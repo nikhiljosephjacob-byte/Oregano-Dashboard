@@ -38,6 +38,8 @@ nav{background:#0d1524;border-bottom:1px solid #1b2f4a;padding:0 20px;display:fl
 .ddi input[type=checkbox]{accent-color:#f59e0b;width:14px;height:14px;cursor:pointer}
 .fchip{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:10px;font-size:11px;font-weight:600;cursor:pointer}
 .brbtn{display:flex;align-items:center;gap:8px;padding:7px 14px;border-radius:10px;cursor:pointer;border:2px solid;background:transparent;transition:all .15s}
+.exp-st{padding:6px 16px;border-radius:6px;border:1px solid #1b2f4a;background:transparent;color:#64748b;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+.exp-st.act{background:#f59e0b22;border-color:#f59e0b;color:#f59e0b}
 .loading{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh}
 @media(max-width:700px){.g4{grid-template-columns:1fr 1fr}.g2{grid-template-columns:1fr}}
 </style>
@@ -63,6 +65,7 @@ nav{background:#0d1524;border-bottom:1px solid #1b2f4a;padding:0 20px;display:fl
     <button class="tab" onclick="gp('outlets')">Outlets</button>
     <button class="tab" onclick="gp('platforms')">Platforms</button>
     <button class="tab" onclick="gp('cpc')">CPC Budgets</button>
+    <button class="tab" onclick="gp('campaigns')">📅 Campaigns</button>
     <div style="flex:1"></div>
     <span id="ts-label" style="font-size:10px;color:#64748b"></span>
     <button onclick="doLoad()" style="margin-left:10px;background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 10px;font-size:12px;cursor:pointer">↻ Refresh</button>
@@ -72,6 +75,7 @@ nav{background:#0d1524;border-bottom:1px solid #1b2f4a;padding:0 20px;display:fl
   <div id="page-outlets" class="pg"></div>
   <div id="page-platforms" class="pg"></div>
   <div id="page-cpc" class="pg"></div>
+  <div id="page-campaigns" class="pg"></div>
 </div>
 <div id="etoa" style="position:fixed;bottom:12px;right:12px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.35);border-radius:6px;padding:6px 10px;font-size:10px;color:#ef4444;max-width:240px;display:none"></div>
 
