@@ -455,6 +455,23 @@ let selDay=null;let campaignData=[],campLoaded=false,campTab='active',calMonth=n
 let campFBrands=new Set(),campFPlatforms=new Set(),campFStatuses=new Set();
 let campSort={col:'startDate',dir:-1};
 
+// Normalize brand/aggregator names — handle case + spelling variants
+const BRAND_NORM={
+  'oregano':'Oregano',
+  'lollorosso':'Lollorosso','lollo rosso':'Lollorosso','lollarosso':'Lollorosso',
+  'smokeys':'Smokeys',"smokey's":'Smokeys','smokey':'Smokeys','smokeys pizzeria':'Smokeys',
+  'fyoozhen':'Fyoozhen','fyoo zhen':'Fyoozhen','fyoo-zhen':'Fyoozhen','fyooshen':'Fyoozhen',
+  'wicked wings':'Wicked Wings','wckd wings':'Wicked Wings','wkd wings':'Wicked Wings',
+  'all brands':'All Brands','all':'All Brands'
+};
+const AGG_NORM={
+  'deliveroo':'Deliveroo','talabat':'Talabat','noon':'Noon','careem':'Careem',
+  'keeta':'Keeta','smiles':'Smiles','instashop':'Instashop','insta shop':'Instashop'
+};
+const EXCLUDED_BRANDS=new Set(['burgerstack','burger stack']);
+function normBrand(s){if(!s)return'';const lc=s.trim().toLowerCase();return BRAND_NORM[lc]||s.trim();}
+function normAgg(s){if(!s)return'';const lc=s.trim().toLowerCase();return AGG_NORM[lc]||s.trim();}
+
 function parseCampaigns(csv){
   const rows=parseCSV(csv);if(rows.length<2)return[];
   const recs=[];
@@ -462,9 +479,11 @@ function parseCampaigns(csv){
     const row=rows[i];
     if(!row[0]?.trim()&&!row[1]?.trim())continue;
     if((row[7]?.trim()||'').toLowerCase()==='cancelled')continue;
+    const brandRaw=(row[1]||'').trim();
+    if(EXCLUDED_BRANDS.has(brandRaw.toLowerCase()))continue; // Skip Burgerstack
     const sd=parseDate(row[2]),ed=parseDate(row[3]);
     if(!sd||!ed)continue;
-    recs.push({aggregator:row[0]?.trim()||'',brand:row[1]?.trim()||'',startDate:dk(sd),endDate:dk(ed),outlet:row[4]?.trim()||'All',comments:row[5]?.trim()||'',name:row[6]?.trim()||'',status:row[7]?.trim()||'Completed',validity:row[8]?.trim()||''});
+    recs.push({aggregator:normAgg(row[0]),brand:normBrand(brandRaw),startDate:dk(sd),endDate:dk(ed),outlet:row[4]?.trim()||'All',comments:row[5]?.trim()||'',name:row[6]?.trim()||'',status:row[7]?.trim()||'Completed',validity:row[8]?.trim()||''});
   }
   return recs;
 }
@@ -665,12 +684,23 @@ function renderCampCalendar(){
     return `<button onclick="setCalFilter('${val}')" style="padding:4px 12px;border-radius:5px;border:1px solid ${isAct?'#f59e0b':'#1b2f4a'};background:${isAct?'#f59e0b22':'transparent'};color:${isAct?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px">${label}</button>`;
   };
   
-  const filterRow=`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;align-items:center">
-    ${filterBtn('all','All Campaigns')}
-    <span style="font-size:10px;color:#64748b;margin:0 4px">|</span>
-    ${allBrands.map(b=>filterBtn(`brand:${b}`,`${logoImg(b,16)}${b}`)).join('')}
-    <span style="font-size:10px;color:#64748b;margin:0 4px">|</span>
-    ${allPlats.map(p=>filterBtn(`platform:${p}`,`${logoImg(p,16)}${p}`)).join('')}
+  // Filter only by KNOWN brands (5 core brands) and KNOWN aggregators (7 aggs)
+  const knownBrands=BR.map(b=>b.n).filter(b=>allBrands.includes(b));
+  const knownPlats=AGGS.filter(p=>allPlats.includes(p));
+  
+  const filterRow=`<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
+    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+      <span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;min-width:60px">Filter:</span>
+      ${filterBtn('all','All Campaigns')}
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+      <span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;min-width:60px">Brands:</span>
+      ${knownBrands.map(b=>filterBtn(`brand:${b}`,`${logoImg(b,16)}${b}`)).join('')}
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+      <span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;min-width:60px">Platforms:</span>
+      ${knownPlats.map(p=>filterBtn(`platform:${p}`,`${logoImg(p,16)}${p}`)).join('')}
+    </div>
   </div>`;
   
   // Calendar grid
