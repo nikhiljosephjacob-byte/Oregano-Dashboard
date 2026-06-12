@@ -374,6 +374,8 @@ Return ONLY valid JSON: {"headline":"<15w>","wins":["w1","w2","w3"],"issues":["i
 
 const CAMPAIGN_GID="1647275459";
 let campaignData=[],campLoaded=false,campTab='active',calMonth=null,selCamp=null;
+let campFBrands=new Set(),campFPlatforms=new Set(),campFStatuses=new Set();
+let campSort={col:'startDate',dir:-1};
 
 function parseCampaigns(csv){
   const rows=parseCSV(csv);if(rows.length<2)return[];
@@ -416,6 +418,129 @@ function campImpact(c){
 }
 
 function selectCamp(idx){selCamp=campaignData[idx];campTab='detail';renderCampaigns();}
+function fmtCampDate(key){
+  if(!key)return"";
+  const d=new Date(key+"T12:00:00");
+  const dayNames=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const moNames=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${dayNames[d.getDay()]} ${d.getDate()} ${moNames[d.getMonth()]}`;
+}
+function fmtCampDateRange(s,e){
+  if(s===e)return fmtCampDate(s);
+  return `${fmtCampDate(s)} → ${fmtCampDate(e)}`;
+}
+
+// Calculate WoW and MoM uplift for a campaign
+function campImpactExtended(c){
+  const base=campImpact(c);
+  if(!base.hasData)return{...base,wowOrdersLift:null,wowSalesLift:null,momOrdersLift:null,momSalesLift:null,contributionDiff:null,profitability:null};
+  
+  // WoW: same campaign period vs same days one week before campaign started
+  const days=base.days;
+  const wowEnd=subDays(c.startDate,1);
+  const wowStart=subDays(wowEnd,days-1);
+  // MoM: same period vs ~30 days before
+  const momEnd=subDays(c.startDate,1);
+  const momStart=subDays(momEnd,29);
+  
+  const flt=r=>{
+    if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;
+    if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;
+    return true;
+  };
+  const cR=allData.filter(r=>r.date>=c.startDate&&r.date<=c.endDate&&flt(r));
+  const cs=sumR(cR);
+  const cDays=new Set(cR.map(r=>r.date)).size||1;
+  
+  // WoW comparison (per-day basis to handle different period lengths)
+  const wR=allData.filter(r=>r.date>=wowStart&&r.date<=wowEnd&&flt(r));
+  const ws=sumR(wR);
+  const wDays=new Set(wR.map(r=>r.date)).size||1;
+  const wowOrdersLift=pctOf(cs.orders/cDays,ws.orders/wDays);
+  const wowSalesLift=pctOf(cs.sales/cDays,ws.sales/wDays);
+  
+  // MoM comparison (30 days prior, per-day basis)
+  const mR=allData.filter(r=>r.date>=momStart&&r.date<=momEnd&&flt(r));
+  const ms=sumR(mR);
+  const mDays=new Set(mR.map(r=>r.date)).size||1;
+  const momOrdersLift=pctOf(cs.orders/cDays,ms.orders/mDays);
+  const momSalesLift=pctOf(cs.sales/cDays,ms.sales/mDays);
+  
+  // Profitability calc:
+  // Discount cost estimate ≈ baseline sales × discount_rate
+  // Try to extract discount % from comments (e.g. "30% off", "50% OFF")
+  const m=(c.comments||'').match(/(\d{1,2})\s*%/);
+  const discountRate=m?parseInt(m[1])/100:0;
+  // Commission cost: use COMM lookup
+  const commData=COMM[c.aggregator]?.[c.brand]||COMM[c.aggregator]?.DEFAULT;
+  const commRate=commData?(commData.commission||0)+(commData.pg||0)+(commData.cpc||0)+(commData.processingFee||0)+(commData.cancellation||0):0.30;
+  
+  // Contribution margin per AED of GMV: 1 - commission - discount
+  const baseCMRate=1-commRate;
+  const campCMRate=1-commRate-discountRate;
+  // Incremental contribution: (campaign sales × cmRate) - (baseline sales × baseCMRate) — both per-day
+  const baseDailyContribution=(base.baseSales/Math.max(1,Math.round((new Date(base.baseEnd)-new Date(base.baseStart))/86400000)+1))*baseCMRate;
+  const campDailyContribution=(cs.sales/cDays)*campCMRate;
+  const contributionDiff=campDailyContribution-baseDailyContribution;
+  // Profitability score: ratio of incremental contribution to baseline contribution (per day)
+  const profitability=baseDailyContribution>0?(contributionDiff/baseDailyContribution)*100:null;
+  
+  return{...base,wowOrdersLift,wowSalesLift,momOrdersLift,momSalesLift,contributionDiff,profitability,discountRate,commRate,campCMRate,baseDailyContribution,campDailyContribution};
+}
+
+function campSortBy(col){if(campSort.col===col)campSort.dir*=-1;else{campSort.col=col;campSort.dir=-1;}renderCampaigns();}
+function campToggleFilter(type,val){const sets={brand:campFBrands,platform:campFPlatforms,status:campFStatuses};const s=sets[type];if(s.has(val))s.delete(val);else s.add(val);renderCampaigns();}
+function campClearFilters(){campFBrands.clear();campFPlatforms.clear();campFStatuses.clear();renderCampaigns();}
+
+function applyCampFilters(camps){
+  return camps.filter(c=>{
+    if(campFBrands.size&&!campFBrands.has(c.brand))return false;
+    if(campFPlatforms.size&&!campFPlatforms.has(c.aggregator))return false;
+    if(campFStatuses.size&&!campFStatuses.has(campStatus(c)))return false;
+    return true;
+  });
+}
+
+function sortCampaigns(camps){
+  const{col,dir}=campSort;
+  return[...camps].sort((a,b)=>{
+    let va,vb;
+    if(col==='startDate'){va=a.startDate;vb=b.startDate;}
+    else if(col==='name'){va=a.name||'';vb=b.name||'';}
+    else if(col==='brand'){va=a.brand;vb=b.brand;}
+    else if(col==='platform'){va=a.aggregator;vb=b.aggregator;}
+    else if(col==='ordersLift'){const ia=campImpact(a),ib=campImpact(b);va=ia.hasData?ia.ordersLift:-999;vb=ib.hasData?ib.ordersLift:-999;}
+    else if(col==='salesLift'){const ia=campImpact(a),ib=campImpact(b);va=ia.hasData?ia.salesLift:-999;vb=ib.hasData?ib.salesLift:-999;}
+    else if(col==='momLift'){const ia=campImpactExtended(a),ib=campImpactExtended(b);va=ia.momSalesLift!=null?ia.momSalesLift:-999;vb=ib.momSalesLift!=null?ib.momSalesLift:-999;}
+    else if(col==='profitability'){const ia=campImpactExtended(a),ib=campImpactExtended(b);va=ia.profitability!=null?ia.profitability:-9999;vb=ib.profitability!=null?ib.profitability:-9999;}
+    else{va=a[col];vb=b[col];}
+    if(typeof va==='string')return dir*va.localeCompare(vb);
+    return dir*((va||0)-(vb||0));
+  });
+}
+
+
+function ddHTMLCamp(id,label,activeSet,items,type){
+  const count=activeSet.size,isOn=count>0;
+  const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi"><input type="checkbox" ${activeSet.has(val)?"checked":""} onchange="campToggleFilter('${type}','${val}')"><span style="color:${clr}">${lbl}</span></label>`).join("");
+  return`<div class="dd-wrap"><button class="fpill ${isOn?"on":""}" onclick="toggleDD('${id}')">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}">${itemsH}</div></div>`;
+}
+function campFilterBar(){
+  const brands=[...new Set(campaignData.map(c=>c.brand))].sort();
+  const platforms=[...new Set(campaignData.map(c=>c.aggregator))].sort();
+  const statuses=['Running','Upcoming','Completed'];
+  const brDD=ddHTMLCamp('cdd-br','Brand',campFBrands,brands.map(b=>({val:b,lbl:b,clr:BMAP[b]?.c||'#94a3b8'})),'brand');
+  const plDD=ddHTMLCamp('cdd-pl','Platform',campFPlatforms,platforms.map(p=>({val:p,lbl:p,clr:AC[p]||'#94a3b8'})),'platform');
+  const stDD=ddHTMLCamp('cdd-st','Status',campFStatuses,statuses.map(s=>({val:s,lbl:s,clr:s==='Running'?'#22C55E':s==='Upcoming'?'#F59E0B':'#64748b'})),'status');
+  const chips=[...[...campFBrands].map(b=>`<span class="fchip" style="background:${BMAP[b]?.c||'#888'}22;color:${BMAP[b]?.c||'#888'};border:1px solid ${BMAP[b]?.c||'#888'}55" onclick="campToggleFilter('brand','${b}')">✕ ${b}</span>`),
+    ...[...campFPlatforms].map(p=>`<span class="fchip" style="background:${AC[p]||'#888'}22;color:${AC[p]||'#888'};border:1px solid ${AC[p]||'#888'}55" onclick="campToggleFilter('platform','${p}')">✕ ${p}</span>`),
+    ...[...campFStatuses].map(s=>`<span class="fchip" style="background:#1b2f4a;color:#94a3b8;border:1px solid #1b2f4a" onclick="campToggleFilter('status','${s}')">✕ ${s}</span>`)].join('');
+  const clearBtn=(campFBrands.size||campFPlatforms.size||campFStatuses.size)?`<button class="fpill" onclick="campClearFilters()" style="color:#ef4444;border-color:#ef444444">✕ Clear</button>`:'';
+  // ddHTML expects fToggle as global. Patch: wire to campToggleFilter via inline override.
+  return `<div class="fbar"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${brDD}${plDD}${stDD}${clearBtn}</div>${chips?`<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">${chips}</div>`:''}</div>`;
+}
+
+
 
 function renderCampCalendar(){
   if(!calMonth){const d=latest?new Date(latest+'T12:00:00'):new Date();calMonth=new Date(d.getFullYear(),d.getMonth(),1);}
@@ -453,32 +578,44 @@ function renderCampCalendar(){
 }
 
 function campTableHTML(title,camps,showImpact){
-  if(!camps.length)return`<div class="card"><div class="ct">${title}</div><div style="color:#64748b;font-size:12px;padding:8px 0">No campaigns in this category.</div></div>`;
-  const heads=showImpact?['Campaign','Brand','Platform','Offer','Dates','Outlet','Orders Lift','GMV Lift','']:['Campaign','Brand','Platform','Offer','Dates','Outlet','Status',''];
-  const rows=camps.map((c,li)=>{
+  if(!camps.length)return`<div class="card"><div class="ct">${title}</div><div style="color:#64748b;font-size:12px;padding:8px 0">No campaigns match your filters.</div></div>`;
+  const sorted=sortCampaigns(camps);
+  const sc=campSort.col,sd=campSort.dir;
+  const sH=(col,label)=>`<th onclick="campSortBy('${col}')" style="${sc===col?'color:#f59e0b':''}">${label} ${sc===col?(sd>0?'↑':'↓'):''}</th>`;
+  let headers=`<th>${sH('name','Campaign').slice(4)}</th>${sH('brand','Brand')}${sH('platform','Platform')}<th>Offer</th>${sH('startDate','Dates')}<th>Outlet</th>`;
+  if(showImpact)headers+=`${sH('ordersLift','WoW Orders')}${sH('salesLift','WoW GMV')}${sH('momLift','MoM GMV')}${sH('profitability','Profitability')}<th></th>`;
+  else headers+=`<th>Status</th><th></th>`;
+  const rows=sorted.map(c=>{
     const realIdx=campaignData.indexOf(c);
     const st=campStatus(c),stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#64748b',Cancelled:'#EF4444'}[st]||'#64748b';
     const b=BMAP[c.brand];
-    const imp=showImpact&&(st==='Completed'||st==='Running')?campImpact(c):null;
-    const dateStr=c.startDate===c.endDate?fmtDisp(c.startDate):`${fmtDisp(c.startDate).replace(/,.*$/,'')} → ${fmtDisp(c.endDate).replace(/,.*$/,'')}`;
+    const imp=showImpact&&(st==='Completed'||st==='Running')?campImpactExtended(c):null;
     const viewBtn=`<button onclick="selectCamp(${realIdx})" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:3px 8px;font-size:10px;cursor:pointer;white-space:nowrap">View →</button>`;
-    const offer=`<span style="font-size:11px;color:#94a3b8" title="${(c.comments||'').replace(/"/g,'&quot;')}">${(c.comments||'').length>55?(c.comments||'').slice(0,55)+'…':(c.comments||'')}</span>`;
-    const row=[`<strong style="font-size:12px">${c.name||'(no name)'}</strong>`,
-      `<span style="color:${b?.c||'#888'};font-weight:700;font-size:11px">${c.brand}</span>`,
-      `<span style="color:${AC[c.aggregator]||'#888'};font-weight:700;font-size:11px">${c.aggregator}</span>`,
-      offer,
-      `<span style="white-space:nowrap;font-size:11px">${dateStr}</span>`,
-      `<span style="font-size:11px">${c.outlet||'All'}</span>`];
-    if(showImpact&&imp){
-      row.push(imp.hasData?`<span style="color:${pctClr(imp.ordersLift)};font-weight:700">${fmtPct(imp.ordersLift)}</span>`:'<span style="color:#64748b">—</span>');
-      row.push(imp.hasData?`<span style="color:${pctClr(imp.salesLift)};font-weight:700">${fmtPct(imp.salesLift)}</span>`:'<span style="color:#64748b">—</span>');
+    const offer=`<span style="font-size:11px;color:#94a3b8" title="${(c.comments||'').replace(/"/g,'&quot;')}">${(c.comments||'').length>50?(c.comments||'').slice(0,50)+'…':(c.comments||'')}</span>`;
+    let row=`<tr><td><strong style="font-size:12px">${c.name||'(no name)'}</strong></td>
+      <td><span style="color:${b?.c||'#888'};font-weight:700;font-size:11px">${c.brand}</span></td>
+      <td><span style="color:${AC[c.aggregator]||'#888'};font-weight:700;font-size:11px">${c.aggregator}</span></td>
+      <td>${offer}</td>
+      <td><span style="white-space:nowrap;font-size:11px">${fmtCampDateRange(c.startDate,c.endDate)}</span></td>
+      <td><span style="font-size:11px">${c.outlet||'All'}</span></td>`;
+    if(showImpact){
+      if(imp&&imp.hasData){
+        const profClr=imp.profitability==null?'#64748b':imp.profitability>0?'#22C55E':imp.profitability>-20?'#FBBF24':'#EF4444';
+        const profStr=imp.profitability==null?'—':`${imp.profitability>=0?'+':''}${imp.profitability.toFixed(1)}%`;
+        row+=`<td style="color:${pctClr(imp.wowOrdersLift)};font-weight:700;font-size:11px">${fmtPct(imp.wowOrdersLift)}</td>
+          <td style="color:${pctClr(imp.wowSalesLift)};font-weight:700;font-size:11px">${fmtPct(imp.wowSalesLift)}</td>
+          <td style="color:${pctClr(imp.momSalesLift)};font-weight:700;font-size:11px">${fmtPct(imp.momSalesLift)}</td>
+          <td style="color:${profClr};font-weight:700;font-size:11px" title="Incremental contribution margin vs baseline. Considers ${(imp.commRate*100).toFixed(1)}% commission + ${(imp.discountRate*100).toFixed(0)}% discount.">${profStr}</td>`;
+      }else{
+        row+='<td style="color:#64748b">—</td><td style="color:#64748b">—</td><td style="color:#64748b">—</td><td style="color:#64748b">—</td>';
+      }
     }else{
-      row.push(`<span style="color:${stClr};font-weight:700;font-size:11px">${st}</span>`);
+      row+=`<td><span style="color:${stClr};font-weight:700;font-size:11px">${st}</span></td>`;
     }
-    row.push(viewBtn);
+    row+=`<td>${viewBtn}</td></tr>`;
     return row;
-  });
-  return`<div class="card"><div class="ct">${title} (${camps.length})</div>${mkTable(heads,rows)}</div>`;
+  }).join('');
+  return`<div class="card"><div class="ct">${title} (${camps.length})</div><div style="overflow-x:auto"><table class="tbl"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
 function campDetailHTML(c,idx){
@@ -624,10 +761,14 @@ async function renderCampaigns(){
     </div>`;
     let main='';
     if(campTab==='calendar')main=`<div class="card">${renderCampCalendar()}</div>`;
-    else if(campTab==='active')main=campTableHTML(`🟢 Running Now`,active,true)+campTableHTML(`⏰ Upcoming`,upcoming,false);
+    else if(campTab==='active'){
+      const fActive=applyCampFilters(active);
+      const fUpcoming=applyCampFilters(upcoming);
+      main=campFilterBar()+campTableHTML(`🟢 Running Now`,fActive,true)+campTableHTML(`⏰ Upcoming`,fUpcoming,false);
+    }
     else if(campTab==='history'){
-      const sorted=[...completed].sort((a,b)=>b.startDate.localeCompare(a.startDate));
-      main=campTableHTML(`📋 Completed Campaigns`,sorted.slice(0,150),true)+(completed.length>150?`<div style="color:#64748b;font-size:12px;text-align:center;padding:10px">Showing 150 most recent of ${completed.length}</div>`:'');
+      const fCompleted=applyCampFilters(completed);
+      main=campFilterBar()+campTableHTML(`📋 Completed Campaigns`,fCompleted.slice(0,150),true)+(fCompleted.length>150?`<div style="color:#64748b;font-size:12px;text-align:center;padding:10px">Showing 150 most recent of ${fCompleted.length}</div>`:'');
     }else if(campTab==='detail'&&selCamp){
       const idx=campaignData.indexOf(selCamp);
       main=campDetailHTML(selCamp,idx);
