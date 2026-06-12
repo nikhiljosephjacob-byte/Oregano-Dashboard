@@ -212,7 +212,7 @@ function renderOverview(){
   document.getElementById("page-overview").innerHTML=makeFilterBar()+
     `<div id="brief-box" class="card" style="border-color:rgba(245,158,11,.25);margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><div class="ct" style="color:#f59e0b;margin-bottom:0">AI Morning Brief · ${getPeriodLabel()}</div><button onclick="genBrief()" style="background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 9px;font-size:10px;cursor:pointer">↻</button></div><div id="brief-content"><div style="color:#64748b;font-size:12px">Generating...</div></div></div>
     <div class="g4">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${getCompLabel()}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders))}${kpiCard("Total GMV",fmtAED(ls.sales),`${getCompLabel()}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales))}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,"per order",null)}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
-    <div class="g2"><div class="sm"><div class="ct">GMV Trend</div><div style="position:relative;height:150px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">Yesterday by Platform</div><div style="position:relative;height:150px"><canvas id="ch-agg"></canvas></div></div></div>
+    <div class="g2"><div class="sm"><div class="ct">GMV Trend</div><div style="position:relative;height:150px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:150px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="g2"><div class="sm"><div class="ct" style="color:#22C55E">✅ What Worked</div>${verdW||"<div style='color:#64748b;font-size:12px'>No comparison data</div>"}</div><div class="sm"><div class="ct" style="color:#EF4444">⚠️ Needs Attention</div>${verdI||"<div style='color:#22C55E;font-size:12px'>All outlets performing</div>"}</div></div>
     <div class="card"><div class="ct">AOV by Brand</div><div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">${BR.map(b=>{const recs=ld.filter(r=>r.brand===b.n);const tot=sumR(recs);const aov=tot.orders>0?(tot.sales/tot.orders).toFixed(1):"—";const byAgg=AGGS.map(ag=>{const a=sumR(recs.filter(r=>r.aggregator===ag));return a.orders>0?`<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(27,47,74,.3);font-size:11px"><span style="color:${AC[ag]||"#888"}">${ag}</span><span style="font-variant-numeric:tabular-nums">AED ${(a.sales/a.orders).toFixed(1)}</span></div>`:"";}).join("");return`<div style="background:#111d2e;border:1px solid #1b2f4a;border-radius:8px;padding:10px"><div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">${logoImg(b.n,28)}<div><div style="font-size:11px;font-weight:700;color:${b.c}">${b.n}</div><div style="font-size:13px;font-weight:800">AED ${aov}</div></div></div>${byAgg||"<div style='color:#64748b;font-size:11px'>No data</div>"}</div>`;}).join("")}</div></div>
     <div class="card"><div class="ct">All Brands — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click brand to expand</span></div>
@@ -292,15 +292,93 @@ function renderBrands(){
   setTimeout(()=>{trendChart("ch-b-trend",trend30(r=>r.brand===selBrand,fStart,fEnd),b?.c||"#888");barChart("ch-b-agg",aggBar.map(a=>a.ag),aggBar.map(a=>a.orders),aggBar.map(a=>a.clr),aggBar.map(a=>a.sales),"orders");},50);
 }
 
-// OUTLETS
+// OUTLETS — card grid view with click-to-drill-down
+let selOutlet=null;
+function selectOutlet(name){selOutlet=name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOutlets();}
+function backToOutlets(){selOutlet=null;Object.values(charts).forEach(c=>c.destroy());charts={};renderOutlets();}
+
 function renderOutlets(){
   const ld=getLD(),pd=getPD();
-  const cm=mkMap(ld,r=>`${r.brand}|${r.branch}`),pm=mkMap(pd,r=>`${r.brand}|${r.branch}`);
-  const platMap={};ld.forEach(r=>{const k=`${r.brand}|${r.branch}`;if(!platMap[k])platMap[k]=new Set();platMap[k].add(r.aggregator);});
-  const rows=Object.values(cm).map(c=>{const[brand,branch]=c.k.split("|");const pv=pm[c.k];return{brand,branch,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,plats:[...(platMap[c.k]||new Set())],oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};}).sort((a,b)=>b.sales-a.sales);
-  const dubai=rows.filter(r=>!AUH.has(r.branch)),auh=rows.filter(r=>AUH.has(r.branch));
-  const mkOT=(title,rows)=>`<div class="card"><div class="ct">${title}</div>${mkTable(["Outlet","Brand","Platforms","Orders","GMV","AOV","Change Orders","Change GMV"],rows.map(r=>[`<strong>${r.branch}</strong>`,`<span style="color:${BMAP[r.brand]?.c||"#888"};font-weight:700">${r.brand}</span>`,r.plats.map(p=>aggChip(p)).join(""),r.orders,fmtAED(r.sales),`AED ${r.aov.toFixed(1)}`,`<span style="color:${pctClr(r.oc)};font-weight:700">${fmtPct(r.oc)}</span>`,`<span style="color:${pctClr(r.sc)};font-weight:700">${fmtPct(r.sc)}</span>`]))}</div>`;
-  document.getElementById("page-outlets").innerHTML=makeFilterBar({hideOutlet:true})+mkOT(`📍 Dubai Outlets — ${getPeriodLabel()}`,dubai)+(auh.length?mkOT(`📍 Abu Dhabi Outlets — ${getPeriodLabel()}`,auh):"");
+  
+  // If a specific outlet is selected, show drill-down detail view
+  if(selOutlet){
+    const outletData=ld.filter(r=>r.branch===selOutlet);
+    const outletPrev=pd.filter(r=>r.branch===selOutlet);
+    const tot=sumR(outletData),prev=sumR(outletPrev);
+    const brandsHere=[...new Set(outletData.map(r=>r.brand))];
+    
+    // Build brand × platform breakdown
+    const cm=mkMap(outletData,r=>`${r.brand}|${r.aggregator}`),pmM=mkMap(outletPrev,r=>`${r.brand}|${r.aggregator}`);
+    const rows=Object.values(cm).map(c=>{const[brand,aggregator]=c.k.split("|");const pv=pmM[c.k];return{brand,aggregator,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};}).sort((a,b)=>b.sales-a.sales);
+    
+    // Per-brand summary for this outlet
+    const brandRows=brandsHere.map(brand=>{
+      const c=sumR(outletData.filter(r=>r.brand===brand));
+      const p=sumR(outletPrev.filter(r=>r.brand===brand));
+      return{brand,...c,aov:c.orders>0?c.sales/c.orders:0,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};
+    }).sort((a,b)=>b.sales-a.sales);
+    
+    const region=AUH.has(selOutlet)?'🇦🇪 Abu Dhabi':'🇦🇪 Dubai';
+    
+    document.getElementById("page-outlets").innerHTML=
+      makeFilterBar({hideOutlet:true})+
+      `<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+        <button onclick="backToOutlets()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:6px 12px;cursor:pointer;font-size:12px">← Back to Outlets</button>
+        <div style="font-size:18px;font-weight:800">📍 ${selOutlet}</div>
+        <span style="font-size:11px;color:#64748b">${region} · ${brandsHere.length} brand${brandsHere.length!==1?'s':''}</span>
+      </div>
+      <div class="g4">
+        ${kpiCard("Orders",tot.orders.toLocaleString(),getCompLabel()+": "+prev.orders,pctOf(tot.orders,prev.orders))}
+        ${kpiCard("GMV",fmtAED(tot.sales),getCompLabel()+": "+fmtAED(prev.sales),pctOf(tot.sales,prev.sales))}
+        ${kpiCard("AOV",`AED ${tot.orders>0?(tot.sales/tot.orders).toFixed(1):0}`,"per order",null)}
+        ${kpiCard("Brands",brandsHere.length,brandsHere.join(", "),null)}
+      </div>
+      <div class="card"><div class="ct">${selOutlet} — Brand Performance (${getPeriodLabel()})</div>
+        ${mkTable(["Brand","Orders","GMV","AOV","Change Orders","Change GMV"],
+          brandRows.map(b=>[`<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.brand,22)}<strong style="color:${BMAP[b.brand]?.c||'#888'}">${b.brand}</strong></span>`,b.orders.toLocaleString(),fmtAED(b.sales),b.orders>0?`AED ${b.aov.toFixed(1)}`:"—",`<span style="color:${pctClr(b.oc)};font-weight:700">${fmtPct(b.oc)}</span>`,`<span style="color:${pctClr(b.sc)};font-weight:700">${fmtPct(b.sc)}</span>`]))}
+      </div>
+      <div class="card"><div class="ct">${selOutlet} — Brand × Platform Breakdown</div>
+        ${mkTable(["Brand","Platform","Orders","GMV","AOV","Change Orders","Change GMV"],
+          rows.map(r=>[`<span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span>`,`<span style="color:${AC[r.aggregator]||'#888'};font-weight:700;font-size:11px">${r.aggregator}</span>`,r.orders,fmtAED(r.sales),r.orders>0?`AED ${r.aov.toFixed(1)}`:"—",`<span style="color:${pctClr(r.oc)};font-weight:700">${fmtPct(r.oc)}</span>`,`<span style="color:${pctClr(r.sc)};font-weight:700">${fmtPct(r.sc)}</span>`]))}
+      </div>`;
+    return;
+  }
+  
+  // ── DEFAULT VIEW: Outlet grid with tiles ──
+  const cm=mkMap(ld,r=>r.branch),pmO=mkMap(pd,r=>r.branch);
+  const platMap={};ld.forEach(r=>{if(!platMap[r.branch])platMap[r.branch]=new Set();platMap[r.branch].add(r.aggregator);});
+  const brandMap={};ld.forEach(r=>{if(!brandMap[r.branch])brandMap[r.branch]=new Set();brandMap[r.branch].add(r.brand);});
+  const tiles=Object.values(cm).map(c=>{const branch=c.k;const pv=pmO[branch];return{branch,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,plats:[...(platMap[branch]||new Set())],brands:[...(brandMap[branch]||new Set())],oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};}).sort((a,b)=>b.sales-a.sales);
+  
+  const dubai=tiles.filter(t=>!AUH.has(t.branch));
+  const auh=tiles.filter(t=>AUH.has(t.branch));
+  
+  const renderTile=t=>`<div onclick="selectOutlet('${t.branch.replace(/'/g,"\\'")}')" style="background:#0d1524;border:1px solid #1b2f4a;border-radius:10px;padding:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='#f59e0b';this.style.background='#111d2e'" onmouseout="this.style.borderColor='#1b2f4a';this.style.background='#0d1524'">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+      <div>
+        <div style="font-size:13px;font-weight:800;color:#e2e8f0">${t.branch}</div>
+        <div style="font-size:10px;color:#64748b;margin-top:2px">${t.brands.length} brand${t.brands.length!==1?'s':''} · ${t.plats.length} platform${t.plats.length!==1?'s':''}</div>
+      </div>
+      <div style="font-size:11px;color:${pctClr(t.sc)};font-weight:700;white-space:nowrap">${fmtPct(t.sc)}</div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:8px">
+      <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Orders</div><div style="font-size:16px;font-weight:800;font-variant-numeric:tabular-nums">${t.orders.toLocaleString()}</div></div>
+      <div style="text-align:right"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">GMV</div><div style="font-size:16px;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(t.sales)}</div></div>
+    </div>
+    <div style="font-size:10px;color:#64748b;margin-top:6px">AOV AED ${t.aov.toFixed(1)}</div>
+    <div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1b2f4a">
+      ${t.plats.slice(0,6).map(p=>`<span style="background:${AC[p]||'#888'}22;color:${AC[p]||'#888'};font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px">${p}</span>`).join('')}
+    </div>
+  </div>`;
+  
+  const dubaiGrid=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">${dubai.map(renderTile).join('')}</div>`;
+  const auhGrid=auh.length?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">${auh.map(renderTile).join('')}</div>`:'';
+  
+  document.getElementById("page-outlets").innerHTML=
+    makeFilterBar({hideOutlet:true})+
+    `<div style="font-size:11px;color:#64748b;margin-bottom:14px">💡 Click any outlet tile to see brand-by-brand and platform breakdown.</div>
+    <div class="card"><div class="ct">📍 Dubai Outlets — ${getPeriodLabel()} (${dubai.length} outlets)</div>${dubaiGrid}</div>
+    ${auh.length?`<div class="card"><div class="ct">📍 Abu Dhabi Outlets — ${getPeriodLabel()} (${auh.length} outlets)</div>${auhGrid}</div>`:''}`;
 }
 
 // PLATFORMS
@@ -347,7 +425,7 @@ async function genBrief(){
   const top3=[...changes].filter(x=>x.oc!=null).sort((a,b)=>b.oc-a.oc).slice(0,3);
   const bot3=[...changes].filter(x=>x.oc!=null).sort((a,b)=>a.oc-b.oc).slice(0,3);
   const zeros=Object.keys(pm2).filter(k=>pm2[k].orders>0&&!cm[k]).map(k=>k.replace(/\|/g," ")).slice(0,4);
-  const prompt=`BD analyst for Oregano Group UAE. Period: ${getPeriodLabel()}. Compare: ${getCompLabel()}.
+  const prompt=`BD analyst for Oregano Restaurants UAE. Period: ${getPeriodLabel()}. Compare: ${getCompLabel()}.
 Total: ${ls.orders} orders AED ${ls.sales.toFixed(0)} | WoW Orders ${fmtPct(pctOf(ls.orders,ps.orders))} GMV ${fmtPct(pctOf(ls.sales,ps.sales))}
 By Brand: ${BR.map(b=>`${b.n}: ${byB[b.n].orders} orders (${fmtPct(pctOf(byB[b.n].orders,pvB[b.n].orders))})`).join(", ")}
 By Platform: ${AGGS.map(a=>`${a}: ${byA[a].orders} orders AED ${byA[a].sales.toFixed(0)}`).join(", ")}
@@ -582,7 +660,7 @@ function campTableHTML(title,camps,showImpact){
   const sorted=sortCampaigns(camps);
   const sc=campSort.col,sd=campSort.dir;
   const sH=(col,label)=>`<th onclick="campSortBy('${col}')" style="${sc===col?'color:#f59e0b':''}">${label} ${sc===col?(sd>0?'↑':'↓'):''}</th>`;
-  let headers=`<th>${sH('name','Campaign').slice(4)}</th>${sH('brand','Brand')}${sH('platform','Platform')}<th>Offer</th>${sH('startDate','Dates')}<th>Outlet</th>`;
+  let headers=`${sH('name','Campaign')}${sH('brand','Brand')}${sH('platform','Platform')}<th>Offer</th>${sH('startDate','Dates')}<th>Outlet</th>`;
   if(showImpact)headers+=`${sH('ordersLift','WoW Orders')}${sH('salesLift','WoW GMV')}${sH('momLift','MoM GMV')}${sH('profitability','Profitability')}<th></th>`;
   else headers+=`<th>Status</th><th></th>`;
   const rows=sorted.map(c=>{
@@ -681,7 +759,7 @@ async function runCampAI(idx){
   const c=campaignData[idx];const imp=campImpact(c);
   const similar=campaignData.filter(x=>x.brand===c.brand&&x.aggregator===c.aggregator&&campStatus(x)==='Completed');
   const simSummary=similar.slice(0,10).map(x=>{const xi=campImpact(x);return`• ${x.name||'(no name)'} (${(x.comments||'').slice(0,60)}): Orders ${fmtPct(xi.ordersLift)}, GMV ${fmtPct(xi.salesLift)}`;}).join('\n');
-  const prompt=`Senior BD analyst for Oregano Group UAE (brands: Oregano, Lollorosso, Smokeys, Fyoozhen, Wicked Wings on Deliveroo/Talabat/Noon/Careem/Keeta/Smiles/Instashop).
+  const prompt=`Senior BD analyst for Oregano Restaurants UAE (brands: Oregano, Lollorosso, Smokeys, Fyoozhen, Wicked Wings on Deliveroo/Talabat/Noon/Careem/Keeta/Smiles/Instashop).
 
 CAMPAIGN: ${c.name}
 Brand: ${c.brand} | Platform: ${c.aggregator} | Outlets: ${c.outlet||'All'}
