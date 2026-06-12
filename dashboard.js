@@ -10,7 +10,50 @@ const AC={Deliveroo:"#00CCBC",Talabat:"#FF6000",Noon:"#F5CF00",Careem:"#3DDC73",
 const MM={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
 const BNM={MC:"Motorcity",TQ:"Town Square","Al Qouz":"Al Quoz","Mirdif":"Mirdiff"};
 const AUH=new Set(["Al Forsan","Al Reem","WTC","Al Reef"]);
-const BE={Deliveroo:2.13,Noon:1.96,Careem:1.96,Talabat:2.08};
+// ── FULL COMMISSION STRUCTURE (from Commission.xlsx — Jun 2026) ──
+// All commissions are NET of VAT. Payment gateway = 2% flat on all aggregators.
+// Format: aggregator → {brand → {commission, mandatoryCPC, processingFee, marketingFee, notes}}
+const COMM={
+  Talabat:{
+    Oregano:      {commission:0.20, pg:0.02, cpc:0,    note:"Preferred brand rate"},
+    Smokeys:      {commission:0.20, pg:0.02, cpc:0,    note:"Preferred brand rate"},
+    Lollorosso:   {commission:0.27, pg:0.02, cpc:0,    note:"Standard rate — deal pending"},
+    Fyoozhen:     {commission:0.27, pg:0.02, cpc:0,    note:"Standard rate — deal pending"},
+    "Wicked Wings":{commission:0.27,pg:0.02, cpc:0,    note:"Standard rate — deal pending"}
+  },
+  Deliveroo:{
+    DEFAULT:      {commission:0.23, pg:0,    cpc:0.02, note:"23% net + 2% mandatory CPC reinvestment"}
+  },
+  Noon:{
+    DEFAULT:      {commission:0.17, pg:0.02, cpc:0.04, cancellation:0.02, note:"17% + 4% mandatory marketing + 2% cancellation"}
+  },
+  Careem:{
+    // 90%+ of orders come from Careem Plus members at 17% — using flat 17%
+    DEFAULT:      {commission:0.17, pg:0,    cpc:0.04, processingFee:0.02, note:"17% (Careem Plus rate, ~90% of orders) + 2% processing + 4% mandatory CPC"}
+  },
+  Smiles:{
+    Oregano:      {commission:0.18, pg:0.02, cpc:0,    note:"Oregano only — 18%"}
+  },
+  Instashop:{
+    Oregano:      {commission:0.16, pg:0.02, cpc:0,    note:"Oregano only — 16%"}
+  },
+  Keeta:{
+    Oregano:      {commission:0,    pg:0.02, cpc:0,    minOrderComm:6, tieredFuture:[0.16,0.20], note:"0% until end of 1st month, then 16% until 31 Dec 2026, then 20% until Initial Term expiry. Min AED 6/order"}
+  }
+};
+
+// Effective break-even ROAS = 1 / (1 - all_charges)
+// where all_charges = commission + payment gateway + mandatory CPC + processing + marketing fees
+function calcBE(agg,brand){
+  const c=COMM[agg]?.[brand]||COMM[agg]?.DEFAULT;if(!c)return null;
+  const totalCharges=(c.commission||0)+(c.pg||0)+(c.cpc||0)+(c.processingFee||0)+(c.cancellation||0);
+  if(totalCharges>=1)return null;
+  return 1/(1-totalCharges);
+}
+// Pre-computed for the dashboard — accessed via getBE(aggregator, brand)
+function getBE(agg,brand){const v=calcBE(agg,brand);return v?Math.round(v*100)/100:null;}
+// Legacy constant for backwards compatibility
+const BE={Deliveroo:1.32,Noon:1.30,Careem:1.27,Talabat:1.41};
 const BMAP=Object.fromEntries(BR.map(b=>[b.n,b]));
 const SKIP_BR=new Set(["total","grand total","subtotal","sub total","totals","all","all outlets","group total"]);
 const ANOTES={Keeta:"No mandatory CPC — tracked for volume only.",Smiles:"e& Smiles — 47 listings, no mandatory CPC obligation.",Instashop:"Oregano only — 13 listings, grocery format, no CPC obligation."};
@@ -89,6 +132,7 @@ async function doLoad(){
 // STATE
 let allData=[],latest=null,curPage="overview",charts={};
 let selBrand="Oregano",selPlatform="Deliveroo";
+let expandedBrand=null,expandedPlatform=null;
 let fStart=null,fEnd=null,fPreset="yesterday";
 let fBrands=new Set(),fPlatforms=new Set(),fBranches=new Set();
 
@@ -148,6 +192,9 @@ function barChart(id,labels,values,colors,extra,mode){const ctx=document.getElem
 function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));document.getElementById(`page-${page}`).classList.add("act");document.querySelectorAll(".tab").forEach(t=>t.classList.remove("act"));const idx={overview:0,brands:1,outlets:2,platforms:3,cpc:4,campaigns:5}[page]||0;document.querySelectorAll(".tab")[idx]?.classList.add("act");Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
 function renderPage(p){if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();}
 
+function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
+function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
+
 // OVERVIEW
 function renderOverview(){
   const ld=getLD(),pd=getPD(),ls=sumR(ld),ps=sumR(pd);
@@ -168,8 +215,64 @@ function renderOverview(){
     <div class="g2"><div class="sm"><div class="ct">GMV Trend</div><div style="position:relative;height:150px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">Yesterday by Platform</div><div style="position:relative;height:150px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="g2"><div class="sm"><div class="ct" style="color:#22C55E">✅ What Worked</div>${verdW||"<div style='color:#64748b;font-size:12px'>No comparison data</div>"}</div><div class="sm"><div class="ct" style="color:#EF4444">⚠️ Needs Attention</div>${verdI||"<div style='color:#22C55E;font-size:12px'>All outlets performing</div>"}</div></div>
     <div class="card"><div class="ct">AOV by Brand</div><div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">${BR.map(b=>{const recs=ld.filter(r=>r.brand===b.n);const tot=sumR(recs);const aov=tot.orders>0?(tot.sales/tot.orders).toFixed(1):"—";const byAgg=AGGS.map(ag=>{const a=sumR(recs.filter(r=>r.aggregator===ag));return a.orders>0?`<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(27,47,74,.3);font-size:11px"><span style="color:${AC[ag]||"#888"}">${ag}</span><span style="font-variant-numeric:tabular-nums">AED ${(a.sales/a.orders).toFixed(1)}</span></div>`:"";}).join("");return`<div style="background:#111d2e;border:1px solid #1b2f4a;border-radius:8px;padding:10px"><div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">${logoImg(b.n,28)}<div><div style="font-size:11px;font-weight:700;color:${b.c}">${b.n}</div><div style="font-size:13px;font-weight:800">AED ${aov}</div></div></div>${byAgg||"<div style='color:#64748b;font-size:11px'>No data</div>"}</div>`;}).join("")}</div></div>
-    <div class="card"><div class="ct">All Brands — ${getPeriodLabel()}</div>${mkTable(["Brand","Orders","GMV","AOV","Change Orders","Change GMV"],brandRows.map(b=>[`<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.n,22)}<strong style="color:${b.c}">${b.n}</strong></span>`,b.cv.orders.toLocaleString(),fmtAED(b.cv.sales),b.cv.orders>0?`AED ${(b.cv.sales/b.cv.orders).toFixed(1)}`:"—",`<span style="color:${pctClr(b.oc)};font-weight:700">${fmtPct(b.oc)}</span>`,`<span style="color:${pctClr(b.sc)};font-weight:700">${fmtPct(b.sc)}</span>`]))}</div>
-    <div class="card"><div class="ct">All Platforms — ${getPeriodLabel()}</div>${mkTable(["Platform","Orders","GMV","AOV","Change Orders","Change GMV"],aggRows.map(a=>[`<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(a.ag,22)}<strong style="color:${a.clr}">${a.ag}</strong></span>`,a.orders.toLocaleString(),fmtAED(a.sales),a.orders>0?`AED ${(a.sales/a.orders).toFixed(1)}`:"—",`<span style="color:${pctClr(a.oc)};font-weight:700">${fmtPct(a.oc)}</span>`,`<span style="color:${pctClr(a.sc)};font-weight:700">${fmtPct(a.sc)}</span>`]))}</div>`;
+    <div class="card"><div class="ct">All Brands — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click brand to expand</span></div>
+<div style="overflow-x:auto"><table class="tbl"><thead><tr><th></th><th>Brand</th><th>Orders</th><th>GMV</th><th>AOV</th><th>Change Orders</th><th>Change GMV</th></tr></thead><tbody>
+${brandRows.map(b=>{
+  const isExp=expandedBrand===b.n;
+  const aggSplit=AGGS.map(ag=>{const c=sumR(ld.filter(r=>r.brand===b.n&&r.aggregator===ag));const p=sumR(pd.filter(r=>r.brand===b.n&&r.aggregator===ag));return{ag,...c,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};}).filter(a=>a.orders>0).sort((x,y)=>y.sales-x.sales);
+  let html=`<tr onclick="toggleBrandRow('${b.n}')" style="cursor:pointer;background:${isExp?'rgba(245,158,11,0.06)':'transparent'}">
+    <td style="width:18px;color:#64748b;font-size:11px;text-align:center">${isExp?'▼':'▶'}</td>
+    <td><span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.n,22)}<strong style="color:${b.c}">${b.n}</strong></span></td>
+    <td>${b.cv.orders.toLocaleString()}</td>
+    <td>${fmtAED(b.cv.sales)}</td>
+    <td>${b.cv.orders>0?`AED ${(b.cv.sales/b.cv.orders).toFixed(1)}`:'—'}</td>
+    <td style="color:${pctClr(b.oc)};font-weight:700">${fmtPct(b.oc)}</td>
+    <td style="color:${pctClr(b.sc)};font-weight:700">${fmtPct(b.sc)}</td>
+  </tr>`;
+  if(isExp){
+    html+=aggSplit.map(a=>`<tr style="background:rgba(13,21,36,.7)">
+      <td></td>
+      <td style="padding-left:30px"><span style="display:inline-flex;align-items:center;gap:6px;font-size:11px">${logoImg(a.ag,18)}<span style="color:${AC[a.ag]||'#888'};font-weight:600">${a.ag}</span></span></td>
+      <td style="font-size:11px;color:#94a3b8">${a.orders.toLocaleString()}</td>
+      <td style="font-size:11px;color:#94a3b8">${fmtAED(a.sales)}</td>
+      <td style="font-size:11px;color:#94a3b8">${a.orders>0?`AED ${(a.sales/a.orders).toFixed(1)}`:'—'}</td>
+      <td style="color:${pctClr(a.oc)};font-weight:700;font-size:11px">${fmtPct(a.oc)}</td>
+      <td style="color:${pctClr(a.sc)};font-weight:700;font-size:11px">${fmtPct(a.sc)}</td>
+    </tr>`).join('');
+    if(aggSplit.length===0)html+=`<tr style="background:rgba(13,21,36,.7)"><td></td><td colspan="6" style="color:#64748b;font-size:11px;padding-left:30px">No platform data for this period</td></tr>`;
+  }
+  return html;
+}).join('')}
+</tbody></table></div></div>
+    <div class="card"><div class="ct">All Platforms — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click platform to expand</span></div>
+<div style="overflow-x:auto"><table class="tbl"><thead><tr><th></th><th>Platform</th><th>Orders</th><th>GMV</th><th>AOV</th><th>Change Orders</th><th>Change GMV</th></tr></thead><tbody>
+${aggRows.map(a=>{
+  const isExp=expandedPlatform===a.ag;
+  const brSplit=BR.map(({n,c})=>{const cv=sumR(ld.filter(r=>r.brand===n&&r.aggregator===a.ag));const pv=sumR(pd.filter(r=>r.brand===n&&r.aggregator===a.ag));return{n,c,...cv,oc:pctOf(cv.orders,pv.orders),sc:pctOf(cv.sales,pv.sales)};}).filter(b=>b.orders>0).sort((x,y)=>y.sales-x.sales);
+  let html=`<tr onclick="togglePlatformRow('${a.ag}')" style="cursor:pointer;background:${isExp?'rgba(245,158,11,0.06)':'transparent'}">
+    <td style="width:18px;color:#64748b;font-size:11px;text-align:center">${isExp?'▼':'▶'}</td>
+    <td><span style="display:inline-flex;align-items:center;gap:7px">${logoImg(a.ag,22)}<strong style="color:${a.clr}">${a.ag}</strong></span></td>
+    <td>${a.orders.toLocaleString()}</td>
+    <td>${fmtAED(a.sales)}</td>
+    <td>${a.orders>0?`AED ${(a.sales/a.orders).toFixed(1)}`:'—'}</td>
+    <td style="color:${pctClr(a.oc)};font-weight:700">${fmtPct(a.oc)}</td>
+    <td style="color:${pctClr(a.sc)};font-weight:700">${fmtPct(a.sc)}</td>
+  </tr>`;
+  if(isExp){
+    html+=brSplit.map(b=>`<tr style="background:rgba(13,21,36,.7)">
+      <td></td>
+      <td style="padding-left:30px"><span style="display:inline-flex;align-items:center;gap:6px;font-size:11px">${logoImg(b.n,18)}<span style="color:${b.c};font-weight:600">${b.n}</span></span></td>
+      <td style="font-size:11px;color:#94a3b8">${b.orders.toLocaleString()}</td>
+      <td style="font-size:11px;color:#94a3b8">${fmtAED(b.sales)}</td>
+      <td style="font-size:11px;color:#94a3b8">${b.orders>0?`AED ${(b.sales/b.orders).toFixed(1)}`:'—'}</td>
+      <td style="color:${pctClr(b.oc)};font-weight:700;font-size:11px">${fmtPct(b.oc)}</td>
+      <td style="color:${pctClr(b.sc)};font-weight:700;font-size:11px">${fmtPct(b.sc)}</td>
+    </tr>`).join('');
+    if(brSplit.length===0)html+=`<tr style="background:rgba(13,21,36,.7)"><td></td><td colspan="6" style="color:#64748b;font-size:11px;padding-left:30px">No brand data for this period</td></tr>`;
+  }
+  return html;
+}).join('')}
+</tbody></table></div></div>`;
   setTimeout(()=>{trendChart("ch-trend",trend30(()=>true,fStart,fEnd),"#F59E0B");barChart("ch-agg",aggRows.map(a=>a.ag),aggRows.map(a=>a.sales),aggRows.map(a=>a.clr),aggRows.map(a=>a.orders),"gmv");},50);
 }
 
