@@ -588,9 +588,11 @@ function mergeKeetaFDAddons(recs){
 }
 
 function campStatus(c){
-  if(!latest)return c.status;
-  if(c.startDate>latest)return'Upcoming';
-  if(c.endDate<latest)return'Completed';
+  // Use ACTUAL today's date for campaign status (not the latest sales data date)
+  // Sales data may be lagging by 1-2 days; campaigns should reflect real calendar
+  const today=dk(new Date());
+  if(c.startDate>today)return'Upcoming';
+  if(c.endDate<today)return'Completed';
   return'Running';
 }
 
@@ -828,9 +830,10 @@ function renderCampCalendar(){
   
   for(let d=1;d<=dim;d++){
     const key=dk(new Date(yr,mo,d));
-    const isToday=key===latest;
-    const isPast=key<latest;
-    const isFuture=key>latest;
+    const todayKey=dk(new Date());
+    const isToday=key===todayKey;
+    const isPast=key<todayKey;
+    const isFuture=key>todayKey;
     const s=dayStats[d];
     const heat=heatmap(s.gmv);
     
