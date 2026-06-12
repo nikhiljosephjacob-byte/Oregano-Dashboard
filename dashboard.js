@@ -146,7 +146,7 @@ function barChart(id,labels,values,colors,extra,mode){const ctx=document.getElem
 
 // NAVIGATION
 function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));document.getElementById(`page-${page}`).classList.add("act");document.querySelectorAll(".tab").forEach(t=>t.classList.remove("act"));const idx={overview:0,brands:1,outlets:2,platforms:3,cpc:4,campaigns:5}[page]||0;document.querySelectorAll(".tab")[idx]?.classList.add("act");Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
-function renderPage(p){if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();}
+function renderPage(p){if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();}
 
 // OVERVIEW
 function renderOverview(){
@@ -263,6 +263,290 @@ Return ONLY valid JSON: {"headline":"<15w>","wins":["w1","w2","w3"],"issues":["i
       </div>${b.insight?`<div style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);border-radius:6px;padding:8px 12px;font-size:12px;color:#FDE68A;line-height:1.6">💡 ${b.insight}</div>`:""}`;
   }catch(e){
     el.innerHTML=e.message==="cors"||e.message.includes("fetch")?`<div style="font-size:12px;color:#64748b;line-height:1.8"><span style="color:#f59e0b;font-weight:700">AI Brief runs in Claude.ai only.</span> All data below works perfectly on GitHub Pages.</div>`:`<div style="color:#64748b;font-size:12px">Brief unavailable</div>`;
+  }
+}
+
+
+// ── CAMPAIGN MANAGER ──────────────────────────────────────────────────────
+
+const CAMPAIGN_GID="1647275459";
+let campaignData=[],campLoaded=false,campTab='active',calMonth=null,selCamp=null;
+
+function parseCampaigns(csv){
+  const rows=parseCSV(csv);if(rows.length<2)return[];
+  const recs=[];
+  for(let i=1;i<rows.length;i++){
+    const row=rows[i];
+    if(!row[0]?.trim()&&!row[1]?.trim())continue;
+    if((row[7]?.trim()||'').toLowerCase()==='cancelled')continue;
+    const sd=parseDate(row[2]),ed=parseDate(row[3]);
+    if(!sd||!ed)continue;
+    recs.push({aggregator:row[0]?.trim()||'',brand:row[1]?.trim()||'',startDate:dk(sd),endDate:dk(ed),outlet:row[4]?.trim()||'All',comments:row[5]?.trim()||'',name:row[6]?.trim()||'',status:row[7]?.trim()||'Completed',validity:row[8]?.trim()||''});
+  }
+  return recs;
+}
+
+function campStatus(c){
+  if(!latest)return c.status;
+  if(c.startDate>latest)return'Upcoming';
+  if(c.endDate<latest)return'Completed';
+  return'Running';
+}
+
+function campImpact(c){
+  const days=Math.max(1,Math.round((new Date(c.endDate)-new Date(c.startDate))/86400000)+1);
+  const baseEnd=subDays(c.startDate,1),baseStart=subDays(baseEnd,days-1);
+  const flt=r=>{
+    if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;
+    if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;
+    return true;
+  };
+  const cR=allData.filter(r=>r.date>=c.startDate&&r.date<=c.endDate&&flt(r));
+  const bR=allData.filter(r=>r.date>=baseStart&&r.date<=baseEnd&&flt(r));
+  const cD=new Set(cR.map(r=>r.date)).size||1,bD=new Set(bR.map(r=>r.date)).size||1;
+  const cs=sumR(cR),bs=sumR(bR);
+  return{campOrders:cs.orders,campSales:cs.sales,campAOV:cs.orders>0?cs.sales/cs.orders:0,
+    baseOrders:bs.orders,baseSales:bs.sales,baseAOV:bs.orders>0?bs.sales/bs.orders:0,
+    ordersLift:pctOf(cs.orders/cD,bs.orders/bD),salesLift:pctOf(cs.sales/cD,bs.sales/bD),
+    aovChange:cs.orders>0&&bs.orders>0?pctOf(cs.sales/cs.orders,bs.sales/bs.orders):null,
+    days,baseStart,baseEnd,hasData:cs.orders>0||cs.sales>0};
+}
+
+function selectCamp(idx){selCamp=campaignData[idx];campTab='detail';renderCampaigns();}
+
+function renderCampCalendar(){
+  if(!calMonth){const d=latest?new Date(latest+'T12:00:00'):new Date();calMonth=new Date(d.getFullYear(),d.getMonth(),1);}
+  const yr=calMonth.getFullYear(),mo=calMonth.getMonth();
+  const firstDow=new Date(yr,mo,1).getDay(),dim=new Date(yr,mo+1,0).getDate();
+  const mNames=['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const dNames=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  let h=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+    <button onclick="calMonth=new Date(calMonth.getFullYear(),calMonth.getMonth()-1,1);renderCampaigns()" style="background:#0d1524;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:6px 14px;cursor:pointer;font-size:12px">← Prev</button>
+    <div style="font-size:15px;font-weight:700">${mNames[mo]} ${yr}</div>
+    <button onclick="calMonth=new Date(calMonth.getFullYear(),calMonth.getMonth()+1,1);renderCampaigns()" style="background:#0d1524;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:6px 14px;cursor:pointer;font-size:12px">Next →</button>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:4px">
+    ${dNames.map(d=>`<div style="text-align:center;font-size:10px;color:#64748b;font-weight:700;padding:4px 0">${d}</div>`).join('')}
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">`;
+  for(let i=0;i<firstDow;i++)h+=`<div style="min-height:82px;background:#0a1120;border-radius:5px"></div>`;
+  for(let d=1;d<=dim;d++){
+    const key=dk(new Date(yr,mo,d));
+    const isToday=key===latest;
+    const dayCamps=campaignData.map((c,i)=>({c,i})).filter(({c})=>c.startDate<=key&&c.endDate>=key);
+    const gmv=allData.filter(r=>r.date===key).reduce((s,r)=>s+r.sales,0);
+    const blocks=dayCamps.slice(0,3).map(({c,i})=>{
+      const clr=AC[c.aggregator]||BMAP[c.brand]?.c||'#888';
+      return`<div onclick="selectCamp(${i})" style="background:${clr}28;border-left:2px solid ${clr};padding:1px 4px;font-size:9px;color:${clr};border-radius:2px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px" title="${c.name} — ${c.brand} on ${c.aggregator}">${c.name}</div>`;
+    }).join('');
+    h+=`<div style="min-height:82px;background:#0d1524;border:1px solid ${isToday?'#f59e0b':'#1b2f4a'};border-radius:5px;padding:4px">
+      <div style="font-size:11px;font-weight:700;color:${isToday?'#f59e0b':'#94a3b8'}">${d}</div>
+      ${gmv>0?`<div style="font-size:9px;color:#64748b">${fmtAED(gmv)}</div>`:''}
+      ${blocks}
+      ${dayCamps.length>3?`<div style="font-size:9px;color:#64748b">+${dayCamps.length-3} more</div>`:''}
+    </div>`;
+  }
+  return h+'</div>';
+}
+
+function campTableHTML(title,camps,showImpact){
+  if(!camps.length)return`<div class="card"><div class="ct">${title}</div><div style="color:#64748b;font-size:12px;padding:8px 0">No campaigns in this category.</div></div>`;
+  const heads=showImpact?['Campaign','Brand','Platform','Offer','Dates','Outlet','Orders Lift','GMV Lift','']:['Campaign','Brand','Platform','Offer','Dates','Outlet','Status',''];
+  const rows=camps.map((c,li)=>{
+    const realIdx=campaignData.indexOf(c);
+    const st=campStatus(c),stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#64748b',Cancelled:'#EF4444'}[st]||'#64748b';
+    const b=BMAP[c.brand];
+    const imp=showImpact&&(st==='Completed'||st==='Running')?campImpact(c):null;
+    const dateStr=c.startDate===c.endDate?fmtDisp(c.startDate):`${fmtDisp(c.startDate).replace(/,.*$/,'')} → ${fmtDisp(c.endDate).replace(/,.*$/,'')}`;
+    const viewBtn=`<button onclick="selectCamp(${realIdx})" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:3px 8px;font-size:10px;cursor:pointer;white-space:nowrap">View →</button>`;
+    const offer=`<span style="font-size:11px;color:#94a3b8" title="${(c.comments||'').replace(/"/g,'&quot;')}">${(c.comments||'').length>55?(c.comments||'').slice(0,55)+'…':(c.comments||'')}</span>`;
+    const row=[`<strong style="font-size:12px">${c.name||'(no name)'}</strong>`,
+      `<span style="color:${b?.c||'#888'};font-weight:700;font-size:11px">${c.brand}</span>`,
+      `<span style="color:${AC[c.aggregator]||'#888'};font-weight:700;font-size:11px">${c.aggregator}</span>`,
+      offer,
+      `<span style="white-space:nowrap;font-size:11px">${dateStr}</span>`,
+      `<span style="font-size:11px">${c.outlet||'All'}</span>`];
+    if(showImpact&&imp){
+      row.push(imp.hasData?`<span style="color:${pctClr(imp.ordersLift)};font-weight:700">${fmtPct(imp.ordersLift)}</span>`:'<span style="color:#64748b">—</span>');
+      row.push(imp.hasData?`<span style="color:${pctClr(imp.salesLift)};font-weight:700">${fmtPct(imp.salesLift)}</span>`:'<span style="color:#64748b">—</span>');
+    }else{
+      row.push(`<span style="color:${stClr};font-weight:700;font-size:11px">${st}</span>`);
+    }
+    row.push(viewBtn);
+    return row;
+  });
+  return`<div class="card"><div class="ct">${title} (${camps.length})</div>${mkTable(heads,rows)}</div>`;
+}
+
+function campDetailHTML(c,idx){
+  const st=campStatus(c),stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#64748b'}[st]||'#64748b';
+  const b=BMAP[c.brand],imp=campImpact(c);
+  const impSection=st==='Upcoming'
+    ?`<div class="card"><div style="color:#F59E0B;font-size:13px;padding:4px 0">⏰ Campaign starts ${fmtDisp(c.startDate)} — performance data will appear once live.</div></div>`
+    :imp.hasData
+      ?`<div class="g4">
+          ${kpiCard('Orders During',imp.campOrders.toLocaleString(),`Baseline: ${imp.baseOrders.toLocaleString()}`,imp.ordersLift)}
+          ${kpiCard('GMV During',fmtAED(imp.campSales),`Baseline: ${fmtAED(imp.baseSales)}`,imp.salesLift)}
+          ${kpiCard('AOV During',`AED ${imp.campAOV.toFixed(1)}`,`Baseline: AED ${imp.baseAOV.toFixed(1)}`,imp.aovChange)}
+          ${kpiCard('Duration',`${imp.days} day${imp.days!==1?'s':''}`,`vs ${fmtDisp(imp.baseStart)} → ${fmtDisp(imp.baseEnd)}`,null)}
+        </div>
+        <div class="sm" style="margin-bottom:12px">
+          <div class="ct" style="color:${b?.c||'#f59e0b'}">Daily Sales — ${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)}</div>
+          <div style="position:relative;height:130px"><canvas id="ch-camp"></canvas></div>
+        </div>`
+      :`<div class="card"><div style="color:#64748b;font-size:12px;padding:4px 0">No sales data found for this campaign period — the brand/aggregator may not have records in the Google Sheet for these dates.</div></div>`;
+  
+  const similar=campaignData.filter(x=>x.brand===c.brand&&x.aggregator===c.aggregator&&campaignData.indexOf(x)!==idx&&campStatus(x)==='Completed');
+  const simRows=similar.slice(0,8).map(x=>{const xi=campImpact(x);return[
+    `<span style="font-size:11px">${x.name||'(no name)'}</span>`,
+    `<span style="font-size:11px;color:#64748b;white-space:nowrap">${fmtDisp(x.startDate).replace(/,.*$/,'')}</span>`,
+    xi.hasData?`<span style="color:${pctClr(xi.ordersLift)};font-weight:700">${fmtPct(xi.ordersLift)}</span>`:'<span style="color:#64748b">—</span>',
+    xi.hasData?`<span style="color:${pctClr(xi.salesLift)};font-weight:700">${fmtPct(xi.salesLift)}</span>`:'<span style="color:#64748b">—</span>',
+    `<span style="font-size:11px;color:#94a3b8">${(x.comments||'').length>50?(x.comments||'').slice(0,50)+'…':(x.comments||'')}</span>`];});
+  const simTable=similar.length>0?`<div class="card"><div class="ct">Past Campaigns — ${c.brand} on ${c.aggregator} (${similar.length} total)</div>${mkTable(['Campaign','Date','Orders Lift','GMV Lift','Offer'],simRows)}</div>`:'';
+  
+  return`<div class="card" style="border-color:${b?.c||'#f59e0b'}44;margin-bottom:12px">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+      <div>
+        <div style="font-size:16px;font-weight:800;color:${b?.c||'#f59e0b'}">${c.name||'(no name)'}</div>
+        <div style="font-size:12px;color:#64748b;margin-top:6px;line-height:2">
+          <span style="color:${b?.c||'#888'};font-weight:700">${c.brand}</span> · 
+          <span style="color:${AC[c.aggregator]||'#888'};font-weight:700">${c.aggregator}</span> · 
+          ${!c.outlet||c.outlet==='All'?'All Outlets':c.outlet}<br>
+          ${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)} (${imp.days} day${imp.days!==1?'s':''})<br>
+          <span style="color:#e2e8f0;line-height:1.6">${c.comments||''}</span>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0">
+        <div style="padding:4px 14px;border-radius:12px;font-size:11px;font-weight:700;background:${stClr}22;color:${stClr};border:1px solid ${stClr}44">${st}</div>
+        <button onclick="campTab='active';renderCampaigns()" style="background:none;border:1px solid #1b2f4a;border-radius:5px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer">← Back</button>
+      </div>
+    </div>
+  </div>
+  ${impSection}
+  ${simTable}
+  <div class="card" style="border-color:rgba(245,158,11,.25)" id="camp-ai-box">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div class="ct" style="color:#f59e0b;margin-bottom:0">✨ AI Campaign Analysis</div>
+      <button id="camp-ai-btn" onclick="runCampAI(${idx})" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:4px 14px;font-size:11px;cursor:pointer;font-weight:600">Generate Analysis</button>
+    </div>
+    <div id="camp-ai-content" style="color:#64748b;font-size:12px">Click to generate AI analysis comparing this campaign to ${similar.length} similar historical campaigns on ${c.aggregator}.</div>
+  </div>`;
+}
+
+async function runCampAI(idx){
+  const btn=document.getElementById('camp-ai-btn'),content=document.getElementById('camp-ai-content');
+  if(!btn||!content)return;
+  btn.textContent='⏳ Analysing...';btn.disabled=true;
+  const c=campaignData[idx];const imp=campImpact(c);
+  const similar=campaignData.filter(x=>x.brand===c.brand&&x.aggregator===c.aggregator&&campStatus(x)==='Completed');
+  const simSummary=similar.slice(0,10).map(x=>{const xi=campImpact(x);return`• ${x.name||'(no name)'} (${(x.comments||'').slice(0,60)}): Orders ${fmtPct(xi.ordersLift)}, GMV ${fmtPct(xi.salesLift)}`;}).join('\n');
+  const prompt=`Senior BD analyst for Oregano Group UAE (brands: Oregano, Lollorosso, Smokeys, Fyoozhen, Wicked Wings on Deliveroo/Talabat/Noon/Careem/Keeta/Smiles/Instashop).
+
+CAMPAIGN: ${c.name}
+Brand: ${c.brand} | Platform: ${c.aggregator} | Outlets: ${c.outlet||'All'}
+Dates: ${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)} (${imp.days} days) | Status: ${campStatus(c)}
+Offer: ${c.comments}
+
+PERFORMANCE vs BASELINE (prior ${imp.days} days, same brand & platform):
+${imp.hasData?`Orders lift: ${fmtPct(imp.ordersLift)} (campaign: ${imp.campOrders} orders vs baseline: ${imp.baseOrders})
+GMV lift: ${fmtPct(imp.salesLift)} (${fmtAED(imp.campSales)} vs ${fmtAED(imp.baseSales)})
+AOV change: ${fmtPct(imp.aovChange)} (AED ${imp.campAOV.toFixed(1)} vs AED ${imp.baseAOV.toFixed(1)})`:'No sales data available in dashboard for this period.'}
+
+SIMILAR PAST CAMPAIGNS — ${c.brand} on ${c.aggregator} (${similar.length} total):
+${simSummary||'No similar historical campaigns found.'}
+
+Return ONLY valid JSON, no markdown:
+{"verdict":"STRONG"/"AVERAGE"/"UNDERPERFORMING"/"INSUFFICIENT_DATA","assessment":"2 sentence assessment with specific numbers","suggestions":["actionable suggestion 1 with specifics","suggestion 2","suggestion 3"],"bestPractice":"What historically works best for ${c.brand} on ${c.aggregator} — 2-3 sentences with specific offer types and timing that drove best results"}`;
+  try{
+    const resp=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:800,messages:[{role:"user",content:prompt}]})});
+    if(!resp.ok)throw new Error('cors');
+    const j=await resp.json();if(j.error)throw new Error(j.error.message);
+    const ai=JSON.parse((j.content?.[0]?.text||'').replace(/```json|```/g,'').trim());
+    const vc={STRONG:'#22C55E',AVERAGE:'#FBBF24',UNDERPERFORMING:'#EF4444',INSUFFICIENT_DATA:'#64748b'}[ai.verdict]||'#64748b';
+    content.innerHTML=`<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px">
+      <div style="padding:3px 12px;border-radius:10px;font-size:11px;font-weight:700;background:${vc}22;color:${vc};border:1px solid ${vc}44;white-space:nowrap">${(ai.verdict||'').replace(/_/g,' ')}</div>
+      <div style="font-size:13px;color:#e2e8f0;line-height:1.6">${ai.assessment}</div>
+    </div>
+    <div class="g2">
+      <div>
+        <div style="font-size:10px;color:#f59e0b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">📋 Suggestions to Improve</div>
+        ${(ai.suggestions||[]).map((s,i)=>`<div style="display:flex;gap:8px;margin-bottom:8px"><div style="background:#f59e0b;color:#000;font-size:10px;font-weight:700;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</div><div style="font-size:12px;color:#e2e8f0;line-height:1.5">${s}</div></div>`).join('')}
+      </div>
+      <div>
+        <div style="font-size:10px;color:#22C55E;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">📈 What Works for ${c.brand} on ${c.aggregator}</div>
+        <div style="font-size:12px;color:#e2e8f0;line-height:1.7;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.15);border-radius:6px;padding:10px">${ai.bestPractice}</div>
+      </div>
+    </div>`;
+    btn.textContent='↻ Regenerate';btn.disabled=false;btn.onclick=()=>runCampAI(idx);
+  }catch(e){
+    content.innerHTML=e.message==='cors'?`<div style="font-size:12px;color:#64748b"><strong style="color:#f59e0b">AI analysis runs in Claude.ai only.</strong> All campaign data and impact metrics above are accurate and ready to use.</div>`:`<div style="color:#64748b;font-size:12px">Analysis unavailable.</div>`;
+    btn.textContent='↻ Retry';btn.disabled=false;
+  }
+}
+
+async function renderCampaigns(){
+  const pg=document.getElementById('page-campaigns');
+  if(!pg){console.error('[BD-Campaigns] page-campaigns div not found in HTML!');return;}
+  if(!campLoaded){
+    pg.innerHTML=`<div style="padding:30px;text-align:center;color:#64748b;font-size:13px">⏳ Loading campaigns from Google Sheets...</div>`;
+    try{
+      console.log('[BD-Campaigns] Fetching gid:',CAMPAIGN_GID);
+      const csv=await fetchCSV(CAMPAIGN_GID);
+      console.log('[BD-Campaigns] CSV length:',csv.length);
+      console.log('[BD-Campaigns] First 300 chars:',csv.slice(0,300));
+      campaignData=parseCampaigns(csv);
+      console.log('[BD-Campaigns] Parsed records:',campaignData.length);
+      if(campaignData.length>0)console.log('[BD-Campaigns] Sample:',JSON.stringify(campaignData[0]));
+      campLoaded=true;
+    }catch(e){
+      console.error('[BD-Campaigns] Load error:',e);
+      pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Could not load Campaign Activations sheet</div><div style="color:#64748b;font-size:12px">Error: ${e.message}<br><br>Make sure the sheet is published: Google Sheets → File → Share → Publish to web → Entire Document.</div></div>`;
+      return;
+    }
+  }
+  if(campaignData.length===0){
+    pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Sheet loaded but no valid campaigns found</div><div style="color:#64748b;font-size:12px">The CSV was fetched but no rows could be parsed. Open F12 → Console to see what was received.</div></div>`;
+    return;
+  }
+  try{
+    const active=campaignData.filter(c=>campStatus(c)==='Running');
+    const upcoming=campaignData.filter(c=>campStatus(c)==='Upcoming');
+    const completed=campaignData.filter(c=>campStatus(c)==='Completed');
+    const tabs=[['calendar','📅 Calendar'],['active',`🟢 Active & Upcoming (${active.length+upcoming.length})`],['history',`📋 History (${completed.length})`]];
+    if(selCamp)tabs.push(['detail','🔍 Campaign Detail']);
+    const tabH=tabs.map(([k,l])=>`<button class="exp-st ${campTab===k?'act':''}" onclick="campTab='${k}';renderCampaigns()">${l}</button>`).join('');
+    const statBar=`<div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:14px">
+      ${[['🟢 Active',active.length,'#22C55E'],['⏰ Upcoming',upcoming.length,'#F59E0B'],['✅ Completed',completed.length,'#64748b'],['📊 Total',campaignData.length,'#f59e0b']].map(([l,n,c])=>`<div style="font-size:12px;color:${c};font-weight:600">${l} <span style="font-size:18px;font-weight:800">${n}</span></div>`).join('')}
+    </div>`;
+    let main='';
+    if(campTab==='calendar')main=`<div class="card">${renderCampCalendar()}</div>`;
+    else if(campTab==='active')main=campTableHTML(`🟢 Running Now`,active,true)+campTableHTML(`⏰ Upcoming`,upcoming,false);
+    else if(campTab==='history'){
+      const sorted=[...completed].sort((a,b)=>b.startDate.localeCompare(a.startDate));
+      main=campTableHTML(`📋 Completed Campaigns`,sorted.slice(0,150),true)+(completed.length>150?`<div style="color:#64748b;font-size:12px;text-align:center;padding:10px">Showing 150 most recent of ${completed.length}</div>`:'');
+    }else if(campTab==='detail'&&selCamp){
+      const idx=campaignData.indexOf(selCamp);
+      main=campDetailHTML(selCamp,idx);
+    }
+    pg.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-size:16px;font-weight:800;color:#f59e0b">📅 Campaign Manager</div>
+      <button onclick="campLoaded=false;selCamp=null;campTab='active';renderCampaigns()" style="background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 10px;font-size:11px;cursor:pointer">↻ Refresh</button>
+    </div>
+    ${statBar}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>
+    ${main}`;
+    if(campTab==='detail'&&selCamp){
+      const c=selCamp;const imp=campImpact(c);
+      if(campStatus(c)!=='Upcoming'&&imp.hasData){
+        const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');
+        while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&(c.brand==='All Brands'||r.brand===c.brand)&&(c.aggregator==='All'||r.aggregator===c.aggregator)));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}
+        setTimeout(()=>{trendChart('ch-camp',trend,BMAP[c.brand]?.c||'#f59e0b');},50);
+      }
+    }
+  }catch(err){
+    console.error('[BD-Campaigns] Render error:',err);
+    pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Render error</div><div style="color:#64748b;font-size:12px">${err.message}</div></div>`;
   }
 }
 
