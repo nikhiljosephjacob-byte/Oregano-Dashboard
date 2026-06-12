@@ -83,11 +83,15 @@ function parseBrand(csv,brand){
   const cols=pa.reduce((a,agg,i)=>{if(agg&&(sr[i]==="Sales"||sr[i]==="Orders"))a.push({i,agg,m:sr[i]});return a;},[]);
   const recs=[];
   for(let i=ai+2;i<rows.length;i++){
-    const row=rows[i];const br=normB(row[0]?.trim()||"");
+    const row=rows[i];let br=normB(row[0]?.trim()||"");
     if(!br||SKIP_BR.has(br.toLowerCase().trim()))continue;
+    // Fyoozhen DIP is a physically separate outlet from Oregano/Lollorosso/Smokeys DIP
+    if(brand==='Fyoozhen'&&br==='DIP')br='DIP (Fyoozhen)';
     const date=parseDate(row[1]);if(!date)continue;const key=dk(date);
+    // Fyoozhen DIP is a physically separate outlet from the shared DIP kitchen — disambiguate
+    const branchFinal=(brand==='Fyoozhen'&&br==='DIP')?'Fyoozhen DIP':br;
     const am={};cols.forEach(({i:idx,agg,m})=>{if(!am[agg])am[agg]={Sales:0,Orders:0};am[agg][m]=toN(row[idx]);});
-    Object.entries(am).forEach(([agg,d])=>{if(d.Sales>0||d.Orders>0)recs.push({brand,branch:br,date:key,aggregator:agg,sales:d.Sales,orders:d.Orders,aov:d.Orders>0?d.Sales/d.Orders:0});});
+    Object.entries(am).forEach(([agg,d])=>{if(d.Sales>0||d.Orders>0)recs.push({brand,branch:branchFinal,date:key,aggregator:agg,sales:d.Sales,orders:d.Orders,aov:d.Orders>0?d.Sales/d.Orders:0});});
   }return recs;
 }
 
@@ -210,11 +214,17 @@ function renderOverview(){
   const verdW=winners.map(w=>`<div class="vrow"><div style="width:3px;height:34px;border-radius:2px;background:${BMAP[w.brand]?.c||"#888"};flex-shrink:0"></div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.brand} · ${w.branch}</div><div style="font-size:11px;color:#64748b">${w.aggregator} · ${w.orders} orders · ${fmtAED(w.sales)}</div></div><div style="color:#22C55E;font-size:12px;font-weight:700;flex-shrink:0">${fmtPct(w.oc)}</div></div>`).join("");
   const verdI=issues.map(w=>`<div class="vrow"><div style="width:3px;height:34px;border-radius:2px;background:${w.oc===-100?"#64748b":"#EF4444"};flex-shrink:0"></div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.brand} · ${w.branch}</div><div style="font-size:11px;color:#64748b">${w.aggregator} · ${w.orders===0?"ZERO orders":w.orders+" orders"}</div></div><div style="color:#EF4444;font-size:12px;font-weight:700;flex-shrink:0">${w.oc===-100?"ZERO":fmtPct(w.oc)}</div></div>`).join("");
   document.getElementById("page-overview").innerHTML=makeFilterBar()+
-    `<div id="brief-box" class="card" style="border-color:rgba(245,158,11,.25);margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><div class="ct" style="color:#f59e0b;margin-bottom:0">AI Morning Brief · ${getPeriodLabel()}</div><button onclick="genBrief()" style="background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 9px;font-size:10px;cursor:pointer">↻</button></div><div id="brief-content"><div style="color:#64748b;font-size:12px">Generating...</div></div></div>
+    `<div id="brief-box" class="card" style="border-color:rgba(245,158,11,.25);margin-bottom:14px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+    <div class="ct" style="color:#f59e0b;margin-bottom:0">AI Morning Brief · ${getPeriodLabel()}</div>
+    <button onclick="genBrief()" style="background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 9px;font-size:10px;cursor:pointer">↻</button>
+  </div>
+  <div id="brief-content"><div style="color:#64748b;font-size:12px">Generating...</div></div>
+</div>
     <div class="g4">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${getCompLabel()}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders))}${kpiCard("Total GMV",fmtAED(ls.sales),`${getCompLabel()}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales))}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,"per order",null)}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
     <div class="g2"><div class="sm"><div class="ct">GMV Trend</div><div style="position:relative;height:150px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:150px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="g2"><div class="sm"><div class="ct" style="color:#22C55E">✅ What Worked</div>${verdW||"<div style='color:#64748b;font-size:12px'>No comparison data</div>"}</div><div class="sm"><div class="ct" style="color:#EF4444">⚠️ Needs Attention</div>${verdI||"<div style='color:#22C55E;font-size:12px'>All outlets performing</div>"}</div></div>
-    <div class="card"><div class="ct">AOV by Brand</div><div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">${BR.map(b=>{const recs=ld.filter(r=>r.brand===b.n);const tot=sumR(recs);const aov=tot.orders>0?(tot.sales/tot.orders).toFixed(1):"—";const byAgg=AGGS.map(ag=>{const a=sumR(recs.filter(r=>r.aggregator===ag));return a.orders>0?`<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(27,47,74,.3);font-size:11px"><span style="color:${AC[ag]||"#888"}">${ag}</span><span style="font-variant-numeric:tabular-nums">AED ${(a.sales/a.orders).toFixed(1)}</span></div>`:"";}).join("");return`<div style="background:#111d2e;border:1px solid #1b2f4a;border-radius:8px;padding:10px"><div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">${logoImg(b.n,28)}<div><div style="font-size:11px;font-weight:700;color:${b.c}">${b.n}</div><div style="font-size:13px;font-weight:800">AED ${aov}</div></div></div>${byAgg||"<div style='color:#64748b;font-size:11px'>No data</div>"}</div>`;}).join("")}</div></div>
+    <div class="card"><div class="ct">AOV by Brand</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">${BR.map(b=>{const recs=ld.filter(r=>r.brand===b.n);const tot=sumR(recs);const aov=tot.orders>0?(tot.sales/tot.orders).toFixed(1):"—";const byAgg=AGGS.map(ag=>{const a=sumR(recs.filter(r=>r.aggregator===ag));return a.orders>0?`<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(27,47,74,.3);font-size:11px"><span style="color:${AC[ag]||"#888"}">${ag}</span><span style="font-variant-numeric:tabular-nums">AED ${(a.sales/a.orders).toFixed(1)}</span></div>`:"";}).join("");return`<div style="background:#111d2e;border:1px solid #1b2f4a;border-radius:8px;padding:10px"><div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">${logoImg(b.n,28)}<div><div style="font-size:11px;font-weight:700;color:${b.c}">${b.n}</div><div style="font-size:13px;font-weight:800">AED ${aov}</div></div></div>${byAgg||"<div style='color:#64748b;font-size:11px'>No data</div>"}</div>`;}).join("")}</div></div>
     <div class="card"><div class="ct">All Brands — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click brand to expand</span></div>
 <div style="overflow-x:auto"><table class="tbl"><thead><tr><th></th><th>Brand</th><th>Orders</th><th>GMV</th><th>AOV</th><th>Change Orders</th><th>Change GMV</th></tr></thead><tbody>
 ${brandRows.map(b=>{
@@ -413,6 +423,53 @@ function renderCPC(){
   <div class="card"><div class="ct">Historical ROAS Verdicts by Outlet</div>${roasH}</div>`;
 }
 
+
+// ── ASK AI FREE-FORM QUESTIONS ABOUT THE DATA ──
+// ── AI CHAT — ask anything about the data ──
+// ── Ask AI input handler (wired to the chat input in morning brief) ──
+async function runAskAI(){
+  const input=document.getElementById('ai-ask-input');
+  const btn=document.getElementById('ai-ask-btn');
+  const answer=document.getElementById('ai-ask-answer');
+  if(!input||!answer)return;
+  const q=input.value.trim();
+  if(!q)return;
+  if(btn){btn.textContent='⏳ Thinking...';btn.disabled=true;}
+  answer.innerHTML=`<div style="margin-top:10px;font-size:11px;color:#94a3b8;font-style:italic">🤔 Thinking...</div>`;
+  const ld=getLD(),pd=getPD();
+  const ls=sumR(ld),ps=sumR(pd);
+  const byBrand=BR.map(b=>{const c=sumR(ld.filter(r=>r.brand===b.n));const p=sumR(pd.filter(r=>r.brand===b.n));return`${b.n}: ${c.orders} orders AED ${c.sales.toFixed(0)} (WoW orders ${fmtPct(pctOf(c.orders,p.orders))})`;}).join('; ');
+  const byPlat=AGGS.map(a=>{const c=sumR(ld.filter(r=>r.aggregator===a));return`${a}: ${c.orders} orders AED ${c.sales.toFixed(0)}`;}).join('; ');
+  const cmO=mkMap(ld,r=>`${r.brand}|${r.branch}`),pmO=mkMap(pd,r=>`${r.brand}|${r.branch}`);
+  const outletPerf=Object.values(cmO).map(c=>{const[brand,branch]=c.k.split('|');const pv=pmO[c.k];return{label:`${brand} ${branch}`,orders:c.orders,sales:c.sales,oc:pv?pctOf(c.orders,pv.orders):null};});
+  const topOutlets=outletPerf.filter(o=>o.oc!=null).sort((a,b)=>b.oc-a.oc).slice(0,5).map(o=>`${o.label}: +${o.oc?.toFixed(1)}%`).join(', ');
+  const bottomOutlets=outletPerf.filter(o=>o.oc!=null).sort((a,b)=>a.oc-b.oc).slice(0,5).map(o=>`${o.label}: ${o.oc?.toFixed(1)}%`).join(', ');
+  const prompt=`You are BD analyst for Oregano Restaurants (UAE food delivery — brands: Oregano, Lollorosso, Smokeys, Fyoozhen, Wicked Wings on Deliveroo, Talabat, Noon, Careem, Keeta, Smiles, Instashop).
+
+DATA for ${getPeriodLabel()} vs ${getCompLabel()}:
+Total: ${ls.orders} orders | AED ${ls.sales.toFixed(0)} GMV | WoW orders ${fmtPct(pctOf(ls.orders,ps.orders))} | GMV ${fmtPct(pctOf(ls.sales,ps.sales))}
+BY BRAND: ${byBrand}
+BY PLATFORM: ${byPlat}
+TOP 5 GROWTH: ${topOutlets}
+BOTTOM 5 DROPS: ${bottomOutlets}
+CONTEXT: Smokeys structural decline. Commissions: Deliveroo 23%, Talabat 20-27%, Noon/Careem 17%+6%, Keeta intro 0%. Mandatory CPC: Deliveroo 2%, Noon/Careem 4%.
+
+QUESTION: ${q}
+
+Answer in 2-4 sentences. Specific numbers. Direct. No preamble.`;
+  try{
+    const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:500,messages:[{role:"user",content:prompt}]})});
+    if(!r.ok)throw new Error('cors');
+    const j=await r.json();if(j.error)throw new Error(j.error.message);
+    const ans=(j.content?.[0]?.text||'').trim();
+    answer.innerHTML=`<div style="margin-top:10px;padding:10px 12px;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.25);border-radius:6px;line-height:1.6;font-size:12px"><div style="font-size:10px;color:#60A5FA;font-weight:700;margin-bottom:5px">💬 ${q}</div><div style="white-space:pre-wrap;color:#e2e8f0">${ans}</div></div>`;
+    input.value='';
+  }catch(e){
+    answer.innerHTML=`<div style="margin-top:10px;padding:10px 12px;background:rgba(239,68,68,.05);border:1px solid rgba(239,68,68,.2);border-radius:6px;font-size:12px;color:#94a3b8">⚠️ AI chat only works in Claude.ai (CORS restriction on external hosts).</div>`;
+  }
+  if(btn){btn.textContent='Ask →';btn.disabled=false;}
+}
+
 // AI BRIEF
 async function genBrief(){
   const el=document.getElementById("brief-content");if(!el)return;
@@ -432,16 +489,33 @@ By Platform: ${AGGS.map(a=>`${a}: ${byA[a].orders} orders AED ${byA[a].sales.toF
 Top 3: ${top3.map(x=>`${x.label}: ${fmtPct(x.oc)}`).join(", ")}
 Bottom 3: ${bot3.map(x=>`${x.label}: ${fmtPct(x.oc)}`).join(", ")}
 Zeros: ${zeros.length?zeros.join(", "):"None"}
-Return ONLY valid JSON: {"headline":"<15w>","wins":["w1","w2","w3"],"issues":["i1","i2","i3"],"actions":["a1","a2","a3"],"insight":"2-3 sentences"}`;
+Return ONLY valid JSON, no markdown:
+{"headline":"<max 15 word summary>","keyWin":"<one specific positive thing that worked today, with numbers — e.g. 'Oregano Town Square Keeta orders up 45% from yesterday's Showcase 50% OFF launch'>","wins":["specific win 1","win 2","win 3"],"issues":["actionable issue 1","issue 2","issue 3"],"actions":["concrete BD action 1","action 2","action 3"],"insight":"2-3 sentence strategic observation"}`;
   try{
     const resp=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
     if(!resp.ok)throw new Error("cors");
     const j=await resp.json();if(j.error)throw new Error(j.error.message);
     const b=JSON.parse((j.content?.[0]?.text||"").replace(/```json|```/g,"").trim());
-    el.innerHTML=`<div style="font-size:15px;font-weight:700;color:#FCD34D;margin-bottom:12px;line-height:1.4">${b.headline||""}</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:10px">
+    el.innerHTML=`<div style="font-size:15px;font-weight:700;color:#FCD34D;margin-bottom:10px;line-height:1.4">${b.headline||""}</div>
+      ${b.keyWin?`<div style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);border-radius:6px;padding:10px 14px;margin-bottom:14px;display:flex;gap:10px;align-items:flex-start"><span style="font-size:18px;flex-shrink:0">🎯</span><div><div style="font-size:10px;font-weight:700;color:#22C55E;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Key Win Today</div><div style="font-size:13px;color:#86EFAC;line-height:1.5;font-weight:500">${b.keyWin}</div></div></div>`:''}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:12px">
         ${[["✅ What Worked","#22C55E",b.wins],["⚠️ Needs Attention","#EF4444",b.issues],["📋 Actions Today","#f59e0b",b.actions]].map(([t,c,items])=>`<div><div style="font-size:10px;font-weight:700;color:${c};text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">${t}</div>${(items||[]).map(i=>`<div style="font-size:12px;margin-bottom:4px;line-height:1.5">• ${i}</div>`).join("")}</div>`).join("")}
-      </div>${b.insight?`<div style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);border-radius:6px;padding:8px 12px;font-size:12px;color:#FDE68A;line-height:1.6">💡 ${b.insight}</div>`:""}`;
+      </div>
+      ${b.insight?`<div style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);border-radius:6px;padding:8px 12px;font-size:12px;color:#FDE68A;line-height:1.6;margin-bottom:14px">💡 ${b.insight}</div>`:""}
+      <div style="background:rgba(96,165,250,.06);border:1px solid rgba(96,165,250,.2);border-radius:8px;padding:12px;margin-top:8px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:14px">💬</span>
+          <span style="font-size:11px;font-weight:700;color:#60A5FA;text-transform:uppercase;letter-spacing:.8px">Ask AI About Your Data</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input type="text" id="ai-ask-input" placeholder="e.g. Why did Smokeys drop yesterday? What should I do about Oregano Marina?" onkeydown="if(event.key==='Enter')runAskAI()" style="flex:1;min-width:240px;background:#060c14;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:8px 12px;font-size:12px;outline:none" onfocus="this.style.borderColor='#60A5FA'" onblur="this.style.borderColor='#1b2f4a'">
+          <button onclick="runAskAI()" id="ai-ask-btn" style="background:#60A5FA;border:none;border-radius:5px;color:#000;font-weight:700;padding:8px 18px;font-size:12px;cursor:pointer;white-space:nowrap">Ask →</button>
+        </div>
+        <div id="ai-ask-suggestions" style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">
+          ${['Why did orders drop today?','Which outlet needs help?','What is my best campaign?','Suggest 3 quick wins'].map(q=>`<button onclick="document.getElementById('ai-ask-input').value='${q}';runAskAI()" style="background:transparent;border:1px solid #1b2f4a;border-radius:12px;color:#94a3b8;font-size:10px;padding:3px 10px;cursor:pointer">${q}</button>`).join('')}
+        </div>
+        <div id="ai-ask-answer" style="margin-top:10px;font-size:12px;color:#e2e8f0;line-height:1.6"></div>
+      </div>`;
   }catch(e){
     el.innerHTML=e.message==="cors"||e.message.includes("fetch")?`<div style="font-size:12px;color:#64748b;line-height:1.8"><span style="color:#f59e0b;font-weight:700">AI Brief runs in Claude.ai only.</span> All data below works perfectly on GitHub Pages.</div>`:`<div style="color:#64748b;font-size:12px">Brief unavailable</div>`;
   }
@@ -483,7 +557,10 @@ function parseCampaigns(csv){
     if(EXCLUDED_BRANDS.has(brandRaw.toLowerCase()))continue;
     const sd=parseDate(row[2]),ed=parseDate(row[3]);
     if(!sd||!ed)continue;
-    recs.push({aggregator:normAgg(row[0]),brand:normBrand(brandRaw),startDate:dk(sd),endDate:dk(ed),outlet:row[4]?.trim()||'All',comments:row[5]?.trim()||'',name:row[6]?.trim()||'',status:row[7]?.trim()||'Completed',validity:row[8]?.trim()||'',addons:[]});
+    const brandFinal=normBrand(brandRaw);
+    let outletFinal=row[4]?.trim()||'All';
+    if(brandFinal==='Fyoozhen'&&/^dip$/i.test(outletFinal))outletFinal='DIP (Fyoozhen)';
+    recs.push({aggregator:normAgg(row[0]),brand:brandFinal,startDate:dk(sd),endDate:dk(ed),outlet:outletFinal,comments:row[5]?.trim()||'',name:row[6]?.trim()||'',status:row[7]?.trim()||'Completed',validity:row[8]?.trim()||'',addons:[]});
   }
   return mergeKeetaFDAddons(recs);
 }
@@ -1054,6 +1131,59 @@ async function renderCampaigns(){
   }catch(err){
     console.error('[BD-Campaigns] Render error:',err);
     pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Render error</div><div style="color:#64748b;font-size:12px">${err.message}</div></div>`;
+  }
+}
+
+
+// ── ASK THE AI ─────────────────────────────────────────────────
+async function askAI(){
+  const input=document.getElementById('ai-question');
+  const answerEl=document.getElementById('ai-answer');
+  if(!input||!answerEl)return;
+  const q=(input.value||'').trim();
+  if(!q){input.focus();return;}
+  answerEl.style.display='block';
+  answerEl.innerHTML=`<div style="background:#111d2e;border:1px solid #1b2f4a;border-radius:6px;padding:10px 12px;font-size:12px;color:#94a3b8"><div style="margin-bottom:6px"><span style="color:#f59e0b;font-weight:700">You:</span> ${q}</div><div style="color:#64748b">⏳ Thinking...</div></div>`;
+  
+  // Build context for AI from current dashboard state
+  const ld=getLD(),pd=getPD(),ls=sumR(ld),ps=sumR(pd);
+  const byB={};BR.forEach(b=>{byB[b.n]=sumR(ld.filter(r=>r.brand===b.n));});
+  const pvB={};BR.forEach(b=>{pvB[b.n]=sumR(pd.filter(r=>r.brand===b.n));});
+  const byA={};AGGS.forEach(a=>{byA[a]=sumR(ld.filter(r=>r.aggregator===a));});
+  const cm=mkMap(ld,r=>`${r.brand}|${r.branch}|${r.aggregator}`),pm2=mkMap(pd,r=>`${r.brand}|${r.branch}|${r.aggregator}`);
+  const changes=Object.values(cm).map(c=>{const[brand,branch,aggregator]=c.k.split("|");const pv=pm2[c.k];return{label:`${brand} ${branch} ${aggregator}`,orders:c.orders,sales:c.sales,oc:pv?pctOf(c.orders,pv.orders):null};});
+  const top5=[...changes].filter(x=>x.oc!=null).sort((a,b)=>b.oc-a.oc).slice(0,5);
+  const bot5=[...changes].filter(x=>x.oc!=null).sort((a,b)=>a.oc-b.oc).slice(0,5);
+  
+  // Active campaigns context
+  const activeCampSummary=campLoaded?campaignData.filter(c=>campStatus(c)==='Running').slice(0,15).map(c=>`${c.name} (${c.brand}/${c.aggregator}, ends ${c.endDate})`).join('; ')||'none':'not loaded';
+  
+  const prompt=`You are the senior BD analyst for Oregano Restaurants UAE. Brands: Oregano, Lollorosso, Smokeys, Fyoozhen, Wicked Wings. Platforms: Deliveroo, Talabat, Noon, Careem, Keeta, Smiles, Instashop.
+
+CURRENT DASHBOARD CONTEXT (period: ${getPeriodLabel()}, vs ${getCompLabel()}):
+- Group total: ${ls.orders} orders | AED ${ls.sales.toFixed(0)} GMV | WoW Orders ${fmtPct(pctOf(ls.orders,ps.orders))} GMV ${fmtPct(pctOf(ls.sales,ps.sales))}
+- By Brand: ${BR.map(b=>`${b.n}: ${byB[b.n].orders} orders ${fmtPct(pctOf(byB[b.n].orders,pvB[b.n].orders))}`).join(' | ')}
+- By Platform: ${AGGS.map(a=>`${a}: ${byA[a].orders} orders`).join(' | ')}
+- Top 5 growing outlets: ${top5.map(x=>`${x.label} ${fmtPct(x.oc)}`).join('; ')}
+- Bottom 5 declining: ${bot5.map(x=>`${x.label} ${fmtPct(x.oc)}`).join('; ')}
+- Active campaigns: ${activeCampSummary}
+
+Commissions (NET of VAT): Talabat 20% (Oregano,Smokeys) / 27% (others) + 2% PG. Deliveroo 23% + 2% mandatory CPC. Noon 17% + 2% PG + 4% CPC + 2% cancellation. Careem 17% + 2% processing + 4% CPC. Keeta 0% intro / 16% then 20%. Smiles 18% (Oregano only). Instashop 16% (Oregano only).
+
+USER'S QUESTION: "${q}"
+
+Answer in 2-4 short paragraphs (max 250 words). Be specific, use actual numbers from the context above, and give actionable insight. If data is insufficient, say what you'd need to answer better. No markdown headers, just clean text paragraphs.`;
+  
+  try{
+    const resp=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:800,messages:[{role:"user",content:prompt}]})});
+    if(!resp.ok)throw new Error('cors');
+    const j=await resp.json();if(j.error)throw new Error(j.error.message);
+    const reply=(j.content?.[0]?.text||'').trim();
+    answerEl.innerHTML=`<div style="background:#111d2e;border:1px solid #1b2f4a;border-radius:6px;padding:12px 14px"><div style="margin-bottom:10px;font-size:12px"><span style="color:#f59e0b;font-weight:700">You:</span> <span style="color:#94a3b8">${q}</span></div><div style="border-top:1px solid #1b2f4a;padding-top:10px;font-size:13px;color:#e2e8f0;line-height:1.7;white-space:pre-wrap">${reply.replace(/</g,'&lt;')}</div><div style="display:flex;justify-content:flex-end;margin-top:10px"><button onclick="document.getElementById('ai-question').value='';document.getElementById('ai-answer').style.display='none';document.getElementById('ai-question').focus()" style="background:none;border:1px solid #1b2f4a;border-radius:5px;color:#64748b;padding:4px 12px;font-size:11px;cursor:pointer">Ask another</button></div></div>`;
+    input.value='';
+  }catch(e){
+    const isCors=e.message==='cors'||(e.message||'').includes('fetch');
+    answerEl.innerHTML=`<div style="background:#111d2e;border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:12px 14px;font-size:12px;color:#94a3b8">${isCors?'⚠️ Ask the AI runs only when the dashboard is opened from Claude.ai. External hosts cannot access the Anthropic API directly. All data on the dashboard works normally.':'⚠️ Could not get a response. Try again in a moment.'}</div>`;
   }
 }
 
