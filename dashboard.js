@@ -346,39 +346,39 @@ function renderOutlets(){
   
   // ── DEFAULT VIEW: Outlet grid with tiles ──
   const cm=mkMap(ld,r=>r.branch),pmO=mkMap(pd,r=>r.branch);
-  const platMap={};ld.forEach(r=>{if(!platMap[r.branch])platMap[r.branch]=new Set();platMap[r.branch].add(r.aggregator);});
   const brandMap={};ld.forEach(r=>{if(!brandMap[r.branch])brandMap[r.branch]=new Set();brandMap[r.branch].add(r.brand);});
-  const tiles=Object.values(cm).map(c=>{const branch=c.k;const pv=pmO[branch];return{branch,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,plats:[...(platMap[branch]||new Set())],brands:[...(brandMap[branch]||new Set())],oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};}).sort((a,b)=>b.sales-a.sales);
+  const tiles=Object.values(cm).map(c=>{const branch=c.k;const pv=pmO[branch];return{branch,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,brands:[...(brandMap[branch]||new Set())],oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};}).sort((a,b)=>b.sales-a.sales);
   
-  const dubai=tiles.filter(t=>!AUH.has(t.branch));
-  const auh=tiles.filter(t=>AUH.has(t.branch));
-  
-  const renderTile=t=>`<div onclick="selectOutlet('${t.branch.replace(/'/g,"\\'")}')" style="background:#0d1524;border:1px solid #1b2f4a;border-radius:10px;padding:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='#f59e0b';this.style.background='#111d2e'" onmouseout="this.style.borderColor='#1b2f4a';this.style.background='#0d1524'">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-      <div>
-        <div style="font-size:13px;font-weight:800;color:#e2e8f0">${t.branch}</div>
-        <div style="font-size:10px;color:#64748b;margin-top:2px">${t.brands.length} brand${t.brands.length!==1?'s':''} · ${t.plats.length} platform${t.plats.length!==1?'s':''}</div>
+  const renderTile=t=>{
+    const region=AUH.has(t.branch)?'AUH':'DXB';
+    return `<div onclick="selectOutlet('${t.branch.replace(/'/g,"\\'")}')" style="background:#0d1524;border:1px solid #1b2f4a;border-radius:10px;padding:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='#f59e0b';this.style.background='#111d2e'" onmouseout="this.style.borderColor='#1b2f4a';this.style.background='#0d1524'">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <div style="font-size:13px;font-weight:800;color:#e2e8f0">${t.branch}</div>
+            <span style="font-size:8px;font-weight:700;padding:1px 6px;border-radius:8px;background:#1b2f4a;color:#94a3b8;letter-spacing:.5px">${region}</span>
+          </div>
+          <div style="font-size:10px;color:#64748b;margin-top:2px">${t.brands.length} brand${t.brands.length!==1?'s':''}</div>
+        </div>
+        <div style="font-size:11px;color:${pctClr(t.sc)};font-weight:700;white-space:nowrap">${fmtPct(t.sc)}</div>
       </div>
-      <div style="font-size:11px;color:${pctClr(t.sc)};font-weight:700;white-space:nowrap">${fmtPct(t.sc)}</div>
-    </div>
-    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:8px">
-      <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Orders</div><div style="font-size:16px;font-weight:800;font-variant-numeric:tabular-nums">${t.orders.toLocaleString()}</div></div>
-      <div style="text-align:right"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">GMV</div><div style="font-size:16px;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(t.sales)}</div></div>
-    </div>
-    <div style="font-size:10px;color:#64748b;margin-top:6px">AOV AED ${t.aov.toFixed(1)}</div>
-    <div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1b2f4a">
-      ${t.plats.slice(0,6).map(p=>`<span style="background:${AC[p]||'#888'}22;color:${AC[p]||'#888'};font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px">${p}</span>`).join('')}
-    </div>
-  </div>`;
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:8px">
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Orders</div><div style="font-size:16px;font-weight:800;font-variant-numeric:tabular-nums">${t.orders.toLocaleString()}</div></div>
+        <div style="text-align:right"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">GMV</div><div style="font-size:16px;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(t.sales)}</div></div>
+      </div>
+      <div style="font-size:10px;color:#64748b;margin-top:6px">AOV AED ${t.aov.toFixed(1)}</div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1b2f4a;align-items:center">
+        ${t.brands.map(b=>`<span title="${b}" style="display:inline-flex;align-items:center;gap:3px;background:${BMAP[b]?.c||'#888'}22;color:${BMAP[b]?.c||'#888'};font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px">${logoImg(b,14)}${b}</span>`).join('')}
+      </div>
+    </div>`;
+  };
   
-  const dubaiGrid=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">${dubai.map(renderTile).join('')}</div>`;
-  const auhGrid=auh.length?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">${auh.map(renderTile).join('')}</div>`:'';
+  const grid=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${tiles.map(renderTile).join('')}</div>`;
   
   document.getElementById("page-outlets").innerHTML=
     makeFilterBar({hideOutlet:true})+
     `<div style="font-size:11px;color:#64748b;margin-bottom:14px">💡 Click any outlet tile to see brand-by-brand and platform breakdown.</div>
-    <div class="card"><div class="ct">📍 Dubai Outlets — ${getPeriodLabel()} (${dubai.length} outlets)</div>${dubaiGrid}</div>
-    ${auh.length?`<div class="card"><div class="ct">📍 Abu Dhabi Outlets — ${getPeriodLabel()} (${auh.length} outlets)</div>${auhGrid}</div>`:''}`;
+    <div class="card"><div class="ct">📍 All Outlets — ${getPeriodLabel()} (${tiles.length} outlets)</div>${grid}</div>`;
 }
 
 // PLATFORMS
