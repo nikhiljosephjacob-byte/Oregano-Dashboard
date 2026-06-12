@@ -779,6 +779,7 @@ function renderCampCalendar(){
   let dayDetail='';
   if(selDay){
     const d=new Date(selDay+'T12:00:00');
+    const isActualToday=selDay===latest;
     const dayCamps=filtered.filter(c=>c.startDate<=selDay&&c.endDate>=selDay);
     const starting=dayCamps.filter(c=>c.startDate===selDay);
     const ending=dayCamps.filter(c=>c.endDate===selDay);
@@ -804,9 +805,9 @@ function renderCampCalendar(){
         </div>
         <button onclick="selDay=null;renderCampaigns()" style="background:none;border:1px solid #1b2f4a;border-radius:5px;color:#64748b;padding:4px 12px;font-size:11px;cursor:pointer">✕ Close</button>
       </div>
-      ${starting.length>0?`<div style="margin-bottom:14px"><div style="font-size:10px;color:#22C55E;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">▶ Starting Today (${starting.length})</div>${starting.map(renderCampLink).join('')}</div>`:''}
-      ${ending.length>0?`<div style="margin-bottom:14px"><div style="font-size:10px;color:#EF4444;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">◀ Ending Today (${ending.length})</div>${ending.map(renderCampLink).join('')}</div>`:''}
-      ${ongoing.length>0?`<div><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">⏵ Ongoing (${ongoing.length})</div>${ongoing.slice(0,8).map(renderCampLink).join('')}${ongoing.length>8?`<div style="text-align:center;color:#64748b;font-size:11px;padding:6px">+${ongoing.length-8} more — use Active & Upcoming tab to see all</div>`:''}</div>`:''}
+      ${starting.length>0?`<div style="margin-bottom:14px"><div style="font-size:10px;color:#22C55E;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">▶ Starting on this day (${starting.length})</div>${starting.map(renderCampLink).join('')}</div>`:''}
+      ${ending.length>0?`<div style="margin-bottom:14px"><div style="font-size:10px;color:#EF4444;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">◀ Ending on this day (${ending.length})</div>${ending.map(renderCampLink).join('')}</div>`:''}
+      ${ongoing.length>0?`<div><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">⏵ Ongoing (started earlier, not ending on this day) (${ongoing.length})</div>${ongoing.slice(0,8).map(renderCampLink).join('')}${ongoing.length>8?`<div style="text-align:center;color:#64748b;font-size:11px;padding:6px">+${ongoing.length-8} more — use Active & Upcoming tab to see all</div>`:''}</div>`:''}
       ${dayCamps.length===0?`<div style="color:#64748b;font-size:12px;padding:10px;text-align:center">No campaigns active on this day for the selected filter.</div>`:''}
     </div>`;
   }
@@ -1031,7 +1032,7 @@ async function renderCampaigns(){
   }
 }
 
-// INIT
+// INIT — Authentication gates the data load (called from index.html after login)
 const navLogo=document.getElementById("nav-logo");
 if(navLogo&&typeof LOGOS!=="undefined")navLogo.src=LOGOS["Oregano"]||"";
-doLoad();
+// Note: doLoad() is now called from index.html after successful login
