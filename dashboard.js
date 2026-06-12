@@ -480,12 +480,34 @@ function parseCampaigns(csv){
     if(!row[0]?.trim()&&!row[1]?.trim())continue;
     if((row[7]?.trim()||'').toLowerCase()==='cancelled')continue;
     const brandRaw=(row[1]||'').trim();
-    if(EXCLUDED_BRANDS.has(brandRaw.toLowerCase()))continue; // Skip Burgerstack
+    if(EXCLUDED_BRANDS.has(brandRaw.toLowerCase()))continue;
     const sd=parseDate(row[2]),ed=parseDate(row[3]);
     if(!sd||!ed)continue;
-    recs.push({aggregator:normAgg(row[0]),brand:normBrand(brandRaw),startDate:dk(sd),endDate:dk(ed),outlet:row[4]?.trim()||'All',comments:row[5]?.trim()||'',name:row[6]?.trim()||'',status:row[7]?.trim()||'Completed',validity:row[8]?.trim()||''});
+    recs.push({aggregator:normAgg(row[0]),brand:normBrand(brandRaw),startDate:dk(sd),endDate:dk(ed),outlet:row[4]?.trim()||'All',comments:row[5]?.trim()||'',name:row[6]?.trim()||'',status:row[7]?.trim()||'Completed',validity:row[8]?.trim()||'',addons:[]});
   }
-  return recs;
+  return mergeKeetaFDAddons(recs);
+}
+
+// Merge "FD (AED 2)" Keeta entries into their parent discount campaign on the same brand+dates
+function mergeKeetaFDAddons(recs){
+  const isFD=c=>c.aggregator==='Keeta'&&/(\bfd\b|free\s*delivery)/i.test(c.comments+' '+c.name);
+  const fdRows=recs.filter(isFD);
+  const nonFD=recs.filter(c=>!isFD(c));
+  
+  fdRows.forEach(fd=>{
+    // Find parent: same brand + Keeta + overlapping date range, not itself
+    const parent=nonFD.find(p=>p.aggregator==='Keeta'&&p.brand===fd.brand&&p.startDate<=fd.endDate&&p.endDate>=fd.startDate);
+    if(parent){
+      parent.addons=parent.addons||[];
+      parent.addons.push({name:'FD AED 2',comments:fd.comments,startDate:fd.startDate,endDate:fd.endDate});
+    } else {
+      // No parent found — keep as standalone (rare edge case)
+      nonFD.push(fd);
+    }
+  });
+  
+  console.log('[BD-Campaigns] Merged',fdRows.length,'Keeta FD entries into parent campaigns');
+  return nonFD;
 }
 
 function campStatus(c){
@@ -787,10 +809,11 @@ function renderCampCalendar(){
     
     const renderCampLink=c=>{
       const clr=BMAP[c.brand]?.c||'#888';
+      const addonTag=(c.addons&&c.addons.length)?` <span style="background:rgba(232,214,20,0.15);color:#E8D614;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:5px">+ ${c.addons.map(a=>a.name).join(', ')}</span>`:'';
       return `<div onclick="selectCamp(${campaignData.indexOf(c)})" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:#111d2e;border-left:3px solid ${clr};border-radius:5px;cursor:pointer;margin-bottom:5px" onmouseover="this.style.background='#1b2f4a'" onmouseout="this.style.background='#111d2e'">
         ${logoImg(c.brand,22)}
         <div style="flex:1;min-width:0">
-          <div style="font-size:12px;font-weight:700;color:#e2e8f0">${c.name}</div>
+          <div style="font-size:12px;font-weight:700;color:#e2e8f0">${c.name}${addonTag}</div>
           <div style="font-size:10px;color:#94a3b8;margin-top:1px"><span style="color:${clr}">${c.brand}</span> · <span style="color:${AC[c.aggregator]||'#888'}">${c.aggregator}</span> · ${c.outlet||'All'} · ${fmtCampDateRange(c.startDate,c.endDate)}</div>
         </div>
         <button style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:4px 10px;font-size:10px;font-weight:600;cursor:pointer">View →</button>
@@ -830,7 +853,8 @@ function campTableHTML(title,camps,showImpact){
     const imp=showImpact&&(st==='Completed'||st==='Running')?campImpactExtended(c):null;
     const viewBtn=`<button onclick="selectCamp(${realIdx})" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:3px 8px;font-size:10px;cursor:pointer;white-space:nowrap">View →</button>`;
     const offer=`<span style="font-size:11px;color:#94a3b8" title="${(c.comments||'').replace(/"/g,'&quot;')}">${(c.comments||'').length>50?(c.comments||'').slice(0,50)+'…':(c.comments||'')}</span>`;
-    let row=`<tr><td><strong style="font-size:12px">${c.name||'(no name)'}</strong></td>
+    const addonTag=(c.addons&&c.addons.length)?` <span style="background:rgba(232,214,20,0.15);color:#E8D614;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:5px;border:1px solid rgba(232,214,20,0.3)" title="${c.addons.map(a=>a.name+': '+a.comments).join(' | ').replace(/"/g,'&quot;')}">+ ${c.addons.map(a=>a.name).join(', ')}</span>`:'';
+    let row=`<tr><td><strong style="font-size:12px">${c.name||'(no name)'}</strong>${addonTag}</td>
       <td><span style="color:${b?.c||'#888'};font-weight:700;font-size:11px">${c.brand}</span></td>
       <td><span style="color:${AC[c.aggregator]||'#888'};font-weight:700;font-size:11px">${c.aggregator}</span></td>
       <td>${offer}</td>
@@ -893,6 +917,7 @@ function campDetailHTML(c,idx){
           ${!c.outlet||c.outlet==='All'?'All Outlets':c.outlet}<br>
           ${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)} (${imp.days} day${imp.days!==1?'s':''})<br>
           <span style="color:#e2e8f0;line-height:1.6">${c.comments||''}</span>
+          ${(c.addons&&c.addons.length)?`<div style="margin-top:10px;padding:8px 12px;background:rgba(232,214,20,0.08);border-left:3px solid #E8D614;border-radius:4px"><div style="font-size:10px;color:#E8D614;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">⊕ Co-funded Add-ons</div>${c.addons.map(a=>`<div style="font-size:11px;color:#FCD34D;line-height:1.5"><strong>${a.name}</strong> · ${a.comments} · ${fmtCampDateRange(a.startDate,a.endDate)}</div>`).join('')}</div>`:''}
         </div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0">
