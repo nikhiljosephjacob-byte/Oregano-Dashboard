@@ -451,7 +451,7 @@ Return ONLY valid JSON: {"headline":"<15w>","wins":["w1","w2","w3"],"issues":["i
 // ── CAMPAIGN MANAGER ──────────────────────────────────────────────────────
 
 const CAMPAIGN_GID="1647275459";
-let campaignData=[],campLoaded=false,campTab='active',calMonth=null,selCamp=null;
+let selDay=null;let campaignData=[],campLoaded=false,campTab='active',calMonth=null,selCamp=null;
 let campFBrands=new Set(),campFPlatforms=new Set(),campFStatuses=new Set();
 let campSort={col:'startDate',dir:-1};
 
@@ -620,39 +620,168 @@ function campFilterBar(){
 
 
 
+// ── CAMPAIGN CALENDAR — Heatmap + filterable, interactive ──
+let calFilter='all'; // 'all', 'brand:X', 'platform:Y'
+let calView='month'; // 'month' or 'list'
+
+function setCalFilter(f){calFilter=f;renderCampaigns();}
+function setCalView(v){calView=v;renderCampaigns();}
+
 function renderCampCalendar(){
   if(!calMonth){const d=latest?new Date(latest+'T12:00:00'):new Date();calMonth=new Date(d.getFullYear(),d.getMonth(),1);}
   const yr=calMonth.getFullYear(),mo=calMonth.getMonth();
   const firstDow=new Date(yr,mo,1).getDay(),dim=new Date(yr,mo+1,0).getDate();
   const mNames=['January','February','March','April','May','June','July','August','September','October','November','December'];
   const dNames=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  let h=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-    <button onclick="calMonth=new Date(calMonth.getFullYear(),calMonth.getMonth()-1,1);renderCampaigns()" style="background:#0d1524;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:6px 14px;cursor:pointer;font-size:12px">← Prev</button>
-    <div style="font-size:15px;font-weight:700">${mNames[mo]} ${yr}</div>
-    <button onclick="calMonth=new Date(calMonth.getFullYear(),calMonth.getMonth()+1,1);renderCampaigns()" style="background:#0d1524;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:6px 14px;cursor:pointer;font-size:12px">Next →</button>
-  </div>
-  <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:4px">
-    ${dNames.map(d=>`<div style="text-align:center;font-size:10px;color:#64748b;font-weight:700;padding:4px 0">${d}</div>`).join('')}
-  </div>
-  <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">`;
-  for(let i=0;i<firstDow;i++)h+=`<div style="min-height:82px;background:#0a1120;border-radius:5px"></div>`;
+  
+  // Apply filter to campaign list
+  const allBrands=[...new Set(campaignData.map(c=>c.brand))].sort();
+  const allPlats=[...new Set(campaignData.map(c=>c.aggregator))].sort();
+  let filtered=campaignData;
+  if(calFilter.startsWith('brand:'))filtered=campaignData.filter(c=>c.brand===calFilter.slice(6));
+  else if(calFilter.startsWith('platform:'))filtered=campaignData.filter(c=>c.aggregator===calFilter.slice(9));
+  
+  // Build day-by-day stats for the month
+  const dayStats={};
+  for(let d=1;d<=dim;d++){
+    const key=dk(new Date(yr,mo,d));
+    const todays=filtered.filter(c=>c.startDate<=key&&c.endDate>=key);
+    const newStart=todays.filter(c=>c.startDate===key);
+    const newEnd=todays.filter(c=>c.endDate===key);
+    const gmv=allData.filter(r=>r.date===key&&(!calFilter.startsWith('brand:')||r.brand===calFilter.slice(6))&&(!calFilter.startsWith('platform:')||r.aggregator===calFilter.slice(9))).reduce((s,r)=>s+r.sales,0);
+    dayStats[d]={count:todays.length,newStart:newStart.length,newEnd:newEnd.length,gmv,campaigns:todays,startCamps:newStart,endCamps:newEnd};
+  }
+  
+  // Find max GMV for heatmap intensity
+  const maxGmv=Math.max(...Object.values(dayStats).map(s=>s.gmv),1);
+  const heatmap=g=>{
+    if(g<=0)return 0;
+    return Math.min(1,g/maxGmv);
+  };
+  
+  // Filter buttons
+  const filterBtn=(val,label,active)=>{
+    const isAct=calFilter===val;
+    return `<button onclick="setCalFilter('${val}')" style="padding:4px 12px;border-radius:5px;border:1px solid ${isAct?'#f59e0b':'#1b2f4a'};background:${isAct?'#f59e0b22':'transparent'};color:${isAct?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px">${label}</button>`;
+  };
+  
+  const filterRow=`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;align-items:center">
+    ${filterBtn('all','All Campaigns')}
+    <span style="font-size:10px;color:#64748b;margin:0 4px">|</span>
+    ${allBrands.map(b=>filterBtn(`brand:${b}`,`${logoImg(b,16)}${b}`)).join('')}
+    <span style="font-size:10px;color:#64748b;margin:0 4px">|</span>
+    ${allPlats.map(p=>filterBtn(`platform:${p}`,`${logoImg(p,16)}${p}`)).join('')}
+  </div>`;
+  
+  // Calendar grid
+  let calH=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+    <div style="display:flex;align-items:center;gap:6px">
+      <button onclick="calMonth=new Date(calMonth.getFullYear(),calMonth.getMonth()-1,1);renderCampaigns()" style="background:#0d1524;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;cursor:pointer;font-size:12px">←</button>
+      <div style="font-size:14px;font-weight:700;min-width:120px;text-align:center">${mNames[mo]} ${yr}</div>
+      <button onclick="calMonth=new Date(calMonth.getFullYear(),calMonth.getMonth()+1,1);renderCampaigns()" style="background:#0d1524;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;cursor:pointer;font-size:12px">→</button>
+      <button onclick="calMonth=new Date(new Date(latest+'T12:00:00').getFullYear(),new Date(latest+'T12:00:00').getMonth(),1);renderCampaigns()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:5px 10px;cursor:pointer;font-size:11px;margin-left:6px">Today</button>
+    </div>
+    <div style="font-size:10px;color:#64748b;display:flex;align-items:center;gap:10px">
+      <span>💚 Low GMV</span>
+      <div style="display:flex;gap:1px">
+        ${[.1,.3,.5,.7,1].map(v=>`<div style="width:18px;height:8px;background:rgba(34,197,94,${v})"></div>`).join('')}
+      </div>
+      <span>💚 High GMV</span>
+    </div>
+  </div>`;
+  
+  // Day headers
+  calH+=`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:4px">${dNames.map(d=>`<div style="text-align:center;font-size:10px;color:#64748b;font-weight:700;padding:4px 0">${d}</div>`).join('')}</div>`;
+  
+  // Calendar cells
+  calH+=`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">`;
+  for(let i=0;i<firstDow;i++)calH+=`<div style="min-height:90px;background:rgba(10,17,32,.5);border-radius:5px"></div>`;
+  
   for(let d=1;d<=dim;d++){
     const key=dk(new Date(yr,mo,d));
     const isToday=key===latest;
-    const dayCamps=campaignData.map((c,i)=>({c,i})).filter(({c})=>c.startDate<=key&&c.endDate>=key);
-    const gmv=allData.filter(r=>r.date===key).reduce((s,r)=>s+r.sales,0);
-    const blocks=dayCamps.slice(0,3).map(({c,i})=>{
-      const clr=AC[c.aggregator]||BMAP[c.brand]?.c||'#888';
-      return`<div onclick="selectCamp(${i})" style="background:${clr}28;border-left:2px solid ${clr};padding:1px 4px;font-size:9px;color:${clr};border-radius:2px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px" title="${c.name} — ${c.brand} on ${c.aggregator}">${c.name}</div>`;
+    const isPast=key<latest;
+    const isFuture=key>latest;
+    const s=dayStats[d];
+    const heat=heatmap(s.gmv);
+    
+    // Background tint based on GMV heat
+    const heatBg=heat>0?`background:linear-gradient(180deg, rgba(34,197,94,${heat*0.15}) 0%, rgba(13,21,36,1) 100%);`:`background:#0d1524;`;
+    
+    const dotClr=s.count>0?(isFuture?'#F59E0B':isPast?'#64748b':'#22C55E'):'#1b2f4a';
+    
+    // Build compact info: count + start/end indicators
+    let info='';
+    if(s.count>0){
+      info=`<div style="display:flex;align-items:center;gap:4px;margin-top:3px;flex-wrap:wrap">
+        <span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:#e2e8f0;font-weight:700;background:rgba(255,255,255,.06);padding:1px 6px;border-radius:8px">${s.count} <span style="color:#64748b;font-weight:500">live</span></span>
+        ${s.newStart>0?`<span title="${s.newStart} starting today" style="color:#22C55E;font-size:9px;font-weight:700">▶${s.newStart}</span>`:''}
+        ${s.newEnd>0?`<span title="${s.newEnd} ending today" style="color:#EF4444;font-size:9px;font-weight:700">◀${s.newEnd}</span>`:''}
+      </div>`;
+    }
+    
+    // GMV preview (compact)
+    const gmvLine=s.gmv>0?`<div style="font-size:9px;color:#64748b;margin-top:2px">${fmtAED(s.gmv)}</div>`:'';
+    
+    // Top 2 unique campaign names (deduped)
+    const uniqueNames=[...new Set(s.campaigns.map(c=>c.name))].slice(0,2);
+    const namesPreview=uniqueNames.map(n=>{
+      const c=s.campaigns.find(x=>x.name===n);
+      const clr=BMAP[c.brand]?.c||AC[c.aggregator]||'#94a3b8';
+      return `<div onclick="event.stopPropagation();selectCamp(${campaignData.indexOf(c)})" style="background:${clr}1a;border-left:2px solid ${clr};color:${clr};font-size:9px;padding:1px 4px;border-radius:2px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px" title="${n}">${n}</div>`;
     }).join('');
-    h+=`<div style="min-height:82px;background:#0d1524;border:1px solid ${isToday?'#f59e0b':'#1b2f4a'};border-radius:5px;padding:4px">
-      <div style="font-size:11px;font-weight:700;color:${isToday?'#f59e0b':'#94a3b8'}">${d}</div>
-      ${gmv>0?`<div style="font-size:9px;color:#64748b">${fmtAED(gmv)}</div>`:''}
-      ${blocks}
-      ${dayCamps.length>3?`<div style="font-size:9px;color:#64748b">+${dayCamps.length-3} more</div>`:''}
+    const moreLine=uniqueNames.length<s.campaigns.length?`<div style="font-size:8px;color:#64748b;margin-top:1px">+${s.campaigns.length-uniqueNames.length} more</div>`:'';
+    
+    calH+=`<div onclick="if(${s.count}>0){selDay='${key}';renderCampaigns()}" style="min-height:90px;${heatBg}border:1px solid ${isToday?'#f59e0b':'#1b2f4a'};border-radius:5px;padding:5px;cursor:${s.count>0?'pointer':'default'};transition:all .12s" ${s.count>0?`onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${isToday?'#f59e0b':'#1b2f4a'}'"`:''}>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:11px;font-weight:700;color:${isToday?'#f59e0b':isPast?'#94a3b8':'#e2e8f0'}">${d}</span>
+        ${s.count>0?`<span style="width:6px;height:6px;border-radius:50%;background:${dotClr}"></span>`:''}
+      </div>
+      ${gmvLine}
+      ${info}
+      ${namesPreview}
+      ${moreLine}
     </div>`;
   }
-  return h+'</div>';
+  calH+=`</div>`;
+  
+  // Selected day detail (below calendar)
+  let dayDetail='';
+  if(selDay){
+    const d=new Date(selDay+'T12:00:00');
+    const dayCamps=filtered.filter(c=>c.startDate<=selDay&&c.endDate>=selDay);
+    const starting=dayCamps.filter(c=>c.startDate===selDay);
+    const ending=dayCamps.filter(c=>c.endDate===selDay);
+    const ongoing=dayCamps.filter(c=>c.startDate<selDay&&c.endDate>selDay);
+    
+    const renderCampLink=c=>{
+      const clr=BMAP[c.brand]?.c||'#888';
+      return `<div onclick="selectCamp(${campaignData.indexOf(c)})" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:#111d2e;border-left:3px solid ${clr};border-radius:5px;cursor:pointer;margin-bottom:5px" onmouseover="this.style.background='#1b2f4a'" onmouseout="this.style.background='#111d2e'">
+        ${logoImg(c.brand,22)}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:700;color:#e2e8f0">${c.name}</div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:1px"><span style="color:${clr}">${c.brand}</span> · <span style="color:${AC[c.aggregator]||'#888'}">${c.aggregator}</span> · ${c.outlet||'All'} · ${fmtCampDateRange(c.startDate,c.endDate)}</div>
+        </div>
+        <button style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:4px 10px;font-size:10px;font-weight:600;cursor:pointer">View →</button>
+      </div>`;
+    };
+    
+    dayDetail=`<div class="card" style="margin-top:14px;border-color:#f59e0b44">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-size:14px;font-weight:800;color:#f59e0b">${fmtDisp(selDay)}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px">${dayCamps.length} campaign${dayCamps.length!==1?'s':''} live${dayCamps.length===0?' on this day':''}</div>
+        </div>
+        <button onclick="selDay=null;renderCampaigns()" style="background:none;border:1px solid #1b2f4a;border-radius:5px;color:#64748b;padding:4px 12px;font-size:11px;cursor:pointer">✕ Close</button>
+      </div>
+      ${starting.length>0?`<div style="margin-bottom:14px"><div style="font-size:10px;color:#22C55E;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">▶ Starting Today (${starting.length})</div>${starting.map(renderCampLink).join('')}</div>`:''}
+      ${ending.length>0?`<div style="margin-bottom:14px"><div style="font-size:10px;color:#EF4444;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">◀ Ending Today (${ending.length})</div>${ending.map(renderCampLink).join('')}</div>`:''}
+      ${ongoing.length>0?`<div><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">⏵ Ongoing (${ongoing.length})</div>${ongoing.slice(0,8).map(renderCampLink).join('')}${ongoing.length>8?`<div style="text-align:center;color:#64748b;font-size:11px;padding:6px">+${ongoing.length-8} more — use Active & Upcoming tab to see all</div>`:''}</div>`:''}
+      ${dayCamps.length===0?`<div style="color:#64748b;font-size:12px;padding:10px;text-align:center">No campaigns active on this day for the selected filter.</div>`:''}
+    </div>`;
+  }
+  
+  return filterRow+calH+dayDetail;
 }
 
 function campTableHTML(title,camps,showImpact){
