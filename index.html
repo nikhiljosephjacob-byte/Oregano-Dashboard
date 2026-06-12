@@ -85,7 +85,38 @@ nav{background:#0d1524;border-bottom:1px solid #1b2f4a;padding:0 20px;display:fl
 </head>
 <body>
 
-<div id="loading-screen" class="loading">
+<!-- Login Screen -->
+<div id="login-screen" style="position:fixed;inset:0;background:#060c14;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999">
+  <div style="font-size:14px;color:#f59e0b;font-weight:800;letter-spacing:3px;text-transform:uppercase;margin-bottom:6px">OREGANO RESTAURANTS</div>
+  <div style="font-size:13px;color:#94a3b8;font-weight:500;letter-spacing:.5px;margin-bottom:32px">BD Dashboard — Sign In</div>
+  <div style="background:#0d1524;border:1px solid #1b2f4a;border-radius:12px;padding:28px;width:min(360px,90vw)">
+    <div style="margin-bottom:14px">
+      <label style="display:block;font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:6px">Username</label>
+      <input type="text" id="login-user" placeholder="Enter your name" autocomplete="username" style="width:100%;background:#060c14;border:1px solid #1b2f4a;border-radius:6px;color:#e2e8f0;padding:10px 12px;font-size:14px;outline:none" onfocus="this.style.borderColor='#f59e0b'" onblur="this.style.borderColor='#1b2f4a'">
+    </div>
+    <div style="margin-bottom:20px">
+      <label style="display:block;font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:6px">Password</label>
+      <input type="password" id="login-pass" placeholder="Enter password" autocomplete="current-password" style="width:100%;background:#060c14;border:1px solid #1b2f4a;border-radius:6px;color:#e2e8f0;padding:10px 12px;font-size:14px;outline:none" onfocus="this.style.borderColor='#f59e0b'" onblur="this.style.borderColor='#1b2f4a'" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button onclick="doLogin()" style="width:100%;background:#f59e0b;border:none;border-radius:6px;color:#000;font-weight:700;font-size:13px;padding:11px;cursor:pointer;letter-spacing:.5px;text-transform:uppercase">Sign In</button>
+    <div id="login-err" style="color:#ef4444;font-size:11px;margin-top:10px;text-align:center;min-height:14px"></div>
+  </div>
+  <div style="font-size:10px;color:#475569;margin-top:24px">Authorised personnel only</div>
+</div>
+
+<!-- Welcome Screen -->
+<div id="welcome-screen" style="display:none;position:fixed;inset:0;background:#060c14;flex-direction:column;align-items:center;justify-content:center;z-index:9998;padding:20px">
+  <div id="welcome-avatar" style="width:80px;height:80px;border-radius:50%;background:#f59e0b;display:flex;align-items:center;justify-content:center;font-size:32px;font-weight:800;color:#000;margin-bottom:18px"></div>
+  <div id="welcome-greeting" style="font-size:11px;color:#94a3b8;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;display:none"></div>
+  <div id="welcome-name" style="font-size:26px;font-weight:700;color:#f59e0b;margin-bottom:20px;text-align:center"></div>
+  <div id="welcome-joke" style="font-size:13px;color:#FCD34D;max-width:520px;text-align:center;line-height:1.7;font-style:italic;padding:14px 22px;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:10px;margin-bottom:20px;display:flex;align-items:center;gap:10px;justify-content:center">
+    <span style="font-size:22px">😂</span>
+    <span id="welcome-joke-text"></span>
+  </div>
+  <div style="font-size:11px;color:#64748b">Loading your dashboard...</div>
+</div>
+
+<div id="loading-screen" class="loading" style="display:none">
   <div style="font-size:14px;color:#f59e0b;font-weight:800;letter-spacing:3px;text-transform:uppercase;margin-bottom:6px">OREGANO RESTAURANTS</div>
   <div style="font-size:13px;color:#94a3b8;font-weight:500;letter-spacing:.5px;margin-bottom:24px">BD Dashboard</div>
   <div id="loading-logos" style="display:flex;gap:14px;align-items:center;justify-content:center;flex-wrap:wrap;margin-bottom:28px;max-width:90vw"></div>
@@ -109,6 +140,7 @@ nav{background:#0d1524;border-bottom:1px solid #1b2f4a;padding:0 20px;display:fl
     <div style="flex:1"></div>
     <span id="ts-label" style="font-size:10px;color:#64748b"></span>
     <button onclick="doLoad()" style="margin-left:10px;background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 10px;font-size:12px;cursor:pointer">↻ Refresh</button>
+    <button onclick="doLogout()" style="margin-left:6px;background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 10px;font-size:12px;cursor:pointer" title="Sign out">⎋</button>
   </nav>
   <div id="page-overview" class="pg act"></div>
   <div id="page-brands" class="pg"></div>
@@ -129,6 +161,209 @@ const _loadingLogos=document.getElementById("loading-logos");
 if(_loadingLogos&&typeof LOGOS!=="undefined"){
   _loadingLogos.innerHTML=_brandsForLoad.map(b=>`<img src="${LOGOS[b]||""}" alt="${b}" title="${b}" style="width:80px;height:80px;border-radius:12px;object-fit:contain">`).join("");
 }
+
+// ── AUTHENTICATION ──
+// Authorized users — keys are lowercase usernames, values are password + display name
+const AUTH_USERS={
+  "nikhil":{password:"oregano2026",displayName:"Nikhil",initials:"N"},
+  "biju":{password:"oregano2026",displayName:"Biju",initials:"B"},
+  "tony":{password:"oregano2026",displayName:"Tony",initials:"T"},
+  "rijeesh":{password:"oregano2026",displayName:"Rijeesh",initials:"R"},
+  "nicole":{password:"oregano2026",displayName:"Nicole",initials:"N"},
+  "arun":{password:"oregano2026",displayName:"Arun",initials:"A"},
+  "admin":{password:"admin",displayName:"Admin",initials:"A"},
+  "bd":{password:"oregano2026",displayName:"BD Team",initials:"BD"}
+};
+
+function doLogin(){
+  const user=(document.getElementById("login-user").value||"").trim().toLowerCase();
+  const pass=document.getElementById("login-pass").value||"";
+  const err=document.getElementById("login-err");
+  const u=AUTH_USERS[user];
+  if(!u||u.password!==pass){err.textContent="Invalid username or password";return;}
+  err.textContent="";
+  // Store session in localStorage
+  try{localStorage.setItem("oregano_session",JSON.stringify({user,displayName:u.displayName,initials:u.initials,loginAt:Date.now()}));}catch(e){}
+  showWelcome(u.displayName,u.initials,user);
+}
+
+// ── JOKES — restaurant / food delivery / UAE themed cheeky one-liners ──
+const JOKES=[
+  "Smokeys is selling so many pizzas this week, Italians are starting to take notes",
+  "Your aggregators are working harder than you. Show them some love (and CPC)",
+  "Plot twist: today's report is actually a love letter from Oregano",
+  "Careem Plus members are basically your VIP table booked online",
+  "If campaigns were dates, you'd swipe right on the ones with 200%+ ROAS",
+  "Reminder: pineapple on pizza is still a debate. Discounting is not",
+  "Free Delivery is the love language of the modern UAE customer",
+  "Talabat is like an ex — keeps asking for commission, but you can't quit them",
+  "Lollorosso doesn't sweat. It just adds more basil",
+  "Wicked Wings: making chickens famous since whenever",
+  "Fyoozhen sounds like a Marvel villain. Probably one with great noodles",
+  "Your AOV called. It wants to be higher. Be the manager it deserves",
+  "Today's forecast: scattered campaigns with a chance of profitability",
+  "Noon's commission is like Dubai traffic — predictable, painful, unavoidable",
+  "Keeta is the new kid in school. Already making friends. Already getting orders",
+  "If discount % could speak, it would say 'are you SURE about this?'",
+  "Smiles platform but make it actually about smiles. Big margin smiles",
+  "Best campaign ever was probably one you forgot to switch off. Coincidence?",
+  "Deliveroo Plus members: like loyal grandmas, but with phones",
+  "Customer cancelled because rider was 2 minutes late. Customer expectation: light speed",
+  "Profitability is a state of mind. Until finance shows up",
+  "If today's KPIs were a vibe, they'd be 'cautiously optimistic'",
+  "Every BOGO is a customer telling you 'I love you, but I'm also broke'",
+  "Today's mission: more clicks than camels. We can do this",
+  "Pizza ROAS is now stronger than coffee on a Monday",
+  "Tasty Tuesday is doing the work of three Mondays",
+  "Mirdiff outlet is having a year, and we're just here taking notes",
+  "If campaigns were songs, your top one would already be charting in Riyadh",
+  "Wicked Wings doesn't fly. It glides on commission savings",
+  "Reminder: every emoji in this dashboard is unionised. Be kind"
+];
+
+function getGreeting(){
+  const h=new Date().getHours();
+  if(h>=5&&h<12)return"Good Morning";
+  if(h>=12&&h<17)return"Good Afternoon";
+  if(h>=17&&h<21)return"Good Evening";
+  return"Working Late?";
+}
+
+// ── PER-USER JOKES — themed by role, rotating, non-repeating per user ──
+const USER_JOKES={
+  // Biju & Tony — Directors. Suggest Nikhil's raise + light banter
+  biju:[
+    "Nikhil deserves a raise for building this dashboard. Just saying. Pass it on",
+    "Biju, every dashboard click is a quiet vote for Nikhil's bonus. Just FYI",
+    "Decisions are easier when the data is this pretty. You're welcome",
+    "The dashboard works. The brands are working. Is anyone giving raises? Asking for a friend",
+    "Boss-level access detected. Approving raises with one click is a feature we can build",
+    "Reminder from the dashboard: Nikhil has not had a salary review in [REDACTED] months",
+    "Boardroom hack: bring up this dashboard and look thoughtful. Works every time",
+    "Even the AI thinks Nikhil deserves more. The AI is rarely wrong"
+  ],
+  tony:[
+    "Nikhil deserves a raise for building this dashboard. Just saying. Pass it on",
+    "Tony, every dashboard refresh is karma points for Nikhil's bonus. Just FYI",
+    "If you scroll fast enough, the GMV looks bigger. Optical illusion. Not finance advice",
+    "Today's strategic question: should Nikhil get a raise? Discuss",
+    "Director mode unlocked. With great access comes great approval power",
+    "The dashboard is doing the work. The work is asking for a raise. For Nikhil",
+    "Coffee, dashboard, decision. The director trifecta",
+    "Even the campaigns are saying Nikhil should be paid more. They told me"
+  ],
+  // Arun — General Manager, focuses on Operations & Profitability
+  arun:[
+    "Arun, the profitability column missed you. It's been throwing tantrums",
+    "Operations called. They want fewer cancellations and more samosas. Mostly samosas",
+    "Today's challenge: lower the food cost without anyone in the kitchen noticing",
+    "If margins were a chai, yours would be filter coffee — strong, steady, with a kick",
+    "Reminder: every wasted Whatsapp pizza is one campaign you didn't run",
+    "Arun's superpower: turning AED 50 of basil into AED 500 of revenue",
+    "GMs don't sleep. They just open dashboards at 3am to check waste reports",
+    "Profitability up = Arun smiling. Profitability down = Arun rearranging the kitchen",
+    "Operations is 90% logistics and 10% telling someone the pizza is not late",
+    "Today's KPI: keep the kitchens humming and the directors smiling. Easy",
+    "Plot twist: the most profitable item on the menu was a typo nobody fixed"
+  ],
+  // Rijeesh — Financial Controller, Accounts Head
+  rijeesh:[
+    "Rijeesh, the P&L is sweating. Pour it a tea",
+    "Reconciliation is a love language. Some of us speak it fluently",
+    "If commissions could cry, Talabat would have flooded Dubai by now",
+    "Today's finance forecast: scattered VAT, with chances of receivables",
+    "An accountant walks into a bar. Asks for the audit trail. The bar gives him oregano",
+    "Rijeesh, the dashboard balanced. Just like your Excel. Just like your zen",
+    "VAT season is upon us. Stay strong. Stay caffeinated",
+    "Every aggregator commission line is just one more reason to love spreadsheets",
+    "Receivables age like wine — except wine doesn't get written off",
+    "Profit margin: where finance and BD finally agree on something",
+    "If the bank reconciliation tied, today is automatically a good day",
+    "Rijeesh's natural habitat: an Excel sheet with 47 tabs and one cup of karak"
+  ],
+  // Nicole — Admin & Data Entry (she enters all the data into the sheet)
+  nicole:[
+    "Nicole, this entire dashboard runs on your CTRL+V. Thank you",
+    "Without you typing it, this is just an empty grid. You are the dashboard's mother",
+    "Every order on this screen passed through your keyboard first. Iconic",
+    "Nicole's superpower: turning 50 aggregator reports into one calm sheet",
+    "If data entry were a sport, you'd have a medal. Possibly two",
+    "The dashboard says thank you in 50 outlet languages",
+    "One tab. Then another. Then 30 more. Nicole sees them all",
+    "Plot twist: the GMV looks great because Nicole typed it correctly",
+    "Behind every chart, there is a Nicole pressing tab → enter → tab → enter",
+    "Reminder: Nicole is the reason this isn't just an angry empty spreadsheet",
+    "Today's hero is the person who entered yesterday's data. That's you",
+    "Nicole's typing speed is single-handedly keeping the dashboard alive"
+  ]
+};
+
+const ALREADY_SHOWN_KEY="oregano_user_jokes_seen";
+
+function getNextJoke(username){
+  // Check if this user has personalized jokes
+  if(username&&USER_JOKES[username]&&USER_JOKES[username].length){
+    let seen={};
+    try{seen=JSON.parse(localStorage.getItem(ALREADY_SHOWN_KEY)||"{}");}catch(e){}
+    const userSeen=seen[username]||[];
+    const total=USER_JOKES[username].length;
+    // If user has seen them all, reset
+    const available=USER_JOKES[username].map((_,i)=>i).filter(i=>!userSeen.includes(i));
+    const pool=available.length?available:USER_JOKES[username].map((_,i)=>i);
+    const pickIdx=pool[Math.floor(Math.random()*pool.length)];
+    const newSeen=available.length?[...userSeen,pickIdx]:[pickIdx];
+    seen[username]=newSeen;
+    try{localStorage.setItem(ALREADY_SHOWN_KEY,JSON.stringify(seen));}catch(e){}
+    return USER_JOKES[username][pickIdx];
+  }
+  // Fallback to generic jokes for other users (Nikhil, admin, bd, etc.)
+  let used=[];
+  try{used=JSON.parse(localStorage.getItem("oregano_jokes_used")||"[]");}catch(e){}
+  if(used.length>=JOKES.length)used=[];
+  const available=JOKES.map((_,i)=>i).filter(i=>!used.includes(i));
+  const pickIdx=available[Math.floor(Math.random()*available.length)];
+  used.push(pickIdx);
+  try{localStorage.setItem("oregano_jokes_used",JSON.stringify(used));}catch(e){}
+  return JOKES[pickIdx];
+}
+
+function showWelcome(name,initials,username){
+  document.getElementById("login-screen").style.display="none";
+  const w=document.getElementById("welcome-screen");
+  w.style.display="flex";
+  document.getElementById("welcome-name").textContent=`${getGreeting()}, ${name}!`;
+  document.getElementById("welcome-greeting").textContent=name;
+  document.getElementById("welcome-avatar").textContent=initials;
+  document.getElementById("welcome-joke-text").textContent=getNextJoke(username);
+  // Show welcome for 3.5 seconds (give time to read the joke)
+  setTimeout(()=>{
+    w.style.display="none";
+    document.getElementById("loading-screen").style.display="flex";
+    if(typeof doLoad==="function")doLoad();
+  },3500);
+}
+
+function doLogout(){
+  try{localStorage.removeItem("oregano_session");}catch(e){}
+  location.reload();
+}
+
+// Check existing session on page load
+(function checkSession(){
+  try{
+    const s=localStorage.getItem("oregano_session");
+    if(s){
+      const sess=JSON.parse(s);
+      // Session valid for 7 days
+      if(Date.now()-sess.loginAt<7*24*60*60*1000){
+        showWelcome(sess.displayName,sess.initials,sess.user);
+        return;
+      }
+    }
+  }catch(e){}
+  // Show login by default
+  document.getElementById("login-screen").style.display="flex";
+})();
 </script>
 
 <!-- Dashboard logic — loaded from dashboard.js -->
