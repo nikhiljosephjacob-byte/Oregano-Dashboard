@@ -1239,11 +1239,20 @@ function kpiStaleness(lastEntryDate){
 
 // Parse a single outlet's KPI sheet CSV
 // Format: column A = aggregator name (merged-block label), column B = "Targets"/value, column C+ = dates
+// Per-outlet brand whitelist — some outlets only host certain brands
+// Fyoozhen DIP is Fyoozhen-only; regular DIP has Oregano/Lollorosso/Smokeys
+const OUTLET_BRAND_WHITELIST={
+  "Fyoozhen DIP":["Fyoozhen"],
+  "FYOO DIP":["Fyoozhen"],
+  "FYOO-DIP":["Fyoozhen"]
+};
+
 function parseKPISheet(csv,outlet){
   const rows=parseCSV(csv);
   if(rows.length<3)return null;
   const blocks=[];
   let currentBrand=null,currentBlock=null,dateCols=[];
+  const allowedBrands=OUTLET_BRAND_WHITELIST[outlet]||null; // null means all brands allowed
   
   for(let i=0;i<rows.length;i++){
     const r=rows[i];
@@ -1253,6 +1262,12 @@ function parseKPISheet(csv,outlet){
     // Brand header: empty col 0, brand name in col 1
     const possibleBrand=normBrand(c1);
     if(!c0&&KPI_BRANDS.includes(possibleBrand)){
+      // Apply outlet brand whitelist — skip brands that shouldn't exist at this outlet
+      if(allowedBrands&&!allowedBrands.includes(possibleBrand)){
+        currentBrand=null; // Mark as skipping this brand's blocks
+        currentBlock=null;
+        continue;
+      }
       currentBrand=possibleBrand;
       currentBlock=null;
       continue;
@@ -1263,6 +1278,8 @@ function parseKPISheet(csv,outlet){
     if(c0Clean&&KPI_AGGS.some(a=>a.toLowerCase()===c0Clean.toLowerCase()||c0Clean.toLowerCase().includes(a.toLowerCase()))){
       const aggNorm=normAgg(c0Clean);
       if(c1.toLowerCase()==="targets"||c1.toLowerCase().includes("target")){
+        // Skip block if current brand was filtered out by outlet whitelist
+        if(allowedBrands&&!currentBrand){currentBlock=null;continue;}
         // Only collect 2026 date columns for speed
         dateCols=[];
         for(let c=2;c<r.length;c++){
@@ -1766,8 +1783,16 @@ function renderKPIMetricView(){
     metricRows=allRows.filter(r=>r.aggregator===platform&&r.type===metricType);
   }
   
-  // Sort: worst first
+  // Sort: group by brand in fixed order (Oregano, Lollorosso, Smokeys, Fyoozhen, Wicked Wings)
+  // Within each brand, sort worst → best for the KPI
+  const BRAND_ORDER=["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"];
   metricRows.sort((a,b)=>{
+    const ai=BRAND_ORDER.indexOf(a.brand);
+    const bi=BRAND_ORDER.indexOf(b.brand);
+    const aIdx=ai===-1?99:ai;
+    const bIdx=bi===-1?99:bi;
+    if(aIdx!==bIdx)return aIdx-bIdx;
+    // Within same brand, sort worst first (higher-is-better metrics ascending, lower-is-better descending)
     if(metricType==="rating"||metricType==="food_ready")return a.latest-b.latest;
     return b.latest-a.latest;
   });
@@ -1777,7 +1802,14 @@ function renderKPIMetricView(){
   const platColor={Talabat:"#FF6000",Deliveroo:"#00CCBC",Careem:"#3DDC73","Google Maps":"#4285F4",Google:"#4285F4"}[platform]||"#f59e0b";
   
   // Build tiles for each outlet × brand row
-  const tiles=metricRows.map(r=>{
+  // Group rows by brand for section headers
+  const rowsByBrand={};
+  metricRows.forEach(r=>{
+    if(!rowsByBrand[r.brand])rowsByBrand[r.brand]=[];
+    rowsByBrand[r.brand].push(r);
+  });
+  
+  const renderCard=r=>{
     const valStr=`${r.latest.toFixed(metricType==="rating"?2:1)}${r.unit||""}`;
     const targetStr=`${r.direction==="below"?"≥":"≤"} ${r.target}${r.unit||""}`;
     let clr="#FCD34D";
@@ -1801,7 +1833,7 @@ function renderKPIMetricView(){
         <div style="font-size:10px;color:#64748b;text-align:right">${targetStr}<br><span style="color:#94a3b8">${fmtDisp(r.latestDate)}</span></div>
       </div>
     </div>`;
-  }).join("");
+  };
   
   pg.innerHTML=`
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
@@ -1810,7 +1842,17 @@ function renderKPIMetricView(){
       <div style="font-size:18px;font-weight:800;color:${platColor}">${platform} · ${metricLabel}</div>
       <span style="font-size:11px;color:#64748b">Sorted worst → best · Click any to view trend</span>
     </div>
-    ${metricRows.length>0?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">${tiles}</div>`:`<div class="card"><div style="color:#64748b;padding:20px;text-align:center">No data for this metric</div></div>`}`;
+    ${metricRows.length>0?Object.keys(rowsByBrand).map(brand=>{
+      const brandClr=BMAP[brand]?.c||"#888";
+      return `<div style="margin-bottom:18px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid ${brandClr}33">
+          ${logoImg(brand,24)}
+          <span style="font-size:14px;font-weight:800;color:${brandClr}">${brand}</span>
+          <span style="font-size:10px;color:#64748b">${rowsByBrand[brand].length} outlet${rowsByBrand[brand].length!==1?"s":""}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">${rowsByBrand[brand].map(renderCard).join("")}</div>
+      </div>`;
+    }).join(""):`<div class="card"><div style="color:#64748b;padding:20px;text-align:center">No data for this metric</div></div>`}`;
 }
 
 // Open KPI detail with specific brand/agg/kpi selected
