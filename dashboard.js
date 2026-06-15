@@ -1683,7 +1683,7 @@ async function renderKPI(){
       </div>
     </div>
     
-    ${flagSection("LOW RATINGS","Rating flags",badRatings,"⭐","#FBBF24").replace("Rating flags",badRatings.length+" rating flag"+(badRatings.length!==1?"s":""))}
+    ${flagSection("LOW RATINGS",badRatings,"⭐","#FBBF24")}
     ${flagSection("SLOW PREP TIMES",badPrepTimes,"⏱","#F59E0B")}
     ${flagSection("RIDER WAIT TIME ISSUES",badRiderWait,"🛵","#94A3B8")}
     ${flagSection("LOW FOOD READY %",badFoodReady,"🍳","#60A5FA")}
