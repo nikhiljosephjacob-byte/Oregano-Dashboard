@@ -1395,35 +1395,48 @@ async function fetchKPIGids(){
   }
   
   // METHOD 4 — Positional match: scan HTML in order, pairing GIDs with known outlet names
+  // Strategy: the tab bar at the bottom of the published HTML has format like
+  // <li id="sheet-button-GID">...Name...</li> for each tab. We find this section first.
   if(Object.keys(found).length===0){
     console.log("[KPI] Trying positional matching with known outlet list...");
     const allGidsMatches=[...htmlText.matchAll(/gid[=:]["']?(\d+)/g)];
     const uniqueGids=[...new Set(allGidsMatches.map(x=>x[1]))];
     console.log("[KPI] Found",uniqueGids.length,"unique GIDs");
     
-    // For each known outlet, search for its name in the HTML and find the closest GID
-    const knownOutlets=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Villa","Jumeirah","Reem Island","WTC","Furjan","Al Quoz","TSQR","Al Forsan","NAS","FYOO DIP","Al Reef","Town Square","NAS DIP"];
-    // Add lowercase variants
-    knownOutlets.forEach(name=>{
-      // Search positions of this name in the HTML
-      const escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-      const namePositions=[...htmlText.matchAll(new RegExp(escaped,"gi"))].map(m=>m.index);
-      if(namePositions.length===0)return;
-      
-      // For each occurrence of the name, find the nearest GID reference
-      for(const pos of namePositions){
-        // Look in a 500-char window around the name
-        const windowStart=Math.max(0,pos-200);
-        const windowEnd=Math.min(htmlText.length,pos+200);
-        const window=htmlText.slice(windowStart,windowEnd);
-        const gidM=window.match(/gid[=:]["']?(\d+)/);
-        if(gidM&&gidM[1]){
-          if(!found[name])found[name]=gidM[1];
-          break;
+    // First try to find the TAB BAR section — usually near the end of the document
+    // Look for a contiguous block where multiple gid= references appear close together
+    const allGidPositions=allGidsMatches.map(m=>({pos:m.index,gid:m[1]}));
+    // Find the densest cluster of GIDs — that's the tab bar
+    let bestCluster=null,bestDensity=0;
+    for(let i=0;i<allGidPositions.length;i++){
+      const window=allGidPositions.filter(p=>p.pos>=allGidPositions[i].pos&&p.pos<=allGidPositions[i].pos+5000);
+      if(window.length>bestDensity){bestDensity=window.length;bestCluster=window;}
+    }
+    if(bestCluster&&bestCluster.length>=3){
+      console.log("[KPI] Found dense GID cluster: ",bestCluster.length,"GIDs spread over ~",bestCluster[bestCluster.length-1].pos-bestCluster[0].pos,"chars");
+      // Slice the HTML to just this region and look for tab names within it
+      const regionStart=bestCluster[0].pos-100;
+      const regionEnd=bestCluster[bestCluster.length-1].pos+200;
+      const tabBarHtml=htmlText.slice(regionStart,regionEnd);
+      // Now search for outlet names ONLY in this region
+      const knownOutlets=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Villa","Jumeirah","Reem Island","WTC","Furjan","Al Quoz","TSQR","Al Forsan","NAS","FYOO DIP","Al Reef","Town Square"];
+      knownOutlets.forEach(name=>{
+        const escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+        const re=new RegExp(escaped,"i");
+        const m=tabBarHtml.match(re);
+        if(m){
+          // Find the nearest GID reference within the same region
+          const nameIdx=m.index;
+          // Look for gid= just before or after the name in this small window
+          const windowStart=Math.max(0,nameIdx-300);
+          const windowEnd=Math.min(tabBarHtml.length,nameIdx+300);
+          const window=tabBarHtml.slice(windowStart,windowEnd);
+          const gidM=window.match(/gid[=:]["']?(\d+)/);
+          if(gidM&&gidM[1]&&!found[name])found[name]=gidM[1];
         }
-      }
-    });
-    console.log("[KPI] Positional matching found",Object.keys(found).length,"tabs");
+      });
+    }
+    console.log("[KPI] Positional matching from tab bar found",Object.keys(found).length,"tabs");
   }
   
   // METHOD 5 — If we have N gids and N known outlets, assume same order
@@ -1544,6 +1557,10 @@ async function renderKPI(){
     else if(b.staleness.days===1)oneDayBehind++;
     else twoPlusDays++;
   }));
+  console.log("[KPI render] outletRows:",outletRows.length,"totalBlocks:",totalBlocks,"sample:",outletRows[0]);
+  if(outletRows.length>0&&Object.keys(outletRows[0].blocks).length===0){
+    console.log("[KPI render] First outlet has 0 blocks — checking raw data:",kpiData[outletRows[0].outlet]);
+  }
   
   // Sort outlets by # of stale blocks (worst first)
   outletRows.sort((a,b)=>{
@@ -1610,6 +1627,13 @@ function renderKPIDetail(){
   const od=kpiData[kpiSelectedOutlet];
   if(!od){kpiSelectedOutlet=null;renderKPI();return;}
   
+  console.log("[KPI detail] outlet data:",od);
+  console.log("[KPI detail] blocks count:",od.blocks?.length);
+  if(od.blocks?.length){
+    console.log("[KPI detail] first block:",od.blocks[0]);
+    console.log("[KPI detail] first block kpis:",Object.keys(od.blocks[0].kpis||{}));
+  }
+  
   // Build a flat list of all rows: brand × aggregator × kpi
   const allRows=[];
   od.blocks.forEach(blk=>{
@@ -1617,6 +1641,7 @@ function renderKPIDetail(){
       allRows.push({brand:blk.brand,aggregator:blk.aggregator,kpi,lastEntry:data.lastEntry,entries:data.entries,latest:data.lastEntry?data.entries[data.lastEntry]:null,staleness:kpiStaleness(data.lastEntry)});
     });
   });
+  console.log("[KPI detail] total flat rows:",allRows.length);
   
   // Apply filters
   let filtered=allRows;
