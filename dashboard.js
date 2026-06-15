@@ -1307,6 +1307,7 @@ function parseKPISheet(csv,outlet){
     
     // KPI row within a block: col A empty, col B has KPI name
     if(currentBlock&&!cA&&cB&&!KPI_BRANDS.includes(normBrand(cB))){
+      if(outlet==="Furjan"&&i<10)console.log("[KPI parse] KPI row at",i,"=",cB,"in block",currentBlock.aggregator,"brand:",currentBlock.brand);
       const kpiName=cB;
       // Build entries by date
       const entries={};
