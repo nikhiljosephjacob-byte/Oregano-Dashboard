@@ -1235,6 +1235,11 @@ function kpiStaleness(lastEntryDate){
 // Format: column A = aggregator name (merged-block label), column B = "Targets"/value, column C+ = dates
 function parseKPISheet(csv,outlet){
   const rows=parseCSV(csv);if(rows.length<3)return null;
+  if(outlet==="Furjan"||outlet==="Motor City"){
+    console.log("[KPI parse]",outlet,"— rows count:",rows.length);
+    console.log("[KPI parse] First 8 rows:");
+    rows.slice(0,8).forEach((r,i)=>console.log(`  Row ${i}:`,r.slice(0,6)));
+  }
   // First row is brand headers (merged across columns) — skip
   // We need to walk rows looking for:
   //   - Rows with brand name in column B (like "Oregano", "Lollorosso") to track current brand
@@ -1278,24 +1283,30 @@ function parseKPISheet(csv,outlet){
     const cA=(r[0]||"").trim();
     const cB=(r[1]||"").trim();
     
-    // Brand header row (no aggregator yet)
-    const normB=normBrand(cB);
-    if(!cA&&KPI_BRANDS.includes(normB)){
-      currentBrand=normB;
+    // Brand header row — accept brand name in EITHER column A or column B
+    // (Google sometimes shifts merged-cell content)
+    const possibleBrand=normBrand(cB)||normBrand(cA);
+    if(KPI_BRANDS.includes(possibleBrand)&&(!cA||KPI_BRANDS.includes(normBrand(cA)))){
+      currentBrand=possibleBrand;
       currentBlock=null;
+      if(outlet==="Furjan")console.log("[KPI parse] Brand header at row",i,"=",possibleBrand);
       continue;
     }
     
-    // Aggregator block start: column A has aggregator name, column B = "Targets"
-    if(cA&&cB.toLowerCase()==="targets"){
+    // Aggregator block start: aggregator name in col A, "Targets" in col B
+    // OR aggregator name in col A, anything in col B that's not a KPI
+    if(cA&&(cB.toLowerCase()==="targets"||cB.toLowerCase().includes("target"))){
       const aggNorm=normAgg(cA);
-      currentBlock={brand:currentBrand,aggregator:aggNorm||cA,kpis:{}};
-      blocks.push(currentBlock);
-      continue;
+      if(aggNorm||KPI_AGGS.includes(cA)){
+        currentBlock={brand:currentBrand,aggregator:aggNorm||cA,kpis:{}};
+        blocks.push(currentBlock);
+        if(outlet==="Furjan")console.log("[KPI parse] Aggregator block at row",i,"=",currentBlock.aggregator,"brand:",currentBrand);
+        continue;
+      }
     }
     
-    // KPI row within a block: col B has KPI name, col A empty
-    if(currentBlock&&!cA&&cB){
+    // KPI row within a block: col A empty, col B has KPI name
+    if(currentBlock&&!cA&&cB&&!KPI_BRANDS.includes(normBrand(cB))){
       const kpiName=cB;
       // Build entries by date
       const entries={};
