@@ -1236,98 +1236,65 @@ function kpiStaleness(lastEntryDate){
 function parseKPISheet(csv,outlet){
   const rows=parseCSV(csv);
   if(rows.length<3)return null;
-  
-  if(outlet==="Furjan"){
-    console.log("[KPI parse]",outlet,"— rows count:",rows.length,"— FIRST ROW HAS",rows[0]?.length||0,"COLUMNS");
-    // Dump all column values from row 1 (the date header row) to see ALL dates
-    if(rows[1]){
-      console.log("[KPI parse] All columns in row 1 (date header row):");
-      const dateRow=rows[1];
-      console.log("  Total columns:",dateRow.length);
-      console.log("  First 5 cols:",dateRow.slice(0,5));
-      console.log("  Last 5 cols:",dateRow.slice(-5));
-      // Find columns containing 2026 dates
-      const cols2026=dateRow.map((v,i)=>({col:i,val:v})).filter(x=>x.val&&String(x.val).includes("2026")||String(x.val).includes("Jun-26"));
-      console.log("  Columns with 2026/Jun-26:",cols2026.slice(-5));
-    }
-  }
-  
-  // gviz layout:
-  // Row N (brand header):    ["", "Oregano", "", "", "", ""]
-  // Row N+1 (agg + dates):   ["Talabat", "Targets", "1-Jun-26", "2-Jun-26", ...]
-  // Row N+2 (KPI):           ["No. Of Orders", "", "12", "25", ...]
-  // Row N+3 (KPI):           ["Food Is Ready %", "90%", "96.3", ...]
-  
   const blocks=[];
-  let currentBrand=null;
-  let currentBlock=null;
-  let dateCols=[]; // Updated each time a new aggregator block starts (since dates may appear in any block's header row)
+  let currentBrand=null,currentBlock=null,dateCols=[];
   
   for(let i=0;i<rows.length;i++){
     const r=rows[i];
     const c0=(r[0]||"").trim();
     const c1=(r[1]||"").trim();
     
-    // Brand header row: col 0 empty, col 1 has brand name
+    // Brand header: empty col 0, brand name in col 1
     const possibleBrand=normBrand(c1);
     if(!c0&&KPI_BRANDS.includes(possibleBrand)){
       currentBrand=possibleBrand;
       currentBlock=null;
-      if(outlet==="Furjan")console.log("[KPI parse] Brand header at row",i,"=",currentBrand);
       continue;
     }
     
-    // Aggregator block start: col 0 has aggregator name, col 1 = "Targets" (or contains date-like content)
+    // Aggregator block start
     if(c0&&KPI_AGGS.some(a=>a.toLowerCase()===c0.toLowerCase()||c0.toLowerCase().includes(a.toLowerCase()))){
       const aggNorm=normAgg(c0);
-      // Check if col 1 is "Targets" or this is the date header row
       if(c1.toLowerCase()==="targets"||c1.toLowerCase().includes("target")){
-        // Extract date columns from this row (col 2 onwards)
+        // Only collect 2026 date columns for speed
         dateCols=[];
         for(let c=2;c<r.length;c++){
           const d=parseDate(r[c]);
-          if(d)dateCols.push({col:c,date:dk(d)});
+          if(d&&d.getFullYear()===2026)dateCols.push({col:c,date:dk(d)});
         }
         currentBlock={brand:currentBrand,aggregator:aggNorm||c0,kpis:{}};
         blocks.push(currentBlock);
-        if(outlet==="Furjan")console.log("[KPI parse] Agg block at row",i,"=",currentBlock.aggregator,"brand:",currentBrand,"dateCols:",dateCols.length);
         continue;
       }
     }
     
-    // KPI row: col 0 has KPI name (not an aggregator, not empty), and we're in a block
+    // KPI row
     if(currentBlock&&c0&&!KPI_AGGS.some(a=>a.toLowerCase()===c0.toLowerCase())){
-      // c1 contains target (e.g. "90%" or "4.8" or "Below 7%") — informational, skip
       const kpiName=c0;
+      const target=c1; // raw target string from col 1 (e.g. "4.8", "90%", "16", "Below 7% of Daily Orders")
       const entries={};
       let lastEntry=null;
+      const dailyValues=[]; // [{date, num}] sorted by date — used for trend detection
+      
       dateCols.forEach(({col,date})=>{
         const raw=r[col];
         if(raw===undefined||raw===null)return;
         const strVal=String(raw).trim();
         if(strVal==="")return;
         entries[date]=strVal;
-        // Determine if this counts as a real entry (non-empty, non-zero numeric)
         const numVal=parseFloat(strVal.replace(/[,%\s]/g,""));
         if(!isNaN(numVal)&&numVal>0){
+          dailyValues.push({date,num:numVal,raw:strVal});
           if(!lastEntry||date>lastEntry)lastEntry=date;
         } else if(isNaN(numVal)&&strVal){
-          // Non-numeric value (rare but counts as entry)
           if(!lastEntry||date>lastEntry)lastEntry=date;
         }
       });
-      currentBlock.kpis[kpiName]={entries,lastEntry};
-      if(outlet==="Furjan"&&Object.keys(currentBlock.kpis).length<=3){
-        console.log("[KPI parse] KPI '",kpiName,"' in",currentBlock.aggregator,"— lastEntry:",lastEntry,"entries:",Object.keys(entries).length);
-      }
+      // Sort daily values by date for trend analysis
+      dailyValues.sort((a,b)=>a.date.localeCompare(b.date));
+      currentBlock.kpis[kpiName]={entries,lastEntry,target,dailyValues};
     }
   }
-  
-  if(outlet==="Furjan"){
-    console.log("[KPI parse]",outlet,"final blocks:",blocks.length);
-    blocks.forEach((b,i)=>console.log(`  Block ${i}: ${b.brand}/${b.aggregator} — ${Object.keys(b.kpis).length} KPIs`));
-  }
-  
   return{outlet,blocks};
 }
 
@@ -1529,213 +1496,347 @@ async function loadKPIData(){
   console.log("[KPI] Loaded",Object.keys(kpiData).length,"outlets total");
 }
 
-// MAIN RENDER
+// ── KPI EVALUATION HELPERS ──
+// Decide if a KPI metric is "tracked for performance" and parse the target
+function getKPIEvaluator(kpiName,aggregator,brand,targetStr){
+  const k=kpiName.toLowerCase();
+  
+  // RATING — only track Talabat, Deliveroo, Google. SKIP Noon & Careem ratings per user request.
+  if(k.includes("rating")){
+    if(aggregator==="Noon"||aggregator==="Careem")return null;
+    // Parse target from col B (e.g. "4.8" or "4.7")
+    const targetNum=parseFloat(String(targetStr).replace(/[^\d.]/g,""));
+    if(!targetNum||targetNum<1||targetNum>5)return null;
+    return{type:"rating",direction:"below",target:targetNum,unit:""};
+  }
+  
+  // PREP TIME — lower is better. Target like "16" or "13" or "1 Minute"
+  if(k.includes("prep time")){
+    const targetNum=parseFloat(String(targetStr).replace(/[^\d.]/g,""));
+    if(!targetNum)return null;
+    return{type:"prep_time",direction:"above",target:targetNum,unit:" min"};
+  }
+  
+  // RIDER WAIT TIME — typically expressed as "Below 7% of Daily Orders" or "1 Minute"
+  if(k.includes("rider wait")||k.includes("driver wait")){
+    // If target is "Below X%" — flag if actual % goes ABOVE X
+    const pctMatch=String(targetStr).match(/(\d+(?:\.\d+)?)\s*%/);
+    if(pctMatch){
+      return{type:"rider_wait_pct",direction:"above",target:parseFloat(pctMatch[1]),unit:"%"};
+    }
+    const num=parseFloat(String(targetStr).replace(/[^\d.]/g,""));
+    if(num){return{type:"rider_wait",direction:"above",target:num,unit:" min"};}
+    return null;
+  }
+  
+  // FOOD READY % — higher is better
+  if(k.includes("food is ready")||k.includes("food ready")){
+    const targetNum=parseFloat(String(targetStr).replace(/[^\d.]/g,""));
+    if(!targetNum)return null;
+    return{type:"food_ready",direction:"below",target:targetNum,unit:"%"};
+  }
+  
+  return null;
+}
+
+// Evaluate the most recent value of a KPI against its target
+function evaluateKPI(kpiData,evaluator){
+  if(!kpiData.dailyValues||kpiData.dailyValues.length===0)return null;
+  const last=kpiData.dailyValues[kpiData.dailyValues.length-1];
+  const latest=last.num;
+  let status="ok";
+  if(evaluator.direction==="below"&&latest<evaluator.target)status="bad";
+  if(evaluator.direction==="above"&&latest>evaluator.target)status="bad";
+  // 7-day average for trend
+  const last7=kpiData.dailyValues.slice(-7);
+  const avg7=last7.reduce((s,v)=>s+v.num,0)/last7.length;
+  // Find degradation date — the first day in the last 30 days where the value crossed the target unfavorably
+  const last30=kpiData.dailyValues.slice(-30);
+  let degradedFrom=null;
+  if(status==="bad"){
+    // Walk backwards from latest until we find a day that WAS within target
+    for(let i=last30.length-1;i>=0;i--){
+      const d=last30[i];
+      const stillBad=(evaluator.direction==="below"&&d.num<evaluator.target)||(evaluator.direction==="above"&&d.num>evaluator.target);
+      if(!stillBad){
+        // The day AFTER this one is where degradation started
+        if(i+1<last30.length)degradedFrom=last30[i+1].date;
+        break;
+      }
+    }
+    if(!degradedFrom&&last30.length>0)degradedFrom=last30[0].date;
+  }
+  return{latest,latestDate:last.date,avg7,status,degradedFrom,values30:last30};
+}
+
+// MAIN RENDER — Outlets grid + Performance flags
 async function renderKPI(){
   const pg=document.getElementById("page-kpi");
   if(!pg)return;
   if(!kpiLoaded){
-    pg.innerHTML=`<div style="padding:30px;text-align:center;color:#64748b;font-size:13px">⏳ Loading KPI Tracker — discovering outlet tabs...</div>`;
+    pg.innerHTML=`<div style="padding:30px;text-align:center;color:#64748b;font-size:13px">⏳ Loading KPI Tracker (2026 data only)...</div>`;
     await loadKPIData();
   }
-  
   if(!kpiData||!Object.keys(kpiData).length){
-    pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Could not load KPI Tracker sheet</div><div style="color:#64748b;font-size:12px;line-height:1.7">Possible causes:<br>• Sheet not published yet (File → Share → Publish to web → Entire Document)<br>• Sheet structure differs from expected format<br><br>Open F12 → Console for details. Click below to retry.</div><button onclick="kpiLoaded=false;renderKPI()" style="margin-top:10px;background:#f59e0b;border:none;border-radius:5px;color:#000;font-weight:700;padding:6px 16px;font-size:11px;cursor:pointer">↻ Retry</button></div>`;
+    pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700">⚠️ Could not load KPI Tracker sheet</div><button onclick="kpiLoaded=false;renderKPI()" style="margin-top:10px;background:#f59e0b;border:none;border-radius:5px;color:#000;font-weight:700;padding:6px 16px;font-size:11px;cursor:pointer">↻ Retry</button></div>`;
     return;
   }
-  
   if(kpiSelectedOutlet){renderKPIDetail();return;}
   
-  // ── DEFAULT VIEW: Heatmap grid of all outlets ──
-  // For each outlet × aggregator, find the freshest lastEntry across the 3 important KPIs (Rating, Prep Time, Rider Wait Time)
-  // Important KPIs per user: Rating, Prep Time Average, Rider Wait Time
-  const importantKPIs=["Rating","Prep Time Average","Rider Wait Time"];
-  
-  // Match KPI name leniently — supports "Rider Wait time" / "Rider Wait Time" / "Rider wait", etc.
-  function kpiNameMatches(actualName,wanted){
-    const a=actualName.toLowerCase().replace(/[^a-z]/g,"");
-    const w=wanted.toLowerCase().replace(/[^a-z]/g,"");
-    // Wanted is in actual, or actual is in wanted (handles partial names)
-    return a.includes(w.slice(0,6))||w.includes(a.slice(0,6));
-  }
-  
-  const outletRows=Object.values(kpiData).map(od=>{
-    const aggSummary={};
+  // Build a flat list of all KPI evaluations across all outlets
+  const allEvaluations=[]; // {outlet, brand, aggregator, kpiName, evaluator, eval, target}
+  Object.values(kpiData).forEach(od=>{
     od.blocks.forEach(blk=>{
-      const aggKey=`${blk.brand||"Unknown"}|${blk.aggregator}`;
-      // Find the LATEST entry across all KPIs in the block (treating any KPI as 'this block was updated on that date')
-      let latestEntry=null;
-      const allKpiKeys=Object.keys(blk.kpis||{});
-      allKpiKeys.forEach(k=>{
-        const le=blk.kpis[k].lastEntry;
-        if(le&&(!latestEntry||le>latestEntry))latestEntry=le;
+      Object.entries(blk.kpis).forEach(([kpiName,data])=>{
+        const evaluator=getKPIEvaluator(kpiName,blk.aggregator,blk.brand,data.target);
+        if(!evaluator)return;
+        const ev=evaluateKPI(data,evaluator);
+        if(!ev)return;
+        allEvaluations.push({outlet:od.outlet,brand:blk.brand,aggregator:blk.aggregator,kpiName,target:evaluator.target,unit:evaluator.unit,type:evaluator.type,direction:evaluator.direction,...ev,lastEntry:data.lastEntry});
       });
-      // Always include the block, even if no important KPIs matched specifically
-      if(allKpiKeys.length>0){
-        aggSummary[aggKey]={brand:blk.brand||"Unknown",aggregator:blk.aggregator,lastEntry:latestEntry,staleness:kpiStaleness(latestEntry)};
-      }
     });
-    return{outlet:od.outlet,blocks:aggSummary};
   });
   
-  // Summary banner counts
-  let totalBlocks=0,upToDate=0,oneDayBehind=0,twoPlusDays=0;
-  outletRows.forEach(o=>Object.values(o.blocks).forEach(b=>{
-    totalBlocks++;
-    if(b.staleness.days===0)upToDate++;
-    else if(b.staleness.days===1)oneDayBehind++;
-    else twoPlusDays++;
+  // Filter to bad performers
+  const badPerformers=allEvaluations.filter(e=>e.status==="bad");
+  const ratingEvals=allEvaluations.filter(e=>e.type==="rating");
+  
+  // Group bad performers by KPI type
+  const badRatings=badPerformers.filter(e=>e.type==="rating").sort((a,b)=>a.latest-b.latest);
+  const badPrepTimes=badPerformers.filter(e=>e.type==="prep_time").sort((a,b)=>b.latest-a.latest);
+  const badRiderWait=badPerformers.filter(e=>e.type==="rider_wait"||e.type==="rider_wait_pct").sort((a,b)=>b.latest-a.latest);
+  const badFoodReady=badPerformers.filter(e=>e.type==="food_ready").sort((a,b)=>a.latest-b.latest);
+  
+  // Ratings leaderboard — lowest to highest (all ratings, not just bad)
+  const ratingsLeaderboard=[...ratingEvals].sort((a,b)=>a.latest-b.latest);
+  
+  // Data-entry staleness (for "needs a call" summary)
+  const today=dk(new Date());
+  let staleEntries=0;
+  Object.values(kpiData).forEach(od=>od.blocks.forEach(blk=>{
+    Object.values(blk.kpis).forEach(kd=>{
+      const stale=kpiStaleness(kd.lastEntry);
+      if(stale.days>=2)staleEntries++;
+    });
   }));
-  console.log("[KPI render] outletRows:",outletRows.length,"totalBlocks:",totalBlocks,"sample:",outletRows[0]);
-  if(outletRows.length>0&&Object.keys(outletRows[0].blocks).length===0){
-    console.log("[KPI render] First outlet has 0 blocks — checking raw data:",kpiData[outletRows[0].outlet]);
-  }
   
-  // Sort outlets by # of stale blocks (worst first)
-  outletRows.sort((a,b)=>{
-    const aStale=Object.values(a.blocks).filter(x=>x.staleness.days>=2).length;
-    const bStale=Object.values(b.blocks).filter(x=>x.staleness.days>=2).length;
-    if(aStale!==bStale)return bStale-aStale;
-    return a.outlet.localeCompare(b.outlet);
-  });
+  // ── Render ──
+  const formatVal=e=>`${e.latest.toFixed(e.type==="rating"?2:1)}${e.unit||""}`;
+  const formatTarget=e=>`${e.direction==="below"?"≥":"≤"} ${e.target}${e.unit||""}`;
   
-  // Build outlet tile grid
-  const tiles=outletRows.map(o=>{
-    const blocksHere=Object.values(o.blocks);
-    const staleCount=blocksHere.filter(b=>b.staleness.days>=2).length;
-    const partialCount=blocksHere.filter(b=>b.staleness.days===1).length;
-    const okCount=blocksHere.filter(b=>b.staleness.days===0).length;
-    
-    // Pick overall outlet badge based on worst block
-    let outletColor="#22C55E",outletLabel="✓ Up to date";
-    if(staleCount>0){outletColor="#EF4444";outletLabel=`⚠ ${staleCount} stale`;}
-    else if(partialCount>0){outletColor="#FBBF24";outletLabel=`◐ ${partialCount} late`;}
-    
-    // Mini chips for each brand×agg combo
-    const chips=blocksHere.sort((a,b)=>b.staleness.days-a.staleness.days).map(b=>{
-      const lab=`${b.brand.slice(0,3)} · ${b.aggregator.slice(0,4)}`;
-      return`<span style="display:inline-flex;align-items:center;font-size:9px;font-weight:600;padding:2px 6px;border-radius:3px;background:${b.staleness.bg};color:${b.staleness.color};border:1px solid ${b.staleness.color}33" title="${b.brand} on ${b.aggregator} — ${b.staleness.label} (last: ${b.lastEntry?fmtDisp(b.lastEntry):'never'})">${lab}</span>`;
-    }).join("");
-    
-    return`<div onclick="kpiSelectedOutlet='${o.outlet.replace(/'/g,"\\'")}';renderKPI()" style="background:#0d1524;border:1px solid #1b2f4a;border-left:3px solid ${outletColor};border-radius:10px;padding:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='#f59e0b';this.style.borderLeftColor='${outletColor}';this.style.background='#111d2e'" onmouseout="this.style.borderColor='#1b2f4a';this.style.background='#0d1524'">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-        <div style="font-size:13px;font-weight:800;color:#e2e8f0">${o.outlet}</div>
-        <span style="font-size:9px;font-weight:700;color:${outletColor}">${outletLabel}</span>
-      </div>
-      <div style="display:flex;gap:14px;margin-bottom:8px">
-        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">OK</div><div style="font-size:16px;font-weight:800;color:#22C55E">${okCount}</div></div>
-        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Late</div><div style="font-size:16px;font-weight:800;color:#FBBF24">${partialCount}</div></div>
-        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Stale</div><div style="font-size:16px;font-weight:800;color:#EF4444">${staleCount}</div></div>
-      </div>
-      <div style="display:flex;gap:3px;flex-wrap:wrap;padding-top:8px;border-top:1px solid #1b2f4a">${chips}</div>
+  const flagRow=(e,idx)=>{
+    const fromTxt=e.degradedFrom?`<span style="color:#FCD34D;font-size:10px">since ${fmtDisp(e.degradedFrom)}</span>`:"";
+    return `<tr onclick="openKPIDetail('${e.outlet.replace(/'/g,"\\'")}','${e.brand}','${e.aggregator}','${e.kpiName.replace(/'/g,"\\'")}')" style="cursor:pointer" onmouseover="this.style.background='rgba(245,158,11,0.05)'" onmouseout="this.style.background='transparent'">
+      <td style="font-size:11px;font-weight:600">${e.outlet}</td>
+      <td><span style="color:${BMAP[e.brand]?.c||'#888'};font-weight:700;font-size:11px">${e.brand}</span></td>
+      <td><span style="color:${AC[e.aggregator]||'#888'};font-weight:700;font-size:11px">${e.aggregator}</span></td>
+      <td style="font-size:11px;font-weight:700;color:#EF4444">${formatVal(e)}</td>
+      <td style="font-size:10px;color:#64748b">${formatTarget(e)}</td>
+      <td style="font-size:10px;color:#94a3b8">7-day avg: ${e.avg7.toFixed(e.type==='rating'?2:1)}${e.unit||''}</td>
+      <td>${fromTxt}</td>
+      <td><span style="font-size:10px;color:#f59e0b">View →</span></td>
+    </tr>`;
+  };
+  
+  const flagSection=(title,arr,icon,color)=>{
+    if(arr.length===0)return"";
+    return `<div class="card" style="border-color:${color}44;margin-bottom:14px">
+      <div class="ct" style="color:${color}">${icon} ${title} — ${arr.length} flag${arr.length!==1?"s":""}</div>
+      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Outlet</th><th>Brand</th><th>Platform</th><th>Current</th><th>Target</th><th>Trend</th><th>Since</th><th></th></tr></thead><tbody>
+      ${arr.map(flagRow).join("")}
+      </tbody></table></div>
     </div>`;
+  };
+  
+  // Ratings leaderboard rendering
+  const ratingsLeaderRows=ratingsLeaderboard.slice(0,30).map(e=>{
+    const bad=e.status==="bad";
+    return `<tr onclick="openKPIDetail('${e.outlet.replace(/'/g,"\\'")}','${e.brand}','${e.aggregator}','${e.kpiName.replace(/'/g,"\\'")}')" style="cursor:pointer;${bad?'background:rgba(239,68,68,0.05)':''}" onmouseover="this.style.background='rgba(245,158,11,0.08)'" onmouseout="this.style.background='${bad?'rgba(239,68,68,0.05)':'transparent'}'">
+      <td style="font-size:11px;font-weight:700;color:${bad?'#EF4444':e.latest>=4.7?'#22C55E':'#FCD34D'}">${e.latest.toFixed(2)} ${bad?'⚠':''}</td>
+      <td style="font-size:11px">${e.outlet}</td>
+      <td><span style="color:${BMAP[e.brand]?.c||'#888'};font-weight:700;font-size:11px">${e.brand}</span></td>
+      <td><span style="color:${AC[e.aggregator]||'#888'};font-weight:700;font-size:11px">${e.aggregator}</span></td>
+      <td style="font-size:10px;color:#64748b">≥ ${e.target}</td>
+      <td style="font-size:10px;color:#94a3b8">${e.lastEntry?fmtDisp(e.lastEntry):"—"}</td>
+    </tr>`;
   }).join("");
   
+  // Total flags count
+  const totalFlags=badPerformers.length;
+  
   pg.innerHTML=`
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div>
-        <div style="font-size:16px;font-weight:800;color:#f59e0b">📊 KPI Tracker</div>
-        <div style="font-size:11px;color:#64748b;margin-top:3px">Yesterday's KPIs are expected by 3 PM today · Click any outlet for details</div>
+        <div style="font-size:18px;font-weight:800;color:#f59e0b">📊 KPI Performance Tracker</div>
+        <div style="font-size:11px;color:#64748b;margin-top:3px">2026 data · Targets from sheet · Click any row for timeline & root cause</div>
       </div>
       <button onclick="kpiLoaded=false;kpiData=null;renderKPI()" style="background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 10px;font-size:11px;cursor:pointer">↻ Refresh</button>
     </div>
-    <div class="card" style="border-color:${twoPlusDays>0?'rgba(239,68,68,0.3)':oneDayBehind>0?'rgba(251,191,36,0.3)':'rgba(34,197,94,0.3)'};margin-bottom:14px">
+    
+    <div class="card" style="border-color:${totalFlags>0?'rgba(239,68,68,0.3)':'rgba(34,197,94,0.3)'};margin-bottom:14px">
       <div style="display:flex;gap:30px;flex-wrap:wrap">
-        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Total Trackers</div><div style="font-size:24px;font-weight:800">${totalBlocks}</div></div>
-        <div><div style="font-size:9px;color:#22C55E;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">✓ Up to date</div><div style="font-size:24px;font-weight:800;color:#22C55E">${upToDate}</div></div>
-        <div><div style="font-size:9px;color:#FBBF24;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">◐ 1 day behind</div><div style="font-size:24px;font-weight:800;color:#FBBF24">${oneDayBehind}</div></div>
-        <div><div style="font-size:9px;color:#EF4444;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">⚠ Needs a call</div><div style="font-size:24px;font-weight:800;color:#EF4444">${twoPlusDays}</div></div>
+        <div><div style="font-size:9px;color:#EF4444;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">⚠ Active Flags</div><div style="font-size:28px;font-weight:800;color:#EF4444">${totalFlags}</div></div>
+        <div><div style="font-size:9px;color:#FBBF24;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">⭐ Low Ratings</div><div style="font-size:28px;font-weight:800;color:#FBBF24">${badRatings.length}</div></div>
+        <div><div style="font-size:9px;color:#F59E0B;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">⏱ Slow Prep</div><div style="font-size:28px;font-weight:800;color:#F59E0B">${badPrepTimes.length}</div></div>
+        <div><div style="font-size:9px;color:#94A3B8;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">🛵 Rider Wait</div><div style="font-size:28px;font-weight:800;color:#94A3B8">${badRiderWait.length}</div></div>
+        <div><div style="font-size:9px;color:#22C55E;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">⚠ Stale Entries</div><div style="font-size:28px;font-weight:800;color:#94A3B8">${staleEntries}</div></div>
       </div>
-      ${twoPlusDays>0?`<div style="font-size:12px;color:#FCD34D;margin-top:10px;padding-top:10px;border-top:1px solid rgba(251,191,36,0.2)">💡 ${twoPlusDays} tracker${twoPlusDays!==1?'s are':' is'} 2+ days behind. Outlets are sorted with the most stale ones first — call those managers.</div>`:''}
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px">${tiles}</div>`;
+    
+    ${flagSection("LOW RATINGS","Rating flags",badRatings,"⭐","#FBBF24").replace("Rating flags",badRatings.length+" rating flag"+(badRatings.length!==1?"s":""))}
+    ${flagSection("SLOW PREP TIMES",badPrepTimes,"⏱","#F59E0B")}
+    ${flagSection("RIDER WAIT TIME ISSUES",badRiderWait,"🛵","#94A3B8")}
+    ${flagSection("LOW FOOD READY %",badFoodReady,"🍳","#60A5FA")}
+    
+    ${ratingsLeaderboard.length>0?`<div class="card" style="margin-bottom:14px"><div class="ct">⭐ RATINGS LEADERBOARD — Lowest to Highest (Talabat / Deliveroo / Google only)</div>
+      <div style="overflow-x:auto;max-height:500px"><table class="tbl"><thead><tr><th>Rating</th><th>Outlet</th><th>Brand</th><th>Platform</th><th>Target</th><th>Last Updated</th></tr></thead><tbody>${ratingsLeaderRows}</tbody></table></div>
+      ${ratingsLeaderboard.length>30?`<div style="color:#64748b;font-size:11px;text-align:center;padding:8px">Showing 30 of ${ratingsLeaderboard.length}</div>`:""}
+    </div>`:""}
+    
+    <div class="card">
+      <div class="ct">📋 Outlet Data Entry Status</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">
+        ${Object.values(kpiData).map(od=>{
+          let staleHere=0,lateHere=0,okHere=0;
+          od.blocks.forEach(b=>Object.values(b.kpis).forEach(k=>{
+            const s=kpiStaleness(k.lastEntry);
+            if(s.days===0)okHere++;
+            else if(s.days===1)lateHere++;
+            else staleHere++;
+          }));
+          const clr=staleHere>0?"#EF4444":lateHere>0?"#FBBF24":"#22C55E";
+          return `<div onclick="kpiSelectedOutlet='${od.outlet.replace(/'/g,"\\'")}';renderKPI()" style="background:#0d1524;border:1px solid #1b2f4a;border-left:3px solid ${clr};border-radius:6px;padding:8px;cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='#1b2f4a'">
+            <div style="font-size:11px;font-weight:700">${od.outlet}</div>
+            <div style="font-size:9px;color:#64748b;margin-top:2px">${okHere} ok · ${lateHere} late · ${staleHere} stale</div>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>`;
 }
 
-// DETAIL VIEW
+// Open KPI detail with specific brand/agg/kpi selected
+function openKPIDetail(outlet,brand,aggregator,kpiName){
+  kpiSelectedOutlet=outlet;
+  kpiSelectedBrand=brand;
+  kpiSelectedAggregator=aggregator;
+  kpiSelectedKPIName=kpiName;
+  renderKPI();
+}
+
+let kpiSelectedBrand=null,kpiSelectedAggregator=null,kpiSelectedKPIName=null;
+
 function renderKPIDetail(){
   const od=kpiData[kpiSelectedOutlet];
   if(!od){kpiSelectedOutlet=null;renderKPI();return;}
   
-  console.log("[KPI detail] outlet data:",od);
-  console.log("[KPI detail] blocks count:",od.blocks?.length);
-  if(od.blocks?.length){
-    console.log("[KPI detail] first block:",od.blocks[0]);
-    console.log("[KPI detail] first block kpis:",Object.keys(od.blocks[0].kpis||{}));
+  // If a specific KPI was selected, show its full timeline
+  if(kpiSelectedKPIName&&kpiSelectedAggregator){
+    const blk=od.blocks.find(b=>b.aggregator===kpiSelectedAggregator&&b.brand===kpiSelectedBrand);
+    const kpiData_=blk?.kpis?.[kpiSelectedKPIName];
+    if(kpiData_){
+      const evaluator=getKPIEvaluator(kpiSelectedKPIName,kpiSelectedAggregator,kpiSelectedBrand,kpiData_.target);
+      const ev=evaluator?evaluateKPI(kpiData_,evaluator):null;
+      const values=kpiData_.dailyValues||[];
+      
+      const pg=document.getElementById("page-kpi");
+      const target=evaluator?evaluator.target:null;
+      
+      // Build mini chart data — last 60 days
+      const chartData=values.slice(-60);
+      const maxVal=Math.max(...chartData.map(v=>v.num),target||0)*1.1;
+      const minVal=Math.min(...chartData.map(v=>v.num),target||Infinity)*0.9;
+      const range=maxVal-minVal||1;
+      const w=900,h=200;
+      
+      const chartSVG=chartData.length?`<svg viewBox="0 0 ${w} ${h+50}" width="100%" style="background:#0d1524;border-radius:6px;display:block">
+        ${target?`<line x1="40" y1="${h-((target-minVal)/range)*(h-20)+10}" x2="${w-20}" y2="${h-((target-minVal)/range)*(h-20)+10}" stroke="#22C55E" stroke-width="1" stroke-dasharray="4,4"/><text x="${w-15}" y="${h-((target-minVal)/range)*(h-20)+14}" fill="#22C55E" font-size="10" text-anchor="end">target ${target}</text>`:""}
+        <polyline points="${chartData.map((v,i)=>{const x=40+(i/(chartData.length-1))*(w-60);const y=h-((v.num-minVal)/range)*(h-20)+10;return`${x},${y}`;}).join(" ")}" fill="none" stroke="#F59E0B" stroke-width="2"/>
+        ${chartData.map((v,i)=>{const x=40+(i/(chartData.length-1))*(w-60);const y=h-((v.num-minVal)/range)*(h-20)+10;const bad=evaluator&&((evaluator.direction==="below"&&v.num<evaluator.target)||(evaluator.direction==="above"&&v.num>evaluator.target));return`<circle cx="${x}" cy="${y}" r="3" fill="${bad?'#EF4444':'#22C55E'}"/><title>${fmtDisp(v.date)}: ${v.num}</title>`;}).join("")}
+        <text x="40" y="${h+25}" fill="#64748b" font-size="9">${chartData[0]?fmtDisp(chartData[0].date):""}</text>
+        <text x="${w-20}" y="${h+25}" fill="#64748b" font-size="9" text-anchor="end">${chartData[chartData.length-1]?fmtDisp(chartData[chartData.length-1].date):""}</text>
+      </svg>`:`<div style="color:#64748b;padding:20px;text-align:center">No 2026 data for this KPI</div>`;
+      
+      // Stats
+      const last30=values.slice(-30),last7=values.slice(-7);
+      const avg30=last30.length?last30.reduce((s,v)=>s+v.num,0)/last30.length:0;
+      const avg7=last7.length?last7.reduce((s,v)=>s+v.num,0)/last7.length:0;
+      const lastVal=values[values.length-1];
+      const bestVal=values.length?values.reduce((b,v)=>v.num>b.num?v:b):null;
+      const worstVal=values.length?values.reduce((b,v)=>v.num<b.num?v:b):null;
+      
+      pg.innerHTML=`
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+          <button onclick="kpiSelectedKPIName=null;kpiSelectedBrand=null;kpiSelectedAggregator=null;renderKPI()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:5px 12px;cursor:pointer;font-size:12px">← Back to All KPIs</button>
+          <div style="font-size:16px;font-weight:800">${kpiSelectedOutlet} · <span style="color:${BMAP[kpiSelectedBrand]?.c||'#888'}">${kpiSelectedBrand}</span> · <span style="color:${AC[kpiSelectedAggregator]||'#888'}">${kpiSelectedAggregator}</span></div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">
+          <span style="background:#0d1524;border:1px solid #1b2f4a;border-radius:5px;padding:6px 12px;font-size:12px;font-weight:700;color:#f59e0b">${kpiSelectedKPIName}</span>
+          ${target?`<span style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:5px;padding:6px 12px;font-size:11px;color:#22C55E">Target: ${evaluator.direction==="below"?"≥":"≤"} ${target}${evaluator.unit||""}</span>`:""}
+        </div>
+        
+        <div class="g4" style="margin-bottom:14px">
+          <div class="sm"><div class="ct">Latest</div><div style="font-size:24px;font-weight:800;color:${ev&&ev.status==="bad"?"#EF4444":"#22C55E"}">${lastVal?lastVal.num.toFixed(evaluator?.type==="rating"?2:1):"—"}</div><div style="font-size:10px;color:#64748b;margin-top:3px">${lastVal?fmtDisp(lastVal.date):""}</div></div>
+          <div class="sm"><div class="ct">7-Day Avg</div><div style="font-size:24px;font-weight:800;color:#FCD34D">${avg7.toFixed(evaluator?.type==="rating"?2:1)}</div></div>
+          <div class="sm"><div class="ct">30-Day Avg</div><div style="font-size:24px;font-weight:800;color:#94A3B8">${avg30.toFixed(evaluator?.type==="rating"?2:1)}</div></div>
+          <div class="sm"><div class="ct">2026 Best / Worst</div><div style="font-size:14px;font-weight:700;color:#22C55E">${bestVal?bestVal.num.toFixed(evaluator?.type==="rating"?2:1):"—"}</div><div style="font-size:14px;font-weight:700;color:#EF4444;margin-top:3px">${worstVal?worstVal.num.toFixed(evaluator?.type==="rating"?2:1):"—"}</div></div>
+        </div>
+        
+        ${ev&&ev.status==="bad"&&ev.degradedFrom?`<div class="card" style="border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.04);margin-bottom:14px">
+          <div style="color:#EF4444;font-weight:700;font-size:13px">⚠ Performance Degradation Detected</div>
+          <div style="color:#FCD34D;font-size:12px;margin-top:6px">This KPI started ${evaluator.direction==="below"?"dropping below target":"rising above target"} from <strong>${fmtDisp(ev.degradedFrom)}</strong>. Investigate operational changes from that date — staff change, supplier issue, marketing surge, etc.</div>
+        </div>`:""}
+        
+        <div class="card" style="margin-bottom:14px">
+          <div class="ct">Daily Trend — Last 60 Days (2026)</div>
+          ${chartSVG}
+          <div style="font-size:10px;color:#64748b;margin-top:6px">🟢 Green dots = within target · 🔴 Red dots = below/above target · Dashed line = target</div>
+        </div>
+        
+        <div class="card">
+          <div class="ct">All 2026 Daily Values (${values.length})</div>
+          <div style="overflow-x:auto;max-height:400px"><table class="tbl"><thead><tr><th>Date</th><th>Value</th><th>vs Target</th></tr></thead><tbody>
+            ${values.slice().reverse().slice(0,200).map(v=>{
+              const bad=evaluator&&((evaluator.direction==="below"&&v.num<evaluator.target)||(evaluator.direction==="above"&&v.num>evaluator.target));
+              const diff=evaluator?(v.num-evaluator.target).toFixed(evaluator.type==="rating"?2:1):"—";
+              return `<tr style="${bad?'background:rgba(239,68,68,0.05)':''}"><td style="font-size:11px">${fmtDisp(v.date)}</td><td style="font-size:11px;font-weight:700;color:${bad?'#EF4444':'#22C55E'}">${v.num}${evaluator?.unit||""}</td><td style="font-size:11px;color:${bad?'#EF4444':'#22C55E'}">${diff>0?"+":""}${diff}</td></tr>`;
+            }).join("")}
+          </tbody></table></div>
+        </div>`;
+      return;
+    }
   }
   
-  // Build a flat list of all rows: brand × aggregator × kpi
+  // Otherwise show outlet-level summary (existing behavior simplified)
+  const pg=document.getElementById("page-kpi");
   const allRows=[];
   od.blocks.forEach(blk=>{
     Object.entries(blk.kpis).forEach(([kpi,data])=>{
-      allRows.push({brand:blk.brand,aggregator:blk.aggregator,kpi,lastEntry:data.lastEntry,entries:data.entries,latest:data.lastEntry?data.entries[data.lastEntry]:null,staleness:kpiStaleness(data.lastEntry)});
+      const evaluator=getKPIEvaluator(kpi,blk.aggregator,blk.brand,data.target);
+      const ev=evaluator?evaluateKPI(data,evaluator):null;
+      allRows.push({brand:blk.brand,aggregator:blk.aggregator,kpi,latest:ev?.latest,lastEntry:data.lastEntry,target:evaluator?.target,status:ev?.status||"ok",unit:evaluator?.unit||""});
     });
   });
-  console.log("[KPI detail] total flat rows:",allRows.length);
+  // Sort: bad first
+  allRows.sort((a,b)=>{if(a.status==="bad"&&b.status!=="bad")return -1;if(b.status==="bad"&&a.status!=="bad")return 1;return a.brand.localeCompare(b.brand);});
   
-  // Apply filters
-  let filtered=allRows;
-  if(kpiFilterBrand!=="All")filtered=filtered.filter(r=>r.brand===kpiFilterBrand);
-  if(kpiFilterAgg!=="All")filtered=filtered.filter(r=>r.aggregator===kpiFilterAgg);
-  if(kpiFilterMetric!=="All")filtered=filtered.filter(r=>r.kpi.toLowerCase().includes(kpiFilterMetric.toLowerCase()));
-  
-  // Sort: most stale first
-  filtered.sort((a,b)=>b.staleness.days-a.staleness.days||a.brand.localeCompare(b.brand)||a.aggregator.localeCompare(b.aggregator));
-  
-  const brands=[...new Set(allRows.map(r=>r.brand))];
-  const aggs=[...new Set(allRows.map(r=>r.aggregator))];
-  const kpiTypes=[...new Set(allRows.map(r=>r.kpi))];
-  
-  const filterChip=(curr,val,setter)=>{
-    const isAct=curr===val;
-    return `<button onclick="${setter}='${val}';renderKPI()" style="padding:3px 10px;border-radius:5px;border:1px solid ${isAct?'#f59e0b':'#1b2f4a'};background:${isAct?'#f59e0b22':'transparent'};color:${isAct?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">${val}</button>`;
-  };
-  
-  const tableRows=filtered.map(r=>{
-    const lastDisp=r.lastEntry?fmtDisp(r.lastEntry):"Never";
-    const valDisp=r.latest||"—";
-    return`<tr style="background:${r.staleness.bg.replace('0.15','0.04').replace('0.12','0.04').replace('0.18','0.04')}">
-      <td><span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span></td>
-      <td><span style="color:${AC[r.aggregator]||'#888'};font-weight:700;font-size:11px">${r.aggregator}</span></td>
-      <td style="font-size:11px;font-weight:600">${r.kpi}</td>
-      <td style="font-size:11px;font-weight:700;color:#e2e8f0">${valDisp}</td>
-      <td style="font-size:11px;color:#94a3b8">${lastDisp}</td>
-      <td><span style="display:inline-block;padding:2px 10px;border-radius:10px;font-size:10px;font-weight:700;background:${r.staleness.bg};color:${r.staleness.color};border:1px solid ${r.staleness.color}44">${r.staleness.label}</span></td>
-    </tr>`;
-  }).join("");
-  
-  // Counts
-  const stale=allRows.filter(r=>r.staleness.days>=2).length;
-  const late=allRows.filter(r=>r.staleness.days===1).length;
-  const ok=allRows.filter(r=>r.staleness.days===0).length;
-  
-  const pg=document.getElementById("page-kpi");
   pg.innerHTML=`
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
-      <button onclick="kpiSelectedOutlet=null;kpiFilterBrand='All';kpiFilterAgg='All';kpiFilterMetric='All';renderKPI()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:5px 12px;cursor:pointer;font-size:12px">← Back to All Outlets</button>
+      <button onclick="kpiSelectedOutlet=null;renderKPI()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:5px 12px;cursor:pointer;font-size:12px">← Back to All KPIs</button>
       <div style="font-size:18px;font-weight:800">📍 ${kpiSelectedOutlet}</div>
-      <span style="font-size:11px;color:#64748b">${allRows.length} trackers · ${stale} need a call · ${late} late · ${ok} OK</span>
-    </div>
-    <div class="fbar">
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
-          <span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;min-width:60px">Brand:</span>
-          ${filterChip(kpiFilterBrand,"All","kpiFilterBrand")}
-          ${brands.map(b=>filterChip(kpiFilterBrand,b,"kpiFilterBrand")).join("")}
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
-          <span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;min-width:60px">Platform:</span>
-          ${filterChip(kpiFilterAgg,"All","kpiFilterAgg")}
-          ${aggs.map(a=>filterChip(kpiFilterAgg,a,"kpiFilterAgg")).join("")}
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
-          <span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;min-width:60px">KPI:</span>
-          ${filterChip(kpiFilterMetric,"All","kpiFilterMetric")}
-          ${["Rating","Prep Time","Rider Wait","Food Is Ready","Contacts"].map(k=>filterChip(kpiFilterMetric,k,"kpiFilterMetric")).join("")}
-        </div>
-      </div>
     </div>
     <div class="card">
-      <div class="ct">${kpiSelectedOutlet} — Detailed KPI Status (${filtered.length} of ${allRows.length})</div>
-      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Brand</th><th>Platform</th><th>KPI</th><th>Latest Value</th><th>Last Entry</th><th>Status</th></tr></thead><tbody>${tableRows}</tbody></table></div>
+      <div class="ct">All KPIs (${allRows.length}) · Click any to deep dive</div>
+      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Brand</th><th>Platform</th><th>KPI</th><th>Latest</th><th>Target</th><th>Last Entry</th><th>Status</th></tr></thead><tbody>
+        ${allRows.map(r=>`<tr onclick="openKPIDetail('${kpiSelectedOutlet.replace(/'/g,"\\'")}','${r.brand}','${r.aggregator}','${r.kpi.replace(/'/g,"\\'")}')" style="cursor:pointer;${r.status==="bad"?'background:rgba(239,68,68,0.05)':''}" onmouseover="this.style.background='rgba(245,158,11,0.08)'" onmouseout="this.style.background='${r.status==="bad"?'rgba(239,68,68,0.05)':'transparent'}'">
+          <td><span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span></td>
+          <td><span style="color:${AC[r.aggregator]||'#888'};font-weight:700;font-size:11px">${r.aggregator}</span></td>
+          <td style="font-size:11px">${r.kpi}</td>
+          <td style="font-size:11px;font-weight:700;color:${r.status==="bad"?"#EF4444":"#22C55E"}">${r.latest!==undefined?r.latest.toFixed(2)+(r.unit||""):"—"}</td>
+          <td style="font-size:10px;color:#64748b">${r.target||"—"}</td>
+          <td style="font-size:10px;color:#94a3b8">${r.lastEntry?fmtDisp(r.lastEntry):"—"}</td>
+          <td><span style="font-size:10px;font-weight:700;color:${r.status==="bad"?"#EF4444":r.status==="ok"?"#22C55E":"#64748b"}">${r.status==="bad"?"⚠ FLAG":r.status==="ok"?"✓ OK":"—"}</span></td>
+        </tr>`).join("")}
+      </tbody></table></div>
     </div>`;
 }
 
