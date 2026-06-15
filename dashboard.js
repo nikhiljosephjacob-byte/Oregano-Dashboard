@@ -1478,16 +1478,16 @@ async function loadKPIData(){
       try{const r=await fetch(u);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(","))(csv=t);}}catch(e){}
       if(csv)break;
     }
-    if(!csv){console.warn("[KPI] No data for",name);return;}
+    if(!csv){console.warn("[KPI] No CSV for",name,"(GID:",gid,") — possibly wrong GID or sheet not in publish");return;}
     try{
       const parsed=parseKPISheet(csv,name);
       if(parsed&&parsed.blocks&&parsed.blocks.length){
         kpiData[name]=parsed;
         console.log("[KPI]",name,"→",parsed.blocks.length,"blocks");
       } else {
-        console.warn("[KPI]",name,"→ no blocks parsed");
+        console.warn("[KPI]",name,"→ no blocks parsed (CSV may have unexpected format)");
       }
-    }catch(e){console.error("[KPI] parse error",name,e);}
+    }catch(e){console.error("[KPI] parse error for",name,":",e.message);}
   }));
   kpiLoaded=true;
   console.log("[KPI] Loaded",Object.keys(kpiData).length,"outlets total");
@@ -1593,7 +1593,7 @@ async function renderKPI(){
       </div>
       <button onclick="kpiLoaded=false;kpiData=null;renderKPI()" style="background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 10px;font-size:11px;cursor:pointer">↻ Refresh</button>
     </div>
-    <div class="card" style="border-color:${twoPlusDays>0?'rgba(239,68,68,0.3)':partialCount>0?'rgba(251,191,36,0.3)':'rgba(34,197,94,0.3)'};margin-bottom:14px">
+    <div class="card" style="border-color:${twoPlusDays>0?'rgba(239,68,68,0.3)':oneDayBehind>0?'rgba(251,191,36,0.3)':'rgba(34,197,94,0.3)'};margin-bottom:14px">
       <div style="display:flex;gap:30px;flex-wrap:wrap">
         <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Total Trackers</div><div style="font-size:24px;font-weight:800">${totalBlocks}</div></div>
         <div><div style="font-size:9px;color:#22C55E;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">✓ Up to date</div><div style="font-size:24px;font-weight:800;color:#22C55E">${upToDate}</div></div>
