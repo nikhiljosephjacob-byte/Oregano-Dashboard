@@ -1209,7 +1209,7 @@ const KPI_OUTLETS=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Vil
 // Brand normalisation for KPI sheet (matches main brand list)
 const KPI_BRANDS=["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"];
 // Aggregators we track in KPI sheet
-const KPI_AGGS=["Talabat","Deliveroo","Noon","Careem","Keeta","Google Maps","Google"];
+const KPI_AGGS=["Talabat","Deliveroo","Noon","Careem","Keeta","Google Maps","Google","Google maps"];
 // KPIs we care about — order numbers excluded per user request
 const KPI_METRICS=["Rating","Prep Time Average","Rider Wait Time","Food Is Ready %","Contacts"];
 // Tab-name-to-gid map — populated on first load
@@ -1639,16 +1639,16 @@ function renderKPIPlatformGrid(){
   
   // Performance-tracked platforms (skip Noon and Careem ratings, but keep their other KPIs)
   const PLATFORMS=[
-    {name:"Talabat",icon:"🛵",color:"#FF6000"},
-    {name:"Deliveroo",icon:"🚴",color:"#00CCBC"},
-    {name:"Careem",icon:"🛺",color:"#3DDC73"},
-    {name:"Google",icon:"📍",color:"#4285F4"}
+    {name:"Talabat",logoKey:"Talabat",color:"#FF6000"},
+    {name:"Deliveroo",logoKey:"Deliveroo",color:"#00CCBC"},
+    {name:"Careem",logoKey:"Careem",color:"#3DDC73"},
+    {name:"Google Maps",logoKey:"GoogleMaps",color:"#4285F4"}
   ];
   
   const platTiles=PLATFORMS.map(p=>{
     // Match Careem rows for both "Careem" and "Google" (sheet uses "Google Maps" or just "Google")
     let platRows;
-    if(p.name==="Google"){
+    if(p.name==="Google Maps"){
       platRows=allRows.filter(r=>r.aggregator.toLowerCase().includes("google"));
     } else {
       platRows=allRows.filter(r=>r.aggregator===p.name);
@@ -1660,8 +1660,8 @@ function renderKPIPlatformGrid(){
     
     return `<div onclick="selectKPIPlatform('${p.name}')" style="background:#0d1524;border:1px solid #1b2f4a;border-left:5px solid ${p.color};border-radius:12px;padding:18px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='#f59e0b';this.style.background='#111d2e'" onmouseout="this.style.borderColor='#1b2f4a';this.style.background='#0d1524'">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span style="font-size:30px">${p.icon}</span>
+        <div style="display:flex;align-items:center;gap:12px">
+          ${logoImg(p.logoKey||p.name,42)}
           <div>
             <div style="font-size:18px;font-weight:800;color:${p.color}">${p.name}</div>
             <div style="font-size:10px;color:#64748b;margin-top:2px">${outlets.size} outlet${outlets.size!==1?'s':''} · ${totalCount} KPIs tracked</div>
@@ -1695,7 +1695,7 @@ function renderKPIPlatformView(){
   const platform=kpiSelectedPlatform;
   const allRows=buildKPIEvalRows();
   let platRows;
-  if(platform==="Google"){
+  if(platform==="Google Maps"){
     platRows=allRows.filter(r=>r.aggregator.toLowerCase().includes("google"));
   } else {
     platRows=allRows.filter(r=>r.aggregator===platform);
@@ -1744,7 +1744,7 @@ function renderKPIPlatformView(){
     </div>`;
   }).filter(x=>x).join("");
   
-  const platColor={Talabat:"#FF6000",Deliveroo:"#00CCBC",Careem:"#3DDC73",Google:"#4285F4"}[platform]||"#f59e0b";
+  const platColor={Talabat:"#FF6000",Deliveroo:"#00CCBC",Careem:"#3DDC73","Google Maps":"#4285F4",Google:"#4285F4"}[platform]||"#f59e0b";
   
   pg.innerHTML=`
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
@@ -1760,7 +1760,7 @@ function renderKPIMetricView(){
   const platform=kpiSelectedPlatform,metricType=kpiSelectedMetric;
   const allRows=buildKPIEvalRows();
   let metricRows;
-  if(platform==="Google"){
+  if(platform==="Google Maps"){
     metricRows=allRows.filter(r=>r.aggregator.toLowerCase().includes("google")&&r.type===metricType);
   } else {
     metricRows=allRows.filter(r=>r.aggregator===platform&&r.type===metricType);
@@ -1774,13 +1774,20 @@ function renderKPIMetricView(){
   
   const metricLabels={rating:"⭐ Rating",prep_time:"⏱ Prep Time",rider_wait:"🛵 Rider Wait",rider_wait_pct:"🛵 Rider Wait %",food_ready:"🍳 Food Ready %"};
   const metricLabel=metricLabels[metricType]||metricType;
-  const platColor={Talabat:"#FF6000",Deliveroo:"#00CCBC",Careem:"#3DDC73",Google:"#4285F4"}[platform]||"#f59e0b";
+  const platColor={Talabat:"#FF6000",Deliveroo:"#00CCBC",Careem:"#3DDC73","Google Maps":"#4285F4",Google:"#4285F4"}[platform]||"#f59e0b";
   
   // Build tiles for each outlet × brand row
   const tiles=metricRows.map(r=>{
     const valStr=`${r.latest.toFixed(metricType==="rating"?2:1)}${r.unit||""}`;
     const targetStr=`${r.direction==="below"?"≥":"≤"} ${r.target}${r.unit||""}`;
-    const clr=r.isBad?"#EF4444":(metricType==="rating"&&r.latest>=4.7?"#22C55E":"#FCD34D");
+    let clr="#FCD34D";
+    if(metricType==="rating"){
+      if(r.latest<4.6)clr="#EF4444";
+      else if(r.latest<4.7)clr="#FBBF24";
+      else clr="#22C55E";
+    } else {
+      clr=r.isBad?"#EF4444":"#22C55E";
+    }
     return `<div onclick="kpiSelectedOutlet='${r.outlet.replace(/'/g,"\\'")}';kpiSelectedBrand='${r.brand}';kpiSelectedAggregator='${r.aggregator.replace(/'/g,"\\'")}';kpiSelectedKPIName='${r.kpiName.replace(/'/g,"\\'")}';renderKPI()" style="background:#0d1524;border:1px solid #1b2f4a;border-left:4px solid ${clr};border-radius:8px;padding:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='#f59e0b';this.style.background='#111d2e'" onmouseout="this.style.borderColor='#1b2f4a';this.style.background='#0d1524'">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <div>
@@ -1909,7 +1916,15 @@ function renderKPIDetail(){
     </div>
     
     <div class="g4" style="margin-bottom:14px">
-      <div class="sm"><div class="ct">Latest Value</div><div style="font-size:26px;font-weight:800;color:${lastVal&&isBad(lastVal)?"#EF4444":"#22C55E"}">${lastVal?lastVal.num.toFixed(evaluator?.type==="rating"?2:1):"—"}${evaluator?.unit||""}</div><div style="font-size:10px;color:#64748b;margin-top:3px">${lastVal?fmtDisp(lastVal.date):""}</div></div>
+      <div class="sm"><div class="ct">Latest Value</div><div style="font-size:26px;font-weight:800;color:${(()=>{
+  if(!lastVal)return"#94a3b8";
+  if(evaluator?.type==="rating"){
+    if(lastVal.num<4.6)return"#EF4444";
+    if(lastVal.num<4.7)return"#FBBF24";
+    return"#22C55E";
+  }
+  return isBad(lastVal)?"#EF4444":"#22C55E";
+})()}">${lastVal?lastVal.num.toFixed(evaluator?.type==="rating"?2:1):"—"}${evaluator?.unit||""}</div><div style="font-size:10px;color:#64748b;margin-top:3px">${lastVal?fmtDisp(lastVal.date):""}</div></div>
       <div class="sm"><div class="ct">${range}-Day Avg</div><div style="font-size:26px;font-weight:800;color:#FCD34D">${avgInRange.toFixed(evaluator?.type==="rating"?2:1)}${evaluator?.unit||""}</div></div>
       <div class="sm"><div class="ct">${range}-Day Best</div><div style="font-size:18px;font-weight:700;color:#22C55E">${bestInRange?bestInRange.num.toFixed(evaluator?.type==="rating"?2:1)+(evaluator?.unit||""):"—"}</div><div style="font-size:10px;color:#64748b;margin-top:3px">${bestInRange?fmtDisp(bestInRange.date):""}</div></div>
       <div class="sm"><div class="ct">${range}-Day Worst</div><div style="font-size:18px;font-weight:700;color:#EF4444">${worstInRange?worstInRange.num.toFixed(evaluator?.type==="rating"?2:1)+(evaluator?.unit||""):"—"}</div><div style="font-size:10px;color:#64748b;margin-top:3px">${worstInRange?fmtDisp(worstInRange.date):""}</div></div>
