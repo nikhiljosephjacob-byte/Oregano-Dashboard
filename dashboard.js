@@ -193,8 +193,8 @@ function trendChart(id,data,color){const ctx=document.getElementById(id)?.getCon
 function barChart(id,labels,values,colors,extra,mode){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);const idx=[...Array(labels.length).keys()].sort((a,b)=>values[b]-values[a]);const sl=idx.map(i=>labels[i]),sv=idx.map(i=>values[i]),sc=idx.map(i=>colors[i]),se=extra?idx.map(i=>extra[i]):null;charts[id]=new Chart(ctx,{type:"bar",data:{labels:sl,datasets:[{data:sv,backgroundColor:sc,borderRadius:3,label:mode==="orders"?"Orders":"GMV"}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{title:t=>t[0].label,label:c=>{const v=c.raw,i=c.dataIndex,ex=se?se[i]:null;return mode==="orders"?[`${Math.round(v).toLocaleString()} Orders`,ex!=null?`AED ${ex.toFixed(2)} Sales`:""].filter(Boolean):[`AED ${Math.round(v).toLocaleString()} Sales`,ex!=null?`${Math.round(ex).toLocaleString()} Orders`:""].filter(Boolean);}}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{display:false},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}}}}});}
 
 // NAVIGATION
-function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));document.getElementById(`page-${page}`).classList.add("act");document.querySelectorAll(".tab").forEach(t=>t.classList.remove("act"));const idx={overview:0,brands:1,outlets:2,platforms:3,cpc:4,campaigns:5}[page]||0;document.querySelectorAll(".tab")[idx]?.classList.add("act");Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
-function renderPage(p){if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();}
+function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));document.getElementById(`page-${page}`).classList.add("act");document.querySelectorAll(".tab").forEach(t=>t.classList.remove("act"));const idx={overview:0,brands:1,outlets:2,platforms:3,cpc:4,campaigns:5,kpi:6}[page]||0;document.querySelectorAll(".tab")[idx]?.classList.add("act");Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
+function renderPage(p){if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="kpi")renderKPI();}
 
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
@@ -1188,6 +1188,378 @@ Answer in 2-4 short paragraphs (max 250 words). Be specific, use actual numbers 
     const isCors=e.message==='cors'||(e.message||'').includes('fetch');
     answerEl.innerHTML=`<div style="background:#111d2e;border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:12px 14px;font-size:12px;color:#94a3b8">${isCors?'⚠️ Ask the AI runs only when the dashboard is opened from Claude.ai. External hosts cannot access the Anthropic API directly. All data on the dashboard works normally.':'⚠️ Could not get a response. Try again in a moment.'}</div>`;
   }
+}
+
+
+// ── KPI TRACKER ──────────────────────────────────────────────────
+// Published KPI Tracker sheet — one tab per outlet
+const KPI_PUB="https://docs.google.com/spreadsheets/d/e/2PACX-1vSnRTQ072D1AwtKTYksLkavZDVCL65ltXyOHrWP0dvXbLwPk3lODmxWatDtm1Syj5D05W7boL4bDRoo/pub";
+
+// Known outlet tabs (matches the screenshot bottom row order) — Claude will discover others on load
+const KPI_OUTLETS=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Villa","Jumeirah","Reem Island","WTC","Furjan","Al Quoz","TSQR","Al Forsan","NAS","Al Reef","Town Square","Fyoozhen DIP"];
+// Brand normalisation for KPI sheet (matches main brand list)
+const KPI_BRANDS=["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"];
+// Aggregators we track in KPI sheet
+const KPI_AGGS=["Talabat","Deliveroo","Noon","Careem","Keeta","Google Maps","Google"];
+// KPIs we care about — order numbers excluded per user request
+const KPI_METRICS=["Rating","Prep Time Average","Rider Wait Time","Food Is Ready %","Contacts"];
+// Tab-name-to-gid map — populated on first load
+let KPI_GIDS={};
+let kpiData=null,kpiLoaded=false,kpiSelectedOutlet=null,kpiFilterBrand="All",kpiFilterAgg="All",kpiFilterMetric="All";
+
+// Determine the "due" date for KPI entries (yesterday's KPIs should be filled by 3PM today)
+function kpiDueDate(){
+  const now=new Date();
+  // Before 3PM: yesterday's data may still be expected → due is day-before-yesterday
+  // After 3PM: yesterday's data should be in → due is yesterday
+  const isAfter3PM=now.getHours()>=15;
+  const dueDate=new Date(now);
+  dueDate.setDate(dueDate.getDate()-(isAfter3PM?1:2));
+  return dk(dueDate);
+}
+
+function kpiStaleness(lastEntryDate){
+  if(!lastEntryDate)return{label:"Never",days:Infinity,color:"#EF4444",bg:"rgba(239,68,68,0.15)"};
+  const due=kpiDueDate();
+  const last=new Date(lastEntryDate+"T12:00:00"),dueD=new Date(due+"T12:00:00");
+  const diff=Math.round((dueD-last)/86400000);
+  if(diff<=0)return{label:"Up to date",days:0,color:"#22C55E",bg:"rgba(34,197,94,0.12)"};
+  if(diff===1)return{label:"1 day behind",days:1,color:"#FBBF24",bg:"rgba(251,191,36,0.15)"};
+  return{label:`${diff} days behind`,days:diff,color:"#EF4444",bg:"rgba(239,68,68,0.18)"};
+}
+
+// Parse a single outlet's KPI sheet CSV
+// Format: column A = aggregator name (merged-block label), column B = "Targets"/value, column C+ = dates
+function parseKPISheet(csv,outlet){
+  const rows=parseCSV(csv);if(rows.length<3)return null;
+  // First row is brand headers (merged across columns) — skip
+  // We need to walk rows looking for:
+  //   - Rows with brand name in column B (like "Oregano", "Lollorosso") to track current brand
+  //   - Rows with aggregator name in column A and "Targets" in column B to start a new aggregator block
+  //   - Subsequent rows under that block = KPI rows (KPI name in col B, daily values in col C+)
+  
+  // Find header row (the row with dates in columns C+)
+  let headerRow=-1;
+  for(let i=0;i<Math.min(rows.length,40);i++){
+    const r=rows[i];
+    // Date row: column C onwards should contain "1-Jun-26" style strings
+    let dateCount=0;
+    for(let c=2;c<Math.min(r.length,15);c++){
+      if(parseDate(r[c]))dateCount++;
+    }
+    if(dateCount>=3){headerRow=i;break;}
+  }
+  if(headerRow<0)return null;
+  
+  // Map column index → date key for ALL date columns
+  const headerCells=rows[headerRow];
+  const dateCols=[];
+  for(let c=2;c<headerCells.length;c++){
+    const d=parseDate(headerCells[c]);
+    if(d)dateCols.push({col:c,date:dk(d)});
+  }
+  if(dateCols.length===0)return null;
+  
+  // Now walk rows AFTER header to build blocks
+  // Strategy: every time col A is non-empty and col B = "Targets", new aggregator block starts.
+  // We track currentBrand from preceding rows (col B with a brand name)
+  const blocks=[]; // {brand, aggregator, target, kpis:{kpiName:{date:value, lastEntry:date}}}
+  let currentBrand=null,currentBlock=null;
+  
+  // Re-scan from top to find brand labels (which appear in column B as a header)
+  // Actually from screenshot: column B contains brand name in special rows like row 1 ("Oregano"), row 10 ("Lollorosso"), etc.
+  // These have an empty column A. Let me detect them by: col A empty + col B = a known brand name
+  
+  for(let i=0;i<rows.length;i++){
+    const r=rows[i];
+    const cA=(r[0]||"").trim();
+    const cB=(r[1]||"").trim();
+    
+    // Brand header row (no aggregator yet)
+    const normB=normBrand(cB);
+    if(!cA&&KPI_BRANDS.includes(normB)){
+      currentBrand=normB;
+      currentBlock=null;
+      continue;
+    }
+    
+    // Aggregator block start: column A has aggregator name, column B = "Targets"
+    if(cA&&cB.toLowerCase()==="targets"){
+      const aggNorm=normAgg(cA);
+      currentBlock={brand:currentBrand,aggregator:aggNorm||cA,kpis:{}};
+      blocks.push(currentBlock);
+      continue;
+    }
+    
+    // KPI row within a block: col B has KPI name, col A empty
+    if(currentBlock&&!cA&&cB){
+      const kpiName=cB;
+      // Build entries by date
+      const entries={};
+      let lastEntry=null;
+      dateCols.forEach(({col,date})=>{
+        const raw=r[col];
+        if(raw!==undefined&&raw!==null&&String(raw).trim()!==""){
+          entries[date]=String(raw).trim();
+          // Only update lastEntry if value is non-zero (zero may mean no entry)
+          const numVal=parseFloat(String(raw).replace(/[,%\s]/g,""));
+          if(!isNaN(numVal)&&numVal>0){
+            if(!lastEntry||date>lastEntry)lastEntry=date;
+          } else if(raw&&isNaN(numVal)){
+            // Non-numeric value also counts as entry
+            if(!lastEntry||date>lastEntry)lastEntry=date;
+          }
+        }
+      });
+      currentBlock.kpis[kpiName]={entries,lastEntry};
+    }
+  }
+  return{outlet,blocks};
+}
+
+// Discover the GIDs of each outlet tab by fetching pubhtml and parsing
+async function fetchKPIGids(){
+  try{
+    const url=`${KPI_PUB}html`;
+    const proxies=[url,`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,`https://corsproxy.io/?${encodeURIComponent(url)}`];
+    let htmlText="";
+    for(const u of proxies){
+      try{const r=await fetch(u);if(r.ok){htmlText=await r.text();if(htmlText.length>500)break;}}catch(e){}
+    }
+    if(!htmlText)throw new Error("could not fetch index");
+    // Find <a> tags with sheet menu links — they have href like "#gid=NUMBER" and innerText is the tab name
+    const gidMatches=[...htmlText.matchAll(/gid=(\d+)[^>]*>([^<]+)</g)];
+    const found={};
+    gidMatches.forEach(m=>{const gid=m[1],name=m[2].trim();if(name&&!found[name])found[name]=gid;});
+    // Also try the alternate pattern that lists tabs at the bottom
+    const tabMatches=[...htmlText.matchAll(/<li[^>]*id="sheet-menu-item-(\d+)"[^>]*>.*?<a[^>]*>([^<]+)<\/a>/g)];
+    tabMatches.forEach(m=>{const gid=m[1],name=m[2].trim();if(name&&!found[name])found[name]=gid;});
+    KPI_GIDS=found;
+    console.log("[KPI] Discovered tabs:",Object.keys(found));
+    return found;
+  }catch(e){
+    console.error("[KPI] Could not discover tabs:",e);
+    return{};
+  }
+}
+
+async function loadKPIData(){
+  kpiLoaded=false;kpiData={};
+  await fetchKPIGids();
+  // If discovery failed, fall back to using known outlet names with gid=0 — won't work for non-first tabs
+  if(Object.keys(KPI_GIDS).length===0){
+    console.warn("[KPI] No GIDs discovered — only first tab will load");
+  }
+  // Fetch each known outlet tab in parallel
+  const outletNames=Object.keys(KPI_GIDS).length?Object.keys(KPI_GIDS):KPI_OUTLETS;
+  await Promise.all(outletNames.map(async(name)=>{
+    const gid=KPI_GIDS[name];
+    if(gid===undefined)return;
+    try{
+      const url=`${KPI_PUB}?gid=${gid}&single=true&output=csv`;
+      const proxies=[url,`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,`https://corsproxy.io/?${encodeURIComponent(url)}`];
+      let csv="";
+      for(const u of proxies){try{const r=await fetch(u);if(r.ok){csv=await r.text();if(csv.length>100&&csv.includes(","))break;}}catch(e){}}
+      if(!csv)return;
+      const parsed=parseKPISheet(csv,name);
+      if(parsed)kpiData[name]=parsed;
+    }catch(e){console.error("[KPI]",name,e);}
+  }));
+  kpiLoaded=true;
+  console.log("[KPI] Loaded",Object.keys(kpiData).length,"outlets");
+}
+
+// MAIN RENDER
+async function renderKPI(){
+  const pg=document.getElementById("page-kpi");
+  if(!pg)return;
+  if(!kpiLoaded){
+    pg.innerHTML=`<div style="padding:30px;text-align:center;color:#64748b;font-size:13px">⏳ Loading KPI Tracker — discovering outlet tabs...</div>`;
+    await loadKPIData();
+  }
+  
+  if(!kpiData||!Object.keys(kpiData).length){
+    pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Could not load KPI Tracker sheet</div><div style="color:#64748b;font-size:12px;line-height:1.7">Possible causes:<br>• Sheet not published yet (File → Share → Publish to web → Entire Document)<br>• Sheet structure differs from expected format<br><br>Open F12 → Console for details. Click below to retry.</div><button onclick="kpiLoaded=false;renderKPI()" style="margin-top:10px;background:#f59e0b;border:none;border-radius:5px;color:#000;font-weight:700;padding:6px 16px;font-size:11px;cursor:pointer">↻ Retry</button></div>`;
+    return;
+  }
+  
+  if(kpiSelectedOutlet){renderKPIDetail();return;}
+  
+  // ── DEFAULT VIEW: Heatmap grid of all outlets ──
+  // For each outlet × aggregator, find the freshest lastEntry across the 3 important KPIs (Rating, Prep Time, Rider Wait Time)
+  // Important KPIs per user: Rating, Prep Time Average, Rider Wait Time
+  const importantKPIs=["Rating","Prep Time Average","Rider Wait Time"];
+  
+  const outletRows=Object.values(kpiData).map(od=>{
+    const aggSummary={};
+    od.blocks.forEach(blk=>{
+      const aggKey=`${blk.brand}|${blk.aggregator}`;
+      // Find the WORST lastEntry across the 3 important KPIs in this block — that's the staleness indicator for the block
+      let worstLast=null;
+      let hasAnyImportant=false;
+      importantKPIs.forEach(km=>{
+        // Match KPI name flexibly
+        const matchedKey=Object.keys(blk.kpis).find(k=>k.toLowerCase().includes(km.toLowerCase().slice(0,8)));
+        if(matchedKey){
+          hasAnyImportant=true;
+          const le=blk.kpis[matchedKey].lastEntry;
+          if(!le){worstLast=null;return;}
+          if(!worstLast||le<worstLast)worstLast=le;
+        }
+      });
+      if(hasAnyImportant)aggSummary[aggKey]={brand:blk.brand,aggregator:blk.aggregator,lastEntry:worstLast,staleness:kpiStaleness(worstLast)};
+    });
+    return{outlet:od.outlet,blocks:aggSummary};
+  });
+  
+  // Summary banner counts
+  let totalBlocks=0,upToDate=0,oneDayBehind=0,twoPlusDays=0;
+  outletRows.forEach(o=>Object.values(o.blocks).forEach(b=>{
+    totalBlocks++;
+    if(b.staleness.days===0)upToDate++;
+    else if(b.staleness.days===1)oneDayBehind++;
+    else twoPlusDays++;
+  }));
+  
+  // Sort outlets by # of stale blocks (worst first)
+  outletRows.sort((a,b)=>{
+    const aStale=Object.values(a.blocks).filter(x=>x.staleness.days>=2).length;
+    const bStale=Object.values(b.blocks).filter(x=>x.staleness.days>=2).length;
+    if(aStale!==bStale)return bStale-aStale;
+    return a.outlet.localeCompare(b.outlet);
+  });
+  
+  // Build outlet tile grid
+  const tiles=outletRows.map(o=>{
+    const blocksHere=Object.values(o.blocks);
+    const staleCount=blocksHere.filter(b=>b.staleness.days>=2).length;
+    const partialCount=blocksHere.filter(b=>b.staleness.days===1).length;
+    const okCount=blocksHere.filter(b=>b.staleness.days===0).length;
+    
+    // Pick overall outlet badge based on worst block
+    let outletColor="#22C55E",outletLabel="✓ Up to date";
+    if(staleCount>0){outletColor="#EF4444";outletLabel=`⚠ ${staleCount} stale`;}
+    else if(partialCount>0){outletColor="#FBBF24";outletLabel=`◐ ${partialCount} late`;}
+    
+    // Mini chips for each brand×agg combo
+    const chips=blocksHere.sort((a,b)=>b.staleness.days-a.staleness.days).map(b=>{
+      const lab=`${b.brand.slice(0,3)} · ${b.aggregator.slice(0,4)}`;
+      return`<span style="display:inline-flex;align-items:center;font-size:9px;font-weight:600;padding:2px 6px;border-radius:3px;background:${b.staleness.bg};color:${b.staleness.color};border:1px solid ${b.staleness.color}33" title="${b.brand} on ${b.aggregator} — ${b.staleness.label} (last: ${b.lastEntry?fmtDisp(b.lastEntry):'never'})">${lab}</span>`;
+    }).join("");
+    
+    return`<div onclick="kpiSelectedOutlet='${o.outlet.replace(/'/g,"\\'")}';renderKPI()" style="background:#0d1524;border:1px solid #1b2f4a;border-left:3px solid ${outletColor};border-radius:10px;padding:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='#f59e0b';this.style.borderLeftColor='${outletColor}';this.style.background='#111d2e'" onmouseout="this.style.borderColor='#1b2f4a';this.style.background='#0d1524'">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div style="font-size:13px;font-weight:800;color:#e2e8f0">${o.outlet}</div>
+        <span style="font-size:9px;font-weight:700;color:${outletColor}">${outletLabel}</span>
+      </div>
+      <div style="display:flex;gap:14px;margin-bottom:8px">
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">OK</div><div style="font-size:16px;font-weight:800;color:#22C55E">${okCount}</div></div>
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Late</div><div style="font-size:16px;font-weight:800;color:#FBBF24">${partialCount}</div></div>
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Stale</div><div style="font-size:16px;font-weight:800;color:#EF4444">${staleCount}</div></div>
+      </div>
+      <div style="display:flex;gap:3px;flex-wrap:wrap;padding-top:8px;border-top:1px solid #1b2f4a">${chips}</div>
+    </div>`;
+  }).join("");
+  
+  pg.innerHTML=`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+      <div>
+        <div style="font-size:16px;font-weight:800;color:#f59e0b">📊 KPI Tracker</div>
+        <div style="font-size:11px;color:#64748b;margin-top:3px">Yesterday's KPIs are expected by 3 PM today · Click any outlet for details</div>
+      </div>
+      <button onclick="kpiLoaded=false;kpiData=null;renderKPI()" style="background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 10px;font-size:11px;cursor:pointer">↻ Refresh</button>
+    </div>
+    <div class="card" style="border-color:${twoPlusDays>0?'rgba(239,68,68,0.3)':partialCount>0?'rgba(251,191,36,0.3)':'rgba(34,197,94,0.3)'};margin-bottom:14px">
+      <div style="display:flex;gap:30px;flex-wrap:wrap">
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Total Trackers</div><div style="font-size:24px;font-weight:800">${totalBlocks}</div></div>
+        <div><div style="font-size:9px;color:#22C55E;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">✓ Up to date</div><div style="font-size:24px;font-weight:800;color:#22C55E">${upToDate}</div></div>
+        <div><div style="font-size:9px;color:#FBBF24;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">◐ 1 day behind</div><div style="font-size:24px;font-weight:800;color:#FBBF24">${oneDayBehind}</div></div>
+        <div><div style="font-size:9px;color:#EF4444;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">⚠ Needs a call</div><div style="font-size:24px;font-weight:800;color:#EF4444">${twoPlusDays}</div></div>
+      </div>
+      ${twoPlusDays>0?`<div style="font-size:12px;color:#FCD34D;margin-top:10px;padding-top:10px;border-top:1px solid rgba(251,191,36,0.2)">💡 ${twoPlusDays} tracker${twoPlusDays!==1?'s are':' is'} 2+ days behind. Outlets are sorted with the most stale ones first — call those managers.</div>`:''}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px">${tiles}</div>`;
+}
+
+// DETAIL VIEW
+function renderKPIDetail(){
+  const od=kpiData[kpiSelectedOutlet];
+  if(!od){kpiSelectedOutlet=null;renderKPI();return;}
+  
+  // Build a flat list of all rows: brand × aggregator × kpi
+  const allRows=[];
+  od.blocks.forEach(blk=>{
+    Object.entries(blk.kpis).forEach(([kpi,data])=>{
+      allRows.push({brand:blk.brand,aggregator:blk.aggregator,kpi,lastEntry:data.lastEntry,entries:data.entries,latest:data.lastEntry?data.entries[data.lastEntry]:null,staleness:kpiStaleness(data.lastEntry)});
+    });
+  });
+  
+  // Apply filters
+  let filtered=allRows;
+  if(kpiFilterBrand!=="All")filtered=filtered.filter(r=>r.brand===kpiFilterBrand);
+  if(kpiFilterAgg!=="All")filtered=filtered.filter(r=>r.aggregator===kpiFilterAgg);
+  if(kpiFilterMetric!=="All")filtered=filtered.filter(r=>r.kpi.toLowerCase().includes(kpiFilterMetric.toLowerCase()));
+  
+  // Sort: most stale first
+  filtered.sort((a,b)=>b.staleness.days-a.staleness.days||a.brand.localeCompare(b.brand)||a.aggregator.localeCompare(b.aggregator));
+  
+  const brands=[...new Set(allRows.map(r=>r.brand))];
+  const aggs=[...new Set(allRows.map(r=>r.aggregator))];
+  const kpiTypes=[...new Set(allRows.map(r=>r.kpi))];
+  
+  const filterChip=(curr,val,setter)=>{
+    const isAct=curr===val;
+    return `<button onclick="${setter}='${val}';renderKPI()" style="padding:3px 10px;border-radius:5px;border:1px solid ${isAct?'#f59e0b':'#1b2f4a'};background:${isAct?'#f59e0b22':'transparent'};color:${isAct?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">${val}</button>`;
+  };
+  
+  const tableRows=filtered.map(r=>{
+    const lastDisp=r.lastEntry?fmtDisp(r.lastEntry):"Never";
+    const valDisp=r.latest||"—";
+    return`<tr style="background:${r.staleness.bg.replace('0.15','0.04').replace('0.12','0.04').replace('0.18','0.04')}">
+      <td><span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span></td>
+      <td><span style="color:${AC[r.aggregator]||'#888'};font-weight:700;font-size:11px">${r.aggregator}</span></td>
+      <td style="font-size:11px;font-weight:600">${r.kpi}</td>
+      <td style="font-size:11px;font-weight:700;color:#e2e8f0">${valDisp}</td>
+      <td style="font-size:11px;color:#94a3b8">${lastDisp}</td>
+      <td><span style="display:inline-block;padding:2px 10px;border-radius:10px;font-size:10px;font-weight:700;background:${r.staleness.bg};color:${r.staleness.color};border:1px solid ${r.staleness.color}44">${r.staleness.label}</span></td>
+    </tr>`;
+  }).join("");
+  
+  // Counts
+  const stale=allRows.filter(r=>r.staleness.days>=2).length;
+  const late=allRows.filter(r=>r.staleness.days===1).length;
+  const ok=allRows.filter(r=>r.staleness.days===0).length;
+  
+  const pg=document.getElementById("page-kpi");
+  pg.innerHTML=`
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+      <button onclick="kpiSelectedOutlet=null;kpiFilterBrand='All';kpiFilterAgg='All';kpiFilterMetric='All';renderKPI()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:5px 12px;cursor:pointer;font-size:12px">← Back to All Outlets</button>
+      <div style="font-size:18px;font-weight:800">📍 ${kpiSelectedOutlet}</div>
+      <span style="font-size:11px;color:#64748b">${allRows.length} trackers · ${stale} need a call · ${late} late · ${ok} OK</span>
+    </div>
+    <div class="fbar">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+          <span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;min-width:60px">Brand:</span>
+          ${filterChip(kpiFilterBrand,"All","kpiFilterBrand")}
+          ${brands.map(b=>filterChip(kpiFilterBrand,b,"kpiFilterBrand")).join("")}
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+          <span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;min-width:60px">Platform:</span>
+          ${filterChip(kpiFilterAgg,"All","kpiFilterAgg")}
+          ${aggs.map(a=>filterChip(kpiFilterAgg,a,"kpiFilterAgg")).join("")}
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+          <span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;min-width:60px">KPI:</span>
+          ${filterChip(kpiFilterMetric,"All","kpiFilterMetric")}
+          ${["Rating","Prep Time","Rider Wait","Food Is Ready","Contacts"].map(k=>filterChip(kpiFilterMetric,k,"kpiFilterMetric")).join("")}
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ct">${kpiSelectedOutlet} — Detailed KPI Status (${filtered.length} of ${allRows.length})</div>
+      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Brand</th><th>Platform</th><th>KPI</th><th>Latest Value</th><th>Last Entry</th><th>Status</th></tr></thead><tbody>${tableRows}</tbody></table></div>
+    </div>`;
 }
 
 // INIT — Authentication gates the data load (called from index.html after login)
