@@ -1194,6 +1194,9 @@ Answer in 2-4 short paragraphs (max 250 words). Be specific, use actual numbers 
 // ── KPI TRACKER ──────────────────────────────────────────────────
 // Published KPI Tracker sheet — one tab per outlet
 const KPI_PUB="https://docs.google.com/spreadsheets/d/e/2PACX-1vSnRTQ072D1AwtKTYksLkavZDVCL65ltXyOHrWP0dvXbLwPk3lODmxWatDtm1Syj5D05W7boL4bDRoo/pub";
+// gviz endpoint allows CORS direct from browsers — bypasses the proxy chain entirely
+// Format: https://docs.google.com/spreadsheets/d/SHEET_ID/gviz/tq?tqx=out:csv&sheet=NAME
+const KPI_SHEET_ID="1xCrtvlJ9Ho1kUFV4vWdYfmIP15cNq5LH0yo-MnfjOik";
 
 // Known outlet tabs (matches the screenshot bottom row order) — Claude will discover others on load
 const KPI_OUTLETS=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Villa","Jumeirah","Reem Island","WTC","Furjan","Al Quoz","TSQR","Al Forsan","NAS","Al Reef","Town Square","Fyoozhen DIP"];
@@ -1473,32 +1476,34 @@ async function fetchKPIGids(){
 
 async function loadKPIData(){
   kpiLoaded=false;kpiData={};
-  await fetchKPIGids();
-  if(Object.keys(KPI_GIDS).length===0){
-    console.warn("[KPI] No GIDs discovered — KPI tab requires publishing 'Entire Document' (not single sheet)");
-    return;
-  }
-  const outletNames=Object.keys(KPI_GIDS);
-  console.log("[KPI] Loading",outletNames.length,"outlets...");
+  // NEW APPROACH: gviz endpoint allows direct CORS access — no proxy needed
+  // Use a fixed list of known outlet tab names and fetch each via gviz?sheet=NAME
+  console.log("[KPI] Loading via gviz direct CORS (no proxy)...");
+  const outletNames=KPI_OUTLETS;
   await Promise.all(outletNames.map(async(name)=>{
-    const gid=KPI_GIDS[name];
-    if(gid===undefined)return;
-    const url=`${KPI_PUB}?gid=${gid}&single=true&output=csv`;
-    const proxies=[
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-      `https://corsproxy.io/?${encodeURIComponent(url)}`,
-      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-      `https://cors-anywhere.herokuapp.com/${url}`,
-      `https://proxy.cors.sh/${url}`,
-      `https://thingproxy.freeboard.io/fetch/${url}`,
-      url,
-    ];
+    // Use gviz endpoint which supports CORS directly from browsers
+    const gvizUrl=`https://docs.google.com/spreadsheets/d/${KPI_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(name)}`;
     let csv="";
-    for(const u of proxies){
-      try{const r=await fetch(u);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(","))(csv=t);}}catch(e){}
-      if(csv)break;
+    try{
+      const r=await fetch(gvizUrl);
+      if(r.ok){
+        const t=await r.text();
+        if(t.length>200&&t.includes(",")){csv=t;}
+      } else {
+        console.warn("[KPI] gviz",r.status,"for",name);
+      }
+    }catch(e){
+      console.warn("[KPI] gviz fetch failed for",name,":",e.message);
     }
-    if(!csv){console.warn("[KPI] No CSV for",name,"(GID:",gid,") — possibly wrong GID or sheet not in publish");return;}
+    if(!csv){
+      // Fallback: try via published URL with allorigins proxy
+      const pubUrl=`${KPI_PUB}?single=true&output=csv&sheet=${encodeURIComponent(name)}`;
+      try{
+        const r=await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(pubUrl)}`);
+        if(r.ok){const t=await r.text();if(t.length>200&&t.includes(","))csv=t;}
+      }catch(e){}
+    }
+    if(!csv){console.warn("[KPI] No CSV for",name);return;}
     try{
       const parsed=parseKPISheet(csv,name);
       if(parsed&&parsed.blocks&&parsed.blocks.length){
@@ -1534,24 +1539,29 @@ async function renderKPI(){
   // Important KPIs per user: Rating, Prep Time Average, Rider Wait Time
   const importantKPIs=["Rating","Prep Time Average","Rider Wait Time"];
   
+  // Match KPI name leniently — supports "Rider Wait time" / "Rider Wait Time" / "Rider wait", etc.
+  function kpiNameMatches(actualName,wanted){
+    const a=actualName.toLowerCase().replace(/[^a-z]/g,"");
+    const w=wanted.toLowerCase().replace(/[^a-z]/g,"");
+    // Wanted is in actual, or actual is in wanted (handles partial names)
+    return a.includes(w.slice(0,6))||w.includes(a.slice(0,6));
+  }
+  
   const outletRows=Object.values(kpiData).map(od=>{
     const aggSummary={};
     od.blocks.forEach(blk=>{
-      const aggKey=`${blk.brand}|${blk.aggregator}`;
-      // Find the WORST lastEntry across the 3 important KPIs in this block — that's the staleness indicator for the block
-      let worstLast=null;
-      let hasAnyImportant=false;
-      importantKPIs.forEach(km=>{
-        // Match KPI name flexibly
-        const matchedKey=Object.keys(blk.kpis).find(k=>k.toLowerCase().includes(km.toLowerCase().slice(0,8)));
-        if(matchedKey){
-          hasAnyImportant=true;
-          const le=blk.kpis[matchedKey].lastEntry;
-          if(!le){worstLast=null;return;}
-          if(!worstLast||le<worstLast)worstLast=le;
-        }
+      const aggKey=`${blk.brand||"Unknown"}|${blk.aggregator}`;
+      // Find the LATEST entry across all KPIs in the block (treating any KPI as 'this block was updated on that date')
+      let latestEntry=null;
+      const allKpiKeys=Object.keys(blk.kpis||{});
+      allKpiKeys.forEach(k=>{
+        const le=blk.kpis[k].lastEntry;
+        if(le&&(!latestEntry||le>latestEntry))latestEntry=le;
       });
-      if(hasAnyImportant)aggSummary[aggKey]={brand:blk.brand,aggregator:blk.aggregator,lastEntry:worstLast,staleness:kpiStaleness(worstLast)};
+      // Always include the block, even if no important KPIs matched specifically
+      if(allKpiKeys.length>0){
+        aggSummary[aggKey]={brand:blk.brand||"Unknown",aggregator:blk.aggregator,lastEntry:latestEntry,staleness:kpiStaleness(latestEntry)};
+      }
     });
     return{outlet:od.outlet,blocks:aggSummary};
   });
