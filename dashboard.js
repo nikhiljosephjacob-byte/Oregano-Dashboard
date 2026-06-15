@@ -1238,9 +1238,18 @@ function parseKPISheet(csv,outlet){
   if(rows.length<3)return null;
   
   if(outlet==="Furjan"){
-    console.log("[KPI parse]",outlet,"— rows count:",rows.length);
-    console.log("[KPI parse] First 10 rows (col 0 | col 1 | col 2):");
-    rows.slice(0,10).forEach((r,i)=>console.log(`  Row ${i}: [0]"${r[0]||''}" [1]"${r[1]||''}" [2]"${r[2]||''}"`));
+    console.log("[KPI parse]",outlet,"— rows count:",rows.length,"— FIRST ROW HAS",rows[0]?.length||0,"COLUMNS");
+    // Dump all column values from row 1 (the date header row) to see ALL dates
+    if(rows[1]){
+      console.log("[KPI parse] All columns in row 1 (date header row):");
+      const dateRow=rows[1];
+      console.log("  Total columns:",dateRow.length);
+      console.log("  First 5 cols:",dateRow.slice(0,5));
+      console.log("  Last 5 cols:",dateRow.slice(-5));
+      // Find columns containing 2026 dates
+      const cols2026=dateRow.map((v,i)=>({col:i,val:v})).filter(x=>x.val&&String(x.val).includes("2026")||String(x.val).includes("Jun-26"));
+      console.log("  Columns with 2026/Jun-26:",cols2026.slice(-5));
+    }
   }
   
   // gviz layout:
@@ -1484,7 +1493,7 @@ async function loadKPIData(){
   const outletNames=KPI_OUTLETS;
   await Promise.all(outletNames.map(async(name)=>{
     // Use gviz endpoint which supports CORS directly from browsers
-    const gvizUrl=`https://docs.google.com/spreadsheets/d/${KPI_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(name)}`;
+    const gvizUrl=`https://docs.google.com/spreadsheets/d/${KPI_SHEET_ID}/gviz/tq?tqx=out:csv&headers=0&sheet=${encodeURIComponent(name)}`;
     let csv="";
     try{
       const r=await fetch(gvizUrl);
