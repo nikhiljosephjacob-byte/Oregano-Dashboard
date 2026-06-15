@@ -1234,101 +1234,91 @@ function kpiStaleness(lastEntryDate){
 // Parse a single outlet's KPI sheet CSV
 // Format: column A = aggregator name (merged-block label), column B = "Targets"/value, column C+ = dates
 function parseKPISheet(csv,outlet){
-  const rows=parseCSV(csv);if(rows.length<3)return null;
-  if(outlet==="Furjan"||outlet==="Motor City"){
+  const rows=parseCSV(csv);
+  if(rows.length<3)return null;
+  
+  if(outlet==="Furjan"){
     console.log("[KPI parse]",outlet,"— rows count:",rows.length);
-    console.log("[KPI parse] First 8 rows:");
-    rows.slice(0,8).forEach((r,i)=>console.log(`  Row ${i}:`,r.slice(0,6)));
+    console.log("[KPI parse] First 10 rows (col 0 | col 1 | col 2):");
+    rows.slice(0,10).forEach((r,i)=>console.log(`  Row ${i}: [0]"${r[0]||''}" [1]"${r[1]||''}" [2]"${r[2]||''}"`));
   }
-  // First row is brand headers (merged across columns) — skip
-  // We need to walk rows looking for:
-  //   - Rows with brand name in column B (like "Oregano", "Lollorosso") to track current brand
-  //   - Rows with aggregator name in column A and "Targets" in column B to start a new aggregator block
-  //   - Subsequent rows under that block = KPI rows (KPI name in col B, daily values in col C+)
   
-  // Find header row (the row with dates in columns C+)
-  let headerRow=-1;
-  for(let i=0;i<Math.min(rows.length,40);i++){
-    const r=rows[i];
-    // Date row: column C onwards should contain "1-Jun-26" style strings
-    let dateCount=0;
-    for(let c=2;c<Math.min(r.length,15);c++){
-      if(parseDate(r[c]))dateCount++;
-    }
-    if(dateCount>=3){headerRow=i;break;}
-  }
-  if(headerRow<0)return null;
+  // gviz layout:
+  // Row N (brand header):    ["", "Oregano", "", "", "", ""]
+  // Row N+1 (agg + dates):   ["Talabat", "Targets", "1-Jun-26", "2-Jun-26", ...]
+  // Row N+2 (KPI):           ["No. Of Orders", "", "12", "25", ...]
+  // Row N+3 (KPI):           ["Food Is Ready %", "90%", "96.3", ...]
   
-  // Map column index → date key for ALL date columns
-  const headerCells=rows[headerRow];
-  const dateCols=[];
-  for(let c=2;c<headerCells.length;c++){
-    const d=parseDate(headerCells[c]);
-    if(d)dateCols.push({col:c,date:dk(d)});
-  }
-  if(dateCols.length===0)return null;
-  
-  // Now walk rows AFTER header to build blocks
-  // Strategy: every time col A is non-empty and col B = "Targets", new aggregator block starts.
-  // We track currentBrand from preceding rows (col B with a brand name)
-  const blocks=[]; // {brand, aggregator, target, kpis:{kpiName:{date:value, lastEntry:date}}}
-  let currentBrand=null,currentBlock=null;
-  
-  // Re-scan from top to find brand labels (which appear in column B as a header)
-  // Actually from screenshot: column B contains brand name in special rows like row 1 ("Oregano"), row 10 ("Lollorosso"), etc.
-  // These have an empty column A. Let me detect them by: col A empty + col B = a known brand name
+  const blocks=[];
+  let currentBrand=null;
+  let currentBlock=null;
+  let dateCols=[]; // Updated each time a new aggregator block starts (since dates may appear in any block's header row)
   
   for(let i=0;i<rows.length;i++){
     const r=rows[i];
-    const cA=(r[0]||"").trim();
-    const cB=(r[1]||"").trim();
+    const c0=(r[0]||"").trim();
+    const c1=(r[1]||"").trim();
     
-    // Brand header row — accept brand name in EITHER column A or column B
-    // (Google sometimes shifts merged-cell content)
-    const possibleBrand=normBrand(cB)||normBrand(cA);
-    if(KPI_BRANDS.includes(possibleBrand)&&(!cA||KPI_BRANDS.includes(normBrand(cA)))){
+    // Brand header row: col 0 empty, col 1 has brand name
+    const possibleBrand=normBrand(c1);
+    if(!c0&&KPI_BRANDS.includes(possibleBrand)){
       currentBrand=possibleBrand;
       currentBlock=null;
-      if(outlet==="Furjan")console.log("[KPI parse] Brand header at row",i,"=",possibleBrand);
+      if(outlet==="Furjan")console.log("[KPI parse] Brand header at row",i,"=",currentBrand);
       continue;
     }
     
-    // Aggregator block start: aggregator name in col A, "Targets" in col B
-    // OR aggregator name in col A, anything in col B that's not a KPI
-    if(cA&&(cB.toLowerCase()==="targets"||cB.toLowerCase().includes("target"))){
-      const aggNorm=normAgg(cA);
-      if(aggNorm||KPI_AGGS.includes(cA)){
-        currentBlock={brand:currentBrand,aggregator:aggNorm||cA,kpis:{}};
+    // Aggregator block start: col 0 has aggregator name, col 1 = "Targets" (or contains date-like content)
+    if(c0&&KPI_AGGS.some(a=>a.toLowerCase()===c0.toLowerCase()||c0.toLowerCase().includes(a.toLowerCase()))){
+      const aggNorm=normAgg(c0);
+      // Check if col 1 is "Targets" or this is the date header row
+      if(c1.toLowerCase()==="targets"||c1.toLowerCase().includes("target")){
+        // Extract date columns from this row (col 2 onwards)
+        dateCols=[];
+        for(let c=2;c<r.length;c++){
+          const d=parseDate(r[c]);
+          if(d)dateCols.push({col:c,date:dk(d)});
+        }
+        currentBlock={brand:currentBrand,aggregator:aggNorm||c0,kpis:{}};
         blocks.push(currentBlock);
-        if(outlet==="Furjan")console.log("[KPI parse] Aggregator block at row",i,"=",currentBlock.aggregator,"brand:",currentBrand);
+        if(outlet==="Furjan")console.log("[KPI parse] Agg block at row",i,"=",currentBlock.aggregator,"brand:",currentBrand,"dateCols:",dateCols.length);
         continue;
       }
     }
     
-    // KPI row within a block: col A empty, col B has KPI name
-    if(currentBlock&&!cA&&cB&&!KPI_BRANDS.includes(normBrand(cB))){
-      if(outlet==="Furjan"&&i<10)console.log("[KPI parse] KPI row at",i,"=",cB,"in block",currentBlock.aggregator,"brand:",currentBlock.brand);
-      const kpiName=cB;
-      // Build entries by date
+    // KPI row: col 0 has KPI name (not an aggregator, not empty), and we're in a block
+    if(currentBlock&&c0&&!KPI_AGGS.some(a=>a.toLowerCase()===c0.toLowerCase())){
+      // c1 contains target (e.g. "90%" or "4.8" or "Below 7%") — informational, skip
+      const kpiName=c0;
       const entries={};
       let lastEntry=null;
       dateCols.forEach(({col,date})=>{
         const raw=r[col];
-        if(raw!==undefined&&raw!==null&&String(raw).trim()!==""){
-          entries[date]=String(raw).trim();
-          // Only update lastEntry if value is non-zero (zero may mean no entry)
-          const numVal=parseFloat(String(raw).replace(/[,%\s]/g,""));
-          if(!isNaN(numVal)&&numVal>0){
-            if(!lastEntry||date>lastEntry)lastEntry=date;
-          } else if(raw&&isNaN(numVal)){
-            // Non-numeric value also counts as entry
-            if(!lastEntry||date>lastEntry)lastEntry=date;
-          }
+        if(raw===undefined||raw===null)return;
+        const strVal=String(raw).trim();
+        if(strVal==="")return;
+        entries[date]=strVal;
+        // Determine if this counts as a real entry (non-empty, non-zero numeric)
+        const numVal=parseFloat(strVal.replace(/[,%\s]/g,""));
+        if(!isNaN(numVal)&&numVal>0){
+          if(!lastEntry||date>lastEntry)lastEntry=date;
+        } else if(isNaN(numVal)&&strVal){
+          // Non-numeric value (rare but counts as entry)
+          if(!lastEntry||date>lastEntry)lastEntry=date;
         }
       });
       currentBlock.kpis[kpiName]={entries,lastEntry};
+      if(outlet==="Furjan"&&Object.keys(currentBlock.kpis).length<=3){
+        console.log("[KPI parse] KPI '",kpiName,"' in",currentBlock.aggregator,"— lastEntry:",lastEntry,"entries:",Object.keys(entries).length);
+      }
     }
   }
+  
+  if(outlet==="Furjan"){
+    console.log("[KPI parse]",outlet,"final blocks:",blocks.length);
+    blocks.forEach((b,i)=>console.log(`  Block ${i}: ${b.brand}/${b.aggregator} — ${Object.keys(b.kpis).length} KPIs`));
+  }
+  
   return{outlet,blocks};
 }
 
