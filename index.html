@@ -121,21 +121,71 @@ nav{background:#0d1524;border-bottom:1px solid #1b2f4a;padding:0 20px;display:fl
   <div id="welcome-name" style="font-size:26px;font-weight:700;color:#f59e0b;margin-bottom:20px;text-align:center"></div>
   <div id="welcome-joke" style="font-size:17px;color:#FCD34D;max-width:640px;text-align:center;line-height:1.6;font-style:italic;padding:22px 28px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);border-radius:14px;margin-bottom:24px;display:flex;align-items:center;gap:14px;justify-content:center;flex-wrap:wrap;min-height:60px">
     <span id="welcome-joke-text" style="font-weight:500"></span><span id="welcome-cursor" style="display:inline-block;width:2px;height:20px;background:#FCD34D;animation:cursor-blink 0.7s steps(1) infinite;vertical-align:middle"></span>
-    <span id="welcome-emoji" style="font-size:54px;display:none;transform-origin:center;line-height:1;text-shadow:0 4px 8px rgba(0,0,0,0.4),0 2px 4px rgba(245,158,11,0.5),0 1px 1px rgba(255,255,255,0.2);filter:drop-shadow(0 3px 6px rgba(245,158,11,0.4))">😉</span>
+    <div id="welcome-emoji" style="display:none;width:64px;height:64px;flex-shrink:0;filter:drop-shadow(0 6px 12px rgba(245,158,11,0.5)) drop-shadow(0 2px 4px rgba(0,0,0,0.3))">
+      <svg viewBox="0 0 100 100" width="64" height="64" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <radialGradient id="faceGrad" cx="40%" cy="35%" r="70%">
+            <stop offset="0%" stop-color="#FFE76A"/>
+            <stop offset="50%" stop-color="#FFC83D"/>
+            <stop offset="100%" stop-color="#D89400"/>
+          </radialGradient>
+          <radialGradient id="cheekGrad" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#FF8B7B" stop-opacity="0.6"/>
+            <stop offset="100%" stop-color="#FF8B7B" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <!-- Face sphere -->
+        <circle cx="50" cy="50" r="45" fill="url(#faceGrad)"/>
+        <!-- Specular highlight (top-left) -->
+        <ellipse cx="35" cy="28" rx="14" ry="9" fill="white" opacity="0.35"/>
+        <!-- Cheeks -->
+        <circle cx="28" cy="62" r="7" fill="url(#cheekGrad)"/>
+        <circle cx="72" cy="62" r="7" fill="url(#cheekGrad)"/>
+        <!-- LEFT EYE — always open -->
+        <ellipse cx="35" cy="45" rx="4" ry="5.5" fill="#1a1a1a"/>
+        <circle cx="36" cy="43" r="1.5" fill="white" opacity="0.9"/>
+        <!-- RIGHT EYE — winks! -->
+        <g id="wink-eye">
+          <ellipse id="wink-eye-open" cx="65" cy="45" rx="4" ry="5.5" fill="#1a1a1a"/>
+          <circle id="wink-eye-shine" cx="66" cy="43" r="1.5" fill="white" opacity="0.9"/>
+          <path id="wink-eye-closed" d="M 60 45 Q 65 47.5 70 45" stroke="#1a1a1a" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0"/>
+        </g>
+        <!-- Smile -->
+        <path d="M 32 64 Q 50 78 68 64" stroke="#1a1a1a" stroke-width="3" stroke-linecap="round" fill="none"/>
+        <!-- Smile shine -->
+        <path d="M 36 67 Q 50 74 64 67" stroke="#FFE76A" stroke-width="1" stroke-linecap="round" fill="none" opacity="0.4"/>
+      </svg>
+    </div>
   </div>
   <style>
-    @keyframes joke-wink{
-      0%,40%{transform:rotate(0deg) scale(1)}
-      50%{transform:rotate(-8deg) scale(1.15)}
-      60%{transform:rotate(-4deg) scale(1.1)}
-      80%{transform:rotate(2deg) scale(1.05)}
-      100%{transform:rotate(0deg) scale(1)}
+    @keyframes joke-wink-eye{
+      0%,55%{opacity:1}
+      60%,68%{opacity:0}
+      72%,100%{opacity:1}
+    }
+    @keyframes joke-wink-eye-shine{
+      0%,55%{opacity:0.9}
+      60%,68%{opacity:0}
+      72%,100%{opacity:0.9}
+    }
+    @keyframes joke-wink-closed{
+      0%,55%{opacity:0}
+      60%,68%{opacity:1}
+      72%,100%{opacity:0}
+    }
+    @keyframes joke-bounce{
+      0%,55%,72%,100%{transform:translateY(0) rotate(0deg)}
+      60%{transform:translateY(-3px) rotate(-3deg)}
+      66%{transform:translateY(-1px) rotate(-1deg)}
     }
     @keyframes cursor-blink{
       0%,49%{opacity:1}
       50%,100%{opacity:0}
     }
-    .laugh-active{animation:joke-wink 1.8s ease-in-out infinite}
+    .laugh-active #wink-eye-open{animation:joke-wink-eye 2.4s ease-in-out infinite}
+    .laugh-active #wink-eye-shine{animation:joke-wink-eye-shine 2.4s ease-in-out infinite}
+    .laugh-active #wink-eye-closed{animation:joke-wink-closed 2.4s ease-in-out infinite}
+    .laugh-active svg{animation:joke-bounce 2.4s ease-in-out infinite}
   </style>
   <div style="font-size:11px;color:#64748b">Loading your dashboard...</div>
 </div>
@@ -161,6 +211,7 @@ nav{background:#0d1524;border-bottom:1px solid #1b2f4a;padding:0 20px;display:fl
     <button class="tab" onclick="gp('platforms')">Platforms</button>
     <button class="tab" onclick="gp('cpc')">CPC Budgets</button>
     <button class="tab" onclick="gp('campaigns')">📅 Campaigns</button>
+    <button class="tab" onclick="gp('kpi')">📊 KPI Tracker</button>
     <div style="flex:1"></div>
     <span id="ts-label" style="font-size:10px;color:#64748b"></span>
     <button onclick="doLoad()" style="margin-left:10px;background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 10px;font-size:12px;cursor:pointer">↻ Refresh</button>
@@ -172,6 +223,7 @@ nav{background:#0d1524;border-bottom:1px solid #1b2f4a;padding:0 20px;display:fl
   <div id="page-platforms" class="pg"></div>
   <div id="page-cpc" class="pg"></div>
   <div id="page-campaigns" class="pg"></div>
+  <div id="page-kpi" class="pg"></div>
 </div>
 <div id="etoa" style="position:fixed;bottom:12px;right:12px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.35);border-radius:6px;padding:6px 10px;font-size:10px;color:#ef4444;max-width:240px;display:none"></div>
 
