@@ -1319,54 +1319,85 @@ function parseKPISheet(csv,outlet){
 
 // Discover the GIDs of each outlet tab by fetching pubhtml and parsing
 async function fetchKPIGids(){
-  try{
-    const url=`${KPI_PUB}html`;
-    const proxies=[url,`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,`https://corsproxy.io/?${encodeURIComponent(url)}`];
-    let htmlText="";
-    for(const u of proxies){
-      try{const r=await fetch(u);if(r.ok){htmlText=await r.text();if(htmlText.length>500)break;}}catch(e){}
-    }
-    if(!htmlText)throw new Error("could not fetch index");
-    // Find <a> tags with sheet menu links — they have href like "#gid=NUMBER" and innerText is the tab name
-    const gidMatches=[...htmlText.matchAll(/gid=(\d+)[^>]*>([^<]+)</g)];
-    const found={};
-    gidMatches.forEach(m=>{const gid=m[1],name=m[2].trim();if(name&&!found[name])found[name]=gid;});
-    // Also try the alternate pattern that lists tabs at the bottom
-    const tabMatches=[...htmlText.matchAll(/<li[^>]*id="sheet-menu-item-(\d+)"[^>]*>.*?<a[^>]*>([^<]+)<\/a>/g)];
-    tabMatches.forEach(m=>{const gid=m[1],name=m[2].trim();if(name&&!found[name])found[name]=gid;});
-    KPI_GIDS=found;
-    console.log("[KPI] Discovered tabs:",Object.keys(found));
-    return found;
-  }catch(e){
-    console.error("[KPI] Could not discover tabs:",e);
-    return{};
+  const url=`${KPI_PUB}html?widget=true&headers=false`;
+  console.log("[KPI] Discovering tabs from:",url);
+  const proxies=[
+    url,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+  ];
+  let htmlText="";
+  for(const u of proxies){
+    try{
+      const r=await fetch(u);
+      if(r.ok){
+        const txt=await r.text();
+        if(txt.length>1000){htmlText=txt;console.log("[KPI] Got",txt.length,"chars via",u.slice(0,40));break;}
+      }
+    }catch(e){console.warn("[KPI] proxy fail:",u.slice(0,40));}
   }
+  if(!htmlText){console.error("[KPI] Could not fetch index from any proxy");return{};}
+  
+  const found={};
+  // Pattern 1: <li id="sheet-button-NUMBER"><a ...>NAME</a></li>
+  let m;
+  const r1=/id="sheet-button-(\d+)"[^>]*>\s*<a[^>]*>([^<]+)<\/a>/g;
+  while((m=r1.exec(htmlText))!==null){found[m[2].trim()]=m[1];}
+  // Pattern 2: data-id and innerText
+  const r2=/<a[^>]*href="#gid=(\d+)"[^>]*>([^<]+)<\/a>/g;
+  while((m=r2.exec(htmlText))!==null){if(!found[m[2].trim()])found[m[2].trim()]=m[1];}
+  // Pattern 3: any "gid=N">NAME<
+  const r3=/gid=(\d+)["'][^>]*>([^<]+)</g;
+  while((m=r3.exec(htmlText))!==null){const name=m[2].trim();if(name&&name.length<60&&!found[name])found[name]=m[1];}
+  
+  // Filter out junk entries (URLs, numbers only, etc.)
+  Object.keys(found).forEach(k=>{
+    if(k.includes("//")||k.includes("http")||/^\d+$/.test(k)||k.length<2){delete found[k];}
+  });
+  
+  KPI_GIDS=found;
+  console.log("[KPI] Discovered",Object.keys(found).length,"tabs:",Object.keys(found));
+  return found;
 }
 
 async function loadKPIData(){
   kpiLoaded=false;kpiData={};
   await fetchKPIGids();
-  // If discovery failed, fall back to using known outlet names with gid=0 — won't work for non-first tabs
   if(Object.keys(KPI_GIDS).length===0){
-    console.warn("[KPI] No GIDs discovered — only first tab will load");
+    console.warn("[KPI] No GIDs discovered — KPI tab requires publishing 'Entire Document' (not single sheet)");
+    return;
   }
-  // Fetch each known outlet tab in parallel
-  const outletNames=Object.keys(KPI_GIDS).length?Object.keys(KPI_GIDS):KPI_OUTLETS;
+  const outletNames=Object.keys(KPI_GIDS);
+  console.log("[KPI] Loading",outletNames.length,"outlets...");
   await Promise.all(outletNames.map(async(name)=>{
     const gid=KPI_GIDS[name];
     if(gid===undefined)return;
+    const url=`${KPI_PUB}?gid=${gid}&single=true&output=csv`;
+    const proxies=[
+      url,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+      `https://corsproxy.io/?${encodeURIComponent(url)}`,
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+    ];
+    let csv="";
+    for(const u of proxies){
+      try{const r=await fetch(u);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(","))(csv=t);}}catch(e){}
+      if(csv)break;
+    }
+    if(!csv){console.warn("[KPI] No data for",name);return;}
     try{
-      const url=`${KPI_PUB}?gid=${gid}&single=true&output=csv`;
-      const proxies=[url,`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,`https://corsproxy.io/?${encodeURIComponent(url)}`];
-      let csv="";
-      for(const u of proxies){try{const r=await fetch(u);if(r.ok){csv=await r.text();if(csv.length>100&&csv.includes(","))break;}}catch(e){}}
-      if(!csv)return;
       const parsed=parseKPISheet(csv,name);
-      if(parsed)kpiData[name]=parsed;
-    }catch(e){console.error("[KPI]",name,e);}
+      if(parsed&&parsed.blocks&&parsed.blocks.length){
+        kpiData[name]=parsed;
+        console.log("[KPI]",name,"→",parsed.blocks.length,"blocks");
+      } else {
+        console.warn("[KPI]",name,"→ no blocks parsed");
+      }
+    }catch(e){console.error("[KPI] parse error",name,e);}
   }));
   kpiLoaded=true;
-  console.log("[KPI] Loaded",Object.keys(kpiData).length,"outlets");
+  console.log("[KPI] Loaded",Object.keys(kpiData).length,"outlets total");
 }
 
 // MAIN RENDER
