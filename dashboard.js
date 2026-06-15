@@ -1317,81 +1317,99 @@ function parseKPISheet(csv,outlet){
   return{outlet,blocks};
 }
 
-// Discover the GIDs of each outlet tab using DOMParser
+// Discover GIDs by parsing the pubhtml directly — Google embeds the sheet list in a JSON blob
 async function fetchKPIGids(){
+  // Approach: hit the gviz JSON endpoint for the first sheet — it returns metadata about ALL sheets
+  // Format: https://docs.google.com/spreadsheets/d/SHEET_ID/gviz/tq?tqx=out:json
+  // BUT this only works with the regular sheet URL, not the /pub/ URL.
+  // For published sheets, we instead extract GIDs from the pubhtml's JavaScript blob.
+  
   const url=`${KPI_PUB}html`;
   console.log("[KPI] Discovering tabs from:",url);
   const proxies=[
     `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     `https://corsproxy.io/?${encodeURIComponent(url)}`,
     `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-    url,
   ];
   let htmlText="";
-  let workingProxy="";
   for(const u of proxies){
     try{
       const r=await fetch(u);
       if(r.ok){
         const txt=await r.text();
-        if(txt.length>1000){htmlText=txt;workingProxy=u;console.log("[KPI] Fetched",txt.length,"chars via",u.slice(0,50));break;}
+        if(txt.length>1000){htmlText=txt;console.log("[KPI] Fetched",txt.length,"chars via",u.slice(0,50));break;}
       }
     }catch(e){console.warn("[KPI] proxy failed:",u.slice(0,50),e.message);}
   }
-  if(!htmlText){console.error("[KPI] Could not fetch published HTML from any proxy.");return{};}
+  if(!htmlText){console.error("[KPI] Could not fetch published HTML.");return{};}
   
   const found={};
   
-  // Method 1: DOMParser — parse the HTML and walk all anchor tags
-  try{
-    const parser=new DOMParser();
-    const doc=parser.parseFromString(htmlText,"text/html");
-    const anchors=doc.querySelectorAll("a[href*='gid=']");
-    console.log("[KPI] DOMParser found",anchors.length,"anchors with gid in href");
-    anchors.forEach(a=>{
-      const href=a.getAttribute("href")||"";
-      const gidM=href.match(/gid=(\d+)/);
-      if(gidM){
-        const gid=gidM[1];
-        const name=(a.textContent||"").trim();
-        if(name&&name.length>1&&name.length<80&&!found[name]){
-          found[name]=gid;
-        }
-      }
-    });
-    // Also look at <li id="sheet-button-XXXX"> entries
-    const sheetBtns=doc.querySelectorAll("[id^='sheet-button-']");
-    console.log("[KPI] DOMParser found",sheetBtns.length,"sheet-button elements");
-    sheetBtns.forEach(el=>{
-      const idM=(el.id||"").match(/sheet-button-(\d+)/);
-      if(idM){
-        const gid=idM[1];
-        const name=(el.textContent||"").trim();
-        if(name&&!found[name])found[name]=gid;
-      }
-    });
-  }catch(e){console.error("[KPI] DOMParser error:",e);}
+  // METHOD 1 — Look for the docs-sheet-buttons-bar HTML structure
+  // Google embeds tab info like: <li id="sheet-button-12345" ...><a ...>Motor City</a></li>
+  // Or in newer format: button elements with onclick handlers
   
-  // Method 2: Fallback regex if DOMParser found nothing
+  // METHOD 2 — Most reliable: parse the JSON blob embedded in the HTML
+  // Google embeds bootstrap data like: bootstrapData = {"changes":[...,"sheets":[{name:"...", id:NUM},...]]}
+  // Or: name: "Motor City"... gid: 12345
+  
+  // Try to extract sheet metadata from JSON blob in the HTML
+  // Common pattern: "name":"Motor City"... immediately followed by gid in same block
+  const jsonPattern=/"name":"([^"]+)"[^}]*?["']?gid["']?\s*:\s*["']?(\d+)/g;
+  let m;
+  while((m=jsonPattern.exec(htmlText))!==null){
+    const name=m[1].trim(),gid=m[2];
+    if(name&&!found[name]&&name.length<60)found[name]=gid;
+  }
+  if(Object.keys(found).length>0){
+    console.log("[KPI] JSON blob method found",Object.keys(found).length,"tabs");
+  }
+  
+  // METHOD 3 — Look for the specific "data-sheet-button" or "sheets-pubhtml-sheet" attributes
   if(Object.keys(found).length===0){
-    console.log("[KPI] DOMParser found 0 tabs, trying regex fallback...");
     const patterns=[
-      /<a[^>]*href="[^"]*[#?&]gid=(\d+)[^"]*"[^>]*>([^<]+)<\/a>/g,
-      /id="sheet-button-(\d+)"[\s\S]{0,200}?>([^<>]{2,60})</g,
-      /name="(\d+)"[\s\S]{0,300}?title="([^"]+)"/g,
+      // Modern Google Sheets published format
+      /["']?gid["']?\s*:\s*["']?(\d+)["']?\s*,\s*["']?name["']?\s*:\s*["']([^"']+)["']/g,
+      // Reverse order: name first then gid
+      /["']?name["']?\s*:\s*["']([^"']+)["']\s*,\s*["']?gid["']?\s*:\s*["']?(\d+)/g,
+      // GID in href
+      /href="[^"]*gid=(\d+)[^"]*"[^>]*>([^<]+)</g,
+      // Sheet button id pattern
+      /id=["']sheet-button-(\d+)["'][^>]*>([^<]+)</g,
     ];
     patterns.forEach((re,i)=>{
-      let m;while((m=re.exec(htmlText))!==null){
-        const gid=m[1],name=m[2].trim();
-        if(name&&name.length>1&&name.length<80&&!found[name])found[name]=gid;
+      let mm;
+      while((mm=re.exec(htmlText))!==null){
+        let name,gid;
+        if(i<2){name=mm[2];gid=mm[1];}
+        else{name=mm[2];gid=mm[1];}
+        // Actually let me handle this more carefully — first 2 patterns have different orders
+        if(i===0){gid=mm[1];name=mm[2];}
+        else if(i===1){name=mm[1];gid=mm[2];}
+        else{gid=mm[1];name=mm[2];}
+        name=(name||"").trim();
+        if(name&&name.length>1&&name.length<60&&!found[name])found[name]=gid;
       }
-      console.log("[KPI] Regex pattern",i+1,"found",Object.keys(found).length,"tabs total");
+      if(Object.keys(found).length>0)console.log("[KPI] Pattern",i+1,"found",Object.keys(found).length,"tabs");
     });
   }
   
-  // Clean junk
+  // METHOD 4 — Last resort: extract ALL gids and ALL plausible tab names, match by order
+  if(Object.keys(found).length===0){
+    console.log("[KPI] Trying positional matching as last resort...");
+    // Find all GIDs mentioned
+    const allGids=[...new Set([...htmlText.matchAll(/gid[=:](["']?)(\d+)\1/g)].map(x=>x[2]))];
+    console.log("[KPI] Found",allGids.length,"unique GIDs in HTML");
+    // Look for sheet name list — typically in a script tag
+    const nameMatches=[...htmlText.matchAll(/"([^"]{2,40})"\s*[,:]/g)];
+    // Filter likely names — short alphanumeric with possible spaces
+    const candidateNames=nameMatches.map(m=>m[1]).filter(n=>/^[A-Za-z][A-Za-z0-9\s]{1,38}$/.test(n));
+    console.log("[KPI] Found",candidateNames.length,"candidate names. Sample:",candidateNames.slice(0,10));
+  }
+  
+  // Clean junk entries
   Object.keys(found).forEach(k=>{
-    if(k.includes("//")||k.includes("http")||/^\d+$/.test(k)||k.length<2||k.toLowerCase().includes("untitled")){
+    if(k.includes("//")||k.includes("http")||/^\d+$/.test(k)||k.length<2||k.toLowerCase().includes("untitled")||k.toLowerCase()==="sheet1"){
       delete found[k];
     }
   });
