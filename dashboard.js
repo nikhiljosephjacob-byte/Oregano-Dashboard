@@ -1317,47 +1317,87 @@ function parseKPISheet(csv,outlet){
   return{outlet,blocks};
 }
 
-// Discover the GIDs of each outlet tab by fetching pubhtml and parsing
+// Discover the GIDs of each outlet tab using DOMParser
 async function fetchKPIGids(){
-  const url=`${KPI_PUB}html?widget=true&headers=false`;
+  const url=`${KPI_PUB}html`;
   console.log("[KPI] Discovering tabs from:",url);
   const proxies=[
-    url,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     `https://corsproxy.io/?${encodeURIComponent(url)}`,
     `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+    url,
   ];
   let htmlText="";
+  let workingProxy="";
   for(const u of proxies){
     try{
       const r=await fetch(u);
       if(r.ok){
         const txt=await r.text();
-        if(txt.length>1000){htmlText=txt;console.log("[KPI] Got",txt.length,"chars via",u.slice(0,40));break;}
+        if(txt.length>1000){htmlText=txt;workingProxy=u;console.log("[KPI] Fetched",txt.length,"chars via",u.slice(0,50));break;}
       }
-    }catch(e){console.warn("[KPI] proxy fail:",u.slice(0,40));}
+    }catch(e){console.warn("[KPI] proxy failed:",u.slice(0,50),e.message);}
   }
-  if(!htmlText){console.error("[KPI] Could not fetch index from any proxy");return{};}
+  if(!htmlText){console.error("[KPI] Could not fetch published HTML from any proxy.");return{};}
   
   const found={};
-  // Pattern 1: <li id="sheet-button-NUMBER"><a ...>NAME</a></li>
-  let m;
-  const r1=/id="sheet-button-(\d+)"[^>]*>\s*<a[^>]*>([^<]+)<\/a>/g;
-  while((m=r1.exec(htmlText))!==null){found[m[2].trim()]=m[1];}
-  // Pattern 2: data-id and innerText
-  const r2=/<a[^>]*href="#gid=(\d+)"[^>]*>([^<]+)<\/a>/g;
-  while((m=r2.exec(htmlText))!==null){if(!found[m[2].trim()])found[m[2].trim()]=m[1];}
-  // Pattern 3: any "gid=N">NAME<
-  const r3=/gid=(\d+)["'][^>]*>([^<]+)</g;
-  while((m=r3.exec(htmlText))!==null){const name=m[2].trim();if(name&&name.length<60&&!found[name])found[name]=m[1];}
   
-  // Filter out junk entries (URLs, numbers only, etc.)
+  // Method 1: DOMParser — parse the HTML and walk all anchor tags
+  try{
+    const parser=new DOMParser();
+    const doc=parser.parseFromString(htmlText,"text/html");
+    const anchors=doc.querySelectorAll("a[href*='gid=']");
+    console.log("[KPI] DOMParser found",anchors.length,"anchors with gid in href");
+    anchors.forEach(a=>{
+      const href=a.getAttribute("href")||"";
+      const gidM=href.match(/gid=(\d+)/);
+      if(gidM){
+        const gid=gidM[1];
+        const name=(a.textContent||"").trim();
+        if(name&&name.length>1&&name.length<80&&!found[name]){
+          found[name]=gid;
+        }
+      }
+    });
+    // Also look at <li id="sheet-button-XXXX"> entries
+    const sheetBtns=doc.querySelectorAll("[id^='sheet-button-']");
+    console.log("[KPI] DOMParser found",sheetBtns.length,"sheet-button elements");
+    sheetBtns.forEach(el=>{
+      const idM=(el.id||"").match(/sheet-button-(\d+)/);
+      if(idM){
+        const gid=idM[1];
+        const name=(el.textContent||"").trim();
+        if(name&&!found[name])found[name]=gid;
+      }
+    });
+  }catch(e){console.error("[KPI] DOMParser error:",e);}
+  
+  // Method 2: Fallback regex if DOMParser found nothing
+  if(Object.keys(found).length===0){
+    console.log("[KPI] DOMParser found 0 tabs, trying regex fallback...");
+    const patterns=[
+      /<a[^>]*href="[^"]*[#?&]gid=(\d+)[^"]*"[^>]*>([^<]+)<\/a>/g,
+      /id="sheet-button-(\d+)"[\s\S]{0,200}?>([^<>]{2,60})</g,
+      /name="(\d+)"[\s\S]{0,300}?title="([^"]+)"/g,
+    ];
+    patterns.forEach((re,i)=>{
+      let m;while((m=re.exec(htmlText))!==null){
+        const gid=m[1],name=m[2].trim();
+        if(name&&name.length>1&&name.length<80&&!found[name])found[name]=gid;
+      }
+      console.log("[KPI] Regex pattern",i+1,"found",Object.keys(found).length,"tabs total");
+    });
+  }
+  
+  // Clean junk
   Object.keys(found).forEach(k=>{
-    if(k.includes("//")||k.includes("http")||/^\d+$/.test(k)||k.length<2){delete found[k];}
+    if(k.includes("//")||k.includes("http")||/^\d+$/.test(k)||k.length<2||k.toLowerCase().includes("untitled")){
+      delete found[k];
+    }
   });
   
   KPI_GIDS=found;
-  console.log("[KPI] Discovered",Object.keys(found).length,"tabs:",Object.keys(found));
+  console.log("[KPI] Final discovered tabs:",Object.keys(found).length,Object.keys(found));
   return found;
 }
 
