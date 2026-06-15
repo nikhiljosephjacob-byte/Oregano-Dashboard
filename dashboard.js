@@ -544,7 +544,13 @@ const AGG_NORM={
 };
 const EXCLUDED_BRANDS=new Set(['burgerstack','burger stack']);
 function normBrand(s){if(!s)return'';const lc=s.trim().toLowerCase();return BRAND_NORM[lc]||s.trim();}
-function normAgg(s){if(!s)return'';const lc=s.trim().toLowerCase();return AGG_NORM[lc]||s.trim();}
+function normAgg(s){
+  if(!s)return'';
+  // Strip trailing IDs/numbers (e.g. "Careem 1065320" → "Careem")
+  const cleaned=s.trim().replace(/\s+\d{3,}\s*$/,"").trim();
+  const lc=cleaned.toLowerCase();
+  return AGG_NORM[lc]||cleaned;
+}
 
 function parseCampaigns(csv){
   const rows=parseCSV(csv);if(rows.length<2)return[];
@@ -1252,9 +1258,10 @@ function parseKPISheet(csv,outlet){
       continue;
     }
     
-    // Aggregator block start
-    if(c0&&KPI_AGGS.some(a=>a.toLowerCase()===c0.toLowerCase()||c0.toLowerCase().includes(a.toLowerCase()))){
-      const aggNorm=normAgg(c0);
+    // Aggregator block start — strip outlet IDs e.g. "Careem 1065320" → "Careem"
+    const c0Clean=c0.replace(/\s*\d{4,}\s*$/,"").trim();
+    if(c0Clean&&KPI_AGGS.some(a=>a.toLowerCase()===c0Clean.toLowerCase()||c0Clean.toLowerCase().includes(a.toLowerCase()))){
+      const aggNorm=normAgg(c0Clean);
       if(c1.toLowerCase()==="targets"||c1.toLowerCase().includes("target")){
         // Only collect 2026 date columns for speed
         dateCols=[];
@@ -1268,8 +1275,9 @@ function parseKPISheet(csv,outlet){
       }
     }
     
-    // KPI row
-    if(currentBlock&&c0&&!KPI_AGGS.some(a=>a.toLowerCase()===c0.toLowerCase())){
+    // KPI row — skip rows where c0 is itself an aggregator (with or without trailing ID)
+    const c0CleanKPI=c0.replace(/\s*\d{4,}\s*$/,"").trim();
+    if(currentBlock&&c0&&!KPI_AGGS.some(a=>a.toLowerCase()===c0CleanKPI.toLowerCase())){
       const kpiName=c0;
       const target=c1; // raw target string from col 1 (e.g. "4.8", "90%", "16", "Below 7% of Daily Orders")
       const entries={};
@@ -1569,7 +1577,39 @@ function evaluateKPI(kpiData,evaluator){
   return{latest,latestDate:last.date,avg7,status,degradedFrom,values30:last30};
 }
 
-// MAIN RENDER — Outlets grid + Performance flags
+// ── PLATFORM SELECTION STATE ──
+let kpiSelectedPlatform=null,kpiSelectedMetric=null,kpiTrendRange=30;
+
+function selectKPIPlatform(p){kpiSelectedPlatform=p;kpiSelectedMetric=null;renderKPI();}
+function selectKPIMetric(m){kpiSelectedMetric=m;renderKPI();}
+function backToKPIPlatforms(){kpiSelectedPlatform=null;kpiSelectedMetric=null;renderKPI();}
+function backToKPIMetrics(){kpiSelectedMetric=null;renderKPI();}
+function setKPITrendRange(r){kpiTrendRange=r;renderKPI();}
+
+// Collect every (outlet, brand, aggregator, kpiName, evaluation) tuple
+function buildKPIEvalRows(){
+  const rows=[];
+  Object.values(kpiData).forEach(od=>{
+    od.blocks.forEach(blk=>{
+      Object.entries(blk.kpis).forEach(([kpiName,kdata])=>{
+        const evaluator=getKPIEvaluator(kpiName,blk.aggregator,blk.brand,kdata.target);
+        if(!evaluator)return;
+        if(!kdata.dailyValues||kdata.dailyValues.length===0)return;
+        const last=kdata.dailyValues[kdata.dailyValues.length-1];
+        const isBad=(evaluator.direction==="below"&&last.num<evaluator.target)||(evaluator.direction==="above"&&last.num>evaluator.target);
+        rows.push({
+          outlet:od.outlet,brand:blk.brand,aggregator:blk.aggregator,kpiName,
+          latest:last.num,latestDate:last.date,
+          target:evaluator.target,unit:evaluator.unit||"",direction:evaluator.direction,type:evaluator.type,
+          isBad,kdata
+        });
+      });
+    });
+  });
+  return rows;
+}
+
+// MAIN RENDER
 async function renderKPI(){
   const pg=document.getElementById("page-kpi");
   if(!pg)return;
@@ -1581,139 +1621,192 @@ async function renderKPI(){
     pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700">⚠️ Could not load KPI Tracker sheet</div><button onclick="kpiLoaded=false;renderKPI()" style="margin-top:10px;background:#f59e0b;border:none;border-radius:5px;color:#000;font-weight:700;padding:6px 16px;font-size:11px;cursor:pointer">↻ Retry</button></div>`;
     return;
   }
-  if(kpiSelectedOutlet){renderKPIDetail();return;}
   
-  // Build a flat list of all KPI evaluations across all outlets
-  const allEvaluations=[]; // {outlet, brand, aggregator, kpiName, evaluator, eval, target}
-  Object.values(kpiData).forEach(od=>{
-    od.blocks.forEach(blk=>{
-      Object.entries(blk.kpis).forEach(([kpiName,data])=>{
-        const evaluator=getKPIEvaluator(kpiName,blk.aggregator,blk.brand,data.target);
-        if(!evaluator)return;
-        const ev=evaluateKPI(data,evaluator);
-        if(!ev)return;
-        allEvaluations.push({outlet:od.outlet,brand:blk.brand,aggregator:blk.aggregator,kpiName,target:evaluator.target,unit:evaluator.unit,type:evaluator.type,direction:evaluator.direction,...ev,lastEntry:data.lastEntry});
-      });
-    });
-  });
+  // Drill levels:
+  // Level 3: Specific KPI selected → show trend chart for that outlet/brand/agg/metric
+  if(kpiSelectedOutlet&&kpiSelectedKPIName){renderKPIDetail();return;}
+  // Level 2: Platform + Metric selected → show outlets ranked by that metric
+  if(kpiSelectedPlatform&&kpiSelectedMetric){renderKPIMetricView();return;}
+  // Level 1: Platform selected → show KPI metric tiles
+  if(kpiSelectedPlatform){renderKPIPlatformView();return;}
+  // Level 0: Top-level platform tiles
+  renderKPIPlatformGrid();
+}
+
+function renderKPIPlatformGrid(){
+  const pg=document.getElementById("page-kpi");
+  const allRows=buildKPIEvalRows();
   
-  // Filter to bad performers
-  const badPerformers=allEvaluations.filter(e=>e.status==="bad");
-  const ratingEvals=allEvaluations.filter(e=>e.type==="rating");
+  // Performance-tracked platforms (skip Noon and Careem ratings, but keep their other KPIs)
+  const PLATFORMS=[
+    {name:"Talabat",icon:"🛵",color:"#FF6000"},
+    {name:"Deliveroo",icon:"🚴",color:"#00CCBC"},
+    {name:"Careem",icon:"🛺",color:"#3DDC73"},
+    {name:"Google",icon:"📍",color:"#4285F4"}
+  ];
   
-  // Group bad performers by KPI type
-  const badRatings=badPerformers.filter(e=>e.type==="rating").sort((a,b)=>a.latest-b.latest);
-  const badPrepTimes=badPerformers.filter(e=>e.type==="prep_time").sort((a,b)=>b.latest-a.latest);
-  const badRiderWait=badPerformers.filter(e=>e.type==="rider_wait"||e.type==="rider_wait_pct").sort((a,b)=>b.latest-a.latest);
-  const badFoodReady=badPerformers.filter(e=>e.type==="food_ready").sort((a,b)=>a.latest-b.latest);
-  
-  // Ratings leaderboard — lowest to highest (all ratings, not just bad)
-  const ratingsLeaderboard=[...ratingEvals].sort((a,b)=>a.latest-b.latest);
-  
-  // Data-entry staleness (for "needs a call" summary)
-  const today=dk(new Date());
-  let staleEntries=0;
-  Object.values(kpiData).forEach(od=>od.blocks.forEach(blk=>{
-    Object.values(blk.kpis).forEach(kd=>{
-      const stale=kpiStaleness(kd.lastEntry);
-      if(stale.days>=2)staleEntries++;
-    });
-  }));
-  
-  // ── Render ──
-  const formatVal=e=>`${e.latest.toFixed(e.type==="rating"?2:1)}${e.unit||""}`;
-  const formatTarget=e=>`${e.direction==="below"?"≥":"≤"} ${e.target}${e.unit||""}`;
-  
-  const flagRow=(e,idx)=>{
-    const fromTxt=e.degradedFrom?`<span style="color:#FCD34D;font-size:10px">since ${fmtDisp(e.degradedFrom)}</span>`:"";
-    return `<tr onclick="openKPIDetail('${e.outlet.replace(/'/g,"\\'")}','${e.brand}','${e.aggregator}','${e.kpiName.replace(/'/g,"\\'")}')" style="cursor:pointer" onmouseover="this.style.background='rgba(245,158,11,0.05)'" onmouseout="this.style.background='transparent'">
-      <td style="font-size:11px;font-weight:600">${e.outlet}</td>
-      <td><span style="color:${BMAP[e.brand]?.c||'#888'};font-weight:700;font-size:11px">${e.brand}</span></td>
-      <td><span style="color:${AC[e.aggregator]||'#888'};font-weight:700;font-size:11px">${e.aggregator}</span></td>
-      <td style="font-size:11px;font-weight:700;color:#EF4444">${formatVal(e)}</td>
-      <td style="font-size:10px;color:#64748b">${formatTarget(e)}</td>
-      <td style="font-size:10px;color:#94a3b8">7-day avg: ${e.avg7.toFixed(e.type==='rating'?2:1)}${e.unit||''}</td>
-      <td>${fromTxt}</td>
-      <td><span style="font-size:10px;color:#f59e0b">View →</span></td>
-    </tr>`;
-  };
-  
-  const flagSection=(title,arr,icon,color)=>{
-    if(arr.length===0)return"";
-    return `<div class="card" style="border-color:${color}44;margin-bottom:14px">
-      <div class="ct" style="color:${color}">${icon} ${title} — ${arr.length} flag${arr.length!==1?"s":""}</div>
-      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Outlet</th><th>Brand</th><th>Platform</th><th>Current</th><th>Target</th><th>Trend</th><th>Since</th><th></th></tr></thead><tbody>
-      ${arr.map(flagRow).join("")}
-      </tbody></table></div>
+  const platTiles=PLATFORMS.map(p=>{
+    // Match Careem rows for both "Careem" and "Google" (sheet uses "Google Maps" or just "Google")
+    let platRows;
+    if(p.name==="Google"){
+      platRows=allRows.filter(r=>r.aggregator.toLowerCase().includes("google"));
+    } else {
+      platRows=allRows.filter(r=>r.aggregator===p.name);
+    }
+    const badCount=platRows.filter(r=>r.isBad).length;
+    const totalCount=platRows.length;
+    const okCount=totalCount-badCount;
+    const outlets=new Set(platRows.map(r=>r.outlet));
+    
+    return `<div onclick="selectKPIPlatform('${p.name}')" style="background:#0d1524;border:1px solid #1b2f4a;border-left:5px solid ${p.color};border-radius:12px;padding:18px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='#f59e0b';this.style.background='#111d2e'" onmouseout="this.style.borderColor='#1b2f4a';this.style.background='#0d1524'">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:30px">${p.icon}</span>
+          <div>
+            <div style="font-size:18px;font-weight:800;color:${p.color}">${p.name}</div>
+            <div style="font-size:10px;color:#64748b;margin-top:2px">${outlets.size} outlet${outlets.size!==1?'s':''} · ${totalCount} KPIs tracked</div>
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:28px;font-weight:800;color:${badCount>0?'#EF4444':'#22C55E'}">${badCount}</div>
+          <div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:1px">${badCount>0?'flags':'all clear'}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:14px;padding-top:12px;border-top:1px solid #1b2f4a">
+        <div><div style="font-size:9px;color:#22C55E;text-transform:uppercase;letter-spacing:.5px">OK</div><div style="font-size:18px;font-weight:800;color:#22C55E">${okCount}</div></div>
+        <div><div style="font-size:9px;color:#EF4444;text-transform:uppercase;letter-spacing:.5px">Flagged</div><div style="font-size:18px;font-weight:800;color:#EF4444">${badCount}</div></div>
+      </div>
     </div>`;
-  };
-  
-  // Ratings leaderboard rendering
-  const ratingsLeaderRows=ratingsLeaderboard.slice(0,30).map(e=>{
-    const bad=e.status==="bad";
-    return `<tr onclick="openKPIDetail('${e.outlet.replace(/'/g,"\\'")}','${e.brand}','${e.aggregator}','${e.kpiName.replace(/'/g,"\\'")}')" style="cursor:pointer;${bad?'background:rgba(239,68,68,0.05)':''}" onmouseover="this.style.background='rgba(245,158,11,0.08)'" onmouseout="this.style.background='${bad?'rgba(239,68,68,0.05)':'transparent'}'">
-      <td style="font-size:11px;font-weight:700;color:${bad?'#EF4444':e.latest>=4.7?'#22C55E':'#FCD34D'}">${e.latest.toFixed(2)} ${bad?'⚠':''}</td>
-      <td style="font-size:11px">${e.outlet}</td>
-      <td><span style="color:${BMAP[e.brand]?.c||'#888'};font-weight:700;font-size:11px">${e.brand}</span></td>
-      <td><span style="color:${AC[e.aggregator]||'#888'};font-weight:700;font-size:11px">${e.aggregator}</span></td>
-      <td style="font-size:10px;color:#64748b">≥ ${e.target}</td>
-      <td style="font-size:10px;color:#94a3b8">${e.lastEntry?fmtDisp(e.lastEntry):"—"}</td>
-    </tr>`;
   }).join("");
-  
-  // Total flags count
-  const totalFlags=badPerformers.length;
   
   pg.innerHTML=`
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div>
         <div style="font-size:18px;font-weight:800;color:#f59e0b">📊 KPI Performance Tracker</div>
-        <div style="font-size:11px;color:#64748b;margin-top:3px">2026 data · Targets from sheet · Click any row for timeline & root cause</div>
+        <div style="font-size:11px;color:#64748b;margin-top:3px">2026 data · Click a platform to drill into its KPIs</div>
       </div>
       <button onclick="kpiLoaded=false;kpiData=null;renderKPI()" style="background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 10px;font-size:11px;cursor:pointer">↻ Refresh</button>
     </div>
-    
-    <div class="card" style="border-color:${totalFlags>0?'rgba(239,68,68,0.3)':'rgba(34,197,94,0.3)'};margin-bottom:14px">
-      <div style="display:flex;gap:30px;flex-wrap:wrap">
-        <div><div style="font-size:9px;color:#EF4444;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">⚠ Active Flags</div><div style="font-size:28px;font-weight:800;color:#EF4444">${totalFlags}</div></div>
-        <div><div style="font-size:9px;color:#FBBF24;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">⭐ Low Ratings</div><div style="font-size:28px;font-weight:800;color:#FBBF24">${badRatings.length}</div></div>
-        <div><div style="font-size:9px;color:#F59E0B;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">⏱ Slow Prep</div><div style="font-size:28px;font-weight:800;color:#F59E0B">${badPrepTimes.length}</div></div>
-        <div><div style="font-size:9px;color:#94A3B8;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">🛵 Rider Wait</div><div style="font-size:28px;font-weight:800;color:#94A3B8">${badRiderWait.length}</div></div>
-        <div><div style="font-size:9px;color:#22C55E;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">⚠ Stale Entries</div><div style="font-size:28px;font-weight:800;color:#94A3B8">${staleEntries}</div></div>
-      </div>
-    </div>
-    
-    ${flagSection("LOW RATINGS",badRatings,"⭐","#FBBF24")}
-    ${flagSection("SLOW PREP TIMES",badPrepTimes,"⏱","#F59E0B")}
-    ${flagSection("RIDER WAIT TIME ISSUES",badRiderWait,"🛵","#94A3B8")}
-    ${flagSection("LOW FOOD READY %",badFoodReady,"🍳","#60A5FA")}
-    
-    ${ratingsLeaderboard.length>0?`<div class="card" style="margin-bottom:14px"><div class="ct">⭐ RATINGS LEADERBOARD — Lowest to Highest (Talabat / Deliveroo / Google only)</div>
-      <div style="overflow-x:auto;max-height:500px"><table class="tbl"><thead><tr><th>Rating</th><th>Outlet</th><th>Brand</th><th>Platform</th><th>Target</th><th>Last Updated</th></tr></thead><tbody>${ratingsLeaderRows}</tbody></table></div>
-      ${ratingsLeaderboard.length>30?`<div style="color:#64748b;font-size:11px;text-align:center;padding:8px">Showing 30 of ${ratingsLeaderboard.length}</div>`:""}
-    </div>`:""}
-    
-    <div class="card">
-      <div class="ct">📋 Outlet Data Entry Status</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">
-        ${Object.values(kpiData).map(od=>{
-          let staleHere=0,lateHere=0,okHere=0;
-          od.blocks.forEach(b=>Object.values(b.kpis).forEach(k=>{
-            const s=kpiStaleness(k.lastEntry);
-            if(s.days===0)okHere++;
-            else if(s.days===1)lateHere++;
-            else staleHere++;
-          }));
-          const clr=staleHere>0?"#EF4444":lateHere>0?"#FBBF24":"#22C55E";
-          return `<div onclick="kpiSelectedOutlet='${od.outlet.replace(/'/g,"\\'")}';renderKPI()" style="background:#0d1524;border:1px solid #1b2f4a;border-left:3px solid ${clr};border-radius:6px;padding:8px;cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='#1b2f4a'">
-            <div style="font-size:11px;font-weight:700">${od.outlet}</div>
-            <div style="font-size:9px;color:#64748b;margin-top:2px">${okHere} ok · ${lateHere} late · ${staleHere} stale</div>
-          </div>`;
-        }).join("")}
-      </div>
-    </div>`;
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${platTiles}</div>`;
 }
 
+function renderKPIPlatformView(){
+  const pg=document.getElementById("page-kpi");
+  const platform=kpiSelectedPlatform;
+  const allRows=buildKPIEvalRows();
+  let platRows;
+  if(platform==="Google"){
+    platRows=allRows.filter(r=>r.aggregator.toLowerCase().includes("google"));
+  } else {
+    platRows=allRows.filter(r=>r.aggregator===platform);
+  }
+  
+  // Group by KPI metric type (Rating, Prep Time, Rider Wait, Food Ready)
+  const metricTypes=[
+    {type:"rating",label:"Rating",icon:"⭐",color:"#FBBF24",desc:"Customer rating"},
+    {type:"prep_time",label:"Prep Time",icon:"⏱",color:"#F59E0B",desc:"Average preparation time"},
+    {type:"rider_wait",label:"Rider Wait",icon:"🛵",color:"#94A3B8",desc:"Rider wait time"},
+    {type:"rider_wait_pct",label:"Rider Wait %",icon:"🛵",color:"#94A3B8",desc:"Rider wait as % of orders"},
+    {type:"food_ready",label:"Food Ready %",icon:"🍳",color:"#60A5FA",desc:"% food ready on time"}
+  ];
+  
+  // Build a tile for each metric type that has data on this platform
+  const tiles=metricTypes.map(m=>{
+    const metricRows=platRows.filter(r=>r.type===m.type);
+    if(metricRows.length===0)return null;
+    const flagged=metricRows.filter(r=>r.isBad).length;
+    const total=metricRows.length;
+    const ok=total-flagged;
+    // Worst current value
+    let worst="—";
+    if(metricRows.length>0){
+      const sorted=[...metricRows].sort((a,b)=>{
+        if(m.type==="rating"||m.type==="food_ready")return a.latest-b.latest;
+        return b.latest-a.latest;
+      });
+      worst=`${sorted[0].latest.toFixed(m.type==="rating"?2:1)}${m.unit||""}`;
+    }
+    return `<div onclick="selectKPIMetric('${m.type}')" style="background:#0d1524;border:1px solid #1b2f4a;border-left:4px solid ${m.color};border-radius:10px;padding:14px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='#f59e0b';this.style.background='#111d2e'" onmouseout="this.style.borderColor='#1b2f4a';this.style.background='#0d1524'">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:22px">${m.icon}</span>
+          <div>
+            <div style="font-size:14px;font-weight:800;color:${m.color}">${m.label}</div>
+            <div style="font-size:9px;color:#64748b;margin-top:1px">${total} measurement${total!==1?'s':''}</div>
+          </div>
+        </div>
+        ${flagged>0?`<span style="background:rgba(239,68,68,0.15);color:#EF4444;border:1px solid rgba(239,68,68,0.3);font-size:10px;font-weight:700;padding:3px 8px;border-radius:6px">${flagged} flag${flagged!==1?'s':''}</span>`:`<span style="color:#22C55E;font-size:10px;font-weight:700">✓ All OK</span>`}
+      </div>
+      <div style="display:flex;gap:14px;padding-top:8px;border-top:1px solid #1b2f4a">
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">OK</div><div style="font-size:14px;font-weight:800;color:#22C55E">${ok}</div></div>
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Worst</div><div style="font-size:14px;font-weight:800;color:${flagged>0?'#EF4444':'#FCD34D'}">${worst}</div></div>
+      </div>
+    </div>`;
+  }).filter(x=>x).join("");
+  
+  const platColor={Talabat:"#FF6000",Deliveroo:"#00CCBC",Careem:"#3DDC73",Google:"#4285F4"}[platform]||"#f59e0b";
+  
+  pg.innerHTML=`
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+      <button onclick="backToKPIPlatforms()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:5px 12px;cursor:pointer;font-size:12px">← All Platforms</button>
+      <div style="font-size:20px;font-weight:800;color:${platColor}">${platform}</div>
+      <span style="font-size:11px;color:#64748b">Click a KPI to see outlets ranked worst→best</span>
+    </div>
+    ${tiles?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${tiles}</div>`:`<div class="card"><div style="color:#64748b;padding:20px;text-align:center">No KPI data for ${platform}</div></div>`}`;
+}
+
+function renderKPIMetricView(){
+  const pg=document.getElementById("page-kpi");
+  const platform=kpiSelectedPlatform,metricType=kpiSelectedMetric;
+  const allRows=buildKPIEvalRows();
+  let metricRows;
+  if(platform==="Google"){
+    metricRows=allRows.filter(r=>r.aggregator.toLowerCase().includes("google")&&r.type===metricType);
+  } else {
+    metricRows=allRows.filter(r=>r.aggregator===platform&&r.type===metricType);
+  }
+  
+  // Sort: worst first
+  metricRows.sort((a,b)=>{
+    if(metricType==="rating"||metricType==="food_ready")return a.latest-b.latest;
+    return b.latest-a.latest;
+  });
+  
+  const metricLabels={rating:"⭐ Rating",prep_time:"⏱ Prep Time",rider_wait:"🛵 Rider Wait",rider_wait_pct:"🛵 Rider Wait %",food_ready:"🍳 Food Ready %"};
+  const metricLabel=metricLabels[metricType]||metricType;
+  const platColor={Talabat:"#FF6000",Deliveroo:"#00CCBC",Careem:"#3DDC73",Google:"#4285F4"}[platform]||"#f59e0b";
+  
+  // Build tiles for each outlet × brand row
+  const tiles=metricRows.map(r=>{
+    const valStr=`${r.latest.toFixed(metricType==="rating"?2:1)}${r.unit||""}`;
+    const targetStr=`${r.direction==="below"?"≥":"≤"} ${r.target}${r.unit||""}`;
+    const clr=r.isBad?"#EF4444":(metricType==="rating"&&r.latest>=4.7?"#22C55E":"#FCD34D");
+    return `<div onclick="kpiSelectedOutlet='${r.outlet.replace(/'/g,"\\'")}';kpiSelectedBrand='${r.brand}';kpiSelectedAggregator='${r.aggregator.replace(/'/g,"\\'")}';kpiSelectedKPIName='${r.kpiName.replace(/'/g,"\\'")}';renderKPI()" style="background:#0d1524;border:1px solid #1b2f4a;border-left:4px solid ${clr};border-radius:8px;padding:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='#f59e0b';this.style.background='#111d2e'" onmouseout="this.style.borderColor='#1b2f4a';this.style.background='#0d1524'">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div>
+          <div style="font-size:13px;font-weight:800;color:#e2e8f0">${r.outlet}</div>
+          <div style="font-size:10px;color:${BMAP[r.brand]?.c||'#888'};font-weight:700;margin-top:2px">${r.brand}</div>
+        </div>
+        ${r.isBad?`<span style="background:rgba(239,68,68,0.15);color:#EF4444;font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px">⚠ FLAG</span>`:`<span style="color:#22C55E;font-size:11px">✓</span>`}
+      </div>
+      <div style="display:flex;align-items:baseline;justify-content:space-between">
+        <div style="font-size:22px;font-weight:800;color:${clr}">${valStr}</div>
+        <div style="font-size:10px;color:#64748b;text-align:right">${targetStr}<br><span style="color:#94a3b8">${fmtDisp(r.latestDate)}</span></div>
+      </div>
+    </div>`;
+  }).join("");
+  
+  pg.innerHTML=`
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+      <button onclick="backToKPIPlatforms()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:5px 12px;cursor:pointer;font-size:12px">← Platforms</button>
+      <button onclick="backToKPIMetrics()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:5px 12px;cursor:pointer;font-size:12px">← ${platform}</button>
+      <div style="font-size:18px;font-weight:800;color:${platColor}">${platform} · ${metricLabel}</div>
+      <span style="font-size:11px;color:#64748b">Sorted worst → best · Click any to view trend</span>
+    </div>
+    ${metricRows.length>0?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">${tiles}</div>`:`<div class="card"><div style="color:#64748b;padding:20px;text-align:center">No data for this metric</div></div>`}`;
+}
+
+// Open KPI detail with specific brand/agg/kpi selected
 // Open KPI detail with specific brand/agg/kpi selected
 function openKPIDetail(outlet,brand,aggregator,kpiName){
   kpiSelectedOutlet=outlet;
@@ -1728,117 +1821,124 @@ let kpiSelectedBrand=null,kpiSelectedAggregator=null,kpiSelectedKPIName=null;
 function renderKPIDetail(){
   const od=kpiData[kpiSelectedOutlet];
   if(!od){kpiSelectedOutlet=null;renderKPI();return;}
+  const blk=od.blocks.find(b=>b.aggregator===kpiSelectedAggregator&&b.brand===kpiSelectedBrand);
+  const kpiData_=blk?.kpis?.[kpiSelectedKPIName];
+  if(!kpiData_){kpiSelectedKPIName=null;renderKPI();return;}
   
-  // If a specific KPI was selected, show its full timeline
-  if(kpiSelectedKPIName&&kpiSelectedAggregator){
-    const blk=od.blocks.find(b=>b.aggregator===kpiSelectedAggregator&&b.brand===kpiSelectedBrand);
-    const kpiData_=blk?.kpis?.[kpiSelectedKPIName];
-    if(kpiData_){
-      const evaluator=getKPIEvaluator(kpiSelectedKPIName,kpiSelectedAggregator,kpiSelectedBrand,kpiData_.target);
-      const ev=evaluator?evaluateKPI(kpiData_,evaluator):null;
-      const values=kpiData_.dailyValues||[];
-      
-      const pg=document.getElementById("page-kpi");
-      const target=evaluator?evaluator.target:null;
-      
-      // Build mini chart data — last 60 days
-      const chartData=values.slice(-60);
-      const maxVal=Math.max(...chartData.map(v=>v.num),target||0)*1.1;
-      const minVal=Math.min(...chartData.map(v=>v.num),target||Infinity)*0.9;
-      const range=maxVal-minVal||1;
-      const w=900,h=200;
-      
-      const chartSVG=chartData.length?`<svg viewBox="0 0 ${w} ${h+50}" width="100%" style="background:#0d1524;border-radius:6px;display:block">
-        ${target?`<line x1="40" y1="${h-((target-minVal)/range)*(h-20)+10}" x2="${w-20}" y2="${h-((target-minVal)/range)*(h-20)+10}" stroke="#22C55E" stroke-width="1" stroke-dasharray="4,4"/><text x="${w-15}" y="${h-((target-minVal)/range)*(h-20)+14}" fill="#22C55E" font-size="10" text-anchor="end">target ${target}</text>`:""}
-        <polyline points="${chartData.map((v,i)=>{const x=40+(i/(chartData.length-1))*(w-60);const y=h-((v.num-minVal)/range)*(h-20)+10;return`${x},${y}`;}).join(" ")}" fill="none" stroke="#F59E0B" stroke-width="2"/>
-        ${chartData.map((v,i)=>{const x=40+(i/(chartData.length-1))*(w-60);const y=h-((v.num-minVal)/range)*(h-20)+10;const bad=evaluator&&((evaluator.direction==="below"&&v.num<evaluator.target)||(evaluator.direction==="above"&&v.num>evaluator.target));return`<circle cx="${x}" cy="${y}" r="3" fill="${bad?'#EF4444':'#22C55E'}"/><title>${fmtDisp(v.date)}: ${v.num}</title>`;}).join("")}
-        <text x="40" y="${h+25}" fill="#64748b" font-size="9">${chartData[0]?fmtDisp(chartData[0].date):""}</text>
-        <text x="${w-20}" y="${h+25}" fill="#64748b" font-size="9" text-anchor="end">${chartData[chartData.length-1]?fmtDisp(chartData[chartData.length-1].date):""}</text>
-      </svg>`:`<div style="color:#64748b;padding:20px;text-align:center">No 2026 data for this KPI</div>`;
-      
-      // Stats
-      const last30=values.slice(-30),last7=values.slice(-7);
-      const avg30=last30.length?last30.reduce((s,v)=>s+v.num,0)/last30.length:0;
-      const avg7=last7.length?last7.reduce((s,v)=>s+v.num,0)/last7.length:0;
-      const lastVal=values[values.length-1];
-      const bestVal=values.length?values.reduce((b,v)=>v.num>b.num?v:b):null;
-      const worstVal=values.length?values.reduce((b,v)=>v.num<b.num?v:b):null;
-      
-      pg.innerHTML=`
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
-          <button onclick="kpiSelectedKPIName=null;kpiSelectedBrand=null;kpiSelectedAggregator=null;renderKPI()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:5px 12px;cursor:pointer;font-size:12px">← Back to All KPIs</button>
-          <div style="font-size:16px;font-weight:800">${kpiSelectedOutlet} · <span style="color:${BMAP[kpiSelectedBrand]?.c||'#888'}">${kpiSelectedBrand}</span> · <span style="color:${AC[kpiSelectedAggregator]||'#888'}">${kpiSelectedAggregator}</span></div>
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">
-          <span style="background:#0d1524;border:1px solid #1b2f4a;border-radius:5px;padding:6px 12px;font-size:12px;font-weight:700;color:#f59e0b">${kpiSelectedKPIName}</span>
-          ${target?`<span style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:5px;padding:6px 12px;font-size:11px;color:#22C55E">Target: ${evaluator.direction==="below"?"≥":"≤"} ${target}${evaluator.unit||""}</span>`:""}
-        </div>
-        
-        <div class="g4" style="margin-bottom:14px">
-          <div class="sm"><div class="ct">Latest</div><div style="font-size:24px;font-weight:800;color:${ev&&ev.status==="bad"?"#EF4444":"#22C55E"}">${lastVal?lastVal.num.toFixed(evaluator?.type==="rating"?2:1):"—"}</div><div style="font-size:10px;color:#64748b;margin-top:3px">${lastVal?fmtDisp(lastVal.date):""}</div></div>
-          <div class="sm"><div class="ct">7-Day Avg</div><div style="font-size:24px;font-weight:800;color:#FCD34D">${avg7.toFixed(evaluator?.type==="rating"?2:1)}</div></div>
-          <div class="sm"><div class="ct">30-Day Avg</div><div style="font-size:24px;font-weight:800;color:#94A3B8">${avg30.toFixed(evaluator?.type==="rating"?2:1)}</div></div>
-          <div class="sm"><div class="ct">2026 Best / Worst</div><div style="font-size:14px;font-weight:700;color:#22C55E">${bestVal?bestVal.num.toFixed(evaluator?.type==="rating"?2:1):"—"}</div><div style="font-size:14px;font-weight:700;color:#EF4444;margin-top:3px">${worstVal?worstVal.num.toFixed(evaluator?.type==="rating"?2:1):"—"}</div></div>
-        </div>
-        
-        ${ev&&ev.status==="bad"&&ev.degradedFrom?`<div class="card" style="border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.04);margin-bottom:14px">
-          <div style="color:#EF4444;font-weight:700;font-size:13px">⚠ Performance Degradation Detected</div>
-          <div style="color:#FCD34D;font-size:12px;margin-top:6px">This KPI started ${evaluator.direction==="below"?"dropping below target":"rising above target"} from <strong>${fmtDisp(ev.degradedFrom)}</strong>. Investigate operational changes from that date — staff change, supplier issue, marketing surge, etc.</div>
-        </div>`:""}
-        
-        <div class="card" style="margin-bottom:14px">
-          <div class="ct">Daily Trend — Last 60 Days (2026)</div>
-          ${chartSVG}
-          <div style="font-size:10px;color:#64748b;margin-top:6px">🟢 Green dots = within target · 🔴 Red dots = below/above target · Dashed line = target</div>
-        </div>
-        
-        <div class="card">
-          <div class="ct">All 2026 Daily Values (${values.length})</div>
-          <div style="overflow-x:auto;max-height:400px"><table class="tbl"><thead><tr><th>Date</th><th>Value</th><th>vs Target</th></tr></thead><tbody>
-            ${values.slice().reverse().slice(0,200).map(v=>{
-              const bad=evaluator&&((evaluator.direction==="below"&&v.num<evaluator.target)||(evaluator.direction==="above"&&v.num>evaluator.target));
-              const diff=evaluator?(v.num-evaluator.target).toFixed(evaluator.type==="rating"?2:1):"—";
-              return `<tr style="${bad?'background:rgba(239,68,68,0.05)':''}"><td style="font-size:11px">${fmtDisp(v.date)}</td><td style="font-size:11px;font-weight:700;color:${bad?'#EF4444':'#22C55E'}">${v.num}${evaluator?.unit||""}</td><td style="font-size:11px;color:${bad?'#EF4444':'#22C55E'}">${diff>0?"+":""}${diff}</td></tr>`;
-            }).join("")}
-          </tbody></table></div>
-        </div>`;
-      return;
+  const evaluator=getKPIEvaluator(kpiSelectedKPIName,kpiSelectedAggregator,kpiSelectedBrand,kpiData_.target);
+  const allValues=kpiData_.dailyValues||[];
+  const range=kpiTrendRange||30; // 7, 15, or 30 days
+  const values=allValues.slice(-range);
+  const lastVal=allValues[allValues.length-1];
+  const target=evaluator?evaluator.target:null;
+  
+  const pg=document.getElementById("page-kpi");
+  
+  // Compute the "since" date if currently flagged
+  let degradedFrom=null;
+  if(evaluator&&lastVal){
+    const isBad=v=>(evaluator.direction==="below"&&v.num<evaluator.target)||(evaluator.direction==="above"&&v.num>evaluator.target);
+    if(isBad(lastVal)){
+      // Walk backwards from latest in ALL values
+      for(let i=allValues.length-1;i>=Math.max(0,allValues.length-60);i--){
+        if(!isBad(allValues[i])){
+          if(i+1<allValues.length)degradedFrom=allValues[i+1].date;
+          break;
+        }
+      }
+      if(!degradedFrom&&allValues.length>0&&isBad(allValues[0]))degradedFrom=allValues[0].date;
     }
   }
   
-  // Otherwise show outlet-level summary (existing behavior simplified)
-  const pg=document.getElementById("page-kpi");
-  const allRows=[];
-  od.blocks.forEach(blk=>{
-    Object.entries(blk.kpis).forEach(([kpi,data])=>{
-      const evaluator=getKPIEvaluator(kpi,blk.aggregator,blk.brand,data.target);
-      const ev=evaluator?evaluateKPI(data,evaluator):null;
-      allRows.push({brand:blk.brand,aggregator:blk.aggregator,kpi,latest:ev?.latest,lastEntry:data.lastEntry,target:evaluator?.target,status:ev?.status||"ok",unit:evaluator?.unit||""});
+  // Build chart
+  const w=900,h=200;
+  const chartSVG=values.length?(()=>{
+    const maxVal=Math.max(...values.map(v=>v.num),target||0)*1.05;
+    const minVal=Math.min(...values.map(v=>v.num),target||Infinity)*0.95;
+    const rng=maxVal-minVal||1;
+    const points=values.map((v,i)=>{
+      const x=40+(i/Math.max(1,values.length-1))*(w-60);
+      const y=h-((v.num-minVal)/rng)*(h-20)+10;
+      return{x,y,v};
     });
-  });
-  // Sort: bad first
-  allRows.sort((a,b)=>{if(a.status==="bad"&&b.status!=="bad")return -1;if(b.status==="bad"&&a.status!=="bad")return 1;return a.brand.localeCompare(b.brand);});
+    return `<svg viewBox="0 0 ${w} ${h+50}" width="100%" style="background:#0d1524;border-radius:6px;display:block">
+      ${target?`<line x1="40" y1="${h-((target-minVal)/rng)*(h-20)+10}" x2="${w-20}" y2="${h-((target-minVal)/rng)*(h-20)+10}" stroke="#22C55E" stroke-width="1.5" stroke-dasharray="5,4"/><text x="${w-15}" y="${h-((target-minVal)/rng)*(h-20)+4}" fill="#22C55E" font-size="11" font-weight="700" text-anchor="end">target ${target}${evaluator.unit||""}</text>`:""}
+      <polyline points="${points.map(p=>`${p.x},${p.y}`).join(" ")}" fill="none" stroke="#F59E0B" stroke-width="2.5"/>
+      ${points.map(p=>{
+        const bad=evaluator&&((evaluator.direction==="below"&&p.v.num<evaluator.target)||(evaluator.direction==="above"&&p.v.num>evaluator.target));
+        return`<circle cx="${p.x}" cy="${p.y}" r="4" fill="${bad?'#EF4444':'#22C55E'}" stroke="#0d1524" stroke-width="1.5"><title>${fmtDisp(p.v.date)}: ${p.v.num}${evaluator?.unit||""}</title></circle>`;
+      }).join("")}
+      <text x="40" y="${h+30}" fill="#64748b" font-size="10">${values[0]?fmtDisp(values[0].date):""}</text>
+      <text x="${w-20}" y="${h+30}" fill="#64748b" font-size="10" text-anchor="end">${values[values.length-1]?fmtDisp(values[values.length-1].date):""}</text>
+    </svg>`;
+  })():`<div style="color:#64748b;padding:30px;text-align:center;font-size:12px">No 2026 data available for this KPI</div>`;
+  
+  // Calculate stats
+  const isBad=v=>evaluator&&((evaluator.direction==="below"&&v.num<evaluator.target)||(evaluator.direction==="above"&&v.num>evaluator.target));
+  const inRange=allValues.slice(-range);
+  const avgInRange=inRange.length?inRange.reduce((s,v)=>s+v.num,0)/inRange.length:0;
+  const bestInRange=inRange.length?inRange.reduce((b,v)=>{const better=evaluator?.direction==="below"?v.num>b.num:v.num<b.num;return better?v:b;}):null;
+  const worstInRange=inRange.length?inRange.reduce((b,v)=>{const worse=evaluator?.direction==="below"?v.num<b.num:v.num>b.num;return worse?v:b;}):null;
+  
+  // Build range toggle buttons
+  const rangeBtn=(r,label)=>{
+    const active=kpiTrendRange===r;
+    return `<button onclick="setKPITrendRange(${r})" style="background:${active?'#f59e0b':'transparent'};border:1px solid ${active?'#f59e0b':'#1b2f4a'};border-radius:5px;color:${active?'#000':'#94a3b8'};padding:5px 14px;cursor:pointer;font-size:11px;font-weight:700">${label}</button>`;
+  };
+  
+  // Determine display platform name (strip ID)
+  const platDisplay=kpiSelectedAggregator.replace(/\s+\d{3,}\s*$/,"");
   
   pg.innerHTML=`
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
-      <button onclick="kpiSelectedOutlet=null;renderKPI()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:5px 12px;cursor:pointer;font-size:12px">← Back to All KPIs</button>
-      <div style="font-size:18px;font-weight:800">📍 ${kpiSelectedOutlet}</div>
+      <button onclick="kpiSelectedOutlet=null;kpiSelectedKPIName=null;kpiSelectedBrand=null;kpiSelectedAggregator=null;renderKPI()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:5px 12px;cursor:pointer;font-size:12px">← Back</button>
+      <div style="font-size:16px;font-weight:800">${kpiSelectedOutlet} · <span style="color:${BMAP[kpiSelectedBrand]?.c||'#888'}">${kpiSelectedBrand}</span> · <span style="color:${AC[platDisplay]||'#888'}">${platDisplay}</span></div>
     </div>
+    
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;align-items:center;justify-content:space-between">
+      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+        <span style="background:#0d1524;border:1px solid #1b2f4a;border-radius:5px;padding:6px 12px;font-size:12px;font-weight:700;color:#f59e0b">${kpiSelectedKPIName}</span>
+        ${target?`<span style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:5px;padding:6px 12px;font-size:11px;color:#22C55E">Target: ${evaluator.direction==="below"?"≥":"≤"} ${target}${evaluator.unit||""}</span>`:""}
+      </div>
+      <div style="display:flex;gap:5px">
+        <span style="font-size:10px;color:#64748b;align-self:center;margin-right:4px">View:</span>
+        ${rangeBtn(7,"7 days")}
+        ${rangeBtn(15,"15 days")}
+        ${rangeBtn(30,"30 days")}
+      </div>
+    </div>
+    
+    <div class="g4" style="margin-bottom:14px">
+      <div class="sm"><div class="ct">Latest Value</div><div style="font-size:26px;font-weight:800;color:${lastVal&&isBad(lastVal)?"#EF4444":"#22C55E"}">${lastVal?lastVal.num.toFixed(evaluator?.type==="rating"?2:1):"—"}${evaluator?.unit||""}</div><div style="font-size:10px;color:#64748b;margin-top:3px">${lastVal?fmtDisp(lastVal.date):""}</div></div>
+      <div class="sm"><div class="ct">${range}-Day Avg</div><div style="font-size:26px;font-weight:800;color:#FCD34D">${avgInRange.toFixed(evaluator?.type==="rating"?2:1)}${evaluator?.unit||""}</div></div>
+      <div class="sm"><div class="ct">${range}-Day Best</div><div style="font-size:18px;font-weight:700;color:#22C55E">${bestInRange?bestInRange.num.toFixed(evaluator?.type==="rating"?2:1)+(evaluator?.unit||""):"—"}</div><div style="font-size:10px;color:#64748b;margin-top:3px">${bestInRange?fmtDisp(bestInRange.date):""}</div></div>
+      <div class="sm"><div class="ct">${range}-Day Worst</div><div style="font-size:18px;font-weight:700;color:#EF4444">${worstInRange?worstInRange.num.toFixed(evaluator?.type==="rating"?2:1)+(evaluator?.unit||""):"—"}</div><div style="font-size:10px;color:#64748b;margin-top:3px">${worstInRange?fmtDisp(worstInRange.date):""}</div></div>
+    </div>
+    
+    ${degradedFrom?`<div class="card" style="border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.04);margin-bottom:14px">
+      <div style="color:#EF4444;font-weight:700;font-size:13px">⚠ Performance Degradation Detected</div>
+      <div style="color:#FCD34D;font-size:12px;margin-top:6px">This KPI started ${evaluator.direction==="below"?"dropping below target":"rising above target"} from <strong>${fmtDisp(degradedFrom)}</strong>. Investigate operational changes from that date onwards.</div>
+    </div>`:""}
+    
+    <div class="card" style="margin-bottom:14px">
+      <div class="ct">Daily Trend — Last ${range} Days</div>
+      ${chartSVG}
+      <div style="font-size:10px;color:#64748b;margin-top:6px">🟢 Within target · 🔴 Outside target · Dashed line = target</div>
+    </div>
+    
     <div class="card">
-      <div class="ct">All KPIs (${allRows.length}) · Click any to deep dive</div>
-      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Brand</th><th>Platform</th><th>KPI</th><th>Latest</th><th>Target</th><th>Last Entry</th><th>Status</th></tr></thead><tbody>
-        ${allRows.map(r=>`<tr onclick="openKPIDetail('${kpiSelectedOutlet.replace(/'/g,"\\'")}','${r.brand}','${r.aggregator}','${r.kpi.replace(/'/g,"\\'")}')" style="cursor:pointer;${r.status==="bad"?'background:rgba(239,68,68,0.05)':''}" onmouseover="this.style.background='rgba(245,158,11,0.08)'" onmouseout="this.style.background='${r.status==="bad"?'rgba(239,68,68,0.05)':'transparent'}'">
-          <td><span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span></td>
-          <td><span style="color:${AC[r.aggregator]||'#888'};font-weight:700;font-size:11px">${r.aggregator}</span></td>
-          <td style="font-size:11px">${r.kpi}</td>
-          <td style="font-size:11px;font-weight:700;color:${r.status==="bad"?"#EF4444":"#22C55E"}">${r.latest!==undefined?r.latest.toFixed(2)+(r.unit||""):"—"}</td>
-          <td style="font-size:10px;color:#64748b">${r.target||"—"}</td>
-          <td style="font-size:10px;color:#94a3b8">${r.lastEntry?fmtDisp(r.lastEntry):"—"}</td>
-          <td><span style="font-size:10px;font-weight:700;color:${r.status==="bad"?"#EF4444":r.status==="ok"?"#22C55E":"#64748b"}">${r.status==="bad"?"⚠ FLAG":r.status==="ok"?"✓ OK":"—"}</span></td>
-        </tr>`).join("")}
+      <div class="ct">All Daily Values (${allValues.length})</div>
+      <div style="overflow-x:auto;max-height:400px"><table class="tbl"><thead><tr><th>Date</th><th>Value</th><th>vs Target</th></tr></thead><tbody>
+        ${allValues.slice().reverse().slice(0,100).map(v=>{
+          const bad=isBad(v);
+          const diff=evaluator?(v.num-evaluator.target).toFixed(evaluator.type==="rating"?2:1):"—";
+          return `<tr style="${bad?'background:rgba(239,68,68,0.05)':''}"><td style="font-size:11px">${fmtDisp(v.date)}</td><td style="font-size:11px;font-weight:700;color:${bad?'#EF4444':'#22C55E'}">${v.num}${evaluator?.unit||""}</td><td style="font-size:11px;color:${bad?'#EF4444':'#22C55E'}">${diff>0?"+":""}${diff}</td></tr>`;
+        }).join("")}
       </tbody></table></div>
     </div>`;
 }
+
+
 
 // INIT — Authentication gates the data load (called from index.html after login)
 const navLogo=document.getElementById("nav-logo");
