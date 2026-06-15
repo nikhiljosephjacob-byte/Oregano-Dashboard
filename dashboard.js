@@ -1330,6 +1330,10 @@ async function fetchKPIGids(){
     `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     `https://corsproxy.io/?${encodeURIComponent(url)}`,
     `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+    `https://cors-anywhere.herokuapp.com/${url}`,
+    `https://proxy.cors.sh/${url}`,
+    `https://thingproxy.freeboard.io/fetch/${url}`,
+    url, // direct attempt as last resort
   ];
   let htmlText="";
   for(const u of proxies){
@@ -1481,10 +1485,13 @@ async function loadKPIData(){
     if(gid===undefined)return;
     const url=`${KPI_PUB}?gid=${gid}&single=true&output=csv`;
     const proxies=[
-      url,
       `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
       `https://corsproxy.io/?${encodeURIComponent(url)}`,
       `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+      `https://cors-anywhere.herokuapp.com/${url}`,
+      `https://proxy.cors.sh/${url}`,
+      `https://thingproxy.freeboard.io/fetch/${url}`,
+      url,
     ];
     let csv="";
     for(const u of proxies){
