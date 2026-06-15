@@ -1394,17 +1394,52 @@ async function fetchKPIGids(){
     });
   }
   
-  // METHOD 4 — Last resort: extract ALL gids and ALL plausible tab names, match by order
+  // METHOD 4 — Positional match: scan HTML in order, pairing GIDs with known outlet names
   if(Object.keys(found).length===0){
-    console.log("[KPI] Trying positional matching as last resort...");
-    // Find all GIDs mentioned
-    const allGids=[...new Set([...htmlText.matchAll(/gid[=:](["']?)(\d+)\1/g)].map(x=>x[2]))];
-    console.log("[KPI] Found",allGids.length,"unique GIDs in HTML");
-    // Look for sheet name list — typically in a script tag
-    const nameMatches=[...htmlText.matchAll(/"([^"]{2,40})"\s*[,:]/g)];
-    // Filter likely names — short alphanumeric with possible spaces
-    const candidateNames=nameMatches.map(m=>m[1]).filter(n=>/^[A-Za-z][A-Za-z0-9\s]{1,38}$/.test(n));
-    console.log("[KPI] Found",candidateNames.length,"candidate names. Sample:",candidateNames.slice(0,10));
+    console.log("[KPI] Trying positional matching with known outlet list...");
+    const allGidsMatches=[...htmlText.matchAll(/gid[=:]["']?(\d+)/g)];
+    const uniqueGids=[...new Set(allGidsMatches.map(x=>x[1]))];
+    console.log("[KPI] Found",uniqueGids.length,"unique GIDs");
+    
+    // For each known outlet, search for its name in the HTML and find the closest GID
+    const knownOutlets=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Villa","Jumeirah","Reem Island","WTC","Furjan","Al Quoz","TSQR","Al Forsan","NAS","FYOO DIP","Al Reef","Town Square","NAS DIP"];
+    // Add lowercase variants
+    knownOutlets.forEach(name=>{
+      // Search positions of this name in the HTML
+      const escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+      const namePositions=[...htmlText.matchAll(new RegExp(escaped,"gi"))].map(m=>m.index);
+      if(namePositions.length===0)return;
+      
+      // For each occurrence of the name, find the nearest GID reference
+      for(const pos of namePositions){
+        // Look in a 500-char window around the name
+        const windowStart=Math.max(0,pos-200);
+        const windowEnd=Math.min(htmlText.length,pos+200);
+        const window=htmlText.slice(windowStart,windowEnd);
+        const gidM=window.match(/gid[=:]["']?(\d+)/);
+        if(gidM&&gidM[1]){
+          if(!found[name])found[name]=gidM[1];
+          break;
+        }
+      }
+    });
+    console.log("[KPI] Positional matching found",Object.keys(found).length,"tabs");
+  }
+  
+  // METHOD 5 — If we have N gids and N known outlets, assume same order
+  if(Object.keys(found).length===0){
+    console.log("[KPI] Trying fallback: assume GIDs are in same order as outlet tabs at bottom");
+    const allGidsList=[...new Set([...htmlText.matchAll(/gid[=:]["']?(\d+)/g)].map(x=>x[1]))];
+    const knownOutlets=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Villa","Jumeirah","Reem Island","WTC","Furjan","Al Quoz","TSQR","Al Forsan","NAS","FYOO DIP","Al Reef"];
+    if(allGidsList.length===knownOutlets.length){
+      knownOutlets.forEach((name,i)=>{found[name]=allGidsList[i];});
+      console.log("[KPI] Positional assumption assigned",Object.keys(found).length,"tabs");
+    } else {
+      console.log("[KPI] GID count mismatch:",allGidsList.length,"vs known",knownOutlets.length);
+      // Take first N GIDs and assign to known outlets best-effort
+      knownOutlets.slice(0,allGidsList.length).forEach((name,i)=>{found[name]=allGidsList[i];});
+      console.log("[KPI] Best-effort assignment:",Object.keys(found).length,"tabs");
+    }
   }
   
   // Clean junk entries
