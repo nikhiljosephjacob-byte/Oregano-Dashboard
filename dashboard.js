@@ -97,6 +97,7 @@ async function doLoad(){
   document.getElementById("loading-screen").style.display="none";
   document.getElementById("main-app").style.display="block";
   const nl=document.getElementById("nav-logo");if(nl&&typeof LOGOS!=="undefined")nl.src=LOGOS["Oregano"]||"";
+  injectCompareTab();
   if(errs.length){const e=document.getElementById("etoa");if(e){e.textContent="⚠️ Partial: "+errs.join(", ");e.style.display="block";setTimeout(()=>e.style.display="none",6000);}}
   gp("overview");
   genBrief();
@@ -209,8 +210,8 @@ function barChart(id,labels,values,colors,extra,mode){const ctx=document.getElem
 function multiLineChart(id,labels,series){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);charts[id]=new Chart(ctx,{type:"line",data:{labels,datasets:series.map(s=>({label:s.name,data:s.data,borderColor:s.color,backgroundColor:s.color,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false,spanGaps:true}))},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#94a3b8",font:{size:10},boxWidth:12,padding:8}},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.raw==null?'—':'AED '+Number(c.raw).toFixed(1)}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}}}}});}
 
 // NAVIGATION
-function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));document.getElementById(`page-${page}`).classList.add("act");document.querySelectorAll(".tab").forEach(t=>t.classList.remove("act"));const idx={overview:0,brands:1,outlets:2,platforms:3,cpc:4,campaigns:5,kpi:6}[page]||0;document.querySelectorAll(".tab")[idx]?.classList.add("act");Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
-function renderPage(p){if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="kpi")renderKPI();}
+function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>t.classList.remove("act"));const idx={overview:0,brands:1,outlets:2,platforms:3,cpc:4,campaigns:5,kpi:6,compare:7}[page]||0;document.querySelectorAll(".tab")[idx]?.classList.add("act");Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
+function renderPage(p){if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();}
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 // AOV drilldown state
@@ -1379,6 +1380,228 @@ function renderKPIDetail(){
     const tgtLine=ev?vals.map(()=>ev.target):null;
     charts["ch-kpi-detail"]=new Chart(ctx,{type:"line",data:{labels:vals.map(v=>fmtShort(v.date)),datasets:[{label:kpiSelectedKPIName,data:vals.map(v=>v.num),borderColor:clr,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false},...(tgtLine?[{label:"Target",data:tgtLine,borderColor:"#EF4444",borderWidth:1,borderDash:[5,4],pointRadius:0,fill:false}]:[])]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#94a3b8",font:{size:10},boxWidth:12}},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.raw}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}}}}});
   },50);
+}
+
+// ── COMPARISON PAGE ──────────────────────────────────────────────────────
+// Fully independent A vs B comparison: each side picks its own brands, outlets,
+// platforms, and date range. Shows Orders / Sales / AOV cards, an overlaid trend
+// chart, a breakdown table, and which aggregators rose/fell between the two windows.
+
+// Inject the Compare tab + page div so no index.html edit is needed.
+function injectCompareTab(){
+  if(document.getElementById("page-compare"))return; // already injected
+  // 1) Add the page container next to the other .pg pages
+  const anyPage=document.querySelector(".pg");
+  if(anyPage&&anyPage.parentNode){
+    const div=document.createElement("div");
+    div.className="pg";div.id="page-compare";
+    anyPage.parentNode.appendChild(div);
+  }
+  // 2) Add a nav tab button after the last existing tab
+  const tabs=document.querySelectorAll(".tab");
+  if(tabs.length){
+    const last=tabs[tabs.length-1];
+    const btn=document.createElement(last.tagName.toLowerCase());
+    btn.className="tab";btn.innerHTML="⚖️ Compare";
+    btn.onclick=()=>gp("compare");
+    last.parentNode.insertBefore(btn,last.nextSibling);
+  }
+}
+
+// Two independent filter states
+const cmpDefault=()=>({brands:new Set(),platforms:new Set(),branches:new Set(),start:null,end:null,preset:"custom"});
+let cmpA=cmpDefault(),cmpB=cmpDefault();
+let cmpMetric="sales"; // which metric the trend chart plots: sales | orders | aov
+let cmpInit=false;
+
+function cmpSeed(){
+  // Sensible defaults: A = last 3 days ending latest; B = same window one year earlier
+  if(!latest)return;
+  cmpA.end=latest;cmpA.start=subDays(latest,2);cmpA.preset="custom";
+  const e=new Date(latest+"T12:00:00");const ey=new Date(e.getFullYear()-1,e.getMonth(),e.getDate());
+  cmpB.end=dk(ey);cmpB.start=subDays(dk(ey),2);cmpB.preset="custom";
+  cmpInit=true;
+}
+
+// Filter dataset by one side's config
+function cmpData(cfg){
+  return allData.filter(r=>{
+    if(cfg.start&&r.date<cfg.start)return false;
+    if(cfg.end&&r.date>cfg.end)return false;
+    if(cfg.brands.size&&!cfg.brands.has(r.brand))return false;
+    if(cfg.platforms.size&&!cfg.platforms.has(r.aggregator))return false;
+    if(cfg.branches.size&&!cfg.branches.has(r.branch))return false;
+    return true;
+  });
+}
+function cmpLabel(cfg){
+  const parts=[];
+  parts.push(cfg.brands.size?[...cfg.brands].join("+"):"All brands");
+  if(cfg.platforms.size)parts.push([...cfg.platforms].join("+"));
+  if(cfg.branches.size)parts.push(cfg.branches.size<=2?[...cfg.branches].join("+"):cfg.branches.size+" outlets");
+  return parts.join(" · ");
+}
+function cmpDateLabel(cfg){
+  if(!cfg.start)return"—";
+  if(cfg.start===cfg.end)return fmtDisp(cfg.start);
+  return `${fmtShort(cfg.start)} → ${fmtShort(cfg.end)} ${cfg.end?.slice(0,4)||''}`;
+}
+
+// State mutators (side = 'A' | 'B')
+function cmpToggle(side,type,val){const cfg=side==="A"?cmpA:cmpB;const s={brand:cfg.brands,platform:cfg.platforms,branch:cfg.branches}[type];if(s.has(val))s.delete(val);else s.add(val);renderCompare();}
+function cmpSetDate(side,which,val){const cfg=side==="A"?cmpA:cmpB;cfg[which]=val;cfg.preset="custom";renderCompare();}
+function cmpPreset(side,p){const cfg=side==="A"?cmpA:cmpB;cfg.preset=p;if(p==="yesterday"){cfg.start=cfg.end=latest;}else if(p==="7d"){cfg.start=subDays(latest,6);cfg.end=latest;}else if(p==="30d"){cfg.start=subDays(latest,29);cfg.end=latest;}else if(p==="month"){cfg.start=latest.slice(0,7)+"-01";cfg.end=latest;}renderCompare();}
+function cmpClear(side){const cfg=side==="A"?cmpA:cmpB;cfg.brands.clear();cfg.platforms.clear();cfg.branches.clear();renderCompare();}
+function cmpCopyAtoB(){cmpB.brands=new Set(cmpA.brands);cmpB.platforms=new Set(cmpA.platforms);cmpB.branches=new Set(cmpA.branches);renderCompare();}
+function cmpSwap(){const t=cmpA;cmpA=cmpB;cmpB=t;renderCompare();}
+function cmpSetMetric(m){cmpMetric=m;renderCompare();}
+
+// Build a side's config panel
+function cmpPanel(side){
+  const cfg=side==="A"?cmpA:cmpB;
+  const accent=side==="A"?"#60A5FA":"#F59E0B";
+  const allBr=[...new Set(allData.map(r=>r.branch))].sort();
+  const dd=(type,label,activeSet,items)=>{
+    const id=`cmp-${side}-${type}`;
+    const count=activeSet.size,isOn=count>0;
+    const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi"><input type="checkbox" ${activeSet.has(val)?"checked":""} onchange="cmpToggle('${side}','${type}','${String(val).replace(/'/g,"\\'")}')"><span style="color:${clr}">${lbl}</span></label>`).join("");
+    return`<div class="dd-wrap"><button class="fpill ${isOn?"on":""}" onclick="event.stopPropagation();toggleDD('${id}')">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}">${itemsH}</div></div>`;
+  };
+  const presets=[["yesterday","Latest day"],["7d","7d"],["30d","30d"],["month","This month"]];
+  const presetsH=presets.map(([k,l])=>`<button class="preset ${cfg.preset===k?"act":""}" onclick="cmpPreset('${side}','${k}')">${l}</button>`).join("");
+  return `<div style="flex:1;min-width:300px;background:#0d1524;border:1px solid ${accent}55;border-radius:12px;padding:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:800;color:${accent}">${side==="A"?"🔵 Group A":"🟠 Group B"}</div>
+      ${(cfg.brands.size||cfg.platforms.size||cfg.branches.size)?`<button onclick="cmpClear('${side}')" style="background:none;border:1px solid #1b2f4a;border-radius:5px;color:#64748b;padding:2px 8px;font-size:10px;cursor:pointer">✕ clear</button>`:""}
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      ${dd("brand","Brands",cfg.brands,BR.map(b=>({val:b.n,lbl:b.n,clr:b.c})))}
+      ${dd("platform","Platforms",cfg.platforms,AGGS.map(a=>({val:a,lbl:a,clr:AC[a]||"#888"})))}
+      ${dd("branch","Outlets",cfg.branches,allBr.map(b=>({val:b,lbl:b,clr:"#94a3b8"})))}
+    </div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">${presetsH}</div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <input type="date" value="${cfg.start||""}" onchange="cmpSetDate('${side}','start',this.value)" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px">
+      <span style="color:#64748b">→</span>
+      <input type="date" value="${cfg.end||""}" onchange="cmpSetDate('${side}','end',this.value)" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px">
+    </div>
+    <div style="margin-top:8px;font-size:11px;color:#94a3b8;line-height:1.5"><strong style="color:${accent}">${cmpLabel(cfg)}</strong><br>${cmpDateLabel(cfg)}</div>
+  </div>`;
+}
+
+function cmpStatCard(label,a,b,fmt,unit){
+  const diff=pctOf(a,b);
+  const dc=pctClr(diff);
+  const fa=fmt(a),fb=fmt(b);
+  return `<div class="sm">
+    <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}</div>
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+      <span style="font-size:20px;font-weight:800;color:#60A5FA;font-variant-numeric:tabular-nums">${fa}</span>
+      <span style="font-size:11px;color:#64748b">vs</span>
+      <span style="font-size:20px;font-weight:800;color:#F59E0B;font-variant-numeric:tabular-nums">${fb}</span>
+    </div>
+    <div style="font-size:12px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:#64748b;font-weight:400">A vs B</span></div>
+  </div>`;
+}
+
+function renderCompare(){
+  let pg=document.getElementById("page-compare");
+  if(!pg){injectCompareTab();pg=document.getElementById("page-compare");}
+  if(!pg)return;
+  if(!cmpInit)cmpSeed();
+  const dA=cmpData(cmpA),dB=cmpData(cmpB);
+  const sA=sumR(dA),sB=sumR(dB);
+  const aovA=sA.orders>0?sA.sales/sA.orders:0,aovB=sB.orders>0?sB.sales/sB.orders:0;
+
+  // Aggregator movement: per-platform totals for the chosen metric on each side
+  const platMove=AGGS.map(ag=>{
+    const a=sumR(dA.filter(r=>r.aggregator===ag));
+    const b=sumR(dB.filter(r=>r.aggregator===ag));
+    const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
+    return{ag,clr:AC[ag]||"#888",a,b,oDiff:pctOf(a.orders,b.orders),sDiff:pctOf(a.sales,b.sales),aDiff:pctOf(aov_a,aov_b)};
+  }).filter(p=>p.a.orders>0||p.b.orders>0);
+  const movers=[...platMove].filter(p=>p.sDiff!=null).sort((x,y)=>y.sDiff-x.sDiff);
+  const risers=movers.filter(p=>p.sDiff>0),fallers=movers.filter(p=>p.sDiff<0).reverse();
+
+  // Breakdown table: by brand × platform across the union of both sides
+  const keys=new Set([...dA,...dB].map(r=>`${r.brand}|${r.aggregator}`));
+  const tableRows=[...keys].map(k=>{
+    const[brand,ag]=k.split("|");
+    const a=sumR(dA.filter(r=>r.brand===brand&&r.aggregator===ag));
+    const b=sumR(dB.filter(r=>r.brand===brand&&r.aggregator===ag));
+    return{brand,ag,a,b,oDiff:pctOf(a.orders,b.orders),sDiff:pctOf(a.sales,b.sales)};
+  }).filter(r=>r.a.orders>0||r.b.orders>0);
+  const tRows=tableRows.map(r=>({cells:[
+    `<span style="display:inline-flex;align-items:center;gap:6px"><span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span><span style="color:${AC[r.ag]||'#888'};font-size:11px">${r.ag}</span></span>`,
+    `<span style="color:#60A5FA">${r.a.orders.toLocaleString()}</span>`,
+    `<span style="color:#F59E0B">${r.b.orders.toLocaleString()}</span>`,
+    `<span style="color:${pctClr(r.oDiff)};font-weight:700">${fmtPct(r.oDiff)}</span>`,
+    `<span style="color:#60A5FA">${fmtAED(r.a.sales)}</span>`,
+    `<span style="color:#F59E0B">${fmtAED(r.b.sales)}</span>`,
+    `<span style="color:${pctClr(r.sDiff)};font-weight:700">${fmtPct(r.sDiff)}</span>`
+  ],sortVals:[r.brand,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff]}));
+  const tHeads=["Brand · Platform","A Orders","B Orders","Δ Ord","A GMV","B GMV","Δ GMV"];
+
+  // Metric toggle for the trend chart
+  const metricBtns=[["sales","GMV"],["orders","Orders"],["aov","AOV"]].map(([k,l])=>`<button onclick="cmpSetMetric('${k}')" style="padding:4px 12px;border-radius:5px;border:1px solid ${cmpMetric===k?'#f59e0b':'#1b2f4a'};background:${cmpMetric===k?'#f59e0b22':'transparent'};color:${cmpMetric===k?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${l}</button>`).join("");
+
+  const moverChip=(p,val)=>`<span style="display:inline-flex;align-items:center;gap:6px;background:${p.clr}18;border:1px solid ${p.clr}44;border-radius:6px;padding:3px 10px;font-size:11px;margin:2px"><span style="color:${p.clr};font-weight:700">${p.ag}</span><span style="color:${pctClr(val)};font-weight:700">${fmtPct(val)}</span></span>`;
+
+  pg.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div style="font-size:18px;font-weight:800;color:#e2e8f0">⚖️ Comparison</div>
+      <div style="display:flex;gap:8px"><button onclick="cmpCopyAtoB()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer" title="Copy A's brand/platform/outlet filters to B">⎘ A→B filters</button><button onclick="cmpSwap()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer">⇄ Swap A/B</button></div>
+    </div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:12px">Pick any combination on each side — brands, platforms, outlets, and dates are fully independent. Example: Oregano+Lollorosso 11–13 May 2026 (A) vs the same 11–13 May 2025 (B).</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">${cmpPanel("A")}${cmpPanel("B")}</div>
+
+    <div class="g4">
+      ${cmpStatCard("Orders",sA.orders,sB.orders,v=>v.toLocaleString())}
+      ${cmpStatCard("GMV",sA.sales,sB.sales,v=>fmtAED(v))}
+      ${cmpStatCard("AOV",aovA,aovB,v=>"AED "+v.toFixed(1))}
+      <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Active Outlets</div><div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:20px;font-weight:800;color:#60A5FA">${new Set(dA.map(r=>r.branch)).size}</span><span style="font-size:11px;color:#64748b">vs</span><span style="font-size:20px;font-weight:800;color:#F59E0B">${new Set(dB.map(r=>r.branch)).size}</span></div></div>
+    </div>
+
+    <div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>Trend — <span style="color:#60A5FA">A</span> vs <span style="color:#F59E0B">B</span> (aligned by day index)</span><div style="display:flex;gap:5px">${metricBtns}</div></div><div style="position:relative;height:220px"><canvas id="cmp-chart"></canvas></div><div style="font-size:10px;color:#64748b;margin-top:6px">Day 1 = first day of each window. This lets you compare windows of different years/lengths on the same axis.</div></div>
+
+    <div class="g2">
+      <div class="sm"><div class="ct" style="color:#22C55E">📈 Platforms that grew (A vs B)</div>${risers.length?risers.map(p=>moverChip(p,p.sDiff)).join(""):`<div style="color:#64748b;font-size:12px">None grew.</div>`}</div>
+      <div class="sm"><div class="ct" style="color:#EF4444">📉 Platforms that dropped (A vs B)</div>${fallers.length?fallers.map(p=>moverChip(p,p.sDiff)).join(""):`<div style="color:#64748b;font-size:12px">None dropped.</div>`}</div>
+    </div>
+
+    <div class="card"><div class="ct">Per-Platform Breakdown</div>${mkTable(["Platform","A Orders","B Orders","Δ Ord","A GMV","B GMV","Δ GMV","A AOV","B AOV","Δ AOV"],platMove.map(p=>[
+      `<span style="color:${p.clr};font-weight:700">${p.ag}</span>`,
+      `<span style="color:#60A5FA">${p.a.orders.toLocaleString()}</span>`,`<span style="color:#F59E0B">${p.b.orders.toLocaleString()}</span>`,
+      `<span style="color:${pctClr(p.oDiff)};font-weight:700">${fmtPct(p.oDiff)}</span>`,
+      `<span style="color:#60A5FA">${fmtAED(p.a.sales)}</span>`,`<span style="color:#F59E0B">${fmtAED(p.b.sales)}</span>`,
+      `<span style="color:${pctClr(p.sDiff)};font-weight:700">${fmtPct(p.sDiff)}</span>`,
+      `<span style="color:#60A5FA">${p.a.orders>0?'AED '+(p.a.sales/p.a.orders).toFixed(1):'—'}</span>`,`<span style="color:#F59E0B">${p.b.orders>0?'AED '+(p.b.sales/p.b.orders).toFixed(1):'—'}</span>`,
+      `<span style="color:${pctClr(p.aDiff)};font-weight:700">${fmtPct(p.aDiff)}</span>`
+    ]))}</div>
+
+    <div class="card"><div class="ct">Brand × Platform Breakdown <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("cmp-tbl",tHeads,tRows,4)}</div>`;
+
+  // Draw the overlaid trend chart (aligned by day index)
+  setTimeout(()=>cmpDrawChart(dA,dB),50);
+}
+
+function cmpDayValues(data,start,end,metric){
+  // Return an array of per-day values from start..end for the chosen metric
+  const out=[];if(!start)return out;
+  let d=new Date(start+"T12:00:00");const e=new Date((end||start)+"T12:00:00");
+  while(d<=e){const k=dk(d);const s=sumR(data.filter(r=>r.date===k));out.push(metric==="orders"?s.orders:metric==="aov"?(s.orders>0?s.sales/s.orders:0):s.sales);d.setDate(d.getDate()+1);}
+  return out;
+}
+function cmpDrawChart(dA,dB){
+  const ctx=document.getElementById("cmp-chart")?.getContext("2d");if(!ctx)return;destroyChart("cmp-chart");
+  const va=cmpDayValues(dA,cmpA.start,cmpA.end,cmpMetric);
+  const vb=cmpDayValues(dB,cmpB.start,cmpB.end,cmpMetric);
+  const n=Math.max(va.length,vb.length,1);
+  const labels=Array.from({length:n},(_,i)=>`Day ${i+1}`);
+  const fmtV=v=>cmpMetric==="orders"?Math.round(v).toLocaleString():cmpMetric==="aov"?"AED "+v.toFixed(1):"AED "+Math.round(v).toLocaleString();
+  charts["cmp-chart"]=new Chart(ctx,{type:"line",data:{labels,datasets:[
+    {label:"A · "+cmpDateLabel(cmpA),data:va,borderColor:"#60A5FA",backgroundColor:"#60A5FA",borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false},
+    {label:"B · "+cmpDateLabel(cmpB),data:vb,borderColor:"#F59E0B",backgroundColor:"#F59E0B",borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false}
+  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#94a3b8",font:{size:10},boxWidth:12,padding:10}},tooltip:{callbacks:{label:c=>`${c.dataset.label.split(" · ")[0]}: ${fmtV(c.raw)}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}}}}});
 }
 
 // ── INIT ──
