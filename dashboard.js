@@ -779,10 +779,29 @@ const KPI_OUTLETS=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Vil
 const KPI_OUTLET_NAME={"TSQR":"Town Square","Motor City":"Motorcity","Mirdif":"Mirdiff"};
 function kpiOutletName(tab){return KPI_OUTLET_NAME[tab]||tab;}
 const KPI_BRANDS=["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"];
+// Expected number of listings (outlets) per brand on the "big 3" aggregators (Talabat, Deliveroo, Careem).
+// Total should be 50 per aggregator. Used to flag when a KPI view is missing outlets.
+const BRAND_EXPECTED_LISTINGS={Oregano:14,Lollorosso:15,Smokeys:14,Fyoozhen:4,"Wicked Wings":3};
+const FULL_LISTING_AGGS=new Set(["Talabat","Deliveroo","Careem"]); // 50-listing platforms
+function expectedListings(brand,aggregator){
+  if(!FULL_LISTING_AGGS.has(aggregator))return null; // only the big 3 have the fixed 50-listing structure
+  return BRAND_EXPECTED_LISTINGS[brand]??null;
+}
 // Aggregator block labels we recognise. "Dine in" maps to Google Maps (Google rating lives there).
 const KPI_AGGS=["Talabat","Deliveroo","Noon","Careem","Keeta","Google Maps","Dine in","Dine In"];
 let kpiData=null,kpiLoaded=false,kpiLoading=false;
-const OUTLET_BRAND_WHITELIST={"Fyoozhen DIP":["Fyoozhen"],"FYOO DIP":["Fyoozhen"],"FYOO-DIP":["Fyoozhen"]};
+// Per-outlet brand rules.
+// WHITELIST: if listed, ONLY these brands are kept (used for single-brand outlets).
+const OUTLET_BRAND_WHITELIST={
+  "Fyoozhen DIP":["Fyoozhen"],"FYOO DIP":["Fyoozhen"],"FYOO-DIP":["Fyoozhen"]
+};
+// EXCLUDE: brands that do NOT operate at this outlet, dropped from its sheet.
+// Safer than a whitelist when we only know what's absent, not the full brand list.
+const OUTLET_BRAND_EXCLUDE={
+  "WTC":["Oregano"],
+  "NAS":["Oregano"],
+  "Fyoozhen DIP":["Oregano"]  // also covered by whitelist, kept for clarity
+};
 
 // Map a raw block label in the KPI sheet to a platform name.
 // "Dine in" section holds "Rating in Google" → treat the block as Google Maps.
@@ -815,15 +834,32 @@ function parseKPISheet(csv,outlet){
   const blocks=[];
   let currentBrand=null,currentBlock=null,dateCols=[];
   const allowedBrands=OUTLET_BRAND_WHITELIST[outlet]||null;
+  const excludedBrands=OUTLET_BRAND_EXCLUDE[outlet]||null;
+  // True if `brand` is permitted at this outlet (passes whitelist AND isn't excluded).
+  const brandAllowed=(brand)=>{
+    if(!brand)return false;
+    if(allowedBrands&&!allowedBrands.includes(brand))return false;
+    if(excludedBrands&&excludedBrands.includes(brand))return false;
+    return true;
+  };
   for(let i=0;i<rows.length;i++){
     const r=rows[i];
     const c0=(r[0]||"").trim();
     const c1=(r[1]||"").trim();
-    // Brand header: empty col 0, brand name in col 1
-    const possibleBrand=normBrand(c1);
-    if(!c0&&KPI_BRANDS.includes(possibleBrand)){
-      if(allowedBrands&&!allowedBrands.includes(possibleBrand)){currentBrand=null;currentBlock=null;continue;}
-      currentBrand=possibleBrand;currentBlock=null;continue;
+    // Brand header row: a row that names a brand (usually col 1, but can be any column;
+    // col 0 may be empty or hold a label). Scan all cells so layout quirks don't drop the brand.
+    let brandHeader=null;
+    for(let cc=0;cc<r.length;cc++){
+      const nb=normBrand((r[cc]||"").trim());
+      if(KPI_BRANDS.includes(nb)){brandHeader=nb;break;}
+    }
+    // Treat it as a brand header only if the row has no aggregator label and no dates
+    // (i.e. it's a standalone "Oregano" header, not a data row that happens to contain a brand word).
+    const c0LooksAgg=KPI_AGGS.some(a=>c0.toLowerCase().includes(a.toLowerCase()));
+    const rowHasDate=r.some(x=>{const d=parseDate((x||"").trim());return d&&d.getFullYear()===2026;});
+    if(brandHeader&&!c0LooksAgg&&!rowHasDate){
+      if(!brandAllowed(brandHeader)){currentBrand=null;currentBlock=null;continue;}
+      currentBrand=brandHeader;currentBlock=null;continue;
     }
     // Also: "Dine in" rows often carry the brand in col 1 with the section in col 0.
     // Detect an aggregator/section block start.
@@ -837,7 +873,7 @@ function parseKPISheet(csv,outlet){
       if(brandInC1||isTargets){
         let blockBrand=currentBrand;
         if(brandInC1)blockBrand=normBrand(c1); // "Dine in" + "Oregano" header pattern
-        if(allowedBrands&&blockBrand&&!allowedBrands.includes(blockBrand)){currentBlock=null;continue;}
+        if(blockBrand&&!brandAllowed(blockBrand)){currentBlock=null;continue;}
         if(!blockBrand){currentBlock=null;continue;} // no brand → skip (prevents "null" entries)
         dateCols=[];
         for(let cc=2;cc<r.length;cc++){const d=parseDate(r[cc]);if(d&&d.getFullYear()===2026)dateCols.push({col:cc,date:dk(d)});}
@@ -929,7 +965,7 @@ function parseKPISheet(csv,outlet){
         }
         let rowBrand=null;for(const cell of cells){const nb=normBrand(cell);if(KPI_BRANDS.includes(nb)){rowBrand=nb;break;}}
         const brand=rowBrand||dineBrand;
-        if(val!=null&&brand&&(!allowedBrands||allowedBrands.includes(brand))){
+        if(val!=null&&brand&&brandAllowed(brand)){
           let gb=blocks.find(b=>b.aggregator==="Google Maps"&&b.brand===brand);
           if(!gb){gb={brand,aggregator:"Google Maps",kpis:{},singleCol:false};blocks.push(gb);}
           gb.kpis["Rating in Google"]={entries,lastEntry,target:"",dailyValues};
@@ -943,18 +979,42 @@ function parseKPISheet(csv,outlet){
 
 async function loadKPIData(){
   if(kpiLoading)return;kpiLoading=true;kpiData={};
+  const diag=[];
   await Promise.all(KPI_OUTLETS.map(async(tab)=>{
-    // Fetch uses the actual TAB name; we store under the canonical outlet name.
     const outletName=kpiOutletName(tab);
-    const gvizUrl=`https://docs.google.com/spreadsheets/d/${KPI_SHEET_ID}/gviz/tq?tqx=out:csv&headers=0&sheet=${encodeURIComponent(tab)}`;
-    let csv="";
-    try{const r=await fetch(gvizUrl);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(","))csv=t;}}catch(e){}
-    if(!csv){const pubUrl=`${KPI_PUB}?single=true&output=csv&sheet=${encodeURIComponent(tab)}`;try{const r=await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(pubUrl)}`);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(","))csv=t;}}catch(e){}}
-    if(!csv)return;
-    try{const parsed=parseKPISheet(csv,outletName);if(parsed&&parsed.blocks&&parsed.blocks.length)kpiData[outletName]=parsed;}catch(e){}
+    // Try several tab-name spellings so a small mismatch doesn't silently drop an outlet.
+    const variants=[...new Set([tab,outletName,
+      tab.replace(/\s+/g,""),           // "Motor City" → "MotorCity"
+      tab.replace(/\s+/g,"-"),          // "Reem Island" → "Reem-Island"
+      tab.toUpperCase(),tab.toLowerCase(),
+      outletName.replace(/\s+/g,"")
+    ])];
+    let csv="",usedName="";
+    for(const v of variants){
+      const gvizUrl=`https://docs.google.com/spreadsheets/d/${KPI_SHEET_ID}/gviz/tq?tqx=out:csv&headers=0&sheet=${encodeURIComponent(v)}`;
+      try{const r=await fetch(gvizUrl);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(",")){csv=t;usedName=v;break;}}}catch(e){}
+    }
+    if(!csv){
+      // fallback proxy with the primary tab name
+      const pubUrl=`${KPI_PUB}?single=true&output=csv&sheet=${encodeURIComponent(tab)}`;
+      try{const r=await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(pubUrl)}`);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(",")){csv=t;usedName=tab+" (proxy)";}}}catch(e){}
+    }
+    if(!csv){diag.push(`✗ ${tab}: tab not reachable (check exact tab name in the sheet)`);return;}
+    try{
+      const parsed=parseKPISheet(csv,outletName);
+      if(parsed&&parsed.blocks&&parsed.blocks.length){
+        kpiData[outletName]=parsed;
+        const aggs=[...new Set(parsed.blocks.map(b=>b.aggregator))];
+        diag.push(`✓ ${outletName} [${usedName}]: ${parsed.blocks.length} blocks · platforms: ${aggs.join(", ")}`);
+      }else{
+        diag.push(`⚠ ${tab}: fetched but 0 blocks parsed (brand headers not recognised)`);
+      }
+    }catch(e){diag.push(`✗ ${tab}: parse error ${e.message}`);}
   }));
   kpiLoaded=true;kpiLoading=false;
-  // If the user is currently on the KPI tab, re-render now that data is in
+  // Print a diagnostic table so missing outlets are easy to spot in the browser console (F12)
+  console.log("[KPI] Load summary — "+Object.keys(kpiData).length+"/"+KPI_OUTLETS.length+" outlets loaded:");
+  diag.sort().forEach(d=>console.log("   "+d));
   if(curPage==="kpi")renderKPI();
 }
 
@@ -1151,10 +1211,14 @@ function renderKPIPlatformView(){
     const bad=rs.filter(r=>r.isBad).length;
     const metricCount=new Set(rs.map(r=>r.kpiName)).size;
     const outletCount=new Set(rs.map(r=>r.outlet)).size;
+    const exp=expectedListings(b.n,p);
+    const short=exp!=null&&outletCount<exp;
+    const outletLabel=exp!=null?`${outletCount}/${exp}`:`${outletCount}`;
+    const outletClr=exp!=null?(outletCount>=exp?'#22C55E':'#FBBF24'):'#e2e8f0';
     return `<div onclick="selectKPIBrand('${b.n}')" style="background:#0d1524;border:1px solid ${bad>0?'#EF444455':'#1b2f4a'};border-radius:10px;padding:14px;cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${bad>0?'#EF444455':'#1b2f4a'}'">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">${logoImg(b.n,28)}<span style="font-size:13px;font-weight:800;color:${b.c}">${b.n}</span></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">${logoImg(b.n,28)}<span style="font-size:13px;font-weight:800;color:${b.c}">${b.n}</span>${short?`<span title="${exp-outletCount} outlet(s) missing" style="margin-left:auto;font-size:10px;font-weight:700;color:#FBBF24;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3);padding:1px 7px;border-radius:8px">−${exp-outletCount}</span>`:''}</div>
       <div style="display:flex;justify-content:space-between;align-items:baseline">
-        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">KPIs · Outlets</div><div style="font-size:18px;font-weight:800">${metricCount} · ${outletCount}</div></div>
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">KPIs · Outlets</div><div style="font-size:18px;font-weight:800">${metricCount} · <span style="color:${outletClr}">${outletLabel}</span></div></div>
         <div style="text-align:right"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Off target</div><div style="font-size:18px;font-weight:800;color:${bad>0?'#EF4444':'#22C55E'}">${bad}</div></div>
       </div>
     </div>`;
@@ -1219,11 +1283,24 @@ function renderKPIMetricView(){
     </div>`;
   }).join("");
   const worst=sorted[0],best=sorted[sorted.length-1];
+  // Expected-listing check: for Talabat/Deliveroo/Careem each brand should hit a known count.
+  const exp=expectedListings(b,p);
+  const present=new Set(rows.map(r=>r.outlet)).size;
+  let countBadge=`${rows.length} outlet${rows.length!==1?'s':''}`;
+  let missingNote="";
+  if(exp!=null){
+    const ok=present>=exp;
+    countBadge=`<span style="font-weight:700;color:${ok?'#22C55E':'#FBBF24'}">${present} of ${exp}</span> expected outlets`;
+    if(present<exp){
+      missingNote=`<div style="margin-bottom:12px;padding:8px 12px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25);border-radius:6px;font-size:11px;color:#FDE68A">⚠️ ${exp-present} outlet${exp-present!==1?'s':''} missing for ${b} on ${p} — that outlet's sheet may not have a ${m} value, or its tab didn't load (check the console summary).</div>`;
+    }
+  }
   pg.innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
       <button onclick="backToKPIMetrics()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:6px 12px;cursor:pointer;font-size:12px">← ${b} KPIs</button>
       <div style="display:flex;align-items:center;gap:8px">${logoImg(b,24)}<span style="font-size:16px;font-weight:800;color:${bc}">${b}</span><span style="color:#64748b">·</span><span style="font-size:14px;font-weight:700;color:${clr}">${p}</span><span style="color:#64748b">·</span><span style="font-size:15px;font-weight:800;color:#e2e8f0">${m}</span></div>
     </div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:12px">${rows.length} outlet${rows.length!==1?'s':''} · <span style="color:#EF4444;font-weight:700">worst on top</span> → <span style="color:#22C55E;font-weight:700">best at bottom</span> · click a card for the trend</div>
+    ${missingNote}
+    <div style="font-size:11px;color:#64748b;margin-bottom:12px">${countBadge} · <span style="color:#EF4444;font-weight:700">worst on top</span> → <span style="color:#22C55E;font-weight:700">best at bottom</span> · click a card for the trend</div>
     ${cards?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${cards}</div>`:`<div class="card"><div style="color:#64748b;font-size:12px">No data for ${m}.</div></div>`}`;
 }
 
