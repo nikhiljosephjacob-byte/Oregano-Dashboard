@@ -534,8 +534,20 @@ let campSort={col:'startDate',dir:-1};
 const BRAND_NORM={'oregano':'Oregano','lollorosso':'Lollorosso','lollo rosso':'Lollorosso','lollarosso':'Lollorosso','smokeys':'Smokeys',"smokey's":'Smokeys','smokey':'Smokeys','smokeys pizzeria':'Smokeys','fyoozhen':'Fyoozhen','fyoo zhen':'Fyoozhen','fyoo-zhen':'Fyoozhen','fyooshen':'Fyoozhen','wicked wings':'Wicked Wings','wckd wings':'Wicked Wings','wkd wings':'Wicked Wings','all brands':'All Brands','all':'All Brands'};
 const AGG_NORM={'deliveroo':'Deliveroo','talabat':'Talabat','noon':'Noon','careem':'Careem','keeta':'Keeta','smiles':'Smiles','instashop':'Instashop','insta shop':'Instashop','google maps':'Google Maps','google map':'Google Maps','google':'Google Maps'};
 const EXCLUDED_BRANDS=new Set(['burgerstack','burger stack']);
-function normBrand(s){if(!s)return'';const lc=s.trim().toLowerCase();return BRAND_NORM[lc]||s.trim();}
-function normAgg(s){if(!s)return'';const cleaned=s.trim().replace(/\s+\d{3,}\s*$/,"").trim();const lc=cleaned.toLowerCase();return AGG_NORM[lc]||cleaned;}
+function normBrand(s){
+  if(!s)return'';
+  const lc=s.trim().toLowerCase();
+  if(BRAND_NORM[lc])return BRAND_NORM[lc];
+  // Fuzzy: cell may contain the brand plus extra text (e.g. "Fyoozhen DIP", "FYOO", "Oregano Pizzeria").
+  // Match against known brand keywords so a decorated header still resolves to the canonical brand.
+  if(/\bfyoo/.test(lc))return'Fyoozhen';
+  if(/\boregano\b/.test(lc))return'Oregano';
+  if(/\blollo\s*rosso\b|\blollorosso\b|\blollo\b/.test(lc))return'Lollorosso';
+  if(/\bsmokey/.test(lc))return'Smokeys';
+  if(/\bwicked\b|\bwckd\b|\bwkd\b/.test(lc)&&/wing/.test(lc))return'Wicked Wings';
+  return s.trim();
+}
+function normAgg(s){if(!s)return'';const cleaned=s.trim().replace(/[\s\-_]*\d{3,}\s*$/,"").trim();const lc=cleaned.toLowerCase();return AGG_NORM[lc]||cleaned;}
 function parseCampaigns(csv){
   const rows=parseCSV(csv);if(rows.length<2)return[];
   const recs=[];
@@ -776,7 +788,7 @@ const KPI_OUTLETS=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Vil
 // Some KPI sheet TABS are named differently from the outlet name used in sales data.
 // Normalise the tab name to the canonical outlet name so they aren't shown as duplicates.
 // e.g. the "TSQR" tab IS the Town Square branch.
-const KPI_OUTLET_NAME={"TSQR":"Town Square","Motor City":"Motorcity","Mirdif":"Mirdiff"};
+const KPI_OUTLET_NAME={"TSQR":"Town Square","Motor City":"Motorcity","Mirdif":"Mirdiff","DMC":"Media City","Dubai Media City":"Media City"};
 function kpiOutletName(tab){return KPI_OUTLET_NAME[tab]||tab;}
 const KPI_BRANDS=["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"];
 // Expected number of listings (outlets) per brand on the "big 3" aggregators (Talabat, Deliveroo, Careem).
@@ -806,7 +818,7 @@ const OUTLET_BRAND_EXCLUDE={
 // Map a raw block label in the KPI sheet to a platform name.
 // "Dine in" section holds "Rating in Google" → treat the block as Google Maps.
 function kpiBlockToPlatform(rawLabel){
-  const cleaned=rawLabel.replace(/\s*\d{4,}\s*$/,"").trim();
+  const cleaned=rawLabel.replace(/[\s\-_]*\d{3,}\s*$/,"").trim();
   const lc=cleaned.toLowerCase();
   if(lc==="dine in"||lc==="dinein")return "Google Maps";
   return normAgg(cleaned);
@@ -863,7 +875,7 @@ function parseKPISheet(csv,outlet){
     }
     // Also: "Dine in" rows often carry the brand in col 1 with the section in col 0.
     // Detect an aggregator/section block start.
-    const c0Clean=c0.replace(/\s*\d{4,}\s*$/,"").trim();
+    const c0Clean=c0.replace(/[\s\-_]*\d{3,}\s*$/,"").trim();
     const isBlockLabel=c0Clean&&KPI_AGGS.some(a=>a.toLowerCase()===c0Clean.toLowerCase()||c0Clean.toLowerCase().includes(a.toLowerCase()));
     if(isBlockLabel){
       const plat=kpiBlockToPlatform(c0Clean);
@@ -1004,8 +1016,9 @@ async function loadKPIData(){
       const parsed=parseKPISheet(csv,outletName);
       if(parsed&&parsed.blocks&&parsed.blocks.length){
         kpiData[outletName]=parsed;
-        const aggs=[...new Set(parsed.blocks.map(b=>b.aggregator))];
-        diag.push(`✓ ${outletName} [${usedName}]: ${parsed.blocks.length} blocks · platforms: ${aggs.join(", ")}`);
+        const byPlat={};parsed.blocks.forEach(b=>{(byPlat[b.aggregator]=byPlat[b.aggregator]||[]).push(b.brand);});
+        const summary=Object.entries(byPlat).map(([pl,brs])=>`${pl}[${[...new Set(brs)].join(",")}]`).join(" ");
+        diag.push(`✓ ${outletName} [${usedName}]: ${summary}`);
       }else{
         diag.push(`⚠ ${tab}: fetched but 0 blocks parsed (brand headers not recognised)`);
       }
@@ -1015,6 +1028,20 @@ async function loadKPIData(){
   // Print a diagnostic table so missing outlets are easy to spot in the browser console (F12)
   console.log("[KPI] Load summary — "+Object.keys(kpiData).length+"/"+KPI_OUTLETS.length+" outlets loaded:");
   diag.sort().forEach(d=>console.log("   "+d));
+  // Coverage gap report: expected vs actual outlet count per brand × big-3 platform
+  try{
+    const rows=buildKPIEvalRows();
+    const gaps=[];
+    ["Talabat","Deliveroo","Careem"].forEach(pl=>{
+      BR.forEach(br=>{
+        const exp=expectedListings(br.n,pl);if(exp==null)return;
+        const outlets=new Set(rows.filter(r=>r.aggregator===pl&&r.brand===br.n).map(r=>r.outlet));
+        if(outlets.size<exp)gaps.push(`   ⚠ ${br.n} on ${pl}: ${outlets.size}/${exp} (missing ${exp-outlets.size})`);
+      });
+    });
+    if(gaps.length){console.log("[KPI] Coverage gaps vs expected listings:");gaps.forEach(g=>console.log(g));}
+    else console.log("[KPI] Coverage: all brand×platform counts meet expected listings ✓");
+  }catch(e){}
   if(curPage==="kpi")renderKPI();
 }
 
