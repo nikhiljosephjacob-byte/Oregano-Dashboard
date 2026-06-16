@@ -880,15 +880,31 @@ function parseKPISheet(csv,outlet){
     if(isBlockLabel){
       const plat=kpiBlockToPlatform(c0Clean);
       // A block starts when col1 looks like a brand header (e.g. "Oregano") OR says "Targets"
+      // OR the row carries dates directly after the aggregator label (no "Targets" word).
       const brandInC1=KPI_BRANDS.includes(normBrand(c1));
       const isTargets=c1.toLowerCase()==="targets"||c1.toLowerCase().includes("target");
-      if(brandInC1||isTargets){
+      const rowHasDates=r.some((x,ix)=>ix>=1&&(()=>{const d=parseDate((x||"").trim());return d&&(d.getFullYear()===2026||d.getFullYear()===2025);})());
+      if(brandInC1||isTargets||rowHasDates){
         let blockBrand=currentBrand;
         if(brandInC1)blockBrand=normBrand(c1); // "Dine in" + "Oregano" header pattern
+        // If we still don't know the brand, look upward a few rows for the nearest brand name
+        // (handles sheets where the brand header sits a couple of rows above the block, or in
+        // a column we didn't treat as a standalone header).
+        if(!blockBrand){
+          for(let j=i-1;j>=0&&j>=i-4;j--){
+            for(let cc=0;cc<rows[j].length;cc++){
+              const nb=normBrand((rows[j][cc]||"").trim());
+              if(KPI_BRANDS.includes(nb)){blockBrand=nb;break;}
+            }
+            if(blockBrand)break;
+          }
+        }
         if(blockBrand&&!brandAllowed(blockBrand)){currentBlock=null;continue;}
         if(!blockBrand){currentBlock=null;continue;} // no brand → skip (prevents "null" entries)
+        currentBrand=blockBrand; // remember for subsequent blocks under the same brand
         dateCols=[];
-        for(let cc=2;cc<r.length;cc++){const d=parseDate(r[cc]);if(d&&d.getFullYear()===2026)dateCols.push({col:cc,date:dk(d)});}
+        // Dates may begin at col 1 (no "Targets" placeholder) or col 2 (with one). Scan from col 1.
+        for(let cc=1;cc<r.length;cc++){const d=parseDate(r[cc]);if(d&&(d.getFullYear()===2026||d.getFullYear()===2025))dateCols.push({col:cc,date:dk(d)});}
         // "Dine in" / Google Maps blocks have the value in col 1 (no date columns) — flag so the
         // KPI rows below read col 1 as the current value instead of treating it as a target.
         const isDineIn=plat==="Google Maps";
