@@ -876,36 +876,58 @@ function parseKPISheet(csv,outlet){
   }
 
   // ── BULLETPROOF GOOGLE-RATING PASS ──
-  // The "Dine in" / Google rating sits at the bottom of each sheet with the value in col 1
-  // and the owning brand somewhere on the same row or in a nearby header. The structured pass
-  // above can miss it if the layout differs, so we do a direct scan here as a guarantee.
+  // The "Dine in" / Google rating sits at the bottom of each sheet. Layout (from the live sheet):
+  //   Row: "Dine in" | <Brand>          (brand header, e.g. "Oregano")
+  //   Row: "Rating in Google" | 4.9 | 1-Jun-26 4.6 | 2-Jun-26 4.6 | ... | 14-Jun-26 4.6
+  // Column 1 (the 4.9) is a SUMMARY cell — the REAL current rating is the latest DATED column.
+  // We must therefore read the dated series and take the most recent value, not col 1.
   const today=(typeof latest!=="undefined"&&latest)?latest:dk(new Date());
-  const hasGoogleAlready=blocks.some(b=>b.aggregator==="Google Maps"&&Object.keys(b.kpis).some(k=>k.toLowerCase().includes("rating")&&b.kpis[k].dailyValues&&b.kpis[k].dailyValues.length));
-  if(!hasGoogleAlready){
-    let dineBrand=null; // brand owning the dine-in / google section
+  // Remove any prior (possibly wrong) Google rating blocks so this authoritative pass wins.
+  for(let bi=blocks.length-1;bi>=0;bi--){
+    const b=blocks[bi];
+    if(b.aggregator==="Google Maps"){
+      // drop only the rating kpi; keep block if it has other kpis, else remove block
+      Object.keys(b.kpis).forEach(k=>{if(k.toLowerCase().includes("rating"))delete b.kpis[k];});
+      if(Object.keys(b.kpis).length===0)blocks.splice(bi,1);
+    }
+  }
+  {
+    let dineBrand=null;
+    // Pre-compute, for every row, which columns hold 2026 dates (so we can find the
+    // date header belonging to the Dine-in section specifically).
+    const rowDateCols=rows.map(r=>{const cols=[];for(let cc=0;cc<r.length;cc++){const d=parseDate((r[cc]||"").trim());if(d&&d.getFullYear()===2026)cols.push({col:cc,date:dk(d)});}return cols;});
     for(let i=0;i<rows.length;i++){
       const r=rows[i];
       const cells=r.map(x=>(x||"").trim());
-      // Track the most recent brand seen anywhere on the row (header cells like "Oregano")
       for(const cell of cells){const nb=normBrand(cell);if(KPI_BRANDS.includes(nb)){dineBrand=nb;}}
-      // Is this a "Rating in Google" row?
       const labelIdx=cells.findIndex(c=>/rating\s*in\s*google|google\s*rating/i.test(c));
       if(labelIdx>=0){
-        // Find the rating value: first numeric cell after the label that looks like a rating (1–5)
-        let val=null;
-        for(let cc=labelIdx+1;cc<cells.length;cc++){
-          const n=parseFloat((cells[cc]||"").replace(/[^\d.]/g,""));
-          if(!isNaN(n)&&n>=1&&n<=5){val=n;break;}
+        // Find the date header for THIS section: scan upward for the nearest row with ≥3 dates
+        // whose date columns line up with numeric cells on this rating row.
+        let dCols=null;
+        for(let j=i;j>=0&&j>=i-6;j--){if(rowDateCols[j]&&rowDateCols[j].length>=3){dCols=rowDateCols[j];break;}}
+        const dailyValues=[];const entries={};
+        if(dCols){
+          dCols.forEach(({col,date})=>{
+            const raw=(cells[col]||"").trim();if(!raw)return;
+            const n=parseFloat(raw.replace(/[^\d.]/g,""));
+            if(!isNaN(n)&&n>=1&&n<=5){dailyValues.push({date,num:n,raw});entries[date]=raw;}
+          });
         }
-        // Brand: prefer one on THIS row, else the most recent dineBrand seen, else first allowed
-        let rowBrand=null;
-        for(const cell of cells){const nb=normBrand(cell);if(KPI_BRANDS.includes(nb)){rowBrand=nb;break;}}
+        let val=null,lastEntry=null;
+        if(dailyValues.length){
+          dailyValues.sort((a,b)=>a.date.localeCompare(b.date));
+          val=dailyValues[dailyValues.length-1].num;lastEntry=dailyValues[dailyValues.length-1].date;
+        } else {
+          // No dated values aligned — fall back to the LAST 1–5 numeric on the row (skips the col-1 summary)
+          for(let cc=cells.length-1;cc>labelIdx;cc--){const n=parseFloat((cells[cc]||"").replace(/[^\d.]/g,""));if(!isNaN(n)&&n>=1&&n<=5){val=n;lastEntry=today;dailyValues.push({date:today,num:n,raw:String(n)});entries[today]=String(n);break;}}
+        }
+        let rowBrand=null;for(const cell of cells){const nb=normBrand(cell);if(KPI_BRANDS.includes(nb)){rowBrand=nb;break;}}
         const brand=rowBrand||dineBrand;
         if(val!=null&&brand&&(!allowedBrands||allowedBrands.includes(brand))){
-          // Find or create the Google Maps block for this brand
           let gb=blocks.find(b=>b.aggregator==="Google Maps"&&b.brand===brand);
-          if(!gb){gb={brand,aggregator:"Google Maps",kpis:{},singleCol:true};blocks.push(gb);}
-          gb.kpis["Rating in Google"]={entries:{[today]:String(val)},lastEntry:today,target:"",dailyValues:[{date:today,num:val,raw:String(val)}]};
+          if(!gb){gb={brand,aggregator:"Google Maps",kpis:{},singleCol:false};blocks.push(gb);}
+          gb.kpis["Rating in Google"]={entries,lastEntry,target:"",dailyValues};
         }
       }
     }
@@ -1003,6 +1025,8 @@ async function renderKPI(){
 
   // Detail view for a single KPI metric trend
   if(kpiSelectedOutlet&&kpiSelectedKPIName){return renderKPIDetail();}
+  // Google Maps: skip brand + metric levels — show outlet tiles directly (Rating in Google)
+  if(kpiSelectedPlatform==="Google Maps"){return renderKPIGoogleOutlets();}
   // Outlet cards for a chosen platform + brand + metric
   if(kpiSelectedPlatform&&kpiSelectedBrand&&kpiSelectedMetric){return renderKPIMetricView();}
   // Metric tiles for a chosen platform + brand
@@ -1074,6 +1098,38 @@ function renderKPILaggingPanel(){
     ${rowsH}
     ${neverH}
   </div>`;
+}
+
+// GOOGLE MAPS special view: outlet tiles labeled "Brand Outlet" (e.g. "Oregano Mirdif")
+function renderKPIGoogleOutlets(){
+  const pg=document.getElementById("page-kpi");
+  const clr=AC["Google Maps"]||"#4285F4";
+  const rows=buildKPIEvalRows().filter(r=>r.aggregator==="Google Maps"&&r.kpiName.toLowerCase().includes("rating"));
+  // Worst rating on top (lower = worse), best at the bottom
+  const sorted=[...rows].sort((a,b)=>a.latest-b.latest);
+  const rateClr=v=>{if(v<4.6)return"#EF4444";if(v<4.7)return"#FBBF24";return"#22C55E";};
+  const cards=sorted.map(r=>{
+    const st=kpiStaleness(r.kdata.lastEntry);
+    const accent=rateClr(r.latest);
+    const bad=r.latest<4.7;
+    const flag=bad?`<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(239,68,68,.15);border:1px solid #EF444455;color:#FCA5A5;font-size:10px;font-weight:700;padding:2px 8px;border-radius:6px">⚠ FLAG</span>`:`<span style="color:#22C55E;font-size:14px;font-weight:700">✓</span>`;
+    return `<div onclick="kpiSelectedOutlet='${r.outlet.replace(/'/g,"\\'")}';kpiSelectedBrand='${r.brand}';kpiSelectedAggregator='Google Maps';kpiSelectedKPIName='${r.kpiName.replace(/'/g,"\\'")}';renderKPI()" style="position:relative;background:#0d1524;border:1px solid #1b2f4a;border-left:4px solid ${accent};border-radius:10px;padding:14px 16px;cursor:pointer;min-height:96px;display:flex;flex-direction:column;justify-content:space-between" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='#1b2f4a'">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px">${logoImg(r.brand,24)}<div><div style="font-size:14px;font-weight:800;color:#e2e8f0">${r.brand} ${r.outlet}</div><div style="font-size:10px;color:#64748b">${st.label}</div></div></div>
+        ${flag}
+      </div>
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:8px">
+        <div style="font-size:30px;font-weight:800;color:${accent};font-variant-numeric:tabular-nums;line-height:1">${r.latest}</div>
+        <div style="text-align:right"><div style="font-size:10px;color:#64748b">target ≥ 4.7</div><div style="font-size:9px;color:#64748b">${r.kdata.lastEntry?fmtDisp(r.kdata.lastEntry):'no date'}</div></div>
+      </div>
+    </div>`;
+  }).join("");
+  pg.innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+      <button onclick="backToKPIPlatforms()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:6px 12px;cursor:pointer;font-size:12px">← All Platforms</button>
+      <div style="display:flex;align-items:center;gap:8px">${logoImg("Google Maps",28)}<span style="font-size:18px;font-weight:800;color:${clr}">Google Maps Ratings</span></div>
+    </div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:12px">${rows.length} outlet${rows.length!==1?'s':''} · <span style="color:#EF4444;font-weight:700">lowest rating on top</span> → <span style="color:#22C55E;font-weight:700">best at bottom</span> · click for trend</div>
+    ${cards?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${cards}</div>`:`<div class="card"><div style="color:#64748b;font-size:12px">No Google ratings found in the KPI sheets.</div></div>`}`;
 }
 
 // LEVEL 2: platform → brand tiles (only brands that have KPIs on this platform)
