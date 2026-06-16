@@ -772,7 +772,12 @@ async function renderCampaigns(){
 // ── KPI TRACKER ──────────────────────────────────────────────────
 const KPI_SHEET_ID="1xCrtvlJ9Ho1kUFV4vWdYfmIP15cNq5LH0yo-MnfjOik";
 const KPI_PUB="https://docs.google.com/spreadsheets/d/e/2PACX-1vSnRTQ072D1AwtKTYksLkavZDVCL65ltXyOHrWP0dvXbLwPk3lODmxWatDtm1Syj5D05W7boL4bDRoo/pub";
-const KPI_OUTLETS=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Villa","Jumeirah","Reem Island","WTC","Furjan","Al Quoz","TSQR","Al Forsan","NAS","Al Reef","Town Square","Fyoozhen DIP"];
+const KPI_OUTLETS=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Villa","Jumeirah","Reem Island","WTC","Furjan","Al Quoz","TSQR","Al Forsan","NAS","Al Reef","Fyoozhen DIP"];
+// Some KPI sheet TABS are named differently from the outlet name used in sales data.
+// Normalise the tab name to the canonical outlet name so they aren't shown as duplicates.
+// e.g. the "TSQR" tab IS the Town Square branch.
+const KPI_OUTLET_NAME={"TSQR":"Town Square","Motor City":"Motorcity","Mirdif":"Mirdiff"};
+function kpiOutletName(tab){return KPI_OUTLET_NAME[tab]||tab;}
 const KPI_BRANDS=["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"];
 // Aggregator block labels we recognise. "Dine in" maps to Google Maps (Google rating lives there).
 const KPI_AGGS=["Talabat","Deliveroo","Noon","Careem","Keeta","Google Maps","Dine in","Dine In"];
@@ -938,13 +943,15 @@ function parseKPISheet(csv,outlet){
 
 async function loadKPIData(){
   if(kpiLoading)return;kpiLoading=true;kpiData={};
-  await Promise.all(KPI_OUTLETS.map(async(name)=>{
-    const gvizUrl=`https://docs.google.com/spreadsheets/d/${KPI_SHEET_ID}/gviz/tq?tqx=out:csv&headers=0&sheet=${encodeURIComponent(name)}`;
+  await Promise.all(KPI_OUTLETS.map(async(tab)=>{
+    // Fetch uses the actual TAB name; we store under the canonical outlet name.
+    const outletName=kpiOutletName(tab);
+    const gvizUrl=`https://docs.google.com/spreadsheets/d/${KPI_SHEET_ID}/gviz/tq?tqx=out:csv&headers=0&sheet=${encodeURIComponent(tab)}`;
     let csv="";
     try{const r=await fetch(gvizUrl);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(","))csv=t;}}catch(e){}
-    if(!csv){const pubUrl=`${KPI_PUB}?single=true&output=csv&sheet=${encodeURIComponent(name)}`;try{const r=await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(pubUrl)}`);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(","))csv=t;}}catch(e){}}
+    if(!csv){const pubUrl=`${KPI_PUB}?single=true&output=csv&sheet=${encodeURIComponent(tab)}`;try{const r=await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(pubUrl)}`);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(","))csv=t;}}catch(e){}}
     if(!csv)return;
-    try{const parsed=parseKPISheet(csv,name);if(parsed&&parsed.blocks&&parsed.blocks.length)kpiData[name]=parsed;}catch(e){}
+    try{const parsed=parseKPISheet(csv,outletName);if(parsed&&parsed.blocks&&parsed.blocks.length)kpiData[outletName]=parsed;}catch(e){}
   }));
   kpiLoaded=true;kpiLoading=false;
   // If the user is currently on the KPI tab, re-render now that data is in
@@ -993,8 +1000,8 @@ function buildKPIFreshness(){
     });
     map[od.outlet]={lastEntry:outletLast,details};
   });
-  // include outlets that returned no data at all
-  KPI_OUTLETS.forEach(o=>{if(!map[o])map[o]={lastEntry:null,details:[]};});
+  // include outlets that returned no data at all (use canonical names, e.g. TSQR→Town Square)
+  KPI_OUTLETS.forEach(tab=>{const o=kpiOutletName(tab);if(!map[o])map[o]={lastEntry:null,details:[]};});
   return map;
 }
 
