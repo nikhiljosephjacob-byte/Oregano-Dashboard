@@ -785,11 +785,11 @@ async function renderCampaigns(){
 // ── KPI TRACKER ──────────────────────────────────────────────────
 const KPI_SHEET_ID="1xCrtvlJ9Ho1kUFV4vWdYfmIP15cNq5LH0yo-MnfjOik";
 const KPI_PUB="https://docs.google.com/spreadsheets/d/e/2PACX-1vSnRTQ072D1AwtKTYksLkavZDVCL65ltXyOHrWP0dvXbLwPk3lODmxWatDtm1Syj5D05W7boL4bDRoo/pub";
-const KPI_OUTLETS=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Villa","Jumeirah","Reem Island","WTC","Furjan","Al Quoz","TSQR","Al Forsan","NAS","Al Reef","Fyoozhen DIP"];
+const KPI_OUTLETS=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Villa","Jumeirah","Reem Island","WTC","Furjan","Al Quoz","TSQR","Al Forsan","NAS","Al Reef","FYOO DIP"];
 // Some KPI sheet TABS are named differently from the outlet name used in sales data.
 // Normalise the tab name to the canonical outlet name so they aren't shown as duplicates.
 // e.g. the "TSQR" tab IS the Town Square branch.
-const KPI_OUTLET_NAME={"TSQR":"Town Square","Motor City":"Motorcity","Mirdif":"Mirdiff","DMC":"Media City","Dubai Media City":"Media City"};
+const KPI_OUTLET_NAME={"TSQR":"Town Square","Motor City":"Motorcity","Mirdif":"Mirdiff","DMC":"Media City","Dubai Media City":"Media City","FYOO DIP":"Fyoozhen DIP","FYOO-DIP":"Fyoozhen DIP","Fyoo DIP":"Fyoozhen DIP"};
 function kpiOutletName(tab){return KPI_OUTLET_NAME[tab]||tab;}
 const KPI_BRANDS=["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"];
 // Expected number of listings (outlets) per brand on the "big 3" aggregators (Talabat, Deliveroo, Careem).
@@ -1076,10 +1076,14 @@ function getKPIEvaluator(kpiName,aggregator,brand,targetStr){
   if(k.includes("food is ready")||k.includes("food ready")){const t=parseFloat(String(targetStr).replace(/[^\d.]/g,""));if(!t)return null;return{type:"food_ready",direction:"below",target:t,unit:"%"};}
   return null;
 }
+// Platforms we actually track KPIs for. Noon/Keeta are parsed (for Google rating context)
+// but we don't record their KPIs, so they're excluded from evaluation and the lagging panel.
+const KPI_TRACKED_PLATFORMS=new Set(["Talabat","Deliveroo","Careem","Google Maps"]);
 function buildKPIEvalRows(){
   const rows=[];
   Object.values(kpiData||{}).forEach(od=>{
     od.blocks.forEach(blk=>{
+      if(!KPI_TRACKED_PLATFORMS.has(blk.aggregator))return; // skip Noon, Keeta, etc.
       Object.entries(blk.kpis).forEach(([kpiName,kdata])=>{
         const ev=getKPIEvaluator(kpiName,blk.aggregator,blk.brand,kdata.target);
         if(!ev)return;
@@ -1151,7 +1155,7 @@ async function renderKPI(){
 function renderKPIPlatformGrid(){
   const pg=document.getElementById("page-kpi");
   const rows=buildKPIEvalRows();
-  const platforms=["Talabat","Deliveroo","Careem","Noon","Google Maps"];
+  const platforms=["Talabat","Deliveroo","Careem","Google Maps"];
   const tileH=platforms.map(p=>{
     const pr=rows.filter(r=>r.aggregator===p);
     const bad=pr.filter(r=>r.isBad).length;
@@ -1180,7 +1184,7 @@ function renderKPIPlatformGrid(){
 // ── LAGGING UPDATES — compact summary (per-box badges carry the detail) ──
 function renderKPILaggingPanel(){
   const fresh=buildKPIFreshness();
-  const platforms=["Talabat","Deliveroo","Careem","Noon","Google Maps"];
+  const platforms=["Talabat","Deliveroo","Careem","Google Maps"];
   const byAgg={};platforms.forEach(p=>byAgg[p]=[]);
   const neverLoaded=[];
   Object.entries(fresh).forEach(([outlet,info])=>{
@@ -1504,6 +1508,37 @@ function cmpStatCard(label,a,b,fmt,unit){
   </div>`;
 }
 
+// Active Outlets card with a hover panel showing exactly which outlets differ A vs B
+function cmpOutletCard(dA,dB){
+  const setA=new Set(dA.map(r=>r.branch)),setB=new Set(dB.map(r=>r.branch));
+  const onlyA=[...setA].filter(b=>!setB.has(b)).sort();
+  const onlyB=[...setB].filter(b=>!setA.has(b)).sort();
+  const both=[...setA].filter(b=>setB.has(b)).sort();
+  const diff=setA.size-setB.size;
+  const diffClr=diff>0?"#60A5FA":diff<0?"#F59E0B":"#64748b";
+  const col=(title,clr,list)=>`<div style="flex:1;min-width:120px"><div style="font-size:9px;font-weight:700;color:${clr};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">${title} (${list.length})</div>${list.length?list.map(o=>`<div style="font-size:11px;color:#cbd5e1;padding:1px 0">${o}</div>`).join(""):`<div style="font-size:11px;color:#64748b">—</div>`}</div>`;
+  // The panel is hidden by default and shown on hover (CSS sibling, inline handlers as fallback)
+  const panel=`<div class="cmp-outlet-panel" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:30;margin-top:6px;background:#0b1220;border:1px solid #1b2f4a;border-radius:10px;padding:12px;box-shadow:0 12px 30px rgba(0,0,0,.5)">
+      <div style="font-size:10px;color:#64748b;margin-bottom:8px">${diff===0?"Both groups cover the same outlets.":`Group ${diff>0?"A":"B"} has ${Math.abs(diff)} more outlet${Math.abs(diff)!==1?"s":""}.`}</div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap">
+        ${col("Only in A","#60A5FA",onlyA)}
+        ${col("Only in B","#F59E0B",onlyB)}
+        ${col("In both","#22C55E",both)}
+      </div>
+    </div>`;
+  return `<div class="sm" style="position:relative;cursor:help" onmouseover="this.querySelector('.cmp-outlet-panel').style.display='block'" onmouseout="this.querySelector('.cmp-outlet-panel').style.display='none'">
+    <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Active Outlets <span style="color:#f59e0b">ⓘ</span></div>
+    <div style="display:flex;align-items:baseline;gap:8px">
+      <span style="font-size:20px;font-weight:800;color:#60A5FA">${setA.size}</span>
+      <span style="font-size:11px;color:#64748b">vs</span>
+      <span style="font-size:20px;font-weight:800;color:#F59E0B">${setB.size}</span>
+      ${diff!==0?`<span style="font-size:12px;color:${diffClr};font-weight:700">(${diff>0?"+":""}${diff})</span>`:""}
+    </div>
+    <div style="font-size:10px;color:#64748b;margin-top:3px">${onlyA.length+onlyB.length>0?`${onlyA.length+onlyB.length} differ · hover for details`:"same outlets"}</div>
+    ${panel}
+  </div>`;
+}
+
 function renderCompare(){
   let pg=document.getElementById("page-compare");
   if(!pg){injectCompareTab();pg=document.getElementById("page-compare");}
@@ -1558,7 +1593,7 @@ function renderCompare(){
       ${cmpStatCard("Orders",sA.orders,sB.orders,v=>v.toLocaleString())}
       ${cmpStatCard("GMV",sA.sales,sB.sales,v=>fmtAED(v))}
       ${cmpStatCard("AOV",aovA,aovB,v=>"AED "+v.toFixed(1))}
-      <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Active Outlets</div><div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:20px;font-weight:800;color:#60A5FA">${new Set(dA.map(r=>r.branch)).size}</span><span style="font-size:11px;color:#64748b">vs</span><span style="font-size:20px;font-weight:800;color:#F59E0B">${new Set(dB.map(r=>r.branch)).size}</span></div></div>
+      ${cmpOutletCard(dA,dB)}
     </div>
 
     <div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>Trend — <span style="color:#60A5FA">A</span> vs <span style="color:#F59E0B">B</span> (aligned by day index)</span><div style="display:flex;gap:5px">${metricBtns}</div></div><div style="position:relative;height:220px"><canvas id="cmp-chart"></canvas></div><div style="font-size:10px;color:#64748b;margin-top:6px">Day 1 = first day of each window. This lets you compare windows of different years/lengths on the same axis.</div></div>
