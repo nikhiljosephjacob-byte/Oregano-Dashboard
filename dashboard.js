@@ -44,7 +44,7 @@ function fmtDisp(k){if(!k)return"";return new Date(k+"T12:00:00").toLocaleDateSt
 function fmtShort(k){if(!k)return"";return new Date(k+"T12:00:00").toLocaleDateString("en-AE",{day:"numeric",month:"short"});}
 function fmtAED(n){if(n>=1e6)return`AED ${(n/1e6).toFixed(2)}M`;if(n>=1000)return`AED ${(n/1000).toFixed(1)}K`;return`AED ${Math.round(n)}`;}
 function pctOf(a,b){if(!b||b===0)return null;return((a-b)/b)*100;}
-function fmtPct(n,d="—"){if(n==null)return d;return`${n>=0?"+":""}${n.toFixed(1)}%`;}
+function fmtPct(n,d="—"){if(n==null||typeof n!=="number"||isNaN(n))return d;return`${n>=0?"+":""}${n.toFixed(1)}%`;}
 function pctClr(n){if(n==null)return"#64748b";if(n>=15)return"#22C55E";if(n>=3)return"#86EFAC";if(n>=0)return"#A3E635";if(n>=-15)return"#FBBF24";return"#EF4444";}
 
 // CSV PARSING
@@ -157,7 +157,7 @@ function mkMap(recs,kFn){const m={};recs.forEach(r=>{const k=kFn(r);if(!m[k])m[k
 function trend30(filterFn,start,end){const s=start||subDays(latest,30),e=end||latest;const m={};allData.filter(r=>filterFn(r)&&r.date>=s&&r.date<=e).forEach(r=>{if(!m[r.date])m[r.date]={d:r.date.slice(5),s:0,o:0};m[r.date].s+=r.sales;m[r.date].o+=r.orders;});return Object.values(m).sort((a,b)=>a.d.localeCompare(b.d));}
 
 // RENDER HELPERS
-function kpiCard(label,value,sub,chg,onclick){const cc=chg!=null?pctClr(chg):"#64748b";const click=onclick?`onclick="${onclick}" style="cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='#1b2f4a'"`:"";return`<div class="sm" ${click}><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">${label}${onclick?' <span style=\"color:#f59e0b\">▸</span>':''}</div><div style="font-size:21px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1">${value}</div>${sub?`<div style="font-size:11px;color:#64748b;margin-top:3px">${sub}</div>`:""}${chg!=null?`<div style="font-size:11px;color:${cc};font-weight:700;margin-top:3px">${fmtPct(chg)}</div>`:""}</div>`;}
+function kpiCard(label,value,sub,chg,onclick){const hasChg=typeof chg==="number"&&!isNaN(chg);const cc=hasChg?pctClr(chg):"#64748b";const click=onclick?`onclick="${onclick}" style="cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='#1b2f4a'"`:"";return`<div class="sm" ${click}><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">${label}${onclick?' <span style=\"color:#f59e0b\">▸</span>':''}</div><div style="font-size:21px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1">${value}</div>${sub?`<div style="font-size:11px;color:#64748b;margin-top:3px">${sub}</div>`:""}${hasChg?`<div style="font-size:11px;color:${cc};font-weight:700;margin-top:3px">${fmtPct(chg)}</div>`:""}</div>`;}
 function logoImg(name,size=26){const src=typeof LOGOS!=="undefined"?LOGOS[name]||"":"";return`<img src="${src}" style="width:${size}px;height:${size}px;border-radius:5px;object-fit:contain;background:#fff;padding:1px;flex-shrink:0">`;}
 
 // ── SORTABLE TABLE ──
@@ -248,7 +248,7 @@ function renderOverview(){
   </div>
   <div id="brief-content"><div style="color:#64748b;font-size:12px">Generating...</div></div>
 </div>
-    <div class="g4">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders))}${kpiCard("Total GMV",fmtAED(ls.sales),`${compShort}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales))}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,"click for brand trends","",`toggleAovDrill()`)}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
+    <div class="g4">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders))}${kpiCard("Total GMV",fmtAED(ls.sales),`${compShort}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales))}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,"click for brand trends",null,`toggleAovDrill()`)}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
     <div class="g2"><div class="sm"><div class="ct">GMV Trend</div><div style="position:relative;height:150px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:150px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="g2"><div class="sm"><div class="ct" style="color:#22C55E">✅ What Worked</div>${verdW||"<div style='color:#64748b;font-size:12px'>No comparison data</div>"}</div><div class="sm"><div class="ct" style="color:#EF4444">⚠️ Needs Attention</div>${verdI||"<div style='color:#22C55E;font-size:12px'>All outlets performing</div>"}</div></div>
     ${aovBlock}
@@ -966,13 +966,11 @@ function renderKPIPlatformGrid(){
     ${renderKPILaggingPanel()}`;
 }
 
-// ── LAGGING UPDATES PANEL (>48h) — structured per aggregator, not a long list ──
+// ── LAGGING UPDATES — compact summary (per-box badges carry the detail) ──
 function renderKPILaggingPanel(){
   const fresh=buildKPIFreshness();
-  // Build per-aggregator → list of {outlet, brand, staleness} for blocks behind > 48h
   const platforms=["Talabat","Deliveroo","Careem","Noon","Google Maps"];
   const byAgg={};platforms.forEach(p=>byAgg[p]=[]);
-  // Outlets never loaded at all
   const neverLoaded=[];
   Object.entries(fresh).forEach(([outlet,info])=>{
     if(!info.details.length){neverLoaded.push(outlet);return;}
@@ -985,20 +983,19 @@ function renderKPILaggingPanel(){
   if(totalLagging===0&&neverLoaded.length===0){
     return `<div class="card" style="border-color:rgba(34,197,94,.3)"><div class="ct" style="color:#22C55E">✅ All KPIs up to date</div><div style="font-size:12px;color:#94a3b8">Every outlet has updated its KPIs within the last 48 hours.</div></div>`;
   }
-  const cols=platforms.filter(p=>byAgg[p].length>0).map(p=>{
+  // One compact row per platform listing the lagging outlets (badge shows worst delay)
+  const rowsH=platforms.filter(p=>byAgg[p].length>0).map(p=>{
     const clr=AC[p]||"#888";
-    // group by outlet within this aggregator
-    const items=byAgg[p].sort((a,b)=>b.st.hrs-a.st.hrs).map(x=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 8px;background:${x.st.bg};border-radius:5px;margin-bottom:4px"><span style="display:inline-flex;align-items:center;gap:6px;font-size:11px"><span style="width:6px;height:6px;border-radius:50%;background:${x.st.color}"></span><strong>${x.outlet}</strong><span style="color:#64748b">${x.brand}</span></span><span style="font-size:10px;font-weight:700;color:${x.st.color};white-space:nowrap">${x.st.label}</span></div>`).join("");
-    return `<div style="background:#0d1524;border:1px solid #1b2f4a;border-radius:8px;padding:12px">
-      <div style="display:flex;align-items:center;gap:7px;margin-bottom:10px">${logoImg(p,22)}<span style="font-size:12px;font-weight:800;color:${clr}">${p}</span><span style="margin-left:auto;font-size:11px;font-weight:700;background:rgba(239,68,68,.15);color:#EF4444;padding:1px 8px;border-radius:8px">${byAgg[p].length}</span></div>
-      ${items}
+    const chips=byAgg[p].sort((a,b)=>b.st.hrs-a.st.hrs).map(x=>`<span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;background:${x.st.bg};border:1px solid ${x.st.color}44;border-radius:10px;padding:2px 8px;margin:2px 0;white-space:nowrap"><strong>${x.outlet}</strong><span style="color:#64748b">${x.brand}</span><span style="color:${x.st.color};font-weight:700">${x.st.label}</span></span>`).join(" ");
+    return `<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid rgba(27,47,74,.4)">
+      <span style="display:inline-flex;align-items:center;gap:6px;min-width:110px;flex-shrink:0">${logoImg(p,20)}<span style="font-size:11px;font-weight:800;color:${clr}">${p}</span><span style="font-size:10px;font-weight:700;background:rgba(239,68,68,.15);color:#EF4444;padding:0 6px;border-radius:8px">${byAgg[p].length}</span></span>
+      <div style="display:flex;flex-wrap:wrap;gap:4px">${chips}</div>
     </div>`;
   }).join("");
-  const neverH=neverLoaded.length?`<div style="margin-top:12px;padding:10px 12px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:6px"><div style="font-size:11px;font-weight:700;color:#EF4444;margin-bottom:4px">⚠️ No KPI data at all (${neverLoaded.length})</div><div style="font-size:11px;color:#94a3b8">${neverLoaded.join(", ")}</div></div>`:"";
+  const neverH=neverLoaded.length?`<div style="margin-top:10px;padding:8px 12px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:6px"><span style="font-size:11px;font-weight:700;color:#EF4444">⚠️ No KPI data at all (${neverLoaded.length}):</span> <span style="font-size:11px;color:#94a3b8">${neverLoaded.join(", ")}</span></div>`:"";
   return `<div class="card" style="border-color:rgba(239,68,68,.25)">
     <div class="ct" style="color:#EF4444">⏰ Lagging KPI Updates — behind by more than 48 hours (${totalLagging})</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:12px">Grouped per platform. Outlets here haven't refreshed their KPIs in over 2 days.</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">${cols}</div>
+    ${rowsH}
     ${neverH}
   </div>`;
 }
@@ -1035,7 +1032,7 @@ function renderKPIMetricView(){
     if(ba!==bb)return ba-bb;
     return a.direction==="below"?a.latest-b.latest:b.latest-a.latest;
   });
-  const isRating=m.toLowerCase().includes("rating");
+  const isRating=(m||"").toLowerCase().includes("rating");
   const rateClr=v=>{if(v<4.6)return"#EF4444";if(v<4.7)return"#FBBF24";return"#22C55E";};
   const list=sorted.map(r=>{
     const st=kpiStaleness(r.kdata.lastEntry);
@@ -1044,7 +1041,7 @@ function renderKPIMetricView(){
       ${logoImg(r.brand,22)}
       <div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:700">${r.outlet}</div><div style="font-size:10px;color:#64748b"><span style="color:${BMAP[r.brand]?.c||'#888'}">${r.brand}</span> · updated ${r.kdata.lastEntry?fmtShort(r.kdata.lastEntry):'never'}</div></div>
       <div style="text-align:right"><div style="font-size:16px;font-weight:800;color:${valClr};font-variant-numeric:tabular-nums">${r.latest}${r.unit}</div><div style="font-size:9px;color:#64748b">target ${r.direction==="below"?"≥":"≤"} ${r.target}${r.unit}</div></div>
-      <span style="font-size:9px;font-weight:700;color:${st.color};white-space:nowrap;min-width:70px;text-align:right">${st.label}</span>
+      <span style="font-size:9px;font-weight:700;color:${st.color};background:${st.bg};border:1px solid ${st.color}44;border-radius:10px;padding:3px 9px;white-space:nowrap;text-align:center">${st.label}</span>
     </div>`;
   }).join("");
   pg.innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
