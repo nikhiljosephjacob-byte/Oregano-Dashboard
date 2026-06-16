@@ -158,7 +158,24 @@ function trend30(filterFn,start,end){const s=start||subDays(latest,30),e=end||la
 
 // RENDER HELPERS
 function kpiCard(label,value,sub,chg,onclick){const hasChg=typeof chg==="number"&&!isNaN(chg);const cc=hasChg?pctClr(chg):"#64748b";const click=onclick?`onclick="${onclick}" style="cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='#1b2f4a'"`:"";return`<div class="sm" ${click}><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">${label}${onclick?' <span style=\"color:#f59e0b\">▸</span>':''}</div><div style="font-size:21px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1">${value}</div>${sub?`<div style="font-size:11px;color:#64748b;margin-top:3px">${sub}</div>`:""}${hasChg?`<div style="font-size:11px;color:${cc};font-weight:700;margin-top:3px">${fmtPct(chg)}</div>`:""}</div>`;}
-function logoImg(name,size=26){const src=typeof LOGOS!=="undefined"?LOGOS[name]||"":"";return`<img src="${src}" style="width:${size}px;height:${size}px;border-radius:5px;object-fit:contain;background:#fff;padding:1px;flex-shrink:0">`;}
+// Built-in fallback logos (data URIs / emoji) used when index.html's LOGOS lacks an entry
+// or the image fails to load. Keeps Google Maps etc. always visible.
+const LOGO_FALLBACK={
+  "Google Maps":"data:image/svg+xml;utf8,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="%23EA4335" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5" fill="%23fff"/></svg>'),
+};
+const LOGO_EMOJI={Deliveroo:"🛵",Talabat:"🍔",Noon:"🟡",Careem:"🚗",Keeta:"🛍️",Smiles:"😊",Instashop:"🛒","Google Maps":"📍"};
+function logoImg(name,size=26){
+  let src=typeof LOGOS!=="undefined"?(LOGOS[name]||""):"";
+  if(!src&&LOGO_FALLBACK[name])src=LOGO_FALLBACK[name];
+  if(src){
+    const emoji=LOGO_EMOJI[name]||"";
+    const onerr=emoji?`onerror="this.outerHTML='<span style=\\'font-size:${Math.round(size*0.7)}px;line-height:${size}px\\'>${emoji}</span>'"`:`onerror="this.style.display='none'"`;
+    return`<img src="${src}" ${onerr} style="width:${size}px;height:${size}px;border-radius:5px;object-fit:contain;background:#fff;padding:1px;flex-shrink:0">`;
+  }
+  // No src at all → emoji badge
+  const emoji=LOGO_EMOJI[name]||"📊";
+  return`<span style="display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:5px;background:#1b2f4a;font-size:${Math.round(size*0.6)}px;flex-shrink:0">${emoji}</span>`;
+}
 
 // ── SORTABLE TABLE ──
 // rows: array of {cells:[html...], sortVals:[raw values for sorting...]}
@@ -788,7 +805,7 @@ function kpiStaleness(lastEntryDate){
 
 function parseKPISheet(csv,outlet){
   const rows=parseCSV(csv);
-  if(rows.length<3)return null;
+  if(rows.length<2)return null;
   const blocks=[];
   let currentBrand=null,currentBlock=null,dateCols=[];
   const allowedBrands=OUTLET_BRAND_WHITELIST[outlet]||null;
@@ -818,7 +835,10 @@ function parseKPISheet(csv,outlet){
         if(!blockBrand){currentBlock=null;continue;} // no brand → skip (prevents "null" entries)
         dateCols=[];
         for(let cc=2;cc<r.length;cc++){const d=parseDate(r[cc]);if(d&&d.getFullYear()===2026)dateCols.push({col:cc,date:dk(d)});}
-        currentBlock={brand:blockBrand,aggregator:plat,kpis:{}};
+        // "Dine in" / Google Maps blocks have the value in col 1 (no date columns) — flag so the
+        // KPI rows below read col 1 as the current value instead of treating it as a target.
+        const isDineIn=plat==="Google Maps";
+        currentBlock={brand:blockBrand,aggregator:plat,kpis:{},singleCol:isDineIn};
         blocks.push(currentBlock);
         continue;
       }
@@ -829,15 +849,28 @@ function parseKPISheet(csv,outlet){
     if(currentBlock&&c0&&!c0IsBlock){
       const kpiName=c0,target=c1;
       const entries={};let lastEntry=null;const dailyValues=[];
-      dateCols.forEach(({col,date})=>{
-        const raw=r[col];if(raw==null)return;const strVal=String(raw).trim();if(strVal==="")return;
-        entries[date]=strVal;
+      if(currentBlock.singleCol){
+        // Google Maps / "Dine in" block: the value sits in column 1 (no date columns).
+        // Treat it as the current reading dated to the most recent sales date (or today).
+        const strVal=String(c1||"").trim();
         const numVal=parseFloat(strVal.replace(/[,%\s]/g,""));
-        if(!isNaN(numVal)&&numVal>0){dailyValues.push({date,num:numVal,raw:strVal});if(!lastEntry||date>lastEntry)lastEntry=date;}
-        else if(isNaN(numVal)&&strVal){if(!lastEntry||date>lastEntry)lastEntry=date;}
-      });
-      dailyValues.sort((a,b)=>a.date.localeCompare(b.date));
-      currentBlock.kpis[kpiName]={entries,lastEntry,target,dailyValues};
+        const today=(typeof latest!=="undefined"&&latest)?latest:dk(new Date());
+        if(!isNaN(numVal)&&numVal>0){
+          entries[today]=strVal;dailyValues.push({date:today,num:numVal,raw:strVal});lastEntry=today;
+        }
+        // target for Google rating is implicit (default 4.7 in evaluator); store blank
+        currentBlock.kpis[kpiName]={entries,lastEntry,target:"",dailyValues};
+      } else {
+        dateCols.forEach(({col,date})=>{
+          const raw=r[col];if(raw==null)return;const strVal=String(raw).trim();if(strVal==="")return;
+          entries[date]=strVal;
+          const numVal=parseFloat(strVal.replace(/[,%\s]/g,""));
+          if(!isNaN(numVal)&&numVal>0){dailyValues.push({date,num:numVal,raw:strVal});if(!lastEntry||date>lastEntry)lastEntry=date;}
+          else if(isNaN(numVal)&&strVal){if(!lastEntry||date>lastEntry)lastEntry=date;}
+        });
+        dailyValues.sort((a,b)=>a.date.localeCompare(b.date));
+        currentBlock.kpis[kpiName]={entries,lastEntry,target,dailyValues};
+      }
     }
   }
   return{outlet,blocks};
