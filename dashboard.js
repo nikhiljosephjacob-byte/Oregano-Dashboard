@@ -161,11 +161,12 @@ function kpiCard(label,value,sub,chg,onclick){const hasChg=typeof chg==="number"
 // Built-in fallback logos (data URIs / emoji) used when index.html's LOGOS lacks an entry
 // or the image fails to load. Keeps Google Maps etc. always visible.
 const LOGO_FALLBACK={
-  "Google Maps":"data:image/svg+xml;utf8,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="%23EA4335" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5" fill="%23fff"/></svg>'),
+  "Google Maps":"data:image/png;base64,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"
 };
 const LOGO_EMOJI={Deliveroo:"🛵",Talabat:"🍔",Noon:"🟡",Careem:"🚗",Keeta:"🛍️",Smiles:"😊",Instashop:"🛒","Google Maps":"📍"};
 function logoImg(name,size=26){
-  let src=typeof LOGOS!=="undefined"?(LOGOS[name]||""):"";
+  // For Google Maps prefer the built-in logo (index.html's entry may be missing/broken)
+  let src=LOGO_FALLBACK[name]||(typeof LOGOS!=="undefined"?(LOGOS[name]||""):"");
   if(!src&&LOGO_FALLBACK[name])src=LOGO_FALLBACK[name];
   if(src){
     const emoji=LOGO_EMOJI[name]||"";
@@ -873,6 +874,43 @@ function parseKPISheet(csv,outlet){
       }
     }
   }
+
+  // ── BULLETPROOF GOOGLE-RATING PASS ──
+  // The "Dine in" / Google rating sits at the bottom of each sheet with the value in col 1
+  // and the owning brand somewhere on the same row or in a nearby header. The structured pass
+  // above can miss it if the layout differs, so we do a direct scan here as a guarantee.
+  const today=(typeof latest!=="undefined"&&latest)?latest:dk(new Date());
+  const hasGoogleAlready=blocks.some(b=>b.aggregator==="Google Maps"&&Object.keys(b.kpis).some(k=>k.toLowerCase().includes("rating")&&b.kpis[k].dailyValues&&b.kpis[k].dailyValues.length));
+  if(!hasGoogleAlready){
+    let dineBrand=null; // brand owning the dine-in / google section
+    for(let i=0;i<rows.length;i++){
+      const r=rows[i];
+      const cells=r.map(x=>(x||"").trim());
+      // Track the most recent brand seen anywhere on the row (header cells like "Oregano")
+      for(const cell of cells){const nb=normBrand(cell);if(KPI_BRANDS.includes(nb)){dineBrand=nb;}}
+      // Is this a "Rating in Google" row?
+      const labelIdx=cells.findIndex(c=>/rating\s*in\s*google|google\s*rating/i.test(c));
+      if(labelIdx>=0){
+        // Find the rating value: first numeric cell after the label that looks like a rating (1–5)
+        let val=null;
+        for(let cc=labelIdx+1;cc<cells.length;cc++){
+          const n=parseFloat((cells[cc]||"").replace(/[^\d.]/g,""));
+          if(!isNaN(n)&&n>=1&&n<=5){val=n;break;}
+        }
+        // Brand: prefer one on THIS row, else the most recent dineBrand seen, else first allowed
+        let rowBrand=null;
+        for(const cell of cells){const nb=normBrand(cell);if(KPI_BRANDS.includes(nb)){rowBrand=nb;break;}}
+        const brand=rowBrand||dineBrand;
+        if(val!=null&&brand&&(!allowedBrands||allowedBrands.includes(brand))){
+          // Find or create the Google Maps block for this brand
+          let gb=blocks.find(b=>b.aggregator==="Google Maps"&&b.brand===brand);
+          if(!gb){gb={brand,aggregator:"Google Maps",kpis:{},singleCol:true};blocks.push(gb);}
+          gb.kpis["Rating in Google"]={entries:{[today]:String(val)},lastEntry:today,target:"",dailyValues:[{date:today,num:val,raw:String(val)}]};
+        }
+      }
+    }
+  }
+
   return{outlet,blocks};
 }
 
@@ -1038,25 +1076,24 @@ function renderKPILaggingPanel(){
   </div>`;
 }
 
-// LEVEL 2: Talabat → 5 brand tiles
+// LEVEL 2: platform → brand tiles (only brands that have KPIs on this platform)
 function renderKPIPlatformView(){
   const pg=document.getElementById("page-kpi");
   const p=kpiSelectedPlatform,clr=AC[p]||"#888";
   const rows=buildKPIEvalRows().filter(r=>r.aggregator===p);
-  // Build a tile per brand (in canonical order), even if a brand has 0 KPIs on this platform
-  const tiles=BR.map(b=>{
+  // Only brands present for this platform, in canonical order (e.g. Google Maps won't list Lollorosso)
+  const brandsPresent=BR.filter(b=>rows.some(r=>r.brand===b.n));
+  const tiles=brandsPresent.map(b=>{
     const rs=rows.filter(r=>r.brand===b.n);
     const bad=rs.filter(r=>r.isBad).length;
     const metricCount=new Set(rs.map(r=>r.kpiName)).size;
     const outletCount=new Set(rs.map(r=>r.outlet)).size;
-    const dim=rs.length===0;
-    return `<div ${dim?'':`onclick="selectKPIBrand('${b.n}')"`} style="background:#0d1524;border:1px solid ${bad>0?'#EF444455':'#1b2f4a'};border-radius:10px;padding:14px;cursor:${dim?'default':'pointer'};opacity:${dim?'.45':'1'}" ${dim?'':`onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${bad>0?'#EF444455':'#1b2f4a'}'"`}>
+    return `<div onclick="selectKPIBrand('${b.n}')" style="background:#0d1524;border:1px solid ${bad>0?'#EF444455':'#1b2f4a'};border-radius:10px;padding:14px;cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${bad>0?'#EF444455':'#1b2f4a'}'">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">${logoImg(b.n,28)}<span style="font-size:13px;font-weight:800;color:${b.c}">${b.n}</span></div>
       <div style="display:flex;justify-content:space-between;align-items:baseline">
         <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">KPIs · Outlets</div><div style="font-size:18px;font-weight:800">${metricCount} · ${outletCount}</div></div>
         <div style="text-align:right"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Off target</div><div style="font-size:18px;font-weight:800;color:${bad>0?'#EF4444':'#22C55E'}">${bad}</div></div>
       </div>
-      ${dim?'<div style="font-size:10px;color:#64748b;margin-top:8px">No KPIs tracked here</div>':''}
     </div>`;
   }).join("");
   pg.innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
@@ -1064,7 +1101,7 @@ function renderKPIPlatformView(){
       <div style="display:flex;align-items:center;gap:8px">${logoImg(p,28)}<span style="font-size:18px;font-weight:800;color:${clr}">${p}</span></div>
       <span style="font-size:11px;color:#64748b">select a brand</span>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">${tiles}</div>`;
+    ${tiles?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">${tiles}</div>`:`<div class="card"><div style="color:#64748b;font-size:12px">No KPIs tracked for ${p} yet.</div></div>`}`;
 }
 
 // LEVEL 3: Talabat → Oregano → KPI metric tiles
