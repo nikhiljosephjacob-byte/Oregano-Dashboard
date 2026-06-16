@@ -126,8 +126,14 @@ function fSetPreset(p){fPreset=p;if(p==="yesterday"){fStart=fEnd=latest;}else if
 function fApply(){const s=document.getElementById("f-s"),e=document.getElementById("f-e");if(s&&e){fStart=s.value;fEnd=e.value;}fPreset="custom";Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
 function fToggle(type,val){const sets={brand:fBrands,platform:fPlatforms,branch:fBranches};const s=sets[type];if(s.has(val))s.delete(val);else s.add(val);Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
 function fClear(){fBrands.clear();fPlatforms.clear();fBranches.clear();Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
-function toggleDD(id){const el=document.getElementById(id);if(!el)return;const was=el.classList.contains("open");document.querySelectorAll(".dd-menu").forEach(d=>d.classList.remove("open"));if(!was)el.classList.add("open");}
-document.addEventListener("click",e=>{if(!e.target.closest(".dd-wrap"))document.querySelectorAll(".dd-menu").forEach(d=>d.classList.remove("open"));});
+function toggleDD(id){
+  const el=document.getElementById(id);if(!el)return;
+  const wasOpen=el.getAttribute("data-open")==="1";
+  // Close all dropdown menus first
+  document.querySelectorAll(".dd-menu").forEach(d=>{d.classList.remove("open");d.style.display="none";d.setAttribute("data-open","0");});
+  if(!wasOpen){el.classList.add("open");el.style.display="block";el.setAttribute("data-open","1");}
+}
+document.addEventListener("click",e=>{if(!e.target.closest(".dd-wrap"))document.querySelectorAll(".dd-menu").forEach(d=>{d.classList.remove("open");d.style.display="none";d.setAttribute("data-open","0");});});
 
 function makeFilterBar(opts){
   const{hideBrand=false,hidePlatform=false,hideOutlet=false}=opts||{};
@@ -148,8 +154,9 @@ function makeFilterBar(opts){
 }
 function ddHTML(id,label,activeSet,items,type){
   const count=activeSet.size,isOn=count>0;
-  const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi"><input type="checkbox" ${activeSet.has(val)?"checked":""} onchange="fToggle('${type}','${val.replace(/'/g,"\\'")}')"><span style="color:${clr}">${lbl}</span></label>`).join("");
-  return`<div class="dd-wrap"><button class="fpill ${isOn?"on":""}" onclick="event.stopPropagation();toggleDD('${id}')">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}">${itemsH}</div></div>`;
+  const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#16273f'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} onchange="fToggle('${type}','${String(val).replace(/'/g,"\\'")}')"><span style="color:${clr}">${lbl}</span></label>`).join("");
+  const menuStyle="display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:#0b1220;border:1px solid #1b2f4a;border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:160px;box-shadow:0 12px 30px rgba(0,0,0,.5)";
+  return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" onclick="event.stopPropagation();toggleDD('${id}')">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;
 }
 
 // ANALYTICS
@@ -630,7 +637,7 @@ function sortCampaigns(camps){
     return dir*((va||0)-(vb||0));
   });
 }
-function ddHTMLCamp(id,label,activeSet,items,type){const count=activeSet.size,isOn=count>0;const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi"><input type="checkbox" ${activeSet.has(val)?"checked":""} onchange="campToggleFilter('${type}','${val}')"><span style="color:${clr}">${lbl}</span></label>`).join("");return`<div class="dd-wrap"><button class="fpill ${isOn?"on":""}" onclick="event.stopPropagation();toggleDD('${id}')">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}">${itemsH}</div></div>`;}
+function ddHTMLCamp(id,label,activeSet,items,type){const count=activeSet.size,isOn=count>0;const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#16273f'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} onchange="campToggleFilter('${type}','${String(val).replace(/'/g,"\\'")}')"><span style="color:${clr}">${lbl}</span></label>`).join("");const menuStyle="display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:#0b1220;border:1px solid #1b2f4a;border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:160px;box-shadow:0 12px 30px rgba(0,0,0,.5)";return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" onclick="event.stopPropagation();toggleDD('${id}')">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;}
 function campFilterBar(){
   const brands=[...new Set(campaignData.map(c=>c.brand))].sort();
   const platforms=[...new Set(campaignData.map(c=>c.aggregator))].sort();
@@ -785,11 +792,11 @@ async function renderCampaigns(){
 // ── KPI TRACKER ──────────────────────────────────────────────────
 const KPI_SHEET_ID="1xCrtvlJ9Ho1kUFV4vWdYfmIP15cNq5LH0yo-MnfjOik";
 const KPI_PUB="https://docs.google.com/spreadsheets/d/e/2PACX-1vSnRTQ072D1AwtKTYksLkavZDVCL65ltXyOHrWP0dvXbLwPk3lODmxWatDtm1Syj5D05W7boL4bDRoo/pub";
-const KPI_OUTLETS=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Villa","Jumeirah","Reem Island","WTC","Furjan","Al Quoz","TSQR","Al Forsan","NAS","Al Reef","FYOO DIP"];
+const KPI_OUTLETS=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Villa","Jumeirah","Reem Island","WTC","Furjan","Al Quoz","TSQR","Al Forsan","NAS","Al Reef","FYOOZHEN-DIP"];
 // Some KPI sheet TABS are named differently from the outlet name used in sales data.
 // Normalise the tab name to the canonical outlet name so they aren't shown as duplicates.
 // e.g. the "TSQR" tab IS the Town Square branch.
-const KPI_OUTLET_NAME={"TSQR":"Town Square","Motor City":"Motorcity","Mirdif":"Mirdiff","DMC":"Media City","Dubai Media City":"Media City","FYOO DIP":"Fyoozhen DIP","FYOO-DIP":"Fyoozhen DIP","Fyoo DIP":"Fyoozhen DIP"};
+const KPI_OUTLET_NAME={"TSQR":"Town Square","Motor City":"Motorcity","Mirdif":"Mirdiff","DMC":"Media City","Dubai Media City":"Media City","FYOO DIP":"Fyoozhen DIP","FYOO-DIP":"Fyoozhen DIP","Fyoo DIP":"Fyoozhen DIP","FYOOZHEN-DIP":"Fyoozhen DIP","FYOOZHEN DIP":"Fyoozhen DIP","Fyoozhen-DIP":"Fyoozhen DIP"};
 function kpiOutletName(tab){return KPI_OUTLET_NAME[tab]||tab;}
 const KPI_BRANDS=["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"];
 // Expected number of listings (outlets) per brand on the "big 3" aggregators (Talabat, Deliveroo, Careem).
@@ -1473,8 +1480,9 @@ function cmpPanel(side){
   const dd=(type,label,activeSet,items)=>{
     const id=`cmp-${side}-${type}`;
     const count=activeSet.size,isOn=count>0;
-    const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi"><input type="checkbox" ${activeSet.has(val)?"checked":""} onchange="cmpToggle('${side}','${type}','${String(val).replace(/'/g,"\\'")}')"><span style="color:${clr}">${lbl}</span></label>`).join("");
-    return`<div class="dd-wrap"><button class="fpill ${isOn?"on":""}" onclick="event.stopPropagation();toggleDD('${id}')">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}">${itemsH}</div></div>`;
+    const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#16273f'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} onchange="cmpToggle('${side}','${type}','${String(val).replace(/'/g,"\\'")}')"><span style="color:${clr}">${lbl}</span></label>`).join("");
+    const menuStyle="display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:#0b1220;border:1px solid #1b2f4a;border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:160px;box-shadow:0 12px 30px rgba(0,0,0,.5)";
+    return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" onclick="event.stopPropagation();toggleDD('${id}')">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;
   };
   const presets=[["yesterday","Latest day"],["7d","7d"],["30d","30d"],["month","This month"]];
   const presetsH=presets.map(([k,l])=>`<button class="preset ${cfg.preset===k?"act":""}" onclick="cmpPreset('${side}','${k}')">${l}</button>`).join("");
@@ -1498,10 +1506,26 @@ function cmpPanel(side){
   </div>`;
 }
 
-function cmpStatCard(label,a,b,fmt,unit){
+function cmpStatCard(label,a,b,fmt,unit,perDay){
   const diff=pctOf(a,b);
   const dc=pctClr(diff);
   const fa=fmt(a),fb=fmt(b);
+  // Optional per-day averages line (shown when the windows span more than one day)
+  let perDayLine="";
+  if(perDay&&(perDay.nA>1||perDay.nB>1)){
+    const avgA=a/perDay.nA,avgB=b/perDay.nB;
+    const avgDiff=pctOf(avgA,avgB);
+    perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #1b2f4a">
+      <div style="font-size:8px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
+      <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
+        <span style="font-size:14px;font-weight:800;color:#60A5FA;font-variant-numeric:tabular-nums">${fmt(avgA)}</span>
+        <span style="font-size:9px;color:#64748b">vs</span>
+        <span style="font-size:14px;font-weight:800;color:#F59E0B;font-variant-numeric:tabular-nums">${fmt(avgB)}</span>
+        <span style="font-size:10px;color:${pctClr(avgDiff)};font-weight:700">${fmtPct(avgDiff)}</span>
+      </div>
+      <div style="font-size:8px;color:#64748b;margin-top:2px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
+    </div>`;
+  }
   return `<div class="sm">
     <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}</div>
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
@@ -1510,6 +1534,7 @@ function cmpStatCard(label,a,b,fmt,unit){
       <span style="font-size:20px;font-weight:800;color:#F59E0B;font-variant-numeric:tabular-nums">${fb}</span>
     </div>
     <div style="font-size:12px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:#64748b;font-weight:400">A vs B</span></div>
+    ${perDayLine}
   </div>`;
 }
 
@@ -1598,8 +1623,8 @@ function renderCompare(){
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">${cmpPanel("A")}${cmpPanel("B")}</div>
 
     <div class="g4">
-      ${cmpStatCard("Orders",sA.orders,sB.orders,v=>v.toLocaleString())}
-      ${cmpStatCard("Net Sales",sA.sales,sB.sales,v=>fmtAED(v))}
+      ${cmpStatCard("Orders",sA.orders,sB.orders,v=>Math.round(v).toLocaleString(),"",{nA,nB})}
+      ${cmpStatCard("Net Sales",sA.sales,sB.sales,v=>fmtAED(v),"",{nA,nB})}
       ${cmpStatCard("AOV",aovA,aovB,v=>"AED "+v.toFixed(1))}
       ${cmpOutletCard(dA,dB)}
     </div>
