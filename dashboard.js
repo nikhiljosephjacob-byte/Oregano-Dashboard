@@ -132,6 +132,16 @@ function toggleDD(id){
   document.querySelectorAll(".dd-menu").forEach(d=>{d.classList.remove("open");d.style.display="none";d.setAttribute("data-open","0");});
   if(!wasOpen){el.classList.add("open");el.style.display="block";el.setAttribute("data-open","1");}
 }
+// Toggle the dropdown menu that belongs to a specific button (its sibling inside .dd-wrap).
+// This avoids getElementById, which breaks when the same dropdown id exists on multiple
+// (hidden + visible) pages — getElementById would return the first/hidden one.
+function toggleDDFromButton(btn){
+  const wrap=btn.closest(".dd-wrap");if(!wrap)return;
+  const menu=wrap.querySelector(".dd-menu");if(!menu)return;
+  const wasOpen=menu.getAttribute("data-open")==="1";
+  document.querySelectorAll(".dd-menu").forEach(d=>{d.classList.remove("open");d.style.display="none";d.setAttribute("data-open","0");});
+  if(!wasOpen){menu.classList.add("open");menu.style.display="block";menu.setAttribute("data-open","1");}
+}
 
 // ── EVENT DELEGATION ──
 // All filter controls use data-* attributes and are handled by ONE delegated listener
@@ -146,7 +156,7 @@ function handleDelegatedClick(e){
   }
   const act=t.getAttribute("data-act");
   const v1=t.getAttribute("data-v1"),v2=t.getAttribute("data-v2");
-  if(act==="dd"){e.stopPropagation();toggleDD(v1);return;}
+  if(act==="dd"){e.stopPropagation();toggleDDFromButton(t);return;}
   if(act==="preset"){fSetPreset(v1);return;}
   if(act==="apply"){fApply();return;}
   if(act==="clear"){fClear();return;}
@@ -687,7 +697,7 @@ function sortCampaigns(camps){
     return dir*((va||0)-(vb||0));
   });
 }
-function ddHTMLCamp(id,label,activeSet,items,type){const count=activeSet.size,isOn=count>0;const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#16273f'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} onchange="campToggleFilter('${type}','${String(val).replace(/'/g,"\\'")}')"><span style="color:${clr}">${lbl}</span></label>`).join("");const menuStyle="display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:#0b1220;border:1px solid #1b2f4a;border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:160px;box-shadow:0 12px 30px rgba(0,0,0,.5)";return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" onclick="event.stopPropagation();toggleDD('${id}')">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;}
+function ddHTMLCamp(id,label,activeSet,items,type){const count=activeSet.size,isOn=count>0;const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#16273f'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="campToggle" data-v1="${type}" data-v2="${esc(val)}"><span style="color:${clr}">${lbl}</span></label>`).join("");const menuStyle="display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:#0b1220;border:1px solid #1b2f4a;border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:160px;box-shadow:0 12px 30px rgba(0,0,0,.5)";return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" data-act="dd" data-v1="${id}">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;}
 function campFilterBar(){
   const brands=[...new Set(campaignData.map(c=>c.brand))].sort();
   const platforms=[...new Set(campaignData.map(c=>c.aggregator))].sort();
