@@ -53,28 +53,39 @@ function parseBrand(csv,brand){
   const rows=parseCSV(csv);
   let ai=-1;for(let i=0;i<Math.min(rows.length,15);i++){if(rows[i].some(v=>AS_LC.has(v.toLowerCase()))){ai=i;break;}}
   if(ai<0)return[];
-  const ar=rows[ai],sr=rows[ai+1]||[];let cur="";
-  // Carry each aggregator label rightward across ITS Sales/Disc/Orders columns only.
-  // Switch when a new known aggregator label appears. Reset to blank only when BOTH the
-  // header cell and the sub-header cell are empty (a true gap between aggregator tables),
-  // so the aggregator still covers its Disc/Orders columns even when their header cell is blank.
-  const pa=ar.map((v,i)=>{
-    const tl=v.trim().toLowerCase();
-    if(AS_LC.has(tl)){cur=AS_LC.get(tl);return cur;}
-    const sub=(sr[i]||"").trim();
-    const hdr=v.trim();
-    if(!hdr&&!sub)cur=""; // genuine empty gap → stop carrying
-    return cur;
+  const ar=rows[ai],sr=rows[ai+1]||[];
+  // Metric detector for the sub-header row (case/space tolerant).
+  const metricAt=(i)=>{const raw=(sr[i]||"").trim().toLowerCase();if(raw==="sales"||raw==="net sales"||raw==="gmv")return"Sales";if(raw==="orders"||raw==="order"||raw==="no. of orders"||raw==="no of orders")return"Orders";if(raw==="disc"||raw==="disc."||raw==="discount"||raw==="discounts"||raw==="discount given"||raw==="total discount"||raw==="total disc")return"Disc";if(raw==="aov")return"AOV";return null;};
+  // Aggregator name positions in the header row, in order.
+  const aggPositions=[];
+  ar.forEach((v,i)=>{const tl=v.trim().toLowerCase();if(AS_LC.has(tl))aggPositions.push({agg:AS_LC.get(tl),col:i});});
+  // Build the ordered list of metric columns (Disc/Sales/Orders/AOV) across the row.
+  const metricCols=[];for(let i=0;i<Math.max(ar.length,sr.length);i++){const m=metricAt(i);if(m)metricCols.push({i,m});}
+  // Group metric columns into per-aggregator BLOCKS. Each block starts at a "Disc" or "Sales"
+  // column and runs until the next block starts. We then pair blocks to aggregator names by
+  // order (block N → aggregator N), which is layout-independent (handles Disc-before-Sales).
+  const blocks=[];let curBlock=null;
+  metricCols.forEach(mc=>{
+    // A new block begins at the first column whose metric repeats (Disc or Sales seen again).
+    if(curBlock&&(curBlock.metrics[mc.m]!==undefined)){blocks.push(curBlock);curBlock=null;}
+    if(!curBlock)curBlock={cols:[],metrics:{}};
+    curBlock.cols.push(mc);curBlock.metrics[mc.m]=mc.i;
   });
-  const cols=pa.reduce((a,agg,i)=>{
-    const raw=(sr[i]||"").trim().toLowerCase();
-    let m=null;
-    if(raw==="sales"||raw==="net sales"||raw==="gmv")m="Sales";
-    else if(raw==="orders"||raw==="order"||raw==="no. of orders"||raw==="no of orders")m="Orders";
-    else if(raw==="disc"||raw==="disc."||raw==="discount"||raw==="discounts"||raw==="discount given"||raw==="total discount"||raw==="total disc")m="Disc";
-    if(agg&&m)a.push({i,agg,m});
-    return a;
-  },[]);
+  if(curBlock)blocks.push(curBlock);
+  // Map each block to its aggregator by matching nearest aggregator-name column.
+  const cols=[];
+  blocks.forEach(bl=>{
+    const span=bl.cols.map(c=>c.i);const lo=Math.min(...span),hi=Math.max(...span);
+    // Choose the aggregator whose name column is within or adjacent to this block's span.
+    let best=null,bestDist=Infinity;
+    aggPositions.forEach(ap=>{
+      let dist;
+      if(ap.col>=lo&&ap.col<=hi)dist=0;
+      else dist=Math.min(Math.abs(ap.col-lo),Math.abs(ap.col-hi));
+      if(dist<bestDist){bestDist=dist;best=ap;}
+    });
+    if(best&&bestDist<=4){bl.cols.forEach(c=>{if(c.m!=="AOV")cols.push({i:c.i,agg:best.agg,m:c.m});});}
+  });
   // One-time per-brand log of which columns were detected, so a missing Disc column is visible.
   try{
     const discCols=cols.filter(c=>c.m==="Disc");
@@ -87,15 +98,35 @@ function parseBrand(csv,brand){
     }
   }catch(e){}
   const recs=[];
+  // Discount is a BRAND-level total per aggregator per day (not per branch). It may appear
+  // repeated on each branch row, only on one row, or on a summary row with no sales. So we
+  // capture it separately per brand|aggregator|date, taking the single representative value
+  // (the max non-zero seen for that day) rather than summing across branch rows.
+  const discMap={}; // `${agg}|${date}` -> discount AED for this brand
+  for(let i=ai+2;i<rows.length;i++){
+    const row=rows[i];const date=parseDate(row[1]);if(!date)continue;const key=dk(date);
+    cols.forEach(({i:idx,agg,m})=>{if(m!=="Disc")return;const v=toN(row[idx]);if(v>0){const dk2=`${agg}|${key}`;discMap[dk2]=Math.max(discMap[dk2]||0,v);}});
+  }
   for(let i=ai+2;i<rows.length;i++){
     const row=rows[i];let br=normB(row[0]?.trim()||"");
     if(!br||SKIP_BR.has(br.toLowerCase().trim()))continue;
     if(brand==='Fyoozhen'&&br==='DIP')br='DIP (Fyoozhen)';
     const date=parseDate(row[1]);if(!date)continue;const key=dk(date);
     const branchFinal=(brand==='Fyoozhen'&&br==='DIP')?'Fyoozhen DIP':br;
-    const am={};cols.forEach(({i:idx,agg,m})=>{if(!am[agg])am[agg]={Sales:0,Orders:0,Disc:0};am[agg][m]=toN(row[idx]);});
-    Object.entries(am).forEach(([agg,d])=>{if(d.Sales>0||d.Orders>0)recs.push({brand,branch:branchFinal,date:key,aggregator:agg,sales:d.Sales,orders:d.Orders,disc:d.Disc||0,aov:d.Orders>0?d.Sales/d.Orders:0});});
-  }return recs;
+    const am={};cols.forEach(({i:idx,agg,m})=>{if(m==="Disc")return;if(!am[agg])am[agg]={Sales:0,Orders:0};am[agg][m]=toN(row[idx]);});
+    Object.entries(am).forEach(([agg,d])=>{if(d.Sales>0||d.Orders>0)recs.push({brand,branch:branchFinal,date:key,aggregator:agg,sales:d.Sales,orders:d.Orders,disc:0,aov:d.Orders>0?d.Sales/d.Orders:0});});
+  }
+  // Attach the brand-level discount to ONE record per brand/aggregator/date (so summing across
+  // branches gives the true brand-level discount, not a per-branch multiple). Remaining branch
+  // records for that day keep disc:0.
+  const discAttached={};
+  recs.forEach(r=>{const dk2=`${r.aggregator}|${r.date}`;if(discMap[dk2]&&!discAttached[dk2]){r.disc=discMap[dk2];discAttached[dk2]=true;}});
+  // If a discount exists for a day but NO sales record matched (e.g. discount on a summary row
+  // and sales recorded under a branch we already used), it's still attached above. If there was
+  // literally no sales record for that agg/day, surface a synthetic disc-only record so the
+  // campaign discount total stays accurate.
+  Object.keys(discMap).forEach(dk2=>{if(!discAttached[dk2]){const [agg,date]=dk2.split("|");recs.push({brand,branch:"(brand-level)",date,aggregator:agg,sales:0,orders:0,disc:discMap[dk2],aov:0});discAttached[dk2]=true;}});
+  return recs;
 }
 
 // FETCHING
@@ -246,7 +277,7 @@ function makeFilterBar(opts){
   const presets=[["yesterday","Yesterday"],["7d","Last 7 Days"],["30d","Last 30 Days"],["month","This Month"],["lmonth","Last Month"],["custom","Custom"]];
   const pH=presets.map(([k,l])=>`<button class="preset ${f.preset===k?"act":""}" data-act="preset" data-v1="${k}">${l}</button>`).join("");
   const custH=f.preset==="custom"?`<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap"><input type="date" id="f-s" value="${f.start||""}" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px"><span style="color:#64748b">→</span><input type="date" id="f-e" value="${f.end||""}" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px"><button data-act="apply" style="background:#f59e0b;border:none;border-radius:5px;color:#000;font-weight:700;padding:4px 12px;font-size:11px;cursor:pointer">Apply</button></div>`:"";
-  const allBr=[...new Set(allData.map(r=>r.branch))].sort();
+  const allBr=[...new Set(allData.map(r=>r.branch))].filter(b=>b!=="(brand-level)").sort();
   const brDD=hideBrand?"":ddHTML("fdd-br","Brand",f.brands,BR.map(b=>({val:b.n,lbl:b.n,clr:b.c})),"brand");
   const plDD=hidePlatform?"":ddHTML("fdd-pl","Platform",f.platforms,AGGS.map(a=>({val:a,lbl:a,clr:AC[a]||"#888"})),"platform");
   const ouDD=hideOutlet?"":ddHTML("fdd-ou","Outlet",f.branches,allBr.map(b=>({val:b,lbl:b+(AUH.has(b)?" (AUH)":""),clr:"#94a3b8"})),"branch");
@@ -1739,7 +1770,7 @@ function cmpSetMetric(m){cmpMetric=m;renderCompare();}
 function cmpPanel(side){
   const cfg=side==="A"?cmpA:cmpB;
   const accent=side==="A"?"#60A5FA":"#F59E0B";
-  const allBr=[...new Set(allData.map(r=>r.branch))].sort();
+  const allBr=[...new Set(allData.map(r=>r.branch))].filter(b=>b!=="(brand-level)").sort();
   const dd=(type,label,activeSet,items)=>{
     const id=`cmp-${side}-${type}`;
     const count=activeSet.size,isOn=count>0;
