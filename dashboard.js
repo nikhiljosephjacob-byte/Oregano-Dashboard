@@ -684,7 +684,8 @@ function campImpactExtended(c){
   const momOrdersLift=pctOf(cs.orders/cDays,ms.orders/mDays),momSalesLift=pctOf(cs.sales/cDays,ms.sales/mDays);
   const m=(c.comments||'').match(/(\d{1,2})\s*%/);const discountRate=m?parseInt(m[1])/100:0;
   const commData=COMM[c.aggregator]?.[c.brand]||COMM[c.aggregator]?.DEFAULT;
-  const commRate=commData?(commData.commission||0)+(commData.pg||0)+(commData.cpc||0)+(commData.processingFee||0)+(commData.cancellation||0):0.30;
+  // CPC is advertising spend, not a per-order commission, so it is excluded from the contribution margin.
+  const commRate=commData?(commData.commission||0)+(commData.pg||0)+(commData.processingFee||0)+(commData.cancellation||0):0.30;
   const baseCMRate=1-commRate,campCMRate=1-commRate-discountRate;
   const baseDailyContribution=(base.baseSales/Math.max(1,Math.round((new Date(base.baseEnd)-new Date(base.baseStart))/86400000)+1))*baseCMRate;
   const campDailyContribution=(cs.sales/cDays)*campCMRate;
@@ -831,7 +832,8 @@ function campAnalysis(c){
   const discPerDay=campDisc/cDays;
   const discPctOfSales=cs.sales>0?(campDisc/cs.sales)*100:null;
   const commData=COMM[c.aggregator]?.[c.brand]||COMM[c.aggregator]?.DEFAULT;
-  const commRate=commData?((commData.commission||0)+(commData.pg||0)+(commData.cpc||0)+(commData.processingFee||0)+(commData.cancellation||0)):0.30;
+  // CPC is advertising spend, not a per-order commission, so it is excluded from the contribution margin.
+  const commRate=commData?((commData.commission||0)+(commData.pg||0)+(commData.processingFee||0)+(commData.cancellation||0)):0.30;
   const campContribution=cs.sales*(1-commRate)-campDisc;
   const baseContribution=bs.sales*(1-commRate)-(bs.disc||0);
   const campContribPerDay=campContribution/cDays, baseContribPerDay=baseContribution/bDays;
@@ -891,8 +893,16 @@ function campDetailHTML(c,idx){
     const roiClr=a.discountROI==null?'#64748b':a.discountROI>=1?'#22C55E':a.discountROI<0?'#EF4444':'#FBBF24';
     const profClr=a.profitabilityPct==null?'#64748b':pctClr(a.profitabilityPct);
     profitSection=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#f59e0b">💰 Profitability Analysis <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· real discount data + commission</span></div>
+      <div style="display:flex;align-items:stretch;gap:14px;flex-wrap:wrap;margin-bottom:14px;padding:12px 14px;background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.18);border-radius:8px">
+        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Total Discount Given</div><div style="font-size:22px;font-weight:800;color:#EF4444;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.campDisc)}</div></div>
+        <div style="width:1px;background:rgba(245,158,11,.2)"></div>
+        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Net Sales Generated</div><div style="font-size:22px;font-weight:800;color:#22C55E;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.cs.sales)}</div></div>
+        <div style="width:1px;background:rgba(245,158,11,.2)"></div>
+        <div style="flex:1;min-width:150px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Actual Discount Depth</div><div style="font-size:22px;font-weight:800;color:#FBBF24;font-variant-numeric:tabular-nums;line-height:1.2">${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'%':'—'}</div><div style="font-size:10px;color:#64748b;margin-top:2px">of net sales went back as discount</div></div>
+      </div>
+      ${(()=>{const m=(c.comments||'').match(/(\d{1,2})\s*%/);if(m&&a.discPctOfSales!=null){const headline=parseInt(m[1]);if(a.discPctOfSales<headline-3)return `<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(34,197,94,.06);border-left:3px solid #22C55E;border-radius:4px">ℹ️ The headline offer is <strong>${headline}% off</strong>, but because it only applies to selected items (not every order), the <strong>actual blended discount was just ${a.discPctOfSales.toFixed(1)}% of net sales</strong> — far less costly than ${headline}% on everything. This is the real figure used in the profitability math below.</div>`;}return '';})()}
       <div class="g4">
-        ${kpiCard('Discount Given',fmtAED(a.campDisc),`AED ${Math.round(a.discPerDay)}/day · ${a.discPctOfSales!=null?a.discPctOfSales.toFixed(0)+'% of sales':'—'}`,null)}
+        ${kpiCard('Discount Given',fmtAED(a.campDisc),`AED ${Math.round(a.discPerDay)}/day · ${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'% of sales':'—'}`,null)}
         ${kpiCard('Commission Rate',`${(a.commRate*100).toFixed(0)}%`,`${c.aggregator} · ${c.brand}`,null)}
         <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Daily Contribution</div><div style="font-size:21px;font-weight:800;color:${a.contribDiffPerDay>=0?'#22C55E':'#EF4444'};font-variant-numeric:tabular-nums;line-height:1">${a.contribDiffPerDay>=0?'+':''}${fmtAED(a.contribDiffPerDay)}</div><div style="font-size:11px;color:#64748b;margin-top:3px">vs baseline /day</div><div style="font-size:11px;color:${profClr};font-weight:700;margin-top:3px">${fmtPct(a.profitabilityPct)}</div></div>
         <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Discount ROI</div><div style="font-size:21px;font-weight:800;color:${roiClr};font-variant-numeric:tabular-nums;line-height:1">${a.discountROI==null?'—':(a.discountROI>=0?'+':'')+a.discountROI.toFixed(2)+'×'}</div><div style="font-size:11px;color:#64748b;margin-top:3px">contrib. per AED disc.</div></div>
