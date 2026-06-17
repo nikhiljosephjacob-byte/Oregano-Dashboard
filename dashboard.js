@@ -741,7 +741,25 @@ function campImpact(c){
   const cs=sumR(cR),bs=sumR(bR);
   return{campOrders:cs.orders,campSales:cs.sales,campAOV:cs.orders>0?cs.sales/cs.orders:0,baseOrders:bs.orders,baseSales:bs.sales,baseAOV:bs.orders>0?bs.sales/bs.orders:0,ordersLift:pctOf(cs.orders/cD,bs.orders/bD),salesLift:pctOf(cs.sales/cD,bs.sales/bD),aovChange:cs.orders>0&&bs.orders>0?pctOf(cs.sales/cs.orders,bs.sales/bs.orders):null,days,baseStart,baseEnd,hasData:cs.orders>0||cs.sales>0};
 }
-function selectCamp(idx){selCamp=campaignData[idx];campTab='detail';renderCampaigns();}
+function selectCamp(idx){selCamp=campaignData[idx];selBundle=null;campTab='detail';renderCampaigns();}
+let selBundle=null;
+// Decode "bundle:1,4,7" → list of campaign indices, look them up, build the bundle, select it.
+function selectBundleByKey(key){
+  const idxs=key.replace(/^bundle:/,'').split(',').map(n=>parseInt(n,10)).filter(n=>!isNaN(n));
+  const camps=idxs.map(i=>campaignData[i]).filter(Boolean);
+  if(!camps.length)return;
+  const start=camps.reduce((m,c)=>c.startDate<m?c.startDate:m,camps[0].startDate);
+  const end=camps.reduce((m,c)=>c.endDate>m?c.endDate:m,camps[0].endDate);
+  selBundle={
+    isBundle:true,brand:camps[0].brand,aggregator:camps[0].aggregator,
+    startDate:start,endDate:end,
+    outlet:camps.every(c=>c.outlet===camps[0].outlet)?camps[0].outlet:"Mixed",
+    campaigns:camps,
+    name:`🎯 ${camps[0].brand} ${camps[0].aggregator} Bundle (${camps.length} segments)`,
+    comments:camps.map(c=>c.name||c.comments||"").filter(Boolean).join(" + ")
+  };
+  selCamp=null;campTab='detail';renderCampaigns();
+}
 function fmtCampDate(key){if(!key)return"";const d=new Date(key+"T12:00:00");const dn=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'],mn=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];return `${dn[d.getDay()]} ${d.getDate()} ${mn[d.getMonth()]}`;}
 function fmtCampDateRange(s,e){if(s===e)return fmtCampDate(s);return `${fmtCampDate(s)} → ${fmtCampDate(e)}`;}
 function campImpactExtended(c){
@@ -870,13 +888,95 @@ function renderCampCalendar(){
   }
   return filterRow+calH+dayDetail;
 }
+// ── CAMPAIGN BUNDLING ──
+// Concurrent campaigns on the same brand + aggregator with overlapping dates aren't really
+// competing — they're a coordinated strategy targeting different customer segments (FTU /
+// Lapsed / Regular, etc.). Analyzing each separately is misleading because the sales lift
+// can't be attributed to any one of them, and the discount in the Disc column is the SUM
+// of all of them combined. This function groups such campaigns into "bundles" so they can
+// be analyzed together as a single coordinated effort.
+function buildCampBundles(camps){
+  // Group by brand|aggregator
+  const groups={};
+  camps.forEach(c=>{const k=`${c.brand}|${c.aggregator}`;(groups[k]=groups[k]||[]).push(c);});
+  const bundles=[],standalone=[];
+  Object.values(groups).forEach(arr=>{
+    if(arr.length<=1){standalone.push(...arr);return;}
+    // Find overlapping date clusters within this brand+aggregator group
+    const remaining=[...arr];
+    while(remaining.length){
+      const seed=remaining.shift();
+      const cluster=[seed];
+      let changed=true;
+      while(changed){
+        changed=false;
+        for(let i=remaining.length-1;i>=0;i--){
+          const c=remaining[i];
+          // overlaps cluster if its range intersects ANY member's range
+          if(cluster.some(m=>!(c.endDate<m.startDate||c.startDate>m.endDate))){
+            cluster.push(c);remaining.splice(i,1);changed=true;
+          }
+        }
+      }
+      if(cluster.length>1){
+        // Bundle: shared brand+platform, overlapping dates
+        const start=cluster.reduce((m,c)=>c.startDate<m?c.startDate:m,cluster[0].startDate);
+        const end=cluster.reduce((m,c)=>c.endDate>m?c.endDate:m,cluster[0].endDate);
+        bundles.push({
+          isBundle:true,
+          brand:seed.brand,
+          aggregator:seed.aggregator,
+          startDate:start,endDate:end,
+          outlet:cluster.every(c=>c.outlet===cluster[0].outlet)?cluster[0].outlet:"Mixed",
+          campaigns:cluster,
+          name:`🎯 ${seed.brand} ${seed.aggregator} Bundle (${cluster.length} segments)`,
+          comments:cluster.map(c=>c.name||c.comments||"").filter(Boolean).join(" + ")
+        });
+      }else standalone.push(seed);
+    }
+  });
+  return{bundles,standalone};
+}
+// Analyze a bundle as ONE combined effort. Uses real Disc totals (which are already the
+// combined discount across all campaigns in the bundle, since your sheet sums them).
+function bundleAnalysis(bundle){
+  // Treat the bundle as if it were a single campaign spanning the union date range.
+  const synthetic={brand:bundle.brand,aggregator:bundle.aggregator,startDate:bundle.startDate,endDate:bundle.endDate,outlet:bundle.outlet,comments:bundle.comments,name:bundle.name,addons:[]};
+  const a=campAnalysis(synthetic);
+  a.bundle=bundle;
+  a.isBundle=true;
+  return a;
+}
+
 function campTableHTML(title,camps,showImpact){
   if(!camps.length)return`<div class="card"><div class="ct">${title}</div><div style="color:#64748b;font-size:12px;padding:8px 0">No campaigns match your filters.</div></div>`;
-  const sorted=sortCampaigns(camps);const sc=campSort.col,sd=campSort.dir;
+  // Detect bundles BEFORE sorting/rendering. Bundles render as a single combined row.
+  const{bundles,standalone}=buildCampBundles(camps);
+  // For sorting/iteration we treat bundles as pseudo-campaigns (their fields satisfy sortCampaigns)
+  const sortable=[...bundles,...standalone];
+  const sorted=sortCampaigns(sortable);const sc=campSort.col,sd=campSort.dir;
   const sH=(col,label)=>`<th onclick="campSortBy('${col}')" style="cursor:pointer;${sc===col?'color:#f59e0b':''}">${label} ${sc===col?(sd>0?'▲':'▼'):'<span style="opacity:.3">↕</span>'}</th>`;
   let headers=`${sH('name','Campaign')}${sH('brand','Brand')}${sH('platform','Platform')}<th>Offer</th>${sH('startDate','Dates')}<th>Outlet</th>`;
   if(showImpact)headers+=`${sH('ordersLift','WoW Orders')}${sH('salesLift','WoW Net Sales')}${sH('momLift','MoM Net Sales')}${sH('profitability','Profitability')}<th></th>`;else headers+=`<th>Status</th><th></th>`;
   const rows=sorted.map(c=>{
+    // Bundle row: shows combined analysis using real Disc totals (which already sum all segments)
+    if(c.isBundle){
+      const a=bundleAnalysis(c);
+      const profClr=a.profitabilityPct==null?'#64748b':a.profitabilityPct>0?'#22C55E':a.profitabilityPct>-20?'#FBBF24':'#EF4444';
+      const profStr=a.profitabilityPct==null?'—':`${a.profitabilityPct>=0?'+':''}${a.profitabilityPct.toFixed(1)}%`;
+      const segChips=c.campaigns.map(seg=>`<span style="background:rgba(245,158,11,.08);color:#FBBF24;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-right:3px;border:1px solid rgba(245,158,11,.25)">${seg.name||'(unnamed)'}</span>`).join('');
+      const bundleIdx="bundle:"+c.campaigns.map(seg=>campaignData.indexOf(seg)).join(",");
+      const viewBtn=`<button onclick="selectBundleByKey('${bundleIdx}')" style="background:#f59e0b22;border:1px solid #f59e0b66;border-radius:5px;color:#f59e0b;padding:3px 8px;font-size:10px;cursor:pointer;white-space:nowrap;font-weight:700">View Bundle →</button>`;
+      const b=BMAP[c.brand];
+      let row=`<tr style="background:rgba(245,158,11,.04)"><td><strong style="font-size:12px;color:#FBBF24">🎯 ${c.brand} ${c.aggregator} Bundle</strong><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px">${segChips}</div></td><td><span style="color:${b?.c||'#888'};font-weight:700;font-size:11px">${c.brand}</span></td><td><span style="color:${AC[c.aggregator]||'#888'};font-weight:700;font-size:11px">${c.aggregator}</span></td><td><span style="font-size:11px;color:#94a3b8">${c.campaigns.length} concurrent segments — combined analysis</span></td><td><span style="white-space:nowrap;font-size:11px">${fmtCampDateRange(c.startDate,c.endDate)}</span></td><td><span style="font-size:11px">${c.outlet}</span></td>`;
+      if(showImpact){
+        if(a.cs&&a.cs.orders>0){
+          const ordClr=pctClr(a.ordersLift),salClr=pctClr(a.salesLift);
+          row+=`<td style="color:${ordClr};font-weight:700;font-size:11px">${fmtPct(a.ordersLift)}</td><td style="color:${salClr};font-weight:700;font-size:11px">${fmtPct(a.salesLift)}</td><td style="color:#64748b;font-size:11px">—</td><td style="color:${profClr};font-weight:700;font-size:11px">${profStr}</td>`;
+        }else row+='<td style="color:#64748b">—</td><td style="color:#64748b">—</td><td style="color:#64748b">—</td><td style="color:#64748b">—</td>';
+      }else row+=`<td><span style="color:#22C55E;font-weight:700;font-size:11px">Running</span></td>`;
+      row+=`<td>${viewBtn}</td></tr>`;return row;
+    }
     const realIdx=campaignData.indexOf(c);const st=campStatus(c),stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#64748b',Cancelled:'#EF4444'}[st]||'#64748b';const b=BMAP[c.brand];
     const imp=showImpact&&(st==='Completed'||st==='Running')?campImpactExtended(c):null;
     const viewBtn=`<button onclick="selectCamp(${realIdx})" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:3px 8px;font-size:10px;cursor:pointer;white-space:nowrap">View →</button>`;
@@ -889,7 +989,7 @@ function campTableHTML(title,camps,showImpact){
     }else row+=`<td><span style="color:${stClr};font-weight:700;font-size:11px">${st}</span></td>`;
     row+=`<td>${viewBtn}</td></tr>`;return row;
   }).join('');
-  return`<div class="card"><div class="ct">${title} (${camps.length})</div><div style="overflow-x:auto"><table class="tbl"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  return`<div class="card"><div class="ct">${title} (${camps.length}${bundles.length?` · ${bundles.length} bundle${bundles.length>1?'s':''}`:''})</div>${bundles.length?`<div style="font-size:10px;color:#94a3b8;padding:0 0 8px 0;font-style:italic">🎯 = Concurrent campaigns on the same brand + platform, analyzed together (real combined discount). Click "View Bundle" to see per-segment breakdown.</div>`:''}<div style="overflow-x:auto"><table class="tbl"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 // Comprehensive campaign analysis: real discounts, profitability, pros/cons, concurrent campaigns.
 function campAnalysis(c){
@@ -1037,6 +1137,59 @@ async function runCampAI(idx){
     btn.textContent='↻ Regenerate';btn.disabled=false;btn.onclick=()=>runCampAI(idx);
   }catch(e){content.innerHTML=e.message==='cors'?`<div style="font-size:12px;color:#64748b"><strong style="color:#f59e0b">AI analysis runs in Claude.ai only.</strong> All campaign metrics above are accurate.</div>`:`<div style="color:#64748b;font-size:12px">Analysis unavailable.</div>`;btn.textContent='↻ Retry';btn.disabled=false;}
 }
+// Bundle detail: a coordinated multi-segment campaign analyzed as ONE combined effort using
+// real combined discount data (the Disc column already sums them, which is the only honest
+// way to report profitability since per-segment attribution isn't possible).
+function bundleDetailHTML(bundle){
+  const a=bundleAnalysis(bundle);
+  const b=BMAP[bundle.brand];const brandClr=b?.c||'#f59e0b';
+  const profClr=a.profitabilityPct==null?'#64748b':a.profitabilityPct>0?'#22C55E':a.profitabilityPct>-20?'#FBBF24':'#EF4444';
+  const roiClr=a.discountROI==null?'#64748b':a.discountROI>=1?'#22C55E':a.discountROI>=0?'#FBBF24':'#EF4444';
+  const ordClr=pctClr(a.ordersLift),salClr=pctClr(a.salesLift),aovClr=pctClr(a.aovChange);
+  // Header
+  const header=`<div class="card" style="margin-bottom:12px;border-left:4px solid ${brandClr}"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+    <div><div style="font-size:9px;color:#FBBF24;font-weight:800;letter-spacing:1.5px;text-transform:uppercase">🎯 Coordinated Campaign Bundle</div><div style="font-size:18px;font-weight:800;color:#e2e8f0;margin-top:4px">${bundle.brand} on ${bundle.aggregator}</div><div style="font-size:11px;color:#94a3b8;margin-top:4px">${fmtCampDateRange(bundle.startDate,bundle.endDate)} · ${a.days} day${a.days>1?'s':''} · ${bundle.outlet||'All'} outlets · ${bundle.campaigns.length} concurrent segments</div></div>
+    <button onclick="selBundle=null;campTab='active';renderCampaigns()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer">← Back</button>
+  </div></div>`;
+  // Segments breakdown — what each campaign in the bundle targets
+  const segmentRows=bundle.campaigns.map((seg,i)=>{
+    const offer=seg.comments||'';
+    return `<tr><td><strong style="font-size:12px;color:#FBBF24">${i+1}. ${seg.name||'(unnamed)'}</strong></td><td><span style="font-size:11px;color:#94a3b8">${offer.length>80?offer.slice(0,80)+'…':offer}</span></td><td style="font-size:11px;color:#94a3b8;white-space:nowrap">${fmtCampDateRange(seg.startDate,seg.endDate)}</td></tr>`;
+  }).join('');
+  const segmentsCard=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#FBBF24">🧩 Bundle Segments — Targeting Different Customer Groups</div><div style="font-size:11px;color:#94a3b8;margin-bottom:10px;line-height:1.6">This bundle runs ${bundle.campaigns.length} concurrent campaigns on the same brand and platform, each targeting a different customer segment (e.g. new vs. lapsed vs. regular). They share the discount pool reported by the platform, so they're analyzed as one combined effort below.</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Segment Campaign</th><th>Offer</th><th>Dates</th></tr></thead><tbody>${segmentRows}</tbody></table></div></div>`;
+  // Combined KPIs
+  const kpiCards=`<div class="card" style="margin-bottom:12px"><div class="ct">Combined Performance</div><div class="g4">
+    ${kpiCard('Orders During',a.cs.orders.toLocaleString(),`baseline /day: ${Math.round(a.baseOrders/Math.max(1,a.bDays)).toLocaleString()}`,a.ordersLift)}
+    ${kpiCard('Net Sales During',fmtAED(a.cs.sales),`baseline /day: ${fmtAED(a.baseSales/Math.max(1,a.bDays))}`,a.salesLift)}
+    ${kpiCard('AOV',`AED ${a.campAOV.toFixed(1)}`,`baseline: AED ${a.baseAOV.toFixed(1)}`,a.aovChange)}
+    ${kpiCard('Duration',`${a.days} day${a.days>1?'s':''}`,`${fmtShort(bundle.startDate)} → ${fmtShort(bundle.endDate)}`,null)}
+  </div></div>`;
+  // Daily sales chart
+  const chart=`<div class="card" style="margin-bottom:12px"><div class="ct">📈 Daily Net Sales — ${fmtShort(bundle.startDate)} → ${fmtShort(bundle.endDate)}</div><div style="height:240px"><canvas id="ch-bundle"></canvas></div></div>`;
+  // Profitability — REAL combined discount
+  let profitSection='';
+  if(a.discAvailable){
+    profitSection=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#f59e0b">💰 Combined Profitability <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· real shared discount across all ${bundle.campaigns.length} segments</span></div>
+      <div style="display:flex;align-items:stretch;gap:14px;flex-wrap:wrap;margin-bottom:14px;padding:12px 14px;background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.18);border-radius:8px">
+        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Total Discount (All ${bundle.campaigns.length} Segments)</div><div style="font-size:22px;font-weight:800;color:#EF4444;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.campDisc)}</div></div>
+        <div style="width:1px;background:rgba(245,158,11,.2)"></div>
+        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Net Sales Generated</div><div style="font-size:22px;font-weight:800;color:#22C55E;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.cs.sales)}</div></div>
+        <div style="width:1px;background:rgba(245,158,11,.2)"></div>
+        <div style="flex:1;min-width:150px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Blended Discount Depth</div><div style="font-size:22px;font-weight:800;color:#FBBF24;font-variant-numeric:tabular-nums;line-height:1.2">${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'%':'—'}</div><div style="font-size:10px;color:#64748b;margin-top:2px">across the whole bundle</div></div>
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px;line-height:1.6">ℹ️ <strong>Why analyze the bundle together?</strong> Each segment targets a different customer group (new, lapsed, regular), so they don't compete for credit on the same orders. The platform reports a single combined discount across them — splitting it per segment would be guesswork. The combined view below is the honest read on whether the bundle paid off overall.</div>
+      <div class="g4">
+        ${kpiCard('Combined Discount',fmtAED(a.campDisc),`AED ${Math.round(a.discPerDay)}/day · ${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'% of sales':'—'}`,null)}
+        ${kpiCard('Commission Rate',`${(a.commRate*100).toFixed(0)}%`,`${bundle.aggregator} · ${bundle.brand}`,null)}
+        <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Daily Contribution</div><div style="font-size:21px;font-weight:800;color:${a.contribDiffPerDay>=0?'#22C55E':'#EF4444'};font-variant-numeric:tabular-nums;line-height:1">${a.contribDiffPerDay>=0?'+':''}${fmtAED(a.contribDiffPerDay)}</div><div style="font-size:11px;color:#64748b;margin-top:3px">vs baseline /day</div><div style="font-size:11px;color:${profClr};font-weight:700;margin-top:3px">${fmtPct(a.profitabilityPct)}</div></div>
+        <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Bundle ROI</div><div style="font-size:21px;font-weight:800;color:${roiClr};font-variant-numeric:tabular-nums;line-height:1">${a.discountROI==null?'—':(a.discountROI>=0?'+':'')+a.discountROI.toFixed(2)+'×'}</div><div style="font-size:11px;color:#64748b;margin-top:3px">contrib. per AED disc.</div></div>
+      </div>
+      <div style="font-size:11px;color:#64748b;margin-top:10px;line-height:1.6">Contribution = Net Sales × (1 − ${(a.commRate*100).toFixed(0)}% commission) − combined discount. ${a.discountROI!=null&&a.discountROI>=1?`<span style="color:#22C55E">The bundle generated more contribution than it cost — the coordinated strategy paid off.</span>`:a.discountROI!=null&&a.discountROI<0?`<span style="color:#EF4444">Incremental contribution was negative — the bundle lost money overall after the combined discount.</span>`:a.discountROI!=null?`<span style="color:#FBBF24">The bundle returned less than AED 1 of contribution per AED discounted — marginal.</span>`:''}</div></div>`;
+  }else{
+    profitSection=`<div class="card" style="margin-bottom:12px;border-color:rgba(96,165,250,.3)"><div class="ct" style="color:#60A5FA">ℹ️ Discount Data Not Available</div><div style="font-size:12px;color:#94a3b8;line-height:1.6">This bundle predates 1 May 2026 (when we started tracking the Disc column), so combined discount and profitability can't be calculated.</div></div>`;
+  }
+  return header+segmentsCard+kpiCards+chart+profitSection;
+}
 async function renderCampaigns(){
   const pg=document.getElementById('page-campaigns');if(!pg)return;
   if(!campLoaded){
@@ -1049,14 +1202,17 @@ async function renderCampaigns(){
     const active=campaignData.filter(c=>campStatus(c)==='Running'),upcoming=campaignData.filter(c=>campStatus(c)==='Upcoming'),completed=campaignData.filter(c=>campStatus(c)==='Completed');
     const tabs=[['calendar','📅 Calendar'],['active',`🟢 Active & Upcoming (${active.length+upcoming.length})`],['history',`📋 History (${completed.length})`]];
     if(selCamp)tabs.push(['detail','🔍 Campaign Detail']);
+    else if(selBundle)tabs.push(['detail','🎯 Bundle Detail']);
     const tabH=tabs.map(([k,l])=>`<button class="exp-st ${campTab===k?'act':''}" onclick="campTab='${k}';renderCampaigns()">${l}</button>`).join('');
     const statBar=`<div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:14px">${[['🟢 Active',active.length,'#22C55E'],['⏰ Upcoming',upcoming.length,'#F59E0B'],['✅ Completed',completed.length,'#64748b'],['📊 Total',campaignData.length,'#f59e0b']].map(([l,n,c])=>`<div style="font-size:12px;color:${c};font-weight:600">${l} <span style="font-size:18px;font-weight:800">${n}</span></div>`).join('')}</div>`;
     let main='';
     if(campTab==='calendar')main=`<div class="card">${renderCampCalendar()}</div>`;
     else if(campTab==='active'){main=campFilterBar()+campTableHTML(`🟢 Running Now`,applyCampFilters(active),true)+campTableHTML(`⏰ Upcoming`,applyCampFilters(upcoming),false);}
     else if(campTab==='history'){const fc=applyCampFilters(completed);main=campFilterBar()+campTableHTML(`📋 Completed Campaigns`,fc.slice(0,150),true)+(fc.length>150?`<div style="color:#64748b;font-size:12px;text-align:center;padding:10px">Showing 150 most recent of ${fc.length}</div>`:'');}
+    else if(campTab==='detail'&&selBundle){main=bundleDetailHTML(selBundle);}
     else if(campTab==='detail'&&selCamp){main=campDetailHTML(selCamp,campaignData.indexOf(selCamp));}
     pg.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-size:16px;font-weight:800;color:#f59e0b">📅 Campaign Manager</div><button onclick="campLoaded=false;selCamp=null;campTab='active';renderCampaigns()" style="background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 10px;font-size:11px;cursor:pointer">↻ Refresh</button></div>${statBar}<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
+    if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
     if(campTab==='detail'&&selCamp){const c=selCamp;const imp=campImpact(c);if(campStatus(c)!=='Upcoming'&&imp.hasData){const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&(c.brand==='All Brands'||r.brand===c.brand)&&(c.aggregator==='All'||r.aggregator===c.aggregator)));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-camp',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}}
   }catch(err){pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Render error</div><div style="color:#64748b;font-size:12px">${err.message}</div></div>`;}
 }
@@ -1978,7 +2134,7 @@ function cmpDrawChart(dA,dB){
   const fns=[gp,renderPage,toggleDD,fToggle,fClear,fSetPreset,fApply,
     genBrief,runAskAI,runCampAI,
     renderBrands,renderOutlets,renderPlatforms,renderOverview,renderCPC,renderCampaigns,renderKPI,renderCompare,
-    selectOutlet,backToOutlets,toggleAovDrill,
+    selectOutlet,backToOutlets,toggleAovDrill,selectBundleByKey,bundleDetailHTML,
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
     sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,
