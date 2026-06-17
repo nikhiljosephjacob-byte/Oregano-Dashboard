@@ -963,6 +963,9 @@ function parseKPISheet(csv,outlet){
             if(blockBrand)break;
           }
         }
+        // Single-brand outlets (e.g. Fyoozhen DIP) may omit the brand header entirely.
+        // If the outlet is whitelisted to exactly one brand, default to it.
+        if(!blockBrand&&allowedBrands&&allowedBrands.length===1){blockBrand=allowedBrands[0];}
         if(blockBrand&&!brandAllowed(blockBrand)){currentBlock=null;continue;}
         if(!blockBrand){currentBlock=null;continue;} // no brand → skip (prevents "null" entries)
         currentBrand=blockBrand; // remember for subsequent blocks under the same brand
@@ -1056,7 +1059,9 @@ function parseKPISheet(csv,outlet){
           for(let cc=cells.length-1;cc>labelIdx;cc--){const n=parseFloat((cells[cc]||"").replace(/[^\d.]/g,""));if(!isNaN(n)&&n>=1&&n<=5){val=n;lastEntry=today;dailyValues.push({date:today,num:n,raw:String(n)});entries[today]=String(n);break;}}
         }
         let rowBrand=null;for(const cell of cells){const nb=normBrand(cell);if(KPI_BRANDS.includes(nb)){rowBrand=nb;break;}}
-        const brand=rowBrand||dineBrand;
+        let brand=rowBrand||dineBrand;
+        // Single-brand outlets (e.g. Fyoozhen DIP) may omit the brand header — default to the whitelist brand.
+        if(!brand&&allowedBrands&&allowedBrands.length===1){brand=allowedBrands[0];}
         if(val!=null&&brand&&brandAllowed(brand)){
           let gb=blocks.find(b=>b.aggregator==="Google Maps"&&b.brand===brand);
           if(!gb){gb={brand,aggregator:"Google Maps",kpis:{},singleCol:false};blocks.push(gb);}
