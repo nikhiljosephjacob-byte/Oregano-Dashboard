@@ -129,34 +129,78 @@ function fClear(){fBrands.clear();fPlatforms.clear();fBranches.clear();Object.va
 function toggleDD(id){
   const el=document.getElementById(id);if(!el)return;
   const wasOpen=el.getAttribute("data-open")==="1";
-  // Close all dropdown menus first
   document.querySelectorAll(".dd-menu").forEach(d=>{d.classList.remove("open");d.style.display="none";d.setAttribute("data-open","0");});
   if(!wasOpen){el.classList.add("open");el.style.display="block";el.setAttribute("data-open","1");}
 }
-document.addEventListener("click",e=>{if(!e.target.closest(".dd-wrap"))document.querySelectorAll(".dd-menu").forEach(d=>{d.classList.remove("open");d.style.display="none";d.setAttribute("data-open","0");});});
+
+// ── EVENT DELEGATION ──
+// All filter controls use data-* attributes and are handled by ONE delegated listener
+// bound with addEventListener (by reference). This works even if inline-handler function
+// names aren't resolvable on window, which was breaking the dropdowns.
+function handleDelegatedClick(e){
+  const t=e.target.closest("[data-act]");
+  if(!t){
+    // Click outside any dropdown closes open menus
+    if(!e.target.closest(".dd-wrap"))document.querySelectorAll(".dd-menu").forEach(d=>{d.classList.remove("open");d.style.display="none";d.setAttribute("data-open","0");});
+    return;
+  }
+  const act=t.getAttribute("data-act");
+  const v1=t.getAttribute("data-v1"),v2=t.getAttribute("data-v2");
+  if(act==="dd"){e.stopPropagation();toggleDD(v1);return;}
+  if(act==="preset"){fSetPreset(v1);return;}
+  if(act==="apply"){fApply();return;}
+  if(act==="clear"){fClear();return;}
+  if(act==="ftoggle"){fToggle(v1,v2);return;}
+  if(act==="campToggle"){campToggleFilter(v1,v2);return;}
+  if(act==="campClear"){campClearFilters();return;}
+  if(act==="cmpToggle"){cmpToggle(v1,v2,t.getAttribute("data-v3"));return;}
+  if(act==="cmpClear"){cmpClear(v1);return;}
+  if(act==="cmpPreset"){cmpPreset(v1,v2);return;}
+  if(act==="cmpMetric"){cmpSetMetric(v1);return;}
+  if(act==="cmpSwap"){cmpSwap();return;}
+  if(act==="cmpCopy"){cmpCopyAtoB();return;}
+}
+function handleDelegatedChange(e){
+  const t=e.target.closest("[data-act]");
+  if(!t)return;
+  const act=t.getAttribute("data-act");
+  const v1=t.getAttribute("data-v1"),v2=t.getAttribute("data-v2");
+  if(act==="ftoggle"){fToggle(v1,v2);return;}
+  if(act==="campToggle"){campToggleFilter(v1,v2);return;}
+  if(act==="cmpToggle"){cmpToggle(v1,v2,t.getAttribute("data-v3"));return;}
+  if(act==="cmpDate"){cmpSetDate(v1,v2,e.target.value);return;}
+}
+// Bind once (by reference, not inline)
+if(typeof document!=="undefined"&&!document.__ddBound){
+  document.addEventListener("click",handleDelegatedClick);
+  document.addEventListener("change",handleDelegatedChange);
+  document.__ddBound=true;
+}
 
 function makeFilterBar(opts){
   const{hideBrand=false,hidePlatform=false,hideOutlet=false}=opts||{};
   const presets=[["yesterday","Yesterday"],["7d","Last 7 Days"],["30d","Last 30 Days"],["month","This Month"],["lmonth","Last Month"],["custom","Custom"]];
-  const pH=presets.map(([k,l])=>`<button class="preset ${fPreset===k?"act":""}" onclick="fSetPreset('${k}')">${l}</button>`).join("");
-  const custH=fPreset==="custom"?`<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap"><input type="date" id="f-s" value="${fStart||""}" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px"><span style="color:#64748b">→</span><input type="date" id="f-e" value="${fEnd||""}" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px"><button onclick="fApply()" style="background:#f59e0b;border:none;border-radius:5px;color:#000;font-weight:700;padding:4px 12px;font-size:11px;cursor:pointer">Apply</button></div>`:"";
+  const pH=presets.map(([k,l])=>`<button class="preset ${fPreset===k?"act":""}" data-act="preset" data-v1="${k}">${l}</button>`).join("");
+  const custH=fPreset==="custom"?`<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap"><input type="date" id="f-s" value="${fStart||""}" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px"><span style="color:#64748b">→</span><input type="date" id="f-e" value="${fEnd||""}" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px"><button data-act="apply" style="background:#f59e0b;border:none;border-radius:5px;color:#000;font-weight:700;padding:4px 12px;font-size:11px;cursor:pointer">Apply</button></div>`:"";
   const allBr=[...new Set(allData.map(r=>r.branch))].sort();
   const brDD=hideBrand?"":ddHTML("fdd-br","Brand",fBrands,BR.map(b=>({val:b.n,lbl:b.n,clr:b.c})),"brand");
   const plDD=hidePlatform?"":ddHTML("fdd-pl","Platform",fPlatforms,AGGS.map(a=>({val:a,lbl:a,clr:AC[a]||"#888"})),"platform");
   const ouDD=hideOutlet?"":ddHTML("fdd-ou","Outlet",fBranches,allBr.map(b=>({val:b,lbl:b+(AUH.has(b)?" (AUH)":""),clr:"#94a3b8"})),"branch");
-  const chips=[...[...fBrands].map(b=>`<span class="fchip" style="background:${BMAP[b]?.c||"#888"}22;color:${BMAP[b]?.c||"#888"};border:1px solid ${BMAP[b]?.c||"#888"}55" onclick="fToggle('brand','${b}')">✕ ${b}</span>`),
-    ...[...fPlatforms].map(p=>`<span class="fchip" style="background:${AC[p]||"#888"}22;color:${AC[p]||"#888"};border:1px solid ${AC[p]||"#888"}55" onclick="fToggle('platform','${p}')">✕ ${p}</span>`),
-    ...[...fBranches].map(b=>`<span class="fchip" style="background:#1b2f4a;color:#94a3b8;border:1px solid #1b2f4a" onclick="fToggle('branch','${b}')">✕ ${b}</span>`)].join("");
-  const clearBtn=(fBrands.size||fPlatforms.size||fBranches.size)?`<button class="fpill" onclick="fClear()" style="color:#ef4444;border-color:#ef444444">✕ Clear</button>`:"";
+  const chip=(type,val,style)=>`<span class="fchip" style="${style}" data-act="ftoggle" data-v1="${type}" data-v2="${esc(val)}">✕ ${val}</span>`;
+  const chips=[...[...fBrands].map(b=>chip("brand",b,`background:${BMAP[b]?.c||"#888"}22;color:${BMAP[b]?.c||"#888"};border:1px solid ${BMAP[b]?.c||"#888"}55`)),
+    ...[...fPlatforms].map(p=>chip("platform",p,`background:${AC[p]||"#888"}22;color:${AC[p]||"#888"};border:1px solid ${AC[p]||"#888"}55`)),
+    ...[...fBranches].map(b=>chip("branch",b,`background:#1b2f4a;color:#94a3b8;border:1px solid #1b2f4a`))].join("");
+  const clearBtn=(fBrands.size||fPlatforms.size||fBranches.size)?`<button class="fpill" data-act="clear" style="color:#ef4444;border-color:#ef444444">✕ Clear</button>`:"";
   const badge=`<span style="margin-left:auto;font-size:10px;color:#64748b;font-style:italic">${getPeriodLabel()}</span>`;
   const ddRow=(brDD||plDD||ouDD||clearBtn)?`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">${brDD}${plDD}${ouDD}${clearBtn}</div>`:"";
   return`<div class="fbar"><div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">${pH}${badge}</div>${custH}${ddRow}${chips?`<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">${chips}</div>`:""}</div>`;
 }
+function esc(s){return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");}
 function ddHTML(id,label,activeSet,items,type){
   const count=activeSet.size,isOn=count>0;
-  const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#16273f'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} onchange="fToggle('${type}','${String(val).replace(/'/g,"\\'")}')"><span style="color:${clr}">${lbl}</span></label>`).join("");
+  const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#16273f'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="ftoggle" data-v1="${type}" data-v2="${esc(val)}"><span style="color:${clr}">${lbl}</span></label>`).join("");
   const menuStyle="display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:#0b1220;border:1px solid #1b2f4a;border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:160px;box-shadow:0 12px 30px rgba(0,0,0,.5)";
-  return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" onclick="event.stopPropagation();toggleDD('${id}')">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;
+  return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" data-act="dd" data-v1="${id}">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;
 }
 
 // ANALYTICS
@@ -1480,16 +1524,16 @@ function cmpPanel(side){
   const dd=(type,label,activeSet,items)=>{
     const id=`cmp-${side}-${type}`;
     const count=activeSet.size,isOn=count>0;
-    const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#16273f'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} onchange="cmpToggle('${side}','${type}','${String(val).replace(/'/g,"\\'")}')"><span style="color:${clr}">${lbl}</span></label>`).join("");
+    const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#16273f'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="cmpToggle" data-v1="${side}" data-v2="${type}" data-v3="${esc(val)}"><span style="color:${clr}">${lbl}</span></label>`).join("");
     const menuStyle="display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:#0b1220;border:1px solid #1b2f4a;border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:160px;box-shadow:0 12px 30px rgba(0,0,0,.5)";
-    return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" onclick="event.stopPropagation();toggleDD('${id}')">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;
+    return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" data-act="dd" data-v1="${id}">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;
   };
   const presets=[["yesterday","Latest day"],["7d","7d"],["30d","30d"],["month","This month"]];
-  const presetsH=presets.map(([k,l])=>`<button class="preset ${cfg.preset===k?"act":""}" onclick="cmpPreset('${side}','${k}')">${l}</button>`).join("");
+  const presetsH=presets.map(([k,l])=>`<button class="preset ${cfg.preset===k?"act":""}" data-act="cmpPreset" data-v1="${side}" data-v2="${k}">${l}</button>`).join("");
   return `<div style="flex:1;min-width:300px;background:#0d1524;border:1px solid ${accent}55;border-radius:12px;padding:14px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
       <div style="font-size:13px;font-weight:800;color:${accent}">${side==="A"?"🔵 Group A":"🟠 Group B"}</div>
-      ${(cfg.brands.size||cfg.platforms.size||cfg.branches.size)?`<button onclick="cmpClear('${side}')" style="background:none;border:1px solid #1b2f4a;border-radius:5px;color:#64748b;padding:2px 8px;font-size:10px;cursor:pointer">✕ clear</button>`:""}
+      ${(cfg.brands.size||cfg.platforms.size||cfg.branches.size)?`<button data-act="cmpClear" data-v1="${side}" style="background:none;border:1px solid #1b2f4a;border-radius:5px;color:#64748b;padding:2px 8px;font-size:10px;cursor:pointer">✕ clear</button>`:""}
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
       ${dd("brand","Brands",cfg.brands,BR.map(b=>({val:b.n,lbl:b.n,clr:b.c})))}
@@ -1498,9 +1542,9 @@ function cmpPanel(side){
     </div>
     <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">${presetsH}</div>
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-      <input type="date" value="${cfg.start||""}" onchange="cmpSetDate('${side}','start',this.value)" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px">
+      <input type="date" value="${cfg.start||""}" data-act="cmpDate" data-v1="${side}" data-v2="start" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px">
       <span style="color:#64748b">→</span>
-      <input type="date" value="${cfg.end||""}" onchange="cmpSetDate('${side}','end',this.value)" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px">
+      <input type="date" value="${cfg.end||""}" data-act="cmpDate" data-v1="${side}" data-v2="end" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px">
     </div>
     <div style="margin-top:8px;font-size:11px;color:#94a3b8;line-height:1.5"><strong style="color:${accent}">${cmpLabel(cfg)}</strong><br>${cmpDateLabel(cfg)}</div>
   </div>`;
@@ -1611,13 +1655,13 @@ function renderCompare(){
   const tHeads=["Brand · Platform","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales"];
 
   // Metric toggle for the trend chart
-  const metricBtns=[["sales","Net Sales"],["orders","Orders"],["aov","AOV"]].map(([k,l])=>`<button onclick="cmpSetMetric('${k}')" style="padding:4px 12px;border-radius:5px;border:1px solid ${cmpMetric===k?'#f59e0b':'#1b2f4a'};background:${cmpMetric===k?'#f59e0b22':'transparent'};color:${cmpMetric===k?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${l}</button>`).join("");
+  const metricBtns=[["sales","Net Sales"],["orders","Orders"],["aov","AOV"]].map(([k,l])=>`<button data-act="cmpMetric" data-v1="${k}" style="padding:4px 12px;border-radius:5px;border:1px solid ${cmpMetric===k?'#f59e0b':'#1b2f4a'};background:${cmpMetric===k?'#f59e0b22':'transparent'};color:${cmpMetric===k?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${l}</button>`).join("");
 
   const moverChip=(p,val)=>`<span style="display:inline-flex;align-items:center;gap:6px;background:${p.clr}18;border:1px solid ${p.clr}44;border-radius:6px;padding:3px 10px;font-size:11px;margin:2px"><span style="color:${p.clr};font-weight:700">${p.ag}</span><span style="color:${pctClr(val)};font-weight:700">${fmtPct(val)}</span></span>`;
 
   pg.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div style="font-size:18px;font-weight:800;color:#e2e8f0">⚖️ Comparison</div>
-      <div style="display:flex;gap:8px"><button onclick="cmpCopyAtoB()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer" title="Copy A's brand/platform/outlet filters to B">⎘ A→B filters</button><button onclick="cmpSwap()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer">⇄ Swap A/B</button></div>
+      <div style="display:flex;gap:8px"><button data-act="cmpCopy" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer" title="Copy A's brand/platform/outlet filters to B">⎘ A→B filters</button><button data-act="cmpSwap" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer">⇄ Swap A/B</button></div>
     </div>
     <div style="font-size:11px;color:#64748b;margin-bottom:12px">Pick any combination on each side — brands, platforms, outlets, and dates are fully independent. Example: Oregano+Lollorosso 11–13 May 2026 (A) vs the same 11–13 May 2025 (B).</div>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">${cmpPanel("A")}${cmpPanel("B")}</div>
@@ -1675,3 +1719,19 @@ function cmpDrawChart(dA,dB){
 // ── INIT ──
 // doLoad() is called from index.html after the user logs in.
 // Nav logo + first paint happen inside doLoad().
+
+// ── EXPOSE HANDLERS TO WINDOW ──────────────────────────────────────────────
+// Inline onclick/onchange handlers in injected HTML resolve names on `window`.
+// Depending on how index.html loads this script, top-level function declarations
+// may not automatically become global — so we attach them explicitly here.
+(function(){
+  const fns=[gp,renderPage,toggleDD,fToggle,fClear,fSetPreset,fApply,
+    genBrief,runAskAI,runCampAI,
+    renderBrands,renderOutlets,renderPlatforms,renderOverview,renderCPC,renderCampaigns,renderKPI,renderCompare,
+    selectOutlet,backToOutlets,toggleAovDrill,
+    selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
+    sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,
+    cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,
+    injectCompareTab,loadKPIData,doLoad];
+  fns.forEach(fn=>{try{if(typeof fn==="function")window[fn.name]=fn;}catch(e){}});
+})();
