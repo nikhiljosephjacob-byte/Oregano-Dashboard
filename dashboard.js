@@ -92,7 +92,8 @@ async function doLoad(){
     return;
   }
   latest=all.reduce((m,r)=>r.date>m?r.date:m,all[0].date);
-  fEnd=latest;fStart=latest;fPreset="yesterday";
+  // Default every page's filter to "yesterday" (the latest day) independently.
+  Object.values(pageFilters).forEach(f=>{f.start=latest;f.end=latest;f.preset="yesterday";f.brands.clear();f.platforms.clear();f.branches.clear();});
   document.getElementById("ts-label").textContent=`Latest: ${fmtDisp(latest)}`;
   document.getElementById("loading-screen").style.display="none";
   document.getElementById("main-app").style.display="block";
@@ -109,23 +110,26 @@ async function doLoad(){
 let allData=[],latest=null,curPage="overview",charts={};
 let selBrand="Oregano",selPlatform="Deliveroo";
 let expandedBrand=null,expandedPlatform=null;
-let fStart=null,fEnd=null,fPreset="yesterday";
-let fBrands=new Set(),fPlatforms=new Set(),fBranches=new Set();
+// Per-page filter state — each page (overview/brands/outlets/platforms) keeps its OWN
+// brands/platforms/outlets/date selection so changing filters on one page doesn't affect others.
+function newFilterState(){return{start:null,end:null,preset:"yesterday",brands:new Set(),platforms:new Set(),branches:new Set()};}
+const pageFilters={overview:newFilterState(),brands:newFilterState(),outlets:newFilterState(),platforms:newFilterState()};
+function curFilters(){return pageFilters[curPage]||pageFilters.overview;}
 // Generic per-table sort state: {tableId:{col,dir}}
 let tableSort={};
 
 // FILTER HELPERS
-function getLD(){return allData.filter(r=>{if(fStart&&r.date<fStart)return false;if(fEnd&&r.date>fEnd)return false;if(fBrands.size&&!fBrands.has(r.brand))return false;if(fPlatforms.size&&!fPlatforms.has(r.aggregator))return false;if(fBranches.size&&!fBranches.has(r.branch))return false;return true;});}
-function getCompRange(){if(!fStart||!fEnd)return{s:subDays(latest,7),e:subDays(latest,7)};const s=new Date(fStart+"T12:00:00"),e=new Date(fEnd+"T12:00:00");const n=Math.round((e-s)/86400000);const ce=new Date(s);ce.setDate(ce.getDate()-1);const cs=new Date(ce);cs.setDate(cs.getDate()-n);return{s:dk(cs),e:dk(ce)};}
-function getPD(){const{s,e}=getCompRange();return allData.filter(r=>{if(r.date<s||r.date>e)return false;if(fBrands.size&&!fBrands.has(r.brand))return false;if(fPlatforms.size&&!fPlatforms.has(r.aggregator))return false;if(fBranches.size&&!fBranches.has(r.branch))return false;return true;});}
-function getCompLabel(){const{s,e}=getCompRange();const days=fStart===fEnd?1:Math.round((new Date(fEnd)-new Date(fStart))/86400000)+1;if(days===1)return`vs ${fmtDisp(s)} (same day prev week)`;return`vs ${fmtDisp(s)}→${fmtDisp(e)}`;}
+function getLD(){const f=curFilters();return allData.filter(r=>{if(f.start&&r.date<f.start)return false;if(f.end&&r.date>f.end)return false;if(f.brands.size&&!f.brands.has(r.brand))return false;if(f.platforms.size&&!f.platforms.has(r.aggregator))return false;if(f.branches.size&&!f.branches.has(r.branch))return false;return true;});}
+function getCompRange(){const f=curFilters();if(!f.start||!f.end)return{s:subDays(latest,7),e:subDays(latest,7)};const s=new Date(f.start+"T12:00:00"),e=new Date(f.end+"T12:00:00");const n=Math.round((e-s)/86400000);const ce=new Date(s);ce.setDate(ce.getDate()-1);const cs=new Date(ce);cs.setDate(cs.getDate()-n);return{s:dk(cs),e:dk(ce)};}
+function getPD(){const{s,e}=getCompRange();const f=curFilters();return allData.filter(r=>{if(r.date<s||r.date>e)return false;if(f.brands.size&&!f.brands.has(r.brand))return false;if(f.platforms.size&&!f.platforms.has(r.aggregator))return false;if(f.branches.size&&!f.branches.has(r.branch))return false;return true;});}
+function getCompLabel(){const{s,e}=getCompRange();const f=curFilters();const days=f.start===f.end?1:Math.round((new Date(f.end)-new Date(f.start))/86400000)+1;if(days===1)return`vs ${fmtDisp(s)} (same day prev week)`;return`vs ${fmtDisp(s)}→${fmtDisp(e)}`;}
 // Short comparison label for table column headers (so the "change" columns aren't ambiguous)
 function getCompShort(){const{s,e}=getCompRange();if(s===e)return`vs ${fmtShort(s)}`;return`vs ${fmtShort(s)}–${fmtShort(e)}`;}
-function getPeriodLabel(){if(!fStart)return"";if(fStart===fEnd)return fmtDisp(fStart);return`${fmtDisp(fStart)} → ${fmtDisp(fEnd)}`;}
-function fSetPreset(p){fPreset=p;if(p==="yesterday"){fStart=fEnd=latest;}else if(p==="7d"){fStart=subDays(latest,6);fEnd=latest;}else if(p==="30d"){fStart=subDays(latest,29);fEnd=latest;}else if(p==="month"){fStart=latest.slice(0,7)+"-01";fEnd=latest;}else if(p==="lmonth"){const now=new Date(latest+"T12:00:00");fStart=dk(new Date(now.getFullYear(),now.getMonth()-1,1));fEnd=dk(new Date(now.getFullYear(),now.getMonth(),0));}Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
-function fApply(){const s=document.getElementById("f-s"),e=document.getElementById("f-e");if(s&&e){fStart=s.value;fEnd=e.value;}fPreset="custom";Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
-function fToggle(type,val){const sets={brand:fBrands,platform:fPlatforms,branch:fBranches};const s=sets[type];if(s.has(val))s.delete(val);else s.add(val);Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
-function fClear(){fBrands.clear();fPlatforms.clear();fBranches.clear();Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
+function getPeriodLabel(){const f=curFilters();if(!f.start)return"";if(f.start===f.end)return fmtDisp(f.start);return`${fmtDisp(f.start)} → ${fmtDisp(f.end)}`;}
+function fSetPreset(p){const f=curFilters();f.preset=p;if(p==="yesterday"){f.start=f.end=latest;}else if(p==="7d"){f.start=subDays(latest,6);f.end=latest;}else if(p==="30d"){f.start=subDays(latest,29);f.end=latest;}else if(p==="month"){f.start=latest.slice(0,7)+"-01";f.end=latest;}else if(p==="lmonth"){const now=new Date(latest+"T12:00:00");f.start=dk(new Date(now.getFullYear(),now.getMonth()-1,1));f.end=dk(new Date(now.getFullYear(),now.getMonth(),0));}Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
+function fApply(){const f=curFilters();const s=document.getElementById("f-s"),e=document.getElementById("f-e");if(s&&e){f.start=s.value;f.end=e.value;}f.preset="custom";Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
+function fToggle(type,val){const f=curFilters();const sets={brand:f.brands,platform:f.platforms,branch:f.branches};const s=sets[type];if(s.has(val))s.delete(val);else s.add(val);Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
+function fClear(){const f=curFilters();f.brands.clear();f.platforms.clear();f.branches.clear();Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
 function toggleDD(id){
   const el=document.getElementById(id);if(!el)return;
   const wasOpen=el.getAttribute("data-open")==="1";
@@ -195,18 +199,19 @@ if(typeof document!=="undefined"){
 
 function makeFilterBar(opts){
   const{hideBrand=false,hidePlatform=false,hideOutlet=false}=opts||{};
+  const f=curFilters();
   const presets=[["yesterday","Yesterday"],["7d","Last 7 Days"],["30d","Last 30 Days"],["month","This Month"],["lmonth","Last Month"],["custom","Custom"]];
-  const pH=presets.map(([k,l])=>`<button class="preset ${fPreset===k?"act":""}" data-act="preset" data-v1="${k}">${l}</button>`).join("");
-  const custH=fPreset==="custom"?`<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap"><input type="date" id="f-s" value="${fStart||""}" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px"><span style="color:#64748b">→</span><input type="date" id="f-e" value="${fEnd||""}" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px"><button data-act="apply" style="background:#f59e0b;border:none;border-radius:5px;color:#000;font-weight:700;padding:4px 12px;font-size:11px;cursor:pointer">Apply</button></div>`:"";
+  const pH=presets.map(([k,l])=>`<button class="preset ${f.preset===k?"act":""}" data-act="preset" data-v1="${k}">${l}</button>`).join("");
+  const custH=f.preset==="custom"?`<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap"><input type="date" id="f-s" value="${f.start||""}" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px"><span style="color:#64748b">→</span><input type="date" id="f-e" value="${f.end||""}" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px"><button data-act="apply" style="background:#f59e0b;border:none;border-radius:5px;color:#000;font-weight:700;padding:4px 12px;font-size:11px;cursor:pointer">Apply</button></div>`:"";
   const allBr=[...new Set(allData.map(r=>r.branch))].sort();
-  const brDD=hideBrand?"":ddHTML("fdd-br","Brand",fBrands,BR.map(b=>({val:b.n,lbl:b.n,clr:b.c})),"brand");
-  const plDD=hidePlatform?"":ddHTML("fdd-pl","Platform",fPlatforms,AGGS.map(a=>({val:a,lbl:a,clr:AC[a]||"#888"})),"platform");
-  const ouDD=hideOutlet?"":ddHTML("fdd-ou","Outlet",fBranches,allBr.map(b=>({val:b,lbl:b+(AUH.has(b)?" (AUH)":""),clr:"#94a3b8"})),"branch");
+  const brDD=hideBrand?"":ddHTML("fdd-br","Brand",f.brands,BR.map(b=>({val:b.n,lbl:b.n,clr:b.c})),"brand");
+  const plDD=hidePlatform?"":ddHTML("fdd-pl","Platform",f.platforms,AGGS.map(a=>({val:a,lbl:a,clr:AC[a]||"#888"})),"platform");
+  const ouDD=hideOutlet?"":ddHTML("fdd-ou","Outlet",f.branches,allBr.map(b=>({val:b,lbl:b+(AUH.has(b)?" (AUH)":""),clr:"#94a3b8"})),"branch");
   const chip=(type,val,style)=>`<span class="fchip" style="${style}" data-act="ftoggle" data-v1="${type}" data-v2="${esc(val)}">✕ ${val}</span>`;
-  const chips=[...[...fBrands].map(b=>chip("brand",b,`background:${BMAP[b]?.c||"#888"}22;color:${BMAP[b]?.c||"#888"};border:1px solid ${BMAP[b]?.c||"#888"}55`)),
-    ...[...fPlatforms].map(p=>chip("platform",p,`background:${AC[p]||"#888"}22;color:${AC[p]||"#888"};border:1px solid ${AC[p]||"#888"}55`)),
-    ...[...fBranches].map(b=>chip("branch",b,`background:#1b2f4a;color:#94a3b8;border:1px solid #1b2f4a`))].join("");
-  const clearBtn=(fBrands.size||fPlatforms.size||fBranches.size)?`<button class="fpill" data-act="clear" style="color:#ef4444;border-color:#ef444444">✕ Clear</button>`:"";
+  const chips=[...[...f.brands].map(b=>chip("brand",b,`background:${BMAP[b]?.c||"#888"}22;color:${BMAP[b]?.c||"#888"};border:1px solid ${BMAP[b]?.c||"#888"}55`)),
+    ...[...f.platforms].map(p=>chip("platform",p,`background:${AC[p]||"#888"}22;color:${AC[p]||"#888"};border:1px solid ${AC[p]||"#888"}55`)),
+    ...[...f.branches].map(b=>chip("branch",b,`background:#1b2f4a;color:#94a3b8;border:1px solid #1b2f4a`))].join("");
+  const clearBtn=(f.brands.size||f.platforms.size||f.branches.size)?`<button class="fpill" data-act="clear" style="color:#ef4444;border-color:#ef444444">✕ Clear</button>`:"";
   const badge=`<span style="margin-left:auto;font-size:10px;color:#64748b;font-style:italic">${getPeriodLabel()}</span>`;
   const ddRow=(brDD||plDD||ouDD||clearBtn)?`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">${brDD}${plDD}${ouDD}${clearBtn}</div>`:"";
   return`<div class="fbar"><div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">${pH}${badge}</div>${custH}${ddRow}${chips?`<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">${chips}</div>`:""}</div>`;
@@ -334,21 +339,21 @@ function renderOverview(){
   </div>
   <div id="brief-content"><div style="color:#64748b;font-size:12px">Generating...</div></div>
 </div>
-    <div class="g4">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders))}${kpiCard("Total Net Sales",fmtAED(ls.sales),`${compShort}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales))}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,"click for brand trends",null,`toggleAovDrill()`)}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
+    <div class="g4">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders))}${kpiCard("Total Net Sales",fmtAED(ls.sales),`${compShort}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales))}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
     <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:150px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:150px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="g2"><div class="sm"><div class="ct" style="color:#22C55E">✅ What Worked</div>${verdW||"<div style='color:#64748b;font-size:12px'>No comparison data</div>"}</div><div class="sm"><div class="ct" style="color:#EF4444">⚠️ Needs Attention</div>${verdI||"<div style='color:#22C55E;font-size:12px'>All outlets performing</div>"}</div></div>
     ${aovBlock}
     <div class="card"><div class="ct">All Brands — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click any header to sort</span></div>${sortableTable("ov-brands",heads,brandTableRows,2)}</div>
     <div class="card"><div class="ct">All Platforms — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click any header to sort</span></div>${sortableTable("ov-plats",heads,aggTableRows,2)}</div>`;
   setTimeout(()=>{
-    trendChart("ch-trend",trend30(()=>true,fStart,fEnd),"#F59E0B");
+    trendChart("ch-trend",trend30(()=>true,curFilters().start,curFilters().end),"#F59E0B");
     barChart("ch-agg",aggRows.map(a=>a.ag),aggRows.map(a=>a.sales),aggRows.map(a=>a.clr),aggRows.map(a=>a.orders),"gmv");
     if(aovDrill){
       // Build per-day AOV per brand across selected range
-      const days=[];let d=new Date((fStart||subDays(latest,6))+"T12:00:00"),e=new Date((fEnd||latest)+"T12:00:00");
+      const days=[];let d=new Date((curFilters().start||subDays(latest,6))+"T12:00:00"),e=new Date((curFilters().end||latest)+"T12:00:00");
       while(d<=e){days.push(dk(d));d.setDate(d.getDate()+1);}
       const labels=days.map(k=>fmtShort(k));
-      const series=BR.map(b=>({name:b.n,color:b.c,data:days.map(k=>{const t=sumR(allData.filter(r=>r.date===k&&r.brand===b.n&&(!fPlatforms.size||fPlatforms.has(r.aggregator))&&(!fBranches.size||fBranches.has(r.branch))));return t.orders>0?+(t.sales/t.orders).toFixed(1):null;})}));
+      const series=BR.map(b=>({name:b.n,color:b.c,data:days.map(k=>{const t=sumR(allData.filter(r=>r.date===k&&r.brand===b.n&&(!curFilters().platforms.size||curFilters().platforms.has(r.aggregator))&&(!curFilters().branches.size||curFilters().branches.has(r.branch))));return t.orders>0?+(t.sales/t.orders).toFixed(1):null;})}));
       multiLineChart("ch-aov-multi",labels,series);
     }
   },50);
@@ -372,10 +377,10 @@ function renderBrands(){
   const heads=["Outlet","Platform","Orders","Net Sales","AOV",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
   document.getElementById("page-brands").innerHTML=makeFilterBar({hideBrand:true})+
     `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
-    <div class="g4">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAED(ls.sales),compShort+": "+fmtAED(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,"per order",null)}${kpiCard("Active Outlets",new Set(ld.map(r=>r.branch)).size,"outlets",null)}</div>
+    <div class="g4">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAED(ls.sales),compShort+": "+fmtAED(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Active Outlets",new Set(ld.map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="g2"><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — Net Sales Trend</div><div style="position:relative;height:140px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform</div><div style="position:relative;height:140px"><canvas id="ch-b-agg"></canvas></div></div></div>
     <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>`;
-  setTimeout(()=>{trendChart("ch-b-trend",trend30(r=>r.brand===selBrand,fStart,fEnd),b?.c||"#888");barChart("ch-b-agg",aggBar.map(a=>a.ag),aggBar.map(a=>a.orders),aggBar.map(a=>a.clr),aggBar.map(a=>a.sales),"orders");},50);
+  setTimeout(()=>{trendChart("ch-b-trend",trend30(r=>r.brand===selBrand,curFilters().start,curFilters().end),b?.c||"#888");barChart("ch-b-agg",aggBar.map(a=>a.ag),aggBar.map(a=>a.orders),aggBar.map(a=>a.clr),aggBar.map(a=>a.sales),"orders");},50);
 }
 
 // OUTLETS — card grid with click-to-drill-down
@@ -480,10 +485,10 @@ function renderPlatforms(){
   document.getElementById("page-platforms").innerHTML=makeFilterBar({hidePlatform:true})+
     `<div class="g4" style="margin-bottom:12px">${cards}</div>
     ${note?`<div class="card" style="background:rgba(245,158,11,.05);border-color:rgba(245,158,11,.2);margin-bottom:12px"><div style="font-size:12px;color:#FDE68A;line-height:1.7">💡 ${note}</div></div>`:""}
-    <div class="g4">${kpiCard("Orders",ls.orders.toLocaleString(),compShort,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAED(ls.sales),compShort,pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,"per order",null)}${kpiCard("Active Outlets",new Set(ld.map(r=>r.branch)).size,"outlets",null)}</div>
+    <div class="g4">${kpiCard("Orders",ls.orders.toLocaleString(),compShort,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAED(ls.sales),compShort,pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Active Outlets",new Set(ld.map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="sm" style="margin-bottom:12px"><div class="ct" style="color:${clr}">${selPlatform} — Net Sales Trend</div><div style="position:relative;height:130px"><canvas id="ch-p-trend"></canvas></div></div>
     <div class="card"><div class="ct" style="color:${clr}">Brand Performance on ${selPlatform} — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("pl-tbl",heads,tRows,2)}</div>`;
-  setTimeout(()=>{trendChart("ch-p-trend",trend30(r=>r.aggregator===selPlatform,fStart,fEnd),clr);},50);
+  setTimeout(()=>{trendChart("ch-p-trend",trend30(r=>r.aggregator===selPlatform,curFilters().start,curFilters().end),clr);},50);
 }
 
 // CPC BUDGETS
