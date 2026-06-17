@@ -54,8 +54,38 @@ function parseBrand(csv,brand){
   let ai=-1;for(let i=0;i<Math.min(rows.length,15);i++){if(rows[i].some(v=>AS_LC.has(v.toLowerCase()))){ai=i;break;}}
   if(ai<0)return[];
   const ar=rows[ai],sr=rows[ai+1]||[];let cur="";
-  const pa=ar.map(v=>{const t=v.trim(),tl=t.toLowerCase();if(AS_LC.has(tl))cur=AS_LC.get(tl);else if(t)cur="";return cur;});
-  const cols=pa.reduce((a,agg,i)=>{if(agg&&(sr[i]==="Sales"||sr[i]==="Orders"||sr[i]==="Disc"||sr[i]==="Discount"||sr[i]==="Discounts"))a.push({i,agg,m:(sr[i]==="Discount"||sr[i]==="Discounts")?"Disc":sr[i]});return a;},[]);
+  // Carry each aggregator label rightward across ITS Sales/Disc/Orders columns only.
+  // Switch when a new known aggregator label appears. Reset to blank only when BOTH the
+  // header cell and the sub-header cell are empty (a true gap between aggregator tables),
+  // so the aggregator still covers its Disc/Orders columns even when their header cell is blank.
+  const pa=ar.map((v,i)=>{
+    const tl=v.trim().toLowerCase();
+    if(AS_LC.has(tl)){cur=AS_LC.get(tl);return cur;}
+    const sub=(sr[i]||"").trim();
+    const hdr=v.trim();
+    if(!hdr&&!sub)cur=""; // genuine empty gap → stop carrying
+    return cur;
+  });
+  const cols=pa.reduce((a,agg,i)=>{
+    const raw=(sr[i]||"").trim().toLowerCase();
+    let m=null;
+    if(raw==="sales"||raw==="net sales"||raw==="gmv")m="Sales";
+    else if(raw==="orders"||raw==="order"||raw==="no. of orders"||raw==="no of orders")m="Orders";
+    else if(raw==="disc"||raw==="disc."||raw==="discount"||raw==="discounts"||raw==="discount given"||raw==="total discount"||raw==="total disc")m="Disc";
+    if(agg&&m)a.push({i,agg,m});
+    return a;
+  },[]);
+  // One-time per-brand log of which columns were detected, so a missing Disc column is visible.
+  try{
+    const discCols=cols.filter(c=>c.m==="Disc");
+    if(!window.__discLogged)window.__discLogged={};
+    if(!window.__discLogged[brand]){
+      window.__discLogged[brand]=true;
+      const colSummary=cols.map(c=>`${c.agg}/${c.m}@${c.i}`).join(" ");
+      console.log(`[DISC-COLS] ${brand}: ${discCols.length} Disc column(s) detected. Headers row: [${(sr||[]).map(x=>(x||"").trim()).filter(Boolean).slice(0,20).join(" | ")}]`);
+      if(discCols.length===0)console.log(`  ⚠ NO Disc column found for ${brand}. The sub-header cells next to "Sales" must read Disc/Discount. Detected metric columns: ${colSummary}`);
+    }
+  }catch(e){}
   const recs=[];
   for(let i=ai+2;i<rows.length;i++){
     const row=rows[i];let br=normB(row[0]?.trim()||"");
@@ -87,6 +117,19 @@ async function doLoad(){
     pb.style.width=`${((idx+1)/5)*100}%`;pt.textContent=`${idx+1} / 5 brands`;
   }));
   allData=all;
+  // ── DISCOUNT PARSE DIAGNOSTIC ──
+  // Prints how much Disc was parsed per brand × aggregator so we can see if the sheet's
+  // Disc column is being read. If a brand/aggregator you entered shows 0, the column header
+  // or layout in that sheet differs from what the parser expects.
+  try{
+    const discByBA={};const discDates={};
+    all.forEach(r=>{const k=`${r.brand} · ${r.aggregator}`;discByBA[k]=(discByBA[k]||0)+(r.disc||0);if(r.disc>0){(discDates[k]=discDates[k]||new Set()).add(r.date);}});
+    const withDisc=Object.entries(discByBA).filter(([k,v])=>v>0);
+    const zeroDisc=Object.entries(discByBA).filter(([k,v])=>v===0);
+    console.log(`[DISC] Parsed discount totals (brand × aggregator): ${withDisc.length} have discount data, ${zeroDisc.length} have none.`);
+    withDisc.sort((a,b)=>b[1]-a[1]).forEach(([k,v])=>{const dates=[...(discDates[k]||[])].sort();console.log(`  ✓ ${k}: AED ${Math.round(v).toLocaleString()} total across ${dates.length} day(s) [${dates[0]||''} → ${dates[dates.length-1]||''}]`);});
+    if(zeroDisc.length)console.log(`  ⚠ No discount parsed for: ${zeroDisc.map(([k])=>k).join(", ")}`);
+  }catch(e){console.log("[DISC] diagnostic error:",e.message);}
   if(!all.length){
     pe.innerHTML=`<div style="color:#ef4444;margin-bottom:10px">⚠️ Could not load data.</div><div style="font-size:12px;line-height:2;color:#94a3b8">Re-publish the Google Sheet to fix CORS.</div>`;
     return;
