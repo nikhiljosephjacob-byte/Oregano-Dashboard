@@ -170,11 +170,17 @@ function handleDelegatedChange(e){
   if(act==="cmpToggle"){cmpToggle(v1,v2,t.getAttribute("data-v3"));return;}
   if(act==="cmpDate"){cmpSetDate(v1,v2,e.target.value);return;}
 }
-// Bind once (by reference, not inline)
-if(typeof document!=="undefined"&&!document.__ddBound){
-  document.addEventListener("click",handleDelegatedClick);
-  document.addEventListener("change",handleDelegatedChange);
-  document.__ddBound=true;
+// Bind once (by reference, not inline). Use capture phase so nothing intercepts first.
+// We deliberately rebind on every load (removing any stale handler) so an older cached
+// version's listener can't block the current one.
+if(typeof document!=="undefined"){
+  if(document.__ddClickHandler){
+    try{document.removeEventListener("click",document.__ddClickHandler,true);document.removeEventListener("change",document.__ddChangeHandler,true);}catch(e){}
+  }
+  document.__ddClickHandler=handleDelegatedClick;
+  document.__ddChangeHandler=handleDelegatedChange;
+  document.addEventListener("click",handleDelegatedClick,true);
+  document.addEventListener("change",handleDelegatedChange,true);
 }
 
 function makeFilterBar(opts){
@@ -841,6 +847,12 @@ const KPI_OUTLETS=["Motor City","Mirdiff","Media City","DIP","DSO","Marina","Vil
 // Normalise the tab name to the canonical outlet name so they aren't shown as duplicates.
 // e.g. the "TSQR" tab IS the Town Square branch.
 const KPI_OUTLET_NAME={"TSQR":"Town Square","Motor City":"Motorcity","Mirdif":"Mirdiff","DMC":"Media City","Dubai Media City":"Media City","FYOO DIP":"Fyoozhen DIP","FYOO-DIP":"Fyoozhen DIP","Fyoo DIP":"Fyoozhen DIP","FYOOZHEN-DIP":"Fyoozhen DIP","FYOOZHEN DIP":"Fyoozhen DIP","Fyoozhen-DIP":"Fyoozhen DIP"};
+// Sheet gids (the numeric ID in the tab URL after #gid=). Fetching by gid is far more reliable
+// than by sheet name, so when a tab is listed here we fetch it by gid first.
+// To add one: open the tab in Google Sheets, copy the number after "#gid=" in the URL.
+const KPI_OUTLET_GID={
+  "FYOOZHEN-DIP":"11930781",
+};
 function kpiOutletName(tab){return KPI_OUTLET_NAME[tab]||tab;}
 const KPI_BRANDS=["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"];
 // Expected number of listings (outlets) per brand on the "big 3" aggregators (Talabat, Deliveroo, Careem).
@@ -1062,12 +1074,14 @@ async function loadKPIData(){
   const diag=[];
   await Promise.all(KPI_OUTLETS.map(async(tab)=>{
     const outletName=kpiOutletName(tab);
-    // Try several tab-name spellings so a small mismatch doesn't silently drop an outlet.
-    const variants=[...new Set([tab,outletName,
-      tab.replace(/\s+/g,""),tab.replace(/\s+/g,"-"),tab.toUpperCase(),tab.toLowerCase(),
-      outletName.replace(/\s+/g,"")
-    ])];
-    // A valid KPI sheet contains at least one aggregator label or a known brand word.
+    // Try many tab-name spellings so a small mismatch doesn't silently drop an outlet.
+    const base=[tab,outletName,tab.trim(),
+      tab.replace(/\s+/g,""),tab.replace(/\s+/g,"-"),tab.replace(/-/g," "),tab.replace(/_/g,"-"),
+      tab.toUpperCase(),tab.toLowerCase(),outletName.replace(/\s+/g,""),outletName.replace(/\s+/g,"-"),
+      // Fyoozhen-specific spellings (covers FYOO DIP, FYOOZHEN DIP, Fyoozhen DIP, etc.)
+      ...(tab.toLowerCase().includes("fyoo")?["FYOOZHEN-DIP","FYOOZHEN DIP","Fyoozhen-DIP","Fyoozhen DIP","FYOO DIP","FYOO-DIP","FYOODIP"]:[])
+    ];
+    const variants=[...new Set(base.filter(Boolean))];
     const looksLikeKPI=(t)=>{
       const lc=t.toLowerCase();
       const hasAgg=["talabat","deliveroo","careem","noon","keeta","dine in","rating in google"].some(k=>lc.includes(k));
@@ -1075,15 +1089,24 @@ async function loadKPIData(){
       return hasAgg||hasBrand;
     };
     let csv="",usedName="";
-    for(const v of variants){
+    // Most reliable: fetch by gid (numeric sheet ID) if we have one for this tab.
+    const gid=KPI_OUTLET_GID[tab]||KPI_OUTLET_GID[outletName];
+    if(gid){
+      const gidUrl=`https://docs.google.com/spreadsheets/d/${KPI_SHEET_ID}/gviz/tq?tqx=out:csv&headers=0&gid=${encodeURIComponent(gid)}`;
+      try{const r=await fetch(gidUrl);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(",")&&looksLikeKPI(t)){csv=t;usedName="gid:"+gid;}}}catch(e){}
+    }
+    if(!csv)for(const v of variants){
       const gvizUrl=`https://docs.google.com/spreadsheets/d/${KPI_SHEET_ID}/gviz/tq?tqx=out:csv&headers=0&sheet=${encodeURIComponent(v)}`;
       try{const r=await fetch(gvizUrl);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(",")&&looksLikeKPI(t)){csv=t;usedName=v;break;}}}catch(e){}
     }
     if(!csv){
-      const pubUrl=`${KPI_PUB}?single=true&output=csv&sheet=${encodeURIComponent(tab)}`;
-      try{const r=await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(pubUrl)}`);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(",")&&looksLikeKPI(t)){csv=t;usedName=tab+" (proxy)";}}}catch(e){}
+      // Fallback: published-CSV endpoint via CORS proxy, trying the same key variants
+      for(const v of variants){
+        const pubUrl=`${KPI_PUB}?single=true&output=csv&sheet=${encodeURIComponent(v)}`;
+        try{const r=await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(pubUrl)}`);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(",")&&looksLikeKPI(t)){csv=t;usedName=v+" (proxy)";break;}}}catch(e){}
+      }
     }
-    if(!csv){diag.push(`✗ ${tab}: tab not reachable or returned non-KPI content (check exact tab name + that it's published)`);return;}
+    if(!csv){diag.push(`✗ ${tab}: tab not reachable or returned non-KPI content (check exact tab name + that it's published). Tried: ${variants.slice(0,6).join(", ")}…`);return;}
     try{
       const parsed=parseKPISheet(csv,outletName);
       if(parsed&&parsed.blocks&&parsed.blocks.length){
