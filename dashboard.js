@@ -775,28 +775,32 @@ function buildCPCModel(onProgress){
         model.monthly.set(k,o);
       }
     });
-    // Step 4: aggregator → brand → outlet rollups (budget respects pooling via sum of allocated)
+    // Step 4: aggregator → brand → outlet rollups. Track BOTH all-time and current-month figures.
     steps.push(()=>{
+      const curMonth=(today||"2026-06-18").slice(0,7);
       for(const r of rows){
         const ag=r.aggregator;
-        if(!model.byAgg[ag])model.byAgg[ag]={name:ag,invested:0,spent:0,sales:0,orders:0,lastUpdate:null,brands:{},rows:[],adTypes:new Set()};
+        const isCur=r.month===curMonth;
+        if(!model.byAgg[ag])model.byAgg[ag]={name:ag,invested:0,spent:0,sales:0,orders:0,curInvested:0,curSpent:0,curSales:0,curOrders:0,lastUpdate:null,brands:{},rows:[],adTypes:new Set()};
         const A=model.byAgg[ag];
         A.invested+=r.budgetAlloc;A.spent+=r.budgetSpent;A.sales+=r.sales;A.orders+=r.orders;A.rows.push(r);A.adTypes.add(r.adType);
+        if(isCur){A.curInvested+=r.budgetAlloc;A.curSpent+=r.budgetSpent;A.curSales+=r.sales;A.curOrders+=r.orders;}
         if(r.endDate&&(!A.lastUpdate||r.endDate>A.lastUpdate))A.lastUpdate=r.endDate;
-        if(!A.brands[r.brand])A.brands[r.brand]={name:r.brand,invested:0,spent:0,sales:0,orders:0,outlets:{},rows:[],adTypes:new Set()};
+        if(!A.brands[r.brand])A.brands[r.brand]={name:r.brand,invested:0,spent:0,sales:0,orders:0,curInvested:0,curSpent:0,curSales:0,curOrders:0,outlets:{},rows:[],adTypes:new Set()};
         const B=A.brands[r.brand];
         B.invested+=r.budgetAlloc;B.spent+=r.budgetSpent;B.sales+=r.sales;B.orders+=r.orders;B.rows.push(r);B.adTypes.add(r.adType);
+        if(isCur){B.curInvested+=r.budgetAlloc;B.curSpent+=r.budgetSpent;B.curSales+=r.sales;B.curOrders+=r.orders;}
         const ok=r.branch;
         if(!B.outlets[ok])B.outlets[ok]={name:ok,invested:0,spent:0,sales:0,orders:0,rows:[]};
         const O=B.outlets[ok];
         O.invested+=r.budgetAlloc;O.spent+=r.budgetSpent;O.sales+=r.sales;O.orders+=r.orders;O.rows.push(r);
       }
-      // compute roas at each level
-      for(const ag in model.byAgg){const A=model.byAgg[ag];A.roas=A.spent>0?A.sales/A.spent:null;
-        for(const b in A.brands){const B=A.brands[b];B.roas=B.spent>0?B.sales/B.spent:null;B.be=cpcBE(b,ag);B.verdict=cpcVerdict(B.roas,B.be);
+      for(const ag in model.byAgg){const A=model.byAgg[ag];A.roas=A.spent>0?A.sales/A.spent:null;A.curRoas=A.curSpent>0?A.curSales/A.curSpent:null;
+        for(const b in A.brands){const B=A.brands[b];B.roas=B.spent>0?B.sales/B.spent:null;B.curRoas=B.curSpent>0?B.curSales/B.curSpent:null;B.be=cpcBE(b,ag);B.verdict=cpcVerdict(B.curSpent>0?B.curRoas:B.roas,B.be);
           for(const o in B.outlets){const O=B.outlets[o];O.roas=O.spent>0?O.sales/O.spent:null;O.be=cpcBE(b,ag);O.verdict=cpcVerdict(O.roas,O.be);}
         }
       }
+      model.curMonth=curMonth;
     });
     // Step 5: post-exhaustion impact for completed/exhausted rows (the heavy scan, but indexed)
     steps.push(()=>{
@@ -820,20 +824,28 @@ function buildCPCModel(onProgress){
     // Step 6: build the Action Now list
     steps.push(()=>{
       const acts=[];
+      const curMonthStr=(today||"2026-06-18").slice(0,7); // refills only for CPCs whose window is in the current calendar month
+      // Index active CPCs per outlet so refill doesn't fire when a replacement is already running
+      const activeByOutlet=new Set();
+      for(const r of rows){if((r.status==="Active"||r.status==="Critical"))activeByOutlet.add(`${r.brand}|${r.aggregator}|${r.adType}|${r.branch}`);}
       for(const r of rows){
         // Top up: active, good verdict, exhausting soon
         if((r.status==="Active"||r.status==="Critical")&&(r.verdict==="SCALE"||r.verdict==="INVEST")&&r.daysUntilExhausted!=null&&r.daysUntilExhausted<=3){
           const sug=cpcTopUpSuggestion(r);
           acts.push({type:"topup",priority:1,r,msg:`Exhausting in ${r.daysUntilExhausted}d · ROAS ${r.roi?.toFixed(1)}× — top up ${sug?fmtAED(sug.suggested):''}`});
         }
-        // Withdraw: below BE still spending
+        // Withdraw: below BE still spending (must be currently active)
         if((r.status==="Active"||r.status==="Critical")&&r.verdict==="WITHDRAW"&&r.leftover>50){
           acts.push({type:"withdraw",priority:2,r,msg:`ROAS ${r.roi?.toFixed(2)}× below BE ${r.be.toFixed(2)}× — shift ${fmtAED(Math.round(r.leftover*0.8))}`});
         }
-        // Refill: big post-exhaustion drop with good verdict
+        // Refill: big post-exhaustion drop — ONLY if the CPC's window is in the CURRENT calendar
+        // month (so late-month campaigns don't bleed into next month's view) AND there's no active
+        // CPC already running for that same outlet+adType (else no refill needed).
         const imp=model.postImpact.get(r);
-        if(imp&&imp.salesChg<-15&&(r.verdict==="SCALE"||r.verdict==="INVEST")){
-          acts.push({type:"refill",priority:1,r,msg:`Sales fell ${fmtPct(imp.salesChg)} after this ended — refill recommended`});
+        if(imp&&imp.salesChg<-15&&(r.verdict==="SCALE"||r.verdict==="INVEST")
+           &&r.month===curMonthStr
+           &&!activeByOutlet.has(`${r.brand}|${r.aggregator}|${r.adType}|${r.branch}`)){
+          acts.push({type:"refill",priority:1,r,msg:`Ended ${cpcMonthLabel(r.month)} · sales fell ${fmtPct(imp.salesChg)} after — refill recommended`});
         }
       }
       acts.sort((a,b)=>a.priority-b.priority);
@@ -874,9 +886,9 @@ function cpcBidSuggestion(r){
 // ── DRILL-DOWN STATE ──
 let cpcDrill={level:"agg",agg:null,brand:null},cpcSort={col:"roas",dir:-1},cpcAdTypeFilter="all",cpcMonthFilter="all";
 
-function cpcGoAgg(){cpcDrill={level:"agg",agg:null,brand:null};renderCPC();}
-function cpcGoBrands(ag){cpcDrill={level:"brand",agg:ag,brand:null};renderCPC();}
-function cpcGoOutlets(ag,brand){cpcDrill={level:"outlet",agg:ag,brand:brand};renderCPC();}
+function cpcGoAgg(){cpcDrill={level:"agg",agg:null,brand:null};cpcAdTypeFilter="all";cpcMonthFilter="all";cpcOutletDetail=null;renderCPC();}
+function cpcGoBrands(ag){cpcDrill={level:"brand",agg:ag,brand:null};cpcAdTypeFilter="all";cpcMonthFilter="all";cpcOutletDetail=null;renderCPC();}
+function cpcGoOutlets(ag,brand){cpcDrill={level:"outlet",agg:ag,brand:brand};cpcMonthFilter="all";cpcOutletDetail=null;renderCPC();}
 function cpcSetSort(col){if(cpcSort.col===col)cpcSort.dir*=-1;else{cpcSort.col=col;cpcSort.dir=-1;}renderCPC();}
 function cpcSetAdType(t){cpcAdTypeFilter=t;renderCPC();}
 function cpcSetMonth(m){cpcMonthFilter=m;renderCPC();}
@@ -914,10 +926,14 @@ function cpcShell(body,withCrumb){
   const statusBar=cpcModel?`<div style="display:flex;align-items:center;gap:8px"><div style="width:120px;height:6px;background:rgba(27,47,74,.5);border-radius:3px;overflow:hidden"><div style="height:100%;width:100%;background:linear-gradient(90deg,#22C55E,#86EFAC)"></div></div><span style="font-size:11px;color:#22C55E;font-weight:700">✓ Ready</span></div>`:'';
   let crumb='';
   if(withCrumb){
-    const parts=[`<span onclick="cpcGoAgg()" style="cursor:pointer;color:${cpcDrill.level==='agg'?'#f59e0b':'#94a3b8'};font-weight:${cpcDrill.level==='agg'?'700':'400'}">All Aggregators</span>`];
-    if(cpcDrill.agg)parts.push(`<span onclick="cpcGoBrands('${cpcDrill.agg}')" style="cursor:pointer;color:${cpcDrill.level==='brand'?'#f59e0b':'#94a3b8'};font-weight:${cpcDrill.level==='brand'?'700':'400'}">${cpcDrill.agg}</span>`);
-    if(cpcDrill.brand)parts.push(`<span style="color:#f59e0b;font-weight:700">${cpcDrill.brand}</span>`);
-    crumb=`<div style="font-size:12px;margin-bottom:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">${parts.join('<span style="color:#475569">→</span>')}</div>`;
+    const parts=[`<span onclick="cpcGoAgg()" style="cursor:pointer;color:${cpcDrill.level==='agg'?'#f59e0b':'#94a3b8'};font-weight:${cpcDrill.level==='agg'?'700':'600'};padding:2px 4px;border-radius:4px" onmouseover="this.style.background='rgba(245,158,11,.1)'" onmouseout="this.style.background='none'">🏠 All Aggregators</span>`];
+    if(cpcDrill.agg)parts.push(`<span onclick="cpcGoBrands('${cpcDrill.agg}')" style="cursor:pointer;color:${cpcDrill.level==='brand'?'#f59e0b':'#94a3b8'};font-weight:${cpcDrill.level==='brand'?'700':'600'};padding:2px 4px;border-radius:4px" onmouseover="this.style.background='rgba(245,158,11,.1)'" onmouseout="this.style.background='none'">${cpcDrill.agg}</span>`);
+    if(cpcDrill.brand)parts.push(`<span style="color:#f59e0b;font-weight:700;padding:2px 4px">${cpcDrill.brand}</span>`);
+    // Back button goes up one level
+    let backBtn='';
+    if(cpcDrill.level==='brand')backBtn=`<button onclick="cpcGoAgg()" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:600">← Back to Aggregators</button>`;
+    else if(cpcDrill.level==='outlet')backBtn=`<button onclick="cpcGoBrands('${cpcDrill.agg}')" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:600">← Back to ${cpcDrill.agg} Brands</button>`;
+    crumb=`<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;padding:8px 12px;background:rgba(13,21,36,.4);border:1px solid rgba(27,47,74,.5);border-radius:8px"><div style="font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">${parts.join('<span style="color:#475569">→</span>')}</div>${backBtn}</div>`;
   }
   return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(27,47,74,.5)"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">📊</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Ads Performance</div>${statusBar}</div><div style="font-size:10px;color:#64748b;margin-top:2px;letter-spacing:.4px">Spend · ROAS · Conversion · Reinvestment</div></div><button onclick="cpcLoaded=false;cpcModel=null;cpcDrill={level:'agg',agg:null,brand:null};renderCPC()" style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600">↻ Refresh</button></div>${crumb}${body}`;
 }
@@ -941,11 +957,15 @@ function cpcActionStrip(){
 
 // LEVEL 1 — Aggregator cards
 function cpcRenderAggLevel(){
-  const aggs=Object.values(cpcModel.byAgg).sort((a,b)=>(b.spent||0)-(a.spent||0));
+  const aggs=Object.values(cpcModel.byAgg).sort((a,b)=>(b.curSpent||b.spent||0)-(a.curSpent||a.spent||0));
+  const monthLbl=cpcMonthLabel(cpcModel.curMonth);
   const cards=aggs.map(A=>{
     const clr=AGG_LOGO_CLR[A.name]||'#94a3b8';
-    const consum=A.invested>0?(A.spent/A.invested)*100:0;
-    const roasStr=A.roas?A.roas.toFixed(2)+'×':'—';
+    // Show current month figures (fall back to all-time if no current-month data)
+    const hasCur=A.curSpent>0||A.curInvested>0;
+    const inv=hasCur?A.curInvested:A.invested,spent=hasCur?A.curSpent:A.spent,roas=hasCur?A.curRoas:A.roas;
+    const consum=inv>0?(spent/inv)*100:0;
+    const roasStr=roas?roas.toFixed(2)+'×':'—';
     const actCount=cpcModel.actions.filter(a=>a.r.aggregator===A.name).length;
     const adTypes=[...A.adTypes].join(' + ');
     return `<div onclick="cpcGoBrands('${A.name}')" style="cursor:pointer;background:linear-gradient(135deg,${clr}0d,rgba(13,21,36,.4));border:1px solid ${clr}33;border-radius:14px;padding:16px;position:relative;overflow:hidden;transition:transform .15s,border-color .15s" onmouseover="this.style.borderColor='${clr}88';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='${clr}33';this.style.transform='none'">
@@ -954,13 +974,14 @@ function cpcRenderAggLevel(){
         <div style="display:flex;align-items:center;gap:8px"><div style="width:34px;height:34px;border-radius:9px;background:${clr}22;border:1px solid ${clr}44;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:${clr}">${A.name[0]}</div><div><div style="font-size:15px;font-weight:800;color:#e2e8f0">${A.name}</div><div style="font-size:9px;color:#64748b">${adTypes}</div></div></div>
         ${actCount?`<div style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:8px;padding:2px 8px;font-size:10px;font-weight:700;color:#EF4444">⚡ ${actCount}</div>`:''}
       </div>
+      <div style="font-size:9px;color:#f59e0b;font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">${hasCur?monthLbl+' (current month)':'all-time (no current month data)'}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Invested</div><div style="font-size:17px;font-weight:800;color:#e2e8f0">${fmtAED(A.invested)}</div></div>
-        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Consumed</div><div style="font-size:17px;font-weight:800;color:#e2e8f0">${fmtAED(A.spent)}</div></div>
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Invested</div><div style="font-size:17px;font-weight:800;color:#e2e8f0">${fmtAED(inv)}</div></div>
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Consumed</div><div style="font-size:17px;font-weight:800;color:#e2e8f0">${fmtAED(spent)}</div></div>
       </div>
       <div style="width:100%;height:6px;background:rgba(27,47,74,.4);border-radius:3px;overflow:hidden;margin-bottom:10px"><div style="height:100%;width:${Math.min(100,consum)}%;background:linear-gradient(90deg,${clr},${clr}88)"></div></div>
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Aggregator ROAS</div><div style="font-size:18px;font-weight:800;color:${clr}">${roasStr}</div></div>
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">ROAS</div><div style="font-size:18px;font-weight:800;color:${clr}">${roasStr}</div></div>
         <div style="text-align:right"><div style="font-size:9px;color:#64748b">Last update</div><div style="font-size:11px;color:#94a3b8">${A.lastUpdate||'—'}</div></div>
       </div>
       <div style="margin-top:10px;font-size:10px;color:#f59e0b;font-weight:600">View ${Object.keys(A.brands).length} brands →</div>
@@ -977,16 +998,19 @@ function cpcRenderBrandLevel(ag){
   // Ad-type toggle (only if this aggregator has more than one)
   const adTypes=[...A.adTypes];
   const adToggle=adTypes.length>1?`<div style="display:flex;gap:6px;margin-bottom:14px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Ad Type</span>${['all',...adTypes].map(t=>`<button onclick="cpcSetAdType('${t}')" style="padding:4px 12px;border-radius:6px;border:1px solid ${cpcAdTypeFilter===t?clr:'rgba(27,47,74,.6)'};background:${cpcAdTypeFilter===t?clr+'22':'transparent'};color:${cpcAdTypeFilter===t?clr:'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${t==='all'?'All':t}</button>`).join('')}</div>`:'';
+  const aggAdTypes=[...A.adTypes];
+  // If the active ad-type filter isn't valid for this aggregator, treat as 'all'
+  const effAdType=(cpcAdTypeFilter!=='all'&&aggAdTypes.includes(cpcAdTypeFilter))?cpcAdTypeFilter:'all';
   const cards=brands.map(B=>{
     const bClr=BMAP[B.name]?.c||'#94a3b8';
     // filter rows by ad type for the displayed numbers
-    let rows=B.rows;if(cpcAdTypeFilter!=='all')rows=rows.filter(r=>r.adType===cpcAdTypeFilter);
+    let rows=B.rows;if(effAdType!=='all')rows=rows.filter(r=>r.adType===effAdType);
     const inv=rows.reduce((s,r)=>s+r.budgetAlloc,0),spent=rows.reduce((s,r)=>s+r.budgetSpent,0),sales=rows.reduce((s,r)=>s+r.sales,0);
     const roas=spent>0?sales/spent:null;const be=cpcBE(B.name,ag);const verdict=cpcVerdict(roas,be);
     if(!rows.length)return '';
     const consum=inv>0?(spent/inv)*100:0;
     const vClr=verdict?CPC_VC[verdict]:'#64748b';
-    const actCount=cpcModel.actions.filter(a=>a.r.aggregator===ag&&a.r.brand===B.name&&(cpcAdTypeFilter==='all'||a.r.adType===cpcAdTypeFilter)).length;
+    const actCount=cpcModel.actions.filter(a=>a.r.aggregator===ag&&a.r.brand===B.name&&(effAdType==='all'||a.r.adType===effAdType)).length;
     return `<div onclick="cpcGoOutlets('${ag}','${B.name}')" style="cursor:pointer;background:linear-gradient(135deg,${bClr}0d,rgba(13,21,36,.4));border:1px solid ${bClr}33;border-radius:14px;padding:16px;position:relative;overflow:hidden;transition:transform .15s,border-color .15s" onmouseover="this.style.borderColor='${bClr}88';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='${bClr}33';this.style.transform='none'">
       <div style="position:absolute;top:-20px;right:-20px;width:80px;height:80px;background:radial-gradient(circle,${bClr}22,transparent 70%);pointer-events:none"></div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
