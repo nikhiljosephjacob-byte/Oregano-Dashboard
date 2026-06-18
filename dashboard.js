@@ -794,11 +794,14 @@ function selectBundleByKey(key){
   if(!camps.length)return;
   const start=camps.reduce((m,c)=>c.startDate<m?c.startDate:m,camps[0].startDate);
   const end=camps.reduce((m,c)=>c.endDate>m?c.endDate:m,camps[0].endDate);
+  const exc=detectExclusion(camps);
   selBundle={
     isBundle:true,brand:camps[0].brand,aggregator:camps[0].aggregator,
     startDate:start,endDate:end,
     outlet:camps.every(c=>c.outlet===camps[0].outlet)?camps[0].outlet:"Mixed",
     campaigns:camps,
+    exclusive:exc.exclusive,
+    pausedByExclusive:exc.paused,
     name:`🎯 ${camps[0].brand} ${camps[0].aggregator} Bundle (${camps.length} segments)`,
     comments:camps.map(c=>c.name||c.comments||"").filter(Boolean).join(" + ")
   };
@@ -961,13 +964,43 @@ function renderCampCalendar(){
   }
   return filterRow+calH+dayDetail;
 }
-// ── CAMPAIGN BUNDLING ──
-// Concurrent campaigns on the same brand + aggregator with overlapping dates aren't really
-// competing — they're a coordinated strategy targeting different customer segments (FTU /
-// Lapsed / Regular, etc.). Analyzing each separately is misleading because the sales lift
-// can't be attributed to any one of them, and the discount in the Disc column is the SUM
-// of all of them combined. This function groups such campaigns into "bundles" so they can
-// be analyzed together as a single coordinated effort.
+// Detect whether a campaign declares mutual exclusion with other concurrent campaigns.
+// Looks at the comments AND name for natural-language clues like "co-funded" (which by convention
+// pauses other campaigns to avoid stacking discounts), "while this is running others not valid",
+// "not valid with other offers", "exclusive", etc.
+function campIsExclusive(c){
+  const text=`${c.name||''} ${c.comments||''}`.toLowerCase();
+  if(!text.trim())return false;
+  // The campaign should be flagged exclusive only when IT pauses/blocks others — not when it
+  // describes itself as the one being paused. Test the negative cases first.
+  // "is paused / will be paused / gets paused / this is paused" → being paused, NOT exclusive.
+  if(/\b(?:this is|when .* is running, this|when .*is active, this|is|will be|gets)\s+paused\b/.test(text))return false;
+  if(/\bthis (?:campaign |offer )?is paused\b/.test(text))return false;
+  // Active-voice patterns where THIS campaign blocks others:
+  const patterns=[
+    /\bco-?funded\b/,                       // co-funded → conventionally pauses others
+    /pauses?\s+(?:the\s+)?other/,            // "pauses other campaigns"
+    /(?:overrides?|supersedes?|replaces?)\s+(?:the\s+)?other/,
+    /excludes?\s+(?:the\s+)?other/,
+    /others?\s+(?:wont|won'?t|will not|are not|aren'?t)\s+(?:valid|active|applicable)/,
+    /no other (?:offer|discount|campaign)/,
+    /not valid (?:with|alongside|combined with)/,  // says it cannot combine with others
+    /cannot be (?:combined|stacked|used with)/,
+    /\bexclusive\b/                          // explicit
+  ];
+  return patterns.some(p=>p.test(text));
+}
+// Detect mutual-exclusion relationships within a group of overlapping campaigns:
+// returns {exclusiveCamps:[campaigns marked exclusive], pausedDuringExclusive:[campaigns paused by them]}
+function detectExclusion(group){
+  const exclusive=group.filter(campIsExclusive);
+  if(!exclusive.length)return{exclusive:[],paused:[]};
+  // Anything that overlaps an exclusive campaign and isn't itself exclusive is paused during that overlap
+  const paused=group.filter(c=>!exclusive.includes(c)&&exclusive.some(x=>!(c.endDate<x.startDate||c.startDate>x.endDate)));
+  return{exclusive,paused};
+}
+
+// CAMPAIGN BUNDLING — see comments below for the rationale.
 function buildCampBundles(camps){
   // Group by brand|aggregator
   const groups={};
@@ -995,6 +1028,7 @@ function buildCampBundles(camps){
         // Bundle: shared brand+platform, overlapping dates
         const start=cluster.reduce((m,c)=>c.startDate<m?c.startDate:m,cluster[0].startDate);
         const end=cluster.reduce((m,c)=>c.endDate>m?c.endDate:m,cluster[0].endDate);
+        const exc=detectExclusion(cluster);
         bundles.push({
           isBundle:true,
           brand:seed.brand,
@@ -1002,6 +1036,8 @@ function buildCampBundles(camps){
           startDate:start,endDate:end,
           outlet:cluster.every(c=>c.outlet===cluster[0].outlet)?cluster[0].outlet:"Mixed",
           campaigns:cluster,
+          exclusive:exc.exclusive,
+          pausedByExclusive:exc.paused,
           name:`🎯 ${seed.brand} ${seed.aggregator} Bundle (${cluster.length} segments)`,
           comments:cluster.map(c=>c.name||c.comments||"").filter(Boolean).join(" + ")
         });
@@ -1041,7 +1077,8 @@ function campTableHTML(title,camps,showImpact){
       const bundleIdx="bundle:"+c.campaigns.map(seg=>campaignData.indexOf(seg)).join(",");
       const viewBtn=`<button onclick="selectBundleByKey('${bundleIdx}')" style="background:#f59e0b22;border:1px solid #f59e0b66;border-radius:5px;color:#f59e0b;padding:3px 8px;font-size:10px;cursor:pointer;white-space:nowrap;font-weight:700">View Bundle →</button>`;
       const b=BMAP[c.brand];
-      let row=`<tr style="background:rgba(245,158,11,.04)"><td><strong style="font-size:12px;color:#FBBF24">🎯 ${c.brand} ${c.aggregator} Bundle</strong><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px">${segChips}</div></td><td><span style="color:${b?.c||'#888'};font-weight:700;font-size:11px">${c.brand}</span></td><td><span style="color:${AC[c.aggregator]||'#888'};font-weight:700;font-size:11px">${c.aggregator}</span></td><td><span style="font-size:11px;color:#94a3b8">${c.campaigns.length} concurrent segments — combined analysis</span></td><td><span style="white-space:nowrap;font-size:11px">${fmtCampDateRange(c.startDate,c.endDate)}</span></td><td><span style="font-size:11px">${c.outlet}</span></td>`;
+      const exclLabel=c.exclusive&&c.exclusive.length?`<span style="font-size:11px;color:#94a3b8">${c.campaigns.length} segments · <span style="color:#FBBF24;font-weight:700">⚠️ Mutual exclusion detected</span> — ${c.exclusive.length} pauses the other${c.pausedByExclusive.length>1?'s':''}</span>`:`<span style="font-size:11px;color:#94a3b8">${c.campaigns.length} concurrent segments — combined analysis</span>`;
+      let row=`<tr style="background:rgba(245,158,11,.04)"><td><strong style="font-size:12px;color:#FBBF24">🎯 ${c.brand} ${c.aggregator} Bundle</strong><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px">${segChips}</div></td><td><span style="color:${b?.c||'#888'};font-weight:700;font-size:11px">${c.brand}</span></td><td><span style="color:${AC[c.aggregator]||'#888'};font-weight:700;font-size:11px">${c.aggregator}</span></td><td>${exclLabel}</td><td><span style="white-space:nowrap;font-size:11px">${fmtCampDateRange(c.startDate,c.endDate)}</span></td><td><span style="font-size:11px">${c.outlet}</span></td>`;
       if(showImpact){
         if(a.cs&&a.cs.orders>0){
           const ordClr=pctClr(a.ordersLift),salClr=pctClr(a.salesLift);
@@ -1123,8 +1160,17 @@ function campDetailHTML(c,idx){
   const scopeStr=campScopeLabel(c);
   const isScoped=scopeStr!=="All outlets";
   const scopeBadge=isScoped?`<div style="margin-top:10px;padding:8px 12px;background:rgba(96,165,250,.08);border-left:3px solid #60A5FA;border-radius:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="font-size:18px">📍</div><div style="flex:1;min-width:200px"><div style="font-size:10px;color:#60A5FA;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Location-Scoped Analysis</div><div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.5">${scopeStr} — performance is compared against the <strong style="color:#e2e8f0">same outlets only</strong> in the prior period (apples-to-apples).</div></div></div>`:'';
-  // ── Header ──
-  const header=`<div class="card" style="border-color:${accent}44;margin-bottom:12px"><div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px"><div style="flex:1;min-width:280px"><div style="font-size:16px;font-weight:800;color:${accent}">${c.name||'(no name)'}</div><div style="font-size:12px;color:#64748b;margin-top:6px;line-height:2"><span style="color:${accent};font-weight:700">${c.brand}</span> · <span style="color:${AC[c.aggregator]||'#888'};font-weight:700">${c.aggregator}</span> · ${!c.outlet||c.outlet==='All'?'All Outlets':c.outlet}<br>${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)} (${a.days} day${a.days!==1?'s':''})<br><span style="color:#e2e8f0;line-height:1.6">${c.comments||''}</span>${(c.addons&&c.addons.length)?`<div style="margin-top:10px;padding:8px 12px;background:rgba(232,214,20,0.08);border-left:3px solid #E8D614;border-radius:4px"><div style="font-size:10px;color:#E8D614;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">⊕ Co-funded Add-ons</div>${c.addons.map(ad=>`<div style="font-size:11px;color:#FCD34D;line-height:1.5"><strong>${ad.name}</strong> · ${ad.comments} · ${fmtCampDateRange(ad.startDate,ad.endDate)}</div>`).join('')}</div>`:''}</div>${scopeBadge}</div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0"><div style="padding:4px 14px;border-radius:12px;font-size:11px;font-weight:700;background:${stClr}22;color:${stClr};border:1px solid ${stClr}44">${st}</div><button onclick="campTab='active';renderCampaigns()" style="background:none;border:1px solid #1b2f4a;border-radius:5px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer">← Back</button></div></div></div>`;
+  // ── Exclusion badge — surfaces the comments-detected mutual-exclusion rule ──
+  const isExcl=campIsExclusive(c);
+  const concurrent=campaignData.filter(o=>o!==c&&o.brand===c.brand&&o.aggregator===c.aggregator&&!(o.endDate<c.startDate||o.startDate>c.endDate));
+  const exclusiveSiblings=concurrent.filter(campIsExclusive);
+  let exclBadge='';
+  if(isExcl&&concurrent.length){
+    exclBadge=`<div style="margin-top:8px;padding:8px 12px;background:rgba(245,158,11,.08);border-left:3px solid #FBBF24;border-radius:4px;display:flex;align-items:flex-start;gap:10px"><div style="font-size:18px;line-height:1">⚡</div><div style="flex:1;min-width:200px"><div style="font-size:10px;color:#FBBF24;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Exclusive — Pauses Other Offers</div><div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.5">The comments flag this as exclusive — while it's running, ${concurrent.length} other concurrent ${c.brand}/${c.aggregator} campaign${concurrent.length>1?'s are':' is'} effectively paused to avoid double-discounting.</div></div></div>`;
+  }else if(exclusiveSiblings.length){
+    exclBadge=`<div style="margin-top:8px;padding:8px 12px;background:rgba(100,116,139,.08);border-left:3px solid #94a3b8;border-radius:4px;display:flex;align-items:flex-start;gap:10px"><div style="font-size:18px;line-height:1">⏸</div><div style="flex:1;min-width:200px"><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Paused When Exclusive Offer Runs</div><div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.5">Another ${c.brand}/${c.aggregator} campaign — ${exclusiveSiblings.map(x=>'"'+(x.name||'unnamed')+'"').join(', ')} — is marked exclusive and overlaps these dates. During those overlapping days, this campaign was effectively paused, so its standalone lift figures should be read with that in mind.</div></div></div>`;
+  }
+  const header=`<div class="card" style="border-color:${accent}44;margin-bottom:12px"><div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px"><div style="flex:1;min-width:280px"><div style="font-size:16px;font-weight:800;color:${accent}">${c.name||'(no name)'}</div><div style="font-size:12px;color:#64748b;margin-top:6px;line-height:2"><span style="color:${accent};font-weight:700">${c.brand}</span> · <span style="color:${AC[c.aggregator]||'#888'};font-weight:700">${c.aggregator}</span> · ${!c.outlet||c.outlet==='All'?'All Outlets':c.outlet}<br>${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)} (${a.days} day${a.days!==1?'s':''})<br><span style="color:#e2e8f0;line-height:1.6">${c.comments||''}</span>${(c.addons&&c.addons.length)?`<div style="margin-top:10px;padding:8px 12px;background:rgba(232,214,20,0.08);border-left:3px solid #E8D614;border-radius:4px"><div style="font-size:10px;color:#E8D614;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">⊕ Co-funded Add-ons</div>${c.addons.map(ad=>`<div style="font-size:11px;color:#FCD34D;line-height:1.5"><strong>${ad.name}</strong> · ${ad.comments} · ${fmtCampDateRange(ad.startDate,ad.endDate)}</div>`).join('')}</div>`:''}</div>${scopeBadge}${exclBadge}</div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0"><div style="padding:4px 14px;border-radius:12px;font-size:11px;font-weight:700;background:${stClr}22;color:${stClr};border:1px solid ${stClr}44">${st}</div><button onclick="campTab='active';renderCampaigns()" style="background:none;border:1px solid #1b2f4a;border-radius:5px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer">← Back</button></div></div></div>`;
 
   if(st==='Upcoming')return header+`<div class="card"><div style="color:#F59E0B;font-size:13px;padding:4px 0">⏰ Campaign starts ${fmtDisp(c.startDate)} — performance data will appear once live.</div></div>`;
   if(!a.hasData)return header+`<div class="card"><div style="color:#64748b;font-size:12px;padding:4px 0">No sales data found for this campaign period.</div></div>`;
@@ -1233,11 +1279,18 @@ function bundleDetailHTML(bundle){
     <button onclick="selBundle=null;campTab='active';renderCampaigns()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer">← Back</button>
   </div></div>`;
   // Segments breakdown — what each campaign in the bundle targets
+  const isExclSet=new Set(bundle.exclusive||[]);
+  const isPausedSet=new Set(bundle.pausedByExclusive||[]);
   const segmentRows=bundle.campaigns.map((seg,i)=>{
     const offer=seg.comments||'';
-    return `<tr><td><strong style="font-size:12px;color:#FBBF24">${i+1}. ${seg.name||'(unnamed)'}</strong></td><td><span style="font-size:11px;color:#94a3b8">${offer.length>80?offer.slice(0,80)+'…':offer}</span></td><td style="font-size:11px;color:#94a3b8;white-space:nowrap">${fmtCampDateRange(seg.startDate,seg.endDate)}</td></tr>`;
+    let badge='';
+    if(isExclSet.has(seg))badge=`<span style="background:rgba(245,158,11,.18);color:#FBBF24;font-size:9px;font-weight:800;padding:2px 7px;border-radius:8px;margin-left:5px;border:1px solid rgba(245,158,11,.4);white-space:nowrap">⚡ EXCLUSIVE</span>`;
+    else if(isPausedSet.has(seg))badge=`<span style="background:rgba(100,116,139,.15);color:#94a3b8;font-size:9px;font-weight:700;padding:2px 7px;border-radius:8px;margin-left:5px;border:1px solid rgba(100,116,139,.3);white-space:nowrap">⏸ Paused when exclusive runs</span>`;
+    return `<tr><td><strong style="font-size:12px;color:#FBBF24">${i+1}. ${seg.name||'(unnamed)'}</strong>${badge}</td><td><span style="font-size:11px;color:#94a3b8">${offer.length>80?offer.slice(0,80)+'…':offer}</span></td><td style="font-size:11px;color:#94a3b8;white-space:nowrap">${fmtCampDateRange(seg.startDate,seg.endDate)}</td></tr>`;
   }).join('');
-  const segmentsCard=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#FBBF24">🧩 Bundle Segments — Targeting Different Customer Groups</div><div style="font-size:11px;color:#94a3b8;margin-bottom:10px;line-height:1.6">This bundle runs ${bundle.campaigns.length} concurrent campaigns on the same brand and platform, each targeting a different customer segment (e.g. new vs. lapsed vs. regular). They share the discount pool reported by the platform, so they're analyzed as one combined effort below.</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Segment Campaign</th><th>Offer</th><th>Dates</th></tr></thead><tbody>${segmentRows}</tbody></table></div></div>`;
+  // Mutual-exclusion notice — surfaces when a segment's comments say it pauses the others
+  const exclNotice=(bundle.exclusive&&bundle.exclusive.length)?`<div style="margin-bottom:10px;padding:10px 14px;background:rgba(245,158,11,.08);border-left:3px solid #FBBF24;border-radius:4px"><div style="display:flex;align-items:flex-start;gap:10px"><div style="font-size:20px;line-height:1">⚡</div><div style="flex:1"><div style="font-size:11px;color:#FBBF24;font-weight:800;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">Mutual Exclusion Detected</div><div style="font-size:11px;color:#e2e8f0;line-height:1.6">The comments on <strong>${bundle.exclusive.map(c=>'"'+(c.name||'unnamed')+'"').join(', ')}</strong> indicate ${bundle.exclusive.length>1?'they pause':'it pauses'} the other segment${bundle.pausedByExclusive.length>1?'s':''} (${bundle.pausedByExclusive.map(c=>'"'+(c.name||'unnamed')+'"').join(', ')}) to avoid double-discounting. So even though the date ranges overlap, the segments don't all run simultaneously — the platform's Disc total still reflects whichever offer was actually active each day, so the combined profitability math below is still accurate.</div></div></div></div>`:'';
+  const segmentsCard=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#FBBF24">🧩 Bundle Segments — Targeting Different Customer Groups</div>${exclNotice}<div style="font-size:11px;color:#94a3b8;margin-bottom:10px;line-height:1.6">This bundle groups ${bundle.campaigns.length} campaigns on the same brand and platform with overlapping date ranges. They share the discount pool reported by the platform, so they're analyzed as one combined effort below.</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Segment Campaign</th><th>Offer</th><th>Dates</th></tr></thead><tbody>${segmentRows}</tbody></table></div></div>`;
   // Combined KPIs
   const kpiCards=`<div class="card" style="margin-bottom:12px"><div class="ct">Combined Performance</div><div class="g4">
     ${kpiCard('Orders During',a.cs.orders.toLocaleString(),`baseline /day: ${Math.round(a.baseOrders/Math.max(1,a.bDays)).toLocaleString()}`,a.ordersLift)}
