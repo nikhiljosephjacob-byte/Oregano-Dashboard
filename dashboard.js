@@ -740,25 +740,138 @@ function campStatus(c){const today=dk(new Date());if(c.startDate>today)return'Up
 // to oranges. campOutlets() resolves the outlet field on a campaign record to the set of actual
 // branch names from allData that the campaign applies to.
 const AUH_OUTLETS=new Set(["Al Forsan","Al Reem","Reem Island","WTC","Al Reef"]); // Abu Dhabi branches
-function campOutlets(c){
-  // Returns a Set of branch names this campaign applies to, OR null meaning "all outlets".
-  const raw=(c.outlet||"").trim();
-  if(!raw||/^all\b/i.test(raw)||raw==="—"||raw==="-")return null;
-  // Build the list of branches that exist in allData for this brand (so we don't fabricate names)
+
+// ── BRANCH ALIAS RESOLVER ──
+// Common shortenings/typos users put in campaign comments. Maps a lowercased alias
+// to a canonical token to look up in the brand's actual branch list. Resolution is
+// case-insensitive and falls back to fuzzy contains-match if no alias hit.
+const BRANCH_ALIASES={
+  "dmc":"media city","dubai media city":"media city","media city":"media city",
+  "motorcity":"motor city","motor city":"motor city",
+  "mirdif":"mirdiff","mirdiff":"mirdiff",
+  "tsqr":"town square","town square":"town square",
+  "fyoo dip":"dip (fyoozhen)","fyoozhen dip":"dip (fyoozhen)","fyoozhen-dip":"dip (fyoozhen)",
+  "reem":"al reem","reem island":"al reem","al reem":"al reem",
+  "wtc":"wtc","al forsan":"al forsan","forsan":"al forsan",
+  "al reef":"al reef","reef":"al reef",
+  "nas":"nas","nad al sheba":"nas",
+  "marina":"marina","dso":"dso","dubai silicon oasis":"dso",
+  "furjan":"furjan","al quoz":"al quoz","quoz":"al quoz","dip":"dip","villa":"villa","jumeirah":"jumeirah"
+};
+function resolveBranchName(token,brandBranches){
+  if(!token)return null;
+  const tl=token.trim().toLowerCase().replace(/^\s*(only\s+)?(at\s+|in\s+)?/,"").replace(/\s+outlets?$/,"").replace(/\s+branch(es)?$/,"").trim();
+  if(!tl)return null;
+  const canonical=BRANCH_ALIASES[tl]||tl;
+  // Exact match first against the brand's actual branches
+  let m=brandBranches.find(b=>b.toLowerCase()===canonical);
+  if(m)return m;
+  // Try alias canonical against branch lower
+  m=brandBranches.find(b=>b.toLowerCase()===tl);
+  if(m)return m;
+  // Fuzzy contains (only if token is long enough to be specific)
+  if(canonical.length>=3){
+    m=brandBranches.find(b=>b.toLowerCase().includes(canonical)||canonical.includes(b.toLowerCase()));
+    if(m)return m;
+  }
+  return null;
+}
+
+// ── COMMENT PARSER ──
+// Extracts structured info from a free-text comment:
+//   - Branch exclusions  ("Except: A, B, C" / "Excluding A, B" / "Not valid in X")
+//   - Branch inclusions  ("Only in X, Y" / "At X, Y" / "Locations: X, Y")
+//   - Co-funding         ("50% co-funded", "60:40 Co-Funding" (brand:platform), "Talabat funds 30%")
+//   - Unresolved tokens  (anything in an exclusion/inclusion list that didn't match a known branch)
+// The parser is conservative: it only extracts branch lists that follow a clear keyword like
+// "Except / Excluding / Only / At / Locations". Free-floating branch names are ignored to avoid
+// false positives. Returns: {includeBranches, excludeBranches, coFundedPctOfDiscount, unresolved, hasInfo}
+function parseCampComment(c){
+  const text=(c.comments||"").trim();
+  const result={includeBranches:null,excludeBranches:null,coFundedPctOfDiscount:null,unresolved:[],hasInfo:false};
+  if(!text)return result;
   const brandBranches=[...new Set(allData.filter(r=>c.brand==="All Brands"||r.brand===c.brand).map(r=>r.branch))].filter(b=>b!=="(brand-level)");
-  // Tokenize the outlet field — supports "DXB", "AUH", "DXB,AUH", "NAS only", "Marina + DSO" etc.
-  const tokens=raw.split(/[,;+/&]+|\s+and\s+|\s+\+\s+/i).map(t=>t.trim()).filter(Boolean);
-  const out=new Set();
-  tokens.forEach(tok=>{
-    const tl=tok.toLowerCase().replace(/\s+only\b/g,"").replace(/\s+outlets?\b/g,"").trim();
-    if(!tl)return;
-    if(tl==="dxb"||tl==="dubai"){brandBranches.forEach(b=>{if(!AUH_OUTLETS.has(b))out.add(b);});return;}
-    if(tl==="auh"||tl==="abudhabi"||tl==="abu dhabi"){brandBranches.forEach(b=>{if(AUH_OUTLETS.has(b))out.add(b);});return;}
-    // Specific branch name — match against actual branches case-insensitively, allow partial
-    const match=brandBranches.find(b=>b.toLowerCase()===tl)||brandBranches.find(b=>b.toLowerCase().includes(tl)||tl.includes(b.toLowerCase()));
-    if(match)out.add(match);
-  });
-  return out.size?out:null;
+  // ─ Branch exclusions ─
+  // Match phrases like "Except: A, B, C" / "Excluding A and B" / "Not valid in X, Y" / "All except X"
+  const excPat=/(?:locations?\s+except|all\s+except|except(?:\s+for)?|excluding|not\s+valid\s+(?:in|at|for))\s*[:\-]?\s*([^.\n]+?)(?:\s+since\b|\s+because\b|\s+as\b|\s+because\s+of\b|\.|$|\n)/i;
+  const excMatch=text.match(excPat);
+  if(excMatch){
+    const list=excMatch[1].split(/[,;]|\s+and\s+|\s+&\s+|\s+\+\s+/i).map(s=>s.trim()).filter(Boolean);
+    const resolved=[],unresolved=[];
+    list.forEach(tok=>{const r=resolveBranchName(tok,brandBranches);if(r)resolved.push(r);else if(tok.length>1)unresolved.push(tok);});
+    if(resolved.length){result.excludeBranches=new Set(resolved);result.hasInfo=true;}
+    if(unresolved.length)result.unresolved.push(...unresolved);
+  }
+  // ─ Branch inclusions ─
+  // Match "Only in X, Y" / "Only at X" / "Locations: X, Y" / "Valid at X, Y, Z"
+  // Skip if we already found an exclusion list to avoid double-processing.
+  if(!result.excludeBranches){
+    const incPat=/(?:only\s+(?:in|at|for)|locations?\s*[:\-]\s*(?!except)|valid\s+(?:in|at|only\s+in|only\s+at))\s*([^.\n]+?)(?:\s+since\b|\s+because\b|\s+as\b|\.|$|\n)/i;
+    const incMatch=text.match(incPat);
+    if(incMatch){
+      const list=incMatch[1].split(/[,;]|\s+and\s+|\s+&\s+|\s+\+\s+/i).map(s=>s.trim()).filter(Boolean);
+      const resolved=[],unresolved=[];
+      list.forEach(tok=>{const r=resolveBranchName(tok,brandBranches);if(r)resolved.push(r);else if(tok.length>1)unresolved.push(tok);});
+      if(resolved.length){result.includeBranches=new Set(resolved);result.hasInfo=true;}
+      if(unresolved.length)result.unresolved.push(...unresolved);
+    }
+  }
+  // ─ Co-funding percentage of discount ─
+  // Patterns:
+  //   "X% co-funded" / "X% co funded" / "co-funded X%" / "X% cofunded"  → platform funds X%
+  //   "X:Y co-funding" / "X:Y co funded"  → brand:platform → platform funds Y%
+  //   "<Platform> funds X%" / "<Platform> X%" near "co-fund"  → platform funds X%
+  const t=text.toLowerCase();
+  // Ratio form first: A:B co-funding (brand:platform)
+  let m=t.match(/(\d{1,3})\s*:\s*(\d{1,3})\s*(?:co[\s\-]?funding|co[\s\-]?funded|cofund)/);
+  if(m){const platformPct=parseInt(m[2],10);if(platformPct>=0&&platformPct<=100){result.coFundedPctOfDiscount=platformPct/100;result.hasInfo=true;}}
+  // Single percentage near "co-fund"
+  if(result.coFundedPctOfDiscount==null){
+    m=t.match(/(\d{1,3})\s*%\s*(?:co[\s\-]?funded|co[\s\-]?funding|cofunded)/)||t.match(/(?:co[\s\-]?funded|co[\s\-]?funding|cofunded)\s*(?:by\s+\S+\s+)?(?:at\s+)?(\d{1,3})\s*%/);
+    if(m){const pct=parseInt(m[1],10);if(pct>0&&pct<=100){result.coFundedPctOfDiscount=pct/100;result.hasInfo=true;}}
+  }
+  return result;
+}
+
+// ── EFFECTIVE OUTLET SCOPE ──
+// Combines the campaign's outlet field with branch-list refinements from comments.
+// outlet="DXB" + comment "Except DMC, Motorcity" → DXB branches MINUS those two.
+// outlet="All" + comment "Only in Marina, DSO"   → just Marina + DSO.
+// outlet="Select Locations" + comment "Locations Except: ..."  → all brand branches MINUS those.
+function campOutlets(c){
+  const raw=(c.outlet||"").trim();
+  const rawLower=raw.toLowerCase();
+  const brandBranches=[...new Set(allData.filter(r=>c.brand==="All Brands"||r.brand===c.brand).map(r=>r.branch))].filter(b=>b!=="(brand-level)");
+  // Step 1: resolve the outlet field into an initial set (or null = all)
+  let base=null;
+  const isAllField=!raw||/^all\b/i.test(raw)||raw==="—"||raw==="-"||/^select\s+locations?/i.test(raw)||/^specific\s+locations?/i.test(raw)||/^selected\s+(branches?|outlets?)/i.test(raw);
+  if(isAllField){base=null;}
+  else{
+    const tokens=raw.split(/[,;+/&]+|\s+and\s+|\s+\+\s+/i).map(t=>t.trim()).filter(Boolean);
+    base=new Set();
+    tokens.forEach(tok=>{
+      const tl=tok.toLowerCase().replace(/\s+only\b/g,"").replace(/\s+outlets?\b/g,"").trim();
+      if(!tl)return;
+      if(tl==="dxb"||tl==="dubai"){brandBranches.forEach(b=>{if(!AUH_OUTLETS.has(b))base.add(b);});return;}
+      if(tl==="auh"||tl==="abudhabi"||tl==="abu dhabi"){brandBranches.forEach(b=>{if(AUH_OUTLETS.has(b))base.add(b);});return;}
+      const r=resolveBranchName(tok,brandBranches);
+      if(r)base.add(r);
+    });
+    if(!base.size)base=null;
+  }
+  // Step 2: apply comment refinements
+  const parsed=parseCampComment(c);
+  if(parsed.includeBranches&&parsed.includeBranches.size){
+    // Comments restrict to a specific list — that becomes the scope
+    return parsed.includeBranches;
+  }
+  if(parsed.excludeBranches&&parsed.excludeBranches.size){
+    // Start from base (or all brand branches if outlet was unrestricted) and subtract exclusions
+    const start=base?new Set(base):new Set(brandBranches);
+    parsed.excludeBranches.forEach(b=>start.delete(b));
+    return start.size?start:null;
+  }
+  return base;
 }
 // Build a "Scope label" for display, e.g. "Dubai outlets (DXB) — 4 branches" or "All outlets"
 function campScopeLabel(c){
@@ -766,11 +879,19 @@ function campScopeLabel(c){
   const raw=(c.outlet||"").trim();
   if(!set)return"All outlets";
   const list=[...set].sort();
-  const rawLower=raw.toLowerCase();
-  // For region campaigns (DXB/AUH/Dubai/Abu Dhabi), use a friendly summary; full list goes in tooltip.
+  const parsed=parseCampComment(c);
+  // Comment-derived exclusion → describe as "all except"
+  if(parsed.excludeBranches&&parsed.excludeBranches.size){
+    const excluded=[...parsed.excludeBranches].sort();
+    return `📍 ${list.length} branch${list.length!==1?'es':''} (all except ${excluded.join(", ")}): ${list.join(", ")}`;
+  }
+  // Comment-derived inclusion → describe as "only at"
+  if(parsed.includeBranches&&parsed.includeBranches.size){
+    return `📍 Only at ${list.length} branch${list.length!==1?'es':''}: ${list.join(", ")}`;
+  }
+  // Region labels
   if(/^(dxb|dubai)/i.test(raw)){return `🏙️ Dubai outlets only — ${set.size} branch${set.size!==1?'es':''}: ${list.join(", ")}`;}
   if(/^(auh|abu\s?dhabi)/i.test(raw)){return `🏛️ Abu Dhabi outlets only — ${set.size} branch${set.size!==1?'es':''}: ${list.join(", ")}`;}
-  // Specific named branches
   return `📍 ${raw} — ${set.size} branch${set.size!==1?'es':''}: ${list.join(", ")}`;
 }
 
@@ -1000,11 +1121,24 @@ function detectExclusion(group){
   return{exclusive,paused};
 }
 
-// CAMPAIGN BUNDLING — see comments below for the rationale.
+// CAMPAIGN BUNDLING — bundles require an EXACT outlet match.
+// Two campaigns are eligible to bundle only when they share brand + aggregator + outlet AND
+// their date ranges overlap. Different outlet scopes (e.g. AUH vs DXB, or All vs DXB) are
+// kept as separate standalone campaigns, so a Dubai-only campaign isn't conflated with an
+// Abu Dhabi-only one just because the brand and platform match.
 function buildCampBundles(camps){
-  // Group by brand|aggregator
+  // The bundle key is the RESOLVED branch set (after applying comment refinements).
+  // Two campaigns can only bundle if they actually cover the same branches — so the
+  // sandwich-30%-OFF (excludes 6) and the 40%-OFF (only those 6) get different keys
+  // even though both say "Select Locations" in the outlet field.
+  const outletKey=(c)=>{
+    const set=campOutlets(c);
+    if(!set)return"all";
+    return [...set].sort().join("|");
+  };
+  // Group by brand|aggregator|resolvedBranchSet
   const groups={};
-  camps.forEach(c=>{const k=`${c.brand}|${c.aggregator}`;(groups[k]=groups[k]||[]).push(c);});
+  camps.forEach(c=>{const k=`${c.brand}|${c.aggregator}|${outletKey(c)}`;(groups[k]=groups[k]||[]).push(c);});
   const bundles=[],standalone=[];
   Object.values(groups).forEach(arr=>{
     if(arr.length<=1){standalone.push(...arr);return;}
@@ -1090,7 +1224,21 @@ function campTableHTML(title,camps,showImpact){
     const realIdx=campaignData.indexOf(c);const st=campStatus(c),stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#64748b',Cancelled:'#EF4444'}[st]||'#64748b';const b=BMAP[c.brand];
     const imp=showImpact&&(st==='Completed'||st==='Running')?campImpactExtended(c):null;
     const viewBtn=`<button onclick="selectCamp(${realIdx})" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:3px 8px;font-size:10px;cursor:pointer;white-space:nowrap">View →</button>`;
-    const offer=`<span style="font-size:11px;color:#94a3b8" title="${(c.comments||'').replace(/"/g,'&quot;')}">${(c.comments||'').length>50?(c.comments||'').slice(0,50)+'…':(c.comments||'')}</span>`;
+    // Offer cell now shows comment + resolved-branch chip + co-funding chip when applicable
+    const parsedC=parseCampComment(c);
+    const resolvedSet=campOutlets(c);
+    const allBrandBranches=[...new Set(allData.filter(r=>r.brand===c.brand).map(r=>r.branch))].filter(b=>b!=='(brand-level)');
+    const isFullCoverage=resolvedSet&&resolvedSet.size>=allBrandBranches.length;
+    let branchChip='';
+    if(resolvedSet&&!isFullCoverage){
+      const list=[...resolvedSet].sort();
+      const summary=list.length<=6?list.join(', '):`${list.slice(0,4).join(', ')} +${list.length-4} more`;
+      const fullList=list.join(', ');
+      branchChip=`<div style="margin-top:4px"><span title="${fullList}" style="font-size:10px;color:#60A5FA;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.25);padding:2px 7px;border-radius:8px;font-weight:600;cursor:help">📍 ${list.length} branch${list.length!==1?'es':''}: ${summary}</span></div>`;
+    }
+    const coFundChip=parsedC.coFundedPctOfDiscount?` <span style="font-size:9px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:2px 7px;border-radius:8px;border:1px solid rgba(168,85,247,.3);margin-left:5px">🤝 ${Math.round(parsedC.coFundedPctOfDiscount*100)}% co-funded</span>`:'';
+    const unresolvedChip=parsedC.unresolved.length?` <span title="Unrecognized in comment: ${parsedC.unresolved.join(', ')}" style="font-size:9px;background:rgba(239,68,68,.12);color:#FCA5A5;font-weight:700;padding:2px 7px;border-radius:8px;border:1px solid rgba(239,68,68,.3);margin-left:5px;cursor:help">⚠ needs clarification</span>`:'';
+    const offer=`<div><span style="font-size:11px;color:#94a3b8" title="${(c.comments||'').replace(/"/g,'&quot;')}">${(c.comments||'').length>60?(c.comments||'').slice(0,60)+'…':(c.comments||'')}</span>${coFundChip}${unresolvedChip}${branchChip}</div>`;
     const addonTag=(c.addons&&c.addons.length)?` <span style="background:rgba(232,214,20,0.15);color:#E8D614;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:5px;border:1px solid rgba(232,214,20,0.3)">+ ${c.addons.map(a=>a.name).join(', ')}</span>`:'';
     let row=`<tr><td><strong style="font-size:12px">${c.name||'(no name)'}</strong>${addonTag}</td><td><span style="color:${b?.c||'#888'};font-weight:700;font-size:11px">${c.brand}</span></td><td><span style="color:${AC[c.aggregator]||'#888'};font-weight:700;font-size:11px">${c.aggregator}</span></td><td>${offer}</td><td><span style="white-space:nowrap;font-size:11px">${fmtCampDateRange(c.startDate,c.endDate)}</span></td><td><span style="font-size:11px">${c.outlet||'All'}</span></td>`;
     if(showImpact){
@@ -1106,20 +1254,33 @@ function campAnalysis(c){
   const base=campImpactExtended(c);
   const outletSet=base.outletSet;
   const flt=r=>{if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;if(outletSet&&!outletSet.has(r.branch))return false;return true;};
-  const cR=allData.filter(r=>r.date>=c.startDate&&r.date<=c.endDate&&flt(r));
-  const bEnd=subDays(c.startDate,1),bStart=subDays(bEnd,base.days-1);
+  // ── ROLLING WINDOW ──
+  // The campaign window only counts days that have ALREADY HAPPENED (start → min(endDate, latest)).
+  // The baseline compares the SAME WEEKDAYS exactly 7 days earlier — so a 2-day-in campaign is
+  // compared to the same 2 weekdays of the previous week, giving a fair apples-to-apples read
+  // that grows day-by-day as the campaign progresses.
+  const effectiveEnd=c.endDate<latest?c.endDate:latest;
+  const effectiveStart=c.startDate;
+  const cR=allData.filter(r=>r.date>=effectiveStart&&r.date<=effectiveEnd&&flt(r));
+  // Baseline = same date range minus 7 days (matches weekdays)
+  const bStart=subDays(effectiveStart,7),bEnd=subDays(effectiveEnd,7);
   const bR=allData.filter(r=>r.date>=bStart&&r.date<=bEnd&&flt(r));
   const cs=sumR(cR),bs=sumR(bR);
   const cDays=new Set(cR.map(r=>r.date)).size||1,bDays=new Set(bR.map(r=>r.date)).size||1;
   const DISC_START="2026-05-01";
-  const discAvailable=c.startDate>=DISC_START;
+  const discAvailable=effectiveStart>=DISC_START;
   const campDisc=cs.disc||0;
   const discPerDay=campDisc/cDays;
   const discPctOfSales=cs.sales>0?(campDisc/cs.sales)*100:null;
+  // Co-funding: if the platform funds X% of the discount, our actual cost is (1-X)% of campDisc.
+  const parsed=parseCampComment(c);
+  const coFundedPct=parsed.coFundedPctOfDiscount||0; // 0 to 1, fraction funded by the platform
+  const ourDiscCost=campDisc*(1-coFundedPct);
+  const ourDiscPerDay=ourDiscCost/cDays;
   const commData=COMM[c.aggregator]?.[c.brand]||COMM[c.aggregator]?.DEFAULT;
   // CPC is advertising spend, not a per-order commission, so it is excluded from the contribution margin.
   const commRate=commData?((commData.commission||0)+(commData.pg||0)+(commData.processingFee||0)+(commData.cancellation||0)):0.30;
-  const campContribution=cs.sales*(1-commRate)-campDisc;
+  const campContribution=cs.sales*(1-commRate)-ourDiscCost;
   const baseContribution=bs.sales*(1-commRate)-(bs.disc||0);
   const campContribPerDay=campContribution/cDays, baseContribPerDay=baseContribution/bDays;
   const contribDiffPerDay=campContribPerDay-baseContribPerDay;
@@ -1127,11 +1288,13 @@ function campAnalysis(c){
   const incrOrdersPerDay=(cs.orders/cDays)-(bs.orders/bDays);
   const incrSalesPerDay=(cs.sales/cDays)-(bs.sales/bDays);
   const incrContribPerDay=contribDiffPerDay;
-  const discountROI=discPerDay>0?(incrContribPerDay/discPerDay):null;
+  // ROI uses OUR discount cost, not the full platform-reported discount
+  const discountROI=ourDiscPerDay>0?(incrContribPerDay/ourDiscPerDay):null;
   const myIdx=campaignData.indexOf(c);
   const concurrent=campaignData.filter((x,i)=>i!==myIdx&&x.startDate<=c.endDate&&x.endDate>=c.startDate);
   const sameBrandPlatConcurrent=concurrent.filter(x=>x.brand===c.brand&&x.aggregator===c.aggregator);
   return{...base,cs,bs,cDays,bDays,discAvailable,campDisc,discPerDay,discPctOfSales,commRate,
+    coFundedPct,ourDiscCost,ourDiscPerDay,
     campContribution,baseContribution,campContribPerDay,baseContribPerDay,contribDiffPerDay,profitabilityPct,
     incrOrdersPerDay,incrSalesPerDay,discountROI,concurrent,sameBrandPlatConcurrent,bStart,bEnd};
 }
@@ -1162,7 +1325,17 @@ function campDetailHTML(c,idx){
   const scopeBadge=isScoped?`<div style="margin-top:10px;padding:8px 12px;background:rgba(96,165,250,.08);border-left:3px solid #60A5FA;border-radius:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="font-size:18px">📍</div><div style="flex:1;min-width:200px"><div style="font-size:10px;color:#60A5FA;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Location-Scoped Analysis</div><div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.5">${scopeStr} — performance is compared against the <strong style="color:#e2e8f0">same outlets only</strong> in the prior period (apples-to-apples).</div></div></div>`:'';
   // ── Exclusion badge — surfaces the comments-detected mutual-exclusion rule ──
   const isExcl=campIsExclusive(c);
-  const concurrent=campaignData.filter(o=>o!==c&&o.brand===c.brand&&o.aggregator===c.aggregator&&!(o.endDate<c.startDate||o.startDate>c.endDate));
+  // Concurrent campaigns for exclusion purposes: same brand + platform + matching resolved
+  // branch set (campaigns running in different branches don't interact with each other).
+  const mySet=campOutlets(c);
+  const myKey=mySet?[...mySet].sort().join("|"):"all";
+  const concurrent=campaignData.filter(o=>{
+    if(o===c||o.brand!==c.brand||o.aggregator!==c.aggregator)return false;
+    if(o.endDate<c.startDate||o.startDate>c.endDate)return false;
+    const oSet=campOutlets(o);
+    const oKey=oSet?[...oSet].sort().join("|"):"all";
+    return oKey===myKey;
+  });
   const exclusiveSiblings=concurrent.filter(campIsExclusive);
   let exclBadge='';
   if(isExcl&&concurrent.length){
@@ -1190,22 +1363,24 @@ function campDetailHTML(c,idx){
   if(a.discAvailable){
     const roiClr=a.discountROI==null?'#64748b':a.discountROI>=1?'#22C55E':a.discountROI<0?'#EF4444':'#FBBF24';
     const profClr=a.profitabilityPct==null?'#64748b':pctClr(a.profitabilityPct);
-    profitSection=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#f59e0b">💰 Profitability Analysis <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· real discount data + commission</span></div>
+    const cfBanner=a.coFundedPct>0?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(168,85,247,.08);border-left:3px solid #A855F7;border-radius:4px">🤝 <strong style="color:#C084FC">Co-funded ${Math.round(a.coFundedPct*100)}% by ${c.aggregator}</strong> — of the AED ${fmtAED(a.campDisc).replace('AED ','')} total discount, ${c.aggregator} absorbs <strong style="color:#A855F7">${fmtAED(a.campDisc*a.coFundedPct)}</strong> and ${c.brand} carries <strong style="color:#e2e8f0">${fmtAED(a.ourDiscCost)}</strong>. Profitability and ROI below use the brand's actual cost.</div>`:'';
+    profitSection=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#f59e0b">💰 Profitability Analysis <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· real discount data + commission${a.coFundedPct>0?' + co-funding':''}</span></div>
       <div style="display:flex;align-items:stretch;gap:14px;flex-wrap:wrap;margin-bottom:14px;padding:12px 14px;background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.18);border-radius:8px">
-        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Total Discount Given</div><div style="font-size:22px;font-weight:800;color:#EF4444;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.campDisc)}</div></div>
+        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Total Discount Given</div><div style="font-size:22px;font-weight:800;color:#EF4444;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.campDisc)}</div>${a.coFundedPct>0?`<div style="font-size:10px;color:#94a3b8;margin-top:2px"><strong style="color:#e2e8f0">${c.brand}'s share:</strong> ${fmtAED(a.ourDiscCost)}</div>`:''}</div>
         <div style="width:1px;background:rgba(245,158,11,.2)"></div>
         <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Net Sales Generated</div><div style="font-size:22px;font-weight:800;color:#22C55E;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.cs.sales)}</div></div>
         <div style="width:1px;background:rgba(245,158,11,.2)"></div>
         <div style="flex:1;min-width:150px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Actual Discount Depth</div><div style="font-size:22px;font-weight:800;color:#FBBF24;font-variant-numeric:tabular-nums;line-height:1.2">${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'%':'—'}</div><div style="font-size:10px;color:#64748b;margin-top:2px">of net sales went back as discount</div></div>
       </div>
+      ${cfBanner}
       ${(()=>{const m=(c.comments||'').match(/(\d{1,2})\s*%/);if(m&&a.discPctOfSales!=null){const headline=parseInt(m[1]);if(a.discPctOfSales<headline-3)return `<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(34,197,94,.06);border-left:3px solid #22C55E;border-radius:4px">ℹ️ The headline offer is <strong>${headline}% off</strong>, but because it only applies to selected items (not every order), the <strong>actual blended discount was just ${a.discPctOfSales.toFixed(1)}% of net sales</strong> — far less costly than ${headline}% on everything. This is the real figure used in the profitability math below.</div>`;}return '';})()}
       <div class="g4">
-        ${kpiCard('Discount Given',fmtAED(a.campDisc),`AED ${Math.round(a.discPerDay)}/day · ${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'% of sales':'—'}`,null)}
+        ${kpiCard(a.coFundedPct>0?`${c.brand}'s Discount Cost`:'Discount Given',fmtAED(a.ourDiscCost),`AED ${Math.round(a.ourDiscPerDay)}/day · ${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'% of sales':'—'}${a.coFundedPct>0?` · after ${Math.round(a.coFundedPct*100)}% co-fund`:''}`,null)}
         ${kpiCard('Commission Rate',`${(a.commRate*100).toFixed(0)}%`,`${c.aggregator} · ${c.brand}`,null)}
         <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Daily Contribution</div><div style="font-size:21px;font-weight:800;color:${a.contribDiffPerDay>=0?'#22C55E':'#EF4444'};font-variant-numeric:tabular-nums;line-height:1">${a.contribDiffPerDay>=0?'+':''}${fmtAED(a.contribDiffPerDay)}</div><div style="font-size:11px;color:#64748b;margin-top:3px">vs baseline /day</div><div style="font-size:11px;color:${profClr};font-weight:700;margin-top:3px">${fmtPct(a.profitabilityPct)}</div></div>
-        <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Discount ROI</div><div style="font-size:21px;font-weight:800;color:${roiClr};font-variant-numeric:tabular-nums;line-height:1">${a.discountROI==null?'—':(a.discountROI>=0?'+':'')+a.discountROI.toFixed(2)+'×'}</div><div style="font-size:11px;color:#64748b;margin-top:3px">contrib. per AED disc.</div></div>
+        <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Discount ROI</div><div style="font-size:21px;font-weight:800;color:${roiClr};font-variant-numeric:tabular-nums;line-height:1">${a.discountROI==null?'—':(a.discountROI>=0?'+':'')+a.discountROI.toFixed(2)+'×'}</div><div style="font-size:11px;color:#64748b;margin-top:3px">contrib. per AED ${a.coFundedPct>0?'we spend':'disc.'}</div></div>
       </div>
-      <div style="font-size:11px;color:#64748b;margin-top:10px;line-height:1.6">Contribution = Net Sales × (1 − ${(a.commRate*100).toFixed(0)}% commission) − discount. ${a.discountROI!=null&&a.discountROI>=1?`<span style="color:#22C55E">The discount generated more incremental contribution than it cost — profitable.</span>`:a.discountROI!=null&&a.discountROI<0?`<span style="color:#EF4444">Incremental contribution was negative — the campaign lost money after discounts.</span>`:a.discountROI!=null?`<span style="color:#FBBF24">The discount returned less than AED 1 of contribution per AED spent — marginal.</span>`:''}</div></div>`;
+      <div style="font-size:11px;color:#64748b;margin-top:10px;line-height:1.6">Contribution = Net Sales × (1 − ${(a.commRate*100).toFixed(0)}% commission) − ${a.coFundedPct>0?`our share of discount (${Math.round((1-a.coFundedPct)*100)}% of AED ${fmtAED(a.campDisc).replace('AED ','')})`:'discount'}. ${a.discountROI!=null&&a.discountROI>=1?`<span style="color:#22C55E">The discount generated more incremental contribution than it cost — profitable.</span>`:a.discountROI!=null&&a.discountROI<0?`<span style="color:#EF4444">Incremental contribution was negative — the campaign lost money after discounts.</span>`:a.discountROI!=null?`<span style="color:#FBBF24">The discount returned less than AED 1 of contribution per AED spent — marginal.</span>`:''}</div></div>`;
   }else{
     profitSection=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#64748b">💰 Profitability Analysis</div><div style="font-size:12px;color:#64748b;padding:4px 0">Discount data is only available from 1 May 2026. This campaign started ${fmtDisp(c.startDate)}, so profitability can't factor in actual discounts.</div></div>`;
   }
@@ -1240,10 +1415,43 @@ function campDetailHTML(c,idx){
   const simRows=similar.slice(0,8).map(x=>{const xi=campImpact(x);return[`<span style="font-size:11px">${x.name||'(no name)'}</span>`,`<span style="font-size:11px;color:#64748b;white-space:nowrap">${fmtDisp(x.startDate).replace(/,.*$/,'')}</span>`,xi.hasData?`<span style="color:${pctClr(xi.ordersLift)};font-weight:700">${fmtPct(xi.ordersLift)}</span>`:'<span style="color:#64748b">—</span>',xi.hasData?`<span style="color:${pctClr(xi.salesLift)};font-weight:700">${fmtPct(xi.salesLift)}</span>`:'<span style="color:#64748b">—</span>',`<span style="font-size:11px;color:#94a3b8">${(x.comments||'').length>50?(x.comments||'').slice(0,50)+'…':(x.comments||'')}</span>`];});
   const simTable=similar.length>0?`<div class="card"><div class="ct">Past Campaigns — ${c.brand} on ${c.aggregator} (${similar.length} total)</div>${mkTable(['Campaign','Date','Orders Lift','Net Sales Lift','Offer'],simRows)}</div>`:'';
 
+  // ── PER-BRANCH BREAKDOWN ──
+  // For each branch in the campaign's scope, compare campaign-window vs same-weekdays-prior-week.
+  // Also flag if another same-platform campaign was running in that branch during the baseline.
+  let perBranchSection='';
+  if(a.hasData&&st!=='Upcoming'){
+    const outletSet=a.outletSet||campOutlets(c);
+    const effectiveEnd=c.endDate<latest?c.endDate:latest;
+    const effectiveStart=c.startDate;
+    const bStart=subDays(effectiveStart,7),bEnd=subDays(effectiveEnd,7);
+    const branchesInScope=outletSet?[...outletSet].sort():[...new Set(allData.filter(r=>r.brand===c.brand&&r.aggregator===c.aggregator).map(r=>r.branch))].filter(b=>b!=='(brand-level)').sort();
+    // Find same-platform/brand campaigns that overlapped each branch during the baseline window
+    const baselineCamps=campaignData.filter(o=>o!==c&&o.brand===c.brand&&o.aggregator===c.aggregator&&!(o.endDate<bStart||o.startDate>bEnd));
+    const baselineCampForBranch=(branch)=>{
+      return baselineCamps.filter(o=>{const oSet=campOutlets(o);if(!oSet)return true;return oSet.has(branch);});
+    };
+    const rows=branchesInScope.map(br=>{
+      const cR=allData.filter(r=>r.brand===c.brand&&r.aggregator===c.aggregator&&r.branch===br&&r.date>=effectiveStart&&r.date<=effectiveEnd);
+      const bR=allData.filter(r=>r.brand===c.brand&&r.aggregator===c.aggregator&&r.branch===br&&r.date>=bStart&&r.date<=bEnd);
+      const cs=sumR(cR),bs=sumR(bR);
+      const cdays=new Set(cR.map(r=>r.date)).size||1,bdays=new Set(bR.map(r=>r.date)).size||1;
+      const cAOV=cs.orders>0?cs.sales/cs.orders:0,bAOV=bs.orders>0?bs.sales/bs.orders:0;
+      const ordChg=pctOf(cs.orders/cdays,bs.orders/bdays);
+      const salChg=pctOf(cs.sales/cdays,bs.sales/bdays);
+      const aovChg=pctOf(cAOV,bAOV);
+      const prior=baselineCampForBranch(br);
+      const priorBadge=prior.length?`<span title="${prior.map(p=>(p.name||'unnamed')+' ('+fmtCampDateRange(p.startDate,p.endDate)+')').join('; ')}" style="font-size:9px;background:rgba(251,191,36,.12);color:#FBBF24;font-weight:700;padding:2px 7px;border-radius:8px;border:1px solid rgba(251,191,36,.3);white-space:nowrap;display:inline-block;margin-top:3px;cursor:help">⚠ ${prior.length} other campaign${prior.length>1?'s':''} ran here previously</span>`:`<span style="font-size:9px;color:#64748b;font-weight:600;font-style:italic">clean baseline</span>`;
+      const fmtN=(n)=>Math.round(n).toLocaleString();
+      return `<tr><td style="font-weight:700;color:#e2e8f0">${br}</td><td style="font-variant-numeric:tabular-nums">${fmtN(cs.orders)}<span style="color:#64748b;font-size:10px;margin-left:5px">vs ${fmtN(bs.orders)}</span><div style="font-size:10px;color:${pctClr(ordChg)};font-weight:700">${fmtPct(ordChg)}</div></td><td style="font-variant-numeric:tabular-nums">${fmtAED(cs.sales)}<span style="color:#64748b;font-size:10px;margin-left:5px">vs ${fmtAED(bs.sales)}</span><div style="font-size:10px;color:${pctClr(salChg)};font-weight:700">${fmtPct(salChg)}</div></td><td style="font-variant-numeric:tabular-nums">AED ${cAOV.toFixed(1)}<span style="color:#64748b;font-size:10px;margin-left:5px">vs AED ${bAOV.toFixed(1)}</span><div style="font-size:10px;color:${pctClr(aovChg)};font-weight:700">${fmtPct(aovChg)}</div></td><td>${priorBadge}</td></tr>`;
+    }).join('');
+    const baselineLabel=`${fmtShort(bStart)} → ${fmtShort(bEnd)} (${a.bDays} day${a.bDays!==1?'s':''}, same weekdays prior week)`;
+    perBranchSection=`<div class="card" style="margin-bottom:12px"><div class="ct">📍 Per-Branch Breakdown — Campaign vs Prior Week</div><div style="font-size:11px;color:#94a3b8;margin-bottom:10px;line-height:1.6">Each branch in the campaign's scope compared with its own performance during ${baselineLabel}. The "⚠" badge flags branches where another <strong>${c.aggregator}</strong> campaign was already running in the same period — those baseline numbers aren't clean, so the lift figure should be read with that in mind.</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Branch</th><th>Orders</th><th>Net Sales</th><th>AOV</th><th>Baseline period</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  }
+
   // ── AI section ──
   const aiSection=`<div class="card" style="border-color:rgba(245,158,11,.25)" id="camp-ai-box"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><div class="ct" style="color:#f59e0b;margin-bottom:0">✨ AI Campaign Analysis</div><button id="camp-ai-btn" onclick="runCampAI(${idx})" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:4px 14px;font-size:11px;cursor:pointer;font-weight:600">Generate Analysis</button></div><div id="camp-ai-content" style="color:#64748b;font-size:12px">Click to generate an AI analysis comparing this campaign to ${similar.length} similar historical campaigns.</div></div>`;
 
-  return header+kpis+ovBanner+chart+profitSection+prosCons+concurrentSection+simTable+aiSection;
+  return header+kpis+ovBanner+chart+perBranchSection+profitSection+prosCons+concurrentSection+simTable+aiSection;
 }
 async function runCampAI(idx){
   const btn=document.getElementById('camp-ai-btn'),content=document.getElementById('camp-ai-content');if(!btn||!content)return;
