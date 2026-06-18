@@ -33,6 +33,15 @@ const SKIP_BR=new Set(["total","grand total","subtotal","sub total","totals","al
 const ANOTES={Keeta:"No mandatory CPC — tracked for volume only.",Smiles:"e& Smiles — 47 listings, no mandatory CPC obligation.",Instashop:"Oregano only — 13 listings, grocery format, no CPC obligation."};
 const HR={"Oregano|Deliveroo":{Villa:14.7,Furjan:12.37,Motorcity:12.18,"Town Square":12.04,DMC:11.63,Marina:11.49,DIP:11.4,"Al Quoz":10.92,DSO:9.96,Mirdiff:8.78,"Al Forsan":8.71,Jumeirah:8.01,"Al Reem":5.86},"Oregano|Noon":{"Town Square":8.02,DSO:6.21,Motorcity:6.18,Furjan:5.92,Marina:5.36,"Al Quoz":5.33,DMC:5.23,Jumeirah:4.94,"Al Forsan":3.27,"Al Reem":3.21,Mirdiff:3.94,DIP:3.57,Villa:4.76},"Oregano|Careem":{"Town Square":14.61,Furjan:11.04,DIP:10.79,DMC:10.22,DSO:10.2,Marina:9.57,"Al Quoz":9.52,Motorcity:9.17,Jumeirah:7.51,"Al Forsan":5.05,"Al Reem":4.56},"Oregano|Talabat":{"Town Square":13.85,Villa:10.2,Motorcity:9.17,DSO:8.44,Marina:8.32,Mirdiff:8.82,DIP:8.21,Furjan:8.21,"Al Quoz":7.98,DMC:7.58,"Al Forsan":7.11,Jumeirah:4.63,"Al Reem":3.37},"Lollorosso|Deliveroo":{Villa:7.58,DIP:7.43,Marina:6.46,"Town Square":6.13,"Al Quoz":5.33,Motorcity:5.58,Jumeirah:4.38,Furjan:4.61,DMC:4.33,"Al Forsan":4.23,DSO:4.79,NAS:3.28,Mirdiff:3.87,"Al Reem":2.19},"Smokeys|Deliveroo":{DIP:5.74,"Town Square":4.56,DMC:3.24,Motorcity:3.41,DSO:1.98,"Al Forsan":1.08,"Al Reem":1.82,Jumeirah:1.62,Marina:1.38,Mirdiff:0.57}};
 const AS_LC=new Map(AGGS.map(a=>[a.toLowerCase(),a]));
+// Aggregator header aliases — sheets sometimes spell these differently (spacing/case).
+// Without these, an unmatched header column gets skipped or mis-paired to the nearest
+// recognized aggregator (e.g. Instashop's data bleeding into Smiles). Map every known
+// variant to its canonical name so column detection is robust.
+[["insta shop","Instashop"],["instashop","Instashop"],["insta-shop","Instashop"],
+ ["talabat ","Talabat"],["delivero","Deliveroo"],["deliveroo ","Deliveroo"],
+ ["e& smiles","Smiles"],["e&smiles","Smiles"],["smiles ","Smiles"],
+ ["careem now","Careem"],["careemnow","Careem"],["noon food","Noon"],["noonfood","Noon"]
+].forEach(([k,v])=>AS_LC.set(k,v));
 
 // UTILS
 const normB=n=>BNM[n]||n;
@@ -51,14 +60,21 @@ function pctClr(n){if(n==null)return"#64748b";if(n>=15)return"#22C55E";if(n>=3)r
 function parseCSV(txt){const rows=[];let row=[],c="",q=false;for(let i=0;i<txt.length;i++){const ch=txt[i];if(ch==='"')q=!q;else if(ch===","&&!q){row.push(c.trim());c="";}else if((ch==="\n"||ch==="\r")&&!q){if(ch==="\r"&&txt[i+1]==="\n")i++;row.push(c.trim());c="";if(row.some(x=>x))rows.push(row);row=[];}else c+=ch;}row.push(c.trim());if(row.some(x=>x))rows.push(row);return rows;}
 function parseBrand(csv,brand){
   const rows=parseCSV(csv);
-  let ai=-1;for(let i=0;i<Math.min(rows.length,15);i++){if(rows[i].some(v=>AS_LC.has(v.toLowerCase()))){ai=i;break;}}
+  const aggLooseMatch=(v)=>{const tl=(v||"").trim().toLowerCase();if(AS_LC.has(tl))return true;const s=tl.replace(/[\s\-_&]/g,"");return AS_LC.has(s)||[...AS_LC.keys()].some(k=>k.replace(/[\s\-_&]/g,"")===s);};
+  let ai=-1;for(let i=0;i<Math.min(rows.length,15);i++){if(rows[i].some(v=>aggLooseMatch(v))){ai=i;break;}}
   if(ai<0)return[];
   const ar=rows[ai],sr=rows[ai+1]||[];
   // Metric detector for the sub-header row (case/space tolerant).
   const metricAt=(i)=>{const raw=(sr[i]||"").trim().toLowerCase();if(raw==="sales"||raw==="net sales"||raw==="gmv")return"Sales";if(raw==="orders"||raw==="order"||raw==="no. of orders"||raw==="no of orders")return"Orders";if(raw==="disc"||raw==="disc."||raw==="discount"||raw==="discounts"||raw==="discount given"||raw==="total discount"||raw==="total disc")return"Disc";if(raw==="aov")return"AOV";return null;};
   // Aggregator name positions in the header row, in order.
   const aggPositions=[];
-  ar.forEach((v,i)=>{const tl=v.trim().toLowerCase();if(AS_LC.has(tl))aggPositions.push({agg:AS_LC.get(tl),col:i});});
+  ar.forEach((v,i)=>{
+    const tl=v.trim().toLowerCase();
+    let canon=AS_LC.get(tl);
+    // Fallback: try space-stripped match (e.g. "insta shop" → "instashop")
+    if(!canon){const stripped=tl.replace(/[\s\-_&]/g,"");canon=AS_LC.get(stripped)||[...AS_LC.entries()].find(([k])=>k.replace(/[\s\-_&]/g,"")===stripped)?.[1];}
+    if(canon)aggPositions.push({agg:canon,col:i});
+  });
   // Build the ordered list of metric columns (Disc/Sales/Orders/AOV) across the row.
   const metricCols=[];for(let i=0;i<Math.max(ar.length,sr.length);i++){const m=metricAt(i);if(m)metricCols.push({i,m});}
   // Group metric columns into per-aggregator BLOCKS. Each block starts at a "Disc" or "Sales"
@@ -404,7 +420,7 @@ function mkTable(heads,rows){return`<div style="overflow-x:auto"><table class="t
 // CHARTS — tooltips show the exact date + value on hover
 function destroyChart(id){if(charts[id]){charts[id].destroy();delete charts[id];}}
 function trendChart(id,data,color){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);charts[id]=new Chart(ctx,{type:"line",data:{labels:data.map(d=>d.d),datasets:[{data:data.map(d=>d.s),borderColor:color,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false,label:"Net Sales"}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:false},tooltip:{callbacks:{title:t=>t[0].label,label:c=>{const o=data[c.dataIndex]?.o;return [`AED ${Math.round(c.raw).toLocaleString()} Net Sales`,o!=null?`${Math.round(o).toLocaleString()} orders`:""].filter(Boolean);}}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}}}}});}
-function barChart(id,labels,values,colors,extra,mode){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);const idx=[...Array(labels.length).keys()].sort((a,b)=>values[b]-values[a]);const sl=idx.map(i=>labels[i]),sv=idx.map(i=>values[i]),sc=idx.map(i=>colors[i]),se=extra?idx.map(i=>extra[i]):null;charts[id]=new Chart(ctx,{type:"bar",data:{labels:sl,datasets:[{data:sv,backgroundColor:sc,borderRadius:3,label:mode==="orders"?"Orders":"Net Sales"}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{title:t=>t[0].label,label:c=>{const v=c.raw,i=c.dataIndex,ex=se?se[i]:null;return mode==="orders"?[`${Math.round(v).toLocaleString()} Orders`,ex!=null?`AED ${Math.round(ex).toLocaleString()} Sales`:""].filter(Boolean):[`AED ${Math.round(v).toLocaleString()} Sales`,ex!=null?`${Math.round(ex).toLocaleString()} Orders`:""].filter(Boolean);}}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{display:false},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}}}}});}
+function barChart(id,labels,values,colors,extra,mode){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);const idx=[...Array(labels.length).keys()].sort((a,b)=>values[b]-values[a]);const sl=idx.map(i=>labels[i]),sv=idx.map(i=>values[i]),sc=idx.map(i=>colors[i]),se=extra?idx.map(i=>extra[i]):null;charts[id]=new Chart(ctx,{type:"bar",data:{labels:sl,datasets:[{data:sv,backgroundColor:sc,borderRadius:3,minBarLength:6,label:mode==="orders"?"Orders":"Net Sales"}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{title:t=>t[0].label,label:c=>{const v=c.raw,i=c.dataIndex,ex=se?se[i]:null;return mode==="orders"?[`${Math.round(v).toLocaleString()} Orders`,ex!=null?`AED ${Math.round(ex).toLocaleString()} Sales`:""].filter(Boolean):[`AED ${Math.round(v).toLocaleString()} Sales`,ex!=null?`${Math.round(ex).toLocaleString()} Orders`:""].filter(Boolean);}}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{display:false},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}}}}});}
 // Multi-line chart: one line per series. Used for AOV-by-brand drilldown.
 function multiLineChart(id,labels,series){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);charts[id]=new Chart(ctx,{type:"line",data:{labels,datasets:series.map(s=>({label:s.name,data:s.data,borderColor:s.color,backgroundColor:s.color,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false,spanGaps:true}))},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#94a3b8",font:{size:10},boxWidth:12,padding:8}},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.raw==null?'—':'AED '+Number(c.raw).toFixed(1)}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}}}}});}
 
@@ -475,7 +491,7 @@ function renderOverview(){
   <div id="brief-content"><div style="color:#64748b;font-size:12px">Generating...</div></div>
 </div>
     <div class="g4">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders),null,ordPerDay)}${kpiCard("Total Net Sales",fmtAED(ls.sales),`${compShort}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales),null,salesPerDay)}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
-    <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:150px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:150px"><canvas id="ch-agg"></canvas></div></div></div>
+    <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:150px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="g2"><div class="sm"><div class="ct" style="color:#22C55E">✅ What Worked</div>${verdW||"<div style='color:#64748b;font-size:12px'>No comparison data</div>"}</div><div class="sm"><div class="ct" style="color:#EF4444">⚠️ Needs Attention</div>${verdI||"<div style='color:#22C55E;font-size:12px'>All outlets performing</div>"}</div></div>
     ${aovBlock}
     <div class="card"><div class="ct">All Brands — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click any header to sort</span></div>${sortableTable("ov-brands",heads,brandTableRows,2)}</div>
@@ -683,6 +699,22 @@ function parseCPCDate(s){
   }
   return parseDate(t);
 }
+// Extract an update date from the Remarks column. The column holds dates like "21/2/2025",
+// "02/06/2025", "18/06/2026" (DD/MM/YYYY, possibly with leading zeros or extra text around it).
+// Returns an ISO date string (YYYY-MM-DD) or null. Treats the format as DAY/MONTH/YEAR.
+function parseRemarksDate(s){
+  if(!s)return null;
+  const t=s.toString().trim();
+  // DD/MM/YYYY or D/M/YY (also accepts - or . separators), find anywhere in the text
+  let m=t.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
+  if(m){
+    let d=parseInt(m[1],10),mo=parseInt(m[2],10),yr=parseInt(m[3],10);
+    if(yr<100)yr+=2000;
+    if(mo>=1&&mo<=12&&d>=1&&d<=31)return `${yr}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  }
+  // DD-MMM-YY fallback (same as campaign date format)
+  return parseCPCDate(t);
+}
 // Brand-branch cache shared across a single parse pass
 function resolveBrandLocation(bl,brandCache,branchCache){
   if(!bl)return{brand:null,branch:null};
@@ -737,13 +769,15 @@ function parseCPCSheet(csv){
     const num=(idx)=>{if(idx<0)return 0;const v=(row[idx]||"").toString().replace(/[, ]/g,"").replace(/%/g,"").trim();const n=parseFloat(v);return isNaN(n)?0:n;};
     const adType=((row[cm.adType]||"").trim()||"CPC").replace(/key\s*words?/i,"Keywords");
     const startDate=parseCPCDate(row[cm.startDate]),endDate=parseCPCDate(row[cm.endDate]);
+    const remarksRaw=(row[cm.remarks]||"").toString().trim();
     const rec={
       adType:/keyword/i.test(adType)?"Keywords":"CPC",
       aggregator,brand,branch,brandLocation:bl,startDate,endDate,
       views:num(cm.views),orders:num(cm.orders),sales:num(cm.sales),aov:num(cm.aov),cto:num(cm.cto),
       budgetAlloc:num(cm.budgetAlloc),budgetSpent:num(cm.budgetSpent),leftover:num(cm.leftover),
       roi:num(cm.roi),avgBid:num(cm.avgBid),ftu:num(cm.ftu),
-      remarks:(row[cm.remarks]||"").toString().trim(),
+      remarks:remarksRaw,
+      updateDate:parseRemarksDate(remarksRaw),
       month:startDate?startDate.slice(0,7):null
     };
     if(rec.startDate&&rec.endDate){
