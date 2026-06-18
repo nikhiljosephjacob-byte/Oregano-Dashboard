@@ -2494,3 +2494,5 @@ function cmpDrawChart(dA,dB){
     injectCompareTab,loadKPIData,doLoad];
   fns.forEach(fn=>{try{if(typeof fn==="function")window[fn.name]=fn;}catch(e){}});
 })();
+
+
