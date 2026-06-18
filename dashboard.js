@@ -10,7 +10,7 @@ const AC={Deliveroo:"#00CCBC",Talabat:"#FF6000",Noon:"#F5CF00",Careem:"#3DDC73",
 const MM={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
 const BNM={MC:"Motorcity",TQ:"Town Square","Al Qouz":"Al Quoz","Mirdif":"Mirdiff"};
 const AUH=new Set(["Al Forsan","Al Reem","Reem Island","WTC","Al Reef"]);
-const COMM={
+const COMM={ 
   Talabat:{
     Oregano:{commission:0.20,pg:0.02,cpc:0,note:"Preferred brand rate"},
     Smokeys:{commission:0.20,pg:0.02,cpc:0,note:"Preferred brand rate"},
