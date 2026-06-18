@@ -9,7 +9,7 @@ const AGGS=["Deliveroo","Talabat","Noon","Careem","Keeta","Smiles","Instashop"];
 const AC={Deliveroo:"#00CCBC",Talabat:"#FF6000",Noon:"#F5CF00",Careem:"#3DDC73",Keeta:"#E8D614",Smiles:"#6B4FCB",Instashop:"#E91E8C","Google Maps":"#4285F4"};
 const MM={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
 const BNM={MC:"Motorcity",TQ:"Town Square","Al Qouz":"Al Quoz","Mirdif":"Mirdiff"};
-const AUH=new Set(["Al Forsan","Al Reem","WTC","Al Reef"]);
+const AUH=new Set(["Al Forsan","Al Reem","Reem Island","WTC","Al Reef"]);
 const COMM={
   Talabat:{
     Oregano:{commission:0.20,pg:0.02,cpc:0,note:"Preferred brand rate"},
@@ -688,6 +688,8 @@ async function runAskAI(){
 const CAMPAIGN_GID="1647275459";
 let selDay=null;let campaignData=[],campLoaded=false,campTab='active',calMonth=null,selCamp=null;
 let campFBrands=new Set(),campFPlatforms=new Set(),campFStatuses=new Set();
+// Date and outlet-scope filters for the campaign list
+let campFStartFrom="",campFStartTo="",campFOutletScope="all"; // outlet scope: all/dxb/auh/specific
 let campSort={col:'startDate',dir:-1};
 const BRAND_NORM={'oregano':'Oregano','lollorosso':'Lollorosso','lollo rosso':'Lollorosso','lollarosso':'Lollorosso','smokeys':'Smokeys',"smokey's":'Smokeys','smokey':'Smokeys','smokeys pizzeria':'Smokeys','fyoozhen':'Fyoozhen','fyoo zhen':'Fyoozhen','fyoo-zhen':'Fyoozhen','fyooshen':'Fyoozhen','wicked wings':'Wicked Wings','wckd wings':'Wicked Wings','wkd wings':'Wicked Wings','all brands':'All Brands','all':'All Brands'};
 const AGG_NORM={'deliveroo':'Deliveroo','talabat':'Talabat','noon':'Noon','careem':'Careem','keeta':'Keeta','smiles':'Smiles','instashop':'Instashop','insta shop':'Instashop','google maps':'Google Maps','google map':'Google Maps','google':'Google Maps'};
@@ -731,15 +733,57 @@ function mergeKeetaFDAddons(recs){
   return nonFD;
 }
 function campStatus(c){const today=dk(new Date());if(c.startDate>today)return'Upcoming';if(c.endDate<today)return'Completed';return'Running';}
+// ── LOCATION-AWARE CAMPAIGN ANALYSIS ──
+// Many campaigns target only specific locations (DXB = Dubai outlets, AUH = Abu Dhabi outlets,
+// or a single branch like "NAS"). When that's the case we MUST compare those outlets vs only
+// those same outlets in the baseline — comparing them to all-outlet totals would compare apples
+// to oranges. campOutlets() resolves the outlet field on a campaign record to the set of actual
+// branch names from allData that the campaign applies to.
+const AUH_OUTLETS=new Set(["Al Forsan","Al Reem","Reem Island","WTC","Al Reef"]); // Abu Dhabi branches
+function campOutlets(c){
+  // Returns a Set of branch names this campaign applies to, OR null meaning "all outlets".
+  const raw=(c.outlet||"").trim();
+  if(!raw||/^all\b/i.test(raw)||raw==="—"||raw==="-")return null;
+  // Build the list of branches that exist in allData for this brand (so we don't fabricate names)
+  const brandBranches=[...new Set(allData.filter(r=>c.brand==="All Brands"||r.brand===c.brand).map(r=>r.branch))].filter(b=>b!=="(brand-level)");
+  // Tokenize the outlet field — supports "DXB", "AUH", "DXB,AUH", "NAS only", "Marina + DSO" etc.
+  const tokens=raw.split(/[,;+/&]+|\s+and\s+|\s+\+\s+/i).map(t=>t.trim()).filter(Boolean);
+  const out=new Set();
+  tokens.forEach(tok=>{
+    const tl=tok.toLowerCase().replace(/\s+only\b/g,"").replace(/\s+outlets?\b/g,"").trim();
+    if(!tl)return;
+    if(tl==="dxb"||tl==="dubai"){brandBranches.forEach(b=>{if(!AUH_OUTLETS.has(b))out.add(b);});return;}
+    if(tl==="auh"||tl==="abudhabi"||tl==="abu dhabi"){brandBranches.forEach(b=>{if(AUH_OUTLETS.has(b))out.add(b);});return;}
+    // Specific branch name — match against actual branches case-insensitively, allow partial
+    const match=brandBranches.find(b=>b.toLowerCase()===tl)||brandBranches.find(b=>b.toLowerCase().includes(tl)||tl.includes(b.toLowerCase()));
+    if(match)out.add(match);
+  });
+  return out.size?out:null;
+}
+// Build a "Scope label" for display, e.g. "Dubai outlets (DXB) — 4 branches" or "All outlets"
+function campScopeLabel(c){
+  const set=campOutlets(c);
+  const raw=(c.outlet||"").trim();
+  if(!set)return"All outlets";
+  const list=[...set].sort();
+  const rawLower=raw.toLowerCase();
+  // For region campaigns (DXB/AUH/Dubai/Abu Dhabi), use a friendly summary; full list goes in tooltip.
+  if(/^(dxb|dubai)/i.test(raw)){return `🏙️ Dubai outlets only — ${set.size} branch${set.size!==1?'es':''}: ${list.join(", ")}`;}
+  if(/^(auh|abu\s?dhabi)/i.test(raw)){return `🏛️ Abu Dhabi outlets only — ${set.size} branch${set.size!==1?'es':''}: ${list.join(", ")}`;}
+  // Specific named branches
+  return `📍 ${raw} — ${set.size} branch${set.size!==1?'es':''}: ${list.join(", ")}`;
+}
+
 function campImpact(c){
   const days=Math.max(1,Math.round((new Date(c.endDate)-new Date(c.startDate))/86400000)+1);
   const baseEnd=subDays(c.startDate,1),baseStart=subDays(baseEnd,days-1);
-  const flt=r=>{if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;return true;};
+  const outletSet=campOutlets(c);
+  const flt=r=>{if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;if(outletSet&&!outletSet.has(r.branch))return false;return true;};
   const cR=allData.filter(r=>r.date>=c.startDate&&r.date<=c.endDate&&flt(r));
   const bR=allData.filter(r=>r.date>=baseStart&&r.date<=baseEnd&&flt(r));
   const cD=new Set(cR.map(r=>r.date)).size||1,bD=new Set(bR.map(r=>r.date)).size||1;
   const cs=sumR(cR),bs=sumR(bR);
-  return{campOrders:cs.orders,campSales:cs.sales,campAOV:cs.orders>0?cs.sales/cs.orders:0,baseOrders:bs.orders,baseSales:bs.sales,baseAOV:bs.orders>0?bs.sales/bs.orders:0,ordersLift:pctOf(cs.orders/cD,bs.orders/bD),salesLift:pctOf(cs.sales/cD,bs.sales/bD),aovChange:cs.orders>0&&bs.orders>0?pctOf(cs.sales/cs.orders,bs.sales/bs.orders):null,days,baseStart,baseEnd,hasData:cs.orders>0||cs.sales>0};
+  return{campOrders:cs.orders,campSales:cs.sales,campAOV:cs.orders>0?cs.sales/cs.orders:0,baseOrders:bs.orders,baseSales:bs.sales,baseAOV:bs.orders>0?bs.sales/bs.orders:0,ordersLift:pctOf(cs.orders/cD,bs.orders/bD),salesLift:pctOf(cs.sales/cD,bs.sales/bD),aovChange:cs.orders>0&&bs.orders>0?pctOf(cs.sales/cs.orders,bs.sales/bs.orders):null,days,baseStart,baseEnd,hasData:cs.orders>0||cs.sales>0,outletSet};
 }
 function selectCamp(idx){selCamp=campaignData[idx];selBundle=null;campTab='detail';renderCampaigns();}
 let selBundle=null;
@@ -768,7 +812,7 @@ function campImpactExtended(c){
   const days=base.days;
   const wowEnd=subDays(c.startDate,1),wowStart=subDays(wowEnd,days-1);
   const momEnd=subDays(c.startDate,1),momStart=subDays(momEnd,29);
-  const flt=r=>{if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;return true;};
+  const flt=r=>{if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;if(base.outletSet&&!base.outletSet.has(r.branch))return false;return true;};
   const cR=allData.filter(r=>r.date>=c.startDate&&r.date<=c.endDate&&flt(r));const cs=sumR(cR);const cDays=new Set(cR.map(r=>r.date)).size||1;
   const wR=allData.filter(r=>r.date>=wowStart&&r.date<=wowEnd&&flt(r));const ws=sumR(wR);const wDays=new Set(wR.map(r=>r.date)).size||1;
   const wowOrdersLift=pctOf(cs.orders/cDays,ws.orders/wDays),wowSalesLift=pctOf(cs.sales/cDays,ws.sales/wDays);
@@ -788,7 +832,29 @@ function campImpactExtended(c){
 function campSortBy(col){if(campSort.col===col)campSort.dir*=-1;else{campSort.col=col;campSort.dir=-1;}renderCampaigns();}
 function campToggleFilter(type,val){const sets={brand:campFBrands,platform:campFPlatforms,status:campFStatuses};const s=sets[type];if(s.has(val))s.delete(val);else s.add(val);renderCampaigns();}
 function campClearFilters(){campFBrands.clear();campFPlatforms.clear();campFStatuses.clear();renderCampaigns();}
-function applyCampFilters(camps){return camps.filter(c=>{if(campFBrands.size&&!campFBrands.has(c.brand))return false;if(campFPlatforms.size&&!campFPlatforms.has(c.aggregator))return false;if(campFStatuses.size&&!campFStatuses.has(campStatus(c)))return false;return true;});}
+function applyCampFilters(camps){
+  return camps.filter(c=>{
+    if(campFBrands.size&&!campFBrands.has(c.brand))return false;
+    if(campFPlatforms.size&&!campFPlatforms.has(c.aggregator))return false;
+    if(campFStatuses.size&&!campFStatuses.has(campStatus(c)))return false;
+    if(campFStartFrom&&c.startDate<campFStartFrom)return false;
+    if(campFStartTo&&c.startDate>campFStartTo)return false;
+    if(campFOutletScope&&campFOutletScope!=="all"){
+      const o=(c.outlet||"").toLowerCase();
+      if(campFOutletScope==="dxb"&&!o.includes("dxb")&&!o.includes("dubai"))return false;
+      if(campFOutletScope==="auh"&&!o.includes("auh")&&!o.includes("abu dhabi")&&!o.includes("abudhabi"))return false;
+      if(campFOutletScope==="specific"){
+        // "Specific" = a single named branch (not All/DXB/AUH/blank)
+        const cleaned=o.trim();
+        if(!cleaned||cleaned==="all"||cleaned.includes("dxb")||cleaned.includes("auh")||cleaned.includes("dubai")||cleaned.includes("abu dhabi"))return false;
+      }
+    }
+    return true;
+  });
+}
+function campSetDate(which,val){if(which==="from")campFStartFrom=val;else campFStartTo=val;renderCampaigns();}
+function campSetScope(v){campFOutletScope=v;renderCampaigns();}
+function campClearDates(){campFStartFrom="";campFStartTo="";renderCampaigns();}
 function sortCampaigns(camps){
   const{col,dir}=campSort;
   return[...camps].sort((a,b)=>{
@@ -815,8 +881,15 @@ function campFilterBar(){
   const plDD=ddHTMLCamp('cdd-pl','Platform',campFPlatforms,platforms.map(p=>({val:p,lbl:p,clr:AC[p]||'#94a3b8'})),'platform');
   const stDD=ddHTMLCamp('cdd-st','Status',campFStatuses,statuses.map(s=>({val:s,lbl:s,clr:s==='Running'?'#22C55E':s==='Upcoming'?'#F59E0B':'#64748b'})),'status');
   const chips=[...[...campFBrands].map(b=>`<span class="fchip" style="background:${BMAP[b]?.c||'#888'}22;color:${BMAP[b]?.c||'#888'};border:1px solid ${BMAP[b]?.c||'#888'}55" onclick="campToggleFilter('brand','${b}')">✕ ${b}</span>`),...[...campFPlatforms].map(p=>`<span class="fchip" style="background:${AC[p]||'#888'}22;color:${AC[p]||'#888'};border:1px solid ${AC[p]||'#888'}55" onclick="campToggleFilter('platform','${p}')">✕ ${p}</span>`),...[...campFStatuses].map(s=>`<span class="fchip" style="background:#1b2f4a;color:#94a3b8;border:1px solid #1b2f4a" onclick="campToggleFilter('status','${s}')">✕ ${s}</span>`)].join('');
-  const clearBtn=(campFBrands.size||campFPlatforms.size||campFStatuses.size)?`<button class="fpill" onclick="campClearFilters()" style="color:#ef4444;border-color:#ef444444">✕ Clear</button>`:'';
-  return `<div class="fbar"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${brDD}${plDD}${stDD}${clearBtn}</div>${chips?`<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">${chips}</div>`:''}</div>`;
+  const hasFilters=campFBrands.size||campFPlatforms.size||campFStatuses.size||campFStartFrom||campFStartTo||campFOutletScope!=="all";
+  const clearBtn=hasFilters?`<button class="fpill" onclick="campClearFilters();campClearDates();campSetScope('all')" style="color:#ef4444;border-color:#ef444444">✕ Clear All</button>`:'';
+  // Outlet-scope pills (DXB / AUH / single branch)
+  const scopePill=(v,lbl,icon)=>`<button onclick="campSetScope('${v}')" style="padding:5px 11px;border-radius:6px;border:1px solid ${campFOutletScope===v?'#f59e0b':'#1b2f4a'};background:${campFOutletScope===v?'rgba(245,158,11,.12)':'transparent'};color:${campFOutletScope===v?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px">${icon} ${lbl}</button>`;
+  const scopeRow=`<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-right:2px">Scope</span>${scopePill('all','All','🌐')}${scopePill('dxb','Dubai (DXB)','🏙️')}${scopePill('auh','Abu Dhabi (AUH)','🏛️')}${scopePill('specific','Specific Branch','📍')}</div>`;
+  // Date filter row
+  const inp=(id,val,ph)=>`<input type="date" value="${val||''}" id="${id}" onchange="campSetDate('${id==='cf-from'?'from':'to'}',this.value)" style="background:#0b1220;border:1px solid #1b2f4a;border-radius:6px;color:#e2e8f0;padding:5px 9px;font-size:11px;font-family:inherit;color-scheme:dark" title="${ph}">`;
+  const dateRow=`<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-right:2px">Start Date</span>${inp('cf-from',campFStartFrom,'From')}<span style="color:#64748b;font-size:11px">→</span>${inp('cf-to',campFStartTo,'To')}${(campFStartFrom||campFStartTo)?`<button onclick="campClearDates()" style="background:none;border:1px solid #1b2f4a;border-radius:5px;color:#64748b;padding:3px 9px;font-size:10px;cursor:pointer">clear dates</button>`:''}</div>`;
+  return `<div class="card" style="margin-bottom:12px;background:linear-gradient(180deg,rgba(11,18,32,.5),rgba(13,21,36,.3));border:1px solid rgba(245,158,11,.15);padding:14px"><div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:10px"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-right:2px">Filters</span>${brDD}${plDD}${stDD}${clearBtn}</div><div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:${chips?'10px':'0'}">${scopeRow}<div style="width:1px;height:18px;background:rgba(27,47,74,.6)"></div>${dateRow}</div>${chips?`<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(27,47,74,.4)">${chips}</div>`:''}</div>`;
 }
 let calFilter='all',calView='month';
 function setCalFilter(f){calFilter=f;renderCampaigns();}
@@ -994,7 +1067,8 @@ function campTableHTML(title,camps,showImpact){
 // Comprehensive campaign analysis: real discounts, profitability, pros/cons, concurrent campaigns.
 function campAnalysis(c){
   const base=campImpactExtended(c);
-  const flt=r=>{if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;return true;};
+  const outletSet=base.outletSet;
+  const flt=r=>{if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;if(outletSet&&!outletSet.has(r.branch))return false;return true;};
   const cR=allData.filter(r=>r.date>=c.startDate&&r.date<=c.endDate&&flt(r));
   const bEnd=subDays(c.startDate,1),bStart=subDays(bEnd,base.days-1);
   const bR=allData.filter(r=>r.date>=bStart&&r.date<=bEnd&&flt(r));
@@ -1045,8 +1119,12 @@ function campDetailHTML(c,idx){
   const st=campStatus(c),stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#64748b'}[st]||'#64748b';
   const b=BMAP[c.brand],a=campAnalysis(c),imp=a;
   const accent=b?.c||'#f59e0b';
+  // ── Scope badge (which outlets are being compared) ──
+  const scopeStr=campScopeLabel(c);
+  const isScoped=scopeStr!=="All outlets";
+  const scopeBadge=isScoped?`<div style="margin-top:10px;padding:8px 12px;background:rgba(96,165,250,.08);border-left:3px solid #60A5FA;border-radius:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="font-size:18px">📍</div><div style="flex:1;min-width:200px"><div style="font-size:10px;color:#60A5FA;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Location-Scoped Analysis</div><div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.5">${scopeStr} — performance is compared against the <strong style="color:#e2e8f0">same outlets only</strong> in the prior period (apples-to-apples).</div></div></div>`:'';
   // ── Header ──
-  const header=`<div class="card" style="border-color:${accent}44;margin-bottom:12px"><div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px"><div><div style="font-size:16px;font-weight:800;color:${accent}">${c.name||'(no name)'}</div><div style="font-size:12px;color:#64748b;margin-top:6px;line-height:2"><span style="color:${accent};font-weight:700">${c.brand}</span> · <span style="color:${AC[c.aggregator]||'#888'};font-weight:700">${c.aggregator}</span> · ${!c.outlet||c.outlet==='All'?'All Outlets':c.outlet}<br>${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)} (${a.days} day${a.days!==1?'s':''})<br><span style="color:#e2e8f0;line-height:1.6">${c.comments||''}</span>${(c.addons&&c.addons.length)?`<div style="margin-top:10px;padding:8px 12px;background:rgba(232,214,20,0.08);border-left:3px solid #E8D614;border-radius:4px"><div style="font-size:10px;color:#E8D614;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">⊕ Co-funded Add-ons</div>${c.addons.map(ad=>`<div style="font-size:11px;color:#FCD34D;line-height:1.5"><strong>${ad.name}</strong> · ${ad.comments} · ${fmtCampDateRange(ad.startDate,ad.endDate)}</div>`).join('')}</div>`:''}</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0"><div style="padding:4px 14px;border-radius:12px;font-size:11px;font-weight:700;background:${stClr}22;color:${stClr};border:1px solid ${stClr}44">${st}</div><button onclick="campTab='active';renderCampaigns()" style="background:none;border:1px solid #1b2f4a;border-radius:5px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer">← Back</button></div></div></div>`;
+  const header=`<div class="card" style="border-color:${accent}44;margin-bottom:12px"><div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px"><div style="flex:1;min-width:280px"><div style="font-size:16px;font-weight:800;color:${accent}">${c.name||'(no name)'}</div><div style="font-size:12px;color:#64748b;margin-top:6px;line-height:2"><span style="color:${accent};font-weight:700">${c.brand}</span> · <span style="color:${AC[c.aggregator]||'#888'};font-weight:700">${c.aggregator}</span> · ${!c.outlet||c.outlet==='All'?'All Outlets':c.outlet}<br>${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)} (${a.days} day${a.days!==1?'s':''})<br><span style="color:#e2e8f0;line-height:1.6">${c.comments||''}</span>${(c.addons&&c.addons.length)?`<div style="margin-top:10px;padding:8px 12px;background:rgba(232,214,20,0.08);border-left:3px solid #E8D614;border-radius:4px"><div style="font-size:10px;color:#E8D614;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">⊕ Co-funded Add-ons</div>${c.addons.map(ad=>`<div style="font-size:11px;color:#FCD34D;line-height:1.5"><strong>${ad.name}</strong> · ${ad.comments} · ${fmtCampDateRange(ad.startDate,ad.endDate)}</div>`).join('')}</div>`:''}</div>${scopeBadge}</div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0"><div style="padding:4px 14px;border-radius:12px;font-size:11px;font-weight:700;background:${stClr}22;color:${stClr};border:1px solid ${stClr}44">${st}</div><button onclick="campTab='active';renderCampaigns()" style="background:none;border:1px solid #1b2f4a;border-radius:5px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer">← Back</button></div></div></div>`;
 
   if(st==='Upcoming')return header+`<div class="card"><div style="color:#F59E0B;font-size:13px;padding:4px 0">⏰ Campaign starts ${fmtDisp(c.startDate)} — performance data will appear once live.</div></div>`;
   if(!a.hasData)return header+`<div class="card"><div style="color:#64748b;font-size:12px;padding:4px 0">No sales data found for this campaign period.</div></div>`;
@@ -1146,9 +1224,12 @@ function bundleDetailHTML(bundle){
   const profClr=a.profitabilityPct==null?'#64748b':a.profitabilityPct>0?'#22C55E':a.profitabilityPct>-20?'#FBBF24':'#EF4444';
   const roiClr=a.discountROI==null?'#64748b':a.discountROI>=1?'#22C55E':a.discountROI>=0?'#FBBF24':'#EF4444';
   const ordClr=pctClr(a.ordersLift),salClr=pctClr(a.salesLift),aovClr=pctClr(a.aovChange);
-  // Header
+  // Header with scope badge (which outlets are being compared)
+  const scopeStr=campScopeLabel({brand:bundle.brand,aggregator:bundle.aggregator,outlet:bundle.outlet,startDate:bundle.startDate,endDate:bundle.endDate});
+  const isScoped=scopeStr!=="All outlets";
+  const scopeBadge=isScoped?`<div style="margin-top:10px;padding:8px 12px;background:rgba(96,165,250,.08);border-left:3px solid #60A5FA;border-radius:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="font-size:18px">📍</div><div style="flex:1;min-width:200px"><div style="font-size:10px;color:#60A5FA;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Location-Scoped Analysis</div><div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.5">${scopeStr} — compared against the <strong style="color:#e2e8f0">same outlets only</strong> in the prior period.</div></div></div>`:'';
   const header=`<div class="card" style="margin-bottom:12px;border-left:4px solid ${brandClr}"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
-    <div><div style="font-size:9px;color:#FBBF24;font-weight:800;letter-spacing:1.5px;text-transform:uppercase">🎯 Coordinated Campaign Bundle</div><div style="font-size:18px;font-weight:800;color:#e2e8f0;margin-top:4px">${bundle.brand} on ${bundle.aggregator}</div><div style="font-size:11px;color:#94a3b8;margin-top:4px">${fmtCampDateRange(bundle.startDate,bundle.endDate)} · ${a.days} day${a.days>1?'s':''} · ${bundle.outlet||'All'} outlets · ${bundle.campaigns.length} concurrent segments</div></div>
+    <div style="flex:1;min-width:280px"><div style="font-size:9px;color:#FBBF24;font-weight:800;letter-spacing:1.5px;text-transform:uppercase">🎯 Coordinated Campaign Bundle</div><div style="font-size:18px;font-weight:800;color:#e2e8f0;margin-top:4px">${bundle.brand} on ${bundle.aggregator}</div><div style="font-size:11px;color:#94a3b8;margin-top:4px">${fmtCampDateRange(bundle.startDate,bundle.endDate)} · ${a.days} day${a.days>1?'s':''} · ${bundle.outlet||'All'} outlets · ${bundle.campaigns.length} concurrent segments</div>${scopeBadge}</div>
     <button onclick="selBundle=null;campTab='active';renderCampaigns()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer">← Back</button>
   </div></div>`;
   // Segments breakdown — what each campaign in the bundle targets
@@ -1200,18 +1281,29 @@ async function renderCampaigns(){
   if(campaignData.length===0){pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Sheet loaded but no valid campaigns found</div></div>`;return;}
   try{
     const active=campaignData.filter(c=>campStatus(c)==='Running'),upcoming=campaignData.filter(c=>campStatus(c)==='Upcoming'),completed=campaignData.filter(c=>campStatus(c)==='Completed');
-    const tabs=[['calendar','📅 Calendar'],['active',`🟢 Active & Upcoming (${active.length+upcoming.length})`],['history',`📋 History (${completed.length})`]];
-    if(selCamp)tabs.push(['detail','🔍 Campaign Detail']);
-    else if(selBundle)tabs.push(['detail','🎯 Bundle Detail']);
-    const tabH=tabs.map(([k,l])=>`<button class="exp-st ${campTab===k?'act':''}" onclick="campTab='${k}';renderCampaigns()">${l}</button>`).join('');
-    const statBar=`<div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:14px">${[['🟢 Active',active.length,'#22C55E'],['⏰ Upcoming',upcoming.length,'#F59E0B'],['✅ Completed',completed.length,'#64748b'],['📊 Total',campaignData.length,'#f59e0b']].map(([l,n,c])=>`<div style="font-size:12px;color:${c};font-weight:600">${l} <span style="font-size:18px;font-weight:800">${n}</span></div>`).join('')}</div>`;
+    // ── Futuristic top bar ──
+    const tile=(emoji,label,n,clr)=>`<div style="flex:1;min-width:130px;background:linear-gradient(135deg,${clr}11,transparent);border:1px solid ${clr}33;border-radius:10px;padding:10px 14px;position:relative;overflow:hidden"><div style="position:absolute;top:0;right:0;width:60px;height:60px;background:radial-gradient(circle at top right,${clr}22,transparent 70%);pointer-events:none"></div><div style="font-size:9px;color:#64748b;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">${emoji} ${label}</div><div style="font-size:24px;font-weight:800;color:${clr};font-variant-numeric:tabular-nums;line-height:1.1;margin-top:4px">${n}</div></div>`;
+    const statBar=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">${tile('🟢','Running Now',active.length,'#22C55E')}${tile('⏰','Upcoming',upcoming.length,'#F59E0B')}${tile('✅','Completed',completed.length,'#64748b')}${tile('📊','Total Tracked',campaignData.length,'#f59e0b')}</div>`;
+    // ── Tab pills ──
+    const tabs=[
+      ['active',`🟢 Active`,active.length],
+      ['upcoming',`⏰ Upcoming`,upcoming.length],
+      ['history',`📋 History`,completed.length],
+      ['calendar',`📅 Calendar`,null]
+    ];
+    if(selCamp)tabs.push(['detail','🔍 Campaign Detail',null]);
+    else if(selBundle)tabs.push(['detail','🎯 Bundle Detail',null]);
+    const tabH=tabs.map(([k,l,n])=>{const act=campTab===k;const cnt=n!=null?` <span style="background:${act?'rgba(245,158,11,.25)':'rgba(100,116,139,.2)'};color:${act?'#FBBF24':'#94a3b8'};font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;margin-left:3px">${n}</span>`:'';return `<button onclick="campTab='${k}';renderCampaigns()" style="padding:7px 14px;border-radius:7px;border:1px solid ${act?'#f59e0b':'rgba(27,47,74,.6)'};background:${act?'linear-gradient(180deg,rgba(245,158,11,.18),rgba(245,158,11,.08))':'transparent'};color:${act?'#f59e0b':'#94a3b8'};font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:3px;transition:all .15s">${l}${cnt}</button>`;}).join('');
     let main='';
     if(campTab==='calendar')main=`<div class="card">${renderCampCalendar()}</div>`;
-    else if(campTab==='active'){main=campFilterBar()+campTableHTML(`🟢 Running Now`,applyCampFilters(active),true)+campTableHTML(`⏰ Upcoming`,applyCampFilters(upcoming),false);}
+    else if(campTab==='active'){const f=applyCampFilters(active);main=campFilterBar()+campTableHTML(`🟢 Active Campaigns`,f,true);}
+    else if(campTab==='upcoming'){const f=applyCampFilters(upcoming);main=campFilterBar()+campTableHTML(`⏰ Upcoming Campaigns`,f,false);}
     else if(campTab==='history'){const fc=applyCampFilters(completed);main=campFilterBar()+campTableHTML(`📋 Completed Campaigns`,fc.slice(0,150),true)+(fc.length>150?`<div style="color:#64748b;font-size:12px;text-align:center;padding:10px">Showing 150 most recent of ${fc.length}</div>`:'');}
     else if(campTab==='detail'&&selBundle){main=bundleDetailHTML(selBundle);}
     else if(campTab==='detail'&&selCamp){main=campDetailHTML(selCamp,campaignData.indexOf(selCamp));}
-    pg.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-size:16px;font-weight:800;color:#f59e0b">📅 Campaign Manager</div><button onclick="campLoaded=false;selCamp=null;campTab='active';renderCampaigns()" style="background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 10px;font-size:11px;cursor:pointer">↻ Refresh</button></div>${statBar}<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
+    // Header
+    const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(27,47,74,.5)"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">⚡</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Campaign Manager</div></div><div style="font-size:10px;color:#64748b;margin-top:2px;letter-spacing:.4px">Performance · Profitability · Coordination</div></div><button onclick="campLoaded=false;selCamp=null;selBundle=null;campTab='active';renderCampaigns()" style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600">↻ Refresh Data</button></div>`;
+    pg.innerHTML=`${header}${statBar}<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
     if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
     if(campTab==='detail'&&selCamp){const c=selCamp;const imp=campImpact(c);if(campStatus(c)!=='Upcoming'&&imp.hasData){const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&(c.brand==='All Brands'||r.brand===c.brand)&&(c.aggregator==='All'||r.aggregator===c.aggregator)));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-camp',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}}
   }catch(err){pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Render error</div><div style="color:#64748b;font-size:12px">${err.message}</div></div>`;}
@@ -2136,7 +2228,7 @@ function cmpDrawChart(dA,dB){
     renderBrands,renderOutlets,renderPlatforms,renderOverview,renderCPC,renderCampaigns,renderKPI,renderCompare,
     selectOutlet,backToOutlets,toggleAovDrill,selectBundleByKey,bundleDetailHTML,
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
-    sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,
+    sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campSetScope,campClearDates,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,
     injectCompareTab,loadKPIData,doLoad];
   fns.forEach(fn=>{try{if(typeof fn==="function")window[fn.name]=fn;}catch(e){}});
