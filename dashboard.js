@@ -10,7 +10,7 @@ const AC={Deliveroo:"#00CCBC",Talabat:"#FF6000",Noon:"#F5CF00",Careem:"#3DDC73",
 const MM={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
 const BNM={MC:"Motorcity",TQ:"Town Square","Al Qouz":"Al Quoz","Mirdif":"Mirdiff"};
 const AUH=new Set(["Al Forsan","Al Reem","Reem Island","WTC","Al Reef"]);
-const COMM={ 
+const COMM={
   Talabat:{
     Oregano:{commission:0.20,pg:0.02,cpc:0,note:"Preferred brand rate"},
     Smokeys:{commission:0.20,pg:0.02,cpc:0,note:"Preferred brand rate"},
@@ -814,6 +814,33 @@ function parseCampComment(c){
       list.forEach(tok=>{const r=resolveBranchName(tok,brandBranches);if(r)resolved.push(r);else if(tok.length>1)unresolved.push(tok);});
       if(resolved.length){result.includeBranches=new Set(resolved);result.hasInfo=true;}
       if(unresolved.length)result.unresolved.push(...unresolved);
+    }
+  }
+  // ─ Fallback: outlet says "Select Locations" but no keyword found ─
+  // When the outlet field is a generic phrase like "Select Locations" / "Specific Locations" and
+  // we still have no branch info, look for a colon-separated list at the end of the comment and
+  // try resolving each token. Only commit if ≥2 tokens resolve to known branches (one match could
+  // be coincidence; 2+ is reliable evidence the colon introduces a branch list).
+  if(!result.excludeBranches&&!result.includeBranches){
+    const outlet=(c.outlet||"").trim().toLowerCase();
+    const isGenericOutlet=/^(select|specific|selected)\s+(locations?|branches?|outlets?)/.test(outlet);
+    if(isGenericOutlet){
+      // Find the LAST colon in the text and parse what follows as a candidate branch list
+      const lastColon=text.lastIndexOf(":");
+      if(lastColon>-1){
+        const tail=text.slice(lastColon+1).trim();
+        if(tail.length>1&&tail.length<300){
+          const list=tail.split(/[,;]|\s+and\s+|\s+&\s+|\s+\+\s+/i).map(s=>s.trim()).filter(Boolean);
+          const resolved=[],unresolved=[];
+          list.forEach(tok=>{const r=resolveBranchName(tok,brandBranches);if(r)resolved.push(r);else if(tok.length>1&&tok.length<25)unresolved.push(tok);});
+          // Only treat as a branch list if at least 2 tokens resolved AND most resolved
+          if(resolved.length>=2&&resolved.length>=Math.ceil(list.length*0.6)){
+            result.includeBranches=new Set(resolved);
+            result.hasInfo=true;
+            if(unresolved.length)result.unresolved.push(...unresolved);
+          }
+        }
+      }
     }
   }
   // ─ Co-funding percentage of discount ─
@@ -2494,5 +2521,3 @@ function cmpDrawChart(dA,dB){
     injectCompareTab,loadKPIData,doLoad];
   fns.forEach(fn=>{try{if(typeof fn==="function")window[fn.name]=fn;}catch(e){}});
 })();
-
-
