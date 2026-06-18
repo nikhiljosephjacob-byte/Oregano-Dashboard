@@ -576,23 +576,28 @@ function renderPlatforms(){
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.aggregator===selPlatform&&(!f.brands.size||f.brands.has(r.brand))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-p-trend",trend30(mf,f.start,f.end),clr);},50);
 }
 
+
 // CPC BUDGETS
 // ═══════════════════════════════════════════════════════════════
-// CPC INVESTMENTS CONSOLE — actuals from the Ad Investments sheet
-// Each row = one CPC investment cycle for one outlet (brand+branch+aggregator window)
+// ADS PERFORMANCE CONSOLE
+// Aggregator → Brand → Outlet drill-down. Budget respects pooling (Careem/Noon = brand-level
+// pool; Deliveroo/Talabat = per-outlet). Results (orders/sales/AOV/CTO/ROAS) always valid
+// per-outlet. CPC vs Keywords (Talabat) tracked as separate ad types. Heavy computation runs
+// ONCE after load into a precomputed model (cpcModel) so drill-downs are instant.
 // ═══════════════════════════════════════════════════════════════
 
-// Food + packaging cost % per brand (used to compute margin-aware break-even ROAS)
+// Food + packaging cost % per brand (for margin-aware break-even ROAS)
 const CPC_FOOD_COST={Oregano:0.30,Lollorosso:0.30,Smokeys:0.30,"Wicked Wings":0.30,Fyoozhen:0.40};
-// Per-aggregator commission (commission + processing + pg, NOT CPC since CPC is the cost we're evaluating)
 const CPC_COMM={
   Talabat:{Oregano:0.22,Smokeys:0.22,DEFAULT:0.30},
   Careem:{DEFAULT:0.19},
   Deliveroo:{DEFAULT:0.25},
   Noon:{DEFAULT:0.28}
 };
-// Compute margin-aware break-even ROAS for a given brand+aggregator.
-// BE = 1 / (1 − commission − foodPkg). Below BE we lose money on every AED spent.
+// Brands we exclude from the Ads dashboard entirely
+const CPC_EXCLUDE_BRANDS=new Set(["smiles","burgerstack"]);
+const CPC_EXCLUDE_AGGS=new Set(["smiles"]);
+
 function cpcBE(brand,aggregator){
   const f=CPC_FOOD_COST[brand]??0.30;
   const cmap=CPC_COMM[aggregator]||{};
@@ -601,7 +606,6 @@ function cpcBE(brand,aggregator){
   if(totalCost>=1)return 99;
   return 1/(1-totalCost);
 }
-// Verdict bands relative to BE. Same proportions across platforms — only BE differs.
 function cpcVerdict(roas,be){
   if(roas==null||be==null)return null;
   if(roas>=be*1.5)return"SCALE";
@@ -611,12 +615,11 @@ function cpcVerdict(roas,be){
 }
 const CPC_VC={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",WITHDRAW:"#EF4444"};
 const CPC_VB={SCALE:"rgba(34,197,94,.12)",INVEST:"rgba(134,239,172,.08)",MONITOR:"rgba(251,191,36,.1)",WITHDRAW:"rgba(239,68,68,.1)"};
+const AGG_LOGO_CLR={Talabat:"#FF6000",Deliveroo:"#00CCBC",Careem:"#3DDC73",Noon:"#F5CF00",Keeta:"#E8D614"};
 
-// Parse CPC date — sheet uses formats like "02-Jan-25" and "03-Jan-25"
 function parseCPCDate(s){
   if(!s)return null;
   const t=s.toString().trim();
-  // Try DD-MMM-YY first (sheet's format)
   let m=t.match(/^(\d{1,2})[-\/](\w{3})[-\/](\d{2,4})$/);
   if(m){
     const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
@@ -625,114 +628,82 @@ function parseCPCDate(s){
     let yr=parseInt(m[3]);if(yr<100)yr+=2000;
     return `${yr}-${String(mo).padStart(2,"0")}-${String(parseInt(m[1])).padStart(2,"0")}`;
   }
-  // Fall back to existing parseDate
   return parseDate(t);
 }
-// Resolve "Brand-Location" cell into canonical brand and branch names, falling back to the
-// raw token when allData isn't loaded yet (parse may happen before sales data is ready).
-function resolveBrandLocation(bl){
+// Brand-branch cache shared across a single parse pass
+function resolveBrandLocation(bl,brandCache,branchCache){
   if(!bl)return{brand:null,branch:null};
   const s=bl.toString().trim();
   const idx=s.indexOf("-");
-  if(idx<0)return{brand:s,branch:null};
-  const brandRaw=s.slice(0,idx).trim();
-  const branchRaw=s.slice(idx+1).trim();
-  const brand=BR.find(b=>b.n.toLowerCase()===brandRaw.toLowerCase())?.n||brandRaw;
-  const brandBranches=[...new Set((allData||[]).filter(r=>r.brand===brand).map(r=>r.branch))].filter(b=>b!=="(brand-level)");
+  const brandRaw=idx<0?s:s.slice(0,idx).trim();
+  const branchRaw=idx<0?"":s.slice(idx+1).trim();
+  let brand;
+  if(brandCache&&brandCache.has(brandRaw.toLowerCase())){brand=brandCache.get(brandRaw.toLowerCase());}
+  else{const bm=BR.find(b=>b.n.toLowerCase()===brandRaw.toLowerCase());brand=bm?bm.n:brandRaw;if(brandCache)brandCache.set(brandRaw.toLowerCase(),brand);}
+  let brandBranches;
+  if(branchCache){
+    if(!branchCache.has(brand))branchCache.set(brand,[...new Set((allData||[]).filter(r=>r.brand===brand).map(r=>r.branch))].filter(b=>b!=="(brand-level)"));
+    brandBranches=branchCache.get(brand);
+  }else brandBranches=[...new Set((allData||[]).filter(r=>r.brand===brand).map(r=>r.branch))].filter(b=>b!=="(brand-level)");
   const branch=(brandBranches.length?resolveBranchName(branchRaw,brandBranches):null)||branchRaw;
   return{brand,branch};
 }
-// Resolve a record's branch against the live allData. Used when computing post-exhaustion
-// impact or per-outlet analyses — re-resolves the raw branch token in case allData wasn't
-// loaded at parse time.
-function resolveCPCBranch(r){
-  const brandBranches=[...new Set((allData||[]).filter(x=>x.brand===r.brand).map(x=>x.branch))].filter(b=>b!=="(brand-level)");
-  return resolveBranchName(r.branch,brandBranches)||r.branch;
-}
-// Parse the Ad Investments CSV.
+
+// Parse the Ad Investments CSV into raw rows (light work only — heavy analysis happens later)
 function parseCPCSheet(csv){
   const rows=parseCSV(csv);if(!rows.length)return[];
-  // Find header row by looking for "Aggregator" and "Total Budget Allocated"
   let hdrIdx=-1;
-  for(let i=0;i<Math.min(rows.length,5);i++){
+  for(let i=0;i<Math.min(rows.length,6);i++){
     const cells=rows[i].map(c=>(c||"").trim().toLowerCase());
     if(cells.includes("aggregator")&&cells.some(c=>c.includes("budget allocated"))){hdrIdx=i;break;}
   }
   if(hdrIdx<0)return[];
   const hdr=rows[hdrIdx].map(c=>(c||"").trim().toLowerCase());
   const col=(...names)=>{for(const n of names){const i=hdr.indexOf(n.toLowerCase());if(i>=0)return i;}for(const n of names){const i=hdr.findIndex(h=>h.includes(n.toLowerCase()));if(i>=0)return i;}return -1;};
-  const colMap={
-    aggregator:col("aggregator"),
-    brand:col("brand"),
-    location:col("brand-location","location"),
-    startDate:col("start date"),
-    endDate:col("end date"),
+  const cm={
+    adType:col("cpc/key words","cpc/keywords","ad type","type"),
+    aggregator:col("aggregator"),brand:col("brand"),location:col("brand-location","location"),
+    startDate:col("start date"),endDate:col("end date"),
     views:col("menu view/clicks","menu views/clicks","clicks","menu view"),
-    orders:col("orders"),
-    sales:col("sales"),
-    aov:col("aov"),
-    cto:col("cto","cto%","cto %"),
+    orders:col("orders"),sales:col("sales"),aov:col("aov"),cto:col("cto","cto%","cto %"),
     budgetAlloc:col("total budget allocated","budget allocated"),
     budgetSpent:col("total budget consumed","budget consumed","spent"),
-    consumption:col("consumption","consumption%","consumption %"),
-    leftover:col("leftover","remaining"),
-    roi:col("roi","roas"),
-    avgBid:col("avg bid","average bid"),
-    ftu:col("ftu","first-time users","new users"),
-    remarks:col("remarks","remarks/last updation date","last updation date","notes")
+    leftover:col("leftover","remaining"),roi:col("roi","roas"),
+    avgBid:col("avg bid","average bid"),ftu:col("ftu","first-time users","new users"),
+    remarks:col("remarks/last updation date","remarks","last updation date","notes")
   };
+  const brandCache=new Map(),branchCache=new Map();
   const recs=[];
   for(let i=hdrIdx+1;i<rows.length;i++){
     const row=rows[i];if(!row||row.every(c=>!c||!c.trim()))continue;
-    const aggregator=(row[colMap.aggregator]||"").trim();if(!aggregator)continue;
-    const bl=(row[colMap.location]||"").trim();
-    const {brand:resolvedBrand,branch}=resolveBrandLocation(bl);
-    const brand=resolvedBrand||(row[colMap.brand]||"").trim();
-    const startDate=parseCPCDate(row[colMap.startDate]);
-    const endDate=parseCPCDate(row[colMap.endDate]);
-    const num=(i)=>{if(i<0)return 0;const v=(row[i]||"").toString().replace(/[, ]/g,"").replace(/%/g,"").trim();const n=parseFloat(v);return isNaN(n)?0:n;};
+    const aggregator=(row[cm.aggregator]||"").trim();if(!aggregator)continue;
+    if(CPC_EXCLUDE_AGGS.has(aggregator.toLowerCase()))continue;
+    const bl=(row[cm.location]||"").trim();
+    const {brand,branch}=resolveBrandLocation(bl,brandCache,branchCache);
+    if(!brand||CPC_EXCLUDE_BRANDS.has(brand.toLowerCase()))continue;
+    const num=(idx)=>{if(idx<0)return 0;const v=(row[idx]||"").toString().replace(/[, ]/g,"").replace(/%/g,"").trim();const n=parseFloat(v);return isNaN(n)?0:n;};
+    const adType=((row[cm.adType]||"").trim()||"CPC").replace(/key\s*words?/i,"Keywords");
+    const startDate=parseCPCDate(row[cm.startDate]),endDate=parseCPCDate(row[cm.endDate]);
     const rec={
-      aggregator,brand,branch,brandLocation:bl,
-      startDate,endDate,
-      views:num(colMap.views),
-      orders:num(colMap.orders),
-      sales:num(colMap.sales),
-      aov:num(colMap.aov),
-      cto:num(colMap.cto),
-      budgetAlloc:num(colMap.budgetAlloc),
-      budgetSpent:num(colMap.budgetSpent),
-      consumptionPct:num(colMap.consumption),
-      leftover:num(colMap.leftover),
-      roi:num(colMap.roi),
-      avgBid:num(colMap.avgBid),
-      ftu:num(colMap.ftu),
-      remarks:(row[colMap.remarks]||"").toString().trim()
+      adType:/keyword/i.test(adType)?"Keywords":"CPC",
+      aggregator,brand,branch,brandLocation:bl,startDate,endDate,
+      views:num(cm.views),orders:num(cm.orders),sales:num(cm.sales),aov:num(cm.aov),cto:num(cm.cto),
+      budgetAlloc:num(cm.budgetAlloc),budgetSpent:num(cm.budgetSpent),leftover:num(cm.leftover),
+      roi:num(cm.roi),avgBid:num(cm.avgBid),ftu:num(cm.ftu),
+      remarks:(row[cm.remarks]||"").toString().trim(),
+      month:startDate?startDate.slice(0,7):null
     };
-    // Computed: days, daily burn, status
     if(rec.startDate&&rec.endDate){
       rec.days=Math.max(1,Math.round((new Date(rec.endDate)-new Date(rec.startDate))/86400000)+1);
       rec.dailyBurn=rec.budgetSpent/rec.days;
-      // Was this campaign cut short by budget exhaustion? Compare end date to "today" — if it
-      // ended earlier than the contracted end and spent ≥95% of allocated, mark as exhausted-early.
-      const today=latest||"2026-06-18";
-      rec.exhaustedEarly=rec.endDate<today&&rec.budgetSpent>=rec.budgetAlloc*0.95;
-    }
-    // Status: Active (today between start and end with leftover) | Completed | Exhausted (leftover ≤ small)
+    }else{rec.days=0;rec.dailyBurn=0;}
     const today=latest||"2026-06-18";
     if(rec.startDate&&rec.endDate){
-      if(today>=rec.startDate&&today<=rec.endDate){
-        rec.status=rec.leftover>5?"Active":"Critical";
-      }else if(today>rec.endDate){
-        rec.status=rec.budgetSpent>=rec.budgetAlloc*0.95?"Exhausted":"Completed";
-      }else{
-        rec.status="Upcoming";
-      }
-    }else{rec.status="Unknown";}
-    // Days until exhausted at current burn rate (only for active rows with leftover > 0)
-    if(rec.status==="Active"&&rec.dailyBurn>0){
-      rec.daysUntilExhausted=Math.floor(rec.leftover/rec.dailyBurn);
-    }else{rec.daysUntilExhausted=null;}
-    // Margin-aware BE and verdict
+      if(today>=rec.startDate&&today<=rec.endDate)rec.status=rec.leftover>5?"Active":"Critical";
+      else if(today>rec.endDate)rec.status=rec.budgetSpent>=rec.budgetAlloc*0.95?"Exhausted":"Completed";
+      else rec.status="Upcoming";
+    }else rec.status="Unknown";
+    rec.daysUntilExhausted=(rec.status==="Active"&&rec.dailyBurn>0)?Math.floor(rec.leftover/rec.dailyBurn):null;
     rec.be=cpcBE(brand,aggregator);
     rec.verdict=cpcVerdict(rec.roi,rec.be);
     recs.push(rec);
@@ -740,257 +711,421 @@ function parseCPCSheet(csv){
   return recs;
 }
 
-// Apply page-level filters to CPC rows
-function applyCPCFilters(rows){
-  return rows.filter(r=>{
-    if(cpcFBrands.size&&!cpcFBrands.has(r.brand))return false;
-    if(cpcFPlatforms.size&&!cpcFPlatforms.has(r.aggregator))return false;
-    if(cpcFOutletScope!=="all"){
-      const isAUH=AUH_OUTLETS.has(r.branch);
-      if(cpcFOutletScope==="dxb"&&isAUH)return false;
-      if(cpcFOutletScope==="auh"&&!isAUH)return false;
-    }
+// ── PRECOMPUTED MODEL ──
+// Built ONCE after load (with a progress callback). Stores everything the UI needs so drill-downs
+// never recompute. Structure:
+//   cpcModel = {
+//     byAgg: { Talabat: {invested, spent, sales, roas, lastUpdate, brands:{...}, rows:[...] }, ... },
+//     monthly: Map(key -> aggregated month record with combined ROI/CTO),
+//     yearROI: Map(brand|agg|adType|outlet -> {sales, spent, roi}),
+//     postImpact: Map(rowRef -> impact),
+//     actions: [ ...urgent action items... ]
+//   }
+let cpcModel=null,cpcModelProgress=0,cpcModelBuilding=false;
+
+function buildCPCModel(onProgress){
+  return new Promise((resolve)=>{
+    const rows=cpcData;
     const today=latest||"2026-06-18";
-    if(cpcFTimeWindow==="active"){if(r.status!=="Active"&&r.status!=="Critical")return false;}
-    else if(cpcFTimeWindow==="30d"){if(!r.endDate||r.endDate<subDays(today,30))return false;}
-    else if(cpcFTimeWindow==="90d"){if(!r.endDate||r.endDate<subDays(today,90))return false;}
-    else if(cpcFTimeWindow==="2025"){if(!r.startDate||!r.startDate.startsWith("2025"))return false;}
-    else if(cpcFTimeWindow==="2026"){if(!r.startDate||!r.startDate.startsWith("2026"))return false;}
-    // "all" passes through
-    return true;
+    const model={byAgg:{},monthly:new Map(),yearROI:new Map(),postImpact:new Map(),actions:[]};
+    // Pre-index allData by brand+aggregator+branch for fast post-impact lookups
+    const salesIdx=new Map(); // key brand|agg|branch -> array of {date,sales,orders}
+    // Build canonical branch resolver cache
+    const branchCache=new Map();
+    const canonBranch=(brand,branch)=>{
+      if(!branchCache.has(brand))branchCache.set(brand,[...new Set((allData||[]).filter(x=>x.brand===brand).map(x=>x.branch))].filter(b=>b!=="(brand-level)"));
+      return resolveBranchName(branch,branchCache.get(brand))||branch;
+    };
+    // chunked processing to keep UI responsive and update progress
+    const steps=[];
+    // Step 1: index sales data
+    steps.push(()=>{
+      for(const r of (allData||[])){
+        const k=`${r.brand}|${r.aggregator}|${r.branch}`;
+        let arr=salesIdx.get(k);if(!arr){arr=[];salesIdx.set(k,arr);}
+        arr.push(r);
+      }
+    });
+    // Step 2: yearly ROI per outlet (2026)
+    steps.push(()=>{
+      const acc=new Map();
+      for(const r of rows){
+        if(!r.startDate||!r.startDate.startsWith("2026"))continue;
+        const k=`${r.brand}|${r.aggregator}|${r.adType}|${r.branch}`;
+        let o=acc.get(k);if(!o){o={sales:0,spent:0};acc.set(k,o);}
+        o.sales+=r.sales;o.spent+=r.budgetSpent;
+      }
+      for(const [k,o] of acc){o.roi=o.spent>0?o.sales/o.spent:null;model.yearROI.set(k,o);}
+    });
+    // Step 3: monthly aggregation (combine multiple CPCs in same outlet+month)
+    steps.push(()=>{
+      const acc=new Map();
+      for(const r of rows){
+        if(!r.month)continue;
+        const k=`${r.brand}|${r.aggregator}|${r.adType}|${r.branch}|${r.month}`;
+        let o=acc.get(k);
+        if(!o){o={brand:r.brand,aggregator:r.aggregator,adType:r.adType,branch:r.branch,month:r.month,sales:0,spent:0,orders:0,views:0,ftu:0,alloc:0,leftover:0,rows:[],be:r.be};acc.set(k,o);}
+        o.sales+=r.sales;o.spent+=r.budgetSpent;o.orders+=r.orders;o.views+=r.views;o.ftu+=r.ftu;o.alloc+=r.budgetAlloc;o.leftover+=r.leftover;o.rows.push(r);
+      }
+      for(const [k,o] of acc){
+        o.roi=o.spent>0?o.sales/o.spent:null;
+        o.cto=o.views>0?(o.orders/o.views)*100:null;
+        o.aov=o.orders>0?o.sales/o.orders:null;
+        o.verdict=cpcVerdict(o.roi,o.be);
+        model.monthly.set(k,o);
+      }
+    });
+    // Step 4: aggregator → brand → outlet rollups (budget respects pooling via sum of allocated)
+    steps.push(()=>{
+      for(const r of rows){
+        const ag=r.aggregator;
+        if(!model.byAgg[ag])model.byAgg[ag]={name:ag,invested:0,spent:0,sales:0,orders:0,lastUpdate:null,brands:{},rows:[],adTypes:new Set()};
+        const A=model.byAgg[ag];
+        A.invested+=r.budgetAlloc;A.spent+=r.budgetSpent;A.sales+=r.sales;A.orders+=r.orders;A.rows.push(r);A.adTypes.add(r.adType);
+        if(r.endDate&&(!A.lastUpdate||r.endDate>A.lastUpdate))A.lastUpdate=r.endDate;
+        if(!A.brands[r.brand])A.brands[r.brand]={name:r.brand,invested:0,spent:0,sales:0,orders:0,outlets:{},rows:[],adTypes:new Set()};
+        const B=A.brands[r.brand];
+        B.invested+=r.budgetAlloc;B.spent+=r.budgetSpent;B.sales+=r.sales;B.orders+=r.orders;B.rows.push(r);B.adTypes.add(r.adType);
+        const ok=r.branch;
+        if(!B.outlets[ok])B.outlets[ok]={name:ok,invested:0,spent:0,sales:0,orders:0,rows:[]};
+        const O=B.outlets[ok];
+        O.invested+=r.budgetAlloc;O.spent+=r.budgetSpent;O.sales+=r.sales;O.orders+=r.orders;O.rows.push(r);
+      }
+      // compute roas at each level
+      for(const ag in model.byAgg){const A=model.byAgg[ag];A.roas=A.spent>0?A.sales/A.spent:null;
+        for(const b in A.brands){const B=A.brands[b];B.roas=B.spent>0?B.sales/B.spent:null;B.be=cpcBE(b,ag);B.verdict=cpcVerdict(B.roas,B.be);
+          for(const o in B.outlets){const O=B.outlets[o];O.roas=O.spent>0?O.sales/O.spent:null;O.be=cpcBE(b,ag);O.verdict=cpcVerdict(O.roas,O.be);}
+        }
+      }
+    });
+    // Step 5: post-exhaustion impact for completed/exhausted rows (the heavy scan, but indexed)
+    steps.push(()=>{
+      for(const r of rows){
+        if(!r.endDate||(r.status!=="Exhausted"&&r.status!=="Completed"))continue;
+        const afterStart=subDays(r.endDate,-1),afterEnd=subDays(r.endDate,-7);
+        if(afterEnd>today)continue;
+        const duringEnd=r.endDate,duringStart=subDays(r.endDate,6);
+        const cb=canonBranch(r.brand,r.branch);
+        const arr=salesIdx.get(`${r.brand}|${r.aggregator}|${cb}`);
+        if(!arr)continue;
+        let dS=0,dO=0,aS=0,aO=0;
+        for(const row of arr){
+          if(row.date>=duringStart&&row.date<=duringEnd){dS+=row.sales;dO+=row.orders;}
+          if(row.date>=afterStart&&row.date<=afterEnd){aS+=row.sales;aO+=row.orders;}
+        }
+        if(dO===0&&aO===0)continue;
+        model.postImpact.set(r,{duringSales:dS,duringOrders:dO,afterSales:aS,afterOrders:aO,salesChg:pctOf(aS,dS),ordersChg:pctOf(aO,dO)});
+      }
+    });
+    // Step 6: build the Action Now list
+    steps.push(()=>{
+      const acts=[];
+      for(const r of rows){
+        // Top up: active, good verdict, exhausting soon
+        if((r.status==="Active"||r.status==="Critical")&&(r.verdict==="SCALE"||r.verdict==="INVEST")&&r.daysUntilExhausted!=null&&r.daysUntilExhausted<=3){
+          const sug=cpcTopUpSuggestion(r);
+          acts.push({type:"topup",priority:1,r,msg:`Exhausting in ${r.daysUntilExhausted}d · ROAS ${r.roi?.toFixed(1)}× — top up ${sug?fmtAED(sug.suggested):''}`});
+        }
+        // Withdraw: below BE still spending
+        if((r.status==="Active"||r.status==="Critical")&&r.verdict==="WITHDRAW"&&r.leftover>50){
+          acts.push({type:"withdraw",priority:2,r,msg:`ROAS ${r.roi?.toFixed(2)}× below BE ${r.be.toFixed(2)}× — shift ${fmtAED(Math.round(r.leftover*0.8))}`});
+        }
+        // Refill: big post-exhaustion drop with good verdict
+        const imp=model.postImpact.get(r);
+        if(imp&&imp.salesChg<-15&&(r.verdict==="SCALE"||r.verdict==="INVEST")){
+          acts.push({type:"refill",priority:1,r,msg:`Sales fell ${fmtPct(imp.salesChg)} after this ended — refill recommended`});
+        }
+      }
+      acts.sort((a,b)=>a.priority-b.priority);
+      model.actions=acts;
+    });
+
+    // Run steps with progress updates, yielding to the event loop between each
+    let idx=0;
+    const runNext=()=>{
+      if(idx>=steps.length){cpcModelProgress=100;if(onProgress)onProgress(100);model.built=true;resolve(model);return;}
+      try{steps[idx]();}catch(e){console.log("[CPC model] step",idx,"error:",e.message);}
+      idx++;
+      cpcModelProgress=Math.round((idx/steps.length)*100);
+      if(onProgress)onProgress(cpcModelProgress);
+      setTimeout(runNext,0); // yield so the progress bar repaints
+    };
+    runNext();
   });
 }
-function cpcToggleBrand(b){if(cpcFBrands.has(b))cpcFBrands.delete(b);else cpcFBrands.add(b);renderCPC();}
-function cpcTogglePlatform(p){if(cpcFPlatforms.has(p))cpcFPlatforms.delete(p);else cpcFPlatforms.add(p);renderCPC();}
-function cpcSetScope(s){cpcFOutletScope=s;renderCPC();}
-function cpcSetWindow(w){cpcFTimeWindow=w;renderCPC();}
-function cpcSetTab(t){cpcTab=t;selCPC=null;renderCPC();}
-function cpcClearFilters(){cpcFBrands.clear();cpcFPlatforms.clear();cpcFOutletScope='all';cpcFTimeWindow='active';renderCPC();}
-function selectCPCRow(idx){selCPC=cpcData[idx];cpcTab='detail';renderCPC();}
 
-// Compute post-exhaustion impact: for a CPC that ended, was there a sales drop in that branch?
-// Compares the 7 days right after the CPC ended vs the last 7 days of the campaign — same
-// brand+aggregator+branch in the sales data.
-function cpcPostImpact(r){
-  if(!r.endDate||(r.status!=="Exhausted"&&r.status!=="Completed"))return null;
-  const today=latest||"2026-06-18";
-  const afterStart=subDays(r.endDate,-1);
-  const afterEnd=subDays(r.endDate,-7);
-  if(afterEnd>today)return null;
-  const duringEnd=r.endDate,duringStart=subDays(r.endDate,6);
-  const canonBranch=resolveCPCBranch(r);
-  const flt=(row,s,e)=>row.brand===r.brand&&row.aggregator===r.aggregator&&row.branch===canonBranch&&row.date>=s&&row.date<=e;
-  const during=sumR(allData.filter(row=>flt(row,duringStart,duringEnd)));
-  const after=sumR(allData.filter(row=>flt(row,afterStart,afterEnd)));
-  if(during.orders===0&&after.orders===0)return null;
-  return{
-    duringOrders:during.orders,duringSales:during.sales,
-    afterOrders:after.orders,afterSales:after.sales,
-    ordersChg:pctOf(after.orders,during.orders),
-    salesChg:pctOf(after.sales,during.sales)
-  };
-}
-// Suggest a top-up budget AED for a row that's running and worth keeping.
 function cpcTopUpSuggestion(r){
   if(r.status!=="Active"&&r.status!=="Critical")return null;
   if(!r.verdict||r.verdict==="WITHDRAW")return null;
   const today=latest||"2026-06-18";
-  // Days left in the current month from today
   const dt=new Date(today+"T12:00:00");
   const lastDay=new Date(dt.getFullYear(),dt.getMonth()+1,0).getDate();
   const daysLeftInMonth=lastDay-dt.getDate();
   if(daysLeftInMonth<=0)return null;
-  const suggested=Math.round(r.dailyBurn*daysLeftInMonth);
-  return{daysLeftInMonth,suggested,burnPerDay:r.dailyBurn};
+  return{daysLeftInMonth,suggested:Math.round(r.dailyBurn*daysLeftInMonth),burnPerDay:r.dailyBurn};
 }
-// Suggest a bid for Deliveroo only.
 function cpcBidSuggestion(r){
-  if(r.aggregator!=="Deliveroo")return null;
-  if(!r.verdict||!r.avgBid)return null;
-  if(r.verdict==="SCALE")return{action:"raise",to:Math.round((r.avgBid*1.15)*100)/100,reason:"Strong ROAS — raise bid to win more impressions"};
-  if(r.verdict==="WITHDRAW")return{action:"lower",to:Math.max(1.5,Math.round((r.avgBid*0.7)*100)/100),reason:"Below break-even — lower bid or pause"};
-  if(r.verdict==="MONITOR")return{action:"hold",to:r.avgBid,reason:"Marginal — hold bid and monitor"};
+  if(r.aggregator!=="Deliveroo"||!r.verdict||!r.avgBid)return null;
+  if(r.verdict==="SCALE")return{action:"raise",to:Math.round(r.avgBid*1.15*100)/100,reason:"Strong ROAS — raise bid to win more impressions"};
+  if(r.verdict==="WITHDRAW")return{action:"lower",to:Math.max(1.5,Math.round(r.avgBid*0.7*100)/100),reason:"Below break-even — lower bid or pause"};
   return{action:"hold",to:r.avgBid,reason:"Bid level looks right for current ROAS"};
 }
 
-// ── RENDER: CPC Investments Console ──
+// ── DRILL-DOWN STATE ──
+let cpcDrill={level:"agg",agg:null,brand:null},cpcSort={col:"roas",dir:-1},cpcAdTypeFilter="all",cpcMonthFilter="all";
+
+function cpcGoAgg(){cpcDrill={level:"agg",agg:null,brand:null};renderCPC();}
+function cpcGoBrands(ag){cpcDrill={level:"brand",agg:ag,brand:null};renderCPC();}
+function cpcGoOutlets(ag,brand){cpcDrill={level:"outlet",agg:ag,brand:brand};renderCPC();}
+function cpcSetSort(col){if(cpcSort.col===col)cpcSort.dir*=-1;else{cpcSort.col=col;cpcSort.dir=-1;}renderCPC();}
+function cpcSetAdType(t){cpcAdTypeFilter=t;renderCPC();}
+function cpcSetMonth(m){cpcMonthFilter=m;renderCPC();}
+
+// ── RENDER ──
 async function renderCPC(){
   const pg=document.getElementById("page-cpc");if(!pg)return;
+  // Load raw data
   if(!cpcLoaded){
-    pg.innerHTML=`<div style="display:flex;align-items:center;gap:10px;padding:14px"><div class="dot"></div><div style="color:#94a3b8;font-size:13px">Loading CPC investments data…</div></div>`;
+    pg.innerHTML=cpcShell(`<div style="display:flex;align-items:center;gap:10px;padding:20px"><div class="dot"></div><div style="color:#94a3b8;font-size:13px">Loading Ad Investments data…</div></div>`);
     try{const csv=await fetchCSV(CPC_GID);cpcData=parseCPCSheet(csv);cpcLoaded=true;}
-    catch(e){pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Could not load CPC data</div><div style="color:#64748b;font-size:12px">${e.message}</div></div>`;return;}
+    catch(e){pg.innerHTML=cpcShell(`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Could not load Ad data</div><div style="color:#64748b;font-size:12px">${e.message}</div></div>`);return;}
   }
-  if(!cpcData.length){pg.innerHTML=`<div class="card"><div style="color:#94a3b8;font-size:13px;padding:8px">No CPC investment rows parsed from the Ad Investments tab. Check the sheet's column headers match expected names (Aggregator, Brand, Brand-Location, Start Date, End Date, Total Budget Allocated, Total Budget Consumed, ROI, etc.).</div></div>`;return;}
-  // ── Top bar ──
-  const filtered=applyCPCFilters(cpcData);
-  const activeRows=cpcData.filter(r=>r.status==="Active"||r.status==="Critical");
-  const exhaustedSoon=activeRows.filter(r=>r.daysUntilExhausted!=null&&r.daysUntilExhausted<=5);
-  const underperformers=cpcData.filter(r=>(r.status==="Active"||r.status==="Critical")&&r.verdict==="WITHDRAW");
-  const scaleCandidates=cpcData.filter(r=>(r.status==="Active"||r.status==="Critical")&&r.verdict==="SCALE");
-  const totalActiveBudget=activeRows.reduce((s,r)=>s+(r.budgetAlloc||0),0);
-  const totalActiveSpent=activeRows.reduce((s,r)=>s+(r.budgetSpent||0),0);
-  const totalActiveSales=activeRows.reduce((s,r)=>s+(r.sales||0),0);
-  const portfolioROI=totalActiveSpent>0?(totalActiveSales/totalActiveSpent).toFixed(2):"—";
-
-  const tile=(emoji,label,n,clr,sub)=>`<div style="flex:1;min-width:130px;background:linear-gradient(135deg,${clr}11,transparent);border:1px solid ${clr}33;border-radius:10px;padding:10px 14px;position:relative;overflow:hidden"><div style="position:absolute;top:0;right:0;width:60px;height:60px;background:radial-gradient(circle at top right,${clr}22,transparent 70%);pointer-events:none"></div><div style="font-size:9px;color:#64748b;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">${emoji} ${label}</div><div style="font-size:24px;font-weight:800;color:${clr};font-variant-numeric:tabular-nums;line-height:1.1;margin-top:4px">${n}</div>${sub?`<div style="font-size:10px;color:#64748b;margin-top:3px">${sub}</div>`:''}</div>`;
-  const statBar=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">${tile('🎯','Active CPCs',activeRows.length,'#22C55E')}${tile('⚠️','Exhausting Soon',exhaustedSoon.length,'#FBBF24','≤ 5 days left')}${tile('🚀','Scale Candidates',scaleCandidates.length,'#86EFAC','high ROAS')}${tile('🛑','Withdraw',underperformers.length,'#EF4444','below break-even')}${tile('📊','Portfolio ROAS',`${portfolioROI}×`,'#f59e0b',`${fmtAED(totalActiveSpent)} / ${fmtAED(totalActiveSales)}`)}</div>`;
-
-  const tabs=[
-    ['health','💰 Spend Health',activeRows.length],
-    ['perf','📈 Performance',cpcData.length],
-    ['post','🔎 Post-Exhaustion Impact',cpcData.filter(r=>cpcPostImpact(r)).length],
-    ['reco','🎯 Recommendations',null],
-    ['yoy','📅 YoY Compare',null]
-  ];
-  if(selCPC)tabs.push(['detail','🔍 CPC Deep Dive',null]);
-  const tabH=tabs.map(([k,l,n])=>{const act=cpcTab===k;const cnt=n!=null?` <span style="background:${act?'rgba(245,158,11,.25)':'rgba(100,116,139,.2)'};color:${act?'#FBBF24':'#94a3b8'};font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;margin-left:3px">${n}</span>`:'';return `<button onclick="cpcSetTab('${k}')" style="padding:7px 14px;border-radius:7px;border:1px solid ${act?'#f59e0b':'rgba(27,47,74,.6)'};background:${act?'linear-gradient(180deg,rgba(245,158,11,.18),rgba(245,158,11,.08))':'transparent'};color:${act?'#f59e0b':'#94a3b8'};font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:3px">${l}${cnt}</button>`;}).join("");
-
-  // Filter bar
-  const brands=[...new Set(cpcData.map(r=>r.brand))].filter(Boolean).sort();
-  const platforms=[...new Set(cpcData.map(r=>r.aggregator))].filter(Boolean).sort();
-  const brandChips=brands.map(b=>{const act=cpcFBrands.has(b);const clr=BMAP[b]?.c||'#94a3b8';return `<button onclick="cpcToggleBrand('${b}')" style="padding:3px 9px;border-radius:5px;border:1px solid ${act?clr:'rgba(27,47,74,.6)'};background:${act?clr+'22':'transparent'};color:${act?clr:'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${b}</button>`;}).join(' ');
-  const platChips=platforms.map(p=>{const act=cpcFPlatforms.has(p);const clr=AC[p]||'#94a3b8';return `<button onclick="cpcTogglePlatform('${p}')" style="padding:3px 9px;border-radius:5px;border:1px solid ${act?clr:'rgba(27,47,74,.6)'};background:${act?clr+'22':'transparent'};color:${act?clr:'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${p}</button>`;}).join(' ');
-  const scopePill=(v,lbl,icon)=>`<button onclick="cpcSetScope('${v}')" style="padding:4px 10px;border-radius:5px;border:1px solid ${cpcFOutletScope===v?'#f59e0b':'rgba(27,47,74,.6)'};background:${cpcFOutletScope===v?'rgba(245,158,11,.12)':'transparent'};color:${cpcFOutletScope===v?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${icon} ${lbl}</button>`;
-  const windowPill=(v,lbl)=>`<button onclick="cpcSetWindow('${v}')" style="padding:4px 10px;border-radius:5px;border:1px solid ${cpcFTimeWindow===v?'#60A5FA':'rgba(27,47,74,.6)'};background:${cpcFTimeWindow===v?'rgba(96,165,250,.12)':'transparent'};color:${cpcFTimeWindow===v?'#60A5FA':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${lbl}</button>`;
-  const filterBar=cpcTab!=='detail'?`<div class="card" style="margin-bottom:12px;padding:12px"><div style="display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center"><div style="font-size:10px;color:#64748b;font-weight:700;letter-spacing:.8px">BRAND</div><div style="display:flex;flex-wrap:wrap;gap:4px">${brandChips}</div><div style="font-size:10px;color:#64748b;font-weight:700;letter-spacing:.8px">PLATFORM</div><div style="display:flex;flex-wrap:wrap;gap:4px">${platChips}</div><div style="font-size:10px;color:#64748b;font-weight:700;letter-spacing:.8px">SCOPE</div><div style="display:flex;flex-wrap:wrap;gap:4px">${scopePill('all','All','🌐')}${scopePill('dxb','Dubai (DXB)','🏙️')}${scopePill('auh','Abu Dhabi (AUH)','🏛️')}</div><div style="font-size:10px;color:#64748b;font-weight:700;letter-spacing:.8px">WINDOW</div><div style="display:flex;flex-wrap:wrap;gap:4px">${windowPill('active','Active Only')}${windowPill('30d','Last 30 days')}${windowPill('90d','Last 90 days')}${windowPill('2025','2025')}${windowPill('2026','2026')}${windowPill('all','All-time')}${(cpcFBrands.size||cpcFPlatforms.size||cpcFOutletScope!=='all'||cpcFTimeWindow!=='active')?'<button onclick="cpcClearFilters()" style="padding:4px 10px;border-radius:5px;border:1px solid #EF444466;background:rgba(239,68,68,.08);color:#EF4444;font-size:11px;font-weight:600;cursor:pointer">✕ Reset</button>':''}</div></div></div>`:'';
-
-  // Header
-  const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(27,47,74,.5)"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">💼</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">CPC Investments Console</div></div><div style="font-size:10px;color:#64748b;margin-top:2px;letter-spacing:.4px">Spend Health · ROAS Verdicts · Reinvestment Logic</div></div><button onclick="cpcLoaded=false;selCPC=null;cpcTab='health';renderCPC()" style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600">↻ Refresh Data</button></div>`;
-
-  // ── Sections ──
-  let main='';
-  if(cpcTab==='detail'&&selCPC)main=renderCPCDeepDive(selCPC);
-  else if(cpcTab==='health')main=renderCPCHealth(filtered);
-  else if(cpcTab==='perf')main=renderCPCPerformance(filtered);
-  else if(cpcTab==='post')main=renderCPCPostImpact(filtered);
-  else if(cpcTab==='reco')main=renderCPCRecommendations(filtered);
-  else if(cpcTab==='yoy')main=renderCPCYoY(filtered);
-  pg.innerHTML=header+statBar+`<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>`+filterBar+main;
+  if(!cpcData.length){pg.innerHTML=cpcShell(`<div class="card"><div style="color:#94a3b8;font-size:13px;padding:8px">No ad rows parsed. Check the Ad Investments tab column headers.</div></div>`);return;}
+  // Build the model once, with a progress bar
+  if(!cpcModel&&!cpcModelBuilding){
+    cpcModelBuilding=true;
+    const paint=(pct)=>{const bar=document.getElementById("cpc-progress-fill");const lbl=document.getElementById("cpc-progress-lbl");if(bar)bar.style.width=pct+"%";if(lbl)lbl.textContent=pct+"%";};
+    pg.innerHTML=cpcShell(cpcProgressHTML(0));
+    cpcModel=await buildCPCModel(paint);
+    cpcModelBuilding=false;
+    // fall through to render
+  }
+  if(cpcModelBuilding){return;}
+  // Render based on drill level
+  let body='';
+  if(cpcDrill.level==="agg")body=cpcRenderAggLevel();
+  else if(cpcDrill.level==="brand")body=cpcRenderBrandLevel(cpcDrill.agg);
+  else if(cpcDrill.level==="outlet")body=cpcRenderOutletLevel(cpcDrill.agg,cpcDrill.brand);
+  pg.innerHTML=cpcShell(body,true);
 }
 
-function renderCPCHealth(rows){
-  if(!rows.length)return `<div class="card"><div style="color:#64748b;font-size:12px;padding:8px">No active CPCs match the filters.</div></div>`;
-  // Sort: most urgent (lowest days-until-exhausted) first
-  const active=rows.filter(r=>r.status==="Active"||r.status==="Critical").sort((a,b)=>{const aD=a.daysUntilExhausted??999,bD=b.daysUntilExhausted??999;return aD-bD;});
-  if(!active.length)return `<div class="card"><div style="color:#64748b;font-size:12px;padding:8px">No active CPCs in this filter window. Try changing the Window filter to "Last 30 days" or "All-time".</div></div>`;
-  const rowsHtml=active.map(r=>{
-    const consumPct=r.budgetAlloc>0?(r.budgetSpent/r.budgetAlloc)*100:0;
-    const urgClr=r.daysUntilExhausted==null?'#64748b':r.daysUntilExhausted<=3?'#EF4444':r.daysUntilExhausted<=7?'#FBBF24':'#22C55E';
-    const statClr=r.status==='Critical'?'#EF4444':'#22C55E';
-    const idx=cpcData.indexOf(r);
-    const bar=`<div style="width:100%;height:6px;background:rgba(27,47,74,.4);border-radius:3px;overflow:hidden;margin-top:4px"><div style="height:100%;width:${Math.min(100,consumPct)}%;background:linear-gradient(90deg,${consumPct>80?'#EF4444':consumPct>50?'#FBBF24':'#22C55E'},${consumPct>80?'#FCA5A5':consumPct>50?'#FCD34D':'#86EFAC'})"></div></div>`;
-    return `<tr style="cursor:pointer" onclick="selectCPCRow(${idx})"><td><strong style="font-size:12px;color:${BMAP[r.brand]?.c||'#e2e8f0'}">${r.brand}</strong><div style="font-size:10px;color:#94a3b8;margin-top:1px">${r.branch}</div></td><td><span style="color:${AC[r.aggregator]||'#888'};font-weight:700;font-size:11px">${r.aggregator}</span></td><td><span style="padding:2px 8px;border-radius:8px;background:${statClr}22;color:${statClr};font-size:10px;font-weight:700">${r.status}</span></td><td style="min-width:160px">${fmtAED(r.budgetSpent)} <span style="color:#64748b;font-size:10px">/ ${fmtAED(r.budgetAlloc)}</span>${bar}<div style="font-size:9px;color:#64748b;margin-top:2px">${consumPct.toFixed(0)}% consumed</div></td><td style="color:#94a3b8">${fmtAED(r.leftover)}</td><td><span style="font-weight:700">${fmtAED(r.dailyBurn)}</span><div style="font-size:10px;color:#64748b">/day</div></td><td><span style="font-weight:800;color:${urgClr}">${r.daysUntilExhausted==null?'—':r.daysUntilExhausted+'d'}</span></td><td style="font-size:10px;color:#94a3b8">${r.startDate} → ${r.endDate}</td><td style="text-align:right"><button onclick="event.stopPropagation();selectCPCRow(${idx})" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:3px 8px;font-size:10px;cursor:pointer">View →</button></td></tr>`;
+// Page shell: header with gradient title + status bar + breadcrumb
+function cpcShell(body,withCrumb){
+  const statusBar=cpcModel?`<div style="display:flex;align-items:center;gap:8px"><div style="width:120px;height:6px;background:rgba(27,47,74,.5);border-radius:3px;overflow:hidden"><div style="height:100%;width:100%;background:linear-gradient(90deg,#22C55E,#86EFAC)"></div></div><span style="font-size:11px;color:#22C55E;font-weight:700">✓ Ready</span></div>`:'';
+  let crumb='';
+  if(withCrumb){
+    const parts=[`<span onclick="cpcGoAgg()" style="cursor:pointer;color:${cpcDrill.level==='agg'?'#f59e0b':'#94a3b8'};font-weight:${cpcDrill.level==='agg'?'700':'400'}">All Aggregators</span>`];
+    if(cpcDrill.agg)parts.push(`<span onclick="cpcGoBrands('${cpcDrill.agg}')" style="cursor:pointer;color:${cpcDrill.level==='brand'?'#f59e0b':'#94a3b8'};font-weight:${cpcDrill.level==='brand'?'700':'400'}">${cpcDrill.agg}</span>`);
+    if(cpcDrill.brand)parts.push(`<span style="color:#f59e0b;font-weight:700">${cpcDrill.brand}</span>`);
+    crumb=`<div style="font-size:12px;margin-bottom:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">${parts.join('<span style="color:#475569">→</span>')}</div>`;
+  }
+  return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(27,47,74,.5)"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">📊</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Ads Performance</div>${statusBar}</div><div style="font-size:10px;color:#64748b;margin-top:2px;letter-spacing:.4px">Spend · ROAS · Conversion · Reinvestment</div></div><button onclick="cpcLoaded=false;cpcModel=null;cpcDrill={level:'agg',agg:null,brand:null};renderCPC()" style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600">↻ Refresh</button></div>${crumb}${body}`;
+}
+
+function cpcProgressHTML(pct){
+  return `<div class="card" style="padding:28px"><div style="text-align:center;max-width:420px;margin:0 auto"><div style="font-size:14px;color:#e2e8f0;font-weight:700;margin-bottom:6px">⚙️ Computing Ad Performance</div><div style="font-size:11px;color:#94a3b8;margin-bottom:16px">Crunching ROAS, conversion trends, and reinvestment signals across all aggregators. This runs once — drill-downs after will be instant.</div><div style="width:100%;height:10px;background:rgba(27,47,74,.5);border-radius:5px;overflow:hidden"><div id="cpc-progress-fill" style="height:100%;width:${pct}%;background:linear-gradient(90deg,#f59e0b,#fbbf24);transition:width .2s"></div></div><div id="cpc-progress-lbl" style="font-size:13px;color:#f59e0b;font-weight:800;margin-top:10px">${pct}%</div></div></div>`;
+}
+
+// Action Now strip — urgent items across all aggregators
+function cpcActionStrip(){
+  const acts=(cpcModel.actions||[]).slice(0,12);
+  if(!acts.length)return '';
+  const cards=acts.map(a=>{
+    const clr=a.type==='topup'?'#22C55E':a.type==='withdraw'?'#EF4444':'#FBBF24';
+    const icon=a.type==='topup'?'🚀':a.type==='withdraw'?'🛑':'📉';
+    const idx=cpcData.indexOf(a.r);
+    return `<div style="flex:0 0 auto;width:260px;background:linear-gradient(135deg,${clr}11,transparent);border:1px solid ${clr}33;border-radius:10px;padding:10px 12px;cursor:pointer" onclick="cpcGoOutlets('${a.r.aggregator}','${a.r.brand}')"><div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span>${icon}</span><span style="font-size:11px;font-weight:800;color:${clr}">${a.r.brand}</span><span style="font-size:10px;color:#94a3b8">${a.r.branch}</span></div><div style="font-size:10px;color:#cbd5e1;line-height:1.4">${a.msg}</div><div style="font-size:9px;color:#64748b;margin-top:3px">${a.r.aggregator} · ${a.r.adType}</div></div>`;
   }).join('');
-  return `<div class="card"><div class="ct">💰 Spend Health — Active CPCs sorted by urgency</div><div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Burn rate = total spent ÷ campaign days elapsed. Days-until-exhausted = leftover ÷ burn rate. Critical = ≤ 5 days left.</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Outlet</th><th>Platform</th><th>Status</th><th>Budget Progress</th><th>Leftover</th><th>Burn Rate</th><th>Days Left</th><th>Window</th><th></th></tr></thead><tbody>${rowsHtml}</tbody></table></div></div>`;
+  return `<div style="margin-bottom:16px"><div style="font-size:11px;font-weight:800;color:#f59e0b;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">⚡ Action Now — ${acts.length} item${acts.length>1?'s':''} need attention</div><div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:6px">${cards}</div></div>`;
 }
 
-function renderCPCPerformance(rows){
-  if(!rows.length)return `<div class="card"><div style="color:#64748b;font-size:12px;padding:8px">No CPCs match the filters.</div></div>`;
-  const verdictOrder={SCALE:0,INVEST:1,MONITOR:2,WITHDRAW:3};
-  const sorted=[...rows].sort((a,b)=>{const va=verdictOrder[a.verdict]??99,vb=verdictOrder[b.verdict]??99;return va-vb||(b.roi||0)-(a.roi||0);});
-  const rowsHtml=sorted.slice(0,200).map(r=>{
-    const idx=cpcData.indexOf(r);
-    const v=r.verdict||'—';
-    const roasClr=r.verdict?CPC_VC[r.verdict]:'#64748b';
-    return `<tr style="cursor:pointer" onclick="selectCPCRow(${idx})"><td><strong style="font-size:12px;color:${BMAP[r.brand]?.c||'#e2e8f0'}">${r.brand}</strong><div style="font-size:10px;color:#94a3b8">${r.branch}</div></td><td><span style="color:${AC[r.aggregator]||'#888'};font-weight:700;font-size:11px">${r.aggregator}</span></td><td><span style="padding:3px 10px;border-radius:8px;background:${CPC_VB[r.verdict]||'rgba(100,116,139,.1)'};color:${roasClr};font-size:10px;font-weight:800;border:1px solid ${roasClr}44">${v}</span></td><td style="text-align:right;font-weight:800;font-variant-numeric:tabular-nums;color:${roasClr}">${r.roi?r.roi.toFixed(2)+'×':'—'}</td><td style="font-size:10px;color:#64748b">BE ${r.be.toFixed(2)}×</td><td>${fmtAED(r.budgetSpent)}</td><td>${fmtAED(r.sales)}</td><td>${r.orders}</td><td>${r.aov.toFixed(0)}</td><td>${r.cto.toFixed(1)}%</td><td>${r.ftu}</td><td style="font-size:10px;color:#94a3b8">${r.endDate||'—'}</td><td><button onclick="event.stopPropagation();selectCPCRow(${idx})" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:3px 8px;font-size:10px;cursor:pointer">View →</button></td></tr>`;
+// LEVEL 1 — Aggregator cards
+function cpcRenderAggLevel(){
+  const aggs=Object.values(cpcModel.byAgg).sort((a,b)=>(b.spent||0)-(a.spent||0));
+  const cards=aggs.map(A=>{
+    const clr=AGG_LOGO_CLR[A.name]||'#94a3b8';
+    const consum=A.invested>0?(A.spent/A.invested)*100:0;
+    const roasStr=A.roas?A.roas.toFixed(2)+'×':'—';
+    const actCount=cpcModel.actions.filter(a=>a.r.aggregator===A.name).length;
+    const adTypes=[...A.adTypes].join(' + ');
+    return `<div onclick="cpcGoBrands('${A.name}')" style="cursor:pointer;background:linear-gradient(135deg,${clr}0d,rgba(13,21,36,.4));border:1px solid ${clr}33;border-radius:14px;padding:16px;position:relative;overflow:hidden;transition:transform .15s,border-color .15s" onmouseover="this.style.borderColor='${clr}88';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='${clr}33';this.style.transform='none'">
+      <div style="position:absolute;top:-20px;right:-20px;width:90px;height:90px;background:radial-gradient(circle,${clr}22,transparent 70%);pointer-events:none"></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:8px"><div style="width:34px;height:34px;border-radius:9px;background:${clr}22;border:1px solid ${clr}44;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:${clr}">${A.name[0]}</div><div><div style="font-size:15px;font-weight:800;color:#e2e8f0">${A.name}</div><div style="font-size:9px;color:#64748b">${adTypes}</div></div></div>
+        ${actCount?`<div style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:8px;padding:2px 8px;font-size:10px;font-weight:700;color:#EF4444">⚡ ${actCount}</div>`:''}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Invested</div><div style="font-size:17px;font-weight:800;color:#e2e8f0">${fmtAED(A.invested)}</div></div>
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Consumed</div><div style="font-size:17px;font-weight:800;color:#e2e8f0">${fmtAED(A.spent)}</div></div>
+      </div>
+      <div style="width:100%;height:6px;background:rgba(27,47,74,.4);border-radius:3px;overflow:hidden;margin-bottom:10px"><div style="height:100%;width:${Math.min(100,consum)}%;background:linear-gradient(90deg,${clr},${clr}88)"></div></div>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Aggregator ROAS</div><div style="font-size:18px;font-weight:800;color:${clr}">${roasStr}</div></div>
+        <div style="text-align:right"><div style="font-size:9px;color:#64748b">Last update</div><div style="font-size:11px;color:#94a3b8">${A.lastUpdate||'—'}</div></div>
+      </div>
+      <div style="margin-top:10px;font-size:10px;color:#f59e0b;font-weight:600">View ${Object.keys(A.brands).length} brands →</div>
+    </div>`;
   }).join('');
-  return `<div class="card"><div class="ct">📈 Performance Verdict — Each CPC vs its margin-aware break-even ROAS</div><div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Verdict bands: <strong style="color:#22C55E">SCALE</strong> ≥ 1.5×BE · <strong style="color:#86EFAC">INVEST</strong> ≥ BE · <strong style="color:#FBBF24">MONITOR</strong> ≥ 0.8×BE · <strong style="color:#EF4444">WITHDRAW</strong> below. BE = 1 / (1 − commission% − food&packaging%).</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Outlet</th><th>Platform</th><th>Verdict</th><th style="text-align:right">ROAS</th><th>BE</th><th>Spent</th><th>Sales</th><th>Orders</th><th>AOV</th><th>CTO</th><th>FTU</th><th>Ended</th><th></th></tr></thead><tbody>${rowsHtml}</tbody></table></div>${sorted.length>200?`<div style="font-size:11px;color:#64748b;text-align:center;padding:8px">Showing 200 most relevant of ${sorted.length}</div>`:''}</div>`;
+  return cpcActionStrip()+`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${cards}</div>`;
 }
 
-function renderCPCPostImpact(rows){
-  const withImpact=rows.map(r=>({r,impact:cpcPostImpact(r)})).filter(x=>x.impact);
-  if(!withImpact.length)return `<div class="card"><div style="color:#64748b;font-size:12px;padding:8px">No exhausted/completed CPCs with at least 7 days of post-period data in this filter window.</div></div>`;
-  // Sort by biggest sales drop
-  withImpact.sort((a,b)=>(a.impact.salesChg||0)-(b.impact.salesChg||0));
-  const rowsHtml=withImpact.slice(0,100).map(({r,impact})=>{
-    const idx=cpcData.indexOf(r);
-    const ordClr=pctClr(impact.ordersChg),salClr=pctClr(impact.salesChg);
-    const verdict=impact.salesChg<-15?'🚨 Critical Drop':impact.salesChg<-5?'⚠️ Notable Drop':impact.salesChg<5?'➡️ Stable':'🤔 Grew Without CPC';
-    const verdictClr=impact.salesChg<-15?'#EF4444':impact.salesChg<-5?'#FBBF24':impact.salesChg<5?'#94a3b8':'#86EFAC';
-    return `<tr style="cursor:pointer" onclick="selectCPCRow(${idx})"><td><strong style="font-size:12px;color:${BMAP[r.brand]?.c||'#e2e8f0'}">${r.brand}</strong><div style="font-size:10px;color:#94a3b8">${r.branch}</div></td><td><span style="color:${AC[r.aggregator]||'#888'};font-weight:700;font-size:11px">${r.aggregator}</span></td><td style="font-size:10px;color:#94a3b8">${r.startDate} → ${r.endDate}</td><td>${fmtAED(impact.duringSales)} <span style="color:#64748b;font-size:10px">/ ${impact.duringOrders} ord</span></td><td>${fmtAED(impact.afterSales)} <span style="color:#64748b;font-size:10px">/ ${impact.afterOrders} ord</span></td><td style="color:${salClr};font-weight:700">${fmtPct(impact.salesChg)}</td><td style="color:${ordClr};font-weight:700">${fmtPct(impact.ordersChg)}</td><td><span style="color:${verdictClr};font-weight:700;font-size:11px">${verdict}</span></td></tr>`;
+// LEVEL 2 — Brand cards within an aggregator
+function cpcRenderBrandLevel(ag){
+  const A=cpcModel.byAgg[ag];if(!A)return `<div class="card">No data for ${ag}</div>`;
+  const clr=AGG_LOGO_CLR[ag]||'#94a3b8';
+  const brands=Object.values(A.brands).sort((a,b)=>(b.spent||0)-(a.spent||0));
+  // Ad-type toggle (only if this aggregator has more than one)
+  const adTypes=[...A.adTypes];
+  const adToggle=adTypes.length>1?`<div style="display:flex;gap:6px;margin-bottom:14px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Ad Type</span>${['all',...adTypes].map(t=>`<button onclick="cpcSetAdType('${t}')" style="padding:4px 12px;border-radius:6px;border:1px solid ${cpcAdTypeFilter===t?clr:'rgba(27,47,74,.6)'};background:${cpcAdTypeFilter===t?clr+'22':'transparent'};color:${cpcAdTypeFilter===t?clr:'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${t==='all'?'All':t}</button>`).join('')}</div>`:'';
+  const cards=brands.map(B=>{
+    const bClr=BMAP[B.name]?.c||'#94a3b8';
+    // filter rows by ad type for the displayed numbers
+    let rows=B.rows;if(cpcAdTypeFilter!=='all')rows=rows.filter(r=>r.adType===cpcAdTypeFilter);
+    const inv=rows.reduce((s,r)=>s+r.budgetAlloc,0),spent=rows.reduce((s,r)=>s+r.budgetSpent,0),sales=rows.reduce((s,r)=>s+r.sales,0);
+    const roas=spent>0?sales/spent:null;const be=cpcBE(B.name,ag);const verdict=cpcVerdict(roas,be);
+    if(!rows.length)return '';
+    const consum=inv>0?(spent/inv)*100:0;
+    const vClr=verdict?CPC_VC[verdict]:'#64748b';
+    const actCount=cpcModel.actions.filter(a=>a.r.aggregator===ag&&a.r.brand===B.name&&(cpcAdTypeFilter==='all'||a.r.adType===cpcAdTypeFilter)).length;
+    return `<div onclick="cpcGoOutlets('${ag}','${B.name}')" style="cursor:pointer;background:linear-gradient(135deg,${bClr}0d,rgba(13,21,36,.4));border:1px solid ${bClr}33;border-radius:14px;padding:16px;position:relative;overflow:hidden;transition:transform .15s,border-color .15s" onmouseover="this.style.borderColor='${bClr}88';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='${bClr}33';this.style.transform='none'">
+      <div style="position:absolute;top:-20px;right:-20px;width:80px;height:80px;background:radial-gradient(circle,${bClr}22,transparent 70%);pointer-events:none"></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="font-size:15px;font-weight:800;color:${bClr}">${B.name}</div>
+        <div style="display:flex;gap:6px;align-items:center">${actCount?`<div style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:8px;padding:2px 7px;font-size:10px;font-weight:700;color:#EF4444">⚡ ${actCount}</div>`:''}${verdict?`<div style="background:${CPC_VB[verdict]};border:1px solid ${vClr}44;border-radius:8px;padding:2px 8px;font-size:9px;font-weight:800;color:${vClr}">${verdict}</div>`:''}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Budget</div><div style="font-size:16px;font-weight:800;color:#e2e8f0">${fmtAED(inv)}</div></div>
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Consumed</div><div style="font-size:16px;font-weight:800;color:#e2e8f0">${fmtAED(spent)}</div></div>
+      </div>
+      <div style="width:100%;height:6px;background:rgba(27,47,74,.4);border-radius:3px;overflow:hidden;margin-bottom:10px"><div style="height:100%;width:${Math.min(100,consum)}%;background:linear-gradient(90deg,${bClr},${bClr}88)"></div></div>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">ROAS</div><div style="font-size:17px;font-weight:800;color:${vClr}">${roas?roas.toFixed(2)+'×':'—'}</div></div>
+        <div style="text-align:right"><div style="font-size:9px;color:#64748b">break-even</div><div style="font-size:12px;color:#94a3b8">${be.toFixed(2)}×</div></div>
+      </div>
+      <div style="margin-top:10px;font-size:10px;color:#f59e0b;font-weight:600">View ${Object.keys(B.outlets).length} outlets →</div>
+    </div>`;
+  }).filter(Boolean).join('');
+  // pooling note
+  const poolNote=(ag==='Careem'||ag==='Noon')?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px">ℹ️ ${ag} budgets are <strong>pooled at brand level</strong> — outlets that burn faster automatically draw more. Per-outlet budget figures are indicative; the brand total is the real budget. Per-outlet <strong>results</strong> (orders, sales, ROAS, CTO) are exact.</div>`:'';
+  return adToggle+poolNote+`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${cards}</div>`;
+}
+
+// LEVEL 3 — Outlet drill-down table with the 3 performance lenses
+function cpcRenderOutletLevel(ag,brand){
+  const A=cpcModel.byAgg[ag];if(!A||!A.brands[brand])return `<div class="card">No data</div>`;
+  const B=A.brands[brand];
+  let rows=B.rows;if(cpcAdTypeFilter!=='all')rows=rows.filter(r=>r.adType===cpcAdTypeFilter);
+  // Build per-outlet aggregated view (current view = latest month by default, or all)
+  // We show the most recent month's combined record per outlet, with trend vs prior month + vs year.
+  const today=latest||"2026-06-18";
+  const curMonth=cpcMonthFilter==='all'?null:cpcMonthFilter;
+  // months available
+  const monthsSet=[...new Set(rows.map(r=>r.month).filter(Boolean))].sort().reverse();
+  const monthSel=`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:12px"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Month</span><button onclick="cpcSetMonth('all')" style="padding:4px 11px;border-radius:6px;border:1px solid ${cpcMonthFilter==='all'?'#f59e0b':'rgba(27,47,74,.6)'};background:${cpcMonthFilter==='all'?'rgba(245,158,11,.12)':'transparent'};color:${cpcMonthFilter==='all'?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">All-time</button>${monthsSet.slice(0,8).map(m=>`<button onclick="cpcSetMonth('${m}')" style="padding:4px 11px;border-radius:6px;border:1px solid ${cpcMonthFilter===m?'#f59e0b':'rgba(27,47,74,.6)'};background:${cpcMonthFilter===m?'rgba(245,158,11,.12)':'transparent'};color:${cpcMonthFilter===m?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${cpcMonthLabel(m)}</button>`).join('')}</div>`;
+
+  // For each outlet, build the row data
+  const outlets={};
+  rows.forEach(r=>{if(!outlets[r.branch])outlets[r.branch]=[];outlets[r.branch].push(r);});
+  const adTypeOf=cpcAdTypeFilter==='all'?(rows[0]?.adType||'CPC'):cpcAdTypeFilter;
+  let tableRows=Object.entries(outlets).map(([outlet,orows])=>{
+    // Determine display window: selected month, or all-time
+    let disp;
+    if(curMonth){
+      const key=`${brand}|${ag}|${adTypeOf}|${outlet}|${curMonth}`;
+      disp=cpcModel.monthly.get(key);
+      // if ad type 'all', combine across adtypes for that month
+      if(cpcAdTypeFilter==='all'){
+        const monthRows=orows.filter(r=>r.month===curMonth);
+        disp=cpcCombineRows(monthRows,brand,ag);
+      }
+      if(!disp||!disp.spent)return null;
+    }else{
+      disp=cpcCombineRows(orows,brand,ag);
+    }
+    // Lens 2: ROI vs prior calendar month + vs 2026 year
+    let momChg=null,momLabel='';
+    if(curMonth){
+      const prevMonth=cpcPrevMonth(curMonth);
+      const prevRows=orows.filter(r=>r.month===prevMonth);
+      const prev=cpcCombineRows(prevRows,brand,ag);
+      if(prev&&prev.roi!=null&&disp.roi!=null){momChg=pctOf(disp.roi,prev.roi);momLabel='vs '+cpcMonthLabel(prevMonth);}
+    }
+    const yearKey=`${brand}|${ag}|${adTypeOf}|${outlet}`;
+    const yr=cpcModel.yearROI.get(yearKey);
+    let yoyChg=null;
+    if(yr&&yr.roi!=null&&disp.roi!=null)yoyChg=pctOf(disp.roi,yr.roi);
+    // Lens 3: CTO relative to brand average (this window)
+    return {outlet,disp,momChg,momLabel,yoyChg,yearROI:yr?.roi,rows:orows};
+  }).filter(Boolean);
+
+  // brand-average CTO for relative judgement
+  const brandCTOs=tableRows.map(t=>t.disp.cto).filter(c=>c!=null);
+  const brandAvgCTO=brandCTOs.length?brandCTOs.reduce((a,b)=>a+b,0)/brandCTOs.length:null;
+
+  // sort
+  const sc=cpcSort.col,sd=cpcSort.dir;
+  const getVal=(t)=>{switch(sc){case'roas':return t.disp.roi||0;case'spent':return t.disp.spent||0;case'sales':return t.disp.sales||0;case'cto':return t.disp.cto||0;case'orders':return t.disp.orders||0;case'mom':return t.momChg||-999;default:return t.disp.roi||0;}};
+  tableRows.sort((a,b)=>(getVal(a)-getVal(b))*sd);
+
+  const arrow=(col)=>cpcSort.col===col?(cpcSort.dir<0?' ▼':' ▲'):'';
+  const th=(col,lbl,align)=>`<th style="cursor:pointer;text-align:${align||'left'}" onclick="cpcSetSort('${col}')">${lbl}${arrow(col)}</th>`;
+
+  const body=tableRows.map(t=>{
+    const d=t.disp;const vClr=d.verdict?CPC_VC[d.verdict]:'#64748b';
+    const momClr=t.momChg==null?'#64748b':pctClr(t.momChg);
+    const yoyClr=t.yoyChg==null?'#64748b':pctClr(t.yoyChg);
+    // CTO relative label
+    let ctoTag='';
+    if(d.cto!=null&&brandAvgCTO){
+      const rel=d.cto/brandAvgCTO;
+      if(rel>=1.2)ctoTag=`<span style="color:#22C55E;font-weight:700">High</span>`;
+      else if(rel<=0.8)ctoTag=`<span style="color:#EF4444;font-weight:700">Low</span>`;
+      else ctoTag=`<span style="color:#94a3b8">Avg</span>`;
+    }
+    const idx=cpcData.indexOf(t.rows[t.rows.length-1]);
+    const imp=cpcModel.postImpact.get(t.rows[t.rows.length-1]);
+    const impTag=imp&&imp.salesChg<-15?` <span title="Sales fell ${fmtPct(imp.salesChg)} after CPC ended" style="font-size:9px;color:#EF4444;cursor:help">📉</span>`:'';
+    return `<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:#e2e8f0">${t.outlet}</strong>${impTag}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}</td><td style="text-align:right;font-size:10px;color:#64748b">BE ${d.be.toFixed(2)}×</td><td style="text-align:right;color:${momClr};font-weight:700">${t.momChg!=null?fmtPct(t.momChg):'—'}<div style="font-size:8px;color:#64748b">${t.momLabel||''}</div></td><td style="text-align:right;color:${yoyClr};font-weight:700">${t.yoyChg!=null?fmtPct(t.yoyChg):'—'}<div style="font-size:8px;color:#64748b">${t.yearROI!=null?'vs 2026 '+t.yearROI.toFixed(1)+'×':''}</div></td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${fmtAED(d.spent)}</td><td style="text-align:right">${fmtAED(d.sales)}</td><td style="text-align:right">${d.orders}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.ftu||0}</td></tr>`;
   }).join('');
-  return `<div class="card"><div class="ct">🔎 Post-Exhaustion Impact — Did sales drop after the CPC ended?</div><div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Compares the 7 days right after the CPC ended vs the last 7 days of the campaign — same brand+aggregator+branch. Big drops mean the CPC was driving real incremental sales (refill recommended). Stable/growth means the CPC may have been wasteful.</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Outlet</th><th>Platform</th><th>Window</th><th>During (last 7d)</th><th>After (next 7d)</th><th>Sales Δ</th><th>Orders Δ</th><th>Verdict</th></tr></thead><tbody>${rowsHtml}</tbody></table></div></div>`;
+
+  const adToggle=([...B.adTypes].length>1)?`<div style="display:flex;gap:6px;margin-bottom:12px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Ad Type</span>${['all',...B.adTypes].map(tp=>`<button onclick="cpcSetAdType('${tp}')" style="padding:4px 12px;border-radius:6px;border:1px solid ${cpcAdTypeFilter===tp?'#f59e0b':'rgba(27,47,74,.6)'};background:${cpcAdTypeFilter===tp?'rgba(245,158,11,.12)':'transparent'};color:${cpcAdTypeFilter===tp?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${tp==='all'?'All':tp}</button>`).join('')}</div>`:'';
+
+  return adToggle+monthSel+`<div class="card"><div class="ct">${brand} on ${ag} — Outlet Performance ${curMonth?'· '+cpcMonthLabel(curMonth):'· All-time'}</div><div style="font-size:11px;color:#94a3b8;margin-bottom:10px">ROAS vs break-even, ROI trend vs prior month and vs 2026 average, and conversion (CTO) relative to brand average. Click any outlet for its full history. 📉 = sales dropped after CPC ended.</div><div style="overflow-x:auto"><table class="tbl"><thead><tr>${th('outlet','Outlet')}<th>Verdict</th>${th('roas','ROAS','right')}<th style="text-align:right">BE</th>${th('mom','MoM','right')}<th style="text-align:right">vs Year</th>${th('cto','CTO','right')}${th('spent','Spent','right')}${th('sales','Sales','right')}${th('orders','Ord','right')}<th style="text-align:right">AOV</th><th style="text-align:right">FTU</th></tr></thead><tbody>${body}</tbody></table></div></div>`;
 }
 
-function renderCPCRecommendations(rows){
-  // Top up: SCALE/INVEST verdicts that are active or recently exhausted with a post-impact drop
-  const topUps=rows.filter(r=>(r.status==="Active"||r.status==="Critical")&&(r.verdict==="SCALE"||r.verdict==="INVEST"));
-  const exhaustedWithDrop=rows.map(r=>({r,impact:cpcPostImpact(r)})).filter(x=>x.impact&&x.impact.salesChg<-10&&(x.r.verdict==='SCALE'||x.r.verdict==='INVEST'));
-  // Withdraw: active rows with WITHDRAW verdict still spending
-  const withdraws=rows.filter(r=>(r.status==="Active"||r.status==="Critical")&&r.verdict==="WITHDRAW"&&r.leftover>50);
-  // Bid recommendations: Deliveroo only
-  const bidRecs=rows.filter(r=>r.aggregator==="Deliveroo"&&(r.status==="Active"||r.status==="Critical"));
-
-  const renderTopUp=(r,impact)=>{
-    const sug=cpcTopUpSuggestion(r);
-    if(!sug&&!impact)return '';
-    const idx=cpcData.indexOf(r);
-    const reason=impact?`Sales fell <strong style="color:#EF4444">${fmtPct(impact.salesChg)}</strong> in this branch after the last CPC ended.`:`Currently performing at <strong style="color:${CPC_VC[r.verdict]}">${r.roi.toFixed(2)}×</strong> ROAS (BE ${r.be.toFixed(2)}×).`;
-    return `<div style="padding:10px 12px;border-left:3px solid #22C55E;background:rgba(34,197,94,.06);border-radius:4px;margin-bottom:8px;cursor:pointer" onclick="selectCPCRow(${idx})"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><strong style="color:${BMAP[r.brand]?.c||'#e2e8f0'};font-size:13px">${r.brand}</strong> <span style="color:#94a3b8">·</span> ${r.branch} <span style="color:${AC[r.aggregator]||'#888'};font-weight:700">${r.aggregator}</span><div style="font-size:11px;color:#94a3b8;margin-top:4px;line-height:1.5">${reason}${sug?` Burn rate <strong>${fmtAED(sug.burnPerDay)}/day</strong> × <strong>${sug.daysLeftInMonth} days</strong> left in month = <strong style="color:#22C55E">add ${fmtAED(sug.suggested)}</strong>.`:''}</div></div>${sug?`<div style="text-align:right"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.8px">Suggest top-up</div><div style="font-size:18px;font-weight:800;color:#22C55E">${fmtAED(sug.suggested)}</div></div>`:''}</div></div>`;
-  };
-  const topUpHTML=[...topUps.map(r=>renderTopUp(r,null)),...exhaustedWithDrop.map(x=>renderTopUp(x.r,x.impact))].filter(Boolean).slice(0,15).join('')||`<div style="color:#64748b;font-size:12px;padding:8px">No top-up candidates in this filter window.</div>`;
-
-  const withdrawHTML=withdraws.slice(0,15).map(r=>{
-    const idx=cpcData.indexOf(r);
-    const shiftFrom=Math.round(r.leftover*0.8);
-    return `<div style="padding:10px 12px;border-left:3px solid #EF4444;background:rgba(239,68,68,.06);border-radius:4px;margin-bottom:8px;cursor:pointer" onclick="selectCPCRow(${idx})"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><strong style="color:${BMAP[r.brand]?.c||'#e2e8f0'};font-size:13px">${r.brand}</strong> <span style="color:#94a3b8">·</span> ${r.branch} <span style="color:${AC[r.aggregator]||'#888'};font-weight:700">${r.aggregator}</span><div style="font-size:11px;color:#94a3b8;margin-top:4px;line-height:1.5">ROAS <strong style="color:#EF4444">${r.roi.toFixed(2)}×</strong> is below break-even <strong>${r.be.toFixed(2)}×</strong> — this CPC is losing money on every AED spent. ${fmtAED(r.leftover)} unspent budget could be redirected.</div></div><div style="text-align:right"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.8px">Shift away</div><div style="font-size:18px;font-weight:800;color:#EF4444">${fmtAED(shiftFrom)}</div></div></div></div>`;
-  }).join('')||`<div style="color:#64748b;font-size:12px;padding:8px">No withdraw candidates in this filter window.</div>`;
-
-  const bidHTML=bidRecs.slice(0,20).map(r=>{
-    const idx=cpcData.indexOf(r);
-    const bid=cpcBidSuggestion(r);
-    if(!bid)return '';
-    const actClr=bid.action==='raise'?'#22C55E':bid.action==='lower'?'#EF4444':'#94a3b8';
-    return `<div style="padding:10px 12px;border-left:3px solid ${actClr};background:${actClr}11;border-radius:4px;margin-bottom:8px;cursor:pointer" onclick="selectCPCRow(${idx})"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><strong style="color:${BMAP[r.brand]?.c||'#e2e8f0'};font-size:13px">${r.brand}</strong> · ${r.branch} <span style="color:#94a3b8;font-size:11px">· Current bid: <strong style="color:#e2e8f0">AED ${r.avgBid.toFixed(2)}</strong> · ROAS ${r.roi?r.roi.toFixed(2)+'×':'—'}</span><div style="font-size:11px;color:#94a3b8;margin-top:4px;line-height:1.5">${bid.reason}</div></div><div style="text-align:right"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.8px">${bid.action} bid to</div><div style="font-size:18px;font-weight:800;color:${actClr}">AED ${bid.to.toFixed(2)}</div></div></div></div>`;
-  }).filter(Boolean).join('')||`<div style="color:#64748b;font-size:12px;padding:8px">No Deliveroo CPCs in this filter window (other aggregators use auto-bid).</div>`;
-
-  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:12px"><div class="card"><div class="ct" style="color:#22C55E">🚀 Top Up These CPCs</div><div style="font-size:11px;color:#94a3b8;margin-bottom:10px">High-ROAS active investments + outlets where sales dropped after exhaustion. Suggested top-up = current burn rate × days remaining in month.</div>${topUpHTML}</div><div class="card"><div class="ct" style="color:#EF4444">🛑 Withdraw & Reallocate</div><div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Below-break-even CPCs still spending. Suggested = shift ~80% of leftover to better-performing outlets.</div>${withdrawHTML}</div><div class="card" style="grid-column:1/-1"><div class="ct" style="color:#60A5FA">🎯 Bid Recommendations <span style="font-weight:400;color:#64748b;text-transform:none;letter-spacing:0;font-size:11px">· Deliveroo only (other platforms are auto-bid)</span></div>${bidHTML}</div></div>`;
+// Combine multiple CPC rows into one record (Σsales/Σspent for ROI, Σorders/Σclicks for CTO)
+function cpcCombineRows(rows,brand,ag){
+  if(!rows||!rows.length)return null;
+  let sales=0,spent=0,orders=0,views=0,ftu=0,alloc=0,leftover=0;
+  rows.forEach(r=>{sales+=r.sales;spent+=r.budgetSpent;orders+=r.orders;views+=r.views;ftu+=r.ftu;alloc+=r.budgetAlloc;leftover+=r.leftover;});
+  const be=cpcBE(brand,ag);
+  const roi=spent>0?sales/spent:null;
+  return{sales,spent,orders,views,ftu,alloc,leftover,be,roi,cto:views>0?(orders/views)*100:null,aov:orders>0?sales/orders:null,verdict:cpcVerdict(roi,be)};
 }
+function cpcPrevMonth(m){const [y,mo]=m.split("-").map(Number);const d=new Date(y,mo-2,1);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;}
+function cpcMonthLabel(m){if(!m)return '';const [y,mo]=m.split("-").map(Number);const names=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];return `${names[mo-1]} ${String(y).slice(2)}`;}
 
-function renderCPCYoY(rows){
-  // Group by brand|aggregator|branch, compare 2025 vs 2026
-  const groups={};
-  rows.forEach(r=>{const k=`${r.brand}|${r.aggregator}|${r.branch}`;if(!groups[k])groups[k]={brand:r.brand,aggregator:r.aggregator,branch:r.branch,y25:[],y26:[]};const y=(r.startDate||'').slice(0,4);if(y==='2025')groups[k].y25.push(r);else if(y==='2026')groups[k].y26.push(r);});
-  const comparable=Object.values(groups).filter(g=>g.y25.length&&g.y26.length);
-  if(!comparable.length)return `<div class="card"><div style="color:#64748b;font-size:12px;padding:8px">No outlets have CPC data in both 2025 and 2026 for the current filter.</div></div>`;
-  const sumGroup=g=>g.reduce((a,r)=>({spent:a.spent+r.budgetSpent,sales:a.sales+r.sales,orders:a.orders+r.orders,ftu:a.ftu+r.ftu}),{spent:0,sales:0,orders:0,ftu:0});
-  const rowsHtml=comparable.map(g=>{
-    const s25=sumGroup(g.y25),s26=sumGroup(g.y26);
-    const roas25=s25.spent>0?s25.sales/s25.spent:0,roas26=s26.spent>0?s26.sales/s26.spent:0;
-    const spendChg=pctOf(s26.spent,s25.spent),salesChg=pctOf(s26.sales,s25.sales),roasChg=pctOf(roas26,roas25);
-    return `<tr><td><strong style="font-size:12px;color:${BMAP[g.brand]?.c||'#e2e8f0'}">${g.brand}</strong><div style="font-size:10px;color:#94a3b8">${g.branch}</div></td><td><span style="color:${AC[g.aggregator]||'#888'};font-weight:700;font-size:11px">${g.aggregator}</span></td><td>${fmtAED(s25.spent)}</td><td>${fmtAED(s26.spent)}</td><td style="color:${pctClr(spendChg)};font-weight:700">${fmtPct(spendChg)}</td><td>${roas25.toFixed(2)}×</td><td>${roas26.toFixed(2)}×</td><td style="color:${pctClr(roasChg)};font-weight:700">${fmtPct(roasChg)}</td><td>${fmtAED(s25.sales)}</td><td>${fmtAED(s26.sales)}</td><td style="color:${pctClr(salesChg)};font-weight:700">${fmtPct(salesChg)}</td></tr>`;
+// Outlet detail modal-ish view (full history)
+let cpcOutletDetail=null;
+function cpcOpenOutletDetail(ag,brand,outletEnc){
+  const outlet=decodeURIComponent(outletEnc);
+  cpcOutletDetail={ag,brand,outlet};
+  renderCPCOutletDetail();
+}
+function cpcCloseOutletDetail(){cpcOutletDetail=null;renderCPC();}
+function renderCPCOutletDetail(){
+  const pg=document.getElementById("page-cpc");if(!pg||!cpcOutletDetail)return;
+  const {ag,brand,outlet}=cpcOutletDetail;
+  const rows=cpcData.filter(r=>r.aggregator===ag&&r.brand===brand&&r.branch===outlet).sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||'')); // NEW → OLD
+  const histRows=rows.map(r=>{
+    const vClr=r.verdict?CPC_VC[r.verdict]:'#64748b';
+    const imp=cpcModel.postImpact.get(r);
+    const impCell=imp?`<span style="color:${pctClr(imp.salesChg)};font-weight:700">${fmtPct(imp.salesChg)}</span>`:'<span style="color:#475569">—</span>';
+    return `<tr><td style="font-size:10px">${r.adType}</td><td style="font-size:10px">${cpcMonthLabel(r.month)}</td><td style="font-size:10px">${r.startDate} → ${r.endDate}</td><td style="text-align:right">${fmtAED(r.budgetAlloc)}</td><td style="text-align:right">${fmtAED(r.budgetSpent)}</td><td style="text-align:right">${fmtAED(r.sales)}</td><td style="text-align:right">${r.orders}</td><td style="text-align:right">${r.cto.toFixed(1)}%</td><td style="text-align:right;font-weight:800;color:${vClr}">${r.roi?r.roi.toFixed(2)+'×':'—'}</td><td><span style="padding:2px 7px;border-radius:6px;background:${CPC_VB[r.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:9px;font-weight:700">${r.verdict||'—'}</span></td><td style="text-align:right">${impCell}</td></tr>`;
   }).join('');
-  return `<div class="card"><div class="ct">📅 Year-over-Year — 2025 vs 2026</div><div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Outlets with CPC investments in both years. Useful for spotting platforms or brands where ROAS has improved or declined year-over-year.</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Outlet</th><th>Platform</th><th>'25 Spent</th><th>'26 Spent</th><th>Spend Δ</th><th>'25 ROAS</th><th>'26 ROAS</th><th>ROAS Δ</th><th>'25 Sales</th><th>'26 Sales</th><th>Sales Δ</th></tr></thead><tbody>${rowsHtml}</tbody></table></div></div>`;
-}
-
-function renderCPCDeepDive(r){
-  if(!r)return '';
-  const idx=cpcData.indexOf(r);
-  const verdict=r.verdict||'—';
-  const verdictClr=r.verdict?CPC_VC[r.verdict]:'#64748b';
-  const impact=cpcPostImpact(r);
-  const topUp=cpcTopUpSuggestion(r);
-  const bid=cpcBidSuggestion(r);
-  // History: all prior CPCs for this outlet+platform
-  const history=cpcData.filter(x=>x.brand===r.brand&&x.aggregator===r.aggregator&&x.branch===r.branch).sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||''));
-  const histHTML=history.length>1?`<div class="card" style="margin-top:12px"><div class="ct">📜 CPC History at this Outlet on ${r.aggregator}</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Start</th><th>End</th><th>Allocated</th><th>Spent</th><th>Sales</th><th>Orders</th><th>ROAS</th><th>Verdict</th><th>Remarks</th></tr></thead><tbody>${history.map(h=>`<tr style="${h===r?'background:rgba(245,158,11,.06)':''}"><td style="font-size:10px">${h.startDate}</td><td style="font-size:10px">${h.endDate}</td><td>${fmtAED(h.budgetAlloc)}</td><td>${fmtAED(h.budgetSpent)}</td><td>${fmtAED(h.sales)}</td><td>${h.orders}</td><td style="font-weight:700;color:${cpcVerdict(h.roi,h.be)?CPC_VC[cpcVerdict(h.roi,h.be)]:'#94a3b8'}">${h.roi?h.roi.toFixed(2)+'×':'—'}</td><td><span style="padding:2px 7px;border-radius:6px;background:${CPC_VB[cpcVerdict(h.roi,h.be)]||'rgba(100,116,139,.1)'};color:${cpcVerdict(h.roi,h.be)?CPC_VC[cpcVerdict(h.roi,h.be)]:'#94a3b8'};font-size:9px;font-weight:700">${cpcVerdict(h.roi,h.be)||'—'}</span></td><td style="font-size:10px;color:#94a3b8">${h.remarks}</td></tr>`).join('')}</tbody></table></div></div>`:'';
-  // Sales context during the CPC window
-  const canonBranch=resolveCPCBranch(r);
-  const dailySales=r.startDate&&r.endDate?allData.filter(x=>x.brand===r.brand&&x.aggregator===r.aggregator&&x.branch===canonBranch&&x.date>=r.startDate&&x.date<=r.endDate):[];
-  const totalSalesActual=sumR(dailySales);
-
-  return `<div class="card" style="margin-bottom:12px;border-left:4px solid ${BMAP[r.brand]?.c||'#f59e0b'}"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap"><div style="flex:1;min-width:280px"><div style="font-size:9px;color:#FBBF24;font-weight:800;letter-spacing:1.5px;text-transform:uppercase">CPC Deep Dive</div><div style="font-size:18px;font-weight:800;color:#e2e8f0;margin-top:4px">${r.brand} · ${r.branch}</div><div style="font-size:11px;color:#94a3b8;margin-top:4px"><span style="color:${AC[r.aggregator]||'#888'};font-weight:700">${r.aggregator}</span> · ${r.startDate} → ${r.endDate} · ${r.days||0} days · <span style="color:${verdictClr};font-weight:700">${verdict}</span> at ROAS ${r.roi?r.roi.toFixed(2)+'×':'—'} (BE ${r.be.toFixed(2)}×)</div>${r.remarks?`<div style="font-size:10px;color:#64748b;margin-top:4px;font-style:italic">${r.remarks}</div>`:''}</div><button onclick="cpcSetTab('health')" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer">← Back</button></div></div>
-
-  <div class="g4" style="margin-bottom:12px">${kpiCard('Budget Allocated',fmtAED(r.budgetAlloc),`${r.startDate||'—'} → ${r.endDate||'—'}`,null)}${kpiCard('Spent',fmtAED(r.budgetSpent),`${r.budgetAlloc>0?((r.budgetSpent/r.budgetAlloc)*100).toFixed(0):0}% consumed`,null)}${kpiCard('Leftover',fmtAED(r.leftover),r.daysUntilExhausted!=null?`${r.daysUntilExhausted} day${r.daysUntilExhausted!==1?'s':''} at current burn`:'—',null)}${kpiCard('ROAS',(r.roi?r.roi.toFixed(2):'—')+'×',`BE ${r.be.toFixed(2)}× · ${verdict}`,null)}</div>
-
-  <div class="g4" style="margin-bottom:12px">${kpiCard('Sales Attributed',fmtAED(r.sales),`${r.orders} orders`,null)}${kpiCard('AOV',`AED ${r.aov.toFixed(1)}`,r.cto.toFixed(1)+'% CTO',null)}${kpiCard('FTU Acquired',r.ftu.toLocaleString(),'first-time users',null)}${kpiCard('Avg Bid',`AED ${r.avgBid.toFixed(2)}`,r.aggregator==='Deliveroo'?'manual bid':'auto-bid',null)}</div>
-
-  ${impact?`<div class="card" style="margin-bottom:12px;border-color:${impact.salesChg<-15?'rgba(239,68,68,.4)':impact.salesChg<-5?'rgba(251,191,36,.4)':'rgba(100,116,139,.3)'}"><div class="ct" style="color:${impact.salesChg<-15?'#EF4444':impact.salesChg<-5?'#FBBF24':'#94a3b8'}">🔎 Post-Exhaustion Impact</div><div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Compared sales in the 7 days right after this CPC ended vs the last 7 days of the campaign.</div><div class="g4">${kpiCard('During (last 7d)',fmtAED(impact.duringSales),`${impact.duringOrders} orders`,null)}${kpiCard('After (next 7d)',fmtAED(impact.afterSales),`${impact.afterOrders} orders`,null)}${kpiCard('Sales Δ',fmtPct(impact.salesChg),impact.salesChg<-15?'critical drop':impact.salesChg<-5?'notable drop':impact.salesChg<5?'stable':'grew without CPC',impact.salesChg)}${kpiCard('Orders Δ',fmtPct(impact.ordersChg),'',impact.ordersChg)}</div></div>`:''}
-
-  ${(topUp||bid)?`<div class="card" style="margin-bottom:12px;border-color:rgba(34,197,94,.3)"><div class="ct" style="color:#22C55E">💡 Recommendation</div>${topUp?`<div style="padding:10px 12px;background:rgba(34,197,94,.06);border-radius:6px;margin-bottom:8px"><div style="font-size:12px;color:#e2e8f0;line-height:1.6">At current burn rate of <strong>${fmtAED(topUp.burnPerDay)}/day</strong> with <strong>${topUp.daysLeftInMonth} days</strong> remaining this month, we'd recommend topping up by <strong style="color:#22C55E;font-size:14px">${fmtAED(topUp.suggested)}</strong> to finish the month at this pace.</div></div>`:''}${bid?`<div style="padding:10px 12px;background:rgba(96,165,250,.06);border-radius:6px"><div style="font-size:12px;color:#e2e8f0;line-height:1.6">${bid.reason} — ${bid.action} bid from <strong>AED ${r.avgBid.toFixed(2)}</strong> to <strong style="color:#60A5FA;font-size:14px">AED ${bid.to.toFixed(2)}</strong>.</div></div>`:''}</div>`:''}
-
-  ${histHTML}`;
+  const bClr=BMAP[brand]?.c||'#f59e0b';
+  const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(27,47,74,.5)"><div><div style="font-size:9px;color:#FBBF24;font-weight:800;letter-spacing:1.5px;text-transform:uppercase">Outlet Deep Dive</div><div style="font-size:18px;font-weight:800;color:${bClr};margin-top:4px">${brand} · ${outlet}</div><div style="font-size:11px;color:#94a3b8;margin-top:2px"><span style="color:${AGG_LOGO_CLR[ag]||'#888'};font-weight:700">${ag}</span> · ${rows.length} CPC cycle${rows.length>1?'s':''} (newest first)</div></div><button onclick="cpcCloseOutletDetail()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer">← Back</button></div>`;
+  pg.innerHTML=cpcShell(header+`<div class="card"><div class="ct">📜 CPC History — Newest to Oldest</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Type</th><th>Month</th><th>Window</th><th style="text-align:right">Budget</th><th style="text-align:right">Spent</th><th style="text-align:right">Sales</th><th style="text-align:right">Orders</th><th style="text-align:right">CTO</th><th style="text-align:right">ROAS</th><th>Verdict</th><th style="text-align:right">Post Δ</th></tr></thead><tbody>${histRows}</tbody></table></div></div>`);
 }
 
 
@@ -1093,7 +1228,7 @@ const CAMPAIGN_GID="1647275459";
 let selDay=null;let campaignData=[],campLoaded=false,campTab='active',calMonth=null,selCamp=null;
 // ── CPC INVESTMENTS STATE ──
 const CPC_GID="2056065310";
-let cpcData=[],cpcLoaded=false,cpcTab='health',cpcFBrands=new Set(),cpcFPlatforms=new Set(),cpcFOutletScope='all',cpcFTimeWindow='active',selCPC=null;
+let cpcData=[],cpcLoaded=false;
 let campFBrands=new Set(),campFPlatforms=new Set(),campFStatuses=new Set();
 // Date and outlet-scope filters for the campaign list
 let campFStartFrom="",campFStartTo="",campFOutletScope="all"; // outlet scope: all/dxb/auh/specific
@@ -2922,7 +3057,7 @@ function cmpDrawChart(dA,dB){
     genBrief,runAskAI,runCampAI,
     renderBrands,renderOutlets,renderPlatforms,renderOverview,renderCPC,renderCampaigns,renderKPI,renderCompare,
     selectOutlet,backToOutlets,toggleAovDrill,selectBundleByKey,bundleDetailHTML,
-    cpcSetTab,cpcToggleBrand,cpcTogglePlatform,cpcSetScope,cpcSetWindow,cpcClearFilters,selectCPCRow,
+    cpcGoAgg,cpcGoBrands,cpcGoOutlets,cpcSetSort,cpcSetAdType,cpcSetMonth,cpcOpenOutletDetail,cpcCloseOutletDetail,
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
     sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campSetScope,campClearDates,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,
