@@ -12,19 +12,29 @@ const BNM={MC:"Motorcity",TQ:"Town Square","Al Qouz":"Al Quoz","Mirdif":"Mirdiff
 const AUH=new Set(["Al Forsan","Al Reem","Reem Island","WTC","Al Reef"]);
 const COMM={
   Talabat:{
-    Oregano:{commission:0.20,pg:0.02,cpc:0,note:"Preferred brand rate"},
-    Smokeys:{commission:0.20,pg:0.02,cpc:0,note:"Preferred brand rate"},
-    Lollorosso:{commission:0.27,pg:0.02,cpc:0,note:"Standard rate — deal pending"},
-    Fyoozhen:{commission:0.27,pg:0.02,cpc:0,note:"Standard rate — deal pending"},
-    "Wicked Wings":{commission:0.27,pg:0.02,cpc:0,note:"Standard rate — deal pending"}
+    Oregano:{commission:0.20,pg:0.02,cpc:0,note:"20% + 2% PG"},
+    Smokeys:{commission:0.20,pg:0.02,cpc:0,note:"20% + 2% PG"},
+    Lollorosso:{commission:0.27,pg:0.02,cpc:0,note:"27% + 2% PG"},
+    Fyoozhen:{commission:0.27,pg:0.02,cpc:0,note:"27% + 2% PG"},
+    "Wicked Wings":{commission:0.27,pg:0.02,cpc:0,note:"27% + 2% PG"}
   },
-  Deliveroo:{DEFAULT:{commission:0.23,pg:0,cpc:0.02,note:"23% net + 2% mandatory CPC"}},
-  Noon:{DEFAULT:{commission:0.17,pg:0.02,cpc:0.04,cancellation:0.02,note:"17% + 4% marketing + 2% cancellation"}},
-  Careem:{DEFAULT:{commission:0.17,pg:0,cpc:0.04,processingFee:0.02,note:"17% Plus + 2% processing + 4% CPC"}},
-  Smiles:{Oregano:{commission:0.18,pg:0.02,cpc:0,note:"Oregano only — 18%"}},
-  Instashop:{Oregano:{commission:0.16,pg:0.02,cpc:0,note:"Oregano only — 16%"}},
-  Keeta:{Oregano:{commission:0,pg:0.02,cpc:0,minOrderComm:6,tieredFuture:[0.16,0.20],note:"0% intro then 16% then 20%. Min AED 6/order"}}
+  // Deliveroo: 23% commission on net sales only. The 2% CPC is advertising spend, not a
+  // per-order commission, so it is excluded from cost-of-campaign math (like other aggregators).
+  Deliveroo:{DEFAULT:{commission:0.23,pg:0,cpc:0,note:"23% commission (2% CPC excluded as ad spend)"}},
+  // Noon: 17% + 2% PG = 19% is the commission cost. 4% ads and 2% cancellation are NOT counted
+  // as cost implications of campaigns.
+  Noon:{DEFAULT:{commission:0.17,pg:0.02,cpc:0,cancellation:0,note:"17% + 2% PG (4% ads & 2% cancellation excluded)"}},
+  // Careem: 17% + 2% PG = 19%. 4% CPC is NOT counted as a campaign cost.
+  Careem:{DEFAULT:{commission:0.17,pg:0.02,cpc:0,processingFee:0,note:"17% + 2% PG (4% CPC excluded)"}},
+  Smiles:{Oregano:{commission:0.18,pg:0.02,cpc:0,note:"Oregano only — 18% + 2% PG"}},
+  Instashop:{Oregano:{commission:0.16,pg:0.02,cpc:0,note:"Oregano only — 16% + 2% PG"}},
+  // Keeta: ALL brands at 16% + 2% PG = 18% until 31-Dec-2026; becomes 20% + 2% PG thereafter
+  // if not renegotiated. Applied via DEFAULT so every brand inherits it.
+  Keeta:{DEFAULT:{commission:0.16,pg:0.02,cpc:0,futureCommission:0.20,futureFrom:"2027-01-01",note:"16% + 2% PG (→20% + 2% from 2027 if not renegotiated)"}}
 };
+// Keeta's commission steps up to 20% on 1-Jan-2027 if not renegotiated. Resolve the rate for a
+// given date so historical/forward analysis uses the correct number.
+function keetaCommissionFor(dateStr){const d=COMM.Keeta.DEFAULT;if(d.futureFrom&&dateStr&&dateStr>=d.futureFrom)return d.futureCommission;return d.commission;}
 function calcBE(agg,brand){const c=COMM[agg]?.[brand]||COMM[agg]?.DEFAULT;if(!c)return null;const t=(c.commission||0)+(c.pg||0)+(c.cpc||0)+(c.processingFee||0)+(c.cancellation||0);if(t>=1)return null;return 1/(1-t);}
 function getBE(agg,brand){const v=calcBE(agg,brand);return v?Math.round(v*100)/100:null;}
 const BE={Deliveroo:1.32,Noon:1.30,Careem:1.27,Talabat:1.41};
@@ -655,15 +665,18 @@ function renderPlatforms(){
 
 // Food + packaging cost % per brand (for margin-aware break-even ROAS)
 const CPC_FOOD_COST={Oregano:0.30,Lollorosso:0.30,Smokeys:0.30,"Wicked Wings":0.30,Fyoozhen:0.40};
+// Pure commission rates for Ads Performance break-even (PG included; ads/CPC/cancellation excluded
+// since CPC spend is the very thing being measured on this page). Kept consistent with the COMM
+// table used in Campaign Manager. Keeta has no ads option, so it's excluded from the Ads page entirely.
 const CPC_COMM={
-  Talabat:{Oregano:0.22,Smokeys:0.22,DEFAULT:0.30},
-  Careem:{DEFAULT:0.19},
-  Deliveroo:{DEFAULT:0.25},
-  Noon:{DEFAULT:0.28}
+  Talabat:{Oregano:0.22,Smokeys:0.22,DEFAULT:0.29}, // 20%+2% PG / 27%+2% PG
+  Careem:{DEFAULT:0.19},   // 17% + 2% PG
+  Deliveroo:{DEFAULT:0.23},// 23% commission (2% CPC excluded)
+  Noon:{DEFAULT:0.19}      // 17% + 2% PG
 };
 // Brands we exclude from the Ads dashboard entirely
 const CPC_EXCLUDE_BRANDS=new Set(["smiles","burgerstack"]);
-const CPC_EXCLUDE_AGGS=new Set(["smiles"]);
+const CPC_EXCLUDE_AGGS=new Set(["smiles","keeta"]);
 
 function cpcBE(brand,aggregator){
   const f=CPC_FOOD_COST[brand]??0.30;
@@ -1827,8 +1840,11 @@ function campImpactExtended(c){
   const momOrdersLift=pctOf(cs.orders/cDays,ms.orders/mDays),momSalesLift=pctOf(cs.sales/cDays,ms.sales/mDays);
   const m=(c.comments||'').match(/(\d{1,2})\s*%/);const discountRate=m?parseInt(m[1])/100:0;
   const commData=COMM[c.aggregator]?.[c.brand]||COMM[c.aggregator]?.DEFAULT;
-  // CPC is advertising spend, not a per-order commission, so it is excluded from the contribution margin.
-  const commRate=commData?(commData.commission||0)+(commData.pg||0)+(commData.processingFee||0)+(commData.cancellation||0):0.30;
+  // CPC/ads spend and cancellation are excluded from the commission cost (they're not per-order
+  // commission). For Keeta, the rate steps up in 2027, so resolve it against the campaign's date.
+  let baseComm=commData?.commission||0;
+  if(c.aggregator==='Keeta')baseComm=keetaCommissionFor(c.startDate);
+  const commRate=commData?baseComm+(commData.pg||0)+(commData.processingFee||0)+(commData.cancellation||0):0.30;
   const baseCMRate=1-commRate,campCMRate=1-commRate-discountRate;
   const baseDailyContribution=(base.baseSales/Math.max(1,Math.round((new Date(base.baseEnd)-new Date(base.baseStart))/86400000)+1))*baseCMRate;
   const campDailyContribution=(cs.sales/cDays)*campCMRate;
@@ -2161,8 +2177,10 @@ function campAnalysis(c){
   const ourDiscCost=campDisc*(1-coFundedPct);
   const ourDiscPerDay=ourDiscCost/cDays;
   const commData=COMM[c.aggregator]?.[c.brand]||COMM[c.aggregator]?.DEFAULT;
-  // CPC is advertising spend, not a per-order commission, so it is excluded from the contribution margin.
-  const commRate=commData?((commData.commission||0)+(commData.pg||0)+(commData.processingFee||0)+(commData.cancellation||0)):0.30;
+  // CPC/ads spend and cancellation excluded from commission cost. Keeta steps up in 2027.
+  let baseComm2=commData?.commission||0;
+  if(c.aggregator==='Keeta')baseComm2=keetaCommissionFor(c.startDate);
+  const commRate=commData?(baseComm2+(commData.pg||0)+(commData.processingFee||0)+(commData.cancellation||0)):0.30;
   const campContribution=cs.sales*(1-commRate)-ourDiscCost;
   const baseContribution=bs.sales*(1-commRate)-(bs.disc||0);
   const campContribPerDay=campContribution/cDays, baseContribPerDay=baseContribution/bDays;
