@@ -1099,7 +1099,7 @@ function cpcRenderAggLevel(){
         <div style="display:flex;align-items:center;gap:8px"><div style="width:34px;height:34px;border-radius:9px;background:${clr}22;border:1px solid ${clr}44;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:${clr}">${A.name[0]}</div><div><div style="font-size:15px;font-weight:800;color:#e2e8f0">${A.name}</div><div style="font-size:9px;color:#64748b">${adTypes}</div></div></div>
         ${actCount?`<div style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:8px;padding:2px 8px;font-size:10px;font-weight:700;color:#EF4444">⚡ ${actCount}</div>`:''}
       </div>
-      <div style="font-size:9px;color:#f59e0b;font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">${hasCur?monthLbl+' (current month)':'all-time (no current month data)'}</div>
+      <div style="font-size:9px;color:${hasCur?'#f59e0b':'#94a3b8'};font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">${hasCur?monthLbl+' (current month)':'⚠ No active CPCs this month · showing historical'}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
         <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Invested</div><div style="font-size:17px;font-weight:800;color:#e2e8f0">${fmtAED(inv)}</div></div>
         <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Consumed</div><div style="font-size:17px;font-weight:800;color:#e2e8f0">${fmtAED(spent)}</div></div>
@@ -1146,7 +1146,7 @@ function cpcRenderBrandLevel(ag){
         <div style="font-size:15px;font-weight:800;color:${bClr}">${B.name}</div>
         <div style="display:flex;gap:6px;align-items:center">${actCount?`<div style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:8px;padding:2px 7px;font-size:10px;font-weight:700;color:#EF4444">⚡ ${actCount}</div>`:''}${verdict?`<div style="background:${CPC_VB[verdict]};border:1px solid ${vClr}44;border-radius:8px;padding:2px 8px;font-size:9px;font-weight:800;color:${vClr}">${verdict}</div>`:''}</div>
       </div>
-      <div style="font-size:9px;color:#f59e0b;font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">${hasCur?cpcMonthLabel(cpcModel.curMonth)+' (current month)':'all-time'}</div>
+      <div style="font-size:9px;color:${hasCur?'#f59e0b':'#94a3b8'};font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">${hasCur?cpcMonthLabel(cpcModel.curMonth)+' (current month)':'⚠ No active CPCs this month · showing historical'}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
         <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Budget</div><div style="font-size:16px;font-weight:800;color:#e2e8f0">${fmtAED(inv)}</div></div>
         <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Consumed</div><div style="font-size:16px;font-weight:800;color:#e2e8f0">${fmtAED(spent)}</div></div>
@@ -1565,6 +1565,15 @@ function parseCampaigns(csv){
     recs.push({aggregator:normAgg(row[0]),brand:brandFinal,startDate:dk(sd),endDate:dk(ed),outlet:outletFinal,comments:row[5]?.trim()||'',name:row[6]?.trim()||'',status:row[7]?.trim()||'Completed',validity:row[8]?.trim()||'',addons:[]});
   }
   return mergeKeetaFDAddons(recs);
+}
+// TEMP DIAGNOSTIC: trace single-day / 18-June Keeta campaigns through the pipeline.
+// Open console and look for [KEETA-DIAG] lines. Remove once the issue is resolved.
+function diagKeeta(stage,recs){
+  try{
+    const hits=recs.filter(c=>c.aggregator==='Keeta'&&c.brand==='Oregano'&&(c.startDate===c.endDate||c.startDate==='2026-06-18'));
+    if(hits.length)console.log(`[KEETA-DIAG ${stage}]`,hits.map(c=>`${c.startDate}→${c.endDate} "${c.name}" status=${c.status}/${(typeof campStatus!=='undefined'?campStatus(c):'?')}`).join(" || "));
+    else console.log(`[KEETA-DIAG ${stage}] no single-day/18-June Oregano Keeta campaign found among ${recs.length} recs`);
+  }catch(e){console.log("[KEETA-DIAG] err",e.message);}
 }
 function mergeKeetaFDAddons(recs){
   const isFD=c=>c.aggregator==='Keeta'&&/(\bfd\b|free\s*delivery)/i.test(c.comments+' '+c.name);
@@ -2425,6 +2434,7 @@ async function renderCampaigns(){
   if(campaignData.length===0){pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Sheet loaded but no valid campaigns found</div></div>`;return;}
   try{
     const active=campaignData.filter(c=>campStatus(c)==='Running'),upcoming=campaignData.filter(c=>campStatus(c)==='Upcoming'),completed=campaignData.filter(c=>campStatus(c)==='Completed');
+    if(!window.__keetaDiagDone){window.__keetaDiagDone=true;diagKeeta("after-parse",campaignData);diagKeeta("completed-bucket",completed);diagKeeta("active-bucket",active);}
     // ── Futuristic top bar ──
     const tile=(emoji,label,n,clr)=>`<div style="flex:1;min-width:130px;background:linear-gradient(135deg,${clr}11,transparent);border:1px solid ${clr}33;border-radius:10px;padding:10px 14px;position:relative;overflow:hidden"><div style="position:absolute;top:0;right:0;width:60px;height:60px;background:radial-gradient(circle at top right,${clr}22,transparent 70%);pointer-events:none"></div><div style="font-size:9px;color:#64748b;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">${emoji} ${label}</div><div style="font-size:24px;font-weight:800;color:${clr};font-variant-numeric:tabular-nums;line-height:1.1;margin-top:4px">${n}</div></div>`;
     const statBar=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">${tile('🟢','Running Now',active.length,'#22C55E')}${tile('⏰','Upcoming',upcoming.length,'#F59E0B')}${tile('✅','Completed',completed.length,'#64748b')}${tile('📊','Total Tracked',campaignData.length,'#f59e0b')}</div>`;
