@@ -88,10 +88,14 @@ function parseBrand(csv,brand){
     const sortedAgg=[...aggPositions].sort((a,b)=>a.col-b.col);
     for(let k=0;k<sortedAgg.length;k++){
       const start=sortedAgg[k].col;
-      const end=k+1<sortedAgg.length?sortedAgg[k+1].col:Infinity;
-      // Assign every metric column whose index falls in [start, end) to this aggregator.
-      // (Skip AOV — it's recomputed from Sales/Orders downstream.)
-      metricCols.forEach(mc=>{if(mc.i>=start&&mc.i<end&&mc.m!=="AOV")cols.push({i:mc.i,agg:sortedAgg[k].agg,m:mc.m});});
+      const nextName=k+1<sortedAgg.length?sortedAgg[k+1].col:Infinity;
+      // A standard block has at most 4 metric columns (Disc, Sales, Orders, AOV). Cap the block
+      // at the next aggregator name OR after its first 4 metric columns — whichever comes first.
+      // Without this cap, the LAST aggregator (e.g. Keeta) absorbs any trailing un-named block
+      // such as the row-level "Total" columns, inflating its numbers massively.
+      const blockMetrics=metricCols.filter(mc=>mc.i>=start&&mc.i<nextName).slice(0,4);
+      const end=blockMetrics.length?blockMetrics[blockMetrics.length-1].i+1:nextName;
+      blockMetrics.forEach(mc=>{if(mc.m!=="AOV")cols.push({i:mc.i,agg:sortedAgg[k].agg,m:mc.m});});
     }
   }
   // One-time per-brand log of which columns were detected, so a missing Disc column is visible.
