@@ -77,31 +77,23 @@ function parseBrand(csv,brand){
   });
   // Build the ordered list of metric columns (Disc/Sales/Orders/AOV) across the row.
   const metricCols=[];for(let i=0;i<Math.max(ar.length,sr.length);i++){const m=metricAt(i);if(m)metricCols.push({i,m});}
-  // Group metric columns into per-aggregator BLOCKS. Each block starts at a "Disc" or "Sales"
-  // column and runs until the next block starts. We then pair blocks to aggregator names by
-  // order (block N → aggregator N), which is layout-independent (handles Disc-before-Sales).
-  const blocks=[];let curBlock=null;
-  metricCols.forEach(mc=>{
-    // A new block begins at the first column whose metric repeats (Disc or Sales seen again).
-    if(curBlock&&(curBlock.metrics[mc.m]!==undefined)){blocks.push(curBlock);curBlock=null;}
-    if(!curBlock)curBlock={cols:[],metrics:{}};
-    curBlock.cols.push(mc);curBlock.metrics[mc.m]=mc.i;
-  });
-  if(curBlock)blocks.push(curBlock);
-  // Map each block to its aggregator by matching nearest aggregator-name column.
+  // ── COLUMN → AGGREGATOR ASSIGNMENT ──
+  // The aggregator name positions are the AUTHORITATIVE block boundaries. Each aggregator's block
+  // runs from its own name column up to (but not including) the next aggregator's name column.
+  // This is robust even when blocks have different widths — e.g. Careem with [Sales,Orders,AOV]
+  // (no Disc) next to Noon with [Disc,Sales,Orders,AOV]. Relying on metric-repetition to find
+  // boundaries breaks in that case and shifts every subsequent platform's data by one block.
   const cols=[];
-  blocks.forEach(bl=>{
-    const span=bl.cols.map(c=>c.i);const lo=Math.min(...span),hi=Math.max(...span);
-    // Choose the aggregator whose name column is within or adjacent to this block's span.
-    let best=null,bestDist=Infinity;
-    aggPositions.forEach(ap=>{
-      let dist;
-      if(ap.col>=lo&&ap.col<=hi)dist=0;
-      else dist=Math.min(Math.abs(ap.col-lo),Math.abs(ap.col-hi));
-      if(dist<bestDist){bestDist=dist;best=ap;}
-    });
-    if(best&&bestDist<=4){bl.cols.forEach(c=>{if(c.m!=="AOV")cols.push({i:c.i,agg:best.agg,m:c.m});});}
-  });
+  if(aggPositions.length){
+    const sortedAgg=[...aggPositions].sort((a,b)=>a.col-b.col);
+    for(let k=0;k<sortedAgg.length;k++){
+      const start=sortedAgg[k].col;
+      const end=k+1<sortedAgg.length?sortedAgg[k+1].col:Infinity;
+      // Assign every metric column whose index falls in [start, end) to this aggregator.
+      // (Skip AOV — it's recomputed from Sales/Orders downstream.)
+      metricCols.forEach(mc=>{if(mc.i>=start&&mc.i<end&&mc.m!=="AOV")cols.push({i:mc.i,agg:sortedAgg[k].agg,m:mc.m});});
+    }
+  }
   // One-time per-brand log of which columns were detected, so a missing Disc column is visible.
   try{
     const discCols=cols.filter(c=>c.m==="Disc");
@@ -872,7 +864,8 @@ function buildCPCModel(onProgress){
         const A=model.byAgg[ag];
         A.invested+=r.budgetAlloc;A.spent+=r.budgetSpent;A.sales+=r.sales;A.orders+=r.orders;A.rows.push(r);A.adTypes.add(r.adType);
         if(isCur){A.curInvested+=r.budgetAlloc;A.curSpent+=r.budgetSpent;A.curSales+=r.sales;A.curOrders+=r.orders;}
-        if(r.endDate&&(!A.lastUpdate||r.endDate>A.lastUpdate))A.lastUpdate=r.endDate;
+        // Last update comes from the Remarks column (column S), not the campaign end date.
+        if(r.updateDate&&(!A.lastUpdate||r.updateDate>A.lastUpdate))A.lastUpdate=r.updateDate;
         if(!A.brands[r.brand])A.brands[r.brand]={name:r.brand,invested:0,spent:0,sales:0,orders:0,curInvested:0,curSpent:0,curSales:0,curOrders:0,outlets:{},rows:[],adTypes:new Set()};
         const B=A.brands[r.brand];
         B.invested+=r.budgetAlloc;B.spent+=r.budgetSpent;B.sales+=r.sales;B.orders+=r.orders;B.rows.push(r);B.adTypes.add(r.adType);
