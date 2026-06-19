@@ -1551,18 +1551,29 @@ function normAgg(s){if(!s)return'';const cleaned=s.trim().replace(/[\s\-_]*\d{3,
 function parseCampaigns(csv){
   const rows=parseCSV(csv);if(rows.length<2)return[];
   const recs=[];
+  const _skipLog=[]; // DIAG: capture rows that get skipped so we can see if 18-June is among them
   for(let i=1;i<rows.length;i++){
     const row=rows[i];
     if(!row[0]?.trim()&&!row[1]?.trim())continue;
-    if((row[7]?.trim()||'').toLowerCase()==='cancelled')continue;
+    // DIAG: is this an Oregano Keeta row? track why it might be skipped.
+    const _isOregKeeta=/keeta/i.test(row[0]||'')&&/oregano/i.test(row[1]||'');
+    if((row[7]?.trim()||'').toLowerCase()==='cancelled'){if(_isOregKeeta)_skipLog.push(`SKIP(cancelled): ${row[2]}→${row[3]} "${row[6]}"`);continue;}
     const brandRaw=(row[1]||'').trim();
-    if(EXCLUDED_BRANDS.has(brandRaw.toLowerCase()))continue;
+    if(EXCLUDED_BRANDS.has(brandRaw.toLowerCase())){if(_isOregKeeta)_skipLog.push(`SKIP(excluded-brand): ${row[2]}→${row[3]}`);continue;}
     const sd=parseDate(row[2]),ed=parseDate(row[3]);
-    if(!sd||!ed)continue;
+    if(!sd||!ed){if(_isOregKeeta)_skipLog.push(`SKIP(bad-date): start="${row[2]}" end="${row[3]}" "${row[6]}"`);continue;}
     const brandFinal=normBrand(brandRaw);
     let outletFinal=row[4]?.trim()||'All';
     if(brandFinal==='Fyoozhen'&&/^dip$/i.test(outletFinal))outletFinal='DIP (Fyoozhen)';
     recs.push({aggregator:normAgg(row[0]),brand:brandFinal,startDate:dk(sd),endDate:dk(ed),outlet:outletFinal,comments:row[5]?.trim()||'',name:row[6]?.trim()||'',status:row[7]?.trim()||'Completed',validity:row[8]?.trim()||'',addons:[]});
+  }
+  // DIAG: dump all Oregano Keeta campaigns that parsed + any skipped ones
+  if(!window.__keetaParseDiag){window.__keetaParseDiag=true;
+    const ok=recs.filter(c=>c.aggregator==='Keeta'&&c.brand==='Oregano');
+    console.log(`[KEETA-PARSE] ${ok.length} Oregano Keeta rows parsed OK:`);
+    ok.forEach(c=>console.log(`   ${c.startDate}→${c.endDate} | "${c.name}" | status="${c.status}"`));
+    if(_skipLog.length)console.log(`[KEETA-PARSE] ${_skipLog.length} Oregano Keeta rows SKIPPED:`,_skipLog);
+    else console.log(`[KEETA-PARSE] no Oregano Keeta rows were skipped`);
   }
   return mergeKeetaFDAddons(recs);
 }
