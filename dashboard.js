@@ -1570,10 +1570,14 @@ function parseCampaigns(csv){
   // DIAG: dump all Oregano Keeta campaigns that parsed + any skipped ones
   if(!window.__keetaParseDiag){window.__keetaParseDiag=true;
     const ok=recs.filter(c=>c.aggregator==='Keeta'&&c.brand==='Oregano');
-    console.log(`[KEETA-PARSE] ${ok.length} Oregano Keeta rows parsed OK:`);
-    ok.forEach(c=>console.log(`   ${c.startDate}→${c.endDate} | "${c.name}" | status="${c.status}"`));
-    if(_skipLog.length)console.log(`[KEETA-PARSE] ${_skipLog.length} Oregano Keeta rows SKIPPED:`,_skipLog);
-    else console.log(`[KEETA-PARSE] no Oregano Keeta rows were skipped`);
+    console.log(`%c[KEETA-PARSE] ${ok.length} Oregano Keeta rows parsed OK (dates):`,'color:#22C55E;font-weight:bold');
+    console.log("   ",ok.map(c=>c.startDate+(c.startDate!==c.endDate?'→'+c.endDate:'')).sort().join("  |  "));
+    if(_skipLog.length)console.log(`%c[KEETA-PARSE] ${_skipLog.length} SKIPPED:`,'color:#EF4444;font-weight:bold',_skipLog);
+    // Hunt the RAW rows for anything that looks like an 18-June Keeta entry, regardless of parse outcome
+    const rawHits=[];
+    for(let j=1;j<rows.length;j++){const r=rows[j];const joined=(r||[]).join(" | ");if(/keeta/i.test(r[0]||'')&&/18[-\/ ]*jun|jun[-\/ ]*18|2026-06-18/i.test(joined)){rawHits.push(`row${j}: [agg="${r[0]}" brand="${r[1]}" start="${r[2]}" end="${r[3]}" outlet="${r[4]}" name="${r[6]}" status="${r[7]}"]`);}}
+    console.log(`%c[KEETA-RAW] ${rawHits.length} raw rows mention Keeta + 18-June:`,'color:#F59E0B;font-weight:bold');
+    rawHits.forEach(h=>console.log("   ",h));
   }
   return mergeKeetaFDAddons(recs);
 }
