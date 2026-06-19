@@ -1551,44 +1551,20 @@ function normAgg(s){if(!s)return'';const cleaned=s.trim().replace(/[\s\-_]*\d{3,
 function parseCampaigns(csv){
   const rows=parseCSV(csv);if(rows.length<2)return[];
   const recs=[];
-  const _skipLog=[]; // DIAG: capture rows that get skipped so we can see if 18-June is among them
   for(let i=1;i<rows.length;i++){
     const row=rows[i];
     if(!row[0]?.trim()&&!row[1]?.trim())continue;
-    // DIAG: is this an Oregano Keeta row? track why it might be skipped.
-    const _isOregKeeta=/keeta/i.test(row[0]||'')&&/oregano/i.test(row[1]||'');
-    if((row[7]?.trim()||'').toLowerCase()==='cancelled'){if(_isOregKeeta)_skipLog.push(`SKIP(cancelled): ${row[2]}→${row[3]} "${row[6]}"`);continue;}
+    if((row[7]?.trim()||'').toLowerCase()==='cancelled')continue;
     const brandRaw=(row[1]||'').trim();
-    if(EXCLUDED_BRANDS.has(brandRaw.toLowerCase())){if(_isOregKeeta)_skipLog.push(`SKIP(excluded-brand): ${row[2]}→${row[3]}`);continue;}
+    if(EXCLUDED_BRANDS.has(brandRaw.toLowerCase()))continue;
     const sd=parseDate(row[2]),ed=parseDate(row[3]);
-    if(!sd||!ed){if(_isOregKeeta)_skipLog.push(`SKIP(bad-date): start="${row[2]}" end="${row[3]}" "${row[6]}"`);continue;}
+    if(!sd||!ed)continue;
     const brandFinal=normBrand(brandRaw);
     let outletFinal=row[4]?.trim()||'All';
     if(brandFinal==='Fyoozhen'&&/^dip$/i.test(outletFinal))outletFinal='DIP (Fyoozhen)';
     recs.push({aggregator:normAgg(row[0]),brand:brandFinal,startDate:dk(sd),endDate:dk(ed),outlet:outletFinal,comments:row[5]?.trim()||'',name:row[6]?.trim()||'',status:row[7]?.trim()||'Completed',validity:row[8]?.trim()||'',addons:[]});
   }
-  // DIAG: dump all Oregano Keeta campaigns that parsed + any skipped ones
-  if(!window.__keetaParseDiag){window.__keetaParseDiag=true;
-    const ok=recs.filter(c=>c.aggregator==='Keeta'&&c.brand==='Oregano');
-    console.log(`%c[KEETA-PARSE] ${ok.length} Oregano Keeta rows parsed OK (dates):`,'color:#22C55E;font-weight:bold');
-    console.log("   ",ok.map(c=>c.startDate+(c.startDate!==c.endDate?'→'+c.endDate:'')).sort().join("  |  "));
-    if(_skipLog.length)console.log(`%c[KEETA-PARSE] ${_skipLog.length} SKIPPED:`,'color:#EF4444;font-weight:bold',_skipLog);
-    // Hunt the RAW rows for anything that looks like an 18-June Keeta entry, regardless of parse outcome
-    const rawHits=[];
-    for(let j=1;j<rows.length;j++){const r=rows[j];const joined=(r||[]).join(" | ");if(/keeta/i.test(r[0]||'')&&/18[-\/ ]*jun|jun[-\/ ]*18|2026-06-18/i.test(joined)){rawHits.push(`row${j}: [agg="${r[0]}" brand="${r[1]}" start="${r[2]}" end="${r[3]}" outlet="${r[4]}" name="${r[6]}" status="${r[7]}"]`);}}
-    console.log(`%c[KEETA-RAW] ${rawHits.length} raw rows mention Keeta + 18-June:`,'color:#F59E0B;font-weight:bold');
-    rawHits.forEach(h=>console.log("   ",h));
-  }
   return mergeKeetaFDAddons(recs);
-}
-// TEMP DIAGNOSTIC: trace single-day / 18-June Keeta campaigns through the pipeline.
-// Open console and look for [KEETA-DIAG] lines. Remove once the issue is resolved.
-function diagKeeta(stage,recs){
-  try{
-    const hits=recs.filter(c=>c.aggregator==='Keeta'&&c.brand==='Oregano'&&(c.startDate===c.endDate||c.startDate==='2026-06-18'));
-    if(hits.length)console.log(`[KEETA-DIAG ${stage}]`,hits.map(c=>`${c.startDate}→${c.endDate} "${c.name}" status=${c.status}/${(typeof campStatus!=='undefined'?campStatus(c):'?')}`).join(" || "));
-    else console.log(`[KEETA-DIAG ${stage}] no single-day/18-June Oregano Keeta campaign found among ${recs.length} recs`);
-  }catch(e){console.log("[KEETA-DIAG] err",e.message);}
 }
 function mergeKeetaFDAddons(recs){
   const isFD=c=>c.aggregator==='Keeta'&&/(\bfd\b|free\s*delivery)/i.test(c.comments+' '+c.name);
@@ -2449,7 +2425,6 @@ async function renderCampaigns(){
   if(campaignData.length===0){pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Sheet loaded but no valid campaigns found</div></div>`;return;}
   try{
     const active=campaignData.filter(c=>campStatus(c)==='Running'),upcoming=campaignData.filter(c=>campStatus(c)==='Upcoming'),completed=campaignData.filter(c=>campStatus(c)==='Completed');
-    if(!window.__keetaDiagDone){window.__keetaDiagDone=true;diagKeeta("after-parse",campaignData);diagKeeta("completed-bucket",completed);diagKeeta("active-bucket",active);}
     // ── Futuristic top bar ──
     const tile=(emoji,label,n,clr)=>`<div style="flex:1;min-width:130px;background:linear-gradient(135deg,${clr}11,transparent);border:1px solid ${clr}33;border-radius:10px;padding:10px 14px;position:relative;overflow:hidden"><div style="position:absolute;top:0;right:0;width:60px;height:60px;background:radial-gradient(circle at top right,${clr}22,transparent 70%);pointer-events:none"></div><div style="font-size:9px;color:#64748b;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">${emoji} ${label}</div><div style="font-size:24px;font-weight:800;color:${clr};font-variant-numeric:tabular-nums;line-height:1.1;margin-top:4px">${n}</div></div>`;
     const statBar=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">${tile('🟢','Running Now',active.length,'#22C55E')}${tile('⏰','Upcoming',upcoming.length,'#F59E0B')}${tile('✅','Completed',completed.length,'#64748b')}${tile('📊','Total Tracked',campaignData.length,'#f59e0b')}</div>`;
@@ -2467,7 +2442,7 @@ async function renderCampaigns(){
     if(campTab==='calendar')main=`<div class="card">${renderCampCalendar()}</div>`;
     else if(campTab==='active'){const f=applyCampFilters(active);main=campFilterBar()+campTableHTML(`🟢 Active Campaigns`,f,true);}
     else if(campTab==='upcoming'){const f=applyCampFilters(upcoming);main=campFilterBar()+campTableHTML(`⏰ Upcoming Campaigns`,f,false);}
-    else if(campTab==='history'){const fc=applyCampFilters(completed);main=campFilterBar()+campTableHTML(`📋 Completed Campaigns`,fc.slice(0,150),true)+(fc.length>150?`<div style="color:#64748b;font-size:12px;text-align:center;padding:10px">Showing 150 most recent of ${fc.length}</div>`:'');}
+    else if(campTab==='history'){const fc=applyCampFilters(completed).slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));main=campFilterBar()+campTableHTML(`📋 Completed Campaigns`,fc.slice(0,150),true)+(fc.length>150?`<div style="color:#64748b;font-size:12px;text-align:center;padding:10px">Showing 150 most recent of ${fc.length}</div>`:'');}
     else if(campTab==='detail'&&selBundle){main=bundleDetailHTML(selBundle);}
     else if(campTab==='detail'&&selCamp){main=campDetailHTML(selCamp,campaignData.indexOf(selCamp));}
     // Header
