@@ -1197,29 +1197,37 @@ function cpcDeliverooBidOpt(ag,brand,outlet,curRow){
 // Deliveroo bid change (reverse-calculated burn).
 function cpcInvestRec(ag,brand,outlet,curRow,bidOpt){
   if(!curRow)return null;
-  const liveRows=cpcData.filter(r=>r.aggregator===ag&&r.brand===brand&&r.branch===outlet&&(cpcAdTypeFilter==='all'||r.adType===cpcAdTypeFilter)&&r.status==="Active");
-  if(!liveRows.length)return null;
-  // Sum current burn across live rows (pooled outlets may have one; that's fine)
-  let burn=liveRows.reduce((s,r)=>s+(r.dailyBurn||0),0);
-  let leftover=liveRows.reduce((s,r)=>s+(r.leftover||0),0);
-  // Option A: days remaining counted from the REAL calendar date (today), so the recommendation
-  // is real-time — viewing on the 15th gives days from the 15th to month-end, on the 20th from
-  // the 20th, automatically. Not tied to when the sales data was last refreshed.
+  // Days remaining counted from the REAL calendar date (Option A) so the recommendation is real-time.
   const dt=new Date();
   const lastDay=new Date(dt.getFullYear(),dt.getMonth()+1,0).getDate();
   const daysLeft=lastDay-dt.getDate();
   if(daysLeft<=0)return null;
-  // Apply Deliveroo bid change to burn (proportional)
+  const liveRows=cpcData.filter(r=>r.aggregator===ag&&r.brand===brand&&r.branch===outlet&&(cpcAdTypeFilter==='all'||r.adType===cpcAdTypeFilter)&&r.status==="Active");
+  // Determine the burn rate to project with: prefer the live row's burn; if exhausted, use the
+  // most recent (this-month) row's historical daily burn as the basis for a restart.
+  let burn,leftover,mode;
+  if(liveRows.length){
+    burn=liveRows.reduce((s,r)=>s+(r.dailyBurn||0),0);
+    leftover=liveRows.reduce((s,r)=>s+(r.leftover||0),0);
+    mode="active";
+  }else{
+    // No active row — budget exhausted/completed this month. Use this row's burn as restart basis.
+    burn=curRow.dailyBurn||0;
+    leftover=0; // nothing left, so the full remaining-month projection is "additional"
+    mode="restart";
+  }
+  if(burn<=0)return null;
+  // Apply Deliveroo bid change to burn (proportional). A LOWER bid reduces burn (and the budget
+  // needed); a HIGHER bid raises it.
   let adjBurn=burn,bidNote='';
   if(bidOpt&&bidOpt.burnFactor&&bidOpt.direction!=='hold'){
     adjBurn=burn*bidOpt.burnFactor;
     bidNote=bidOpt.direction==='raise'?'higher bid raises burn':'lower bid reduces burn';
   }
-  // Projected spend for rest of month at adjusted burn
   const projSpend=adjBurn*daysLeft;
   const additional=Math.max(0,Math.round(projSpend-leftover));
-  const daysUntilDry=adjBurn>0?Math.floor(leftover/adjBurn):null;
-  return{burn,adjBurn,leftover,daysLeft,daysUntilDry,additional,bidNote};
+  const daysUntilDry=mode==="active"?(adjBurn>0?Math.floor(leftover/adjBurn):null):0;
+  return{burn,adjBurn,leftover,daysLeft,daysUntilDry,additional,bidNote,mode};
 }
 
 function cpcRenderOutletLevel(ag,brand){
@@ -1277,7 +1285,7 @@ function cpcRenderOutletLevel(ag,brand){
   const th=(col,lbl)=>`<th style="cursor:pointer;text-align:right" onclick="cpcSetSort('${col}')">${lbl}${arrow(col)}</th>`;
 
   // Totals accumulators
-  let tClicks=0,tOrders=0,tSales=0,tBudget=0,tSpent=0,tLeftover=0,tFtu=0;
+  let tClicks=0,tOrders=0,tSales=0,tBudget=0,tSpent=0,tLeftover=0,tFtu=0,tInvest=0;
 
   const body=tableRows.map(t=>{
     const d=t.disp;const vClr=d.verdict?CPC_VC[d.verdict]:'#64748b';
@@ -1293,19 +1301,36 @@ function cpcRenderOutletLevel(ag,brand){
       const bidOpt=cpcDeliverooBidOpt(ag,brand,t.outlet,t.liveRow);
       const inv=cpcInvestRec(ag,brand,t.outlet,t.liveRow,bidOpt);
       const parts=[];
-      if(inv&&inv.daysUntilDry!=null){
-        if(inv.additional>0){
-          // Will run dry before month end — show shortfall
-          const dryClr=inv.daysUntilDry<=3?'#EF4444':inv.daysUntilDry<=7?'#FBBF24':'#94a3b8';
-          parts.push(`<div style="font-size:10px;color:${dryClr};font-weight:700">dry in ${inv.daysUntilDry}d · +${fmtAED(inv.additional)}</div>`);
-        }else{
-          // Budget comfortably covers the rest of the month
-          parts.push(`<div style="font-size:10px;color:#22C55E">✓ covers month</div>`);
+      const goodVerdict=d.verdict==="SCALE"||d.verdict==="INVEST";
+      const poorVerdict=d.verdict==="WITHDRAW";
+      if(inv){
+        if(inv.mode==="active"){
+          if(inv.additional>0&&goodVerdict){
+            // Running, will run dry before month end, worth keeping → top up
+            tInvest+=inv.additional;
+            const dryClr=inv.daysUntilDry<=3?'#EF4444':inv.daysUntilDry<=7?'#FBBF24':'#94a3b8';
+            parts.push(`<div style="font-size:10px;color:${dryClr};font-weight:700">dry in ${inv.daysUntilDry}d · +${fmtAED(inv.additional)}</div>`);
+          }else if(inv.additional>0&&poorVerdict){
+            // Running but below break-even — don't pour in more; suggest letting it lapse
+            parts.push(`<div style="font-size:10px;color:#EF4444;font-weight:700">dry in ${inv.daysUntilDry}d · hold (below BE)</div>`);
+          }else if(inv.additional<=0){
+            parts.push(`<div style="font-size:10px;color:#22C55E">✓ covers month</div>`);
+          }
+        }else if(inv.mode==="restart"){
+          // Budget exhausted this month. Recommend a restart budget only if it's worth it.
+          if(goodVerdict&&inv.additional>0){
+            tInvest+=inv.additional;
+            parts.push(`<div style="font-size:10px;color:#22C55E;font-weight:700">exhausted · restart +${fmtAED(inv.additional)}</div>`);
+          }else if(poorVerdict){
+            parts.push(`<div style="font-size:10px;color:#EF4444">exhausted · don't restart (ROAS ${d.roi?d.roi.toFixed(2):'—'}×)</div>`);
+          }
         }
       }
+      // Bid recommendation (Deliveroo only). Show raise/lower with the target bid.
       if(bidOpt&&bidOpt.suggestedBid&&ag==="Deliveroo"&&bidOpt.direction!=='hold'){
         const bClr=bidOpt.direction==='raise'?'#22C55E':'#EF4444';
-        parts.push(`<div style="font-size:10px;color:${bClr}" title="Best balance of ROAS & volume was ${cpcMonthLabel(bidOpt.bestMonth)} at this bid">bid→ AED ${bidOpt.suggestedBid.toFixed(2)}</div>`);
+        const arrow=bidOpt.direction==='raise'?'↑':'↓';
+        parts.push(`<div style="font-size:10px;color:${bClr}" title="Best balance of ROAS & volume was ${cpcMonthLabel(bidOpt.bestMonth)} at this bid. ${bidOpt.direction==='lower'?'Lowering the bid reduces burn so less extra budget is needed.':'Raising the bid wins more volume but increases burn.'}">bid ${arrow} AED ${bidOpt.suggestedBid.toFixed(2)}</div>`);
       }
       if(parts.length)recCell=parts.join('');
     }
@@ -1317,12 +1342,14 @@ function cpcRenderOutletLevel(ag,brand){
   const totAov=tOrders>0?(tSales/tOrders):null;
   const totCto=tClicks>0?((tOrders/tClicks)*100):null;
   const totBid=tClicks>0?(tSpent/tClicks):null;
-  const totalsRow=`<tr style="border-top:2px solid rgba(245,158,11,.4);background:rgba(245,158,11,.04);font-weight:800"><td style="color:#f59e0b">TOTAL</td><td></td><td style="text-align:right;color:#e2e8f0">${tClicks.toLocaleString()}</td><td style="text-align:right;color:#e2e8f0">${tOrders.toLocaleString()}</td><td style="text-align:right;color:#e2e8f0">${fmtAED(tSales)}</td><td style="text-align:right;color:#e2e8f0">${totAov?totAov.toFixed(0):'—'}</td><td style="text-align:right;color:#e2e8f0">${totCto!=null?totCto.toFixed(1)+'%':'—'}</td><td style="text-align:right;color:#e2e8f0">${fmtAED(tBudget)}</td><td style="text-align:right;color:#e2e8f0">${fmtAED(tSpent)}</td><td style="text-align:right;color:#e2e8f0">${fmtAED(tLeftover)}</td><td style="text-align:right;color:#f59e0b">${totRoas?totRoas.toFixed(2)+'×':'—'}</td><td style="text-align:right;color:#e2e8f0">${totBid!=null?'AED '+totBid.toFixed(2):'—'}</td><td style="text-align:right;color:#e2e8f0">${tFtu.toLocaleString()}</td><td></td></tr>`;
+  const totalsRow=`<tr style="border-top:2px solid rgba(245,158,11,.4);background:rgba(245,158,11,.04);font-weight:800"><td style="color:#f59e0b">TOTAL</td><td></td><td style="text-align:right;color:#e2e8f0">${tClicks.toLocaleString()}</td><td style="text-align:right;color:#e2e8f0">${tOrders.toLocaleString()}</td><td style="text-align:right;color:#e2e8f0">${fmtAED(tSales)}</td><td style="text-align:right;color:#e2e8f0">${totAov?totAov.toFixed(0):'—'}</td><td style="text-align:right;color:#e2e8f0">${totCto!=null?totCto.toFixed(1)+'%':'—'}</td><td style="text-align:right;color:#e2e8f0">${fmtAED(tBudget)}</td><td style="text-align:right;color:#e2e8f0">${fmtAED(tSpent)}</td><td style="text-align:right;color:#e2e8f0">${fmtAED(tLeftover)}</td><td style="text-align:right;color:#f59e0b">${totRoas?totRoas.toFixed(2)+'×':'—'}</td><td style="text-align:right;color:#e2e8f0">${totBid!=null?'AED '+totBid.toFixed(2):'—'}</td><td style="text-align:right;color:#e2e8f0">${tFtu.toLocaleString()}</td><td style="text-align:right">${isCurrentMonth&&tInvest>0?`<span style="color:#22C55E;font-weight:800">+${fmtAED(tInvest)}</span>`:''}</td></tr>`;
+
+  const investSummary=(isCurrentMonth&&tInvest>0)?`<div style="margin-top:12px;padding:12px 16px;background:linear-gradient(135deg,rgba(34,197,94,.1),rgba(34,197,94,.03));border:1px solid rgba(34,197,94,.3);border-radius:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px"><div><div style="font-size:11px;color:#86EFAC;font-weight:700;text-transform:uppercase;letter-spacing:.6px">💰 Total Additional Investment Needed</div><div style="font-size:11px;color:#94a3b8;margin-top:3px">To keep all under-funded ${brand} outlets on ${ag} running through ${cpcMonthLabel(selMonth)} at their current burn rate${ag==='Deliveroo'?' (adjusted for any suggested bid changes)':''}.</div></div><div style="font-size:26px;font-weight:800;color:#22C55E">+${fmtAED(tInvest)}</div></div>`:'';
 
   const poolNote=(ag==='Careem'||ag==='Noon')?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px">ℹ️ ${ag} budgets are <strong>pooled at brand level</strong>. Per-outlet budget/spent are indicative; the brand total is the real budget. Per-outlet <strong>results</strong> (orders, sales, ROAS, CTO) are exact.</div>`:'';
   const bidNote=ag==="Deliveroo"?`<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Bid suggestions analyze the past 6 months and target the bid with the best balance of ROAS and order volume. Changing the bid shifts the burn rate proportionally, and the extra budget needed is recalculated accordingly.</div>`:`<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">${ag} uses auto-bidding, so only budget recommendations are shown. 📉 = sales dropped after a CPC ended.</div>`;
 
-  return controlBar+poolNote+`<div class="card"><div class="ct">${brand} on ${ag} — Outlet Performance · ${cpcMonthLabel(selMonth)}${isCurrentMonth?' (current month)':''}</div>${bidNote}<div style="overflow-x:auto"><table class="tbl"><thead><tr><th style="cursor:pointer" onclick="cpcSetSort('outlet')">Outlet${arrow('outlet')}</th><th>Verdict</th>${th('clicks','Clicks')}${th('orders','Orders')}${th('sales','Sales')}${th('aov','AOV')}${th('cto','CTO')}${th('budget','Budget')}${th('spent','Spent')}${th('leftover','Leftover')}${th('roas','ROAS')}${th('bid','Avg Bid')}${th('ftu','FTU')}<th style="text-align:right">${isCurrentMonth?'Invest / Bid':''}</th></tr></thead><tbody>${body}${totalsRow}</tbody></table></div></div>`;
+  return controlBar+poolNote+`<div class="card"><div class="ct">${brand} on ${ag} — Outlet Performance · ${cpcMonthLabel(selMonth)}${isCurrentMonth?' (current month)':''}</div>${bidNote}<div style="overflow-x:auto"><table class="tbl"><thead><tr><th style="cursor:pointer" onclick="cpcSetSort('outlet')">Outlet${arrow('outlet')}</th><th>Verdict</th>${th('clicks','Clicks')}${th('orders','Orders')}${th('sales','Sales')}${th('aov','AOV')}${th('cto','CTO')}${th('budget','Budget')}${th('spent','Spent')}${th('leftover','Leftover')}${th('roas','ROAS')}${th('bid','Avg Bid')}${th('ftu','FTU')}<th style="text-align:right">${isCurrentMonth?'Invest / Bid':''}</th></tr></thead><tbody>${body}${totalsRow}</tbody></table></div>${investSummary}</div>`;
 }
 
 // Combine multiple CPC rows into one record (Σsales/Σspent for ROI, Σorders/Σclicks for CTO)
@@ -1530,7 +1557,7 @@ const BRANCH_ALIASES={
   "al reef":"al reef","reef":"al reef",
   "nas":"nas","nad al sheba":"nas",
   "marina":"marina","dso":"dso","dubai silicon oasis":"dso",
-  "furjan":"furjan","al quoz":"al quoz","quoz":"al quoz","dip":"dip","villa":"villa","jumeirah":"jumeirah"
+  "furjan":"furjan","al quoz":"al quoz","quoz":"al quoz","qouz":"al quoz","al qouz":"al quoz","dip":"dip","villa":"villa","jumeirah":"jumeirah","jumearah":"jumeirah","mc":"motor city","mirdif":"mirdiff"
 };
 function resolveBranchName(token,brandBranches){
   if(!token)return null;
@@ -1577,17 +1604,21 @@ function parseCampComment(c){
     if(unresolved.length)result.unresolved.push(...unresolved);
   }
   // ─ Branch inclusions ─
-  // Match "Only in X, Y" / "Only at X" / "Locations: X, Y" / "Valid at X, Y, Z"
+  // Match "Only in X, Y" / "Only at X" / "Locations: X, Y" / "Valid at X, Y, Z" /
+  // "Select Locations only X, Y" / "Locations only X" / bare "only X, Y" (where X resolves to branches).
   // Skip if we already found an exclusion list to avoid double-processing.
   if(!result.excludeBranches){
-    const incPat=/(?:only\s+(?:in|at|for)|locations?\s*[:\-]\s*(?!except)|valid\s+(?:in|at|only\s+in|only\s+at))\s*([^.\n]+?)(?:\s+since\b|\s+because\b|\s+as\b|\.|$|\n)/i;
-    const incMatch=text.match(incPat);
+    // Try the explicit keyword forms first.
+    const incPat=/(?:(?:select\s+|specific\s+)?locations?\s+only|only\s+(?:in|at|for)|locations?\s*[:\-]\s*(?!except)|valid\s+(?:in|at|only\s+in|only\s+at))\s*([^.\n]+?)(?:\s+since\b|\s+because\b|\s+as\b|\.|$|\n)/i;
+    let incMatch=text.match(incPat);
+    // Fallback: bare "only <list>" where the list resolves to known branches (e.g. "... only Al Quoz, MC, Mirdif")
+    if(!incMatch){const bareOnly=text.match(/\bonly\s+([A-Za-z][^.\n]+?)(?:\s+since\b|\s+because\b|\.|$|\n)/i);if(bareOnly)incMatch=bareOnly;}
     if(incMatch){
       const list=incMatch[1].split(/[,;]|\s+and\s+|\s+&\s+|\s+\+\s+/i).map(s=>s.trim()).filter(Boolean);
       const resolved=[],unresolved=[];
       list.forEach(tok=>{const r=resolveBranchName(tok,brandBranches);if(r)resolved.push(r);else if(tok.length>1)unresolved.push(tok);});
-      if(resolved.length){result.includeBranches=new Set(resolved);result.hasInfo=true;}
-      if(unresolved.length)result.unresolved.push(...unresolved);
+      // For the bare-only fallback, require at least 2 resolved branches to avoid false positives.
+      if(resolved.length>=2||(resolved.length>=1&&/locations?\s+only|only\s+(?:in|at|for)/i.test(text))){result.includeBranches=new Set(resolved);result.hasInfo=true;if(unresolved.length)result.unresolved.push(...unresolved);}
     }
   }
   // ─ Fallback: outlet says "Select Locations" but no keyword found ─
