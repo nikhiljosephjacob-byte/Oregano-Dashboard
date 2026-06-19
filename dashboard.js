@@ -1572,7 +1572,19 @@ function mergeKeetaFDAddons(recs){
   fdRows.forEach(fd=>{const parent=nonFD.find(p=>p.aggregator==='Keeta'&&p.brand===fd.brand&&p.startDate<=fd.endDate&&p.endDate>=fd.startDate);if(parent){parent.addons=parent.addons||[];parent.addons.push({name:'FD AED 2',comments:fd.comments,startDate:fd.startDate,endDate:fd.endDate});}else{nonFD.push(fd);}});
   return nonFD;
 }
-function campStatus(c){const today=dk(new Date());if(c.startDate>today)return'Upcoming';if(c.endDate<today)return'Completed';return'Running';}
+function campStatus(c){
+  const sheetStatus=(c.status||'').trim().toLowerCase();
+  if(sheetStatus==='cancelled'||sheetStatus==='canceled')return'Cancelled';
+  const today=dk(new Date());
+  // An explicit "Completed" from the sheet is authoritative — the user marked it ended (handles
+  // single-day campaigns whose start=end=today, which pure date math would call "Running").
+  if(sheetStatus==='completed'||sheetStatus==='ended'||sheetStatus==='finished')return'Completed';
+  // Otherwise compute from dates. A campaign past its end date is Completed even if the sheet
+  // still says "Running" (the sheet status can be stale).
+  if(c.startDate>today)return'Upcoming';
+  if(c.endDate<today)return'Completed';
+  return'Running';
+}
 // ── LOCATION-AWARE CAMPAIGN ANALYSIS ──
 // Many campaigns target only specific locations (DXB = Dubai outlets, AUH = Abu Dhabi outlets,
 // or a single branch like "NAS"). When that's the case we MUST compare those outlets vs only
@@ -1586,7 +1598,7 @@ const AUH_OUTLETS=new Set(["Al Forsan","Al Reem","Reem Island","WTC","Al Reef"])
 // to a canonical token to look up in the brand's actual branch list. Resolution is
 // case-insensitive and falls back to fuzzy contains-match if no alias hit.
 const BRANCH_ALIASES={
-  "dmc":"media city","dubai media city":"media city","media city":"media city",
+  "dmc":"dmc","dubai media city":"dmc","media city":"dmc",
   "motorcity":"motor city","motor city":"motor city",
   "mirdif":"mirdiff","mirdiff":"mirdiff",
   "tsqr":"town square","town square":"town square",
