@@ -693,7 +693,12 @@ function parseCPCDate(s){
     let yr=parseInt(m[3]);if(yr<100)yr+=2000;
     return `${yr}-${String(mo).padStart(2,"0")}-${String(parseInt(m[1])).padStart(2,"0")}`;
   }
-  return parseDate(t);
+  // parseDate may return a Date object — normalize to an ISO string so downstream
+  // string comparisons and display work correctly.
+  const pd=parseDate(t);
+  if(!pd)return null;
+  if(typeof pd==="string")return pd;
+  return `${pd.getFullYear()}-${String(pd.getMonth()+1).padStart(2,"0")}-${String(pd.getDate()).padStart(2,"0")}`;
 }
 // Extract an update date from the Remarks column. The column holds dates like "21/2/2025",
 // "02/06/2025", "18/06/2026" (DD/MM/YYYY, possibly with leading zeros or extra text around it).
@@ -701,15 +706,23 @@ function parseCPCDate(s){
 function parseRemarksDate(s){
   if(!s)return null;
   const t=s.toString().trim();
-  // DD/MM/YYYY or D/M/YY (also accepts - or . separators), find anywhere in the text
+  if(!t)return null;
+  // DD/MM/YYYY or D/M/YY (also accepts - or . separators), found anywhere in the text
   let m=t.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
   if(m){
     let d=parseInt(m[1],10),mo=parseInt(m[2],10),yr=parseInt(m[3],10);
     if(yr<100)yr+=2000;
     if(mo>=1&&mo<=12&&d>=1&&d<=31)return `${yr}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
   }
-  // DD-MMM-YY fallback (same as campaign date format)
-  return parseCPCDate(t);
+  // DD-MMM-YY (e.g. "09-Feb-26")
+  const iso=parseCPCDate(t);
+  if(typeof iso==="string")return iso;
+  // Any other format the browser can parse (e.g. "Feb 09 2026", "2026-02-09 ...") → normalize to ISO.
+  // CRITICAL: always return a STRING, never a Date object (a raw Date renders as
+  // "Mon Feb 09 2026 00:00:00 GMT+0400" in the UI).
+  const dObj=new Date(t);
+  if(!isNaN(dObj))return `${dObj.getFullYear()}-${String(dObj.getMonth()+1).padStart(2,"0")}-${String(dObj.getDate()).padStart(2,"0")}`;
+  return null;
 }
 // Brand-branch cache shared across a single parse pass
 function resolveBrandLocation(bl,brandCache,branchCache){
@@ -978,8 +991,9 @@ function buildCPCModel(onProgress){
 function cpcTopUpSuggestion(r){
   if(r.status!=="Active"&&r.status!=="Critical")return null;
   if(!r.verdict||r.verdict==="WITHDRAW")return null;
-  const today=latest||"2026-06-18";
-  const dt=new Date(today+"T12:00:00");
+  // Option A: count days remaining from the REAL calendar date (today), not the data's latest date,
+  // so the forecast is genuinely real-time — checking on the 15th shows days from the 15th to month-end.
+  const dt=new Date();
   const lastDay=new Date(dt.getFullYear(),dt.getMonth()+1,0).getDate();
   const daysLeftInMonth=lastDay-dt.getDate();
   if(daysLeftInMonth<=0)return null;
@@ -1091,7 +1105,7 @@ function cpcRenderAggLevel(){
       <div style="width:100%;height:6px;background:rgba(27,47,74,.4);border-radius:3px;overflow:hidden;margin-bottom:10px"><div style="height:100%;width:${Math.min(100,consum)}%;background:linear-gradient(90deg,${clr},${clr}88)"></div></div>
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">ROAS</div><div style="font-size:18px;font-weight:800;color:${clr}">${roasStr}</div></div>
-        <div style="text-align:right"><div style="font-size:9px;color:#64748b">Last update</div><div style="font-size:11px;color:#94a3b8">${A.lastUpdate||'—'}</div></div>
+        <div style="text-align:right"><div style="font-size:9px;color:#64748b">Last update</div><div style="font-size:11px;color:#94a3b8">${A.lastUpdate?fmtDisp(A.lastUpdate):'—'}</div></div>
       </div>
       <div style="margin-top:10px;font-size:10px;color:#f59e0b;font-weight:600">View ${Object.keys(A.brands).length} brands →</div>
       ${(()=>{const ct=cpcModel.contractual&&cpcModel.contractual[A.name];if(!ct)return '';const gap=ct.expected-ct.investedSoFar;const metClr=ct.investedSoFar>=ct.expected?'#22C55E':'#FBBF24';return `<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(27,47,74,.5)"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">Contractual (${(ct.pct*100).toFixed(0)}% of ${cpcMonthLabel(ct.priorMonth)} group sales)</div><div style="display:flex;justify-content:space-between;align-items:baseline"><div><span style="font-size:13px;font-weight:800;color:#e2e8f0">${fmtAED(ct.investedSoFar)}</span><span style="font-size:10px;color:#64748b"> / ${fmtAED(ct.expected)}</span></div><div style="font-size:10px;font-weight:700;color:${metClr}">${ct.investedSoFar>=ct.expected?'✓ met':fmtAED(gap)+' short'}</div></div></div>`;})()}
@@ -1183,14 +1197,15 @@ function cpcDeliverooBidOpt(ag,brand,outlet,curRow){
 // Deliveroo bid change (reverse-calculated burn).
 function cpcInvestRec(ag,brand,outlet,curRow,bidOpt){
   if(!curRow)return null;
-  // Find the live active row for this outlet (today between start/end with leftover)
-  const today=latest||"2026-06-18";
   const liveRows=cpcData.filter(r=>r.aggregator===ag&&r.brand===brand&&r.branch===outlet&&(cpcAdTypeFilter==='all'||r.adType===cpcAdTypeFilter)&&r.status==="Active");
   if(!liveRows.length)return null;
   // Sum current burn across live rows (pooled outlets may have one; that's fine)
   let burn=liveRows.reduce((s,r)=>s+(r.dailyBurn||0),0);
   let leftover=liveRows.reduce((s,r)=>s+(r.leftover||0),0);
-  const dt=new Date(today+"T12:00:00");
+  // Option A: days remaining counted from the REAL calendar date (today), so the recommendation
+  // is real-time — viewing on the 15th gives days from the 15th to month-end, on the 20th from
+  // the 20th, automatically. Not tied to when the sales data was last refreshed.
+  const dt=new Date();
   const lastDay=new Date(dt.getFullYear(),dt.getMonth()+1,0).getDate();
   const daysLeft=lastDay-dt.getDate();
   if(daysLeft<=0)return null;
