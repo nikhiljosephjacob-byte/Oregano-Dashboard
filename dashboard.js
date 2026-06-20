@@ -228,6 +228,8 @@ async function doLoad(){
   setTimeout(()=>{if(!kpiLoaded)loadKPIData();},1500);
   // Pre-warm the Ads Performance model in the background, with a battery-style fill on the nav tab
   setTimeout(()=>{prewarmCPC();},800);
+  // Pre-warm campaign data + analyses in the background so the Campaigns page opens instantly.
+  setTimeout(()=>{prewarmCampaigns();},1100);
 }
 
 // Find the "Ads Performance" nav tab button (the one wired to gp('cpc'))
@@ -279,6 +281,43 @@ async function prewarmCPC(){
     // If the user is already sitting on the page waiting, render it now
     if(curPage==="cpc")renderCPC();
   }catch(e){console.log("[CPC prewarm] error:",e.message);cpcModelBuilding=false;paintCPCNavBattery(100);}
+}
+
+// Find the Campaigns nav tab (wired to gp('campaigns'))
+function campNavTab(){
+  const tabs=document.querySelectorAll(".tab");
+  for(const t of tabs){const oc=t.getAttribute("onclick")||"";if(oc.includes("'campaigns'")||oc.includes('"campaigns"'))return t;}
+  return null;
+}
+function paintCampNavBattery(pct){
+  const tab=campNavTab();if(!tab)return;
+  if(pct>=100){tab.style.backgroundImage="";tab.style.pointerEvents="";tab.style.opacity="";tab.title="Campaigns — ready";return;}
+  tab.style.backgroundImage=`linear-gradient(90deg, rgba(34,197,94,.35) ${pct}%, rgba(15,23,42,.0) ${pct}%)`;
+  tab.style.backgroundRepeat="no-repeat";tab.style.borderRadius="6px";
+  tab.style.pointerEvents="none";tab.style.opacity="0.85";tab.title=`Loading campaigns… ${pct}%`;
+}
+// Proactively load campaign data and precompute every campaign's analysis in chunks (yields to the
+// UI between batches so it never blocks). The cache means the page then renders instantly.
+async function prewarmCampaigns(){
+  if(campModelBuilt||campModelBuilding)return;
+  campModelBuilding=true;
+  try{
+    paintCampNavBattery(3);
+    if(!campLoaded){const csv=await fetchCSV(CAMPAIGN_GID);campaignData=parseCampaigns(csv);campLoaded=true;campAnalysisCache.clear();}
+    paintCampNavBattery(10);
+    // Precompute analyses for completed + active campaigns (the ones the cards show numbers for).
+    const toWarm=campaignData.filter(c=>{const s=campStatus(c);return s==='Completed'||s==='Running';});
+    const batch=25;
+    for(let i=0;i<toWarm.length;i+=batch){
+      for(let j=i;j<Math.min(i+batch,toWarm.length);j++){try{campAnalysisCached(toWarm[j]);}catch(e){}}
+      const pct=10+Math.round(((i+batch)/Math.max(1,toWarm.length))*90);
+      paintCampNavBattery(Math.min(99,pct));
+      await new Promise(r=>setTimeout(r,0)); // yield to UI
+    }
+    campModelBuilt=true;campModelBuilding=false;
+    paintCampNavBattery(100);
+    if(curPage==='campaigns'&&typeof renderCampaigns==='function')renderCampaigns();
+  }catch(e){console.log("[Campaign prewarm] error:",e.message);campModelBuilding=false;paintCampNavBattery(100);}
 }
 
 // STATE
@@ -1561,6 +1600,10 @@ async function runAskAI(){
 // ── CAMPAIGN MANAGER ──────────────────────────────────────────────────────
 const CAMPAIGN_GID="1647275459";
 let selDay=null;let campaignData=[],campLoaded=false,campTab='active',calMonth=null,selCamp=null;
+// Campaign analysis cache — campAnalysisV2 scans allData repeatedly, so memoize per campaign.
+// Keyed by campaign index + elasticity + latest date. Cleared when data reloads.
+let campAnalysisCache=new Map();
+let campModelBuilt=false,campModelBuilding=false;
 // ── CPC INVESTMENTS STATE ──
 const CPC_GID="2056065310";
 let cpcData=[],cpcLoaded=false;
@@ -1950,26 +1993,27 @@ function renderCampCalendar(){
   const dNames=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const allBrands=[...new Set(campaignData.map(c=>c.brand))].sort();
   const allPlats=[...new Set(campaignData.map(c=>c.aggregator))].sort();
-  let filtered=campaignData;
-  if(calFilter.startsWith('brand:'))filtered=campaignData.filter(c=>c.brand===calFilter.slice(6));
-  else if(calFilter.startsWith('platform:'))filtered=campaignData.filter(c=>c.aggregator===calFilter.slice(9));
+  // Use the SHARED multi-filter state so Brand AND Platform AND Status can combine (was single-select).
+  let filtered=applyCampFilters(campaignData);
   const dayStats={};
   for(let d=1;d<=dim;d++){
     const key=dk(new Date(yr,mo,d));
     const todays=filtered.filter(c=>c.startDate<=key&&c.endDate>=key);
     const newStart=todays.filter(c=>c.startDate===key),newEnd=todays.filter(c=>c.endDate===key);
-    const gmv=allData.filter(r=>r.date===key&&(!calFilter.startsWith('brand:')||r.brand===calFilter.slice(6))&&(!calFilter.startsWith('platform:')||r.aggregator===calFilter.slice(9))).reduce((s,r)=>s+r.sales,0);
+    // Net sales for the day respecting the same brand/platform filters
+    const gmv=allData.filter(r=>r.date===key&&(!campFBrands.size||campFBrands.has(r.brand))&&(!campFPlatforms.size||campFPlatforms.has(r.aggregator))).reduce((s,r)=>s+r.sales,0);
     dayStats[d]={count:todays.length,newStart:newStart.length,newEnd:newEnd.length,gmv,campaigns:todays};
   }
   const maxGmv=Math.max(...Object.values(dayStats).map(s=>s.gmv),1);
   const heatmap=g=>g<=0?0:Math.min(1,g/maxGmv);
-  const filterBtn=(val,label)=>{const isAct=calFilter===val;return `<button onclick="setCalFilter('${val}')" style="padding:4px 12px;border-radius:5px;border:1px solid ${isAct?'#f59e0b':'#1b2f4a'};background:${isAct?'#f59e0b22':'transparent'};color:${isAct?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px">${label}</button>`;};
   const knownBrands=BR.map(b=>b.n).filter(b=>allBrands.includes(b));
   const knownPlats=AGGS.filter(p=>allPlats.includes(p));
+  // Multi-select filter chips (shared state) — clicking toggles, multiple can be active together.
+  const mfBtn=(active,clr,label,onclick)=>`<button onclick="${onclick}" style="padding:4px 11px;border-radius:6px;border:1px solid ${active?clr:'#1b2f4a'};background:${active?clr+'22':'transparent'};color:${active?clr:'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px">${label}</button>`;
   const filterRow=`<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
-    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;min-width:60px">Filter:</span>${filterBtn('all','All Campaigns')}</div>
-    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;min-width:60px">Brands:</span>${knownBrands.map(b=>filterBtn(`brand:${b}`,`${logoImg(b,16)}${b}`)).join('')}</div>
-    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;min-width:60px">Platforms:</span>${knownPlats.map(p=>filterBtn(`platform:${p}`,`${logoImg(p,16)}${p}`)).join('')}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;min-width:64px">Brands:</span>${knownBrands.map(b=>mfBtn(campFBrands.has(b),BMAP[b]?.c||'#94a3b8',`${logoImg(b,16)}${b}`,`campToggleFilter('brand','${b}')`)).join('')}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;min-width:64px">Platforms:</span>${knownPlats.map(p=>mfBtn(campFPlatforms.has(p),AC[p]||'#94a3b8',`${logoImg(p,16)}${p}`,`campToggleFilter('platform','${p}')`)).join('')}</div>
+    ${(campFBrands.size||campFPlatforms.size||campFStatuses.size)?`<div><button onclick="campClearFilters()" style="font-size:10px;color:#EF4444;background:none;border:1px solid rgba(239,68,68,.3);border-radius:6px;padding:3px 10px;cursor:pointer;font-weight:600">✕ Clear filters</button></div>`:''}
   </div>`;
   let calH=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px">
     <div style="display:flex;align-items:center;gap:6px">
@@ -1980,23 +2024,23 @@ function renderCampCalendar(){
     </div>
     <div style="font-size:10px;color:#64748b;display:flex;align-items:center;gap:10px"><span>Low</span><div style="display:flex;gap:1px">${[.1,.3,.5,.7,1].map(v=>`<div style="width:18px;height:8px;background:rgba(34,197,94,${v})"></div>`).join('')}</div><span>High Net Sales</span></div>
   </div>`;
-  calH+=`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:4px">${dNames.map(d=>`<div style="text-align:center;font-size:10px;color:#64748b;font-weight:700;padding:4px 0">${d}</div>`).join('')}</div>`;
-  calH+=`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">`;
-  for(let i=0;i<firstDow;i++)calH+=`<div style="min-height:90px;background:rgba(10,17,32,.5);border-radius:5px"></div>`;
+  calH+=`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:5px">${dNames.map(d=>`<div style="text-align:center;font-size:11px;color:#64748b;font-weight:700;padding:5px 0">${d}</div>`).join('')}</div>`;
+  calH+=`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px">`;
+  for(let i=0;i<firstDow;i++)calH+=`<div style="min-height:130px;background:rgba(10,17,32,.5);border-radius:8px"></div>`;
   for(let d=1;d<=dim;d++){
     const key=dk(new Date(yr,mo,d));const todayKey=dk(new Date());
     const isToday=key===todayKey,isPast=key<todayKey,isFuture=key>todayKey;
     const s=dayStats[d];const heat=heatmap(s.gmv);
-    const heatBg=heat>0?`background:linear-gradient(180deg, rgba(34,197,94,${heat*0.15}) 0%, rgba(13,21,36,1) 100%);`:`background:#0d1524;`;
+    const heatBg=heat>0?`background:linear-gradient(180deg, rgba(34,197,94,${heat*0.18}) 0%, rgba(13,21,36,1) 60%);`:`background:#0d1524;`;
     const dotClr=s.count>0?(isFuture?'#F59E0B':isPast?'#64748b':'#22C55E'):'#1b2f4a';
     let info='';
-    if(s.count>0)info=`<div style="display:flex;align-items:center;gap:4px;margin-top:3px;flex-wrap:wrap"><span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:#e2e8f0;font-weight:700;background:rgba(255,255,255,.06);padding:1px 6px;border-radius:8px">${s.count} <span style="color:#64748b;font-weight:500">live</span></span>${s.newStart>0?`<span style="color:#22C55E;font-size:9px;font-weight:700">▶${s.newStart}</span>`:''}${s.newEnd>0?`<span style="color:#EF4444;font-size:9px;font-weight:700">◀${s.newEnd}</span>`:''}</div>`;
-    const gmvLine=s.gmv>0?`<div style="font-size:9px;color:#64748b;margin-top:2px">${fmtAED(s.gmv)}</div>`:'';
-    const uniqueNames=[...new Set(s.campaigns.map(c=>c.name))].slice(0,2);
-    const namesPreview=uniqueNames.map(n=>{const c=s.campaigns.find(x=>x.name===n);const clr=BMAP[c.brand]?.c||AC[c.aggregator]||'#94a3b8';return `<div onclick="event.stopPropagation();selectCamp(${campaignData.indexOf(c)})" style="background:${clr}1a;border-left:2px solid ${clr};color:${clr};font-size:9px;padding:1px 4px;border-radius:2px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px" title="${n}">${n}</div>`;}).join('');
-    const moreLine=uniqueNames.length<s.campaigns.length?`<div style="font-size:8px;color:#64748b;margin-top:1px">+${s.campaigns.length-uniqueNames.length} more</div>`:'';
-    calH+=`<div onclick="if(${s.count}>0){selDay='${key}';renderCampaigns()}" style="min-height:90px;${heatBg}border:1px solid ${isToday?'#f59e0b':'#1b2f4a'};border-radius:5px;padding:5px;cursor:${s.count>0?'pointer':'default'};transition:all .12s" ${s.count>0?`onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${isToday?'#f59e0b':'#1b2f4a'}'"`:''}>
-      <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:11px;font-weight:700;color:${isToday?'#f59e0b':isPast?'#94a3b8':'#e2e8f0'}">${d}</span>${s.count>0?`<span style="width:6px;height:6px;border-radius:50%;background:${dotClr}"></span>`:''}</div>${gmvLine}${info}${namesPreview}${moreLine}</div>`;
+    if(s.count>0)info=`<div style="display:flex;align-items:center;gap:5px;margin-top:5px;flex-wrap:wrap"><span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;color:#e2e8f0;font-weight:800;background:rgba(255,255,255,.07);padding:2px 8px;border-radius:8px">${s.count} <span style="color:#64748b;font-weight:500;font-size:9px">live</span></span>${s.newStart>0?`<span style="color:#22C55E;font-size:10px;font-weight:700" title="${s.newStart} starting">▶${s.newStart}</span>`:''}${s.newEnd>0?`<span style="color:#EF4444;font-size:10px;font-weight:700" title="${s.newEnd} ending">◀${s.newEnd}</span>`:''}</div>`;
+    const gmvLine=s.gmv>0?`<div style="font-size:10px;color:#86EFAC;margin-top:3px;font-weight:600">${fmtAED(s.gmv)}</div>`:'';
+    const uniqueNames=[...new Set(s.campaigns.map(c=>c.name))].slice(0,3);
+    const namesPreview=uniqueNames.map(n=>{const c=s.campaigns.find(x=>x.name===n);const clr=BMAP[c.brand]?.c||AC[c.aggregator]||'#94a3b8';return `<div onclick="event.stopPropagation();selectCamp(${campaignData.indexOf(c)})" style="background:${clr}1a;border-left:2px solid ${clr};color:${clr};font-size:9px;padding:2px 5px;border-radius:3px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px;font-weight:600" title="${n} — ${c.brand}/${c.aggregator}">${n}</div>`;}).join('');
+    const moreLine=uniqueNames.length<[...new Set(s.campaigns.map(c=>c.name))].length?`<div style="font-size:9px;color:#64748b;margin-top:2px">+${[...new Set(s.campaigns.map(c=>c.name))].length-uniqueNames.length} more</div>`:'';
+    calH+=`<div onclick="if(${s.count}>0){selDay='${key}';renderCampaigns()}" style="min-height:130px;${heatBg}border:1px solid ${isToday?'#f59e0b':'#1b2f4a'};border-radius:8px;padding:7px;cursor:${s.count>0?'pointer':'default'};transition:all .12s" ${s.count>0?`onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${isToday?'#f59e0b':'#1b2f4a'}'"`:''}>
+      <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:13px;font-weight:800;color:${isToday?'#f59e0b':isPast?'#94a3b8':'#e2e8f0'}">${d}</span>${s.count>0?`<span style="width:7px;height:7px;border-radius:50%;background:${dotClr}"></span>`:''}</div>${gmvLine}${info}${namesPreview}${moreLine}</div>`;
   }
   calH+=`</div>`;
   let dayDetail='';
@@ -2112,6 +2156,63 @@ function bundleAnalysis(bundle){
   a.bundle=bundle;
   a.isBundle=true;
   return a;
+}
+
+// ── Campaign CARD GRID (replaces the wide table for Active/Upcoming/History) ──
+// Each card reads from the cached analysis, so rendering many cards is fast.
+function campCardGrid(camps,showProfit){
+  if(!camps.length)return `<div class="card"><div style="text-align:center;padding:30px;color:#64748b">No campaigns match your filters.</div></div>`;
+  const cards=camps.map(c=>{
+    const idx=campaignData.indexOf(c);
+    const b=BMAP[c.brand];const accent=b?.c||'#94a3b8';
+    const aggClr=(typeof AGG_LOGO_CLR!=='undefined'&&AGG_LOGO_CLR[c.aggregator])||'#94a3b8';
+    const st=campStatus(c);
+    const stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#94a3b8',Cancelled:'#EF4444'}[st]||'#94a3b8';
+    let headlineHTML='';
+    if(showProfit){
+      const a=campAnalysisCached(c);
+      if(a.needsCoFundClarity){
+        headlineHTML=`<div style="font-size:11px;color:#F59E0B;font-weight:700;margin-top:8px">⚠ Needs clarification</div>`;
+      }else if(a.hasData){
+        const incrClr=a.incrContribTotal>=0?'#22C55E':'#EF4444';
+        const roi=a.discountROI;
+        const verdictClr=roi==null?'#64748b':roi>=1?'#22C55E':roi>=0.4?'#FBBF24':'#EF4444';
+        const verdictTxt=roi==null?'—':roi>=1?'Paid for itself':roi>=0.4?'Marginal':'Lost money';
+        headlineHTML=`
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+            <div><div style="font-size:8px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Incr. Contribution</div><div style="font-size:17px;font-weight:800;color:${incrClr}">${a.incrContribTotal>=0?'+':''}${fmtAEDx(a.incrContribTotal)}</div></div>
+            <div><div style="font-size:8px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Discount ROI</div><div style="font-size:17px;font-weight:800;color:${verdictClr}">${roi!=null?roi.toFixed(2)+'×':'—'}</div></div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+            <span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:700;color:${verdictClr}"><span style="width:7px;height:7px;border-radius:50%;background:${verdictClr};display:inline-block"></span>${verdictTxt}</span>
+            <span style="font-size:10px;color:${a.ordersLift>=0?'#22C55E':'#EF4444'};font-weight:600">${a.ordersLift!=null?(a.ordersLift>=0?'▲':'▼')+' '+Math.abs(a.ordersLift).toFixed(0)+'% orders':''}</span>
+          </div>`;
+      }else{
+        headlineHTML=`<div style="font-size:11px;color:#64748b;margin-top:8px">No sales data in window yet</div>`;
+      }
+    }else{
+      const daysToStart=Math.ceil((new Date(c.startDate+'T12:00:00')-new Date())/86400000);
+      headlineHTML=`<div style="font-size:11px;color:#F59E0B;margin-top:10px;font-weight:600">Starts in ${daysToStart} day${daysToStart!==1?'s':''} · ${fmtDisp(c.startDate)}</div>`;
+    }
+    const coFundChip=(()=>{const p=parseCampComment(c).coFundedPctOfDiscount;return p>0?`<span style="font-size:8px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:1px 6px;border-radius:6px">🤝 ${Math.round(p*100)}%</span>`:'';})();
+    const offer=(()=>{const m=(c.comments||'').match(/(\d{1,2})\s*%/);return m?`${m[1]}% off`:(c.name||'');})();
+    return `<div onclick="selectCamp(${idx})" style="cursor:pointer;background:linear-gradient(135deg,${accent}0d,rgba(13,21,36,.5));border:1px solid ${accent}33;border-left:3px solid ${accent};border-radius:12px;padding:14px;transition:transform .12s,border-color .12s" onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${accent}77'" onmouseout="this.style.transform='none';this.style.borderColor='${accent}33'">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+        <div style="min-width:0;flex:1">
+          <div style="font-size:13px;font-weight:800;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.name||'Campaign'}</div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:2px">${c.brand} · <span style="color:${aggClr};font-weight:700">${c.aggregator}</span></div>
+        </div>
+        <span style="padding:2px 7px;border-radius:6px;background:${stClr}22;color:${stClr};font-size:8px;font-weight:800;border:1px solid ${stClr}44;white-space:nowrap">${st.toUpperCase()}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
+        <span style="font-size:9px;color:#cbd5e1;background:rgba(255,255,255,.05);padding:1px 7px;border-radius:6px">${offer}</span>
+        ${coFundChip}
+        <span style="font-size:9px;color:#64748b">${fmtDisp(c.startDate).replace(/,.*/,'')}–${fmtDisp(c.endDate).replace(/,.*/,'')}</span>
+      </div>
+      ${headlineHTML}
+    </div>`;
+  }).join('');
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">${cards}</div>`;
 }
 
 function campTableHTML(title,camps,showImpact){
@@ -2322,6 +2423,16 @@ function campAnalysisV2(c){
 }
 // Elasticity exponent for the counterfactual (1.0 = linear: half the discount retains half the lift).
 let campElasticity=1.0;
+// Cached wrapper around campAnalysisV2. Key includes campaign identity + elasticity + latest so
+// changing elasticity or reloading data invalidates correctly. This is what makes the list fast:
+// the same campaign isn't re-analyzed on every re-render or filter toggle.
+function campAnalysisCached(c){
+  const key=`${c.aggregator}|${c.brand}|${c.startDate}|${c.endDate}|${c.name}|${campElasticity}|${latest}`;
+  if(campAnalysisCache.has(key))return campAnalysisCache.get(key);
+  const a=campAnalysisV2(c);
+  campAnalysisCache.set(key,a);
+  return a;
+}
 // Legacy comprehensive campaign analysis (kept for any callers not yet migrated to V2).
 function campAnalysis(c){
   const base=campImpactExtended(c);
@@ -2697,7 +2808,7 @@ async function renderCampaigns(){
   const pg=document.getElementById('page-campaigns');if(!pg)return;
   if(!campLoaded){
     pg.innerHTML=`<div style="padding:30px;text-align:center;color:#64748b;font-size:13px">⏳ Loading campaigns from Google Sheets...</div>`;
-    try{const csv=await fetchCSV(CAMPAIGN_GID);campaignData=parseCampaigns(csv);campLoaded=true;}
+    try{const csv=await fetchCSV(CAMPAIGN_GID);campaignData=parseCampaigns(csv);campLoaded=true;campAnalysisCache.clear();}
     catch(e){pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Could not load Campaign Activations sheet</div><div style="color:#64748b;font-size:12px">Error: ${e.message}</div></div>`;return;}
   }
   if(campaignData.length===0){pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Sheet loaded but no valid campaigns found</div></div>`;return;}
@@ -2718,9 +2829,9 @@ async function renderCampaigns(){
     const tabH=tabs.map(([k,l,n])=>{const act=campTab===k;const cnt=n!=null?` <span style="background:${act?'rgba(245,158,11,.25)':'rgba(100,116,139,.2)'};color:${act?'#FBBF24':'#94a3b8'};font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;margin-left:3px">${n}</span>`:'';return `<button onclick="campTab='${k}';renderCampaigns()" style="padding:7px 14px;border-radius:7px;border:1px solid ${act?'#f59e0b':'rgba(27,47,74,.6)'};background:${act?'linear-gradient(180deg,rgba(245,158,11,.18),rgba(245,158,11,.08))':'transparent'};color:${act?'#f59e0b':'#94a3b8'};font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:3px;transition:all .15s">${l}${cnt}</button>`;}).join('');
     let main='';
     if(campTab==='calendar')main=`<div class="card">${renderCampCalendar()}</div>`;
-    else if(campTab==='active'){const f=applyCampFilters(active);main=campFilterBar()+campTableHTML(`🟢 Active Campaigns`,f,true);}
-    else if(campTab==='upcoming'){const f=applyCampFilters(upcoming);main=campFilterBar()+campTableHTML(`⏰ Upcoming Campaigns`,f,false);}
-    else if(campTab==='history'){const fc=applyCampFilters(completed).slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));main=campFilterBar()+campTableHTML(`📋 Completed Campaigns`,fc.slice(0,150),true)+(fc.length>150?`<div style="color:#64748b;font-size:12px;text-align:center;padding:10px">Showing 150 most recent of ${fc.length}</div>`:'');}
+    else if(campTab==='active'){const f=applyCampFilters(active);main=campFilterBar()+`<div style="font-size:11px;color:#64748b;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px;font-weight:700">🟢 Active Campaigns (${f.length})</div>`+campCardGrid(f,true);}
+    else if(campTab==='upcoming'){const f=applyCampFilters(upcoming);main=campFilterBar()+`<div style="font-size:11px;color:#64748b;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px;font-weight:700">⏰ Upcoming Campaigns (${f.length})</div>`+campCardGrid(f,false);}
+    else if(campTab==='history'){const fc=applyCampFilters(completed).slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));const shown=fc.slice(0,120);main=campFilterBar()+`<div style="font-size:11px;color:#64748b;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px;font-weight:700">📋 Completed Campaigns (${fc.length}${fc.length>120?' · showing 120 most recent':''})</div>`+campCardGrid(shown,true);}
     else if(campTab==='detail'&&selBundle){main=bundleDetailHTML(selBundle);}
     else if(campTab==='detail'&&selCamp){main=campDetailV2HTML(selCamp,campaignData.indexOf(selCamp));}
     // Header
