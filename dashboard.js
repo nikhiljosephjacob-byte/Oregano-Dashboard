@@ -1832,7 +1832,9 @@ function campOutlets(c){
     const tokens=raw.split(/[,;+/&]+|\s+and\s+|\s+\+\s+/i).map(t=>t.trim()).filter(Boolean);
     base=new Set();
     tokens.forEach(tok=>{
-      const tl=tok.toLowerCase().replace(/\s+only\b/g,"").replace(/\s+outlets?\b/g,"").trim();
+      // Normalize: drop trailing qualifier words so "AUH Locations only", "Abu Dhabi outlets",
+      // "DXB branches only" all reduce to the bare region keyword.
+      const tl=tok.toLowerCase().replace(/\b(only|outlets?|locations?|branches?|stores?|all)\b/g,"").replace(/\s+/g," ").trim();
       if(!tl)return;
       if(tl==="dxb"||tl==="dubai"){brandBranches.forEach(b=>{if(!AUH_OUTLETS.has(b))base.add(b);});return;}
       if(tl==="auh"||tl==="abudhabi"||tl==="abu dhabi"){brandBranches.forEach(b=>{if(AUH_OUTLETS.has(b))base.add(b);});return;}
@@ -2336,6 +2338,68 @@ function campTableHTML(title,camps,showImpact){
 // Contribution per brand: revenue = net sales (already includes any co-funded discount the
 // platform paid us). Cost = commission%(net) + food&pkg%(gross). Gross = net + discount.
 // ════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// DISCOUNT ALLOCATION ENGINE
+// The sales sheet reports discount at the BRAND+PLATFORM+DAY level (one number covering all
+// campaigns running that day), NOT per branch. So when a campaign is scoped to only some branches,
+// or when multiple campaigns run the same day, we must split that daily discount fairly.
+//
+// Rule (confirmed with the business):
+//  • A campaign covering N of the brand's M branches is allocated (N/M) of that day's discount.
+//  • Multiple NON-overlapping campaigns each take their (N/M) share — they sum to ≤ the day total.
+//  • If two campaigns genuinely overlap (share a branch the same day), we CANNOT split a brand-level
+//    figure between them, so we FLAG it as an overlap and skip the discount calc for the affected
+//    days (the campaign still shows order-count comparisons).
+//
+// When per-branch discount data becomes available in the sheet, this can be replaced with exact
+// per-branch attribution — but the (N/M) proportional split is the correct estimate until then.
+// ════════════════════════════════════════════════════════════════════════════
+function brandTotalBranches(brand,aggregator){
+  return new Set(allData.filter(r=>r.aggregator===aggregator&&(brand==='All Brands'||r.brand===brand)&&r.branch!=='(brand-level)').map(r=>r.branch)).size;
+}
+// Daily brand-level discount for a brand+platform (summed across the brand's records for that day).
+function brandDailyDiscount(brand,aggregator){
+  const map={};
+  allData.forEach(r=>{if(r.aggregator===aggregator&&(brand==='All Brands'||r.brand===brand)&&r.disc){map[r.date]=(map[r.date]||0)+r.disc;}});
+  return map; // {date: totalDiscount}
+}
+// Compute the discount allocated to campaign c over [start,end], plus overlap flags.
+// Returns {allocatedDisc, overlapDays:[...], hadOverlap, dailyAlloc:{date:amount}}.
+function allocateCampaignDiscount(c,start,end){
+  const M=brandTotalBranches(c.brand,c.aggregator)||1;
+  const myScope=campOutlets(c); // null = all branches
+  const myBranches=myScope?[...myScope]:null; // null → all M
+  const myN=myScope?myScope.size:M;
+  const dailyDisc=brandDailyDiscount(c.brand,c.aggregator);
+  // Other campaigns of the same brand+platform that run on any day in this window
+  const myIdx=campaignData.indexOf(c);
+  const others=campaignData.filter((x,i)=>i!==myIdx&&x.brand===c.brand&&x.aggregator===c.aggregator&&!(x.endDate<start||x.startDate>end)&&campStatus(x)!=='Cancelled');
+  let allocatedDisc=0;const dailyAlloc={};const overlapDays=[];
+  // Iterate each day in the window
+  let d=new Date(start+'T12:00:00'),e=new Date(end+'T12:00:00');
+  for(;d<=e;d.setDate(d.getDate()+1)){
+    const key=dk(d);const dayTotal=dailyDisc[key]||0;
+    if(dayTotal<=0)continue;
+    // Which other campaigns are live this day, and do their branches overlap mine?
+    const liveOthers=others.filter(x=>x.startDate<=key&&x.endDate>=key);
+    // Determine overlap: does any live campaign (including me) share a branch with another?
+    const myBranchSet=myScope||new Set(allData.filter(r=>r.aggregator===c.aggregator&&(c.brand==='All Brands'||r.brand===c.brand)).map(r=>r.branch));
+    let overlap=false;
+    for(const o of liveOthers){
+      const oScope=campOutlets(o);
+      const oSet=oScope||new Set([...myBranchSet]); // null other = all branches → always overlaps
+      // overlap if they share any branch
+      for(const b of myBranchSet){if(oSet.has(b)){overlap=true;break;}}
+      if(overlap)break;
+    }
+    if(overlap){overlapDays.push(key);continue;} // skip discount this day; flag it
+    // No overlap → allocate my branch-share of the day's discount
+    const share=(myN/M)*dayTotal;
+    dailyAlloc[key]=share;allocatedDisc+=share;
+  }
+  return{allocatedDisc,overlapDays,hadOverlap:overlapDays.length>0,dailyAlloc,M,myN};
+}
+
 function campAnalysisV2(c){
   const outletSet=campOutlets(c);
   const flt=r=>{if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;if(outletSet&&!outletSet.has(r.branch))return false;return true;};
@@ -2379,9 +2443,14 @@ function campAnalysisV2(c){
     return{contribution,gross,net,disc};
   };
   const campC=contribFor(cR), baseC=contribFor(bR);
-  // Our discount cost (what we funded). Note: net sales already includes the platform's co-funded
-  // share, so this is purely for the discount-ROI ratio, not subtracted from contribution again.
-  const ourDiscCost=(cs.disc||0)*(1-coFundedPct);
+  // Allocate this campaign's share of the brand-level daily discount (by branch proportion), with
+  // overlap detection. Replaces the raw cs.disc which would double-count when campaigns overlap.
+  const alloc=allocateCampaignDiscount(c,effStart,effEnd);
+  const allocatedDisc=alloc.allocatedDisc;
+  const hasOverlap=alloc.hadOverlap;
+  // Our discount cost (what we funded). Net sales already includes the platform's co-funded share,
+  // so this is purely for the discount-ROI ratio, not subtracted from contribution again.
+  const ourDiscCost=allocatedDisc*(1-coFundedPct);
   const ourDiscPerDay=ourDiscCost/cDays;
 
   // Incremental contribution (per day, then total over the elapsed window)
@@ -2398,9 +2467,10 @@ function campAnalysisV2(c){
   const incrOrdersPerDay=(cs.orders/cDays)-(bs.orders/bDays);
   const incrSalesPerDay=(cs.sales/cDays)-(bs.sales/bDays);
 
-  // Discount ROI = incremental contribution per AED we discounted
-  const discountROI=ourDiscPerDay>0?(incrContribPerDay/ourDiscPerDay):null;
-  const discPctOfGross=campC.gross>0?((cs.disc||0)/campC.gross)*100:null;
+  // Discount ROI = incremental contribution per AED we discounted. If there's a genuine overlap we
+  // can't trust the discount split, so suppress discount-based metrics (order comparison still shown).
+  const discountROI=(!hasOverlap&&ourDiscPerDay>0)?(incrContribPerDay/ourDiscPerDay):null;
+  const discPctOfGross=(!hasOverlap&&campC.gross>0)?((allocatedDisc)/campC.gross)*100:null;
 
   // Were we running OTHER campaigns on this brand+aggregator during the BASELINE window?
   const myIdx=campaignData.indexOf(c);
@@ -2473,7 +2543,7 @@ function campAnalysisV2(c){
     campContribTotal:campC.contribution,baseContribTotal:baseC.contribution,
     campContribPerDay,baseContribPerDay,incrContribPerDay,incrContribTotal,profitabilityPct,
     ordersLift,salesLift,aovChange,incrOrdersPerDay,incrSalesPerDay,
-    discountROI,discPctOfGross,campDisc:cs.disc||0,
+    discountROI,discPctOfGross,campDisc:allocatedDisc,rawBrandDisc:cs.disc||0,allocatedDisc,hasOverlap,overlapDays:alloc.overlapDays,branchN:alloc.myN,branchM:alloc.M,
     baselineCampaigns,concurrent,sameBrandPlatConcurrent,
     scenarios,breakEvenDepth,
     hasData:cs.orders>0||cs.sales>0,
@@ -2655,6 +2725,7 @@ function campDetailV2HTML(c,idx){
   const baselineCampNote=a.baselineCampaigns.length
     ? `<div style="margin-top:8px;padding:8px 12px;background:rgba(245,158,11,.08);border-left:3px solid #F59E0B;border-radius:4px;font-size:11px;color:#fbbf24">⚠ During the comparison week, ${a.baselineCampaigns.length} other ${c.aggregator} campaign(s) ran on this brand: ${a.baselineCampaigns.map(x=>`"${x.name}" (${fmtDisp(x.startDate)}–${fmtDisp(x.endDate)})`).join('; ')}. The baseline may itself be elevated, so the incremental figures are conservative.</div>`
     : `<div style="margin-top:8px;font-size:11px;color:#22C55E">✓ No campaigns ran on this brand+platform during the comparison week — a clean baseline.</div>`;
+  const overlapBanner=a.hasOverlap?`<div class="card" style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.4)"><div style="font-size:13px;font-weight:800;color:#EF4444;margin-bottom:6px">⚠ Overlapping campaign detected — discount figures hidden</div><div style="font-size:12px;color:#cbd5e1;line-height:1.6">On ${a.overlapDays.length} day(s) (${a.overlapDays.map(d=>fmtShort(d)).join(', ')}), another ${c.aggregator} campaign for ${c.brand} ran in the <strong>same branches</strong> as this one. Because the sheet only reports discount at the brand level (not per branch), we can't reliably split the discount between the two — so discount-based metrics (burn, ROI, depth) are hidden to avoid showing wrong numbers. Order-count comparisons below are still valid. <strong>Please verify whether this overlap is real or a data-entry issue.</strong></div></div>`:'';
   const cmpBanner=`<div class="card" style="background:linear-gradient(135deg,rgba(96,165,250,.06),rgba(13,21,36,.3))"><div style="font-size:11px;color:#60A5FA;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">📅 Comparison Basis</div><div style="font-size:13px;color:#e2e8f0;line-height:1.6">Campaign <strong>${fmtDisp(a.effStart)} → ${fmtDisp(a.effEnd)}</strong> (${a.cDays} day${a.cDays>1?'s':''}) compared against the same weekdays 4 weeks earlier: <strong style="color:#93c5fd">${fmtDisp(a.bStart)} → ${fmtDisp(a.bEnd)}</strong>.</div>${baselineCampNote}</div>`;
   const incrClr=a.incrContribTotal>=0?'#22C55E':'#EF4444';
   const roiClr=a.discountROI==null?'#64748b':a.discountROI>=1?'#22C55E':a.discountROI>=0.5?'#FBBF24':'#EF4444';
@@ -2695,7 +2766,7 @@ function campDetailV2HTML(c,idx){
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><span style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Elasticity</span>${[0.7,1.0,1.3].map(e=>`<button onclick="campSetElasticity(${e})" style="padding:3px 10px;border-radius:6px;border:1px solid ${campElasticity===e?'#f59e0b':'rgba(27,47,74,.6)'};background:${campElasticity===e?'rgba(245,158,11,.12)':'transparent'};color:${campElasticity===e?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${e===0.7?'Low (0.7)':e===1?'Linear (1.0)':'High (1.3)'}</button>`).join('')}</div>
       <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Scenario</th><th style="text-align:right">Incr Orders</th><th style="text-align:right">Our Disc Burn</th><th style="text-align:right">Incr Contribution</th><th style="text-align:right">ROI</th></tr></thead><tbody>${rows}</tbody></table></div>${beNote}</div>`;
   }
-  return header+cmpBanner+verdictBox+kpiCards+breakdownBox+campOutletBreakdownHTML(c,a)+scenarioBox;
+  return header+overlapBanner+cmpBanner+verdictBox+kpiCards+breakdownBox+campOutletBreakdownHTML(c,a)+scenarioBox;
 }
 
 function campDetailHTML(c,idx){
