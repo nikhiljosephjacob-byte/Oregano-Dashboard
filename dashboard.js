@@ -37,6 +37,30 @@ const COMM={
 function keetaCommissionFor(dateStr){const d=COMM.Keeta.DEFAULT;if(d.futureFrom&&dateStr&&dateStr>=d.futureFrom)return d.futureCommission;return d.commission;}
 function calcBE(agg,brand){const c=COMM[agg]?.[brand]||COMM[agg]?.DEFAULT;if(!c)return null;const t=(c.commission||0)+(c.pg||0)+(c.cpc||0)+(c.processingFee||0)+(c.cancellation||0);if(t>=1)return null;return 1/(1-t);}
 function getBE(agg,brand){const v=calcBE(agg,brand);return v?Math.round(v*100)/100:null;}
+// ── FOOD + PACKAGING COST (% of GROSS sales = Net Sales + Discounts), per brand ──
+// Source: confirmed brand cost table. Applied to GROSS sales (what the customer's order was
+// worth before discount), while commission is applied to NET sales (what we book as revenue).
+const FOOD_PKG_COST={Oregano:0.23,Lollorosso:0.28,Smokeys:0.28,Fyoozhen:0.33,"Wicked Wings":0.33};
+function foodPkgPct(brand){return FOOD_PKG_COST[brand]??0.30;}
+// Commission rate (commission + PG only; ads/CPC/cancellation excluded) for a brand+aggregator on
+// a given date. Keeta steps up in 2027. Returns a fraction of NET sales.
+function commissionRateFor(agg,brand,dateStr){
+  const c=COMM[agg]?.[brand]||COMM[agg]?.DEFAULT;if(!c)return 0.30;
+  let comm=c.commission||0;
+  if(agg==='Keeta')comm=keetaCommissionFor(dateStr);
+  return comm+(c.pg||0)+(c.processingFee||0)+(c.cancellation||0);
+}
+// Contribution for a brand+aggregator given net sales, gross sales and the discount WE funded.
+// netSales already includes any co-funded portion (platform's share of the discount is paid to us),
+// so revenue = netSales. Cost = commission(on net) + food&pkg(on gross). The discount we funded is
+// already reflected in netSales being lower than gross; we don't subtract it again.
+// Returns the contribution (margin AED) this revenue generated.
+function brandContribution(agg,brand,netSales,grossSales,dateStr){
+  const comm=commissionRateFor(agg,brand,dateStr);
+  const commCost=netSales*comm;
+  const foodCost=grossSales*foodPkgPct(brand);
+  return netSales-commCost-foodCost;
+}
 const BE={Deliveroo:1.32,Noon:1.30,Careem:1.27,Talabat:1.41};
 const BMAP=Object.fromEntries(BR.map(b=>[b.n,b]));
 const SKIP_BR=new Set(["total","grand total","subtotal","sub total","totals","all","all outlets","group total"]);
@@ -2148,7 +2172,157 @@ function campTableHTML(title,camps,showImpact){
   }).join('');
   return`<div class="card"><div class="ct">${title} (${camps.length}${bundles.length?` · ${bundles.length} bundle${bundles.length>1?'s':''}`:''})</div>${bundles.length?`<div style="font-size:10px;color:#94a3b8;padding:0 0 8px 0;font-style:italic">🎯 = Concurrent campaigns on the same brand + platform, analyzed together (real combined discount). Click "View Bundle" to see per-segment breakdown.</div>`:''}<div style="overflow-x:auto"><table class="tbl"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
-// Comprehensive campaign analysis: real discounts, profitability, pros/cons, concurrent campaigns.
+// ════════════════════════════════════════════════════════════════════════════
+// CAMPAIGN ANALYSIS V2 — weekday-aligned previous-month baseline + true per-brand
+// incremental contribution + elasticity counterfactual.
+//
+// Baseline rule: 28 days before the campaign window (always weekday-aligned). A campaign
+// running Fri 5 Jun → Thu 11 Jun is compared to Fri 8 May → Thu 14 May.
+//
+// Contribution per brand: revenue = net sales (already includes any co-funded discount the
+// platform paid us). Cost = commission%(net) + food&pkg%(gross). Gross = net + discount.
+// ════════════════════════════════════════════════════════════════════════════
+function campAnalysisV2(c){
+  const outletSet=campOutlets(c);
+  const flt=r=>{if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;if(outletSet&&!outletSet.has(r.branch))return false;return true;};
+  // Campaign window counts only days that have happened
+  const effEnd=c.endDate<latest?c.endDate:latest;
+  const effStart=c.startDate;
+  // Baseline = 28 days earlier (weekday-aligned), same number of days
+  const bStart=subDays(effStart,28),bEnd=subDays(effEnd,28);
+  const cR=allData.filter(r=>r.date>=effStart&&r.date<=effEnd&&flt(r));
+  const bR=allData.filter(r=>r.date>=bStart&&r.date<=bEnd&&flt(r));
+  const cs=sumR(cR),bs=sumR(bR);
+  const cDays=new Set(cR.map(r=>r.date)).size||1, bDays=new Set(bR.map(r=>r.date)).size||1;
+
+  // Co-funding (fraction of discount the PLATFORM funds)
+  const parsed=parseCampComment(c);
+  const coFundedPct=parsed.coFundedPctOfDiscount||0;
+  const needsCoFundClarity=parsed.unresolved&&parsed.unresolved.length>0;
+
+  // Per-brand contribution. For a single-brand campaign this is one brand; for All Brands we
+  // aggregate each brand with its own food% and commission.
+  const brandsInScope=c.brand==='All Brands'?[...new Set(cR.map(r=>r.brand))]:[c.brand];
+  const dref=c.startDate;
+  // Helper: compute gross + contribution for a set of records over a window
+  const contribFor=(recs,perBrandDiscShareFundedByUs)=>{
+    // group by brand
+    const byBrand={};
+    recs.forEach(r=>{const b=r.brand;if(!byBrand[b])byBrand[b]={net:0,disc:0};byBrand[b].net+=r.sales;byBrand[b].disc+=(r.disc||0);});
+    let contribution=0,gross=0,net=0,disc=0;
+    for(const b in byBrand){
+      const o=byBrand[b];
+      const g=o.net+o.disc; // gross = net + discount
+      contribution+=brandContribution(c.aggregator,b,o.net,g,dref);
+      gross+=g;net+=o.net;disc+=o.disc;
+    }
+    return{contribution,gross,net,disc};
+  };
+  const campC=contribFor(cR), baseC=contribFor(bR);
+  // Our discount cost (what we funded). Note: net sales already includes the platform's co-funded
+  // share, so this is purely for the discount-ROI ratio, not subtracted from contribution again.
+  const ourDiscCost=(cs.disc||0)*(1-coFundedPct);
+  const ourDiscPerDay=ourDiscCost/cDays;
+
+  // Incremental contribution (per day, then total over the elapsed window)
+  const campContribPerDay=campC.contribution/cDays;
+  const baseContribPerDay=baseC.contribution/bDays;
+  const incrContribPerDay=campContribPerDay-baseContribPerDay;
+  const incrContribTotal=incrContribPerDay*cDays;
+  const profitabilityPct=baseContribPerDay!==0?(incrContribPerDay/Math.abs(baseContribPerDay))*100:null;
+
+  // Lifts (per day)
+  const ordersLift=pctOf(cs.orders/cDays,bs.orders/bDays);
+  const salesLift=pctOf(cs.sales/cDays,bs.sales/bDays);
+  const aovChange=cs.orders>0&&bs.orders>0?pctOf(cs.sales/cs.orders,bs.sales/bs.orders):null;
+  const incrOrdersPerDay=(cs.orders/cDays)-(bs.orders/bDays);
+  const incrSalesPerDay=(cs.sales/cDays)-(bs.sales/bDays);
+
+  // Discount ROI = incremental contribution per AED we discounted
+  const discountROI=ourDiscPerDay>0?(incrContribPerDay/ourDiscPerDay):null;
+  const discPctOfGross=campC.gross>0?((cs.disc||0)/campC.gross)*100:null;
+
+  // Were we running OTHER campaigns on this brand+aggregator during the BASELINE window?
+  const myIdx=campaignData.indexOf(c);
+  const baselineCampaigns=campaignData.filter((x,i)=>i!==myIdx&&x.aggregator===c.aggregator&&(c.brand==='All Brands'||x.brand===c.brand)&&x.startDate<=bEnd&&x.endDate>=bStart);
+
+  // Concurrent campaigns during THIS campaign (same brand+platform)
+  const concurrent=campaignData.filter((x,i)=>i!==myIdx&&x.startDate<=c.endDate&&x.endDate>=c.startDate);
+  const sameBrandPlatConcurrent=concurrent.filter(x=>x.brand===c.brand&&x.aggregator===c.aggregator);
+
+  // ── Elasticity counterfactual ──
+  // Given the observed incremental orders at the actual discount depth, model what LOWER discounts
+  // might have produced. Assumption (linear default, adjustable): retained order-lift scales with
+  // discount depth raised to an elasticity exponent. Lower discount → fewer incremental orders but
+  // also far less discount burn. We compute contribution for each scenario.
+  const actualDiscDepth=discPctOfGross!=null?discPctOfGross/100:0; // e.g. 0.27 blended
+  const scenarios=[];
+  if(actualDiscDepth>0.02&&incrOrdersPerDay>0){
+    const elasticity=campElasticity; // global, default 1.0 (linear)
+    // baseline AOV (gross) to value incremental orders
+    const baseGrossAOV=bs.orders>0?(baseC.gross/bs.orders):(cs.orders>0?campC.gross/cs.orders:0);
+    // Scenarios: actual depth, and two shallower depths
+    const depths=[actualDiscDepth,actualDiscDepth*0.6,actualDiscDepth*0.4];
+    depths.forEach((depth,i)=>{
+      // retained fraction of the incremental order lift at this depth
+      const retain=actualDiscDepth>0?Math.pow(depth/actualDiscDepth,elasticity):0;
+      const scIncrOrdersPerDay=incrOrdersPerDay*retain;
+      const scTotalOrdersPerDay=(bs.orders/bDays)+scIncrOrdersPerDay;
+      // gross sales at this scenario (incremental orders valued at baseline gross AOV)
+      const scGrossPerDay=scTotalOrdersPerDay*baseGrossAOV;
+      const scDiscPerDay=scGrossPerDay*depth;
+      const scNetPerDay=scGrossPerDay-scDiscPerDay;
+      // our discount cost (apply same co-funding)
+      const scOurDiscPerDay=scDiscPerDay*(1-coFundedPct);
+      // contribution (single representative brand cost basis; for All Brands use scope-weighted later)
+      const brandForCost=c.brand==='All Brands'?(brandsInScope[0]||'Oregano'):c.brand;
+      const scContribPerDay=brandContribution(c.aggregator,brandForCost,scNetPerDay,scGrossPerDay,dref);
+      const scIncrContribPerDay=scContribPerDay-baseContribPerDay;
+      scenarios.push({
+        label:i===0?'Actual':`${Math.round(depth*100)}% depth`,
+        depthPct:depth*100,
+        incrOrdersPerDay:scIncrOrdersPerDay,
+        ourDiscPerDay:scOurDiscPerDay,
+        incrContribPerDay:scIncrContribPerDay,
+        discountROI:scOurDiscPerDay>0?scIncrContribPerDay/scOurDiscPerDay:null,
+        isActual:i===0
+      });
+    });
+  }
+  // Break-even discount depth: at the observed order lift, the discount depth where incremental
+  // contribution = 0. Solved numerically by scanning depths.
+  let breakEvenDepth=null;
+  if(incrOrdersPerDay>0&&actualDiscDepth>0){
+    const elasticity=campElasticity;
+    const baseGrossAOV=bs.orders>0?(baseC.gross/bs.orders):0;
+    const brandForCost=c.brand==='All Brands'?(brandsInScope[0]||'Oregano'):c.brand;
+    for(let d=0.80;d>=0.0;d-=0.01){
+      const retain=Math.pow(d/actualDiscDepth,elasticity);
+      const scTotalOrders=(bs.orders/bDays)+incrOrdersPerDay*retain;
+      const scGross=scTotalOrders*baseGrossAOV;const scNet=scGross*(1-d);
+      const scContrib=brandContribution(c.aggregator,brandForCost,scNet,scGross,dref)-baseContribPerDay;
+      if(scContrib>0){breakEvenDepth=d;break;}
+    }
+  }
+
+  return{
+    brand:c.brand,aggregator:c.aggregator,outletSet,
+    effStart,effEnd,bStart,bEnd,cDays,bDays,
+    cs,bs,campGross:campC.gross,baseGross:baseC.gross,
+    coFundedPct,needsCoFundClarity,ourDiscCost,ourDiscPerDay,
+    campContribTotal:campC.contribution,baseContribTotal:baseC.contribution,
+    campContribPerDay,baseContribPerDay,incrContribPerDay,incrContribTotal,profitabilityPct,
+    ordersLift,salesLift,aovChange,incrOrdersPerDay,incrSalesPerDay,
+    discountROI,discPctOfGross,campDisc:cs.disc||0,
+    baselineCampaigns,concurrent,sameBrandPlatConcurrent,
+    scenarios,breakEvenDepth,
+    hasData:cs.orders>0||cs.sales>0,
+    hasBaseline:bs.orders>0||bs.sales>0
+  };
+}
+// Elasticity exponent for the counterfactual (1.0 = linear: half the discount retains half the lift).
+let campElasticity=1.0;
+// Legacy comprehensive campaign analysis (kept for any callers not yet migrated to V2).
 function campAnalysis(c){
   const base=campImpactExtended(c);
   const outletSet=base.outletSet;
@@ -2214,6 +2388,92 @@ function campProsCons(a){
   if(pros.length===0)pros.push('No clearly positive signals in the data for this window');
   if(cons.length===0)cons.push('No clear downsides detected');
   return{pros,cons};
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// REDESIGNED campaign detail (V2) — clean, card-based, matches Ads Performance.
+// ════════════════════════════════════════════════════════════════════════════
+function fmtAEDx(n){return`AED ${Math.round(n||0).toLocaleString()}`;}
+function campKpiCard(label,value,sub,clr){
+  return `<div style="background:linear-gradient(135deg,${clr}0d,rgba(13,21,36,.4));border:1px solid ${clr}33;border-radius:14px;padding:14px 16px">
+    <div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px">${label}</div>
+    <div style="font-size:22px;font-weight:800;color:${clr};line-height:1.1">${value}</div>
+    <div style="font-size:10px;color:#94a3b8;margin-top:5px">${sub}</div>
+  </div>`;
+}
+function campSetElasticity(e){campElasticity=e;renderCampaigns();}
+function campDetailV2HTML(c,idx){
+  const st=campStatus(c);
+  const stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#94a3b8',Cancelled:'#EF4444'}[st]||'#94a3b8';
+  const b=BMAP[c.brand];const accent=b?.c||'#f59e0b';
+  const a=campAnalysisV2(c);
+  const aggClr=(typeof AGG_LOGO_CLR!=='undefined'&&AGG_LOGO_CLR[c.aggregator])||accent;
+  const scopeStr=campScopeLabel(c);
+  const coFundChip=a.coFundedPct>0?`<span style="font-size:10px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:3px 9px;border-radius:8px;border:1px solid rgba(168,85,247,.3)">🤝 ${Math.round(a.coFundedPct*100)}% platform co-funded</span>`:'';
+  const header=`<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:14px">
+    <div style="display:flex;align-items:center;gap:12px">
+      <button onclick="selCamp=null;renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.25);border-radius:8px;color:#94a3b8;padding:7px 12px;font-size:12px;cursor:pointer;font-weight:600">← Back</button>
+      <div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-size:19px;font-weight:800;color:${accent}">${c.name||'Campaign'}</span>
+          <span style="padding:3px 10px;border-radius:8px;background:${stClr}22;color:${stClr};font-size:10px;font-weight:800;border:1px solid ${stClr}44">${st.toUpperCase()}</span>
+        </div>
+        <div style="font-size:12px;color:#94a3b8;margin-top:4px">${c.brand} · <span style="color:${aggClr};font-weight:700">${c.aggregator}</span> · ${scopeStr}</div>
+      </div>
+    </div>
+    ${coFundChip}
+  </div>`;
+  if(a.needsCoFundClarity){
+    const unres=parseCampComment(c).unresolved.join(', ');
+    return header+`<div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);border-radius:12px;padding:20px"><div style="font-size:14px;font-weight:700;color:#F59E0B;margin-bottom:6px">⚠ Needs clarification before analysis</div><div style="font-size:13px;color:#cbd5e1;line-height:1.6">This campaign's comment contains terms we couldn't confidently interpret: <strong style="color:#e2e8f0">${unres}</strong>. To avoid showing inaccurate profitability, the analysis is paused. Please confirm the scope or co-funding split.</div><div style="font-size:12px;color:#94a3b8;margin-top:10px">Raw comment: "${(c.comments||'').replace(/"/g,'&quot;')}"</div></div>`;
+  }
+  if(!a.hasData){
+    return header+`<div class="card"><div style="text-align:center;padding:30px;color:#64748b">No sales data in the campaign window yet (${fmtDisp(a.effStart)} → ${fmtDisp(a.effEnd)}).</div></div>`;
+  }
+  const baselineCampNote=a.baselineCampaigns.length
+    ? `<div style="margin-top:8px;padding:8px 12px;background:rgba(245,158,11,.08);border-left:3px solid #F59E0B;border-radius:4px;font-size:11px;color:#fbbf24">⚠ During the comparison week, ${a.baselineCampaigns.length} other ${c.aggregator} campaign(s) ran on this brand: ${a.baselineCampaigns.map(x=>`"${x.name}" (${fmtDisp(x.startDate)}–${fmtDisp(x.endDate)})`).join('; ')}. The baseline may itself be elevated, so the incremental figures are conservative.</div>`
+    : `<div style="margin-top:8px;font-size:11px;color:#22C55E">✓ No campaigns ran on this brand+platform during the comparison week — a clean baseline.</div>`;
+  const cmpBanner=`<div class="card" style="background:linear-gradient(135deg,rgba(96,165,250,.06),rgba(13,21,36,.3))"><div style="font-size:11px;color:#60A5FA;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">📅 Comparison Basis</div><div style="font-size:13px;color:#e2e8f0;line-height:1.6">Campaign <strong>${fmtDisp(a.effStart)} → ${fmtDisp(a.effEnd)}</strong> (${a.cDays} day${a.cDays>1?'s':''}) compared against the same weekdays 4 weeks earlier: <strong style="color:#93c5fd">${fmtDisp(a.bStart)} → ${fmtDisp(a.bEnd)}</strong>.</div>${baselineCampNote}</div>`;
+  const incrClr=a.incrContribTotal>=0?'#22C55E':'#EF4444';
+  const roiClr=a.discountROI==null?'#64748b':a.discountROI>=1?'#22C55E':a.discountROI>=0.5?'#FBBF24':'#EF4444';
+  const kpiCards=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:14px 0">
+    ${campKpiCard('Incremental Contribution',`${a.incrContribTotal>=0?'+':''}${fmtAEDx(a.incrContribTotal)}`,`over ${a.cDays} days · ${a.incrContribPerDay>=0?'+':''}${fmtAEDx(a.incrContribPerDay)}/day`,incrClr)}
+    ${campKpiCard('Orders Lift',a.ordersLift!=null?`${a.ordersLift>=0?'+':''}${a.ordersLift.toFixed(0)}%`:'—',`+${a.incrOrdersPerDay.toFixed(0)} orders/day vs baseline`,a.ordersLift>=0?'#22C55E':'#EF4444')}
+    ${campKpiCard('Discount Depth',a.discPctOfGross!=null?`${a.discPctOfGross.toFixed(0)}%`:'—',`of gross · we funded ${fmtAEDx(a.ourDiscCost)}`,'#C084FC')}
+    ${campKpiCard('Discount ROI',a.discountROI!=null?`${a.discountROI.toFixed(2)}×`:'—','contribution per AED discounted',roiClr)}
+  </div>`;
+  let verdict='',verdictClr='#94a3b8',verdictIcon='';
+  if(a.discountROI!=null){
+    if(a.discountROI>=1){verdict=`This campaign paid for itself — every AED 1 discounted returned AED ${a.discountROI.toFixed(2)} in incremental contribution.`;verdictClr='#22C55E';verdictIcon='✅';}
+    else if(a.discountROI>=0.4){verdict=`Marginal — the discount returned only AED ${a.discountROI.toFixed(2)} per AED spent. It drove volume but ate into profit.`;verdictClr='#FBBF24';verdictIcon='⚠️';}
+    else{verdict=`The discount lost money on a contribution basis — only AED ${a.discountROI.toFixed(2)} returned per AED discounted. A shallower discount would likely have been more profitable.`;verdictClr='#EF4444';verdictIcon='🔻';}
+  }
+  const verdictBox=verdict?`<div style="background:${verdictClr}15;border:1px solid ${verdictClr}40;border-radius:12px;padding:14px 16px;margin-bottom:14px;display:flex;gap:12px;align-items:flex-start"><div style="font-size:20px">${verdictIcon}</div><div style="font-size:13px;color:#e2e8f0;line-height:1.6;font-weight:500">${verdict}</div></div>`:'';
+  const fc=foodPkgPct(c.brand)*100;
+  const cc=commissionRateFor(c.aggregator,c.brand,c.startDate)*100;
+  const breakdownBox=`<div class="card"><div class="ct">Contribution Breakdown · ${c.brand} on ${c.aggregator}</div>
+    <div style="font-size:11px;color:#94a3b8;margin-bottom:12px">Revenue = net sales (includes any co-funded portion the platform pays us). Costs: <strong>${cc.toFixed(0)}% commission</strong> on net sales, <strong>${fc.toFixed(0)}% food + packaging</strong> on gross sales (net + discount).</div>
+    <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Metric</th><th style="text-align:right">Campaign (${a.cDays}d)</th><th style="text-align:right">Baseline (${a.bDays}d)</th><th style="text-align:right">Per-day Δ</th></tr></thead><tbody>
+      <tr><td>Orders</td><td style="text-align:right">${a.cs.orders.toLocaleString()}</td><td style="text-align:right">${a.bs.orders.toLocaleString()}</td><td style="text-align:right;color:${a.incrOrdersPerDay>=0?'#22C55E':'#EF4444'}">${a.incrOrdersPerDay>=0?'+':''}${a.incrOrdersPerDay.toFixed(0)}</td></tr>
+      <tr><td>Net Sales</td><td style="text-align:right">${fmtAEDx(a.cs.sales)}</td><td style="text-align:right">${fmtAEDx(a.bs.sales)}</td><td style="text-align:right;color:${a.incrSalesPerDay>=0?'#22C55E':'#EF4444'}">${a.incrSalesPerDay>=0?'+':''}${fmtAEDx(a.incrSalesPerDay)}</td></tr>
+      <tr><td>Gross Sales</td><td style="text-align:right">${fmtAEDx(a.campGross)}</td><td style="text-align:right">${fmtAEDx(a.baseGross)}</td><td style="text-align:right;color:#94a3b8">—</td></tr>
+      <tr><td>Discount Given</td><td style="text-align:right">${fmtAEDx(a.campDisc)}</td><td style="text-align:right">${fmtAEDx(a.bs.disc||0)}</td><td style="text-align:right;color:#94a3b8">—</td></tr>
+      <tr style="border-top:2px solid rgba(245,158,11,.3);font-weight:800"><td style="color:#f59e0b">Contribution</td><td style="text-align:right;color:#e2e8f0">${fmtAEDx(a.campContribTotal)}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDx(a.baseContribTotal)}</td><td style="text-align:right;color:${incrClr}">${a.incrContribPerDay>=0?'+':''}${fmtAEDx(a.incrContribPerDay)}</td></tr>
+    </tbody></table></div></div>`;
+  let scenarioBox='';
+  if(a.scenarios.length){
+    const best=a.scenarios.reduce((m,x)=>x.incrContribPerDay>m.incrContribPerDay?x:m,a.scenarios[0]);
+    const rows=a.scenarios.map(s=>{
+      const cl=s.incrContribPerDay>=0?'#22C55E':'#EF4444';const isBest=s===best;
+      return `<tr style="${isBest?'background:rgba(34,197,94,.06)':''}"><td><strong style="color:${s.isActual?'#f59e0b':'#e2e8f0'}">${s.isActual?'Actual — ':''}${s.depthPct.toFixed(0)}% discount</strong>${isBest?' <span style="font-size:9px;color:#22C55E;font-weight:700">◀ most profitable</span>':''}</td><td style="text-align:right">+${s.incrOrdersPerDay.toFixed(0)}/day</td><td style="text-align:right">${fmtAEDx(s.ourDiscPerDay)}/day</td><td style="text-align:right;color:${cl};font-weight:700">${s.incrContribPerDay>=0?'+':''}${fmtAEDx(s.incrContribPerDay)}/day</td><td style="text-align:right">${s.discountROI!=null?s.discountROI.toFixed(2)+'×':'—'}</td></tr>`;
+    }).join('');
+    const beNote=a.breakEvenDepth!=null?`<div style="font-size:12px;color:#cbd5e1;margin-top:10px;padding:8px 12px;background:rgba(96,165,250,.06);border-radius:6px">📐 <strong>Break-even discount: ${(a.breakEvenDepth*100).toFixed(0)}%</strong> — at the order lift this campaign produced, any discount deeper than this loses money on a contribution basis.</div>`:'';
+    scenarioBox=`<div class="card"><div class="ct">💡 Was a different discount better? — Elasticity Scenarios</div>
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Models what shallower discounts might have produced, assuming order lift scales with discount depth (elasticity <strong>${campElasticity.toFixed(1)}</strong> = ${campElasticity===1?'linear':'curved'}). These are <em>estimates</em>, not measured outcomes.</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><span style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Elasticity</span>${[0.7,1.0,1.3].map(e=>`<button onclick="campSetElasticity(${e})" style="padding:3px 10px;border-radius:6px;border:1px solid ${campElasticity===e?'#f59e0b':'rgba(27,47,74,.6)'};background:${campElasticity===e?'rgba(245,158,11,.12)':'transparent'};color:${campElasticity===e?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${e===0.7?'Low (0.7)':e===1?'Linear (1.0)':'High (1.3)'}</button>`).join('')}</div>
+      <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Scenario</th><th style="text-align:right">Incr Orders</th><th style="text-align:right">Our Disc Burn</th><th style="text-align:right">Incr Contribution</th><th style="text-align:right">ROI</th></tr></thead><tbody>${rows}</tbody></table></div>${beNote}</div>`;
+  }
+  return header+cmpBanner+verdictBox+kpiCards+breakdownBox+scenarioBox;
 }
 
 function campDetailHTML(c,idx){
@@ -2462,7 +2722,7 @@ async function renderCampaigns(){
     else if(campTab==='upcoming'){const f=applyCampFilters(upcoming);main=campFilterBar()+campTableHTML(`⏰ Upcoming Campaigns`,f,false);}
     else if(campTab==='history'){const fc=applyCampFilters(completed).slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));main=campFilterBar()+campTableHTML(`📋 Completed Campaigns`,fc.slice(0,150),true)+(fc.length>150?`<div style="color:#64748b;font-size:12px;text-align:center;padding:10px">Showing 150 most recent of ${fc.length}</div>`:'');}
     else if(campTab==='detail'&&selBundle){main=bundleDetailHTML(selBundle);}
-    else if(campTab==='detail'&&selCamp){main=campDetailHTML(selCamp,campaignData.indexOf(selCamp));}
+    else if(campTab==='detail'&&selCamp){main=campDetailV2HTML(selCamp,campaignData.indexOf(selCamp));}
     // Header
     const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(27,47,74,.5)"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">⚡</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Campaign Manager</div></div><div style="font-size:10px;color:#64748b;margin-top:2px;letter-spacing:.4px">Performance · Profitability · Coordination</div></div><button onclick="campLoaded=false;selCamp=null;selBundle=null;campTab='active';renderCampaigns()" style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600">↻ Refresh Data</button></div>`;
     pg.innerHTML=`${header}${statBar}<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
@@ -3391,7 +3651,7 @@ function cmpDrawChart(dA,dB){
     selectOutlet,backToOutlets,toggleAovDrill,selectBundleByKey,bundleDetailHTML,
     cpcGoAgg,cpcGoBrands,cpcGoOutlets,cpcSetSort,cpcSetAdType,cpcSetMonth,cpcOpenOutletDetail,cpcCloseOutletDetail,cpcExportTable,
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
-    sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campSetScope,campClearDates,
+    sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campSetScope,campClearDates,campSetElasticity,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,
     injectCompareTab,loadKPIData,doLoad];
   fns.forEach(fn=>{try{if(typeof fn==="function")window[fn.name]=fn;}catch(e){}});
