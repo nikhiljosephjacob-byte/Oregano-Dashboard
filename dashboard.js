@@ -1720,7 +1720,7 @@ function resolveBranchName(token,brandBranches){
 // false positives. Returns: {includeBranches, excludeBranches, coFundedPctOfDiscount, unresolved, hasInfo}
 function parseCampComment(c){
   const text=(c.comments||"").trim();
-  const result={includeBranches:null,excludeBranches:null,coFundedPctOfDiscount:null,unresolved:[],hasInfo:false};
+  const result={includeBranches:null,excludeBranches:null,coFundedPctOfDiscount:null,regionOnly:null,unresolved:[],hasInfo:false};
   if(!text)return result;
   const brandBranches=[...new Set(allData.filter(r=>c.brand==="All Brands"||r.brand===c.brand).map(r=>r.branch))].filter(b=>b!=="(brand-level)");
   // ─ Branch exclusions ─
@@ -1733,6 +1733,20 @@ function parseCampComment(c){
     list.forEach(tok=>{const r=resolveBranchName(tok,brandBranches);if(r)resolved.push(r);else if(tok.length>1)unresolved.push(tok);});
     if(resolved.length){result.excludeBranches=new Set(resolved);result.hasInfo=true;}
     if(unresolved.length)result.unresolved.push(...unresolved);
+  }
+  // ─ Region restriction from the COMMENT (not just the Outlet column) ─
+  // Catches "valid only in AUH", "Abu Dhabi outlets only", "DXB only", "Dubai branches only" etc.
+  // Sets result.regionOnly so campOutlets can restrict to that region's branches.
+  if(!result.excludeBranches&&!result.includeBranches){
+    const tl=text.toLowerCase();
+    const auhRe=/\b(?:auh|abu\s?dhabi)\b/;
+    const dxbRe=/\b(?:dxb|dubai)\b/;
+    // Only treat as a restriction when paired with limiting language (only/valid in/exclusive to)
+    const limiting=/\b(only|valid\s+(?:in|at|for|only)|exclusive(?:ly)?|restricted\s+to|just)\b/.test(tl);
+    if(limiting){
+      if(auhRe.test(tl)&&!dxbRe.test(tl)){result.regionOnly="auh";result.hasInfo=true;}
+      else if(dxbRe.test(tl)&&!auhRe.test(tl)){result.regionOnly="dxb";result.hasInfo=true;}
+    }
   }
   // ─ Branch inclusions ─
   // Match "Only in X, Y" / "Only at X" / "Locations: X, Y" / "Valid at X, Y, Z" /
@@ -1785,8 +1799,11 @@ function parseCampComment(c){
   //   "X:Y co-funding" / "X:Y co funded"  → brand:platform → platform funds Y%
   //   "<Platform> funds X%" / "<Platform> X%" near "co-fund"  → platform funds X%
   const t=text.toLowerCase();
-  // Ratio form first: A:B co-funding (brand:platform)
-  let m=t.match(/(\d{1,3})\s*:\s*(\d{1,3})\s*(?:co[\s\-]?funding|co[\s\-]?funded|cofund)/);
+  // Ratio form: "A:B co-funding" / "A-B co-funded" / "co-funded A:B" / "co-funded A-B"
+  // (brand:platform → platform funds B%). Separator can be colon, hyphen, en-dash, or "/".
+  // The "co-fund" keyword may come before OR after the ratio.
+  let m=t.match(/(\d{1,3})\s*[:\-–\/]\s*(\d{1,3})\s*(?:co[\s\-]?fund(?:ing|ed)?|cofund(?:ing|ed)?)/)
+       ||t.match(/(?:co[\s\-]?fund(?:ing|ed)?|cofund(?:ing|ed)?)\s*(?:by\s+\S+\s+)?(\d{1,3})\s*[:\-–\/]\s*(\d{1,3})/);
   if(m){const platformPct=parseInt(m[2],10);if(platformPct>=0&&platformPct<=100){result.coFundedPctOfDiscount=platformPct/100;result.hasInfo=true;}}
   // Single percentage near "co-fund"
   if(result.coFundedPctOfDiscount==null){
@@ -1824,6 +1841,12 @@ function campOutlets(c){
   }
   // Step 2: apply comment refinements
   const parsed=parseCampComment(c);
+  // Region restriction from the comment (e.g. "valid only in AUH") — intersect with base or apply directly.
+  if(parsed.regionOnly){
+    const regionSet=new Set(brandBranches.filter(b=>parsed.regionOnly==="auh"?AUH_OUTLETS.has(b):!AUH_OUTLETS.has(b)));
+    if(base){const inter=new Set([...base].filter(b=>regionSet.has(b)));return inter.size?inter:regionSet;}
+    return regionSet.size?regionSet:base;
+  }
   if(parsed.includeBranches&&parsed.includeBranches.size){
     // Comments restrict to a specific list — that becomes the scope
     return parsed.includeBranches;
@@ -1843,7 +1866,9 @@ function campScopeLabel(c){
   if(!set)return"All outlets";
   const list=[...set].sort();
   const parsed=parseCampComment(c);
-  // Comment-derived exclusion → describe as "all except"
+  // Region restriction from comment
+  if(parsed.regionOnly==="auh")return `🏛️ Abu Dhabi outlets only — ${set.size} branch${set.size!==1?'es':''}: ${list.join(", ")}`;
+  if(parsed.regionOnly==="dxb")return `🏙️ Dubai outlets only — ${set.size} branch${set.size!==1?'es':''}: ${list.join(", ")}`;
   if(parsed.excludeBranches&&parsed.excludeBranches.size){
     const excluded=[...parsed.excludeBranches].sort();
     return `📍 ${list.length} branch${list.length!==1?'es':''} (all except ${excluded.join(", ")}): ${list.join(", ")}`;
