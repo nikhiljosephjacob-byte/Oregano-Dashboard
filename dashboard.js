@@ -379,7 +379,8 @@ function handleDelegatedClick(e){
   if(act==="apply"){fApply();return;}
   if(act==="clear"){fClear();return;}
   if(act==="ftoggle"){fToggle(v1,v2);return;}
-  if(act==="campToggle"){campToggleFilter(v1,v2);return;}
+  if(act==="campToggle"){if(t.tagName==="INPUT")return;campToggleFilter(v1,v2);return;}
+  if(act==="campSelectAll"){e.stopPropagation();campSelectAll(v1);return;}
   if(act==="campClear"){campClearFilters();return;}
   if(act==="cmpToggle"){cmpToggle(v1,v2,t.getAttribute("data-v3"));return;}
   if(act==="cmpClear"){cmpClear(v1);return;}
@@ -1604,6 +1605,7 @@ let selDay=null;let campaignData=[],campLoaded=false,campTab='active',calMonth=n
 // Keyed by campaign index + elasticity + latest date. Cleared when data reloads.
 let campAnalysisCache=new Map();
 let campModelBuilt=false,campModelBuilding=false;
+let campReturnTab='active'; // which tab to return to when leaving the deep-dive
 // ── CPC INVESTMENTS STATE ──
 const CPC_GID="2056065310";
 let cpcData=[],cpcLoaded=false;
@@ -1894,7 +1896,7 @@ function campImpact(c){
   const cs=sumR(cR),bs=sumR(bR);
   return{campOrders:cs.orders,campSales:cs.sales,campAOV:cs.orders>0?cs.sales/cs.orders:0,baseOrders:bs.orders,baseSales:bs.sales,baseAOV:bs.orders>0?bs.sales/bs.orders:0,ordersLift:pctOf(cs.orders/cD,bs.orders/bD),salesLift:pctOf(cs.sales/cD,bs.sales/bD),aovChange:cs.orders>0&&bs.orders>0?pctOf(cs.sales/cs.orders,bs.sales/bs.orders):null,days,baseStart,baseEnd,hasData:cs.orders>0||cs.sales>0,outletSet};
 }
-function selectCamp(idx){selCamp=campaignData[idx];selBundle=null;campTab='detail';renderCampaigns();}
+function selectCamp(idx){selCamp=campaignData[idx];selBundle=null;if(campTab!=='detail')campReturnTab=campTab;campTab='detail';renderCampaigns();}
 let selBundle=null;
 // Decode "bundle:1,4,7" → list of campaign indices, look them up, build the bundle, select it.
 function selectBundleByKey(key){
@@ -1945,7 +1947,24 @@ function campImpactExtended(c){
   return{...base,wowOrdersLift,wowSalesLift,momOrdersLift,momSalesLift,contributionDiff,profitability,discountRate,commRate,campCMRate,baseDailyContribution,campDailyContribution};
 }
 function campSortBy(col){if(campSort.col===col)campSort.dir*=-1;else{campSort.col=col;campSort.dir=-1;}renderCampaigns();}
-function campToggleFilter(type,val){const sets={brand:campFBrands,platform:campFPlatforms,status:campFStatuses};const s=sets[type];if(s.has(val))s.delete(val);else s.add(val);renderCampaigns();}
+function campToggleFilter(type,val){const sets={brand:campFBrands,platform:campFPlatforms,status:campFStatuses};const s=sets[type];if(s.has(val))s.delete(val);else s.add(val);rememberOpenDD();renderCampaigns();restoreOpenDD();}
+// Select-all / clear-all for a filter group (e.g. "All Brands"). Adds every available value.
+function campSelectAll(type){
+  const sets={brand:campFBrands,platform:campFPlatforms,status:campFStatuses};
+  const s=sets[type];if(!s)return;
+  let all=[];
+  if(type==='brand')all=[...new Set(campaignData.map(c=>c.brand))];
+  else if(type==='platform')all=[...new Set(campaignData.map(c=>c.aggregator))];
+  else if(type==='status')all=['Running','Upcoming','Completed'];
+  // If everything is already selected, clear; otherwise select all.
+  const allSelected=all.length>0&&all.every(v=>s.has(v));
+  s.clear();if(!allSelected)all.forEach(v=>s.add(v));
+  rememberOpenDD();renderCampaigns();restoreOpenDD();
+}
+// Remember which dropdown menu is open so a re-render doesn't close it.
+let campOpenDDId=null;
+function rememberOpenDD(){const open=document.querySelector('.dd-menu[data-open="1"]');campOpenDDId=open?open.id:null;}
+function restoreOpenDD(){if(!campOpenDDId)return;const el=document.getElementById(campOpenDDId);if(el){el.classList.add("open");el.style.display="block";el.setAttribute("data-open","1");}}
 function campClearFilters(){campFBrands.clear();campFPlatforms.clear();campFStatuses.clear();renderCampaigns();}
 function applyCampFilters(camps){
   return camps.filter(c=>{
@@ -1987,7 +2006,7 @@ function sortCampaigns(camps){
     return dir*((va||0)-(vb||0));
   });
 }
-function ddHTMLCamp(id,label,activeSet,items,type){const count=activeSet.size,isOn=count>0;const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#16273f'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="campToggle" data-v1="${type}" data-v2="${esc(val)}"><span style="color:${clr}">${lbl}</span></label>`).join("");const menuStyle="display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:#0b1220;border:1px solid #1b2f4a;border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:160px;box-shadow:0 12px 30px rgba(0,0,0,.5)";return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" data-act="dd" data-v1="${id}">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;}
+function ddHTMLCamp(id,label,activeSet,items,type){const count=activeSet.size,isOn=count>0;const allSelected=items.length>0&&items.every(it=>activeSet.has(it.val));const selectAllRow=`<div class="ddi" style="display:flex;align-items:center;gap:7px;padding:6px 10px;cursor:pointer;font-size:11px;white-space:nowrap;border-bottom:1px solid #1b2f4a;font-weight:700;color:#f59e0b" data-act="campSelectAll" data-v1="${type}" onmouseover="this.style.background='#16273f'" onmouseout="this.style.background='transparent'">${allSelected?'✓ ':''}All ${label}${type==='brand'?'s':type==='platform'?'s':'es'} ${allSelected?'(clear)':'(select all)'}</div>`;const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#16273f'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="campToggle" data-v1="${type}" data-v2="${esc(val)}"><span style="color:${clr}">${lbl}</span></label>`).join("");const menuStyle=`${id===campOpenDDId?'display:block':'display:none'};position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:#0b1220;border:1px solid #1b2f4a;border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:170px;box-shadow:0 12px 30px rgba(0,0,0,.5)`;return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" data-act="dd" data-v1="${id}">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="${id===campOpenDDId?'1':'0'}" style="${menuStyle}">${selectAllRow}${itemsH}</div></div>`;}
 function campFilterBar(){
   const brands=[...new Set(campaignData.map(c=>c.brand))].sort();
   const platforms=[...new Set(campaignData.map(c=>c.aggregator))].sort();
@@ -2220,7 +2239,16 @@ function campCardGrid(camps,showProfit){
       headlineHTML=`<div style="font-size:11px;color:#F59E0B;margin-top:10px;font-weight:600">Starts in ${daysToStart} day${daysToStart!==1?'s':''} · ${fmtDisp(c.startDate)}</div>`;
     }
     const coFundChip=(()=>{const p=parseCampComment(c).coFundedPctOfDiscount;return p>0?`<span style="font-size:8px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:1px 6px;border-radius:6px">🤝 ${Math.round(p*100)}%</span>`:'';})();
-    const offer=(()=>{const m=(c.comments||'').match(/(\d{1,2})\s*%/);return m?`${m[1]}% off`:(c.name||'');})();
+    // Offer text: discount % plus any cap (e.g. "50% off · cap AED 30") parsed from the comment.
+    const offer=(()=>{
+      const txt=c.comments||c.name||'';
+      const pm=txt.match(/(\d{1,2})\s*%/);
+      const capM=txt.match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i)||txt.match(/(?:aed\s*)?(\d{1,4})\s*cap/i);
+      const pct=pm?`${pm[1]}% off`:(c.name||'');
+      return capM?`${pct} · cap AED ${capM[1]}`:pct;
+    })();
+    // Full dates (e.g. "5 Jun – 11 Jun 2026")
+    const dateStr=(()=>{const s=fmtDisp(c.startDate).replace(/^\w+,\s*/,'');const e=fmtDisp(c.endDate).replace(/^\w+,\s*/,'');return `${s} – ${e}`;})();
     return `<div onclick="selectCamp(${idx})" style="cursor:pointer;background:linear-gradient(135deg,${accent}0d,rgba(13,21,36,.5));border:1px solid ${accent}33;border-left:3px solid ${accent};border-radius:12px;padding:14px;transition:transform .12s,border-color .12s" onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${accent}77'" onmouseout="this.style.transform='none';this.style.borderColor='${accent}33'">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
         <div style="min-width:0;flex:1">
@@ -2232,8 +2260,8 @@ function campCardGrid(camps,showProfit){
       <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
         <span style="font-size:9px;color:#cbd5e1;background:rgba(255,255,255,.05);padding:1px 7px;border-radius:6px">${offer}</span>
         ${coFundChip}
-        <span style="font-size:9px;color:#64748b">${fmtDisp(c.startDate).replace(/,.*/,'')}–${fmtDisp(c.endDate).replace(/,.*/,'')}</span>
       </div>
+      <div style="font-size:9px;color:#64748b;margin-top:4px">📅 ${dateStr}</div>
       ${headlineHTML}
     </div>`;
   }).join('');
@@ -2314,12 +2342,18 @@ function campAnalysisV2(c){
   // Campaign window counts only days that have happened
   const effEnd=c.endDate<latest?c.endDate:latest;
   const effStart=c.startDate;
-  // Baseline = 28 days earlier (weekday-aligned), same number of days
-  const bStart=subDays(effStart,28),bEnd=subDays(effEnd,28);
+  // Campaign window counts only ELAPSED days (capped at the latest data we have). If a campaign
+  // runs Mon-Fri but today is Thursday, the elapsed window is Mon-Wed, and EVERY baseline uses the
+  // same Mon-Wed weekdays — equal day counts, apple-to-apple.
+  const elapsedDays=Math.round((new Date(effEnd)-new Date(effStart))/86400000)+1;
+  // Baseline = 28 days earlier, EXACTLY the same number of elapsed days (weekday-aligned).
+  const bStart=subDays(effStart,28),bEnd=subDays(bStart,-(elapsedDays-1));
   const cR=allData.filter(r=>r.date>=effStart&&r.date<=effEnd&&flt(r));
   const bR=allData.filter(r=>r.date>=bStart&&r.date<=bEnd&&flt(r));
   const cs=sumR(cR),bs=sumR(bR);
-  const cDays=new Set(cR.map(r=>r.date)).size||1, bDays=new Set(bR.map(r=>r.date)).size||1;
+  // Use the explicit elapsed-day count for BOTH windows so per-day math is apple-to-apple, rather
+  // than counting only days that happen to have data (which caused 7-vs-8-day mismatches).
+  const cDays=elapsedDays, bDays=elapsedDays;
 
   // Co-funding (fraction of discount the PLATFORM funds)
   const parsed=parseCampComment(c);
@@ -2547,19 +2581,22 @@ function campOutletBreakdownHTML(c,a){
   const outletSet=a.outletSet||campOutlets(c);
   const branchesInScope=outletSet?[...outletSet].sort():[...new Set(allData.filter(r=>r.brand===c.brand&&r.aggregator===c.aggregator).map(r=>r.branch))].filter(b=>b!=='(brand-level)').sort();
   if(!branchesInScope.length)return '';
-  // Baseline windows — three genuinely distinct comparisons
+  // Baseline windows — three distinct comparisons, each EXACTLY the same elapsed-day length as
+  // the campaign window (apple-to-apple). If the campaign is Mon-Fri but only Mon-Wed has elapsed,
+  // every baseline is the matching Mon-Wed weekdays.
   const cDaysCount=Math.round((new Date(effEnd)-new Date(effStart))/86400000)+1;
-  const pw_s=subDays(effStart,7),pw_e=subDays(effEnd,7);        // previous week (same weekdays, -7d)
-  const pm_s=subDays(effStart,28),pm_e=subDays(effEnd,28);      // previous month (weekday-aligned, -28d)
-  const p2_s=subDays(effStart,56),p2_e=subDays(effEnd,56);      // two months prior (-56d, seasonal)
+  const win=(offset)=>{const s=subDays(effStart,offset);return{s,e:subDays(s,-(cDaysCount-1))};};
+  const pw=win(7),pm=win(28),p2=win(56);
+  const pw_s=pw.s,pw_e=pw.e, pm_s=pm.s,pm_e=pm.e, p2_s=p2.s,p2_e=p2.e;
   // Which other same-brand/platform campaigns ran during each baseline (flags dirty baselines)
   const campsInWindow=(s,e)=>campaignData.filter(o=>o!==c&&o.brand===c.brand&&o.aggregator===c.aggregator&&!(o.endDate<s||o.startDate>e));
   const pwCamps=campsInWindow(pw_s,pw_e),pmCamps=campsInWindow(pm_s,pm_e),p2Camps=campsInWindow(p2_s,p2_e);
   const branchHasCamp=(camps,br)=>camps.some(o=>{const oSet=campOutlets(o);return !oSet||oSet.has(br);});
 
   const cellUplift=(campOrders,cDays,baseRecs,baseStart,baseEnd,dirty)=>{
-    const bs=sumR(baseRecs);const bDays=new Set(baseRecs.map(r=>r.date)).size||1;
-    const campPerDay=campOrders/cDays, basePerDay=bs.orders/bDays;
+    const bs=sumR(baseRecs);
+    // Apple-to-apple: both windows are the same elapsed length, so divide by the same day count.
+    const campPerDay=campOrders/cDays, basePerDay=bs.orders/cDays;
     const chg=pctOf(campPerDay,basePerDay);
     const dirtyMark=dirty?`<span title="another campaign ran here during this baseline" style="color:#FBBF24;cursor:help">⚠</span> `:'';
     const chgClr=chg==null?'#64748b':pctClr(chg);
@@ -2597,7 +2634,7 @@ function campDetailV2HTML(c,idx){
   const coFundChip=a.coFundedPct>0?`<span style="font-size:10px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:3px 9px;border-radius:8px;border:1px solid rgba(168,85,247,.3)">🤝 ${Math.round(a.coFundedPct*100)}% platform co-funded</span>`:'';
   const header=`<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:14px">
     <div style="display:flex;align-items:center;gap:12px">
-      <button onclick="selCamp=null;renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.25);border-radius:8px;color:#94a3b8;padding:7px 12px;font-size:12px;cursor:pointer;font-weight:600">← Back</button>
+      <button onclick="selCamp=null;campTab=campReturnTab||'active';renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.25);border-radius:8px;color:#94a3b8;padding:7px 12px;font-size:12px;cursor:pointer;font-weight:600">← Back</button>
       <div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <span style="font-size:19px;font-weight:800;color:${accent}">${c.name||'Campaign'}</span>
