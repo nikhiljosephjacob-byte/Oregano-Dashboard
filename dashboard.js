@@ -2538,6 +2538,55 @@ function campKpiCard(label,value,sub,clr){
   </div>`;
 }
 function campSetElasticity(e){campElasticity=e;renderCampaigns();}
+// Per-outlet breakdown with THREE baselines: prior week (-7d), prior 4 weeks/month (-28d), and
+// the immediately preceding equal-length period. Shows order uplift per outlet against each.
+function campOutletBreakdownHTML(c,a){
+  if(!a.hasData||campStatus(c)==='Upcoming')return '';
+  const effStart=a.effStart,effEnd=a.effEnd;
+  const flt=(br,s,e)=>allData.filter(r=>r.brand===c.brand&&r.aggregator===c.aggregator&&r.branch===br&&r.date>=s&&r.date<=e);
+  const outletSet=a.outletSet||campOutlets(c);
+  const branchesInScope=outletSet?[...outletSet].sort():[...new Set(allData.filter(r=>r.brand===c.brand&&r.aggregator===c.aggregator).map(r=>r.branch))].filter(b=>b!=='(brand-level)').sort();
+  if(!branchesInScope.length)return '';
+  // Baseline windows — three genuinely distinct comparisons
+  const cDaysCount=Math.round((new Date(effEnd)-new Date(effStart))/86400000)+1;
+  const pw_s=subDays(effStart,7),pw_e=subDays(effEnd,7);        // previous week (same weekdays, -7d)
+  const pm_s=subDays(effStart,28),pm_e=subDays(effEnd,28);      // previous month (weekday-aligned, -28d)
+  const p2_s=subDays(effStart,56),p2_e=subDays(effEnd,56);      // two months prior (-56d, seasonal)
+  // Which other same-brand/platform campaigns ran during each baseline (flags dirty baselines)
+  const campsInWindow=(s,e)=>campaignData.filter(o=>o!==c&&o.brand===c.brand&&o.aggregator===c.aggregator&&!(o.endDate<s||o.startDate>e));
+  const pwCamps=campsInWindow(pw_s,pw_e),pmCamps=campsInWindow(pm_s,pm_e),p2Camps=campsInWindow(p2_s,p2_e);
+  const branchHasCamp=(camps,br)=>camps.some(o=>{const oSet=campOutlets(o);return !oSet||oSet.has(br);});
+
+  const cellUplift=(campOrders,cDays,baseRecs,baseStart,baseEnd,dirty)=>{
+    const bs=sumR(baseRecs);const bDays=new Set(baseRecs.map(r=>r.date)).size||1;
+    const campPerDay=campOrders/cDays, basePerDay=bs.orders/bDays;
+    const chg=pctOf(campPerDay,basePerDay);
+    const dirtyMark=dirty?`<span title="another campaign ran here during this baseline" style="color:#FBBF24;cursor:help">⚠</span> `:'';
+    const chgClr=chg==null?'#64748b':pctClr(chg);
+    return `<td style="text-align:right;font-variant-numeric:tabular-nums">${dirtyMark}<span style="color:#94a3b8;font-size:11px">${Math.round(bs.orders).toLocaleString()}</span><div style="font-size:10px;color:${chgClr};font-weight:700">${chg!=null?fmtPct(chg):'—'}</div></td>`;
+  };
+
+  let tClickOrders=0;
+  const rows=branchesInScope.map(br=>{
+    const cR=flt(br,effStart,effEnd);const cs=sumR(cR);const cDays=new Set(cR.map(r=>r.date)).size||1;
+    if(!cs.orders&&!cs.sales)return null; // skip outlets with no campaign activity
+    tClickOrders+=cs.orders;
+    const pwCell=cellUplift(cs.orders,cDays,flt(br,pw_s,pw_e),pw_s,pw_e,branchHasCamp(pwCamps,br));
+    const pmCell=cellUplift(cs.orders,cDays,flt(br,pm_s,pm_e),pm_s,pm_e,branchHasCamp(pmCamps,br));
+    const p2Cell=cellUplift(cs.orders,cDays,flt(br,p2_s,p2_e),p2_s,p2_e,branchHasCamp(p2Camps,br));
+    return `<tr><td style="font-weight:700;color:#e2e8f0">${br}</td><td style="text-align:right;font-weight:700;color:#e2e8f0;font-variant-numeric:tabular-nums">${Math.round(cs.orders).toLocaleString()}</td><td style="text-align:right;color:#94a3b8;font-variant-numeric:tabular-nums">${fmtAEDx(cs.sales)}</td>${pwCell}${pmCell}${p2Cell}</tr>`;
+  }).filter(Boolean).join('');
+  if(!rows)return '';
+  const fmtRange=(s,e)=>`${fmtShort(s)}–${fmtShort(e)}`;
+  return `<div class="card"><div class="ct">📍 Per-Outlet Order Uplift — vs 3 baselines</div>
+    <div style="font-size:11px;color:#94a3b8;margin-bottom:6px;line-height:1.6">Each outlet's orders during the campaign vs the same outlet in three earlier windows. Figures shown are baseline orders with the % change in campaign orders/day above baseline. <span style="color:#FBBF24">⚠</span> = another ${c.aggregator} campaign ran in that outlet during that baseline (read with caution).</div>
+    <div style="overflow-x:auto"><table class="tbl"><thead>
+      <tr><th rowspan="2" style="vertical-align:bottom">Outlet</th><th rowspan="2" style="text-align:right;vertical-align:bottom">Campaign<br>Orders</th><th rowspan="2" style="text-align:right;vertical-align:bottom">Campaign<br>Sales</th><th style="text-align:center">Previous Week</th><th style="text-align:center">Previous Month</th><th style="text-align:center">2 Months Ago</th></tr>
+      <tr><th style="text-align:right;font-size:9px;color:#64748b;font-weight:500">${fmtRange(pw_s,pw_e)}</th><th style="text-align:right;font-size:9px;color:#64748b;font-weight:500">${fmtRange(pm_s,pm_e)}</th><th style="text-align:right;font-size:9px;color:#64748b;font-weight:500">${fmtRange(p2_s,p2_e)}</th></tr>
+    </thead><tbody>${rows}</tbody></table></div>
+    <div style="font-size:10px;color:#64748b;margin-top:8px">Each comparison uses the same weekdays: Previous Week = 7 days earlier · Previous Month = 28 days earlier · 2 Months Ago = 56 days earlier. The % is the change in campaign orders/day vs that baseline.</div>
+  </div>`;
+}
 function campDetailV2HTML(c,idx){
   const st=campStatus(c);
   const stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#94a3b8',Cancelled:'#EF4444'}[st]||'#94a3b8';
@@ -2609,7 +2658,7 @@ function campDetailV2HTML(c,idx){
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><span style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Elasticity</span>${[0.7,1.0,1.3].map(e=>`<button onclick="campSetElasticity(${e})" style="padding:3px 10px;border-radius:6px;border:1px solid ${campElasticity===e?'#f59e0b':'rgba(27,47,74,.6)'};background:${campElasticity===e?'rgba(245,158,11,.12)':'transparent'};color:${campElasticity===e?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${e===0.7?'Low (0.7)':e===1?'Linear (1.0)':'High (1.3)'}</button>`).join('')}</div>
       <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Scenario</th><th style="text-align:right">Incr Orders</th><th style="text-align:right">Our Disc Burn</th><th style="text-align:right">Incr Contribution</th><th style="text-align:right">ROI</th></tr></thead><tbody>${rows}</tbody></table></div>${beNote}</div>`;
   }
-  return header+cmpBanner+verdictBox+kpiCards+breakdownBox+scenarioBox;
+  return header+cmpBanner+verdictBox+kpiCards+breakdownBox+campOutletBreakdownHTML(c,a)+scenarioBox;
 }
 
 function campDetailHTML(c,idx){
