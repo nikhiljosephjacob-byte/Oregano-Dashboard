@@ -2225,7 +2225,7 @@ function campCardGrid(camps,showProfit){
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
         <div style="min-width:0;flex:1">
           <div style="font-size:13px;font-weight:800;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.name||'Campaign'}</div>
-          <div style="font-size:10px;color:#94a3b8;margin-top:2px">${c.brand} · <span style="color:${aggClr};font-weight:700">${c.aggregator}</span></div>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:5px" title="${c.brand} · ${c.aggregator}">${logoImg(c.brand,20)}<span style="color:#64748b;font-size:11px">×</span>${logoImg(c.aggregator,20)}</div>
         </div>
         <span style="padding:2px 7px;border-radius:6px;background:${stClr}22;color:${stClr};font-size:8px;font-weight:800;border:1px solid ${stClr}44;white-space:nowrap">${st.toUpperCase()}</span>
       </div>
@@ -2603,7 +2603,7 @@ function campDetailV2HTML(c,idx){
           <span style="font-size:19px;font-weight:800;color:${accent}">${c.name||'Campaign'}</span>
           <span style="padding:3px 10px;border-radius:8px;background:${stClr}22;color:${stClr};font-size:10px;font-weight:800;border:1px solid ${stClr}44">${st.toUpperCase()}</span>
         </div>
-        <div style="font-size:12px;color:#94a3b8;margin-top:4px">${c.brand} · <span style="color:${aggClr};font-weight:700">${c.aggregator}</span> · ${scopeStr}</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap"><span style="display:inline-flex;align-items:center;gap:6px" title="${c.brand} · ${c.aggregator}">${logoImg(c.brand,22)}<span style="color:#64748b">×</span>${logoImg(c.aggregator,22)}</span><span style="font-size:12px;color:#94a3b8">${scopeStr}</span></div>
       </div>
     </div>
     ${coFundChip}
