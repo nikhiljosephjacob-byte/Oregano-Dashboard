@@ -196,6 +196,7 @@ async function doLoad(){
     pb.style.width=`${((idx+1)/5)*100}%`;pt.textContent=`${idx+1} / 5 brands`;
   }));
   allData=all;
+  buildDataIndex();
   // ── DISCOUNT PARSE DIAGNOSTIC ──
   // Prints how much Disc was parsed per brand × aggregator so we can see if the sheet's
   // Disc column is being read. If a brand/aggregator you entered shows 0, the column header
@@ -229,7 +230,9 @@ async function doLoad(){
   // Pre-warm the Ads Performance model in the background, with a battery-style fill on the nav tab
   setTimeout(()=>{prewarmCPC();},800);
   // Pre-warm campaign data + analyses in the background so the Campaigns page opens instantly.
-  setTimeout(()=>{prewarmCampaigns();},1100);
+  // Earlier delay was 1100ms to let other prewarms grab CPU first; reduced now that analyses are
+  // indexed and per-campaign cost is much lower.
+  setTimeout(()=>{prewarmCampaigns();},700);
 }
 
 // Find the "Ads Performance" nav tab button (the one wired to gp('cpc'))
@@ -307,7 +310,7 @@ async function prewarmCampaigns(){
     paintCampNavBattery(10);
     // Precompute analyses for completed + active campaigns (the ones the cards show numbers for).
     const toWarm=campaignData.filter(c=>{const s=campStatus(c);return s==='Completed'||s==='Running';});
-    const batch=25;
+    const batch=60; // larger batch is fine now: per-analysis work is O(window) thanks to the data index
     for(let i=0;i<toWarm.length;i+=batch){
       for(let j=i;j<Math.min(i+batch,toWarm.length);j++){try{campAnalysisCached(toWarm[j]);}catch(e){}}
       const pct=10+Math.round(((i+batch)/Math.max(1,toWarm.length))*90);
@@ -1955,7 +1958,7 @@ function campSelectAll(type){
   const sets={brand:campFBrands,platform:campFPlatforms,status:campFStatuses};
   const s=sets[type];if(!s)return;
   let all=[];
-  if(type==='brand')all=[...new Set(campaignData.map(c=>c.brand))];
+  if(type==='brand')all=[...new Set(campaignData.map(c=>c.brand))].filter(b=>b!=='All Brands');
   else if(type==='platform')all=[...new Set(campaignData.map(c=>c.aggregator))];
   else if(type==='status')all=['Running','Upcoming','Completed'];
   // If everything is already selected, clear; otherwise select all.
@@ -2354,24 +2357,120 @@ function campTableHTML(title,camps,showImpact){
 // When per-branch discount data becomes available in the sheet, this can be replaced with exact
 // per-branch attribution — but the (N/M) proportional split is the correct estimate until then.
 // ════════════════════════════════════════════════════════════════════════════
+// ── DATA INDEX (performance) ──
+// allData is scanned heavily by campaign analysis (per-campaign × per-day × per-branch).
+// Pre-index it once after load so filters become O(window) instead of O(allData × N).
+// Cleared & rebuilt whenever allData is reassigned (see doLoad and any data refresh path).
+const dataIndex={
+  byBrandAgg:new Map(),              // "brand|agg" -> records[]
+  byBrandAggBranch:new Map(),        // "brand|agg|branch" -> records[]
+  brandBranches:new Map(),           // "brand|agg" -> Set<branch> (excludes "(brand-level)")
+  brandDailyDisc:new Map(),          // "brand|agg" -> {date:totalDisc}
+  brandDailySalesByBranch:new Map(), // "brand|agg" -> {date:{branch:netSales}}
+  built:false
+};
+function buildDataIndex(){
+  dataIndex.byBrandAgg.clear();
+  dataIndex.byBrandAggBranch.clear();
+  dataIndex.brandBranches.clear();
+  dataIndex.brandDailyDisc.clear();
+  dataIndex.brandDailySalesByBranch.clear();
+  for(const r of allData){
+    const k=`${r.brand}|${r.aggregator}`;
+    let arr=dataIndex.byBrandAgg.get(k);if(!arr){arr=[];dataIndex.byBrandAgg.set(k,arr);}arr.push(r);
+    if(r.branch!=='(brand-level)'){
+      let s=dataIndex.brandBranches.get(k);if(!s){s=new Set();dataIndex.brandBranches.set(k,s);}s.add(r.branch);
+    }
+    if(r.disc){
+      let m=dataIndex.brandDailyDisc.get(k);if(!m){m={};dataIndex.brandDailyDisc.set(k,m);}
+      m[r.date]=(m[r.date]||0)+r.disc;
+    }
+    if(r.sales&&r.branch!=='(brand-level)'){
+      let m=dataIndex.brandDailySalesByBranch.get(k);if(!m){m={};dataIndex.brandDailySalesByBranch.set(k,m);}
+      let d=m[r.date];if(!d){d={};m[r.date]=d;}
+      d[r.branch]=(d[r.branch]||0)+r.sales;
+    }
+    const bk=`${r.brand}|${r.aggregator}|${r.branch}`;
+    let barr=dataIndex.byBrandAggBranch.get(bk);if(!barr){barr=[];dataIndex.byBrandAggBranch.set(bk,barr);}barr.push(r);
+  }
+  dataIndex.built=true;
+}
+// Fast helpers using the index. Fall back to a scan if the index isn't built yet.
+function indexedRecords(brand,aggregator){
+  if(!dataIndex.built)return allData.filter(r=>r.brand===brand&&r.aggregator===aggregator);
+  return dataIndex.byBrandAgg.get(`${brand}|${aggregator}`)||[];
+}
+function indexedBranchRecords(brand,aggregator,branch){
+  if(!dataIndex.built)return allData.filter(r=>r.brand===brand&&r.aggregator===aggregator&&r.branch===branch);
+  return dataIndex.byBrandAggBranch.get(`${brand}|${aggregator}|${branch}`)||[];
+}
+
 function brandTotalBranches(brand,aggregator){
-  return new Set(allData.filter(r=>r.aggregator===aggregator&&(brand==='All Brands'||r.brand===brand)&&r.branch!=='(brand-level)').map(r=>r.branch)).size;
+  // "All Brands" → distinct branches across every brand on this aggregator
+  if(brand==='All Brands'){
+    if(!dataIndex.built)return new Set(allData.filter(r=>r.aggregator===aggregator&&r.branch!=='(brand-level)').map(r=>r.branch)).size;
+    const all=new Set();
+    for(const[k,s]of dataIndex.brandBranches){if(k.endsWith(`|${aggregator}`))for(const b of s)all.add(b);}
+    return all.size;
+  }
+  if(!dataIndex.built)return new Set(allData.filter(r=>r.aggregator===aggregator&&r.brand===brand&&r.branch!=='(brand-level)').map(r=>r.branch)).size;
+  return(dataIndex.brandBranches.get(`${brand}|${aggregator}`)||new Set()).size;
 }
 // Daily brand-level discount for a brand+platform (summed across the brand's records for that day).
 function brandDailyDiscount(brand,aggregator){
-  const map={};
-  allData.forEach(r=>{if(r.aggregator===aggregator&&(brand==='All Brands'||r.brand===brand)&&r.disc){map[r.date]=(map[r.date]||0)+r.disc;}});
-  return map; // {date: totalDiscount}
+  if(brand==='All Brands'){
+    const map={};
+    allData.forEach(r=>{if(r.aggregator===aggregator&&r.disc){map[r.date]=(map[r.date]||0)+r.disc;}});
+    return map;
+  }
+  if(!dataIndex.built){
+    const map={};
+    allData.forEach(r=>{if(r.aggregator===aggregator&&r.brand===brand&&r.disc){map[r.date]=(map[r.date]||0)+r.disc;}});
+    return map;
+  }
+  return dataIndex.brandDailyDisc.get(`${brand}|${aggregator}`)||{};
 }
-// Compute the discount allocated to campaign c over [start,end], plus overlap flags.
-// Returns {allocatedDisc, overlapDays:[...], hadOverlap, dailyAlloc:{date:amount}}.
+// Daily per-branch net sales for a brand+platform. Used for sales-weighted discount allocation.
+// Returns {date: {branch: netSales}}. Excludes "(brand-level)" pseudo-records (no real sales there).
+function brandDailySalesByBranch(brand,aggregator){
+  if(brand==='All Brands'){
+    const map={};
+    allData.forEach(r=>{if(r.aggregator===aggregator&&r.branch!=='(brand-level)'&&r.sales){if(!map[r.date])map[r.date]={};map[r.date][r.branch]=(map[r.date][r.branch]||0)+r.sales;}});
+    return map;
+  }
+  if(!dataIndex.built){
+    const map={};
+    allData.forEach(r=>{if(r.aggregator===aggregator&&r.brand===brand&&r.branch!=='(brand-level)'&&r.sales){if(!map[r.date])map[r.date]={};map[r.date][r.branch]=(map[r.date][r.branch]||0)+r.sales;}});
+    return map;
+  }
+  return dataIndex.brandDailySalesByBranch.get(`${brand}|${aggregator}`)||{};
+}
+// Compute the discount allocated to campaign c over [start,end] using SALES-WEIGHTED method.
+// Why this method: the sheet only reports discount at brand+platform+day level, not per branch.
+// The earlier N/M (branch-count) split assumed every branch had equal sales, which produced
+// "discount > net sales" for AUH campaigns (low-revenue branches were over-allocated).
+//
+// New method, per day:
+//  1. Find all campaigns running this day on this brand+platform (me + concurrent).
+//  2. Take the UNION of their branches — the "campaign-covered scope" for this day.
+//  3. Each campaign's share of the day's brand discount = (its branches' net sales that day) /
+//     (union branches' net sales that day) × brand discount.
+//  4. Genuine overlap (two campaigns share a branch the same day) is still flagged and skipped,
+//     because we cannot split a brand-level discount across the same branch.
+//
+// Solo campaign edge case: union = just my branches → my share = 100% of day's discount (preserves
+// the "no untracked campaigns → all brand discount comes from tracked campaigns" assumption).
+// Returns {allocatedDisc, overlapDays:[...], hadOverlap, dailyAlloc:{date:amount}, M, myN}.
 function allocateCampaignDiscount(c,start,end){
   const M=brandTotalBranches(c.brand,c.aggregator)||1;
   const myScope=campOutlets(c); // null = all branches
-  const myBranches=myScope?[...myScope]:null; // null → all M
   const myN=myScope?myScope.size:M;
   const dailyDisc=brandDailyDiscount(c.brand,c.aggregator);
-  // Other campaigns of the same brand+platform that run on any day in this window
+  const dailySales=brandDailySalesByBranch(c.brand,c.aggregator); // {date:{branch:netSales}}
+  const allBrandBranches=dataIndex.brandBranches.get(`${c.brand}|${c.aggregator}`)||new Set();
+  // myBranches as a Set of branch names (resolve null scope to ALL the brand's branches on this platform)
+  const myBranches=myScope||allBrandBranches;
+  // Other campaigns of the same brand+platform that could run on any day in this window
   const myIdx=campaignData.indexOf(c);
   const others=campaignData.filter((x,i)=>i!==myIdx&&x.brand===c.brand&&x.aggregator===c.aggregator&&!(x.endDate<start||x.startDate>end)&&campStatus(x)!=='Cancelled');
   let allocatedDisc=0;const dailyAlloc={};const overlapDays=[];
@@ -2380,21 +2479,28 @@ function allocateCampaignDiscount(c,start,end){
   for(;d<=e;d.setDate(d.getDate()+1)){
     const key=dk(d);const dayTotal=dailyDisc[key]||0;
     if(dayTotal<=0)continue;
-    // Which other campaigns are live this day, and do their branches overlap mine?
+    // Which other campaigns are live this day?
     const liveOthers=others.filter(x=>x.startDate<=key&&x.endDate>=key);
-    // Determine overlap: does any live campaign (including me) share a branch with another?
-    const myBranchSet=myScope||new Set(allData.filter(r=>r.aggregator===c.aggregator&&(c.brand==='All Brands'||r.brand===c.brand)).map(r=>r.branch));
+    // Overlap detection: does any live other share a branch with me?
     let overlap=false;
     for(const o of liveOthers){
-      const oScope=campOutlets(o);
-      const oSet=oScope||new Set([...myBranchSet]); // null other = all branches → always overlaps
-      // overlap if they share any branch
-      for(const b of myBranchSet){if(oSet.has(b)){overlap=true;break;}}
+      const oScope=campOutlets(o)||allBrandBranches;
+      for(const b of myBranches){if(oScope.has(b)){overlap=true;break;}}
       if(overlap)break;
     }
     if(overlap){overlapDays.push(key);continue;} // skip discount this day; flag it
-    // No overlap → allocate my branch-share of the day's discount
-    const share=(myN/M)*dayTotal;
+    // Build the union of branches covered by me + all live others (the "campaign-covered scope")
+    const unionBranches=new Set(myBranches);
+    for(const o of liveOthers){const oScope=campOutlets(o)||allBrandBranches;for(const b of oScope)unionBranches.add(b);}
+    // Sum net sales for my branches and for the union on this day
+    const daySales=dailySales[key]||{};
+    let mySales=0,unionSales=0;
+    for(const b of myBranches)mySales+=daySales[b]||0;
+    for(const b of unionBranches)unionSales+=daySales[b]||0;
+    // Allocate sales-weighted. If no sales data at all (edge case), fall back to N/M.
+    let share;
+    if(unionSales>0)share=dayTotal*(mySales/unionSales);
+    else share=(myN/M)*dayTotal;
     dailyAlloc[key]=share;allocatedDisc+=share;
   }
   return{allocatedDisc,overlapDays,hadOverlap:overlapDays.length>0,dailyAlloc,M,myN};
@@ -2412,8 +2518,11 @@ function campAnalysisV2(c){
   const elapsedDays=Math.round((new Date(effEnd)-new Date(effStart))/86400000)+1;
   // Baseline = 28 days earlier, EXACTLY the same number of elapsed days (weekday-aligned).
   const bStart=subDays(effStart,28),bEnd=subDays(bStart,-(elapsedDays-1));
-  const cR=allData.filter(r=>r.date>=effStart&&r.date<=effEnd&&flt(r));
-  const bR=allData.filter(r=>r.date>=bStart&&r.date<=bEnd&&flt(r));
+  // Pre-narrow records to this brand+platform via the index, then filter by date+outlet.
+  // For "All Brands" we still scan allData (rare path; can't pre-narrow by brand).
+  const brandRecs=c.brand==='All Brands'?allData:indexedRecords(c.brand,c.aggregator);
+  const cR=brandRecs.filter(r=>r.date>=effStart&&r.date<=effEnd&&flt(r));
+  const bR=brandRecs.filter(r=>r.date>=bStart&&r.date<=bEnd&&flt(r));
   const cs=sumR(cR),bs=sumR(bR);
   // Use the explicit elapsed-day count for BOTH windows so per-day math is apple-to-apple, rather
   // than counting only days that happen to have data (which caused 7-vs-8-day mismatches).
@@ -2667,9 +2776,11 @@ function campSetElasticity(e){campElasticity=e;renderCampaigns();}
 function campOutletBreakdownHTML(c,a){
   if(!a.hasData||campStatus(c)==='Upcoming')return '';
   const effStart=a.effStart,effEnd=a.effEnd;
-  const flt=(br,s,e)=>allData.filter(r=>r.brand===c.brand&&r.aggregator===c.aggregator&&r.branch===br&&r.date>=s&&r.date<=e);
+  // Use indexed per-branch records — each branch's data is a small pre-built array, so date filtering
+  // is now O(branch_records) instead of O(allData). Materially faster on long histories.
+  const flt=(br,s,e)=>indexedBranchRecords(c.brand,c.aggregator,br).filter(r=>r.date>=s&&r.date<=e);
   const outletSet=a.outletSet||campOutlets(c);
-  const branchesInScope=outletSet?[...outletSet].sort():[...new Set(allData.filter(r=>r.brand===c.brand&&r.aggregator===c.aggregator).map(r=>r.branch))].filter(b=>b!=='(brand-level)').sort();
+  const branchesInScope=outletSet?[...outletSet].sort():[...(dataIndex.brandBranches.get(`${c.brand}|${c.aggregator}`)||new Set())].sort();
   if(!branchesInScope.length)return '';
   // Baseline windows — three distinct comparisons, each EXACTLY the same elapsed-day length as
   // the campaign window (apple-to-apple). If the campaign is Mon-Fri but only Mon-Wed has elapsed,
@@ -2920,15 +3031,16 @@ function campDetailHTML(c,idx){
     const effectiveEnd=c.endDate<latest?c.endDate:latest;
     const effectiveStart=c.startDate;
     const bStart=subDays(effectiveStart,7),bEnd=subDays(effectiveEnd,7);
-    const branchesInScope=outletSet?[...outletSet].sort():[...new Set(allData.filter(r=>r.brand===c.brand&&r.aggregator===c.aggregator).map(r=>r.branch))].filter(b=>b!=='(brand-level)').sort();
+    const branchesInScope=outletSet?[...outletSet].sort():[...(dataIndex.brandBranches.get(`${c.brand}|${c.aggregator}`)||new Set())].sort();
     // Find same-platform/brand campaigns that overlapped each branch during the baseline window
     const baselineCamps=campaignData.filter(o=>o!==c&&o.brand===c.brand&&o.aggregator===c.aggregator&&!(o.endDate<bStart||o.startDate>bEnd));
     const baselineCampForBranch=(branch)=>{
       return baselineCamps.filter(o=>{const oSet=campOutlets(o);if(!oSet)return true;return oSet.has(branch);});
     };
     const rows=branchesInScope.map(br=>{
-      const cR=allData.filter(r=>r.brand===c.brand&&r.aggregator===c.aggregator&&r.branch===br&&r.date>=effectiveStart&&r.date<=effectiveEnd);
-      const bR=allData.filter(r=>r.brand===c.brand&&r.aggregator===c.aggregator&&r.branch===br&&r.date>=bStart&&r.date<=bEnd);
+      const branchRecs=indexedBranchRecords(c.brand,c.aggregator,br);
+      const cR=branchRecs.filter(r=>r.date>=effectiveStart&&r.date<=effectiveEnd);
+      const bR=branchRecs.filter(r=>r.date>=bStart&&r.date<=bEnd);
       const cs=sumR(cR),bs=sumR(bR);
       const cdays=new Set(cR.map(r=>r.date)).size||1,bdays=new Set(bR.map(r=>r.date)).size||1;
       const cAOV=cs.orders>0?cs.sales/cs.orders:0,bAOV=bs.orders>0?bs.sales/bs.orders:0;
