@@ -150,17 +150,17 @@ function clearKeetaData(){
 }
 
 // ── Lookup used by allocateCampaignDiscount ──────────────────────────────
-// For a campaign window fully covered by the uploaded data range, sum the exact menu_disc
-// for matching (brand, outlet ∈ scope, campaign name, date in window).
-// Returns null if no upload, no records match, or window extends beyond uploaded range
-// (in which case the caller falls back to sales-weighted allocation for the whole window).
+// For a campaign window with ANY overlap with the uploaded data range, sum the exact menu_disc
+// for matching (brand, outlet ∈ scope, campaign name, date in overlap).
+// Partial coverage is allowed: days outside the upload range simply contribute 0 (the user can
+// re-upload tomorrow to fill in today). Returns null only if NO overlap exists (in which case
+// the caller falls back to sales-weighted allocation for the entire window).
 function getKeetaExactDisc(c,start,end){
   if(!keetaOrdersData||!keetaOrdersData.records||!keetaOrdersData.metadata)return null;
   const dr=keetaOrdersData.metadata.date_range||[];
   if(!dr[0]||!dr[1])return null;
-  // Require the campaign window to be fully within uploaded range — otherwise we'd be
-  // mixing exact data with estimated data for the uncovered tail, which is confusing.
-  if(start<dr[0]||end>dr[1])return null;
+  // No overlap at all → fall back
+  if(end<dr[0]||start>dr[1])return null;
   const myScope=campOutlets(c); // Set<branch> or null = all branches
   let menuDisc=0;const dailyAlloc={};let matched=0;
   for(const rec of keetaOrdersData.records){
@@ -172,8 +172,14 @@ function getKeetaExactDisc(c,start,end){
     dailyAlloc[rec.date]=(dailyAlloc[rec.date]||0)+rec.menu_disc;
     matched++;
   }
-  if(!matched)return null; // campaign window inside upload range but no records match → fall back
-  return{menuDisc,dailyAlloc,matchedRecords:matched};
+  if(!matched)return null;
+  // Coverage diagnostics for the UI badge / banner
+  const daysIn=(s,e)=>Math.max(0,Math.round((new Date(e+"T12:00:00")-new Date(s+"T12:00:00"))/86400000)+1);
+  const totalDays=daysIn(start,end);
+  const covStart=start>dr[0]?start:dr[0];
+  const covEnd=end<dr[1]?end:dr[1];
+  const coveredDays=daysIn(covStart,covEnd);
+  return{menuDisc,dailyAlloc,matchedRecords:matched,coveredDays,totalDays,partialCoverage:coveredDays<totalDays,uncoveredStart:end>dr[1]?dr[1]:null,uncoveredEnd:end>dr[1]?end:null};
 }
 // Per-outlet exact menu_disc for a campaign window — used by campOutletBreakdownHTML to show
 // the exact contribution of each branch when Keeta exact data is available.
@@ -181,7 +187,7 @@ function getKeetaExactDiscPerOutlet(c,start,end){
   if(!keetaOrdersData||!keetaOrdersData.records||!keetaOrdersData.metadata)return null;
   const dr=keetaOrdersData.metadata.date_range||[];
   if(!dr[0]||!dr[1])return null;
-  if(start<dr[0]||end>dr[1])return null;
+  if(end<dr[0]||start>dr[1])return null; // any overlap is enough
   const myScope=campOutlets(c);
   const byOutlet={};
   for(const rec of keetaOrdersData.records){
@@ -2811,7 +2817,7 @@ function allocateCampaignDiscount(c,start,end){
     if(exact){
       const M=brandTotalBranches(c.brand,c.aggregator)||1;
       const myN=(campOutlets(c)||new Set()).size||M;
-      return{allocatedDisc:exact.menuDisc,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"keeta_exact"};
+      return{allocatedDisc:exact.menuDisc,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"keeta_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
     }
   }
   const M=brandTotalBranches(c.brand,c.aggregator)||1;
@@ -3026,6 +3032,7 @@ function campAnalysisV2(c){
     ordersLift,salesLift,aovChange,incrOrdersPerDay,incrSalesPerDay,
     discountROI,discPctOfGross,campDisc:allocatedDisc,rawBrandDisc:cs.disc||0,allocatedDisc,hasOverlap,overlapDays:alloc.overlapDays,branchN:alloc.myN,branchM:alloc.M,
     discSource:alloc.source||"estimated",
+    discPartialCoverage:!!alloc.partialCoverage,discCoveredDays:alloc.coveredDays,discTotalDays:alloc.totalDays,discUncoveredStart:alloc.uncoveredStart,discUncoveredEnd:alloc.uncoveredEnd,
     baselineCampaigns,concurrent,sameBrandPlatConcurrent,
     scenarios,breakEvenDepth,headlinePct,actualDiscDepth,
     hasData:cs.orders>0||cs.sales>0,
@@ -3274,7 +3281,17 @@ function campDetailV2HTML(c,idx){
   }
   // Subtle banner shown only when this campaign's discount is sourced from uploaded Keeta data.
   // Reassures the user that discount/ROI/depth figures here are exact, not estimated.
-  const exactBanner=a.discSource==='keeta_exact'?`<div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.25);border-radius:7px;margin:0 0 14px 0"><span style="font-size:14px">📊</span><span style="font-size:11px;color:#cbd5e1"><strong style="color:#22C55E">Exact Keeta data:</strong> discount figures below come from the uploaded Recent Orders file (per-order, per-outlet truth), not sales-weighted estimation.</span></div>`:'';
+  // If the campaign window extends past the uploaded data range, note the partial coverage so
+  // the user understands today's missing day isn't a real drop in activity.
+  let exactBanner='';
+  if(a.discSource==='keeta_exact'){
+    if(a.discPartialCoverage){
+      const tail=a.discUncoveredStart===a.discUncoveredEnd?fmtShort(a.discUncoveredStart):`${fmtShort(a.discUncoveredStart)}–${fmtShort(a.discUncoveredEnd)}`;
+      exactBanner=`<div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.3);border-radius:7px;margin:0 0 14px 0"><span style="font-size:14px">📊</span><span style="font-size:11px;color:#cbd5e1"><strong style="color:#FBBF24">Partial exact Keeta data:</strong> ${a.discCoveredDays} of ${a.discTotalDays} days covered by the uploaded file. Discount for <strong>${tail}</strong> is missing — re-upload tomorrow with a fresh Keeta export to include those days.</span></div>`;
+    }else{
+      exactBanner=`<div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.25);border-radius:7px;margin:0 0 14px 0"><span style="font-size:14px">📊</span><span style="font-size:11px;color:#cbd5e1"><strong style="color:#22C55E">Exact Keeta data:</strong> discount figures below come from the uploaded Recent Orders file (per-order, per-outlet truth), not sales-weighted estimation.</span></div>`;
+    }
+  }
   return header+overlapBanner+cmpBanner+exactBanner+verdictBox+kpiCards+breakdownBox+campOutletBreakdownHTML(c,a)+scenarioBox;
 }
 
