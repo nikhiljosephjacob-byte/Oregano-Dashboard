@@ -2010,7 +2010,7 @@ function sortCampaigns(camps){
 }
 function ddHTMLCamp(id,label,activeSet,items,type){const count=activeSet.size,isOn=count>0;const allSelected=items.length>0&&items.every(it=>activeSet.has(it.val));const selectAllRow=`<div class="ddi" style="display:flex;align-items:center;gap:7px;padding:6px 10px;cursor:pointer;font-size:11px;white-space:nowrap;border-bottom:1px solid #1b2f4a;font-weight:700;color:#f59e0b" data-act="campSelectAll" data-v1="${type}" onmouseover="this.style.background='#16273f'" onmouseout="this.style.background='transparent'">${allSelected?'✓ ':''}All ${label}${type==='brand'?'s':type==='platform'?'s':'es'} ${allSelected?'(clear)':'(select all)'}</div>`;const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#16273f'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="campToggle" data-v1="${type}" data-v2="${esc(val)}"><span style="color:${clr}">${lbl}</span></label>`).join("");const menuStyle=`${id===campOpenDDId?'display:block':'display:none'};position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:#0b1220;border:1px solid #1b2f4a;border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:170px;box-shadow:0 12px 30px rgba(0,0,0,.5)`;return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" data-act="dd" data-v1="${id}">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="${id===campOpenDDId?'1':'0'}" style="${menuStyle}">${selectAllRow}${itemsH}</div></div>`;}
 function campFilterBar(){
-  const brands=[...new Set(campaignData.map(c=>c.brand))].sort();
+  const brands=[...new Set(campaignData.map(c=>c.brand))].filter(b=>b!=='All Brands').sort();
   const platforms=[...new Set(campaignData.map(c=>c.aggregator))].sort();
   const statuses=['Running','Upcoming','Completed'];
   const brDD=ddHTMLCamp('cdd-br','Brand',campFBrands,brands.map(b=>({val:b,lbl:b,clr:BMAP[b]?.c||'#94a3b8'})),'brand');
@@ -2447,6 +2447,17 @@ function campAnalysisV2(c){
   // overlap detection. Replaces the raw cs.disc which would double-count when campaigns overlap.
   const alloc=allocateCampaignDiscount(c,effStart,effEnd);
   const allocatedDisc=alloc.allocatedDisc;
+  // Patch campC.gross: the discount record is attached to branch="(brand-level)" which gets filtered
+  // OUT by scoped campaigns (e.g. AUH-only Flash Sale). So campC.disc=0 and gross=net, which is wrong.
+  // The correct gross = net + allocatedDisc (our campaign's proportional share of the day's discount).
+  // Also recompute contribution using the corrected gross so food+pkg cost is applied to the right base.
+  if(allocatedDisc>0&&!alloc.hadOverlap){
+    const correctedGross=campC.net+allocatedDisc;
+    const brandForCost=c.brand==='All Brands'?(brandsInScope[0]||'Oregano'):c.brand;
+    const correctedContrib=brandContribution(c.aggregator,brandForCost,campC.net,correctedGross,dref);
+    campC.gross=correctedGross;
+    campC.contribution=correctedContrib;
+  }
   const hasOverlap=alloc.hadOverlap;
   // Our discount cost (what we funded). Net sales already includes the platform's co-funded share,
   // so this is purely for the discount-ROI ratio, not subtracted from contribution again.
@@ -2486,6 +2497,12 @@ function campAnalysisV2(c){
   // discount depth raised to an elasticity exponent. Lower discount → fewer incremental orders but
   // also far less discount burn. We compute contribution for each scenario.
   const actualDiscDepth=discPctOfGross!=null?discPctOfGross/100:0; // e.g. 0.27 blended
+  // Extract the headline % from the campaign comment (e.g. "50% OFF CAP 30" → 50).
+  // Used to translate scenario blended depths back to the headline % a manager would set on-platform.
+  const headlineMatch=(c.comments||'').match(/(\d{1,3})\s*%/);
+  const headlinePct=headlineMatch?parseInt(headlineMatch[1]):null;
+  // ratio: headline / actualDepth. Apply same ratio to scenario depths → approx headline for that depth.
+  const headlineRatio=(headlinePct&&actualDiscDepth>0)?(headlinePct/100)/actualDiscDepth:null;
   const scenarios=[];
   if(actualDiscDepth>0.02&&incrOrdersPerDay>0){
     const elasticity=campElasticity; // global, default 1.0 (linear)
@@ -2508,9 +2525,12 @@ function campAnalysisV2(c){
       const brandForCost=c.brand==='All Brands'?(brandsInScope[0]||'Oregano'):c.brand;
       const scContribPerDay=brandContribution(c.aggregator,brandForCost,scNetPerDay,scGrossPerDay,dref);
       const scIncrContribPerDay=scContribPerDay-baseContribPerDay;
+      // headline % this depth corresponds to on the platform (scaled from the observed headline→depth ratio)
+      const scenarioHeadlinePct=headlineRatio?Math.round(depth*headlineRatio*100):null;
       scenarios.push({
         label:i===0?'Actual':`${Math.round(depth*100)}% depth`,
         depthPct:depth*100,
+        headlinePct:scenarioHeadlinePct,
         incrOrdersPerDay:scIncrOrdersPerDay,
         ourDiscPerDay:scOurDiscPerDay,
         incrContribPerDay:scIncrContribPerDay,
@@ -2545,7 +2565,7 @@ function campAnalysisV2(c){
     ordersLift,salesLift,aovChange,incrOrdersPerDay,incrSalesPerDay,
     discountROI,discPctOfGross,campDisc:allocatedDisc,rawBrandDisc:cs.disc||0,allocatedDisc,hasOverlap,overlapDays:alloc.overlapDays,branchN:alloc.myN,branchM:alloc.M,
     baselineCampaigns,concurrent,sameBrandPlatConcurrent,
-    scenarios,breakEvenDepth,
+    scenarios,breakEvenDepth,headlinePct,actualDiscDepth,
     hasData:cs.orders>0||cs.sales>0,
     hasBaseline:bs.orders>0||bs.sales>0
   };
@@ -2673,24 +2693,39 @@ function campOutletBreakdownHTML(c,a){
     return `<td style="text-align:right;font-variant-numeric:tabular-nums">${dirtyMark}<span style="color:#94a3b8;font-size:11px">${Math.round(bs.orders).toLocaleString()}</span><div style="font-size:10px;color:${chgClr};font-weight:700">${chg!=null?fmtPct(chg):'—'}</div></td>`;
   };
 
-  let tClickOrders=0;
+  let tClickOrders=0,tClickSales=0;
+  // Totals accumulators for the three baseline comparisons (for simple-average uplift)
+  let tPwUplifts=[],tPmUplifts=[],tP2Uplifts=[];
   const rows=branchesInScope.map(br=>{
     const cR=flt(br,effStart,effEnd);const cs=sumR(cR);const cDays=new Set(cR.map(r=>r.date)).size||1;
     if(!cs.orders&&!cs.sales)return null; // skip outlets with no campaign activity
-    tClickOrders+=cs.orders;
+    tClickOrders+=cs.orders;tClickSales+=cs.sales;
+    // Compute uplift % for each baseline and accumulate for simple average
+    const upliftPct=(campOrds,cD,baseRecs)=>{const bs=sumR(baseRecs);const cp=campOrds/cD,bp=bs.orders/cD;return pctOf(cp,bp);};
+    const pwU=upliftPct(cs.orders,cDays,flt(br,pw_s,pw_e));
+    const pmU=upliftPct(cs.orders,cDays,flt(br,pm_s,pm_e));
+    const p2U=upliftPct(cs.orders,cDays,flt(br,p2_s,p2_e));
+    if(pwU!=null)tPwUplifts.push(pwU);
+    if(pmU!=null)tPmUplifts.push(pmU);
+    if(p2U!=null)tP2Uplifts.push(p2U);
     const pwCell=cellUplift(cs.orders,cDays,flt(br,pw_s,pw_e),pw_s,pw_e,branchHasCamp(pwCamps,br));
     const pmCell=cellUplift(cs.orders,cDays,flt(br,pm_s,pm_e),pm_s,pm_e,branchHasCamp(pmCamps,br));
     const p2Cell=cellUplift(cs.orders,cDays,flt(br,p2_s,p2_e),p2_s,p2_e,branchHasCamp(p2Camps,br));
     return `<tr><td style="font-weight:700;color:#e2e8f0">${br}</td><td style="text-align:right;font-weight:700;color:#e2e8f0;font-variant-numeric:tabular-nums">${Math.round(cs.orders).toLocaleString()}</td><td style="text-align:right;color:#94a3b8;font-variant-numeric:tabular-nums">${fmtAEDx(cs.sales)}</td>${pwCell}${pmCell}${p2Cell}</tr>`;
   }).filter(Boolean).join('');
   if(!rows)return '';
+  // Totals row: sum of orders/sales, simple average uplift across all outlets that had data
+  const avgUplift=(arr)=>arr.length?arr.reduce((s,v)=>s+v,0)/arr.length:null;
+  const avgPw=avgUplift(tPwUplifts),avgPm=avgUplift(tPmUplifts),avgP2=avgUplift(tP2Uplifts);
+  const totUpliftCell=(avg)=>avg!=null?`<span style="color:${pctClr(avg)};font-weight:700">${fmtPct(avg)}</span><div style="font-size:9px;color:#64748b">avg across ${avg!=null?(avg===avgPw?tPwUplifts.length:avg===avgPm?tPmUplifts.length:tP2Uplifts.length):0} outlets</div>`:`<span style="color:#64748b">—</span>`;
+  const totalsRow=`<tr style="border-top:2px solid rgba(245,158,11,.3);background:rgba(245,158,11,.04)"><td style="font-weight:800;color:#f59e0b">TOTAL / AVG</td><td style="text-align:right;font-weight:800;color:#e2e8f0;font-variant-numeric:tabular-nums">${Math.round(tClickOrders).toLocaleString()}</td><td style="text-align:right;font-weight:800;color:#e2e8f0;font-variant-numeric:tabular-nums">${fmtAEDx(tClickSales)}</td><td style="text-align:right;font-variant-numeric:tabular-nums">${totUpliftCell(avgPw)}</td><td style="text-align:right;font-variant-numeric:tabular-nums">${totUpliftCell(avgPm)}</td><td style="text-align:right;font-variant-numeric:tabular-nums">${totUpliftCell(avgP2)}</td></tr>`;
   const fmtRange=(s,e)=>`${fmtShort(s)}–${fmtShort(e)}`;
   return `<div class="card"><div class="ct">📍 Per-Outlet Order Uplift — vs 3 baselines</div>
     <div style="font-size:11px;color:#94a3b8;margin-bottom:6px;line-height:1.6">Each outlet's orders during the campaign vs the same outlet in three earlier windows. Figures shown are baseline orders with the % change in campaign orders/day above baseline. <span style="color:#FBBF24">⚠</span> = another ${c.aggregator} campaign ran in that outlet during that baseline (read with caution).</div>
     <div style="overflow-x:auto"><table class="tbl"><thead>
       <tr><th rowspan="2" style="vertical-align:bottom">Outlet</th><th rowspan="2" style="text-align:right;vertical-align:bottom">Campaign<br>Orders</th><th rowspan="2" style="text-align:right;vertical-align:bottom">Campaign<br>Sales</th><th style="text-align:center">Previous Week</th><th style="text-align:center">Previous Month</th><th style="text-align:center">2 Months Ago</th></tr>
       <tr><th style="text-align:right;font-size:9px;color:#64748b;font-weight:500">${fmtRange(pw_s,pw_e)}</th><th style="text-align:right;font-size:9px;color:#64748b;font-weight:500">${fmtRange(pm_s,pm_e)}</th><th style="text-align:right;font-size:9px;color:#64748b;font-weight:500">${fmtRange(p2_s,p2_e)}</th></tr>
-    </thead><tbody>${rows}</tbody></table></div>
+    </thead><tbody>${rows}${totalsRow}</tbody></table></div>
     <div style="font-size:10px;color:#64748b;margin-top:8px">Each comparison uses the same weekdays: Previous Week = 7 days earlier · Previous Month = 28 days earlier · 2 Months Ago = 56 days earlier. The % is the change in campaign orders/day vs that baseline.</div>
   </div>`;
 }
@@ -2758,12 +2793,19 @@ function campDetailV2HTML(c,idx){
     const best=a.scenarios.reduce((m,x)=>x.incrContribPerDay>m.incrContribPerDay?x:m,a.scenarios[0]);
     const rows=a.scenarios.map(s=>{
       const cl=s.incrContribPerDay>=0?'#22C55E':'#EF4444';const isBest=s===best;
-      return `<tr style="${isBest?'background:rgba(34,197,94,.06)':''}"><td><strong style="color:${s.isActual?'#f59e0b':'#e2e8f0'}">${s.isActual?'Actual — ':''}${s.depthPct.toFixed(0)}% discount</strong>${isBest?' <span style="font-size:9px;color:#22C55E;font-weight:700">◀ most profitable</span>':''}</td><td style="text-align:right">+${s.incrOrdersPerDay.toFixed(0)}/day</td><td style="text-align:right">${fmtAEDx(s.ourDiscPerDay)}/day</td><td style="text-align:right;color:${cl};font-weight:700">${s.incrContribPerDay>=0?'+':''}${fmtAEDx(s.incrContribPerDay)}/day</td><td style="text-align:right">${s.discountROI!=null?s.discountROI.toFixed(2)+'×':'—'}</td></tr>`;
+      // Label: show headline % (what you'd set on the platform) + blended depth in smaller text
+      const headlineTag=s.headlinePct!=null
+        ?`<strong style="color:${s.isActual?'#f59e0b':'#e2e8f0'}">≈ ${s.headlinePct}% headline</strong><span style="font-size:10px;color:#64748b;margin-left:5px">(${s.depthPct.toFixed(0)}% blended depth)</span>`
+        :`<strong style="color:${s.isActual?'#f59e0b':'#e2e8f0'}">${s.depthPct.toFixed(0)}% blended depth</strong>`;
+      const actualTag=s.isActual?`<span style="font-size:9px;color:#f59e0b;font-weight:700;margin-right:4px">Actual — </span>`:'';
+      return `<tr style="${isBest?'background:rgba(34,197,94,.06)':''}"><td>${actualTag}${headlineTag}${isBest?' <span style="font-size:9px;color:#22C55E;font-weight:700">◀ most profitable</span>':''}</td><td style="text-align:right">+${s.incrOrdersPerDay.toFixed(0)}/day</td><td style="text-align:right">${fmtAEDx(s.ourDiscPerDay)}/day</td><td style="text-align:right;color:${cl};font-weight:700">${s.incrContribPerDay>=0?'+':''}${fmtAEDx(s.incrContribPerDay)}/day</td><td style="text-align:right">${s.discountROI!=null?s.discountROI.toFixed(2)+'×':'—'}</td></tr>`;
     }).join('');
-    const beNote=a.breakEvenDepth!=null?`<div style="font-size:12px;color:#cbd5e1;margin-top:10px;padding:8px 12px;background:rgba(96,165,250,.06);border-radius:6px">📐 <strong>Break-even discount: ${(a.breakEvenDepth*100).toFixed(0)}%</strong> — at the order lift this campaign produced, any discount deeper than this loses money on a contribution basis.</div>`:'';
+    const beNote=a.breakEvenDepth!=null?`<div style="font-size:12px;color:#cbd5e1;margin-top:10px;padding:8px 12px;background:rgba(96,165,250,.06);border-radius:6px">📐 <strong>Break-even discount: ${(a.breakEvenDepth*100).toFixed(0)}% blended depth${a.headlinePct&&a.actualDiscDepth>0?` (≈ ${Math.round(a.breakEvenDepth*(a.headlinePct/100)/a.actualDiscDepth*100)}% headline)`:''}  </strong> — at the order lift this campaign produced, any discount deeper than this loses money on a contribution basis.</div>`:'';
+    // Subheader: show the actual campaign comment and blended depth so context is clear
+    const commentNote=c.comments?`<div style="font-size:11px;color:#64748b;margin-bottom:8px;padding:6px 10px;background:rgba(27,47,74,.4);border-radius:6px;border-left:2px solid #334155">📋 Campaign: <em style="color:#94a3b8">"${c.comments}"</em>${a.discPctOfGross!=null?` · <strong style="color:#e2e8f0">actual blended depth: ${a.discPctOfGross.toFixed(1)}%</strong> of gross (vs ${a.headlinePct!=null?a.headlinePct+'% headline':'stated headline'})`:''}</div>`:'';
     scenarioBox=`<div class="card"><div class="ct">💡 Was a different discount better? — Elasticity Scenarios</div>
-      <div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Models what shallower discounts might have produced, assuming order lift scales with discount depth (elasticity <strong>${campElasticity.toFixed(1)}</strong> = ${campElasticity===1?'linear':'curved'}). These are <em>estimates</em>, not measured outcomes.</div>
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><span style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Elasticity</span>${[0.7,1.0,1.3].map(e=>`<button onclick="campSetElasticity(${e})" style="padding:3px 10px;border-radius:6px;border:1px solid ${campElasticity===e?'#f59e0b':'rgba(27,47,74,.6)'};background:${campElasticity===e?'rgba(245,158,11,.12)':'transparent'};color:${campElasticity===e?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${e===0.7?'Low (0.7)':e===1?'Linear (1.0)':'High (1.3)'}</button>`).join('')}</div>
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Models what shallower discounts might have produced, assuming order lift scales with discount depth (elasticity <strong>${campElasticity.toFixed(1)}</strong> = ${campElasticity===1?'linear':'curved'}). Headline % = what you'd set on the platform. Blended depth = actual realized discount as % of gross. These are <em>estimates</em>, not measured outcomes.</div>
+      ${commentNote}<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><span style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Elasticity</span>${[0.7,1.0,1.3].map(e=>`<button onclick="campSetElasticity(${e})" style="padding:3px 10px;border-radius:6px;border:1px solid ${campElasticity===e?'#f59e0b':'rgba(27,47,74,.6)'};background:${campElasticity===e?'rgba(245,158,11,.12)':'transparent'};color:${campElasticity===e?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${e===0.7?'Low (0.7)':e===1?'Linear (1.0)':'High (1.3)'}</button>`).join('')}</div>
       <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Scenario</th><th style="text-align:right">Incr Orders</th><th style="text-align:right">Our Disc Burn</th><th style="text-align:right">Incr Contribution</th><th style="text-align:right">ROI</th></tr></thead><tbody>${rows}</tbody></table></div>${beNote}</div>`;
   }
   return header+overlapBanner+cmpBanner+verdictBox+kpiCards+breakdownBox+campOutletBreakdownHTML(c,a)+scenarioBox;
