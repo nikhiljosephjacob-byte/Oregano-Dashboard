@@ -1001,7 +1001,7 @@ function makeFilterBar(opts){
   const f=curFilters();
   const presets=[["yesterday","Yesterday"],["7d","Last 7 Days"],["30d","Last 30 Days"],["month","This Month"],["lmonth","Last Month"],["custom","Custom"]];
   const pH=presets.map(([k,l])=>`<button class="preset ${f.preset===k?"act":""}" data-act="preset" data-v1="${k}">${l}</button>`).join("");
-  const custH=f.preset==="custom"?`<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap"><input type="date" id="f-s" value="${f.start||""}" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px"><span style="color:#64748b">→</span><input type="date" id="f-e" value="${f.end||""}" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px"><button data-act="apply" style="background:#f59e0b;border:none;border-radius:5px;color:#000;font-weight:700;padding:4px 12px;font-size:11px;cursor:pointer">Apply</button></div>`:"";
+  const custH=f.preset==="custom"?`<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap"><input type="date" id="f-s" value="${f.start||""}" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:6px;color:#e2e8f0;padding:7px 12px;font-size:13px;font-weight:600;color-scheme:dark;min-width:135px"><span style="color:#64748b">→</span><input type="date" id="f-e" value="${f.end||""}" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:6px;color:#e2e8f0;padding:7px 12px;font-size:13px;font-weight:600;color-scheme:dark;min-width:135px"><button data-act="apply" style="background:#f59e0b;border:none;border-radius:5px;color:#000;font-weight:700;padding:7px 14px;font-size:12px;cursor:pointer">Apply</button></div>`:"";
   const allBr=[...new Set(allData.map(r=>r.branch))].filter(b=>b!=="(brand-level)").sort();
   const brDD=hideBrand?"":ddHTML("fdd-br","Brand",f.brands,BR.map(b=>({val:b.n,lbl:b.n,clr:b.c})),"brand");
   const plDD=hidePlatform?"":ddHTML("fdd-pl","Platform",f.platforms,AGGS.map(a=>({val:a,lbl:a,clr:AC[a]||"#888"})),"platform");
@@ -4540,23 +4540,26 @@ function cmpPanel(side){
     </div>
     <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">${presetsH}</div>
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-      <input type="date" value="${cfg.start||""}" data-act="cmpDate" data-v1="${side}" data-v2="start" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px">
+      <input type="date" value="${cfg.start||""}" data-act="cmpDate" data-v1="${side}" data-v2="start" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:6px;color:#e2e8f0;padding:7px 12px;font-size:13px;font-weight:600;color-scheme:dark;min-width:135px">
       <span style="color:#64748b">→</span>
-      <input type="date" value="${cfg.end||""}" data-act="cmpDate" data-v1="${side}" data-v2="end" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:4px 8px;font-size:11px">
+      <input type="date" value="${cfg.end||""}" data-act="cmpDate" data-v1="${side}" data-v2="end" style="background:#111d2e;border:1px solid #1b2f4a;border-radius:6px;color:#e2e8f0;padding:7px 12px;font-size:13px;font-weight:600;color-scheme:dark;min-width:135px">
     </div>
     <div style="margin-top:8px;font-size:11px;color:#94a3b8;line-height:1.5"><strong style="color:${accent}">${cmpLabel(cfg)}</strong><br>${cmpDateLabel(cfg)}</div>
   </div>`;
 }
 
 function cmpStatCard(label,a,b,fmt,unit,perDay){
-  const diff=pctOf(a,b);
+  // pctOf(b,a) measures how B changed relative to A as the baseline — the conventional
+  // period-over-period view. Earlier we used pctOf(a,b) which reported A relative to B and
+  // confused users (e.g. orders going 122 → 102 showed "+19.6% A vs B" instead of -16.4%).
+  const diff=pctOf(b,a);
   const dc=pctClr(diff);
   const fa=fmt(a),fb=fmt(b);
   // Optional per-day averages line (shown when the windows span more than one day)
   let perDayLine="";
   if(perDay&&(perDay.nA>1||perDay.nB>1)){
     const avgA=a/perDay.nA,avgB=b/perDay.nB;
-    const avgDiff=pctOf(avgA,avgB);
+    const avgDiff=pctOf(avgB,avgA);
     perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #1b2f4a">
       <div style="font-size:8px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
       <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
@@ -4575,7 +4578,7 @@ function cmpStatCard(label,a,b,fmt,unit,perDay){
       <span style="font-size:11px;color:#64748b">vs</span>
       <span style="font-size:20px;font-weight:800;color:#F59E0B;font-variant-numeric:tabular-nums">${fb}</span>
     </div>
-    <div style="font-size:12px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:#64748b;font-weight:400">A vs B</span></div>
+    <div style="font-size:12px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:#64748b;font-weight:400">B vs A</span></div>
     ${perDayLine}
   </div>`;
 }
@@ -4628,7 +4631,7 @@ function renderCompare(){
     const a=sumR(dA.filter(r=>r.aggregator===ag));
     const b=sumR(dB.filter(r=>r.aggregator===ag));
     const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
-    return{ag,clr:AC[ag]||"#888",a,b,oDiff:pctOf(a.orders,b.orders),sDiff:pctOf(a.sales,b.sales),aDiff:pctOf(aov_a,aov_b)};
+    return{ag,clr:AC[ag]||"#888",a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a)};
   }).filter(p=>p.a.orders>0||p.b.orders>0);
   const movers=[...platMove].filter(p=>p.sDiff!=null).sort((x,y)=>y.sDiff-x.sDiff);
   const risers=movers.filter(p=>p.sDiff>0),fallers=movers.filter(p=>p.sDiff<0).reverse();
@@ -4639,7 +4642,7 @@ function renderCompare(){
     const[brand,ag]=k.split("|");
     const a=sumR(dA.filter(r=>r.brand===brand&&r.aggregator===ag));
     const b=sumR(dB.filter(r=>r.brand===brand&&r.aggregator===ag));
-    return{brand,ag,a,b,oDiff:pctOf(a.orders,b.orders),sDiff:pctOf(a.sales,b.sales)};
+    return{brand,ag,a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales)};
   }).filter(r=>r.a.orders>0||r.b.orders>0);
   const tRows=tableRows.map(r=>({cells:[
     `<span style="display:inline-flex;align-items:center;gap:6px"><span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span><span style="color:${AC[r.ag]||'#888'};font-size:11px">${r.ag}</span></span>`,
@@ -4674,8 +4677,8 @@ function renderCompare(){
     <div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>Trend — <span style="color:#60A5FA">A</span> vs <span style="color:#F59E0B">B</span> (aligned by day index)</span><div style="display:flex;gap:5px">${metricBtns}</div></div><div style="position:relative;height:220px"><canvas id="cmp-chart"></canvas></div><div style="font-size:10px;color:#64748b;margin-top:6px">Day 1 = first day of each window. This lets you compare windows of different years/lengths on the same axis.</div></div>
 
     <div class="g2">
-      <div class="sm"><div class="ct" style="color:#22C55E">📈 Platforms that grew (A vs B)</div>${risers.length?risers.map(p=>moverChip(p,p.sDiff)).join(""):`<div style="color:#64748b;font-size:12px">None grew.</div>`}</div>
-      <div class="sm"><div class="ct" style="color:#EF4444">📉 Platforms that dropped (A vs B)</div>${fallers.length?fallers.map(p=>moverChip(p,p.sDiff)).join(""):`<div style="color:#64748b;font-size:12px">None dropped.</div>`}</div>
+      <div class="sm"><div class="ct" style="color:#22C55E">📈 Platforms that grew (B vs A)</div>${risers.length?risers.map(p=>moverChip(p,p.sDiff)).join(""):`<div style="color:#64748b;font-size:12px">None grew.</div>`}</div>
+      <div class="sm"><div class="ct" style="color:#EF4444">📉 Platforms that dropped (B vs A)</div>${fallers.length?fallers.map(p=>moverChip(p,p.sDiff)).join(""):`<div style="color:#64748b;font-size:12px">None dropped.</div>`}</div>
     </div>
 
     <div class="card"><div class="ct">Per-Platform Breakdown</div>${mkTable(["Platform","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A AOV","B AOV","Δ AOV"],platMove.map(p=>[
