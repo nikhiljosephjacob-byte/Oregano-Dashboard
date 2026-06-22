@@ -2339,7 +2339,7 @@ const AUH_OUTLETS=new Set(["Al Forsan","Al Reem","Reem Island","WTC","Al Reef"])
 // case-insensitive and falls back to fuzzy contains-match if no alias hit.
 const BRANCH_ALIASES={
   "dmc":"dmc","dubai media city":"dmc","media city":"dmc",
-  "motorcity":"motor city","motor city":"motor city",
+  "motorcity":"motorcity","motor city":"motorcity","mc":"motorcity",
   "mirdif":"mirdiff","mirdiff":"mirdiff",
   "tsqr":"town square","town square":"town square",
   "fyoo dip":"dip (fyoozhen)","fyoozhen dip":"dip (fyoozhen)","fyoozhen-dip":"dip (fyoozhen)",
@@ -2348,7 +2348,7 @@ const BRANCH_ALIASES={
   "al reef":"al reef","reef":"al reef",
   "nas":"nas","nad al sheba":"nas",
   "marina":"marina","dso":"dso","dubai silicon oasis":"dso",
-  "furjan":"furjan","al quoz":"al quoz","quoz":"al quoz","qouz":"al quoz","al qouz":"al quoz","dip":"dip","villa":"villa","jumeirah":"jumeirah","jumearah":"jumeirah","mc":"motor city","mirdif":"mirdiff"
+  "furjan":"furjan","al quoz":"al quoz","quoz":"al quoz","qouz":"al quoz","al qouz":"al quoz","dip":"dip","villa":"villa","jumeirah":"jumeirah","jumearah":"jumeirah"
 };
 function resolveBranchName(token,brandBranches){
   if(!token)return null;
@@ -2358,8 +2358,13 @@ function resolveBranchName(token,brandBranches){
   // Exact match first against the brand's actual branches
   let m=brandBranches.find(b=>b.toLowerCase()===canonical);
   if(m)return m;
-  // Try alias canonical against branch lower
+  // Try the original token (pre-alias) against branch lower
   m=brandBranches.find(b=>b.toLowerCase()===tl);
+  if(m)return m;
+  // Whitespace-insensitive match — handles "motor city" vs "Motorcity", "town square" vs
+  // "TownSquare", etc. Many user-written comments don't match the dashboard's exact spelling.
+  const nows=s=>s.toLowerCase().replace(/\s+/g,"");
+  m=brandBranches.find(b=>nows(b)===nows(canonical))||brandBranches.find(b=>nows(b)===nows(tl));
   if(m)return m;
   // Fuzzy contains (only if token is long enough to be specific)
   if(canonical.length>=3){
