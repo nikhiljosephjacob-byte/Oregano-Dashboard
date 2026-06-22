@@ -4497,8 +4497,10 @@ function cmpData(cfg){
 
 // Compute total merchant-funded discount for the comparison filter scope. Three paths,
 // chosen in order of preference for accuracy:
-//   1. No outlet filter → use the raw brand-level disc straight from the sheet records
-//      (which is stored on the "(brand-level)" pseudo-branch and represents the truth).
+//   1. No outlet filter → sum r.disc across ALL records for the brand × aggregator in the
+//      date window. The dashboard's sheet parser attaches each day's brand-level discount to
+//      a single record (usually a real outlet's row, not the "(brand-level)" pseudo-branch),
+//      so summing all records correctly recovers the brand total without double-counting.
 //   2. Outlet filter set + Keeta/Careem exact data uploaded → sum per-outlet menu_disc
 //      from the uploaded JSON (this is what the Campaigns page uses).
 //   3. Outlet filter set + no exact data → fall back to sales-weighted estimate
@@ -4522,11 +4524,12 @@ function cmpComputeDisc(cfg){
   let anyExact=false,anyEstimated=false;
   for(const key of pairs){
     const [brand,agg]=key.split("|");
-    // Path 1: no outlet filter — raw brand-level
+    // Path 1: no outlet filter — sum r.disc across ALL records (per-outlet + any
+    // brand-level pseudo-records). Each day's discount is attached to exactly one record by
+    // the parser, so summing all of them gives the brand total once, not duplicated.
     if(!cfg.branches.size){
       for(const r of allData){
         if(r.brand!==brand||r.aggregator!==agg)continue;
-        if(r.branch!=="(brand-level)")continue;
         if(!inWindow(r.date))continue;
         total+=r.disc||0;
       }
@@ -4551,13 +4554,18 @@ function cmpComputeDisc(cfg){
       }
       anyExact=true;continue;
     }
-    // Path 3: fallback — sales-weighted brand allocation
+    // Path 3: fallback — sales-weighted brand allocation. brandDisc sums r.disc across ALL
+    // records (per-outlet + pseudo-brand-level) since the parser attaches disc to any single
+    // record per day. brandSales sums only real outlets to use as the allocation base.
     let brandDisc=0,brandSales=0,outletSales=0;
     for(const r of allData){
       if(r.brand!==brand||r.aggregator!==agg)continue;
       if(!inWindow(r.date))continue;
-      if(r.branch==="(brand-level)"){brandDisc+=r.disc||0;}
-      else{brandSales+=r.sales||0;if(cfg.branches.has(r.branch))outletSales+=r.sales||0;}
+      brandDisc+=r.disc||0;
+      if(r.branch!=="(brand-level)"){
+        brandSales+=r.sales||0;
+        if(cfg.branches.has(r.branch))outletSales+=r.sales||0;
+      }
     }
     if(brandSales>0)total+=brandDisc*(outletSales/brandSales);
     anyEstimated=true;
