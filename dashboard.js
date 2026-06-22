@@ -366,66 +366,308 @@ async function parseKeetaXlsx(file){
   };
 }
 
-// ── Upload UI bar (rendered at top of Campaigns page) ────────────────────
+// ── Unified upload UI bar (top of Campaigns page) — handles both Keeta XLSX and Careem CSV
 function keetaUploadBarHTML(){
-  if(!keetaOrdersData){
-    return`<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:rgba(232,214,20,.06);border:1px dashed rgba(232,214,20,.3);border-radius:8px;margin-bottom:12px">
-      <span style="font-size:14px">📊</span>
-      <span style="font-size:11px;color:#94a3b8;flex:1">No Keeta exact-order data uploaded — Keeta campaigns currently use sales-weighted estimation. Upload Keeta's "Recent Orders" Excel for exact per-outlet discount data.</span>
-      <input type="file" id="keeta-file" accept=".xlsx,.xls" style="display:none" onchange="handleKeetaUpload(this.files[0])">
-      <button onclick="document.getElementById('keeta-file').click()" style="background:rgba(232,214,20,.15);border:1px solid rgba(232,214,20,.4);border-radius:5px;color:#E8D614;padding:5px 14px;font-size:11px;cursor:pointer;font-weight:700">Upload Keeta Orders</button>
-    </div>`;
-  }
-  const md=keetaOrdersData.metadata||{};
-  const dr=md.date_range||[];
-  const tot=md.totals||{};
-  const uploaded=md.generated_at?fmtDisp(md.generated_at.slice(0,10)):"unknown";
-  const status=document.getElementById("keeta-status-msg");
-  const msg=status?status.innerHTML:"";
-  return`<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.3);border-radius:8px;margin-bottom:12px">
-    <span style="font-size:14px">📊</span>
-    <span style="font-size:11px;color:#cbd5e1;flex:1">
-      <strong style="color:#22C55E">Keeta exact data loaded:</strong>
-      ${(tot.orders||0).toLocaleString()} orders · ${dr[0]?fmtShort(dr[0]):"?"} → ${dr[1]?fmtShort(dr[1]):"?"} · uploaded ${uploaded}
-      <span id="keeta-status-msg" style="margin-left:8px;color:#fbbf24">${msg}</span>
-    </span>
-    <input type="file" id="keeta-file" accept=".xlsx,.xls" style="display:none" onchange="handleKeetaUpload(this.files[0])">
-    <button onclick="document.getElementById('keeta-file').click()" style="background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3);border-radius:5px;color:#22C55E;padding:4px 10px;font-size:10px;cursor:pointer;font-weight:600">↻ Replace</button>
-    <button onclick="if(confirm('Clear uploaded Keeta data? Keeta campaigns will revert to sales-weighted estimation.'))clearKeetaData()" style="background:transparent;border:1px solid rgba(100,116,139,.3);border-radius:5px;color:#64748b;padding:4px 10px;font-size:10px;cursor:pointer">Clear</button>
+  const fmtSourceStatus=(label,data,clearFn)=>{
+    if(!data)return`<span style="font-size:11px;color:#64748b">${label}: <em style="color:#475569">not uploaded</em></span>`;
+    const md=data.metadata||{};const dr=md.date_range||[];const tot=md.totals||{};
+    return`<span style="font-size:11px;color:#cbd5e1"><strong style="color:#22C55E">${label}:</strong> ${(tot.orders||0).toLocaleString()} orders · ${dr[0]?fmtShort(dr[0]):"?"} → ${dr[1]?fmtShort(dr[1]):"?"} <button onclick="if(confirm('Clear uploaded ${label} data? Reverts to sales-weighted estimation.'))${clearFn}()" style="background:transparent;border:none;color:#64748b;font-size:9px;cursor:pointer;padding:0 4px;text-decoration:underline">clear</button></span>`;
+  };
+  const keetaStatus=fmtSourceStatus("Keeta",keetaOrdersData,"clearKeetaData");
+  const careemStatus=fmtSourceStatus("Careem",careemOrdersData,"clearCareemData");
+  const anyLoaded=keetaOrdersData||careemOrdersData;
+  const accent=anyLoaded?"rgba(34,197,94,.3)":"rgba(232,214,20,.3)";
+  const accentBg=anyLoaded?"rgba(34,197,94,.04)":"rgba(232,214,20,.06)";
+  const accentBorder=anyLoaded?"1px solid":"1px dashed";
+  const blurb=anyLoaded
+    ?`<span style="font-size:11px;color:#94a3b8;margin-right:8px">📊 Exact-order data is in use for campaigns where uploaded data covers the window:</span>`
+    :`<span style="font-size:11px;color:#94a3b8;margin-right:8px;flex:1">📊 No exact-order data uploaded — campaigns currently use sales-weighted estimation. Upload Keeta "Recent Orders" (.xlsx) or Careem "FOOD_ORDER" (.csv) for exact per-outlet discount data.</span>`;
+  return`<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:${accentBg};border:${accentBorder} ${accent};border-radius:8px;margin-bottom:12px;flex-wrap:wrap">
+    ${blurb}
+    ${anyLoaded?`<div style="display:flex;gap:14px;flex-wrap:wrap;flex:1">${keetaStatus}${careemStatus}</div>`:''}
+    <input type="file" id="orders-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleOrdersUpload(this.files[0])">
+    <button onclick="document.getElementById('orders-file').click()" style="background:rgba(232,214,20,.15);border:1px solid rgba(232,214,20,.4);border-radius:5px;color:#E8D614;padding:5px 14px;font-size:11px;cursor:pointer;font-weight:700;white-space:nowrap">${anyLoaded?'↻ Upload More':'Upload Orders File'}</button>
   </div>`;
 }
 
-// ── Upload handler ───────────────────────────────────────────────────────
-async function handleKeetaUpload(file){
+// ── Unified upload handler ──────────────────────────────────────────────
+// Auto-detects file format from headers:
+//   xlsx + "Order no." / "Promotion funded by merchant"  → Keeta path
+//   csv  + "PARTNER_FUNDED_CATALOG_DISCOUNT" / "MERCHANT_AREA" → Careem path
+// Routes to the right parser and stores in the right state slot.
+async function handleOrdersUpload(file){
   if(!file)return;
-  // Show progress on the Campaigns nav tab (same battery technique as prewarm)
   const tab=typeof campNavTab==="function"?campNavTab():null;
   const oldTitle=tab?tab.title:"";
-  if(tab){tab.style.opacity="0.6";tab.title="Parsing Keeta orders file…";}
+  if(tab){tab.style.opacity="0.6";tab.title="Parsing orders file…";}
   try{
-    const data=await parseKeetaXlsx(file);
-    if(!data.records.length){
-      alert("File parsed but no usable records were found. Check the file is the right format (Keeta 'Recent Orders' export).");
+    await loadSheetJS(); // both parsers need it
+    const ab=await file.arrayBuffer();
+    const wb=XLSX.read(ab,{type:"array",raw:true,codepage:65001});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const firstRow=XLSX.utils.sheet_to_json(ws,{header:1,defval:""})[0]||[];
+    const headers=new Set(firstRow.map(h=>String(h).replace(/^\uFEFF/,"")));
+    let detected=null;
+    if(headers.has("Order no.")&&headers.has("Promotion funded by merchant"))detected="keeta";
+    else if(headers.has("PARTNER_FUNDED_CATALOG_DISCOUNT")&&headers.has("MERCHANT_AREA"))detected="careem";
+    if(!detected){
+      alert("Couldn't detect the file format.\n\nExpected either:\n• Keeta Recent Orders (.xlsx)\n• Careem FOOD_ORDER (.csv)\n\nMake sure you exported the right report.");
       return;
     }
-    keetaOrdersData=data;
-    saveKeetaToStorage();
-    // Cached campaign analyses must be invalidated so they re-compute with exact data.
+    if(detected==="keeta"){
+      const data=await parseKeetaXlsx(file);
+      if(!data.records.length){alert("File parsed but no usable Keeta records were found.");return;}
+      keetaOrdersData=data;saveKeetaToStorage();
+    }else{
+      const data=await parseCareemCSV(file);
+      if(!data.records.length){alert("File parsed but no usable Careem records were found.");return;}
+      careemOrdersData=data;saveCareemToStorage();
+    }
     if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
-    // Brief status message that fades
-    const tot=data.metadata.totals||{};
-    setTimeout(()=>{const m=document.getElementById("keeta-status-msg");if(m){m.innerHTML="✓ Loaded";setTimeout(()=>{if(m)m.innerHTML="";},2500);}},50);
     renderCampaigns();
+    // Brief confirmation toast (since the banner refresh is silent)
+    setTimeout(()=>{const tab2=typeof campNavTab==="function"?campNavTab():null;if(tab2){tab2.title=`Loaded ${detected.charAt(0).toUpperCase()+detected.slice(1)} orders`;setTimeout(()=>{if(tab2)tab2.title="";},2500);}},50);
   }catch(e){
-    alert("Failed to parse Keeta file:\n\n"+e.message+"\n\nMake sure this is the 'Recent Orders' Excel export from Keeta's merchant portal.");
-    console.error("[Keeta] parse error",e);
+    alert("Failed to parse file:\n\n"+e.message);
+    console.error("[Orders upload] parse error",e);
   }finally{
     if(tab){tab.style.opacity="1";tab.title=oldTitle;}
   }
 }
+// Back-compat: keep the old handler name in case external code references it
+async function handleKeetaUpload(file){return handleOrdersUpload(file);}
 // ═══════════════════════════════════════════════════════════════
 // END KEETA MODULE
 // ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// CAREEM EXACT-DISCOUNT MODULE
+// Parses Careem "FOOD_ORDER" CSV exports into per-(brand × outlet × date × discount_type)
+// menu discount totals. Methodology in /mnt/user-data/outputs/careem-orders/SKILL.md.
+//
+// Differs from Keeta:
+//  - CSV (not XLSX); UTF-8 BOM
+//  - Two discount columns (PARTNER_FUNDED_CATALOG_DISCOUNT, PARTNER_FUNDED_PROMO_DISCOUNT)
+//    which are mutually exclusive per order (~0.01% have both)
+//  - No items column → can't attribute by item; instead we classify each Careem CAMPAIGN as
+//    catalog-type (% off menu items) or promo-type (voucher with fixed cap), and match orders
+//    by discount column non-zero
+//  - No FD subtraction (Careem handles delivery separately)
+// ═══════════════════════════════════════════════════════════════
+
+// BRAND_NAME → canonical brand. Careem appends "- UAE" or geographic qualifiers.
+const CAREEM_BRAND_NORM={
+  "Oregano":                  "Oregano",
+  "Lollo Rosso - UAE":        "Lollorosso",
+  "Fyoo Zhen - UAE":          "Fyoozhen",
+  "Smokey's Pizzeria - UAE":  "Smokeys",
+  "Wicked Wings- UAE":        "Wicked Wings"
+};
+// MERCHANT_AREA → dashboard branch. Some Careem names are non-obvious:
+//   "Jebel Ali Village" is actually Furjan; "Dubai Land" is Villa; "Al Sufouh" maps to DMC.
+// When new outlets appear, add them here. Unmapped outlets are surfaced in metadata.
+const CAREEM_OUTLET_CODE={
+  "Motor City":                  "Motorcity",
+  "Dubai Marina":                "Marina",
+  "Dubai Investment Park":       "DIP",
+  "Media City / Internet City":  "DMC",
+  "Al Sufouh":                   "DMC",
+  "Jebel Ali Village":           "Furjan",
+  "Al Furjan":                   "Furjan",
+  "Silicon Oasis":               "DSO",
+  "Mirdif":                      "Mirdiff",
+  "Al Reem Island":              "Al Reem",
+  "Town Square":                 "Town Square",
+  "Al Quoz":                     "Al Quoz",
+  "Al Reef":                     "Al Reef",
+  "Al Mina":                     "Jumeirah",
+  "Al Jaffiliya":                "Jumeirah",
+  "Al Jaffliya":                 "Jumeirah",  // alt spelling
+  "Dubai Land":                  "Villa",
+  "Nad Al Sheba":                "NAS",
+  "Khalifa West":                "Al Forsan",
+  "Al Danah":                    "WTC"
+};
+const CAREEM_SKIPPED_STATUSES=new Set(["Cancelled by others","Cancelled by merchant"]);
+const CAREEM_STORAGE_KEY="careem_orders_data_v1";
+
+let careemOrdersData=null;
+function loadCareemFromStorage(){
+  try{const raw=localStorage.getItem(CAREEM_STORAGE_KEY);if(raw)careemOrdersData=JSON.parse(raw);}
+  catch(e){console.log("[Careem] localStorage load failed:",e.message);careemOrdersData=null;}
+}
+function saveCareemToStorage(){
+  if(!careemOrdersData)return;
+  try{localStorage.setItem(CAREEM_STORAGE_KEY,JSON.stringify(careemOrdersData));}
+  catch(e){console.log("[Careem] localStorage save failed (quota?):",e.message);}
+}
+function clearCareemData(){
+  careemOrdersData=null;
+  try{localStorage.removeItem(CAREEM_STORAGE_KEY);}catch(e){}
+  if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
+  renderCampaigns();
+}
+
+// Classify a Careem campaign as "catalog" or "promo" by inspecting its name + comments.
+// Heuristic: presence of "CAP" anywhere = promo (capped voucher-style); otherwise catalog.
+// Examples (Jun 2026):
+//   "Crazy Deals 30% OFF CAP 20"        → promo
+//   "Best Sellers 30% OFF"              → catalog
+//   "Offers for You 50% OFF 1 Item"     → catalog (Keeta, not Careem — wouldn't be classified here)
+function classifyCareemCampaign(c){
+  const text=`${c.name||""} ${c.comments||""}`.toUpperCase();
+  // Match standalone "CAP" word — avoid matching "capacity" / "capital" etc. accidentally
+  if(/\bCAP\b/.test(text))return "promo";
+  return "catalog";
+}
+
+// Lookup: sum exact menu_disc for matching (brand, outlet ∈ scope, date in window, discount_type)
+// where discount_type matches the campaign's classification (catalog vs promo).
+// Returns null when there's no overlap with the uploaded date range (→ caller falls back to
+// sales-weighted estimation). Partial coverage works the same way as Keeta — exact for covered
+// days, 0 contribution for uncovered tail days.
+function getCareemExactDisc(c,start,end){
+  if(!careemOrdersData||!careemOrdersData.records||!careemOrdersData.metadata)return null;
+  const dr=careemOrdersData.metadata.date_range||[];
+  if(!dr[0]||!dr[1])return null;
+  if(end<dr[0]||start>dr[1])return null;
+  const expectedType=classifyCareemCampaign(c);
+  const myScope=campOutlets(c);
+  let menuDisc=0;const dailyAlloc={};let matched=0;
+  for(const rec of careemOrdersData.records){
+    if(rec.brand!==c.brand)continue;
+    if(rec.discount_type!==expectedType)continue;
+    if(rec.date<start||rec.date>end)continue;
+    if(myScope&&!myScope.has(rec.outlet))continue;
+    menuDisc+=rec.menu_disc;
+    dailyAlloc[rec.date]=(dailyAlloc[rec.date]||0)+rec.menu_disc;
+    matched++;
+  }
+  if(!matched)return null;
+  const daysIn=(s,e)=>Math.max(0,Math.round((new Date(e+"T12:00:00")-new Date(s+"T12:00:00"))/86400000)+1);
+  const totalDays=daysIn(start,end);
+  const covStart=start>dr[0]?start:dr[0];
+  const covEnd=end<dr[1]?end:dr[1];
+  const coveredDays=daysIn(covStart,covEnd);
+  return{menuDisc,dailyAlloc,matchedRecords:matched,coveredDays,totalDays,partialCoverage:coveredDays<totalDays,uncoveredStart:end>dr[1]?dr[1]:null,uncoveredEnd:end>dr[1]?end:null};
+}
+
+// AED parser for plain numeric values (Careem CSV uses raw floats, not "AED 17.30" strings)
+function parseCareemAmount(v){
+  if(v==null||v==="")return 0;
+  if(typeof v==="number")return v;
+  const s=String(v).trim();
+  const n=parseFloat(s);
+  return isNaN(n)?0:n;
+}
+function parseCareemDate(ts){
+  if(!ts)return null;
+  const s=String(ts).trim();
+  // Careem format: "2026-06-20 22:46:17.0" — first 10 chars is the date
+  return s.length>=10?s.slice(0,10):null;
+}
+
+// Parse a Careem FOOD_ORDER CSV into the same aggregated shape as Keeta's output.
+async function parseCareemCSV(file){
+  await loadSheetJS(); // SheetJS handles CSV too — one loader for both formats
+  const ab=await file.arrayBuffer();
+  const wb=XLSX.read(ab,{type:"array",raw:true,codepage:65001}); // UTF-8 (codepage 65001) handles BOM
+  const ws=wb.Sheets[wb.SheetNames[0]];
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+  if(!rows.length)throw new Error("File is empty");
+  const header=rows[0],headerIdx={};
+  // Careem's first header has a BOM prefix on the first column — strip it
+  header.forEach((h,i)=>{headerIdx[String(h).replace(/^\uFEFF/,"")]=i;});
+  const required=["REFERENCE_ID","TRANSACTION_DATE","TOTAL_AMOUNT","TOTAL_PAYOUT_AMOUNT","FOOD_GROSS_BASKET_AMOUNT","PARTNER_FUNDED_CATALOG_DISCOUNT","PARTNER_FUNDED_PROMO_DISCOUNT","BRAND_NAME","MERCHANT_AREA","STATUS"];
+  const missing=required.filter(c=>!(c in headerIdx));
+  if(missing.length)throw new Error("Missing required columns: "+missing.join(", "));
+
+  const data=rows.slice(1);
+  const agg={};
+  const skipped={cancelled:0,no_brand:0,no_outlet:0,no_date:0};
+  const unmappedOutlets=new Set();
+  const unmappedBrands=new Set();
+  const perBrand={};
+  const datesSeen=new Set();
+
+  for(const r of data){
+    const status=String(r[headerIdx["STATUS"]]||"").trim();
+    if(CAREEM_SKIPPED_STATUSES.has(status)){skipped.cancelled++;continue;}
+    const brandRaw=String(r[headerIdx["BRAND_NAME"]]||"").trim();
+    const brand=CAREEM_BRAND_NORM[brandRaw];
+    if(!brand){unmappedBrands.add(brandRaw);skipped.no_brand++;continue;}
+    const outletRaw=String(r[headerIdx["MERCHANT_AREA"]]||"").trim();
+    const outlet=CAREEM_OUTLET_CODE[outletRaw];
+    if(!outlet){unmappedOutlets.add(outletRaw);skipped.no_outlet++;continue;}
+    const date=parseCareemDate(r[headerIdx["TRANSACTION_DATE"]]);
+    if(!date){skipped.no_date++;continue;}
+
+    const gross=parseCareemAmount(r[headerIdx["FOOD_GROSS_BASKET_AMOUNT"]])||parseCareemAmount(r[headerIdx["TOTAL_AMOUNT"]]);
+    const netPayout=parseCareemAmount(r[headerIdx["TOTAL_PAYOUT_AMOUNT"]]);
+    const catDisc=Math.abs(parseCareemAmount(r[headerIdx["PARTNER_FUNDED_CATALOG_DISCOUNT"]]));
+    const promoDisc=Math.abs(parseCareemAmount(r[headerIdx["PARTNER_FUNDED_PROMO_DISCOUNT"]]));
+
+    // Per-brand totals for validation
+    if(!perBrand[brand])perBrand[brand]={orders:0,gross:0,net_payout:0,cat_disc:0,promo_disc:0};
+    const pb=perBrand[brand];
+    pb.orders++;pb.gross+=gross;pb.net_payout+=netPayout;pb.cat_disc+=catDisc;pb.promo_disc+=promoDisc;
+
+    // Aggregate by (brand, outlet, date, discount_type). Both columns are usually mutually exclusive;
+    // the ~1-per-file order with both gets recorded under each type, but gross/payout only under catalog
+    // to avoid double-counting baseline figures when summing across types.
+    const recordTo=(dtype,gShare,pShare,discShare)=>{
+      const k=`${brand}|${outlet}|${date}|${dtype}`;
+      if(!agg[k])agg[k]={brand,outlet,date,discount_type:dtype,orders:0,gross:0,net_payout:0,menu_disc:0};
+      agg[k].orders++;agg[k].gross+=gShare;agg[k].net_payout+=pShare;agg[k].menu_disc+=discShare;
+    };
+    if(catDisc>0&&promoDisc>0){
+      recordTo("catalog",gross,netPayout,catDisc);
+      recordTo("promo",0,0,promoDisc);
+    }else if(catDisc>0){
+      recordTo("catalog",gross,netPayout,catDisc);
+    }else if(promoDisc>0){
+      recordTo("promo",gross,netPayout,promoDisc);
+    }else{
+      recordTo("none",gross,netPayout,0);
+    }
+    datesSeen.add(date);
+  }
+
+  const records=Object.values(agg).map(r=>({
+    brand:r.brand,outlet:r.outlet,date:r.date,discount_type:r.discount_type,
+    orders:r.orders,gross:Math.round(r.gross*100)/100,net_payout:Math.round(r.net_payout*100)/100,
+    menu_disc:Math.round(r.menu_disc*100)/100
+  }));
+  const dates=Array.from(datesSeen).sort();
+  return{
+    metadata:{
+      source_file:file.name,
+      generated_at:new Date().toISOString(),
+      aggregator:"Careem",
+      date_range:dates.length?[dates[0],dates[dates.length-1]]:[null,null],
+      rows_in_file:data.length,
+      rows_skipped:skipped,
+      unmapped_outlets:Array.from(unmappedOutlets).sort(),
+      unmapped_brands:Array.from(unmappedBrands).sort(),
+      totals_per_brand:Object.fromEntries(Object.entries(perBrand).map(([br,v])=>[br,{
+        orders:v.orders,
+        gross:Math.round(v.gross*100)/100,
+        net_payout:Math.round(v.net_payout*100)/100,
+        catalog_disc:Math.round(v.cat_disc*100)/100,
+        promo_disc:Math.round(v.promo_disc*100)/100,
+        total_menu_disc:Math.round((v.cat_disc+v.promo_disc)*100)/100
+      }])),
+      totals:{
+        orders:data.length-skipped.cancelled-skipped.no_brand-skipped.no_outlet-skipped.no_date
+      }
+    },
+    records
+  };
+}
+// ═══════════════════════════════════════════════════════════════
+// END CAREEM MODULE
+// ═══════════════════════════════════════════════════════════════
+
 
 
 // CSV PARSING
@@ -533,8 +775,9 @@ async function doLoad(){
   }));
   allData=all;
   buildDataIndex();
-  // Restore any previously-uploaded Keeta exact-discount data from localStorage
+  // Restore any previously-uploaded exact-discount data from localStorage (both aggregators)
   loadKeetaFromStorage();
+  loadCareemFromStorage();
   // ── DISCOUNT PARSE DIAGNOSTIC ──
   // Prints how much Disc was parsed per brand × aggregator so we can see if the sheet's
   // Disc column is being read. If a brand/aggregator you entered shows 0, the column header
@@ -2592,11 +2835,14 @@ function campCardGrid(camps,showProfit){
     })();
     // Full dates (e.g. "5 Jun – 11 Jun 2026")
     const dateStr=(()=>{const s=fmtDisp(c.startDate).replace(/^\w+,\s*/,'');const e=fmtDisp(c.endDate).replace(/^\w+,\s*/,'');return `${s} – ${e}`;})();
-    // "📊 Exact" badge when this campaign's discount came from uploaded Keeta order data
-    // (as opposed to the sales-weighted estimate). Shown only for Keeta campaigns with data.
-    const exactChip=(showProfit&&c.aggregator==='Keeta'&&keetaOrdersData)?(()=>{
+    // "📊 Exact" badge when this campaign's discount came from uploaded order data
+    // (Keeta XLSX or Careem CSV). Shown only for matching aggregator + data present.
+    const exactChip=(showProfit&&(
+      (c.aggregator==='Keeta'&&keetaOrdersData)||
+      (c.aggregator==='Careem'&&careemOrdersData)
+    ))?(()=>{
       const a=campAnalysisCached(c);
-      return a.discSource==='keeta_exact'?`<span style="font-size:8px;background:rgba(34,197,94,.12);color:#22C55E;font-weight:700;padding:1px 6px;border-radius:6px" title="Discount sourced from uploaded Keeta orders file (exact per-order data, not estimated)">📊 Exact</span>`:'';
+      return(a.discSource==='keeta_exact'||a.discSource==='careem_exact')?`<span style="font-size:8px;background:rgba(34,197,94,.12);color:#22C55E;font-weight:700;padding:1px 6px;border-radius:6px" title="Discount sourced from uploaded ${c.aggregator} orders file (exact per-order data, not estimated)">📊 Exact</span>`:'';
     })():'';
     return `<div onclick="selectCamp(${idx})" style="cursor:pointer;background:linear-gradient(135deg,${accent}0d,rgba(13,21,36,.5));border:1px solid ${accent}33;border-left:3px solid ${accent};border-radius:12px;padding:14px;transition:transform .12s,border-color .12s" onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${accent}77'" onmouseout="this.style.transform='none';this.style.borderColor='${accent}33'">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
@@ -2818,6 +3064,16 @@ function allocateCampaignDiscount(c,start,end){
       const M=brandTotalBranches(c.brand,c.aggregator)||1;
       const myN=(campOutlets(c)||new Set()).size||M;
       return{allocatedDisc:exact.menuDisc,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"keeta_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
+    }
+  }
+  // Same short-circuit for Careem — exact per-order data from uploaded FOOD_ORDER CSV.
+  // Campaign type is auto-classified (catalog vs promo) from name/comment; lookup matches by type.
+  if(c.aggregator==="Careem"){
+    const exact=getCareemExactDisc(c,start,end);
+    if(exact){
+      const M=brandTotalBranches(c.brand,c.aggregator)||1;
+      const myN=(campOutlets(c)||new Set()).size||M;
+      return{allocatedDisc:exact.menuDisc,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"careem_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
     }
   }
   const M=brandTotalBranches(c.brand,c.aggregator)||1;
@@ -3238,7 +3494,7 @@ function campDetailV2HTML(c,idx){
   const kpiCards=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:14px 0">
     ${campKpiCard('Incremental Contribution',`${a.incrContribTotal>=0?'+':''}${fmtAEDx(a.incrContribTotal)}`,`over ${a.cDays} days · ${a.incrContribPerDay>=0?'+':''}${fmtAEDx(a.incrContribPerDay)}/day`,incrClr)}
     ${campKpiCard('Orders Lift',a.ordersLift!=null?`${a.ordersLift>=0?'+':''}${a.ordersLift.toFixed(0)}%`:'—',`+${a.incrOrdersPerDay.toFixed(0)} orders/day vs baseline`,a.ordersLift>=0?'#22C55E':'#EF4444')}
-    ${campKpiCard('Discount Depth',a.discPctOfGross!=null?`${a.discPctOfGross.toFixed(0)}%`:'—',a.discSource==='keeta_exact'?`📊 Exact (Keeta orders) · we funded ${fmtAEDx(a.ourDiscCost)}`:`of gross · we funded ${fmtAEDx(a.ourDiscCost)}`,'#C084FC')}
+    ${campKpiCard('Discount Depth',a.discPctOfGross!=null?`${a.discPctOfGross.toFixed(0)}%`:'—',(a.discSource==='keeta_exact'||a.discSource==='careem_exact')?`📊 Exact (${a.discSource==='keeta_exact'?'Keeta':'Careem'} orders) · we funded ${fmtAEDx(a.ourDiscCost)}`:`of gross · we funded ${fmtAEDx(a.ourDiscCost)}`,'#C084FC')}
     ${campKpiCard('Discount ROI',a.discountROI!=null?`${a.discountROI.toFixed(2)}×`:'—','contribution per AED discounted',roiClr)}
   </div>`;
   let verdict='',verdictClr='#94a3b8',verdictIcon='';
@@ -3279,17 +3535,19 @@ function campDetailV2HTML(c,idx){
       ${commentNote}<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><span style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Elasticity</span>${[0.7,1.0,1.3].map(e=>`<button onclick="campSetElasticity(${e})" style="padding:3px 10px;border-radius:6px;border:1px solid ${campElasticity===e?'#f59e0b':'rgba(27,47,74,.6)'};background:${campElasticity===e?'rgba(245,158,11,.12)':'transparent'};color:${campElasticity===e?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${e===0.7?'Low (0.7)':e===1?'Linear (1.0)':'High (1.3)'}</button>`).join('')}</div>
       <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Scenario</th><th style="text-align:right">Incr Orders</th><th style="text-align:right">Our Disc Burn</th><th style="text-align:right">Incr Contribution</th><th style="text-align:right">ROI</th></tr></thead><tbody>${rows}</tbody></table></div>${beNote}</div>`;
   }
-  // Subtle banner shown only when this campaign's discount is sourced from uploaded Keeta data.
-  // Reassures the user that discount/ROI/depth figures here are exact, not estimated.
+  // Subtle banner shown only when this campaign's discount is sourced from uploaded order data.
+  // Reassures the user that discount/ROI/depth figures are exact, not estimated.
   // If the campaign window extends past the uploaded data range, note the partial coverage so
   // the user understands today's missing day isn't a real drop in activity.
   let exactBanner='';
-  if(a.discSource==='keeta_exact'){
+  if(a.discSource==='keeta_exact'||a.discSource==='careem_exact'){
+    const srcLabel=a.discSource==='keeta_exact'?'Keeta':'Careem';
+    const srcFile=a.discSource==='keeta_exact'?'Recent Orders':'FOOD_ORDER';
     if(a.discPartialCoverage){
       const tail=a.discUncoveredStart===a.discUncoveredEnd?fmtShort(a.discUncoveredStart):`${fmtShort(a.discUncoveredStart)}–${fmtShort(a.discUncoveredEnd)}`;
-      exactBanner=`<div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.3);border-radius:7px;margin:0 0 14px 0"><span style="font-size:14px">📊</span><span style="font-size:11px;color:#cbd5e1"><strong style="color:#FBBF24">Partial exact Keeta data:</strong> ${a.discCoveredDays} of ${a.discTotalDays} days covered by the uploaded file. Discount for <strong>${tail}</strong> is missing — re-upload tomorrow with a fresh Keeta export to include those days.</span></div>`;
+      exactBanner=`<div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.3);border-radius:7px;margin:0 0 14px 0"><span style="font-size:14px">📊</span><span style="font-size:11px;color:#cbd5e1"><strong style="color:#FBBF24">Partial exact ${srcLabel} data:</strong> ${a.discCoveredDays} of ${a.discTotalDays} days covered by the uploaded file. Discount for <strong>${tail}</strong> is missing — re-upload tomorrow with a fresh ${srcLabel} export to include those days.</span></div>`;
     }else{
-      exactBanner=`<div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.25);border-radius:7px;margin:0 0 14px 0"><span style="font-size:14px">📊</span><span style="font-size:11px;color:#cbd5e1"><strong style="color:#22C55E">Exact Keeta data:</strong> discount figures below come from the uploaded Recent Orders file (per-order, per-outlet truth), not sales-weighted estimation.</span></div>`;
+      exactBanner=`<div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.25);border-radius:7px;margin:0 0 14px 0"><span style="font-size:14px">📊</span><span style="font-size:11px;color:#cbd5e1"><strong style="color:#22C55E">Exact ${srcLabel} data:</strong> discount figures below come from the uploaded ${srcFile} file (per-order, per-outlet truth), not sales-weighted estimation.</span></div>`;
     }
   }
   return header+overlapBanner+cmpBanner+exactBanner+verdictBox+kpiCards+breakdownBox+campOutletBreakdownHTML(c,a)+scenarioBox;
