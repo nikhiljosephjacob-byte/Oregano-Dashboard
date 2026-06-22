@@ -4494,6 +4494,77 @@ function cmpData(cfg){
     return true;
   });
 }
+
+// Compute total merchant-funded discount for the comparison filter scope. Three paths,
+// chosen in order of preference for accuracy:
+//   1. No outlet filter → use the raw brand-level disc straight from the sheet records
+//      (which is stored on the "(brand-level)" pseudo-branch and represents the truth).
+//   2. Outlet filter set + Keeta/Careem exact data uploaded → sum per-outlet menu_disc
+//      from the uploaded JSON (this is what the Campaigns page uses).
+//   3. Outlet filter set + no exact data → fall back to sales-weighted estimate
+//      (brand_disc × outlet_sales / brand_total_sales) so at least we report something.
+// Returns {total, source} so the card can label "📊 Exact" when it has truth available.
+function cmpComputeDisc(cfg){
+  const inWindow=d=>(!cfg.start||d>=cfg.start)&&(!cfg.end||d<=cfg.end);
+  const allowedBrands=cfg.brands.size?cfg.brands:null;
+  const allowedAggs=cfg.platforms.size?cfg.platforms:null;
+  // Identify (brand × aggregator) pairs in scope from the actual outlet-level rows
+  const pairs=new Set();
+  for(const r of allData){
+    if(!inWindow(r.date))continue;
+    if(r.branch==="(brand-level)")continue;
+    if(allowedBrands&&!allowedBrands.has(r.brand))continue;
+    if(allowedAggs&&!allowedAggs.has(r.aggregator))continue;
+    if(cfg.branches.size&&!cfg.branches.has(r.branch))continue;
+    pairs.add(`${r.brand}|${r.aggregator}`);
+  }
+  let total=0;
+  let anyExact=false,anyEstimated=false;
+  for(const key of pairs){
+    const [brand,agg]=key.split("|");
+    // Path 1: no outlet filter — raw brand-level
+    if(!cfg.branches.size){
+      for(const r of allData){
+        if(r.brand!==brand||r.aggregator!==agg)continue;
+        if(r.branch!=="(brand-level)")continue;
+        if(!inWindow(r.date))continue;
+        total+=r.disc||0;
+      }
+      continue;
+    }
+    // Path 2: outlet filter + exact data
+    if(agg==="Keeta"&&keetaOrdersData){
+      for(const rec of keetaOrdersData.records){
+        if(rec.brand!==brand)continue;
+        if(!cfg.branches.has(rec.outlet))continue;
+        if(!inWindow(rec.date))continue;
+        total+=rec.menu_disc;
+      }
+      anyExact=true;continue;
+    }
+    if(agg==="Careem"&&careemOrdersData){
+      for(const rec of careemOrdersData.records){
+        if(rec.brand!==brand)continue;
+        if(!cfg.branches.has(rec.outlet))continue;
+        if(!inWindow(rec.date))continue;
+        total+=rec.menu_disc;
+      }
+      anyExact=true;continue;
+    }
+    // Path 3: fallback — sales-weighted brand allocation
+    let brandDisc=0,brandSales=0,outletSales=0;
+    for(const r of allData){
+      if(r.brand!==brand||r.aggregator!==agg)continue;
+      if(!inWindow(r.date))continue;
+      if(r.branch==="(brand-level)"){brandDisc+=r.disc||0;}
+      else{brandSales+=r.sales||0;if(cfg.branches.has(r.branch))outletSales+=r.sales||0;}
+    }
+    if(brandSales>0)total+=brandDisc*(outletSales/brandSales);
+    anyEstimated=true;
+  }
+  const source=cfg.branches.size===0?"brand_level":(anyExact&&!anyEstimated?"exact":(anyEstimated&&anyExact?"mixed":"estimated"));
+  return{total,source};
+}
 function cmpLabel(cfg){
   const parts=[];
   parts.push(cfg.brands.size?[...cfg.brands].join("+"):"All brands");
@@ -4585,6 +4656,54 @@ function cmpStatCard(label,a,b,fmt,unit,perDay){
   </div>`;
 }
 
+// Discount Burn card with burn-rate sub-line (disc as % of net sales). For discount, "less
+// is better" — so the color coding is inverted vs the orders/sales cards: when B's burn
+// dropped (less discount), that's GREEN (good); when B's burn rose, RED. Per-day avg shown
+// when windows span multiple days, same as the other cards. The card also surfaces the data
+// source ("Exact" / "Brand-level" / "Estimated" / "Mixed") so the user knows the precision.
+function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay){
+  const a=discA||0,b=discB||0;
+  const diff=pctOf(b,a);
+  // Inverted color: positive change = MORE burn = bad (red). Negative = less burn = good (green).
+  const dc=diff==null?"#64748b":(diff>0?"#EF4444":(diff<0?"#22C55E":"#94a3b8"));
+  const arrow=diff==null?"":(diff>0?"▲":(diff<0?"▼":""));
+  const burnA=netA>0?(a/netA*100):null,burnB=netB>0?(b/netB*100):null;
+  const burnLine=(burnA!=null||burnB!=null)?`<div style="font-size:10px;color:#64748b;margin-top:4px">Burn rate · <span style="color:#60A5FA">${burnA!=null?burnA.toFixed(1)+'%':'—'}</span> vs <span style="color:#F59E0B">${burnB!=null?burnB.toFixed(1)+'%':'—'}</span> of net</div>`:'';
+  // Most informative source label between the two sides
+  const srcLabel=(s)=>({exact:"📊 Exact",brand_level:"Brand-level",estimated:"≈ Estimated",mixed:"Mixed"}[s]||'—');
+  const srcCombo=sourceA===sourceB?srcLabel(sourceA):`${srcLabel(sourceA)} / ${srcLabel(sourceB)}`;
+  let perDayLine="";
+  if(perDay&&(perDay.nA>1||perDay.nB>1)){
+    const avgA=a/perDay.nA,avgB=b/perDay.nB;
+    const avgDiff=pctOf(avgB,avgA);
+    const avgClr=avgDiff==null?"#64748b":(avgDiff>0?"#EF4444":(avgDiff<0?"#22C55E":"#94a3b8"));
+    perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #1b2f4a">
+      <div style="font-size:8px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
+      <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
+        <span style="font-size:14px;font-weight:800;color:#60A5FA;font-variant-numeric:tabular-nums">${fmtAED(avgA)}</span>
+        <span style="font-size:9px;color:#64748b">vs</span>
+        <span style="font-size:14px;font-weight:800;color:#F59E0B;font-variant-numeric:tabular-nums">${fmtAED(avgB)}</span>
+        <span style="font-size:10px;color:${avgClr};font-weight:700">${fmtPct(avgDiff)}</span>
+      </div>
+      <div style="font-size:8px;color:#64748b;margin-top:2px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
+    </div>`;
+  }
+  return `<div class="sm">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px">Discount Burn</div>
+      <span style="font-size:8px;color:#64748b;background:rgba(100,116,139,.1);padding:1px 6px;border-radius:5px" title="Data source. 'Exact' = per-order uploaded data; 'Brand-level' = sheet's raw brand-level discount; 'Estimated' = sales-weighted allocation to selected outlets (less precise).">${srcCombo}</span>
+    </div>
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+      <span style="font-size:20px;font-weight:800;color:#60A5FA;font-variant-numeric:tabular-nums">${fmtAED(a)}</span>
+      <span style="font-size:11px;color:#64748b">vs</span>
+      <span style="font-size:20px;font-weight:800;color:#F59E0B;font-variant-numeric:tabular-nums">${fmtAED(b)}</span>
+    </div>
+    <div style="font-size:12px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${arrow} <span style="color:#64748b;font-weight:400">B vs A · less is better</span></div>
+    ${burnLine}
+    ${perDayLine}
+  </div>`;
+}
+
 // Active Outlets card with a hover panel showing exactly which outlets differ A vs B
 function cmpOutletCard(dA,dB){
   const setA=new Set(dA.map(r=>r.branch)),setB=new Set(dB.map(r=>r.branch));
@@ -4627,6 +4746,10 @@ function renderCompare(){
   // Number of days in each window (inclusive). Used for per-day averages.
   const daysIn=(cfg)=>{if(!cfg.start)return 1;if(cfg.start===cfg.end)return 1;const s=new Date(cfg.start+"T12:00:00"),e=new Date((cfg.end||cfg.start)+"T12:00:00");return Math.max(1,Math.round((e-s)/86400000)+1);};
   const nA=daysIn(cmpA),nB=daysIn(cmpB);
+  // Discount burn for each side. Picks the best-available source: brand-level (no outlet filter),
+  // exact uploaded data (outlet filter + Keeta/Careem), or sales-weighted estimate (fallback).
+  const discAObj=cmpComputeDisc(cmpA),discBObj=cmpComputeDisc(cmpB);
+  const discA=discAObj.total,discB=discBObj.total;
 
   // Aggregator movement: per-platform totals for the chosen metric on each side
   const platMove=AGGS.map(ag=>{
@@ -4678,10 +4801,11 @@ function renderCompare(){
     ${yearBanner}
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">${cmpPanel("A")}${cmpPanel("B")}</div>
 
-    <div class="g4">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:14px">
       ${cmpStatCard("Orders",sA.orders,sB.orders,v=>Math.round(v).toLocaleString(),"",{nA,nB})}
       ${cmpStatCard("Net Sales",sA.sales,sB.sales,v=>fmtAED(v),"",{nA,nB})}
       ${cmpStatCard("AOV",aovA,aovB,v=>"AED "+v.toFixed(1))}
+      ${cmpDiscCard(discA,discB,sA.sales,sB.sales,discAObj.source,discBObj.source,{nA,nB})}
       ${cmpOutletCard(dA,dB)}
     </div>
 
