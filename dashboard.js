@@ -4473,11 +4473,13 @@ let cmpMetric="sales"; // which metric the trend chart plots: sales | orders | a
 let cmpInit=false;
 
 function cmpSeed(){
-  // Sensible defaults: A = last 3 days ending latest; B = same window one year earlier
+  // Sensible defaults: A = last 7 days ending latest; B = the immediately PRIOR 7 days
+  // (week-over-week, same year). Previously B defaulted to "same window 1 year earlier",
+  // which silently put Group B in 2025 and caused users to misread the comparison when they
+  // didn't notice the year. Year-over-year is still 2 clicks away via custom dates.
   if(!latest)return;
-  cmpA.end=latest;cmpA.start=subDays(latest,2);cmpA.preset="custom";
-  const e=new Date(latest+"T12:00:00");const ey=new Date(e.getFullYear()-1,e.getMonth(),e.getDate());
-  cmpB.end=dk(ey);cmpB.start=subDays(dk(ey),2);cmpB.preset="custom";
+  cmpA.end=latest;cmpA.start=subDays(latest,6);cmpA.preset="custom";
+  cmpB.end=subDays(latest,7);cmpB.start=subDays(latest,13);cmpB.preset="custom";
   cmpInit=true;
 }
 
@@ -4660,11 +4662,20 @@ function renderCompare(){
 
   const moverChip=(p,val)=>`<span style="display:inline-flex;align-items:center;gap:6px;background:${p.clr}18;border:1px solid ${p.clr}44;border-radius:6px;padding:3px 10px;font-size:11px;margin:2px"><span style="color:${p.clr};font-weight:700">${p.ag}</span><span style="color:${pctClr(val)};font-weight:700">${fmtPct(val)}</span></span>`;
 
+  // Year-mismatch safety banner — fires when A and B's date ranges fall in different calendar
+  // years. Easy to mis-read otherwise (e.g. "Jun 2026" vs "Jun 2025" both look like "Jun" at
+  // a glance). The warning forces a conscious confirmation that year-over-year is intentional.
+  const yearOf=s=>s?String(s).slice(0,4):null;
+  const yA=yearOf(cmpA.start)||yearOf(cmpA.end);
+  const yB=yearOf(cmpB.start)||yearOf(cmpB.end);
+  const yearBanner=(yA&&yB&&yA!==yB)?`<div style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.4);border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px"><span style="font-size:18px">⚠️</span><div style="font-size:12px;color:#FBBF24;line-height:1.5"><strong>Year-over-year comparison detected:</strong> Group A is in <strong>${yA}</strong> but Group B is in <strong>${yB}</strong>. If this isn't intentional, fix the year in the date pickers below — easy to misread because month/day look identical.</div></div>`:'';
+
   pg.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div style="font-size:18px;font-weight:800;color:#e2e8f0">⚖️ Comparison</div>
       <div style="display:flex;gap:8px"><button data-act="cmpCopy" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer" title="Copy A's brand/platform/outlet filters to B">⎘ A→B filters</button><button data-act="cmpSwap" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer">⇄ Swap A/B</button></div>
     </div>
     <div style="font-size:11px;color:#64748b;margin-bottom:12px">Pick any combination on each side — brands, platforms, outlets, and dates are fully independent. Example: Oregano+Lollorosso 11–13 May 2026 (A) vs the same 11–13 May 2025 (B).</div>
+    ${yearBanner}
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">${cmpPanel("A")}${cmpPanel("B")}</div>
 
     <div class="g4">
