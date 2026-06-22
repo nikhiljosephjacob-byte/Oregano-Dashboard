@@ -801,6 +801,7 @@ async function doLoad(){
   document.getElementById("ts-label").textContent=`Latest: ${fmtDisp(latest)}`;
   document.getElementById("loading-screen").style.display="none";
   document.getElementById("main-app").style.display="block";
+  injectResponsiveCSS();
   const nl=document.getElementById("nav-logo");if(nl&&typeof LOGOS!=="undefined")nl.src=LOGOS["Oregano"]||"";
   injectCompareTab();
   if(errs.length){const e=document.getElementById("etoa");if(e){e.textContent="⚠️ Partial: "+errs.join(", ");e.style.display="block";setTimeout(()=>e.style.display="none",6000);}}
@@ -816,7 +817,73 @@ async function doLoad(){
   setTimeout(()=>{prewarmCampaigns();},700);
 }
 
-// Find the "Ads Performance" nav tab button (the one wired to gp('cpc'))
+// Inject responsive CSS overrides so the dashboard works on mobile/tablet as well as desktop.
+// index.html has its own base styles; this layer adds mobile-specific behaviour without
+// requiring an edit to index.html (since this script is loaded as a separate file).
+// Key fixes:
+//   - Top nav: becomes a horizontal scroll strip with a fade hint on the right edge so users
+//     can swipe to discover hidden tabs (Compare was previously off-screen with no indicator)
+//   - KPI/stat cards: stack two-per-row on phones, single column on very narrow screens
+//   - Tables: scroll horizontally inside their container instead of overflowing the page
+//   - Buttons/chips: slightly larger touch targets on mobile
+// Run-once: if a previous injection exists, skip.
+function injectResponsiveCSS(){
+  if(document.getElementById("dash-responsive-css"))return;
+  const s=document.createElement("style");
+  s.id="dash-responsive-css";
+  s.textContent=`
+/* ── Mobile (phones, ≤640px) ────────────────────────────────────────────── */
+@media (max-width: 640px){
+  /* Make the top nav strip horizontally scrollable so all tabs (incl. Compare) are reachable.
+     Hides scrollbar but keeps native touch scrolling, with a fade gradient on the right edge
+     as a discoverability cue. */
+  .tabs, nav, [class*="nav"], .navbar, header > div:has(.tab){
+    overflow-x:auto !important;
+    -webkit-overflow-scrolling:touch;
+    scrollbar-width:none;        /* Firefox */
+    flex-wrap:nowrap !important;
+    white-space:nowrap;
+    position:relative;
+  }
+  .tabs::-webkit-scrollbar, nav::-webkit-scrollbar{display:none;} /* WebKit */
+  .tab{flex-shrink:0 !important;font-size:13px !important;padding:8px 12px !important;}
+  /* Stack KPI/stat grid 2-per-row on phones */
+  .g4{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
+  .g3{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
+  .g2{grid-template-columns:repeat(1,minmax(0,1fr)) !important;}
+  /* Card padding tighter on phones for more content density */
+  .card{padding:12px !important;}
+  .sm{padding:10px !important;}
+  /* Section titles slightly smaller */
+  .ct{font-size:11px !important;}
+  /* Tables: scroll horizontally inside their wrapper rather than blowing out the page */
+  .tbl, table{font-size:11px !important;}
+  table{display:block;overflow-x:auto;white-space:nowrap;}
+  /* Buttons: bigger tap targets */
+  button{min-height:32px;}
+  /* Charts: cap height so they don't dominate the viewport */
+  canvas{max-height:260px !important;}
+  /* Top header more compact */
+  h1, h2{font-size:18px !important;}
+}
+/* ── Very narrow (≤380px — small phones) ────────────────────────────────── */
+@media (max-width: 380px){
+  .g4, .g3{grid-template-columns:repeat(1,minmax(0,1fr)) !important;}
+  .tab{font-size:12px !important;padding:7px 10px !important;}
+}
+/* ── Tablet (641–960px) ─────────────────────────────────────────────────── */
+@media (min-width: 641px) and (max-width: 960px){
+  .g4{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
+  .g3{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
+  .tabs, nav{overflow-x:auto;flex-wrap:nowrap !important;white-space:nowrap;}
+  .tabs::-webkit-scrollbar, nav::-webkit-scrollbar{display:none;}
+  .tab{flex-shrink:0;}
+}
+`;
+  document.head.appendChild(s);
+}
+
+
 function cpcNavTab(){
   const tabs=document.querySelectorAll(".tab");
   for(const t of tabs){const oc=t.getAttribute("onclick")||"";if(oc.includes("'cpc'")||oc.includes('"cpc"'))return t;}
@@ -1967,6 +2034,13 @@ function cpcRenderOutletLevel(ag,brand){
   const arrow=(col)=>cpcSort.col===col?(cpcSort.dir<0?' ▼':' ▲'):'';
   const th=(col,lbl)=>`<th style="cursor:pointer;text-align:right" onclick="cpcSetSort('${col}')">${lbl}${arrow(col)}</th>`;
 
+  // Careem budgets are pooled at brand level, so per-outlet "top up by X" or "raise bid" advice
+  // is misleading — the user can't allocate a budget to one outlet. Hide the Invest/Bid column
+  // entirely for Careem (header, cells, totals cell) but keep accumulating tInvest so the
+  // brand-level Total Additional Investment Needed summary below still works (the sum of slices
+  // = the pool's needed top-up).
+  const showInvestCol=isCurrentMonth&&ag!=='Careem';
+
   // Totals accumulators
   let tClicks=0,tOrders=0,tSales=0,tBudget=0,tSpent=0,tLeftover=0,tFtu=0,tInvest=0;
 
@@ -2017,7 +2091,7 @@ function cpcRenderOutletLevel(ag,brand){
       }
       if(parts.length)recCell=parts.join('');
     }
-    return `<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:#e2e8f0">${t.outlet}</strong>${impTag}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right">${(d.views||0).toLocaleString()}</td><td style="text-align:right">${(d.orders||0).toLocaleString()}</td><td style="text-align:right">${fmtAEDExact(d.sales)}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${fmtAEDExact(d.alloc)}</td><td style="text-align:right">${fmtAEDExact(d.spent)}</td><td style="text-align:right">${fmtAEDExact(d.leftover)}</td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}<div style="font-size:8px;color:${t.momChg==null?'#475569':pctClr(t.momChg)}">${t.momChg!=null?'MoM '+fmtPct(t.momChg):''}</div></td><td style="text-align:right">${t.calcBid!=null?'AED '+t.calcBid.toFixed(2):'—'}</td><td style="text-align:right">${d.ftu||0}</td><td style="text-align:right">${recCell}</td></tr>`;
+    return `<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:#e2e8f0">${t.outlet}</strong>${impTag}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right">${(d.views||0).toLocaleString()}</td><td style="text-align:right">${(d.orders||0).toLocaleString()}</td><td style="text-align:right">${fmtAEDExact(d.sales)}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${fmtAEDExact(d.alloc)}</td><td style="text-align:right">${fmtAEDExact(d.spent)}</td><td style="text-align:right">${fmtAEDExact(d.leftover)}</td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}<div style="font-size:8px;color:${t.momChg==null?'#475569':pctClr(t.momChg)}">${t.momChg!=null?'MoM '+fmtPct(t.momChg):''}</div></td><td style="text-align:right">${t.calcBid!=null?'AED '+t.calcBid.toFixed(2):'—'}</td><td style="text-align:right">${d.ftu||0}</td>${showInvestCol?`<td style="text-align:right">${recCell}</td>`:''}</tr>`;
   }).join('');
 
   // Capture the table data for export (raw numbers, exactly what's filtered on screen).
@@ -2030,7 +2104,7 @@ function cpcRenderOutletLevel(ag,brand){
       budget:Math.round(t.disp.alloc||0),spent:Math.round(t.disp.spent||0),leftover:Math.round(t.disp.leftover||0),
       roas:t.disp.roi?t.disp.roi.toFixed(2):"",mom:t.momChg!=null?t.momChg.toFixed(1):"",vsYear:t.yoyChg!=null?t.yoyChg.toFixed(1):"",
       bid:t.calcBid!=null?t.calcBid.toFixed(2):"",ftu:t.disp.ftu||0,
-      rec:(()=>{if(!isCurrentMonth)return"";const bidOpt=cpcDeliverooBidOpt(ag,brand,t.outlet,t.liveRow);const inv=cpcInvestRec(ag,brand,t.outlet,t.liveRow,bidOpt);const bits=[];if(inv){if(inv.mode==="active"&&inv.additional>0&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST"))bits.push(`Top up AED ${inv.additional}`);else if(inv.mode==="restart"&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST")&&inv.additional>0)bits.push(`Restart AED ${inv.additional}`);else if(t.disp.verdict==="WITHDRAW")bits.push("Below BE — don't add");}if(bidOpt&&bidOpt.suggestedBid&&ag==="Deliveroo"&&bidOpt.direction!=='hold')bits.push(`Bid ${bidOpt.direction} to AED ${bidOpt.suggestedBid.toFixed(2)}`);return bits.join("; ");})()
+      rec:(()=>{if(!isCurrentMonth||ag==='Careem')return"";const bidOpt=cpcDeliverooBidOpt(ag,brand,t.outlet,t.liveRow);const inv=cpcInvestRec(ag,brand,t.outlet,t.liveRow,bidOpt);const bits=[];if(inv){if(inv.mode==="active"&&inv.additional>0&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST"))bits.push(`Top up AED ${inv.additional}`);else if(inv.mode==="restart"&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST")&&inv.additional>0)bits.push(`Restart AED ${inv.additional}`);else if(t.disp.verdict==="WITHDRAW")bits.push("Below BE — don't add");}if(bidOpt&&bidOpt.suggestedBid&&ag==="Deliveroo"&&bidOpt.direction!=='hold')bits.push(`Bid ${bidOpt.direction} to AED ${bidOpt.suggestedBid.toFixed(2)}`);return bits.join("; ");})()
     })),
     totals:null // filled after totals computed below
   };
@@ -2042,14 +2116,14 @@ function cpcRenderOutletLevel(ag,brand){
   const totBid=tClicks>0?(tSpent/tClicks):null;
   // Fill export totals now that they're computed
   if(cpcExportData)cpcExportData.totals={label:"TOTAL",clicks:tClicks,orders:tOrders,sales:Math.round(tSales),aov:totAov?Math.round(totAov):"",cto:totCto!=null?totCto.toFixed(1):"",budget:Math.round(tBudget),spent:Math.round(tSpent),leftover:Math.round(tLeftover),roas:totRoas?totRoas.toFixed(2):"",bid:totBid!=null?totBid.toFixed(2):"",ftu:tFtu,invest:isCurrentMonth&&tInvest>0?tInvest:""};
-  const totalsRow=`<tr style="border-top:2px solid rgba(245,158,11,.4);background:rgba(245,158,11,.04);font-weight:800"><td style="color:#f59e0b">TOTAL</td><td></td><td style="text-align:right;color:#e2e8f0">${tClicks.toLocaleString()}</td><td style="text-align:right;color:#e2e8f0">${tOrders.toLocaleString()}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tSales)}</td><td style="text-align:right;color:#e2e8f0">${totAov?totAov.toFixed(0):'—'}</td><td style="text-align:right;color:#e2e8f0">${totCto!=null?totCto.toFixed(1)+'%':'—'}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tBudget)}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tSpent)}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tLeftover)}</td><td style="text-align:right;color:#f59e0b">${totRoas?totRoas.toFixed(2)+'×':'—'}</td><td style="text-align:right;color:#e2e8f0">${totBid!=null?'AED '+totBid.toFixed(2):'—'}</td><td style="text-align:right;color:#e2e8f0">${tFtu.toLocaleString()}</td><td style="text-align:right">${isCurrentMonth&&tInvest>0?`<span style="color:#22C55E;font-weight:800">+${fmtAEDExact(tInvest)}</span>`:''}</td></tr>`;
+  const totalsRow=`<tr style="border-top:2px solid rgba(245,158,11,.4);background:rgba(245,158,11,.04);font-weight:800"><td style="color:#f59e0b">TOTAL</td><td></td><td style="text-align:right;color:#e2e8f0">${tClicks.toLocaleString()}</td><td style="text-align:right;color:#e2e8f0">${tOrders.toLocaleString()}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tSales)}</td><td style="text-align:right;color:#e2e8f0">${totAov?totAov.toFixed(0):'—'}</td><td style="text-align:right;color:#e2e8f0">${totCto!=null?totCto.toFixed(1)+'%':'—'}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tBudget)}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tSpent)}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tLeftover)}</td><td style="text-align:right;color:#f59e0b">${totRoas?totRoas.toFixed(2)+'×':'—'}</td><td style="text-align:right;color:#e2e8f0">${totBid!=null?'AED '+totBid.toFixed(2):'—'}</td><td style="text-align:right;color:#e2e8f0">${tFtu.toLocaleString()}</td>${showInvestCol?`<td style="text-align:right">${isCurrentMonth&&tInvest>0?`<span style="color:#22C55E;font-weight:800">+${fmtAEDExact(tInvest)}</span>`:''}</td>`:''}</tr>`;
 
-  const investSummary=(isCurrentMonth&&tInvest>0)?`<div style="margin-top:12px;padding:12px 16px;background:linear-gradient(135deg,rgba(34,197,94,.1),rgba(34,197,94,.03));border:1px solid rgba(34,197,94,.3);border-radius:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px"><div><div style="font-size:11px;color:#86EFAC;font-weight:700;text-transform:uppercase;letter-spacing:.6px">💰 Total Additional Investment Needed</div><div style="font-size:11px;color:#94a3b8;margin-top:3px">To keep all under-funded ${brand} outlets on ${ag} running through ${cpcMonthLabel(selMonth)} at their current burn rate${ag==='Deliveroo'?' (adjusted for any suggested bid changes)':''}.</div></div><div style="font-size:26px;font-weight:800;color:#22C55E">+${fmtAED(tInvest)}</div></div>`:'';
+  const investSummary=(isCurrentMonth&&tInvest>0)?`<div style="margin-top:12px;padding:12px 16px;background:linear-gradient(135deg,rgba(34,197,94,.1),rgba(34,197,94,.03));border:1px solid rgba(34,197,94,.3);border-radius:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px"><div><div style="font-size:11px;color:#86EFAC;font-weight:700;text-transform:uppercase;letter-spacing:.6px">💰 Total Additional Investment Needed</div><div style="font-size:11px;color:#94a3b8;margin-top:3px">${ag==='Careem'?`Brand-level pooled budget for ${brand} on Careem. Top up by this amount to keep the campaigns running through ${cpcMonthLabel(selMonth)} at the current brand-wide burn rate.`:`To keep all under-funded ${brand} outlets on ${ag} running through ${cpcMonthLabel(selMonth)} at their current burn rate${ag==='Deliveroo'?' (adjusted for any suggested bid changes)':''}.`}</div></div><div style="font-size:26px;font-weight:800;color:#22C55E">+${fmtAED(tInvest)}</div></div>`:'';
 
   const poolNote=(ag==='Careem'||ag==='Noon')?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px">ℹ️ ${ag} budgets are <strong>pooled at brand level</strong>. Per-outlet budget/spent are indicative; the brand total is the real budget. Per-outlet <strong>results</strong> (orders, sales, ROAS, CTO) are exact.</div>`:'';
   const bidNote=ag==="Deliveroo"?`<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Bid suggestions analyze the past 6 months and target the bid with the best balance of ROAS and order volume. Changing the bid shifts the burn rate proportionally, and the extra budget needed is recalculated accordingly.</div>`:`<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">${ag} uses auto-bidding, so only budget recommendations are shown. 📉 = sales dropped after a CPC ended.</div>`;
 
-  return controlBar+poolNote+`<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap"><div class="ct" style="margin-bottom:0">${brand} on ${ag} — Outlet Performance · ${cpcMonthLabel(selMonth)}${isCurrentMonth?' (current month)':''}</div><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-size:10px;color:#64748b" title="Most recent date in the underlying sales data. Reinvestment figures recompute live based on today's real calendar date, so re-render the page just before you act on a recommendation.">📅 Data as of ${fmtShort(latest)}${isCurrentMonth?` · live (recalculated from today's date)`:''}</span><button onclick="cpcExportTable()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:5px">⬇ Export to Excel</button></div></div><div style="margin-top:8px">${bidNote}</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th style="cursor:pointer" onclick="cpcSetSort('outlet')">Outlet${arrow('outlet')}</th><th>Verdict</th>${th('clicks','Clicks')}${th('orders','Orders')}${th('sales','Sales')}${th('aov','AOV')}${th('cto','CTO')}${th('budget','Budget')}${th('spent','Spent')}${th('leftover','Leftover')}${th('roas','ROAS')}${th('bid','Avg Bid')}${th('ftu','FTU')}<th style="text-align:right">${isCurrentMonth?'Invest / Bid':''}</th></tr></thead><tbody>${body}${totalsRow}</tbody></table></div>${investSummary}</div>`;
+  return controlBar+poolNote+`<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap"><div class="ct" style="margin-bottom:0">${brand} on ${ag} — Outlet Performance · ${cpcMonthLabel(selMonth)}${isCurrentMonth?' (current month)':''}</div><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-size:10px;color:#64748b" title="Most recent date in the underlying sales data. Reinvestment figures recompute live based on today's real calendar date, so re-render the page just before you act on a recommendation.">📅 Data as of ${fmtShort(latest)}${isCurrentMonth?` · live (recalculated from today's date)`:''}</span><button onclick="cpcExportTable()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:5px">⬇ Export to Excel</button></div></div><div style="margin-top:8px">${bidNote}</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th style="cursor:pointer" onclick="cpcSetSort('outlet')">Outlet${arrow('outlet')}</th><th>Verdict</th>${th('clicks','Clicks')}${th('orders','Orders')}${th('sales','Sales')}${th('aov','AOV')}${th('cto','CTO')}${th('budget','Budget')}${th('spent','Spent')}${th('leftover','Leftover')}${th('roas','ROAS')}${th('bid','Avg Bid')}${th('ftu','FTU')}${showInvestCol?`<th style="text-align:right">Invest / Bid</th>`:''}</tr></thead><tbody>${body}${totalsRow}</tbody></table></div>${investSummary}</div>`;
 }
 
 // Combine multiple CPC rows into one record (Σsales/Σspent for ROI, Σorders/Σclicks for CTO)
