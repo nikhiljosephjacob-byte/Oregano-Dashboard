@@ -2348,11 +2348,49 @@ const BRANCH_ALIASES={
   "al reef":"al reef","reef":"al reef",
   "nas":"nas","nad al sheba":"nas",
   "marina":"marina","dso":"dso","dubai silicon oasis":"dso",
-  "furjan":"furjan","al quoz":"al quoz","quoz":"al quoz","qouz":"al quoz","al qouz":"al quoz","dip":"dip","villa":"villa","jumeirah":"jumeirah","jumearah":"jumeirah"
+  "furjan":"furjan","al quoz":"al quoz","quoz":"al quoz","qouz":"al quoz","al qouz":"al quoz","dip":"dip","villa":"villa","jumeirah":"jumeirah","jumearah":"jumeirah","wasl":"jumeirah","al wasl":"jumeirah"
 };
+// Tokens that frequently appear inside "Except X, Y, Z" lists but are NOT branch names —
+// menu item types, customer segments, pricing rules, etc. Without this filter, every "Except
+// Combos" / "FTU Only" / "MOV 50" trips a false "⚠ Needs clarification" warning on cards
+// whose comment was actually perfectly clear (just not about branch exclusions).
+// Compared lowercase, with punctuation stripped.
+const NON_BRANCH_TOKENS=new Set([
+  // Menu item categories
+  "combos","combo","the combos","the combo","item","items","select items","high cost items",
+  "high fcr items","high fcr","high cost","certain sides","sides","water","drinks","beverages",
+  "burratas","burrata","byo salad","byo","salad","pizza","pasta","desserts",
+  // Customer segments
+  "ftu","ftu only","new customers","new customer","lapsed users","lapsed","d+ users","dplus",
+  "first time","first time users","existing customers",
+  // Pricing / order parameters
+  "mov","max cap","cap","entire menu","entire menu)","whole menu",
+  // Common trailing scraps from over-captured regex
+  "is not an option","since","because"
+]);
+// Returns true if a token is shape-plausible as a branch name (will be looked up against
+// brandBranches). Returns false for clear non-branch tokens so they're silently dropped
+// from the parser's unresolved list — preventing false clarification warnings.
+function isPlausibleBranchToken(token){
+  if(!token)return false;
+  const t=token.toLowerCase().trim().replace(/^[\s()[\].,;:]+|[\s()[\].,;:]+$/g,"").trim();
+  if(!t||t.length<2)return false;
+  if(NON_BRANCH_TOKENS.has(t))return false;
+  // Has digits → almost certainly a pricing rule or count ("MOV 50", "AED 30", "10 Items")
+  if(/\d/.test(t))return false;
+  // Contains % or AED → pricing info
+  if(/%|aed\b/i.test(t))return false;
+  // More than 3 words → too long to be a branch name (real ones are ≤3 words: "Town Square",
+  // "Al Quoz", "Al Reem Island"). Over-captured regex chunks like "All Locations Except Reem"
+  // would otherwise leak into unresolved.
+  if(t.split(/\s+/).length>3)return false;
+  return true;
+}
 function resolveBranchName(token,brandBranches){
   if(!token)return null;
-  const tl=token.trim().toLowerCase().replace(/^\s*(only\s+)?(at\s+|in\s+)?/,"").replace(/\s+outlets?$/,"").replace(/\s+branch(es)?$/,"").trim();
+  // Strip leading/trailing punctuation BEFORE the alias lookup so tokens like "Reem)" /
+  // "(Marina" still hit the alias map.
+  const tl=token.trim().replace(/^[\s()[\].,;:]+|[\s()[\].,;:]+$/g,"").toLowerCase().replace(/^\s*(only\s+)?(at\s+|in\s+)?/,"").replace(/\s+outlets?$/,"").replace(/\s+branch(es)?$/,"").trim();
   if(!tl)return null;
   const canonical=BRANCH_ALIASES[tl]||tl;
   // Exact match first against the brand's actual branches
@@ -2393,9 +2431,18 @@ function parseCampComment(c){
   const excPat=/(?:locations?\s+except|all\s+except|except(?:\s+for)?|excluding|not\s+valid\s+(?:in|at|for))\s*[:\-]?\s*([^.\n]+?)(?:\s+since\b|\s+because\b|\s+as\b|\s+because\s+of\b|\.|$|\n)/i;
   const excMatch=text.match(excPat);
   if(excMatch){
-    const list=excMatch[1].split(/[,;]|\s+and\s+|\s+&\s+|\s+\+\s+/i).map(s=>s.trim()).filter(Boolean);
+    // Split on commas/and/&/+ AND on close-paren — handles "Except Combos) FTU Only" where the
+    // regex over-captured into the comment's free-text tail.
+    const list=excMatch[1].split(/[,;)]|\s+and\s+|\s+&\s+|\s+\+\s+/i).map(s=>s.trim()).filter(Boolean);
     const resolved=[],unresolved=[];
-    list.forEach(tok=>{const r=resolveBranchName(tok,brandBranches);if(r)resolved.push(r);else if(tok.length>1)unresolved.push(tok);});
+    list.forEach(tok=>{
+      // Skip tokens that clearly aren't branch names (item categories, pricing rules, customer
+      // segments) — they're allowed in the comment but don't trigger a clarification warning.
+      if(!isPlausibleBranchToken(tok))return;
+      const r=resolveBranchName(tok,brandBranches);
+      if(r)resolved.push(r);
+      else if(tok.length>1)unresolved.push(tok);
+    });
     if(resolved.length){result.excludeBranches=new Set(resolved);result.hasInfo=true;}
     if(unresolved.length)result.unresolved.push(...unresolved);
   }
@@ -2424,9 +2471,14 @@ function parseCampComment(c){
     // Fallback: bare "only <list>" where the list resolves to known branches (e.g. "... only Al Quoz, MC, Mirdif")
     if(!incMatch){const bareOnly=text.match(/\bonly\s+([A-Za-z][^.\n]+?)(?:\s+since\b|\s+because\b|\.|$|\n)/i);if(bareOnly)incMatch=bareOnly;}
     if(incMatch){
-      const list=incMatch[1].split(/[,;]|\s+and\s+|\s+&\s+|\s+\+\s+/i).map(s=>s.trim()).filter(Boolean);
+      const list=incMatch[1].split(/[,;)]|\s+and\s+|\s+&\s+|\s+\+\s+/i).map(s=>s.trim()).filter(Boolean);
       const resolved=[],unresolved=[];
-      list.forEach(tok=>{const r=resolveBranchName(tok,brandBranches);if(r)resolved.push(r);else if(tok.length>1)unresolved.push(tok);});
+      list.forEach(tok=>{
+        if(!isPlausibleBranchToken(tok))return;
+        const r=resolveBranchName(tok,brandBranches);
+        if(r)resolved.push(r);
+        else if(tok.length>1)unresolved.push(tok);
+      });
       // For the bare-only fallback, require at least 2 resolved branches to avoid false positives.
       if(resolved.length>=2||(resolved.length>=1&&/locations?\s+only|only\s+(?:in|at|for)/i.test(text))){result.includeBranches=new Set(resolved);result.hasInfo=true;if(unresolved.length)result.unresolved.push(...unresolved);}
     }
@@ -2447,7 +2499,12 @@ function parseCampComment(c){
         if(tail.length>1&&tail.length<300){
           const list=tail.split(/[,;]|\s+and\s+|\s+&\s+|\s+\+\s+/i).map(s=>s.trim()).filter(Boolean);
           const resolved=[],unresolved=[];
-          list.forEach(tok=>{const r=resolveBranchName(tok,brandBranches);if(r)resolved.push(r);else if(tok.length>1&&tok.length<25)unresolved.push(tok);});
+          list.forEach(tok=>{
+            if(!isPlausibleBranchToken(tok))return;
+            const r=resolveBranchName(tok,brandBranches);
+            if(r)resolved.push(r);
+            else if(tok.length>1&&tok.length<25)unresolved.push(tok);
+          });
           // Only treat as a branch list if at least 2 tokens resolved AND most resolved
           if(resolved.length>=2&&resolved.length>=Math.ceil(list.length*0.6)){
             result.includeBranches=new Set(resolved);
