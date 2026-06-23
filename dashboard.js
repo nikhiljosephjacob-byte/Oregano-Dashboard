@@ -774,16 +774,70 @@ async function fetchCSV(gid){
   for(const u of proxies){try{const r=await fetch(u);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(","))return t;}}catch(e){}}
   throw new Error("blocked");
 }
+// Combined loading screen: greeting + brand logos + animated SVG pie progress. Replaces
+// the previous two-screen sequence (greeting screen → brand-logos screen with jokes). Runs
+// once at startup, before any data fetch. The pie chart's stroke-dashoffset is driven by
+// setLoadingProgress(pct) called from doLoad as each brand sheet finishes loading.
+function injectLoadingScreen(){
+  const ls=document.getElementById("loading-screen");if(!ls)return;
+  const hr=new Date().getHours();
+  const greet=hr<12?"Good morning":hr<17?"Good afternoon":hr<22?"Good evening":"Working late";
+  // Circumference of r=42 circle (used for stroke-dasharray on the progress arc)
+  const C=2*Math.PI*42;
+  const logoRow=(typeof BR!=="undefined"?BR:[]).map(b=>{
+    const src=(typeof LOGOS!=="undefined"&&LOGOS[b.n])||"";
+    return `<div style="display:flex;flex-direction:column;align-items:center;gap:6px">
+      ${src?`<img src="${src}" alt="${b.n}" style="width:54px;height:54px;border-radius:14px;object-fit:cover;background:#0d1524;border:1px solid #1b2f4a"/>`:`<div style="width:54px;height:54px;border-radius:14px;background:#0d1524;border:1px solid #1b2f4a;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:800;color:#f59e0b">${b.n[0]}</div>`}
+      <div style="font-size:10px;color:#94a3b8;font-weight:600;letter-spacing:.3px">${b.n}</div>
+    </div>`;
+  }).join("");
+  ls.innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:40px 30px;text-align:center;background:radial-gradient(circle at 50% 20%,#0d1524 0%,#0a1322 60%,#070d1c 100%);color:#e2e8f0">
+    <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:3px;margin-bottom:6px">Oregano Restaurants UAE</div>
+    <h1 style="font-size:30px;font-weight:800;color:#f59e0b;margin:0 0 6px;letter-spacing:-.5px">${greet}, Diyar</h1>
+    <div style="font-size:12px;color:#94a3b8;margin-bottom:32px">Preparing your performance view across all brands…</div>
+    <div style="display:flex;gap:18px;margin-bottom:34px;flex-wrap:wrap;justify-content:center;max-width:560px">${logoRow}</div>
+    <div style="position:relative;width:180px;height:180px;margin-bottom:18px">
+      <svg viewBox="0 0 100 100" style="width:100%;height:100%;transform:rotate(-90deg)">
+        <defs>
+          <linearGradient id="pie-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#06B6D4"/>
+            <stop offset="50%" stop-color="#F59E0B"/>
+            <stop offset="100%" stop-color="#EC4899"/>
+          </linearGradient>
+        </defs>
+        <circle cx="50" cy="50" r="42" stroke="#1b2f4a" stroke-width="7" fill="none"/>
+        <circle id="pie-progress-arc" cx="50" cy="50" r="42" stroke="url(#pie-grad)" stroke-width="7" fill="none" stroke-linecap="round" stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${C.toFixed(2)}" style="transition:stroke-dashoffset .45s cubic-bezier(.4,0,.2,1)"/>
+      </svg>
+      <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
+        <div id="pie-progress-pct" style="font-size:34px;font-weight:800;color:#e2e8f0;font-variant-numeric:tabular-nums;line-height:1">0%</div>
+        <div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:2.5px;margin-top:4px">Loading</div>
+      </div>
+    </div>
+    <div id="ptxt" style="font-size:13px;color:#94a3b8;font-weight:600;min-height:18px">Connecting…</div>
+    <div id="perr" style="margin-top:18px;max-width:520px;font-size:12px"></div>
+    <div id="pbar" style="display:none"></div>
+  </div>`;
+}
+// Drive the loading pie arc + percent text. Called from doLoad as each brand finishes.
+function setLoadingProgress(pct){
+  const C=2*Math.PI*42;
+  const arc=document.getElementById("pie-progress-arc");
+  const txt=document.getElementById("pie-progress-pct");
+  if(arc)arc.style.strokeDashoffset=(C*(1-Math.max(0,Math.min(100,pct))/100)).toFixed(2);
+  if(txt)txt.textContent=Math.round(pct)+"%";
+}
+
 async function doLoad(){
+  injectLoadingScreen();
   document.getElementById("loading-screen").style.display="flex";
   document.getElementById("main-app").style.display="none";
   const pb=document.getElementById("pbar"),pt=document.getElementById("ptxt"),pe=document.getElementById("perr");
-  pb.style.width="0%";pe.innerHTML="";
+  pb.style.width="0%";pe.innerHTML="";setLoadingProgress(0);
   const all=[],errs=[];
   await Promise.all(BR.map(async({n,gid},idx)=>{
     try{all.push(...parseBrand(await fetchCSV(gid),n));}
     catch(e){errs.push(`${n}: ${e.message}`);}
-    pb.style.width=`${((idx+1)/5)*100}%`;pt.textContent=`${idx+1} / 5 brands`;
+    pb.style.width=`${((idx+1)/5)*100}%`;pt.textContent=`${n} loaded · ${idx+1} of 5 brands`;setLoadingProgress(((idx+1)/5)*100);
   }));
   allData=all;
   buildDataIndex();
@@ -4487,6 +4541,29 @@ function renderKPIPlatformView(){
   const rows=buildKPIEvalRows().filter(r=>r.aggregator===p);
   // Only brands present for this platform, in canonical order (e.g. Google Maps won't list Lollorosso)
   const brandsPresent=BR.filter(b=>rows.some(r=>r.brand===b.n));
+
+  // Worst-5 helpers — for each KPI type, sort outlets by "how bad" and take 5. Direction
+  // 'below' means lower=worse (rating, food_ready) → ascending sort. Direction 'above' means
+  // higher=worse (prep_time, rider_wait) → descending sort. Color-codes red if isBad.
+  const worstByType=(brandRows,type)=>{
+    const f=brandRows.filter(r=>r.type===type);
+    if(!f.length)return null;
+    const dir=f[0].direction;
+    f.sort((a,b)=>dir==='below'?a.latest-b.latest:b.latest-a.latest);
+    return f.slice(0,5);
+  };
+  const fmtVal=r=>{
+    if(r.type==='rating')return r.latest.toFixed(2);
+    if(r.type==='prep_time'||r.type==='rider_wait')return r.latest.toFixed(0)+(r.unit||' min');
+    if(r.type==='rider_wait_pct')return r.latest.toFixed(1)+'%';
+    if(r.type==='food_ready')return r.latest.toFixed(1)+'%';
+    return r.latest+'';
+  };
+  const worstSection=(title,list)=>{
+    if(!list||!list.length)return '';
+    return `<div style="margin-top:8px"><div style="font-size:8.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.6px;font-weight:700;margin-bottom:3px">${title}</div>${list.map(r=>`<div style="display:flex;justify-content:space-between;font-size:10px;padding:2px 0;border-bottom:1px solid rgba(27,47,74,.4)"><span style="color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:130px" title="${r.outlet}">${r.outlet}</span><span style="color:${r.isBad?'#EF4444':'#64748b'};font-weight:700;font-variant-numeric:tabular-nums">${fmtVal(r)}</span></div>`).join('')}</div>`;
+  };
+
   const tiles=brandsPresent.map(b=>{
     const rs=rows.filter(r=>r.brand===b.n);
     const bad=rs.filter(r=>r.isBad).length;
@@ -4496,20 +4573,27 @@ function renderKPIPlatformView(){
     const short=exp!=null&&outletCount<exp;
     const outletLabel=exp!=null?`${outletCount}/${exp}`:`${outletCount}`;
     const outletClr=exp!=null?(outletCount>=exp?'#22C55E':'#FBBF24'):'#e2e8f0';
+    // Build the 4 worst-5 sections from this brand's rows
+    const ratingW=worstByType(rs,'rating');
+    const foodW=worstByType(rs,'food_ready');
+    const prepW=worstByType(rs,'prep_time');
+    const riderW=worstByType(rs,'rider_wait')||worstByType(rs,'rider_wait_pct');
+    const worstHTML=[worstSection('Worst 5 Ratings',ratingW),worstSection('Worst 5 Food Ready %',foodW),worstSection('Worst 5 Prep Times',prepW),worstSection('Worst 5 Rider Wait',riderW)].join('');
     return `<div onclick="selectKPIBrand('${b.n}')" style="background:#0d1524;border:1px solid ${bad>0?'#EF444455':'#1b2f4a'};border-radius:10px;padding:14px;cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${bad>0?'#EF444455':'#1b2f4a'}'">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">${logoImg(b.n,28)}<span style="font-size:13px;font-weight:800;color:${b.c}">${b.n}</span>${short?`<span title="${exp-outletCount} outlet(s) missing" style="margin-left:auto;font-size:10px;font-weight:700;color:#FBBF24;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3);padding:1px 7px;border-radius:8px">−${exp-outletCount}</span>`:''}</div>
       <div style="display:flex;justify-content:space-between;align-items:baseline">
         <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">KPIs · Outlets</div><div style="font-size:18px;font-weight:800">${metricCount} · <span style="color:${outletClr}">${outletLabel}</span></div></div>
         <div style="text-align:right"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Off target</div><div style="font-size:18px;font-weight:800;color:${bad>0?'#EF4444':'#22C55E'}">${bad}</div></div>
       </div>
+      ${worstHTML?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(27,47,74,.6)">${worstHTML}</div>`:''}
     </div>`;
   }).join("");
   pg.innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
       <button onclick="backToKPIPlatforms()" style="background:none;border:1px solid #1b2f4a;border-radius:6px;color:#64748b;padding:6px 12px;cursor:pointer;font-size:12px">← All Platforms</button>
       <div style="display:flex;align-items:center;gap:8px">${logoImg(p,28)}<span style="font-size:18px;font-weight:800;color:${clr}">${p}</span></div>
-      <span style="font-size:11px;color:#64748b">select a brand</span>
+      <span style="font-size:11px;color:#64748b">click a brand for full metric breakdown · worst-5 outlets per KPI shown inline</span>
     </div>
-    ${tiles?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">${tiles}</div>`:`<div class="card"><div style="color:#64748b;font-size:12px">No KPIs tracked for ${p} yet.</div></div>`}`;
+    ${tiles?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">${tiles}</div>`:`<div class="card"><div style="color:#64748b;font-size:12px">No KPIs tracked for ${p} yet.</div></div>`}`;
 }
 
 // LEVEL 3: Talabat → Oregano → KPI metric tiles
