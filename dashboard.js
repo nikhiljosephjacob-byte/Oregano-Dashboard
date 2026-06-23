@@ -775,13 +775,26 @@ async function fetchCSV(gid){
   throw new Error("blocked");
 }
 // Combined loading screen: greeting + brand logos + animated SVG pie progress. Replaces
-// the previous two-screen sequence (greeting screen → brand-logos screen with jokes). Runs
-// once at startup, before any data fetch. The pie chart's stroke-dashoffset is driven by
-// setLoadingProgress(pct) called from doLoad as each brand sheet finishes loading.
+// the previous two-screen sequence (pre-login welcome → brand-logos screen with jokes). The
+// pie chart's stroke-dashoffset is driven by setLoadingProgress(pct) called from doLoad as
+// each brand sheet finishes loading. The greeting name is read from localStorage so anyone
+// using the dashboard sets their own name once and the greeting persists across sessions.
+function getUserName(){return(localStorage.getItem("dashboardUserName")||"").trim();}
+function setUserNamePrompt(){
+  const cur=getUserName();
+  const v=prompt("Your name (used for the greeting on the loading screen):",cur);
+  if(v===null)return; // user cancelled
+  localStorage.setItem("dashboardUserName",v.trim());
+  // Re-render the greeting line immediately if the loading screen is still up
+  const g=document.getElementById("ls-greeting");if(g){const hr=new Date().getHours();const greet=hr<12?"Good morning":hr<17?"Good afternoon":hr<22?"Good evening":"Working late";const n=getUserName();g.textContent=greet+(n?", "+n:"")+"!";}
+  const btn=document.getElementById("ls-name-btn");if(btn)btn.textContent=getUserName()?"✎ Change name":"✎ Set your name";
+}
 function injectLoadingScreen(){
   const ls=document.getElementById("loading-screen");if(!ls)return;
   const hr=new Date().getHours();
   const greet=hr<12?"Good morning":hr<17?"Good afternoon":hr<22?"Good evening":"Working late";
+  const userName=getUserName();
+  const greetLine=greet+(userName?", "+userName:"")+"!";
   // Circumference of r=42 circle (used for stroke-dasharray on the progress arc)
   const C=2*Math.PI*42;
   const logoRow=(typeof BR!=="undefined"?BR:[]).map(b=>{
@@ -793,8 +806,9 @@ function injectLoadingScreen(){
   }).join("");
   ls.innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:40px 30px;text-align:center;background:radial-gradient(circle at 50% 20%,#0d1524 0%,#0a1322 60%,#070d1c 100%);color:#e2e8f0">
     <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:3px;margin-bottom:6px">Oregano Restaurants UAE</div>
-    <h1 style="font-size:30px;font-weight:800;color:#f59e0b;margin:0 0 6px;letter-spacing:-.5px">${greet}, Diyar</h1>
-    <div style="font-size:12px;color:#94a3b8;margin-bottom:32px">Preparing your performance view across all brands…</div>
+    <h1 id="ls-greeting" style="font-size:30px;font-weight:800;color:#f59e0b;margin:0 0 6px;letter-spacing:-.5px">${greetLine}</h1>
+    <div style="font-size:12px;color:#94a3b8;margin-bottom:8px">Preparing your performance view across all brands…</div>
+    <button id="ls-name-btn" onclick="setUserNamePrompt()" style="background:none;border:1px solid #1b2f4a;border-radius:14px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer;margin-bottom:24px;transition:all .15s" onmouseover="this.style.borderColor='#f59e0b';this.style.color='#f59e0b'" onmouseout="this.style.borderColor='#1b2f4a';this.style.color='#64748b'">${userName?"✎ Change name":"✎ Set your name"}</button>
     <div style="display:flex;gap:18px;margin-bottom:34px;flex-wrap:wrap;justify-content:center;max-width:560px">${logoRow}</div>
     <div style="position:relative;width:180px;height:180px;margin-bottom:18px">
       <svg viewBox="0 0 100 100" style="width:100%;height:100%;transform:rotate(-90deg)">
@@ -5124,8 +5138,26 @@ function cmpDrawChart(dA,dB){
 }
 
 // ── INIT ──
-// doLoad() is called from index.html after the user logs in.
-// Nav logo + first paint happen inside doLoad().
+// Auto-start the dashboard on script load — the previous behavior required clicking through
+// a pre-login welcome screen in index.html before reaching the data view. The user requested
+// that screen be skipped: the combined loading screen (greeting + brand logos + pie chart)
+// now takes over the page immediately. Any leftover pre-login containers from index.html
+// (login-screen, welcome-screen, splash, intro) are hidden defensively so they don't flash.
+function autoStartDashboard(){
+  if(window.__doLoadStarted)return;
+  window.__doLoadStarted=true;
+  ["login-screen","welcome-screen","splash","intro","pre-login"].forEach(id=>{
+    const el=document.getElementById(id);if(el)el.style.display="none";
+  });
+  // Show the loading-screen container even if index.html had it hidden
+  const ls=document.getElementById("loading-screen");if(ls)ls.style.display="flex";
+  doLoad();
+}
+if(document.readyState==="loading"){
+  document.addEventListener("DOMContentLoaded",autoStartDashboard);
+}else{
+  autoStartDashboard();
+}
 
 // ── EXPOSE HANDLERS TO WINDOW ──────────────────────────────────────────────
 // Inline onclick/onchange handlers in injected HTML resolve names on `window`.
@@ -5140,6 +5172,6 @@ function cmpDrawChart(dA,dB){
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
     sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campSetScope,campClearDates,campSetElasticity,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,
-    injectCompareTab,loadKPIData,doLoad];
+    injectCompareTab,loadKPIData,doLoad,setUserNamePrompt];
   fns.forEach(fn=>{try{if(typeof fn==="function")window[fn.name]=fn;}catch(e){}});
 })();
