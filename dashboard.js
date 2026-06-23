@@ -777,9 +777,23 @@ async function fetchCSV(gid){
 // Combined loading screen: greeting + brand logos + animated SVG pie progress. Replaces
 // the previous two-screen sequence (pre-login welcome → brand-logos screen with jokes). The
 // pie chart's stroke-dashoffset is driven by setLoadingProgress(pct) called from doLoad as
-// each brand sheet finishes loading. The greeting name is read from localStorage so anyone
-// using the dashboard sets their own name once and the greeting persists across sessions.
-function getUserName(){return(localStorage.getItem("dashboardUserName")||"").trim();}
+// each brand sheet finishes loading. The greeting name is read from the active login session
+// (set by index.html's doLogin) so the dashboard automatically greets whoever logged in. A
+// manual override is still available via the "Change name" button below the greeting.
+function getUserName(){
+  // Manual override takes priority if explicitly set via the loading-screen pencil button
+  const override=(localStorage.getItem("dashboardUserName")||"").trim();
+  if(override)return override;
+  // Otherwise use the displayName from the active login session
+  try{
+    const s=localStorage.getItem("oregano_session");
+    if(s){
+      const sess=JSON.parse(s);
+      if(sess&&sess.displayName)return String(sess.displayName).trim();
+    }
+  }catch(e){}
+  return "";
+}
 function setUserNamePrompt(){
   const cur=getUserName();
   const v=prompt("Your name (used for the greeting on the loading screen):",cur);
@@ -5138,26 +5152,9 @@ function cmpDrawChart(dA,dB){
 }
 
 // ── INIT ──
-// Auto-start the dashboard on script load — the previous behavior required clicking through
-// a pre-login welcome screen in index.html before reaching the data view. The user requested
-// that screen be skipped: the combined loading screen (greeting + brand logos + pie chart)
-// now takes over the page immediately. Any leftover pre-login containers from index.html
-// (login-screen, welcome-screen, splash, intro) are hidden defensively so they don't flash.
-function autoStartDashboard(){
-  if(window.__doLoadStarted)return;
-  window.__doLoadStarted=true;
-  ["login-screen","welcome-screen","splash","intro","pre-login"].forEach(id=>{
-    const el=document.getElementById(id);if(el)el.style.display="none";
-  });
-  // Show the loading-screen container even if index.html had it hidden
-  const ls=document.getElementById("loading-screen");if(ls)ls.style.display="flex";
-  doLoad();
-}
-if(document.readyState==="loading"){
-  document.addEventListener("DOMContentLoaded",autoStartDashboard);
-}else{
-  autoStartDashboard();
-}
+// doLoad() is fired by index.html — either from doLogin() after successful auth, or from
+// checkSession() when a valid saved session is detected. We do NOT auto-fire it from here,
+// because that would bypass the login screen.
 
 // ── EXPOSE HANDLERS TO WINDOW ──────────────────────────────────────────────
 // Inline onclick/onchange handlers in injected HTML resolve names on `window`.
