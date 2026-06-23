@@ -83,6 +83,18 @@ const toN=s=>{const v=parseFloat((s||"").replace(/[,\s]/g,""));return isNaN(v)?0
 function parseDate(s){if(!s)return null;const m=String(s).trim().match(/^(\d{1,2})-([A-Za-z]{3})-(\d{2,4})$/);if(m){let y=parseInt(m[3]);if(y<100)y=y>50?1900+y:2000+y;const mo=MM[m[2]];if(mo!=null)return new Date(y,mo,parseInt(m[1]));}const d=new Date(s);return isNaN(d)?null:d;}
 function dk(d){return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
 function subDays(k,n){const d=new Date(k+"T12:00:00");d.setDate(d.getDate()-n);return dk(d);}
+// Subtract one calendar month, clamping the day so e.g. Mar 31 → Feb 28 (or 29 in leap years),
+// not the JS default of Feb 31 overflowing into March. Used for "same date prior month" period
+// comparison on the This Month / Last Month presets.
+function subMonth(k){
+  const d=new Date(k+"T12:00:00");
+  const targetYear=d.getMonth()===0?d.getFullYear()-1:d.getFullYear();
+  const targetMonth=d.getMonth()===0?11:d.getMonth()-1;
+  // Last day of target month (day 0 of next month = last day of this month)
+  const lastDayOfTarget=new Date(targetYear,targetMonth+1,0).getDate();
+  const targetDay=Math.min(d.getDate(),lastDayOfTarget);
+  return dk(new Date(targetYear,targetMonth,targetDay));
+}
 function fmtDisp(k){if(!k)return"";return new Date(k+"T12:00:00").toLocaleDateString("en-AE",{weekday:"short",day:"numeric",month:"short",year:"numeric"});}
 function fmtShort(k){if(!k)return"";return new Date(k+"T12:00:00").toLocaleDateString("en-AE",{day:"numeric",month:"short"});}
 function fmtAED(n){if(n>=1e6)return`AED ${(n/1e6).toFixed(2)}M`;if(n>=1000)return`AED ${(n/1000).toFixed(1)}K`;return`AED ${Math.round(n)}`;}
@@ -985,11 +997,42 @@ let tableSort={};
 
 // FILTER HELPERS
 function getLD(){const f=curFilters();return allData.filter(r=>{if(f.start&&r.date<f.start)return false;if(f.end&&r.date>f.end)return false;if(f.brands.size&&!f.brands.has(r.brand))return false;if(f.platforms.size&&!f.platforms.has(r.aggregator))return false;if(f.branches.size&&!f.branches.has(r.branch))return false;return true;});}
-function getCompRange(){const f=curFilters();if(!f.start||!f.end)return{s:subDays(latest,7),e:subDays(latest,7)};const s=new Date(f.start+"T12:00:00"),e=new Date(f.end+"T12:00:00");const n=Math.round((e-s)/86400000);const ce=new Date(s);ce.setDate(ce.getDate()-1);const cs=new Date(ce);cs.setDate(cs.getDate()-n);return{s:dk(cs),e:dk(ce)};}
+function getCompRange(){
+  const f=curFilters();
+  if(!f.start||!f.end)return{s:subDays(latest,7),e:subDays(latest,7)};
+  // PRESET-AWARE COMPARISON:
+  // For "This Month" and "Last Month" presets, the natural comparison is the SAME dates one
+  // calendar month back — Jun 1-21 compares to May 1-21, not the trailing 21 days (May 11-31).
+  // This matches how monthly progress is read: "how is this month going vs last month at the
+  // same point?" Trailing-N is still used for other presets (7d / 30d / custom) since week-over-
+  // week and arbitrary windows naturally compare to the immediately preceding period.
+  if(f.preset==="month"||f.preset==="lmonth"){
+    return{s:subMonth(f.start),e:subMonth(f.end)};
+  }
+  // Default: trailing N days (immediately before the current window)
+  const s=new Date(f.start+"T12:00:00"),e=new Date(f.end+"T12:00:00");
+  const n=Math.round((e-s)/86400000);
+  const ce=new Date(s);ce.setDate(ce.getDate()-1);
+  const cs=new Date(ce);cs.setDate(cs.getDate()-n);
+  return{s:dk(cs),e:dk(ce)};
+}
 function getPD(){const{s,e}=getCompRange();const f=curFilters();return allData.filter(r=>{if(r.date<s||r.date>e)return false;if(f.brands.size&&!f.brands.has(r.brand))return false;if(f.platforms.size&&!f.platforms.has(r.aggregator))return false;if(f.branches.size&&!f.branches.has(r.branch))return false;return true;});}
-function getCompLabel(){const{s,e}=getCompRange();const f=curFilters();const days=f.start===f.end?1:Math.round((new Date(f.end)-new Date(f.start))/86400000)+1;if(days===1)return`vs ${fmtDisp(s)} (same day prev week)`;return`vs ${fmtDisp(s)}→${fmtDisp(e)}`;}
+function getCompLabel(){
+  const{s,e}=getCompRange();
+  const f=curFilters();
+  const days=f.start===f.end?1:Math.round((new Date(f.end)-new Date(f.start))/86400000)+1;
+  if(days===1)return`vs ${fmtDisp(s)} (same day prev week)`;
+  const suffix=(f.preset==="month"||f.preset==="lmonth")?" (same dates, prior month)":"";
+  return`vs ${fmtDisp(s)}→${fmtDisp(e)}${suffix}`;
+}
 // Short comparison label for table column headers (so the "change" columns aren't ambiguous)
-function getCompShort(){const{s,e}=getCompRange();if(s===e)return`vs ${fmtShort(s)}`;return`vs ${fmtShort(s)}–${fmtShort(e)}`;}
+function getCompShort(){
+  const{s,e}=getCompRange();
+  const f=curFilters();
+  if(s===e)return`vs ${fmtShort(s)}`;
+  const suffix=(f.preset==="month"||f.preset==="lmonth")?" (prior mo.)":"";
+  return`vs ${fmtShort(s)}–${fmtShort(e)}${suffix}`;
+}
 function getPeriodLabel(){const f=curFilters();if(!f.start)return"";if(f.start===f.end)return fmtDisp(f.start);return`${fmtDisp(f.start)} → ${fmtDisp(f.end)}`;}
 function fSetPreset(p){const f=curFilters();f.preset=p;if(p==="yesterday"){f.start=f.end=latest;}else if(p==="7d"){f.start=subDays(latest,6);f.end=latest;}else if(p==="30d"){f.start=subDays(latest,29);f.end=latest;}else if(p==="month"){f.start=latest.slice(0,7)+"-01";f.end=latest;}else if(p==="lmonth"){const now=new Date(latest+"T12:00:00");f.start=dk(new Date(now.getFullYear(),now.getMonth()-1,1));f.end=dk(new Date(now.getFullYear(),now.getMonth(),0));}Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
 function fApply(){const f=curFilters();const s=document.getElementById("f-s"),e=document.getElementById("f-e");if(s&&e){f.start=s.value;f.end=e.value;}f.preset="custom";Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
