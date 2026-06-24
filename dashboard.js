@@ -4587,9 +4587,27 @@ function renderKPIPlatformView(){
     if(r.type==='food_ready')return r.latest.toFixed(1)+'%';
     return r.latest+'';
   };
+  // Render a worst-5 list. Color gradient by rank position gives visual hierarchy:
+  // #1 = red (most urgent), #2-3 = amber, #4-5 = muted gray (still bad but less critical).
+  // Leader-dot row connects outlet name to value cleanly without the dead-space gap that
+  // justify-content:space-between leaves on wide tiles.
   const worstSection=(title,list)=>{
     if(!list||!list.length)return '';
-    return `<div style="margin-top:8px"><div style="font-size:8.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.6px;font-weight:700;margin-bottom:3px">${title}</div>${list.map(r=>`<div style="display:flex;justify-content:space-between;font-size:10px;padding:2px 0;border-bottom:1px solid rgba(27,47,74,.4)"><span style="color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:130px" title="${r.outlet}">${r.outlet}</span><span style="color:${r.isBad?'#EF4444':'#64748b'};font-weight:700;font-variant-numeric:tabular-nums">${fmtVal(r)}</span></div>`).join('')}</div>`;
+    const rankColor=i=>i===0?'#EF4444':i<=2?'#FBBF24':'#94a3b8';
+    return `<div style="margin-top:11px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+        <div style="width:5px;height:5px;background:#f59e0b;border-radius:50%;flex-shrink:0"></div>
+        <div style="font-size:10px;color:#cbd5e1;letter-spacing:.4px;font-weight:700">${title}</div>
+      </div>
+      ${list.map((r,i)=>{
+        const c=rankColor(i);
+        return `<div style="display:flex;align-items:baseline;font-size:10.5px;padding:2.5px 0;gap:6px">
+          <span style="color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex-shrink:1" title="${r.outlet}">${r.outlet}</span>
+          <span style="flex:1 1 auto;border-bottom:1px dotted rgba(100,116,139,.45);align-self:center;height:0;min-width:8px"></span>
+          <span style="color:${c};font-weight:700;font-variant-numeric:tabular-nums;flex-shrink:0">${fmtVal(r)}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
   };
 
   const tiles=brandsPresent.map(b=>{
@@ -4606,7 +4624,7 @@ function renderKPIPlatformView(){
     const foodW=worstByType(rs,'food_ready');
     const prepW=worstByType(rs,'prep_time');
     const riderW=worstByType(rs,'rider_wait')||worstByType(rs,'rider_wait_pct');
-    const worstHTML=[worstSection('Worst 5 Ratings',ratingW),worstSection('Worst 5 Food Ready %',foodW),worstSection('Worst 5 Prep Times',prepW),worstSection('Worst 5 Rider Wait',riderW)].join('');
+    const worstHTML=[worstSection('Lowest Ratings',ratingW),worstSection('Lowest Food Ready %',foodW),worstSection('Slowest Prep Times',prepW),worstSection('Longest Rider Wait',riderW)].join('');
     return `<div onclick="selectKPIBrand('${b.n}')" style="background:#0d1524;border:1px solid ${bad>0?'#EF444455':'#1b2f4a'};border-radius:10px;padding:14px;cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${bad>0?'#EF444455':'#1b2f4a'}'">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">${logoImg(b.n,28)}<span style="font-size:13px;font-weight:800;color:${b.c}">${b.n}</span>${short?`<span title="${exp-outletCount} outlet(s) missing" style="margin-left:auto;font-size:10px;font-weight:700;color:#FBBF24;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3);padding:1px 7px;border-radius:8px">−${exp-outletCount}</span>`:''}</div>
       <div style="display:flex;justify-content:space-between;align-items:baseline">
