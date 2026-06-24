@@ -4594,14 +4594,14 @@ function renderKPIPlatformView(){
   const worstSection=(title,list)=>{
     if(!list||!list.length)return '';
     const rankColor=i=>i===0?'#EF4444':i<=2?'#FBBF24':'#94a3b8';
-    return `<div style="margin-top:11px">
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+    return `<div style="margin-top:12px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
         <div style="width:5px;height:5px;background:#f59e0b;border-radius:50%;flex-shrink:0"></div>
-        <div style="font-size:10px;color:#cbd5e1;letter-spacing:.4px;font-weight:700">${title}</div>
+        <div style="font-size:12px;color:#cbd5e1;letter-spacing:.3px;font-weight:700">${title}</div>
       </div>
       ${list.map((r,i)=>{
         const c=rankColor(i);
-        return `<div style="display:flex;align-items:baseline;font-size:10.5px;padding:2.5px 0;gap:6px">
+        return `<div style="display:flex;align-items:baseline;font-size:12px;padding:3px 0;gap:6px">
           <span style="color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex-shrink:1" title="${r.outlet}">${r.outlet}</span>
           <span style="flex:1 1 auto;border-bottom:1px dotted rgba(100,116,139,.45);align-self:center;height:0;min-width:8px"></span>
           <span style="color:${c};font-weight:700;font-variant-numeric:tabular-nums;flex-shrink:0">${fmtVal(r)}</span>
@@ -4625,11 +4625,11 @@ function renderKPIPlatformView(){
     const prepW=worstByType(rs,'prep_time');
     const riderW=worstByType(rs,'rider_wait')||worstByType(rs,'rider_wait_pct');
     const worstHTML=[worstSection('Lowest Ratings',ratingW),worstSection('Lowest Food Ready %',foodW),worstSection('Slowest Prep Times',prepW),worstSection('Longest Rider Wait',riderW)].join('');
-    return `<div onclick="selectKPIBrand('${b.n}')" style="background:#0d1524;border:1px solid ${bad>0?'#EF444455':'#1b2f4a'};border-radius:10px;padding:14px;cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${bad>0?'#EF444455':'#1b2f4a'}'">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">${logoImg(b.n,28)}<span style="font-size:13px;font-weight:800;color:${b.c}">${b.n}</span>${short?`<span title="${exp-outletCount} outlet(s) missing" style="margin-left:auto;font-size:10px;font-weight:700;color:#FBBF24;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3);padding:1px 7px;border-radius:8px">−${exp-outletCount}</span>`:''}</div>
+    return `<div onclick="selectKPIBrand('${b.n}')" style="background:#0d1524;border:1px solid ${bad>0?'#EF444455':'#1b2f4a'};border-radius:10px;padding:12px 11px;cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${bad>0?'#EF444455':'#1b2f4a'}'">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">${logoImg(b.n,28)}<span style="font-size:15px;font-weight:800;color:${b.c}">${b.n}</span>${short?`<span title="${exp-outletCount} outlet(s) missing" style="margin-left:auto;font-size:10px;font-weight:700;color:#FBBF24;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3);padding:1px 7px;border-radius:8px">−${exp-outletCount}</span>`:''}</div>
       <div style="display:flex;justify-content:space-between;align-items:baseline">
-        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">KPIs · Outlets</div><div style="font-size:18px;font-weight:800">${metricCount} · <span style="color:${outletClr}">${outletLabel}</span></div></div>
-        <div style="text-align:right"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Off target</div><div style="font-size:18px;font-weight:800;color:${bad>0?'#EF4444':'#22C55E'}">${bad}</div></div>
+        <div><div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">KPIs · Outlets</div><div style="font-size:20px;font-weight:800">${metricCount} · <span style="color:${outletClr}">${outletLabel}</span></div></div>
+        <div style="text-align:right"><div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">Off target</div><div style="font-size:20px;font-weight:800;color:${bad>0?'#EF4444':'#22C55E'}">${bad}</div></div>
       </div>
       ${worstHTML?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(27,47,74,.6)">${worstHTML}</div>`:''}
     </div>`;
@@ -4639,7 +4639,7 @@ function renderKPIPlatformView(){
       <div style="display:flex;align-items:center;gap:8px">${logoImg(p,28)}<span style="font-size:18px;font-weight:800;color:${clr}">${p}</span></div>
       <span style="font-size:11px;color:#64748b">click a brand for full metric breakdown · worst-5 outlets per KPI shown inline</span>
     </div>
-    ${tiles?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">${tiles}</div>`:`<div class="card"><div style="color:#64748b;font-size:12px">No KPIs tracked for ${p} yet.</div></div>`}`;
+    ${tiles?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">${tiles}</div>`:`<div class="card"><div style="color:#64748b;font-size:12px">No KPIs tracked for ${p} yet.</div></div>`}`;
 }
 
 // LEVEL 3: Talabat → Oregano → KPI metric tiles
