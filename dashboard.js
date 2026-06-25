@@ -378,25 +378,30 @@ async function parseKeetaXlsx(file){
   };
 }
 
-// ── Unified upload UI bar (top of Campaigns page) — handles both Keeta XLSX and Careem CSV
+// ── Unified upload UI bar (top of Campaigns page) — handles Keeta XLSX, Careem CSV, Talabat XLSX
 function keetaUploadBarHTML(){
   const fmtSourceStatus=(label,data,clearFn)=>{
     if(!data)return`<span style="font-size:11px;color:#64748b">${label}: <em style="color:#475569">not uploaded</em></span>`;
-    const md=data.metadata||{};const dr=md.date_range||[];const tot=md.totals||{};
-    return`<span style="font-size:11px;color:#cbd5e1"><strong style="color:#22C55E">${label}:</strong> ${(tot.orders||0).toLocaleString()} orders · ${dr[0]?fmtShort(dr[0]):"?"} → ${dr[1]?fmtShort(dr[1]):"?"} <button onclick="if(confirm('Clear uploaded ${label} data? Reverts to sales-weighted estimation.'))${clearFn}()" style="background:transparent;border:none;color:#64748b;font-size:9px;cursor:pointer;padding:0 4px;text-decoration:underline">clear</button></span>`;
+    const md=data.metadata||{};const dr=md.date_range||[];
+    // Order total can be in metadata.totals.orders (Keeta) or summed from totals_per_brand (Careem/Talabat)
+    let orders=0;
+    if(md.totals&&md.totals.orders)orders=md.totals.orders;
+    else if(md.totals_per_brand)Object.values(md.totals_per_brand).forEach(t=>{orders+=t.orders||0;});
+    return`<span style="font-size:11px;color:#cbd5e1"><strong style="color:#22C55E">${label}:</strong> ${orders.toLocaleString()} orders · ${dr[0]?fmtShort(dr[0]):"?"} → ${dr[1]?fmtShort(dr[1]):"?"} <button onclick="if(confirm('Clear uploaded ${label} data? Reverts to sales-weighted estimation.'))${clearFn}()" style="background:transparent;border:none;color:#64748b;font-size:9px;cursor:pointer;padding:0 4px;text-decoration:underline">clear</button></span>`;
   };
   const keetaStatus=fmtSourceStatus("Keeta",keetaOrdersData,"clearKeetaData");
   const careemStatus=fmtSourceStatus("Careem",careemOrdersData,"clearCareemData");
-  const anyLoaded=keetaOrdersData||careemOrdersData;
+  const talabatStatus=fmtSourceStatus("Talabat",talabatOrdersData,"clearTalabatData");
+  const anyLoaded=keetaOrdersData||careemOrdersData||talabatOrdersData;
   const accent=anyLoaded?"rgba(34,197,94,.3)":"rgba(232,214,20,.3)";
   const accentBg=anyLoaded?"rgba(34,197,94,.04)":"rgba(232,214,20,.06)";
   const accentBorder=anyLoaded?"1px solid":"1px dashed";
   const blurb=anyLoaded
     ?`<span style="font-size:11px;color:#94a3b8;margin-right:8px">📊 Exact-order data is in use for campaigns where uploaded data covers the window:</span>`
-    :`<span style="font-size:11px;color:#94a3b8;margin-right:8px;flex:1">📊 No exact-order data uploaded — campaigns currently use sales-weighted estimation. Upload Keeta "Recent Orders" (.xlsx) or Careem "FOOD_ORDER" (.csv) for exact per-outlet discount data.</span>`;
+    :`<span style="font-size:11px;color:#94a3b8;margin-right:8px;flex:1">📊 No exact-order data uploaded — campaigns currently use sales-weighted estimation. Upload Keeta "Recent Orders" (.xlsx), Careem "FOOD_ORDER" (.csv), or Talabat "orderDetails" (.xlsx) for exact per-outlet discount data.</span>`;
   return`<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:${accentBg};border:${accentBorder} ${accent};border-radius:8px;margin-bottom:12px;flex-wrap:wrap">
     ${blurb}
-    ${anyLoaded?`<div style="display:flex;gap:14px;flex-wrap:wrap;flex:1">${keetaStatus}${careemStatus}</div>`:''}
+    ${anyLoaded?`<div style="display:flex;gap:14px;flex-wrap:wrap;flex:1">${keetaStatus}${careemStatus}${talabatStatus}</div>`:''}
     <input type="file" id="orders-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleOrdersUpload(this.files[0])">
     <button onclick="document.getElementById('orders-file').click()" style="background:rgba(232,214,20,.15);border:1px solid rgba(232,214,20,.4);border-radius:5px;color:#E8D614;padding:5px 14px;font-size:11px;cursor:pointer;font-weight:700;white-space:nowrap">${anyLoaded?'↻ Upload More':'Upload Orders File'}</button>
   </div>`;
@@ -406,6 +411,8 @@ function keetaUploadBarHTML(){
 // Auto-detects file format from headers:
 //   xlsx + "Order no." / "Promotion funded by merchant"  → Keeta path
 //   csv  + "PARTNER_FUNDED_CATALOG_DISCOUNT" / "MERCHANT_AREA" → Careem path
+//   xlsx + "Voucher Funded by you" / "Talabat-Funded Voucher" → Talabat path (two-row header,
+//                                                               check row 0 AND row 1)
 // Routes to the right parser and stores in the right state slot.
 async function handleOrdersUpload(file){
   if(!file)return;
@@ -413,31 +420,38 @@ async function handleOrdersUpload(file){
   const oldTitle=tab?tab.title:"";
   if(tab){tab.style.opacity="0.6";tab.title="Parsing orders file…";}
   try{
-    await loadSheetJS(); // both parsers need it
+    await loadSheetJS();
     const ab=await file.arrayBuffer();
     const wb=XLSX.read(ab,{type:"array",raw:true,codepage:65001});
     const ws=wb.Sheets[wb.SheetNames[0]];
-    const firstRow=XLSX.utils.sheet_to_json(ws,{header:1,defval:""})[0]||[];
-    const headers=new Set(firstRow.map(h=>String(h).replace(/^\uFEFF/,"")));
+    const rowsForDetect=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+    const firstRow=rowsForDetect[0]||[],secondRow=rowsForDetect[1]||[];
+    const headers=new Set();
+    firstRow.forEach(h=>headers.add(String(h).replace(/^\uFEFF/,"")));
+    secondRow.forEach(h=>headers.add(String(h).replace(/^\uFEFF/,"")));
     let detected=null;
     if(headers.has("Order no.")&&headers.has("Promotion funded by merchant"))detected="keeta";
     else if(headers.has("PARTNER_FUNDED_CATALOG_DISCOUNT")&&headers.has("MERCHANT_AREA"))detected="careem";
+    else if(headers.has("Voucher Funded by you")&&headers.has("Talabat-Funded Voucher"))detected="talabat";
     if(!detected){
-      alert("Couldn't detect the file format.\n\nExpected either:\n• Keeta Recent Orders (.xlsx)\n• Careem FOOD_ORDER (.csv)\n\nMake sure you exported the right report.");
+      alert("Couldn't detect the file format.\n\nExpected either:\n• Keeta Recent Orders (.xlsx)\n• Careem FOOD_ORDER (.csv)\n• Talabat orderDetails (.xlsx)\n\nMake sure you exported the right report.");
       return;
     }
     if(detected==="keeta"){
       const data=await parseKeetaXlsx(file);
       if(!data.records.length){alert("File parsed but no usable Keeta records were found.");return;}
       keetaOrdersData=data;saveKeetaToStorage();
-    }else{
+    }else if(detected==="careem"){
       const data=await parseCareemCSV(file);
       if(!data.records.length){alert("File parsed but no usable Careem records were found.");return;}
       careemOrdersData=data;saveCareemToStorage();
+    }else{
+      const data=await parseTalabatXlsx(file);
+      if(!data.records.length){alert("File parsed but no usable Talabat records were found.");return;}
+      talabatOrdersData=data;saveTalabatToStorage();
     }
     if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
     renderCampaigns();
-    // Brief confirmation toast (since the banner refresh is silent)
     setTimeout(()=>{const tab2=typeof campNavTab==="function"?campNavTab():null;if(tab2){tab2.title=`Loaded ${detected.charAt(0).toUpperCase()+detected.slice(1)} orders`;setTimeout(()=>{if(tab2)tab2.title="";},2500);}},50);
   }catch(e){
     alert("Failed to parse file:\n\n"+e.message);
@@ -680,6 +694,238 @@ async function parseCareemCSV(file){
 // END CAREEM MODULE
 // ═══════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════
+// TALABAT EXACT-DISCOUNT MODULE
+// Parses Talabat "orderDetails.xlsx" exports into per-(brand × outlet × date) menu
+// discount totals. Methodology in /mnt/user-data/outputs/talabat-orders/SKILL.md.
+//
+// Differs from Keeta + Careem:
+//  - Two-row header (level 0 = category groups, level 1 = column names) → read row 1
+//  - Exact merchant-funded discount is in ONE clean column ("Voucher Funded by you").
+//    Talabat doesn't bundle FD into the discount column, so no AED 2 subtraction needed.
+//  - No per-order campaign tag and no catalog/promo distinction → exact totals are
+//    returned at the (brand, outlet, date) level. Multi-campaign attribution remains
+//    the dashboard's existing responsibility (each overlapping Talabat campaign for a
+//    brand will see the same exact total; the campaign-overlap UI flags these days).
+// ═══════════════════════════════════════════════════════════════
+
+// Brand prefix at start of `Restaurant name`. Order matters: longest prefix first so
+// "Fyoozhen Asian" matches before any future bare "Fyoozhen" prefix would.
+const TALABAT_BRAND_PREFIXES=[
+  ["fyoozhen asian","Fyoozhen"],
+  ["wicked wings","Wicked Wings"],
+  ["lollorosso","Lollorosso"],
+  ["smokeys","Smokeys"],
+  ["oregano","Oregano"]
+];
+// Outlet name (lowercased, last comma-separated non-empty segment after brand stripped)
+// → dashboard branch name. New outlets must be added here; unmapped names are surfaced in
+// metadata.
+const TALABAT_OUTLET_MAP={
+  "al furjan":"Furjan",
+  "al quoz 1":"Al Quoz","al quoz 2":"Al Quoz",
+  "al reef":"Al Reef",
+  "dubai internet city - dic":"DMC","dubai media city":"DMC",
+  "dubai investments park":"DIP","dubai investments park 1":"DIP",
+  "dubai motor city":"Motorcity",
+  "dubai silicon oasis":"DSO","dso":"DSO",
+  "dubai marina":"Marina",
+  "forsan - al forsan village":"Al Forsan","al forsan village":"Al Forsan",
+  "madinat khalifa-a":"Al Forsan","madinat khalifa - a":"Al Forsan",
+  "al khalidiyah":"WTC",
+  "jumeirah":"Jumeirah","jumeirah 1":"Jumeirah",
+  "mirdif":"Mirdiff",
+  "nad al sheba 1":"NAS","nad al sheba 4":"NAS",
+  "reem island":"Al Reem",
+  "the villa":"Villa",
+  "town square":"Town Square"
+};
+const TALABAT_STORAGE_KEY="talabat_orders_data_v1";
+
+let talabatOrdersData=null;
+function loadTalabatFromStorage(){
+  try{const raw=localStorage.getItem(TALABAT_STORAGE_KEY);if(raw)talabatOrdersData=JSON.parse(raw);}
+  catch(e){console.log("[Talabat] localStorage load failed:",e.message);talabatOrdersData=null;}
+}
+function saveTalabatToStorage(){
+  if(!talabatOrdersData)return;
+  try{localStorage.setItem(TALABAT_STORAGE_KEY,JSON.stringify(talabatOrdersData));}
+  catch(e){console.log("[Talabat] localStorage save failed (quota?):",e.message);}
+}
+function clearTalabatData(){
+  talabatOrdersData=null;
+  try{localStorage.removeItem(TALABAT_STORAGE_KEY);}catch(e){}
+  if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
+  renderCampaigns();
+}
+
+// Parse brand+outlet from Talabat "Restaurant name" field. Returns {brand,outlet} or
+// {brand:null,outlet:null} when unparseable / unmapped. The function lowercases, strips
+// the brand prefix, lstrips " ," (handles "Lollorosso ,Dubai Investments Park 1" with
+// stray leading space), then takes the LAST non-empty comma-separated segment as the
+// outlet identifier and maps it via TALABAT_OUTLET_MAP.
+function parseTalabatBrandOutlet(rn){
+  if(!rn)return{brand:null,outlet:null,rawOutlet:null};
+  const s=String(rn).trim();const lc=s.toLowerCase();
+  let brand=null,rest=null;
+  for(const[pfx,name]of TALABAT_BRAND_PREFIXES){
+    if(lc.startsWith(pfx)){brand=name;rest=s.slice(pfx.length);break;}
+  }
+  if(!brand)return{brand:null,outlet:null,rawOutlet:null};
+  rest=rest.replace(/^[\s,]+/,"").trim();
+  const parts=rest.split(",").map(p=>p.trim().replace(/,+$/,"")).filter(Boolean);
+  const rawOutlet=parts.length?parts[parts.length-1].trim():"";
+  const outlet=TALABAT_OUTLET_MAP[rawOutlet.toLowerCase()]||null;
+  return{brand,outlet,rawOutlet};
+}
+
+// Lookup: sum exact menu_disc for matching (brand, outlet ∈ scope, date in window).
+// Same return shape as Keeta/Careem lookups so allocateCampaignDiscount can short-circuit
+// the sales-weighted estimate. Returns null when there's no overlap with the upload range.
+//
+// Note: Talabat has no per-record campaign tag, so overlapping Talabat campaigns for the
+// same brand+outlets will each see the same exact total. The existing campaign-overlap
+// UI flags those cases for the user to resolve.
+function getTalabatExactDisc(c,start,end){
+  if(!talabatOrdersData||!talabatOrdersData.records||!talabatOrdersData.metadata)return null;
+  const dr=talabatOrdersData.metadata.date_range||[];
+  if(!dr[0]||!dr[1])return null;
+  if(end<dr[0]||start>dr[1])return null;
+  const myScope=campOutlets(c);
+  let menuDisc=0;const dailyAlloc={};let matched=0;
+  for(const rec of talabatOrdersData.records){
+    if(rec.brand!==c.brand)continue;
+    if(rec.date<start||rec.date>end)continue;
+    if(myScope&&!myScope.has(rec.outlet))continue;
+    menuDisc+=rec.menu_disc;
+    dailyAlloc[rec.date]=(dailyAlloc[rec.date]||0)+rec.menu_disc;
+    matched++;
+  }
+  if(!matched)return null;
+  const daysIn=(s,e)=>Math.max(0,Math.round((new Date(e+"T12:00:00")-new Date(s+"T12:00:00"))/86400000)+1);
+  const totalDays=daysIn(start,end);
+  const covStart=start>dr[0]?start:dr[0];
+  const covEnd=end<dr[1]?end:dr[1];
+  const coveredDays=daysIn(covStart,covEnd);
+  return{menuDisc,dailyAlloc,matchedRecords:matched,coveredDays,totalDays,partialCoverage:coveredDays<totalDays,uncoveredStart:end>dr[1]?dr[1]:null,uncoveredEnd:end>dr[1]?end:null};
+}
+
+// Per-outlet exact menu_disc for a campaign window — used by campOutletBreakdownHTML
+function getTalabatExactDiscPerOutlet(c,start,end){
+  if(!talabatOrdersData||!talabatOrdersData.records||!talabatOrdersData.metadata)return null;
+  const dr=talabatOrdersData.metadata.date_range||[];
+  if(!dr[0]||!dr[1])return null;
+  if(end<dr[0]||start>dr[1])return null;
+  const myScope=campOutlets(c);
+  const byOutlet={};
+  for(const rec of talabatOrdersData.records){
+    if(rec.brand!==c.brand)continue;
+    if(rec.date<start||rec.date>end)continue;
+    if(myScope&&!myScope.has(rec.outlet))continue;
+    byOutlet[rec.outlet]=(byOutlet[rec.outlet]||0)+rec.menu_disc;
+  }
+  return Object.keys(byOutlet).length?byOutlet:null;
+}
+
+// Talabat date format: "2026-06-01 11:34" or Excel serial (number). Return "YYYY-MM-DD" or null.
+function parseTalabatDate(v){
+  if(v==null||v==="")return null;
+  // Excel serial date (typeof number) — convert via SheetJS helper if available
+  if(typeof v==="number"&&typeof XLSX!=="undefined"&&XLSX.SSF){
+    const dt=XLSX.SSF.parse_date_code(v);
+    if(dt)return`${dt.y}-${String(dt.m).padStart(2,"0")}-${String(dt.d).padStart(2,"0")}`;
+  }
+  const s=String(v).trim();
+  if(/^\d{4}-\d{2}-\d{2}/.test(s))return s.slice(0,10);
+  // Fallback: best-effort Date parse
+  const d=new Date(s);
+  if(isNaN(d.getTime()))return null;
+  return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+// Parse a Talabat orderDetails.xlsx into the same aggregated shape as the Python parser.
+// Two-row header: row 0 = category groups (Order Metadata, Operations, ...), row 1 = column
+// names (Restaurant name, Subtotal, Voucher Funded by you, ...). Data starts at row 2.
+async function parseTalabatXlsx(file){
+  await loadSheetJS();
+  const ab=await file.arrayBuffer();
+  const wb=XLSX.read(ab,{type:"array",raw:true,cellDates:false});
+  const ws=wb.Sheets[wb.SheetNames[0]];
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+  if(rows.length<3)throw new Error("File looks empty (<3 rows)");
+  const header=rows[1].map(h=>String(h).trim()); // level-2 column names
+  const colIdx={};header.forEach((h,i)=>{if(h)colIdx[h]=i;});
+  const required=["Restaurant name","Order status","Order received at","Subtotal","Voucher Funded by you","Commission","Operational Charges","Payout Amount"];
+  const missing=required.filter(c=>!(c in colIdx));
+  if(missing.length)throw new Error("Talabat parser: missing columns — "+missing.join(", "));
+
+  const data=rows.slice(2);
+  const agg={}; // key "brand|outlet|date" → {orders,gross,net_payout,menu_disc,commission,ops_charges}
+  const skipped={cancelled:0,no_brand:0,no_outlet:0,no_date:0};
+  const unmappedOutlets={}; // raw name → count
+  const numAt=(row,col)=>{const v=row[colIdx[col]];if(v==null||v==="")return 0;if(typeof v==="number")return v;const n=parseFloat(String(v));return isNaN(n)?0:n;};
+
+  for(const row of data){
+    if(!row||row.length===0)continue;
+    const status=String(row[colIdx["Order status"]]||"").trim();
+    if(status.toLowerCase()==="cancelled"){skipped.cancelled++;continue;}
+    const{brand,outlet,rawOutlet}=parseTalabatBrandOutlet(row[colIdx["Restaurant name"]]);
+    if(!brand){skipped.no_brand++;continue;}
+    if(!outlet){skipped.no_outlet++;if(rawOutlet)unmappedOutlets[rawOutlet]=(unmappedOutlets[rawOutlet]||0)+1;continue;}
+    const date=parseTalabatDate(row[colIdx["Order received at"]]);
+    if(!date){skipped.no_date++;continue;}
+    const key=`${brand}|${outlet}|${date}`;
+    if(!agg[key])agg[key]={brand,outlet,date,orders:0,gross:0,net_payout:0,menu_disc:0,commission:0,ops_charges:0};
+    const b=agg[key];
+    b.orders++;
+    b.gross+=numAt(row,"Subtotal");
+    b.net_payout+=numAt(row,"Payout Amount");
+    b.menu_disc+=numAt(row,"Voucher Funded by you");
+    b.commission+=numAt(row,"Commission");
+    b.ops_charges+=numAt(row,"Operational Charges");
+  }
+
+  const records=Object.values(agg).map(r=>({
+    brand:r.brand,outlet:r.outlet,date:r.date,
+    orders:r.orders,
+    gross:+r.gross.toFixed(2),
+    net_payout:+r.net_payout.toFixed(2),
+    menu_disc:+r.menu_disc.toFixed(2),
+    commission:+r.commission.toFixed(2),
+    ops_charges:+r.ops_charges.toFixed(2)
+  })).sort((a,b)=>(a.brand+a.outlet+a.date).localeCompare(b.brand+b.outlet+b.date));
+
+  // Date range + per-brand totals for the metadata block
+  const dates=records.map(r=>r.date).sort();
+  const date_range=dates.length?[dates[0],dates[dates.length-1]]:[null,null];
+  const totals={};
+  for(const r of records){
+    if(!totals[r.brand])totals[r.brand]={orders:0,gross:0,net_payout:0,menu_disc:0,commission:0,ops_charges:0};
+    const t=totals[r.brand];
+    t.orders+=r.orders;t.gross+=r.gross;t.net_payout+=r.net_payout;
+    t.menu_disc+=r.menu_disc;t.commission+=r.commission;t.ops_charges+=r.ops_charges;
+  }
+  Object.values(totals).forEach(t=>{["gross","net_payout","menu_disc","commission","ops_charges"].forEach(k=>t[k]=+t[k].toFixed(2));});
+
+  return{
+    metadata:{
+      source_file:file.name||"orderDetails.xlsx",
+      generated_at:new Date().toISOString(),
+      aggregator:"Talabat",
+      date_range,
+      rows_in_file:data.length,
+      rows_skipped:skipped,
+      unmapped_outlets:Object.keys(unmappedOutlets),
+      totals_per_brand:totals
+    },
+    records
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// END TALABAT MODULE
+// ═══════════════════════════════════════════════════════════════
+
 
 
 // CSV PARSING
@@ -872,6 +1118,7 @@ async function doLoad(){
   // Restore any previously-uploaded exact-discount data from localStorage (both aggregators)
   loadKeetaFromStorage();
   loadCareemFromStorage();
+  loadTalabatFromStorage();
   // ── DISCOUNT PARSE DIAGNOSTIC ──
   // Prints how much Disc was parsed per brand × aggregator so we can see if the sheet's
   // Disc column is being read. If a brand/aggregator you entered shows 0, the column header
@@ -3097,13 +3344,14 @@ function campCardGrid(camps,showProfit){
     // Full dates (e.g. "5 Jun – 11 Jun 2026")
     const dateStr=(()=>{const s=fmtDisp(c.startDate).replace(/^\w+,\s*/,'');const e=fmtDisp(c.endDate).replace(/^\w+,\s*/,'');return `${s} – ${e}`;})();
     // "📊 Exact" badge when this campaign's discount came from uploaded order data
-    // (Keeta XLSX or Careem CSV). Shown only for matching aggregator + data present.
+    // (Keeta XLSX, Careem CSV, or Talabat XLSX). Shown only for matching aggregator + data present.
     const exactChip=(showProfit&&(
       (c.aggregator==='Keeta'&&keetaOrdersData)||
-      (c.aggregator==='Careem'&&careemOrdersData)
+      (c.aggregator==='Careem'&&careemOrdersData)||
+      (c.aggregator==='Talabat'&&talabatOrdersData)
     ))?(()=>{
       const a=campAnalysisCached(c);
-      return(a.discSource==='keeta_exact'||a.discSource==='careem_exact')?`<span style="font-size:8px;background:rgba(34,197,94,.12);color:#22C55E;font-weight:700;padding:1px 6px;border-radius:6px" title="Discount sourced from uploaded ${c.aggregator} orders file (exact per-order data, not estimated)">📊 Exact</span>`:'';
+      return(a.discSource==='keeta_exact'||a.discSource==='careem_exact'||a.discSource==='talabat_exact')?`<span style="font-size:8px;background:rgba(34,197,94,.12);color:#22C55E;font-weight:700;padding:1px 6px;border-radius:6px" title="Discount sourced from uploaded ${c.aggregator} orders file (exact per-order data, not estimated)">📊 Exact</span>`:'';
     })():'';
     return `<div onclick="selectCamp(${idx})" style="cursor:pointer;background:linear-gradient(135deg,${accent}0d,rgba(13,21,36,.5));border:1px solid ${accent}33;border-left:3px solid ${accent};border-radius:12px;padding:14px;transition:transform .12s,border-color .12s" onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${accent}77'" onmouseout="this.style.transform='none';this.style.borderColor='${accent}33'">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
@@ -3335,6 +3583,18 @@ function allocateCampaignDiscount(c,start,end){
       const M=brandTotalBranches(c.brand,c.aggregator)||1;
       const myN=(campOutlets(c)||new Set()).size||M;
       return{allocatedDisc:exact.menuDisc,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"careem_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
+    }
+  }
+  // Talabat: same pattern. Exact data is at (brand, outlet, date) — no per-record campaign tag,
+  // so the lookup returns the brand+outlet+window total. If multiple Talabat campaigns overlap
+  // on the same brand+outlets, each will see the same exact total; the dashboard's campaign-
+  // overlap UI flags those cases for the user.
+  if(c.aggregator==="Talabat"){
+    const exact=getTalabatExactDisc(c,start,end);
+    if(exact){
+      const M=brandTotalBranches(c.brand,c.aggregator)||1;
+      const myN=(campOutlets(c)||new Set()).size||M;
+      return{allocatedDisc:exact.menuDisc,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"talabat_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
     }
   }
   const M=brandTotalBranches(c.brand,c.aggregator)||1;
