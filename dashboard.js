@@ -17,7 +17,7 @@
 //
 // Format suggestion: ISO date + counter, e.g. "2026-06-25-001". Doesn't need to
 // be ordered or parseable — only string-equality matters.
-const BUILD_VERSION="2026-06-25-001";
+const BUILD_VERSION="2026-06-25-002";
 
 async function checkForUpdate(){
   try{
@@ -1227,6 +1227,10 @@ async function doLoad(){
   injectResponsiveCSS();
   const nl=document.getElementById("nav-logo");if(nl&&typeof LOGOS!=="undefined")nl.src=LOGOS["Oregano"]||"";
   injectCompareTab();
+  // Inject the Admin tab if the logged-in user is an admin. This runs AFTER login
+  // (doLoad fires from doLogin's success path), unlike the DOMContentLoaded handler
+  // which fires before the user has authenticated.
+  if(typeof tryInitAdmin==="function")tryInitAdmin();
   if(errs.length){const e=document.getElementById("etoa");if(e){e.textContent="⚠️ Partial: "+errs.join(", ");e.style.display="block";setTimeout(()=>e.style.display="none",6000);}}
   gp("overview");
   genBrief();
