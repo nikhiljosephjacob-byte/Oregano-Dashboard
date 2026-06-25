@@ -17,7 +17,7 @@
 //
 // Format suggestion: ISO date + counter, e.g. "2026-06-25-001". Doesn't need to
 // be ordered or parseable — only string-equality matters.
-const BUILD_VERSION="2026-06-25-002";
+const BUILD_VERSION="2026-06-25-003";
 
 async function checkForUpdate(){
   try{
@@ -1952,6 +1952,10 @@ function parseCPCSheet(csv){
     budgetSpent:col("total budget consumed","budget consumed","spent"),
     leftover:col("leftover","remaining"),roi:col("roi","roas"),
     avgBid:col("avg bid","average bid"),ftu:col("ftu","first-time users","new users"),
+    // NEW: "Budget Combined/Seperate" column distinguishes pooled (brand-level, can't edit per outlet)
+    // from individually-editable per-outlet budgets. Matches partial header substrings so the column
+    // can be renamed slightly without breaking the parser. Handles the user's "Seperate" typo too.
+    budgetType:col("budget combined/seperate","budget combined/separate","budget type","budget style","combined/seperate","combined/separate"),
     remarks:col("remarks/last updation date","remarks","last updation date","notes")
   };
   const brandCache=new Map(),branchCache=new Map();
@@ -1967,12 +1971,20 @@ function parseCPCSheet(csv){
     const adType=((row[cm.adType]||"").trim()||"CPC").replace(/key\s*words?/i,"Keywords");
     const startDate=parseCPCDate(row[cm.startDate]),endDate=parseCPCDate(row[cm.endDate]);
     const remarksRaw=(row[cm.remarks]||"").toString().trim();
+    // Normalize the new "Budget Combined/Seperate" column to either "combined" or "separate".
+    // "Combined Per Brand"      → combined (pooled, can't edit individually — Careem, Noon)
+    // "Seperate Budget Per Outlet" → separate (per-outlet editable — Deliveroo, Talabat)
+    // Falls back to "separate" if the cell is blank or the value is unrecognized, so older
+    // rows added before this column existed still get a sensible default.
+    const btRaw=((cm.budgetType>=0?row[cm.budgetType]:"")||"").toString().trim().toLowerCase();
+    const budgetType=btRaw.includes("combin")?"combined":(btRaw.includes("seperat")||btRaw.includes("separat"))?"separate":"separate";
     const rec={
       adType:/keyword/i.test(adType)?"Keywords":"CPC",
       aggregator,brand,branch,brandLocation:bl,startDate,endDate,
       views:num(cm.views),orders:num(cm.orders),sales:num(cm.sales),aov:num(cm.aov),cto:num(cm.cto),
       budgetAlloc:num(cm.budgetAlloc),budgetSpent:num(cm.budgetSpent),leftover:num(cm.leftover),
       roi:num(cm.roi),avgBid:num(cm.avgBid),ftu:num(cm.ftu),
+      budgetType,
       remarks:remarksRaw,
       updateDate:parseRemarksDate(remarksRaw),
       month:startDate?startDate.slice(0,7):null
@@ -2492,24 +2504,33 @@ function cpcRenderOutletLevel(ag,brand){
   const arrow=(col)=>cpcSort.col===col?(cpcSort.dir<0?' ▼':' ▲'):'';
   const th=(col,lbl)=>`<th style="cursor:pointer;text-align:right" onclick="cpcSetSort('${col}')">${lbl}${arrow(col)}</th>`;
 
-  // Careem budgets are pooled at brand level, so per-outlet "top up by X" or "raise bid" advice
-  // is misleading — the user can't allocate a budget to one outlet. Hide the Invest/Bid column
-  // entirely for Careem (header, cells, totals cell) but keep accumulating tInvest so the
-  // brand-level Total Additional Investment Needed summary below still works (the sum of slices
-  // = the pool's needed top-up).
-  const showInvestCol=isCurrentMonth&&ag!=='Careem';
+  // Show the Invest/Bid column whenever we're on the current month. Previously this was hidden
+  // for Careem because all Careem budgets were assumed pooled — but now per-row budgetType
+  // controls the display ("+AED" for separate, "🔒 pool" for combined), so the column stays
+  // visible for every aggregator and the user can see exceptions.
+  const showInvestCol=isCurrentMonth;
 
-  // Totals accumulators
-  let tClicks=0,tOrders=0,tSales=0,tBudget=0,tSpent=0,tLeftover=0,tFtu=0,tInvest=0;
+  // Totals accumulators. Split investment by budget type so the summary box below can show
+  // pool-level vs per-outlet top-ups separately (a Combined-Per-Brand outlet can't have budget
+  // added individually, so per-row +AED amounts would be misleading — we accumulate them into
+  // a brand-pool figure instead).
+  let tClicks=0,tOrders=0,tSales=0,tBudget=0,tSpent=0,tLeftover=0,tFtu=0,tInvest=0,tInvestPool=0,tInvestSep=0;
 
   const body=tableRows.map(t=>{
     const d=t.disp;const vClr=d.verdict?CPC_VC[d.verdict]:'#64748b';
+    // Read budget type from the most recent live row for this outlet (defaults to "separate"
+    // for older rows pre-dating the column).
+    const budgetType=(t.liveRow&&t.liveRow.budgetType)||"separate";
+    const isPooled=budgetType==="combined";
     tClicks+=d.views||0;tOrders+=d.orders||0;tSales+=d.sales||0;tBudget+=d.alloc||0;tSpent+=d.spent||0;tLeftover+=d.leftover||0;tFtu+=d.ftu||0;
     // CTO relative
     let ctoTag='';
     if(d.cto!=null&&brandAvgCTO){const rel=d.cto/brandAvgCTO;ctoTag=rel>=1.2?`<span style="color:#22C55E;font-weight:700">▲</span>`:rel<=0.8?`<span style="color:#EF4444;font-weight:700">▼</span>`:'';}
     const imp=cpcModel.postImpact.get(t.rows[t.rows.length-1]);
     const impTag=imp&&imp.salesChg<-15?` <span title="Sales fell ${fmtPct(imp.salesChg)} after CPC ended" style="font-size:9px;color:#EF4444;cursor:help">📉</span>`:'';
+    // Small lock badge for pooled outlets so the user can see at a glance which rows have
+    // editable budgets vs which roll up to a brand-level pool.
+    const poolTag=isPooled?` <span title="Budget is pooled at brand level — can't be edited per outlet. Top up the brand pool instead." style="font-size:9px;color:#60A5FA;cursor:help">🔒</span>`:'';
     // Investment + bid recommendation (current month only)
     let recCell='<span style="color:#475569;font-size:10px">—</span>';
     if(isCurrentMonth){
@@ -2521,12 +2542,18 @@ function cpcRenderOutletLevel(ag,brand){
       if(inv){
         if(inv.mode==="active"){
           if(inv.additional>0&&goodVerdict){
-            // Running, will run dry before month end, worth keeping → top up
+            // Running, will run dry before month end, worth keeping → top up.
+            // For pooled budgets we still tally into the brand-pool figure but DON'T show
+            // a per-outlet AED amount on the row (it's not actionable individually).
             tInvest+=inv.additional;
+            if(isPooled){tInvestPool+=inv.additional;}else{tInvestSep+=inv.additional;}
             const dryClr=inv.daysUntilDry<=3?'#EF4444':inv.daysUntilDry<=7?'#FBBF24':'#94a3b8';
-            parts.push(`<div style="font-size:10px;color:${dryClr};font-weight:700">dry in ${inv.daysUntilDry}d · +${fmtAED(inv.additional)}</div>`);
+            if(isPooled){
+              parts.push(`<div style="font-size:10px;color:${dryClr};font-weight:700" title="Outlet would run dry in ${inv.daysUntilDry}d at the current burn rate. Budget is pooled — total pool top-up shown below.">dry in ${inv.daysUntilDry}d · 🔒 pool</div>`);
+            }else{
+              parts.push(`<div style="font-size:10px;color:${dryClr};font-weight:700">dry in ${inv.daysUntilDry}d · +${fmtAED(inv.additional)}</div>`);
+            }
           }else if(inv.additional>0&&poorVerdict){
-            // Running but below break-even — don't pour in more; suggest letting it lapse
             parts.push(`<div style="font-size:10px;color:#EF4444;font-weight:700">dry in ${inv.daysUntilDry}d · hold (below BE)</div>`);
           }else if(inv.additional<=0){
             parts.push(`<div style="font-size:10px;color:#22C55E">✓ covers month</div>`);
@@ -2535,7 +2562,12 @@ function cpcRenderOutletLevel(ag,brand){
           // Budget exhausted this month. Recommend a restart budget only if it's worth it.
           if(goodVerdict&&inv.additional>0){
             tInvest+=inv.additional;
-            parts.push(`<div style="font-size:10px;color:#22C55E;font-weight:700">exhausted · restart +${fmtAED(inv.additional)}</div>`);
+            if(isPooled){tInvestPool+=inv.additional;}else{tInvestSep+=inv.additional;}
+            if(isPooled){
+              parts.push(`<div style="font-size:10px;color:#22C55E;font-weight:700" title="Exhausted at the current burn rate; restart amount is rolled into the brand-pool figure shown below.">exhausted · 🔒 pool</div>`);
+            }else{
+              parts.push(`<div style="font-size:10px;color:#22C55E;font-weight:700">exhausted · restart +${fmtAED(inv.additional)}</div>`);
+            }
           }else if(poorVerdict){
             parts.push(`<div style="font-size:10px;color:#EF4444">exhausted · don't restart (ROAS ${d.roi?d.roi.toFixed(2):'—'}×)</div>`);
           }
@@ -2549,7 +2581,7 @@ function cpcRenderOutletLevel(ag,brand){
       }
       if(parts.length)recCell=parts.join('');
     }
-    return `<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:#e2e8f0">${t.outlet}</strong>${impTag}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right">${(d.views||0).toLocaleString()}</td><td style="text-align:right">${(d.orders||0).toLocaleString()}</td><td style="text-align:right">${fmtAEDExact(d.sales)}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${fmtAEDExact(d.alloc)}</td><td style="text-align:right">${fmtAEDExact(d.spent)}</td><td style="text-align:right">${fmtAEDExact(d.leftover)}</td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}<div style="font-size:8px;color:${t.momChg==null?'#475569':pctClr(t.momChg)}">${t.momChg!=null?'MoM '+fmtPct(t.momChg):''}</div></td><td style="text-align:right">${t.calcBid!=null?'AED '+t.calcBid.toFixed(2):'—'}</td><td style="text-align:right">${d.ftu||0}</td>${showInvestCol?`<td style="text-align:right">${recCell}</td>`:''}</tr>`;
+    return `<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:#e2e8f0">${t.outlet}</strong>${impTag}${poolTag}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right">${(d.views||0).toLocaleString()}</td><td style="text-align:right">${(d.orders||0).toLocaleString()}</td><td style="text-align:right">${fmtAEDExact(d.sales)}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${fmtAEDExact(d.alloc)}</td><td style="text-align:right">${fmtAEDExact(d.spent)}</td><td style="text-align:right">${fmtAEDExact(d.leftover)}</td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}<div style="font-size:8px;color:${t.momChg==null?'#475569':pctClr(t.momChg)}">${t.momChg!=null?'MoM '+fmtPct(t.momChg):''}</div></td><td style="text-align:right">${t.calcBid!=null?'AED '+t.calcBid.toFixed(2):'—'}</td><td style="text-align:right">${d.ftu||0}</td>${showInvestCol?`<td style="text-align:right">${recCell}</td>`:''}</tr>`;
   }).join('');
 
   // Capture the table data for export (raw numbers, exactly what's filtered on screen).
@@ -2562,7 +2594,7 @@ function cpcRenderOutletLevel(ag,brand){
       budget:Math.round(t.disp.alloc||0),spent:Math.round(t.disp.spent||0),leftover:Math.round(t.disp.leftover||0),
       roas:t.disp.roi?t.disp.roi.toFixed(2):"",mom:t.momChg!=null?t.momChg.toFixed(1):"",vsYear:t.yoyChg!=null?t.yoyChg.toFixed(1):"",
       bid:t.calcBid!=null?t.calcBid.toFixed(2):"",ftu:t.disp.ftu||0,
-      rec:(()=>{if(!isCurrentMonth||ag==='Careem')return"";const bidOpt=cpcDeliverooBidOpt(ag,brand,t.outlet,t.liveRow);const inv=cpcInvestRec(ag,brand,t.outlet,t.liveRow,bidOpt);const bits=[];if(inv){if(inv.mode==="active"&&inv.additional>0&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST"))bits.push(`Top up AED ${inv.additional}`);else if(inv.mode==="restart"&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST")&&inv.additional>0)bits.push(`Restart AED ${inv.additional}`);else if(t.disp.verdict==="WITHDRAW")bits.push("Below BE — don't add");}if(bidOpt&&bidOpt.suggestedBid&&ag==="Deliveroo"&&bidOpt.direction!=='hold')bits.push(`Bid ${bidOpt.direction} to AED ${bidOpt.suggestedBid.toFixed(2)}`);return bits.join("; ");})()
+      rec:(()=>{if(!isCurrentMonth)return"";const bidOpt=cpcDeliverooBidOpt(ag,brand,t.outlet,t.liveRow);const inv=cpcInvestRec(ag,brand,t.outlet,t.liveRow,bidOpt);const isPooled=(t.liveRow&&t.liveRow.budgetType==="combined");const bits=[];if(inv){if(inv.mode==="active"&&inv.additional>0&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST"))bits.push(isPooled?`Pool +AED ${inv.additional}`:`Top up AED ${inv.additional}`);else if(inv.mode==="restart"&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST")&&inv.additional>0)bits.push(isPooled?`Pool restart +AED ${inv.additional}`:`Restart AED ${inv.additional}`);else if(t.disp.verdict==="WITHDRAW")bits.push("Below BE — don't add");}if(bidOpt&&bidOpt.suggestedBid&&ag==="Deliveroo"&&bidOpt.direction!=='hold')bits.push(`Bid ${bidOpt.direction} to AED ${bidOpt.suggestedBid.toFixed(2)}`);return bits.join("; ");})()
     })),
     totals:null // filled after totals computed below
   };
@@ -2576,9 +2608,38 @@ function cpcRenderOutletLevel(ag,brand){
   if(cpcExportData)cpcExportData.totals={label:"TOTAL",clicks:tClicks,orders:tOrders,sales:Math.round(tSales),aov:totAov?Math.round(totAov):"",cto:totCto!=null?totCto.toFixed(1):"",budget:Math.round(tBudget),spent:Math.round(tSpent),leftover:Math.round(tLeftover),roas:totRoas?totRoas.toFixed(2):"",bid:totBid!=null?totBid.toFixed(2):"",ftu:tFtu,invest:isCurrentMonth&&tInvest>0?tInvest:""};
   const totalsRow=`<tr style="border-top:2px solid rgba(245,158,11,.4);background:rgba(245,158,11,.04);font-weight:800"><td style="color:#f59e0b">TOTAL</td><td></td><td style="text-align:right;color:#e2e8f0">${tClicks.toLocaleString()}</td><td style="text-align:right;color:#e2e8f0">${tOrders.toLocaleString()}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tSales)}</td><td style="text-align:right;color:#e2e8f0">${totAov?totAov.toFixed(0):'—'}</td><td style="text-align:right;color:#e2e8f0">${totCto!=null?totCto.toFixed(1)+'%':'—'}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tBudget)}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tSpent)}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tLeftover)}</td><td style="text-align:right;color:#f59e0b">${totRoas?totRoas.toFixed(2)+'×':'—'}</td><td style="text-align:right;color:#e2e8f0">${totBid!=null?'AED '+totBid.toFixed(2):'—'}</td><td style="text-align:right;color:#e2e8f0">${tFtu.toLocaleString()}</td>${showInvestCol?`<td style="text-align:right">${isCurrentMonth&&tInvest>0?`<span style="color:#22C55E;font-weight:800">+${fmtAEDExact(tInvest)}</span>`:''}</td>`:''}</tr>`;
 
-  const investSummary=(isCurrentMonth&&tInvest>0)?`<div style="margin-top:12px;padding:12px 16px;background:linear-gradient(135deg,rgba(34,197,94,.1),rgba(34,197,94,.03));border:1px solid rgba(34,197,94,.3);border-radius:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px"><div><div style="font-size:11px;color:#86EFAC;font-weight:700;text-transform:uppercase;letter-spacing:.6px">💰 Total Additional Investment Needed</div><div style="font-size:11px;color:#94a3b8;margin-top:3px">${ag==='Careem'?`Brand-level pooled budget for ${brand} on Careem. Top up by this amount to keep the campaigns running through ${cpcMonthLabel(selMonth)} at the current brand-wide burn rate.`:`To keep all under-funded ${brand} outlets on ${ag} running through ${cpcMonthLabel(selMonth)} at their current burn rate${ag==='Deliveroo'?' (adjusted for any suggested bid changes)':''}.`}</div></div><div style="font-size:26px;font-weight:800;color:#22C55E">+${fmtAED(tInvest)}</div></div>`:'';
+  // Investment summary: when both pool-level and per-outlet top-ups exist, show them split
+  // so the user can act on each independently. Pool top-ups go to brand-level (single edit on
+  // the aggregator's portal); per-outlet top-ups can be applied row-by-row.
+  let investSummary='';
+  if(isCurrentMonth&&(tInvestPool>0||tInvestSep>0)){
+    const monthLbl=cpcMonthLabel(selMonth);
+    const bidAdjNote=ag==='Deliveroo'?' (adjusted for any suggested bid changes)':'';
+    const lines=[];
+    if(tInvestPool>0){
+      lines.push(`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:6px 0"><div><div style="font-size:11px;color:#60A5FA;font-weight:700">🔒 Brand-pool top-up</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Edit at the ${ag} brand level — applies to all pooled ${brand} outlets together.</div></div><div style="font-size:18px;font-weight:800;color:#60A5FA;white-space:nowrap">+${fmtAED(tInvestPool)}</div></div>`);
+    }
+    if(tInvestSep>0){
+      lines.push(`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:6px 0"><div><div style="font-size:11px;color:#22C55E;font-weight:700">Per-outlet top-ups</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Sum of individually-editable outlet budgets shown in the table above.</div></div><div style="font-size:18px;font-weight:800;color:#22C55E;white-space:nowrap">+${fmtAED(tInvestSep)}</div></div>`);
+    }
+    const hasBoth=tInvestPool>0&&tInvestSep>0;
+    const grandTotal=tInvestPool+tInvestSep;
+    const grandRow=hasBoth?`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding-top:8px;margin-top:6px;border-top:1px dashed rgba(34,197,94,.4)"><div style="font-size:11px;color:#86EFAC;font-weight:700;text-transform:uppercase;letter-spacing:.6px">💰 Total additional investment</div><div style="font-size:24px;font-weight:800;color:#22C55E;white-space:nowrap">+${fmtAED(grandTotal)}</div></div>`:'';
+    const introBlurb=hasBoth
+      ?`<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">To keep all under-funded ${brand} outlets on ${ag} running through ${monthLbl}${bidAdjNote}. ${brand} has BOTH pooled and per-outlet budgets — actions are split below.</div>`
+      :tInvestPool>0
+        ?`<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Brand-level pooled budget for ${brand} on ${ag}. Top up the pool by this amount to keep campaigns running through ${monthLbl} at the current brand-wide burn rate.</div>`
+        :`<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Per-outlet top-ups needed to keep all under-funded ${brand} outlets on ${ag} running through ${monthLbl}${bidAdjNote}.</div>`;
+    investSummary=`<div style="margin-top:12px;padding:12px 16px;background:linear-gradient(135deg,rgba(34,197,94,.08),rgba(34,197,94,.02));border:1px solid rgba(34,197,94,.3);border-radius:10px">${introBlurb}${lines.join('')}${grandRow}</div>`;
+  }
 
-  const poolNote=(ag==='Careem'||ag==='Noon')?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px">ℹ️ ${ag} budgets are <strong>pooled at brand level</strong>. Per-outlet budget/spent are indicative; the brand total is the real budget. Per-outlet <strong>results</strong> (orders, sales, ROAS, CTO) are exact.</div>`:'';
+  // Contextual note above the table. If the brand on this aggregator has any pooled rows, mention it.
+  // Uses the actual data mix rather than hardcoding by aggregator.
+  const rowsHavePool=tableRows.some(t=>t.liveRow&&t.liveRow.budgetType==="combined");
+  const rowsHaveSep =tableRows.some(t=>t.liveRow&&t.liveRow.budgetType==="separate");
+  const poolNote=rowsHavePool
+    ?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px">ℹ️ ${rowsHaveSep?`Some ${brand} outlets on ${ag} have <strong>pooled budgets</strong> (🔒) — those can only be topped up at brand level. Others are <strong>individually editable</strong>.`:`${brand} budgets on ${ag} are <strong>pooled at brand level</strong>. Per-outlet budget/spent are indicative; the brand total is the real budget. Per-outlet <strong>results</strong> (orders, sales, ROAS, CTO) are exact.`}</div>`
+    :'';
   const bidNote=ag==="Deliveroo"?`<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">Bid suggestions analyze the past 6 months and target the bid with the best balance of ROAS and order volume. Changing the bid shifts the burn rate proportionally, and the extra budget needed is recalculated accordingly.</div>`:`<div style="font-size:11px;color:#94a3b8;margin-bottom:10px">${ag} uses auto-bidding, so only budget recommendations are shown. 📉 = sales dropped after a CPC ended.</div>`;
 
   return controlBar+poolNote+`<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap"><div class="ct" style="margin-bottom:0">${brand} on ${ag} — Outlet Performance · ${cpcMonthLabel(selMonth)}${isCurrentMonth?' (current month)':''}</div><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-size:10px;color:#64748b" title="Most recent date in the underlying sales data. Reinvestment figures recompute live based on today's real calendar date, so re-render the page just before you act on a recommendation.">📅 Data as of ${fmtShort(latest)}${isCurrentMonth?` · live (recalculated from today's date)`:''}</span><button onclick="cpcExportTable()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:5px">⬇ Export to Excel</button></div></div><div style="margin-top:8px">${bidNote}</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th style="cursor:pointer" onclick="cpcSetSort('outlet')">Outlet${arrow('outlet')}</th><th>Verdict</th>${th('clicks','Clicks')}${th('orders','Orders')}${th('sales','Sales')}${th('aov','AOV')}${th('cto','CTO')}${th('budget','Budget')}${th('spent','Spent')}${th('leftover','Leftover')}${th('roas','ROAS')}${th('bid','Avg Bid')}${th('ftu','FTU')}${showInvestCol?`<th style="text-align:right">Invest / Bid</th>`:''}</tr></thead><tbody>${body}${totalsRow}</tbody></table></div>${investSummary}</div>`;
