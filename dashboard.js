@@ -3,6 +3,88 @@
 // To update: paste new content of this file into GitHub editor
 // ═══════════════════════════════════════════════════════════════
 
+// ── BUILD VERSION + AUTO-UPDATE CHECKER ──────────────────────────────────────
+// Bump BUILD_VERSION *every time you push a meaningful change to dashboard.js*.
+// At the same time, edit /version.txt in the same repo so its contents EXACTLY
+// match this string (just the version, no extra characters or newlines that matter).
+//
+// On every active user's open dashboard:
+//   1. Every 60 seconds, AND when the tab regains focus, the dashboard fetches
+//      /version.txt with a cache-busting query param.
+//   2. If the fetched version doesn't match BUILD_VERSION, the user's session is
+//      cleared and the page is hard-reloaded — they'll see the login screen and
+//      whatever new code you deployed.
+//
+// Format suggestion: ISO date + counter, e.g. "2026-06-25-001". Doesn't need to
+// be ordered or parseable — only string-equality matters.
+const BUILD_VERSION="2026-06-25-001";
+
+async function checkForUpdate(){
+  try{
+    const res=await fetch("/version.txt?t="+Date.now(),{cache:"no-store"});
+    if(!res.ok)return; // version file missing or 404 — fail open, don't force reload
+    const remote=(await res.text()).trim();
+    if(!remote)return;
+    if(remote!==BUILD_VERSION){
+      console.log("[Update] Version mismatch — local:",BUILD_VERSION,"remote:",remote);
+      // Show a brief banner before reloading so the user understands why
+      const banner=document.createElement("div");
+      banner.style.cssText="position:fixed;top:0;left:0;right:0;background:#f59e0b;color:#000;font-weight:700;text-align:center;padding:10px;z-index:99999;font-size:13px;letter-spacing:.5px;box-shadow:0 4px 12px rgba(0,0,0,.4)";
+      banner.textContent="✨ Dashboard updated — refreshing in 3 seconds…";
+      document.body.appendChild(banner);
+      // Clear session so users re-authenticate (catches stale auth state) and reload
+      setTimeout(()=>{
+        try{localStorage.removeItem("oregano_session");}catch(e){}
+        location.reload();
+      },3000);
+    }
+  }catch(e){
+    // Network blip — silent fail, try again next tick
+  }
+}
+
+// Kick off the update check after the page has had a chance to load
+window.addEventListener("load",()=>{
+  // First check after 10 seconds (not immediate, to avoid colliding with initial data load)
+  setTimeout(checkForUpdate,10000);
+  // Then every 60 seconds
+  setInterval(checkForUpdate,60000);
+  // And whenever the tab regains focus (catches users who left the tab open overnight)
+  document.addEventListener("visibilitychange",()=>{
+    if(document.visibilityState==="visible")checkForUpdate();
+  });
+});
+
+// ── SESSION HEARTBEAT (server-side validation) ───────────────────────────────
+// Every 60 seconds, ping /api/heartbeat with the sessionId from localStorage. The Worker:
+//   • Refreshes the session's TTL in KV (keeps "active" status alive in the admin panel)
+//   • Returns 401 if the session was deleted (admin kicked the user)
+//   • Returns 403 if the user was banned
+// Either failure → clear local session + reload → user sees login screen.
+async function sessionHeartbeat(){
+  let sess;try{sess=JSON.parse(localStorage.getItem("oregano_session")||"null");}catch(e){return;}
+  if(!sess||!sess.sessionId)return;
+  try{
+    const res=await fetch("/api/heartbeat",{method:"POST",headers:{"X-Session-Id":sess.sessionId}});
+    if(res.status===401||res.status===403){
+      const body=await res.json().catch(()=>({}));
+      const msg=body.error==="banned"?"Your account has been suspended by the admin.":"Your session has ended. Please sign in again.";
+      try{localStorage.removeItem("oregano_session");}catch(e){}
+      alert(msg);
+      location.reload();
+    }
+  }catch(e){
+    // Network blip — silent fail, retry next tick
+  }
+}
+window.addEventListener("load",()=>{
+  setTimeout(sessionHeartbeat,5000);    // First ping shortly after load
+  setInterval(sessionHeartbeat,60000);  // Every 60s thereafter
+  document.addEventListener("visibilitychange",()=>{
+    if(document.visibilityState==="visible")sessionHeartbeat();
+  });
+});
+
 const PUB="https://docs.google.com/spreadsheets/d/e/2PACX-1vR2PpdGikWQBRBclmQCvw95Z_1RtbkQ8AmZiv2SQq3CX8SPDTGHj3wqCUnJahp-lLGQet8FnLaXQbMa/pub";
 const BR=[{n:"Oregano",gid:"502198035",c:"#C9933A"},{n:"Lollorosso",gid:"1967911882",c:"#7C8C2A"},{n:"Smokeys",gid:"1503469680",c:"#F07020"},{n:"Fyoozhen",gid:"436809130",c:"#C9A227"},{n:"Wicked Wings",gid:"1467214878",c:"#E85D04"}];
 const AGGS=["Deliveroo","Talabat","Noon","Careem","Keeta","Smiles","Instashop"];
@@ -5429,6 +5511,208 @@ function cmpDrawChart(dA,dB){
   ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#94a3b8",font:{size:10},boxWidth:12,padding:10}},tooltip:{callbacks:{label:c=>`${c.dataset.label.split(" · ")[0]}: ${fmtV(c.raw)}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"rgba(27,47,74,.5)"},border:{display:false}}}}});
 }
 
+// ═══════════════════════════════════════════════════════════════
+// ADMIN PANEL — visible only to users with `admin:true` in their session.
+// Calls /api/admin/sessions, /api/admin/kick, /api/admin/ban, /api/admin/unban.
+// ═══════════════════════════════════════════════════════════════
+
+function getActiveSession(){
+  try{return JSON.parse(localStorage.getItem("oregano_session")||"null");}catch(e){return null;}
+}
+
+function isAdminUser(){
+  const s=getActiveSession();
+  return !!(s&&s.admin);
+}
+
+// Inject the "Admin" tab + page container into the DOM (idempotent).
+function initAdminUI(){
+  if(!isAdminUser())return;
+  // Add nav tab if not present
+  const nav=document.querySelector("nav");
+  if(nav&&!document.getElementById("tab-admin")){
+    const tab=document.createElement("button");
+    tab.id="tab-admin";tab.className="tab";
+    tab.style.color="#22C55E";tab.style.fontWeight="700";
+    tab.innerHTML="🛡 Admin";
+    tab.onclick=()=>gp("admin");
+    // Insert after the KPI tab (or before the spacer div)
+    const spacer=Array.from(nav.children).find(c=>c.style&&c.style.flex==="1");
+    if(spacer)nav.insertBefore(tab,spacer);else nav.appendChild(tab);
+  }
+  // Add page container if not present
+  if(!document.getElementById("page-admin")){
+    const pages=document.getElementById("main-app");
+    if(pages){
+      const pg=document.createElement("div");
+      pg.id="page-admin";pg.className="pg";
+      pages.appendChild(pg);
+    }
+  }
+}
+
+// Fetch + render the admin sessions page
+async function renderAdmin(){
+  const pg=document.getElementById("page-admin");
+  if(!pg)return;
+  pg.innerHTML=`<div style="padding:24px;text-align:center;color:#64748b;font-size:13px">Loading sessions…</div>`;
+
+  const sess=getActiveSession();
+  if(!sess||!sess.sessionId){
+    pg.innerHTML=`<div style="padding:24px;color:#EF4444">No active session.</div>`;
+    return;
+  }
+
+  let data;
+  try{
+    const res=await fetch("/api/admin/sessions",{headers:{"X-Session-Id":sess.sessionId}});
+    if(!res.ok){
+      pg.innerHTML=`<div style="padding:24px;color:#EF4444">Access denied (${res.status}).</div>`;
+      return;
+    }
+    data=await res.json();
+  }catch(e){
+    pg.innerHTML=`<div style="padding:24px;color:#EF4444">Network error: ${e.message}</div>`;
+    return;
+  }
+
+  const fmtAgo=(iso)=>{
+    if(!iso)return"—";
+    const diff=(Date.now()-new Date(iso).getTime())/1000;
+    if(diff<60)return Math.round(diff)+"s ago";
+    if(diff<3600)return Math.round(diff/60)+"m ago";
+    if(diff<86400)return Math.round(diff/3600)+"h ago";
+    return Math.round(diff/86400)+"d ago";
+  };
+  const fmtTime=(iso)=>{
+    if(!iso)return"—";
+    const d=new Date(iso);
+    return d.toLocaleDateString("en-GB",{day:"2-digit",month:"short"})+" "+d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
+  };
+  const shortUA=(ua)=>{
+    if(!ua)return"—";
+    const m=ua.match(/Chrome|Firefox|Safari|Edge|Mobile|Android|iPhone|iPad/g);
+    return m?m.slice(0,3).join(" · "):ua.slice(0,40);
+  };
+  const evColor=(ev)=>({login_success:"#22C55E",login_failed:"#EF4444",login_blocked_banned:"#EF4444",logout:"#94a3b8",admin_kick:"#FBBF24",admin_ban:"#EF4444",admin_unban:"#22C55E"})[ev]||"#94a3b8";
+
+  const activeRows=(data.active||[]).map(s=>`
+    <tr>
+      <td><strong style="color:#22C55E">${s.displayName||s.user}</strong></td>
+      <td><code style="font-size:10px;color:#94a3b8">${s.ip}</code></td>
+      <td style="color:#94a3b8;font-size:11px">${shortUA(s.ua)}</td>
+      <td style="color:#cbd5e1">${fmtTime(s.loginTs)}</td>
+      <td style="color:#22C55E">${fmtAgo(s.lastSeen)}</td>
+      <td style="text-align:right">
+        <button onclick="adminKick('${s.sessionId}','${s.user}')" style="background:rgba(251,191,36,.15);border:1px solid rgba(251,191,36,.4);color:#FBBF24;padding:3px 9px;font-size:10px;border-radius:5px;cursor:pointer;font-weight:700">Kick</button>
+        <button onclick="adminBan('${s.user}')" style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);color:#EF4444;padding:3px 9px;font-size:10px;border-radius:5px;cursor:pointer;font-weight:700;margin-left:4px">Ban</button>
+      </td>
+    </tr>
+  `).join("")||`<tr><td colspan="6" style="color:#64748b;text-align:center;padding:14px">No active sessions.</td></tr>`;
+
+  const eventRows=(data.events||[]).slice(0,100).map(e=>`
+    <tr>
+      <td style="color:#94a3b8;font-size:11px">${fmtTime(e.ts)}</td>
+      <td><strong style="color:${evColor(e.event)}">${e.user||"—"}</strong></td>
+      <td style="color:${evColor(e.event)};font-size:11px;font-weight:700">${(e.event||"").replace(/_/g," ")}</td>
+      <td><code style="font-size:10px;color:#94a3b8">${e.ip||"—"}</code></td>
+      <td style="color:#64748b;font-size:11px">${e.target?"→ "+e.target:""}${e.reason?" · "+e.reason:""}${e.kickedCount?" ("+e.kickedCount+" kicked)":""}</td>
+    </tr>
+  `).join("")||`<tr><td colspan="5" style="color:#64748b;text-align:center;padding:14px">No events yet.</td></tr>`;
+
+  const banRows=(data.bans||[]).map(b=>`
+    <tr>
+      <td><strong style="color:#EF4444">${b.user}</strong></td>
+      <td style="color:#94a3b8;font-size:11px">${b.meta?fmtTime(b.meta.ts):"—"}</td>
+      <td style="color:#94a3b8;font-size:11px">${b.meta?b.meta.bannedBy:"—"}</td>
+      <td style="color:#cbd5e1;font-size:11px">${b.meta&&b.meta.reason?b.meta.reason:"<em style=\"color:#64748b\">no reason</em>"}</td>
+      <td style="text-align:right">
+        <button onclick="adminUnban('${b.user}')" style="background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.4);color:#22C55E;padding:3px 9px;font-size:10px;border-radius:5px;cursor:pointer;font-weight:700">Unban</button>
+      </td>
+    </tr>
+  `).join("")||`<tr><td colspan="5" style="color:#64748b;text-align:center;padding:14px">No banned users.</td></tr>`;
+
+  pg.innerHTML=`
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      <div style="font-size:18px;font-weight:800;color:#22C55E">🛡 Admin · Sessions & Audit</div>
+      <button onclick="renderAdmin()" style="background:rgba(245,158,11,.15);border:1px solid rgba(245,158,11,.4);color:#f59e0b;padding:4px 12px;font-size:11px;border-radius:5px;cursor:pointer;font-weight:700">↻ Refresh</button>
+      <div style="flex:1"></div>
+      <div style="font-size:10px;color:#64748b">Server time: ${fmtTime(data.serverTime)}</div>
+    </div>
+
+    <div class="card">
+      <div class="ct">Active sessions <span style="color:#22C55E;font-weight:700">(${(data.active||[]).length})</span></div>
+      <div style="overflow-x:auto"><table class="tbl">
+        <thead><tr><th>User</th><th>IP</th><th>Device</th><th>Login time</th><th>Last seen</th><th></th></tr></thead>
+        <tbody>${activeRows}</tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <div class="ct">Banned users <span style="color:#EF4444;font-weight:700">(${(data.bans||[]).length})</span></div>
+      <div style="overflow-x:auto"><table class="tbl">
+        <thead><tr><th>User</th><th>Banned at</th><th>By</th><th>Reason</th><th></th></tr></thead>
+        <tbody>${banRows}</tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <div class="ct">Recent login history <span style="color:#94a3b8;font-weight:700">(last 100)</span></div>
+      <div style="overflow-x:auto"><table class="tbl">
+        <thead><tr><th>Time</th><th>User</th><th>Event</th><th>IP</th><th>Detail</th></tr></thead>
+        <tbody>${eventRows}</tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+async function adminApiCall(path,body){
+  const sess=getActiveSession();
+  if(!sess||!sess.sessionId){alert("No session.");return false;}
+  try{
+    const res=await fetch(path,{
+      method:"POST",
+      headers:{"Content-Type":"application/json","X-Session-Id":sess.sessionId},
+      body:JSON.stringify(body||{})
+    });
+    const data=await res.json();
+    if(!res.ok){alert("Failed: "+(data.error||res.status));return false;}
+    return true;
+  }catch(e){alert("Network error: "+e.message);return false;}
+}
+
+async function adminKick(sessionId,user){
+  if(!confirm("Kick "+user+" from this session? They'll be forced to log in again within 60 seconds."))return;
+  if(await adminApiCall("/api/admin/kick",{sessionId}))renderAdmin();
+}
+
+async function adminBan(user){
+  const reason=prompt("Ban "+user+"?\n\nThis prevents future logins AND kicks all current sessions. Enter a reason (optional):");
+  if(reason===null)return;
+  if(await adminApiCall("/api/admin/ban",{user,reason}))renderAdmin();
+}
+
+async function adminUnban(user){
+  if(!confirm("Unban "+user+"? They'll be able to log in again."))return;
+  if(await adminApiCall("/api/admin/unban",{user}))renderAdmin();
+}
+
+// Wire the admin page route into the existing renderPage dispatcher (overwrite)
+const _origRenderPage=renderPage;
+renderPage=function(p){if(p==="admin")renderAdmin();else _origRenderPage(p);};
+
+// Initialize admin UI as soon as DOM is ready AND user session is known
+function tryInitAdmin(){
+  const s=getActiveSession();
+  if(s&&s.sessionId&&s.admin)initAdminUI();
+}
+window.addEventListener("load",tryInitAdmin);
+document.addEventListener("DOMContentLoaded",tryInitAdmin);
+
+// ═══════════════════════════════════════════════════════════════
+// END ADMIN PANEL
+// ═══════════════════════════════════════════════════════════════
+
 // ── INIT ──
 // doLoad() is fired by index.html — either from doLogin() after successful auth, or from
 // checkSession() when a valid saved session is detected. We do NOT auto-fire it from here,
@@ -5447,6 +5731,7 @@ function cmpDrawChart(dA,dB){
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
     sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campSetScope,campClearDates,campSetElasticity,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,
-    injectCompareTab,loadKPIData,doLoad,setUserNamePrompt];
+    injectCompareTab,loadKPIData,doLoad,setUserNamePrompt,
+    renderAdmin,adminKick,adminBan,adminUnban,initAdminUI];
   fns.forEach(fn=>{try{if(typeof fn==="function")window[fn.name]=fn;}catch(e){}});
 })();
