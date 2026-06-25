@@ -1,0 +1,15 @@
+name = "oregano-dashboard"
+main = "worker.js"
+compatibility_date = "2026-06-25"
+
+# Serve the static assets that live in the repo root (index.html, dashboard.js, etc).
+# The .assetsignore file excludes worker.js / wrangler.toml from being treated as assets.
+[assets]
+directory = "./"
+binding = "ASSETS"
+
+# Session storage. After creating the KV namespace in the Cloudflare dashboard
+# (Workers & Pages → KV → Create namespace → name "SESSIONS"), paste its ID here.
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "4e0e8f9843684b3d9976b6c186ffcfdb"
