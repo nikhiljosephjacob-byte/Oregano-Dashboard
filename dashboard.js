@@ -3,55 +3,145 @@
 // To update: paste new content of this file into GitHub editor
 // ═══════════════════════════════════════════════════════════════
 
-// ── BUILD VERSION + AUTO-UPDATE CHECKER ──────────────────────────────────────
-// Bump BUILD_VERSION *every time you push a meaningful change to dashboard.js*.
-// At the same time, edit /version.txt in the same repo so its contents EXACTLY
-// match this string (just the version, no extra characters or newlines that matter).
+// ── BUILD VERSION + SOFT UPDATE FLOW ─────────────────────────────────────────
+// Bump BUILD_VERSION + the matching string in /version.txt every time you push a meaningful
+// change. The dashboard polls /version.txt every 60s; on mismatch it now shows a friendly
+// modal asking the user to hard-refresh (Ctrl+Shift+R), instead of forcing a logout. The
+// session is preserved across version bumps — only login/auth changes would require a hard
+// reauth, and those are rare.
 //
-// On every active user's open dashboard:
-//   1. Every 60 seconds, AND when the tab regains focus, the dashboard fetches
-//      /version.txt with a cache-busting query param.
-//   2. If the fetched version doesn't match BUILD_VERSION, the user's session is
-//      cleared and the page is hard-reloaded — they'll see the login screen and
-//      whatever new code you deployed.
-//
-// Format suggestion: ISO date + counter, e.g. "2026-06-25-001". Doesn't need to
-// be ordered or parseable — only string-equality matters.
-const BUILD_VERSION="2026-06-25-005";
+// BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
+// Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
+// against localStorage.oregano_last_seen_version to decide whether to show.
+const BUILD_VERSION="2026-06-25-006";
+const BUILD_NOTES=[
+  "🆕 Talabat co-fund now visible in campaign breakdowns — see the platform's share of the discount.",
+  "🆕 CPC pool math fixed — pooled outlets (Combined Per Brand) now show real pool status instead of misleading per-outlet 'exhausted'.",
+  "🆕 Smoother updates — no more forced logout; you'll be nudged to hard-refresh when there's a new version."
+];
 
+let _updateDialogShown=false;
 async function checkForUpdate(){
+  if(_updateDialogShown)return; // don't nag while dialog is open
   try{
     const res=await fetch("/version.txt?t="+Date.now(),{cache:"no-store"});
-    if(!res.ok)return; // version file missing or 404 — fail open, don't force reload
+    if(!res.ok)return;
     const remote=(await res.text()).trim();
-    if(!remote)return;
-    if(remote!==BUILD_VERSION){
-      console.log("[Update] Version mismatch — local:",BUILD_VERSION,"remote:",remote);
-      // Show a brief banner before reloading so the user understands why
-      const banner=document.createElement("div");
-      banner.style.cssText="position:fixed;top:0;left:0;right:0;background:#f59e0b;color:#000;font-weight:700;text-align:center;padding:10px;z-index:99999;font-size:13px;letter-spacing:.5px;box-shadow:0 4px 12px rgba(0,0,0,.4)";
-      banner.textContent="✨ Dashboard updated — refreshing in 3 seconds…";
-      document.body.appendChild(banner);
-      // Clear session so users re-authenticate (catches stale auth state) and reload
-      setTimeout(()=>{
-        try{localStorage.removeItem("oregano_session");}catch(e){}
-        location.reload();
-      },3000);
-    }
-  }catch(e){
-    // Network blip — silent fail, try again next tick
+    if(!remote||remote===BUILD_VERSION)return;
+    showUpdateAvailableModal(remote);
+  }catch(e){/* network blip — try again next tick */}
+}
+
+function showUpdateAvailableModal(remoteVersion){
+  if(_updateDialogShown||document.getElementById("update-modal"))return;
+  _updateDialogShown=true;
+  const isMac=/Mac|iPhone|iPad/i.test(navigator.platform||navigator.userAgent);
+  const refreshKeys=isMac?"⌘ Cmd + Shift + R":"Ctrl + Shift + R";
+  const overlay=document.createElement("div");
+  overlay.id="update-modal";
+  overlay.style.cssText="position:fixed;inset:0;background:rgba(6,12,20,.78);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:99999;padding:20px";
+  overlay.innerHTML=`
+    <div style="background:#0d1524;border:1px solid #f59e0b80;border-radius:12px;padding:24px 28px;max-width:460px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.6);animation:fadeInUp .3s ease">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <div style="font-size:24px">✨</div>
+        <div style="font-size:18px;font-weight:800;color:#f59e0b">Dashboard updates ready</div>
+      </div>
+      <div style="font-size:13px;color:#cbd5e1;line-height:1.6;margin-bottom:18px">
+        New features and improvements have been deployed. To load them, do a <strong style="color:#fff">hard refresh</strong>:
+      </div>
+      <div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);border-radius:8px;padding:14px 16px;margin-bottom:18px;text-align:center">
+        <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;font-weight:600">Press</div>
+        <div style="font-size:18px;font-weight:800;color:#f59e0b;font-family:'JetBrains Mono',ui-monospace,monospace;letter-spacing:.5px">${refreshKeys}</div>
+        <div style="font-size:10px;color:#64748b;margin-top:8px">Your session is preserved — you won't need to log in again.</div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button onclick="dismissUpdateModal(true)" style="background:transparent;border:1px solid #1b2f4a;color:#94a3b8;padding:7px 14px;font-size:11px;border-radius:6px;cursor:pointer">Remind me in 5 min</button>
+        <button onclick="hardRefreshNow()" style="background:#f59e0b;border:none;color:#000;padding:7px 16px;font-size:11px;font-weight:700;border-radius:6px;cursor:pointer">Refresh now</button>
+      </div>
+    </div>
+    <style>@keyframes fadeInUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}</style>
+  `;
+  document.body.appendChild(overlay);
+}
+function dismissUpdateModal(snooze){
+  const m=document.getElementById("update-modal");if(m)m.remove();
+  _updateDialogShown=false;
+  if(snooze){
+    // Suppress checks for 5 minutes
+    const until=Date.now()+5*60*1000;
+    try{sessionStorage.setItem("update_snooze_until",String(until));}catch(e){}
   }
+}
+function hardRefreshNow(){
+  // Mark the upgrade as "user accepted" so the What's New popup fires after reload.
+  try{sessionStorage.setItem("show_whats_new","1");}catch(e){}
+  // location.reload(true) is deprecated but still hints to bypass cache.
+  // The ?_v= param defeats any remaining cache layers.
+  location.href=location.pathname+"?_v="+Date.now()+location.hash;
+}
+
+// Show the "What's New" popup IF the user just refreshed to a new BUILD_VERSION.
+// Triggers after doLoad completes (so it doesn't compete with the loading screen).
+function showWhatsNewIfNeeded(){
+  let lastSeen=null;
+  try{lastSeen=localStorage.getItem("oregano_last_seen_version");}catch(e){}
+  if(lastSeen===BUILD_VERSION)return; // already shown for this version
+  if(!BUILD_NOTES||!BUILD_NOTES.length){
+    try{localStorage.setItem("oregano_last_seen_version",BUILD_VERSION);}catch(e){}
+    return;
+  }
+  // Skip on first-ever load (no lastSeen at all) so brand-new users aren't bombarded
+  if(!lastSeen){
+    try{localStorage.setItem("oregano_last_seen_version",BUILD_VERSION);}catch(e){}
+    return;
+  }
+  const overlay=document.createElement("div");
+  overlay.id="whatsnew-modal";
+  overlay.style.cssText="position:fixed;inset:0;background:rgba(6,12,20,.78);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:99999;padding:20px";
+  const items=BUILD_NOTES.map(n=>`<li style="margin-bottom:10px;line-height:1.55">${n}</li>`).join("");
+  overlay.innerHTML=`
+    <div style="background:#0d1524;border:1px solid #22C55E80;border-radius:12px;padding:24px 28px;max-width:540px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.6);animation:fadeInUp .3s ease">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+        <div style="font-size:24px">🎉</div>
+        <div style="font-size:18px;font-weight:800;color:#22C55E">What's new in this update</div>
+      </div>
+      <div style="font-size:10px;color:#64748b;margin-bottom:14px">Version ${BUILD_VERSION}</div>
+      <ul style="font-size:13px;color:#cbd5e1;padding-left:22px;margin:0 0 18px 0">${items}</ul>
+      <div style="display:flex;justify-content:flex-end">
+        <button onclick="dismissWhatsNew()" style="background:#22C55E;border:none;color:#000;padding:7px 18px;font-size:11px;font-weight:700;border-radius:6px;cursor:pointer">Got it</button>
+      </div>
+    </div>
+    <style>@keyframes fadeInUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}</style>
+  `;
+  document.body.appendChild(overlay);
+}
+function dismissWhatsNew(){
+  const m=document.getElementById("whatsnew-modal");if(m)m.remove();
+  try{
+    localStorage.setItem("oregano_last_seen_version",BUILD_VERSION);
+    sessionStorage.removeItem("show_whats_new");
+  }catch(e){}
 }
 
 // Kick off the update check after the page has had a chance to load
 window.addEventListener("load",()=>{
-  // First check after 10 seconds (not immediate, to avoid colliding with initial data load)
-  setTimeout(checkForUpdate,10000);
-  // Then every 60 seconds
-  setInterval(checkForUpdate,60000);
-  // And whenever the tab regains focus (catches users who left the tab open overnight)
+  // Wait 10s after first load (avoid colliding with initial data fetch)
+  setTimeout(()=>{
+    // Respect snooze
+    let snoozeUntil=0;try{snoozeUntil=parseInt(sessionStorage.getItem("update_snooze_until")||"0",10);}catch(e){}
+    if(Date.now()>=snoozeUntil)checkForUpdate();
+  },10000);
+  // Then every 60s, respecting snooze
+  setInterval(()=>{
+    let snoozeUntil=0;try{snoozeUntil=parseInt(sessionStorage.getItem("update_snooze_until")||"0",10);}catch(e){}
+    if(Date.now()>=snoozeUntil)checkForUpdate();
+  },60000);
+  // And on tab refocus
   document.addEventListener("visibilitychange",()=>{
-    if(document.visibilityState==="visible")checkForUpdate();
+    if(document.visibilityState==="visible"){
+      let snoozeUntil=0;try{snoozeUntil=parseInt(sessionStorage.getItem("update_snooze_until")||"0",10);}catch(e){}
+      if(Date.now()>=snoozeUntil)checkForUpdate();
+    }
   });
 });
 
@@ -1111,11 +1201,9 @@ async function fetchCSV(gid){
 // each brand sheet finishes loading. The greeting name is read from the active login session
 // (set by index.html's doLogin) so the dashboard automatically greets whoever logged in. A
 // manual override is still available via the "Change name" button below the greeting.
+// Greeting name comes from the active server session set by index.html's doLogin.
+// AUTH_USERS in worker.js controls displayName per user — that's the single source of truth.
 function getUserName(){
-  // Manual override takes priority if explicitly set via the loading-screen pencil button
-  const override=(localStorage.getItem("dashboardUserName")||"").trim();
-  if(override)return override;
-  // Otherwise use the displayName from the active login session
   try{
     const s=localStorage.getItem("oregano_session");
     if(s){
@@ -1124,15 +1212,6 @@ function getUserName(){
     }
   }catch(e){}
   return "";
-}
-function setUserNamePrompt(){
-  const cur=getUserName();
-  const v=prompt("Your name (used for the greeting on the loading screen):",cur);
-  if(v===null)return; // user cancelled
-  localStorage.setItem("dashboardUserName",v.trim());
-  // Re-render the greeting line immediately if the loading screen is still up
-  const g=document.getElementById("ls-greeting");if(g){const hr=new Date().getHours();const greet=hr<12?"Good morning":hr<17?"Good afternoon":hr<22?"Good evening":"Working late";const n=getUserName();g.textContent=greet+(n?", "+n:"")+"!";}
-  const btn=document.getElementById("ls-name-btn");if(btn)btn.textContent=getUserName()?"✎ Change name":"✎ Set your name";
 }
 function injectLoadingScreen(){
   const ls=document.getElementById("loading-screen");if(!ls)return;
@@ -1152,8 +1231,7 @@ function injectLoadingScreen(){
   ls.innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:40px 30px;text-align:center;background:radial-gradient(circle at 50% 20%,#0d1524 0%,#0a1322 60%,#070d1c 100%);color:#e2e8f0">
     <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:3px;margin-bottom:6px">Oregano Restaurants UAE</div>
     <h1 id="ls-greeting" style="font-size:30px;font-weight:800;color:#f59e0b;margin:0 0 6px;letter-spacing:-.5px">${greetLine}</h1>
-    <div style="font-size:12px;color:#94a3b8;margin-bottom:8px">Preparing your performance view across all brands…</div>
-    <button id="ls-name-btn" onclick="setUserNamePrompt()" style="background:none;border:1px solid #1b2f4a;border-radius:14px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer;margin-bottom:24px;transition:all .15s" onmouseover="this.style.borderColor='#f59e0b';this.style.color='#f59e0b'" onmouseout="this.style.borderColor='#1b2f4a';this.style.color='#64748b'">${userName?"✎ Change name":"✎ Set your name"}</button>
+    <div style="font-size:12px;color:#94a3b8;margin-bottom:24px">Preparing your performance view across all brands…</div>
     <div style="display:flex;gap:18px;margin-bottom:34px;flex-wrap:wrap;justify-content:center;max-width:560px">${logoRow}</div>
     <div style="position:relative;width:180px;height:180px;margin-bottom:18px">
       <svg viewBox="0 0 100 100" style="width:100%;height:100%;transform:rotate(-90deg)">
@@ -1234,6 +1312,10 @@ async function doLoad(){
   // (doLoad fires from doLogin's success path), unlike the DOMContentLoaded handler
   // which fires before the user has authenticated.
   if(typeof tryInitAdmin==="function")tryInitAdmin();
+  // After the dashboard finishes loading, show the "What's new" popup if BUILD_VERSION
+  // changed since the user's last visit. Small delay so it doesn't compete with the
+  // initial dashboard render.
+  setTimeout(()=>{if(typeof showWhatsNewIfNeeded==="function")showWhatsNewIfNeeded();},1500);
   if(errs.length){const e=document.getElementById("etoa");if(e){e.textContent="⚠️ Partial: "+errs.join(", ");e.style.display="block";setTimeout(()=>e.style.display="none",6000);}}
   gp("overview");
   genBrief();
@@ -5880,7 +5962,8 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
     sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campSetScope,campClearDates,campSetElasticity,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,
-    injectCompareTab,loadKPIData,doLoad,setUserNamePrompt,
+    injectCompareTab,loadKPIData,doLoad,
+    dismissUpdateModal,hardRefreshNow,dismissWhatsNew,showWhatsNewIfNeeded,
     renderAdmin,adminKick,adminBan,adminUnban,initAdminUI];
   fns.forEach(fn=>{try{if(typeof fn==="function")window[fn.name]=fn;}catch(e){}});
 })();
