@@ -17,7 +17,7 @@
 //
 // Format suggestion: ISO date + counter, e.g. "2026-06-25-001". Doesn't need to
 // be ordered or parseable — only string-equality matters.
-const BUILD_VERSION="2026-06-25-003";
+const BUILD_VERSION="2026-06-25-005";
 
 async function checkForUpdate(){
   try{
@@ -874,12 +874,13 @@ function getTalabatExactDisc(c,start,end){
   if(!dr[0]||!dr[1])return null;
   if(end<dr[0]||start>dr[1])return null;
   const myScope=campOutlets(c);
-  let menuDisc=0;const dailyAlloc={};let matched=0;
+  let menuDisc=0,talabatDisc=0;const dailyAlloc={};let matched=0;
   for(const rec of talabatOrdersData.records){
     if(rec.brand!==c.brand)continue;
     if(rec.date<start||rec.date>end)continue;
     if(myScope&&!myScope.has(rec.outlet))continue;
     menuDisc+=rec.menu_disc;
+    talabatDisc+=(rec.talabat_disc||0);
     dailyAlloc[rec.date]=(dailyAlloc[rec.date]||0)+rec.menu_disc;
     matched++;
   }
@@ -889,7 +890,7 @@ function getTalabatExactDisc(c,start,end){
   const covStart=start>dr[0]?start:dr[0];
   const covEnd=end<dr[1]?end:dr[1];
   const coveredDays=daysIn(covStart,covEnd);
-  return{menuDisc,dailyAlloc,matchedRecords:matched,coveredDays,totalDays,partialCoverage:coveredDays<totalDays,uncoveredStart:end>dr[1]?dr[1]:null,uncoveredEnd:end>dr[1]?end:null};
+  return{menuDisc,talabatDisc,dailyAlloc,matchedRecords:matched,coveredDays,totalDays,partialCoverage:coveredDays<totalDays,uncoveredStart:end>dr[1]?dr[1]:null,uncoveredEnd:end>dr[1]?end:null};
 }
 
 // Per-outlet exact menu_disc for a campaign window — used by campOutletBreakdownHTML
@@ -957,12 +958,13 @@ async function parseTalabatXlsx(file){
     const date=parseTalabatDate(row[colIdx["Order received at"]]);
     if(!date){skipped.no_date++;continue;}
     const key=`${brand}|${outlet}|${date}`;
-    if(!agg[key])agg[key]={brand,outlet,date,orders:0,gross:0,net_payout:0,menu_disc:0,commission:0,ops_charges:0};
+    if(!agg[key])agg[key]={brand,outlet,date,orders:0,gross:0,net_payout:0,menu_disc:0,talabat_disc:0,commission:0,ops_charges:0};
     const b=agg[key];
     b.orders++;
     b.gross+=numAt(row,"Subtotal");
     b.net_payout+=numAt(row,"Payout Amount");
     b.menu_disc+=numAt(row,"Voucher Funded by you");
+    b.talabat_disc+=numAt(row,"Talabat-Funded Voucher");
     b.commission+=numAt(row,"Commission");
     b.ops_charges+=numAt(row,"Operational Charges");
   }
@@ -973,6 +975,7 @@ async function parseTalabatXlsx(file){
     gross:+r.gross.toFixed(2),
     net_payout:+r.net_payout.toFixed(2),
     menu_disc:+r.menu_disc.toFixed(2),
+    talabat_disc:+r.talabat_disc.toFixed(2),
     commission:+r.commission.toFixed(2),
     ops_charges:+r.ops_charges.toFixed(2)
   })).sort((a,b)=>(a.brand+a.outlet+a.date).localeCompare(b.brand+b.outlet+b.date));
@@ -982,12 +985,12 @@ async function parseTalabatXlsx(file){
   const date_range=dates.length?[dates[0],dates[dates.length-1]]:[null,null];
   const totals={};
   for(const r of records){
-    if(!totals[r.brand])totals[r.brand]={orders:0,gross:0,net_payout:0,menu_disc:0,commission:0,ops_charges:0};
+    if(!totals[r.brand])totals[r.brand]={orders:0,gross:0,net_payout:0,menu_disc:0,talabat_disc:0,commission:0,ops_charges:0};
     const t=totals[r.brand];
     t.orders+=r.orders;t.gross+=r.gross;t.net_payout+=r.net_payout;
-    t.menu_disc+=r.menu_disc;t.commission+=r.commission;t.ops_charges+=r.ops_charges;
+    t.menu_disc+=r.menu_disc;t.talabat_disc+=r.talabat_disc;t.commission+=r.commission;t.ops_charges+=r.ops_charges;
   }
-  Object.values(totals).forEach(t=>{["gross","net_payout","menu_disc","commission","ops_charges"].forEach(k=>t[k]=+t[k].toFixed(2));});
+  Object.values(totals).forEach(t=>{["gross","net_payout","menu_disc","talabat_disc","commission","ops_charges"].forEach(k=>t[k]=+t[k].toFixed(2));});
 
   return{
     metadata:{
@@ -2392,6 +2395,43 @@ function cpcDeliverooBidOpt(ag,brand,outlet,curRow){
   const burnFactor=suggestedBid/curBid; // simple proportional model
   return{suggestedBid,curBid:Math.round(curBid*100)/100,burnFactor,bestMonth:best.month,bestRoas:best.roas,direction:suggestedBid>curBid?"raise":suggestedBid<curBid?"lower":"hold"};
 }
+// Investment recommendation for a POOL of combined-budget outlets (Combined Per Brand).
+// Sums alloc/spent/burn across all pooled outlets in the brand → treats them as one budget.
+// Individual outlets in a pool can't "run out" individually — only the pool can. So this
+// replaces per-outlet cpcInvestRec calls for combined rows.
+function cpcPoolInvestRec(pooledRows){
+  if(!pooledRows||!pooledRows.length)return null;
+  const dt=new Date();
+  const lastDay=new Date(dt.getFullYear(),dt.getMonth()+1,0).getDate();
+  const daysLeft=lastDay-dt.getDate();
+  if(daysLeft<=0)return null;
+  let poolAlloc=0,poolSpent=0,poolBurn=0,poolSales=0;
+  pooledRows.forEach(t=>{
+    poolAlloc+=(t.disp.alloc||0);
+    poolSpent+=(t.disp.spent||0);
+    poolSales+=(t.disp.sales||0);
+    // Sum dailyBurn from the most recent month-row of each outlet (active or not).
+    // The pool's actual burn IS the sum of what each contributing outlet spent per day.
+    const lastRow=t.monthRows&&t.monthRows.length?t.monthRows[t.monthRows.length-1]:t.liveRow;
+    poolBurn+=(lastRow&&lastRow.dailyBurn)||0;
+  });
+  const poolLeftover=Math.max(0,poolAlloc-poolSpent);
+  const poolROI=poolSpent>0?poolSales/poolSpent:null;
+  if(poolBurn<=0)return{poolAlloc,poolSpent,poolLeftover,poolBurn,poolROI,daysLeft,mode:"idle",additional:0,daysUntilDry:null};
+  let mode,additional,daysUntilDry=null;
+  if(poolLeftover>5){
+    mode="active";
+    const projSpend=poolBurn*daysLeft;
+    additional=Math.max(0,Math.round(projSpend-poolLeftover));
+    daysUntilDry=Math.floor(poolLeftover/poolBurn);
+  }else{
+    mode="restart";
+    additional=Math.round(poolBurn*daysLeft);
+    daysUntilDry=0;
+  }
+  return{poolAlloc,poolSpent,poolLeftover,poolBurn,poolROI,daysLeft,mode,additional,daysUntilDry};
+}
+
 // Investment recommendation for a CURRENT-month active outlet row.
 // Returns how much more to invest given burn rate × days left in month, adjusted for any
 // Deliveroo bid change (reverse-calculated burn).
@@ -2510,16 +2550,27 @@ function cpcRenderOutletLevel(ag,brand){
   // visible for every aggregator and the user can see exceptions.
   const showInvestCol=isCurrentMonth;
 
-  // Totals accumulators. Split investment by budget type so the summary box below can show
-  // pool-level vs per-outlet top-ups separately (a Combined-Per-Brand outlet can't have budget
-  // added individually, so per-row +AED amounts would be misleading — we accumulate them into
-  // a brand-pool figure instead).
+  // Totals accumulators. tInvestPool comes from the POOL aggregate computed once below
+  // (not from summing per-outlet amounts); tInvestSep comes from per-outlet calculations.
   let tClicks=0,tOrders=0,tSales=0,tBudget=0,tSpent=0,tLeftover=0,tFtu=0,tInvest=0,tInvestPool=0,tInvestSep=0;
+
+  // ── POOL-LEVEL CALCULATION ─────────────────────────────────────────────────
+  // For "Combined Per Brand" outlets, individual rows can show "exhausted" or "leftover ≤ 0"
+  // even when the brand-pool still has budget. The pool is what actually controls when ads stop.
+  // We aggregate the pooled rows' alloc/spent/burn once here and use that for the pool status
+  // every pooled row displays. Separate-budget rows keep their per-outlet calculation.
+  const pooledTableRows=tableRows.filter(t=>t.liveRow&&t.liveRow.budgetType==="combined");
+  const poolRec=(isCurrentMonth&&pooledTableRows.length)?cpcPoolInvestRec(pooledTableRows):null;
+  // Pool verdict: do we have any pooled outlet with a worthwhile ROAS? If the entire pool is
+  // below break-even, don't recommend restart even if exhausted.
+  const poolHasSomeGoodVerdict=pooledTableRows.some(t=>t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST");
+  if(poolRec&&poolRec.additional>0&&poolHasSomeGoodVerdict){
+    tInvestPool=poolRec.additional;
+    tInvest+=poolRec.additional;
+  }
 
   const body=tableRows.map(t=>{
     const d=t.disp;const vClr=d.verdict?CPC_VC[d.verdict]:'#64748b';
-    // Read budget type from the most recent live row for this outlet (defaults to "separate"
-    // for older rows pre-dating the column).
     const budgetType=(t.liveRow&&t.liveRow.budgetType)||"separate";
     const isPooled=budgetType==="combined";
     tClicks+=d.views||0;tOrders+=d.orders||0;tSales+=d.sales||0;tBudget+=d.alloc||0;tSpent+=d.spent||0;tLeftover+=d.leftover||0;tFtu+=d.ftu||0;
@@ -2528,56 +2579,66 @@ function cpcRenderOutletLevel(ag,brand){
     if(d.cto!=null&&brandAvgCTO){const rel=d.cto/brandAvgCTO;ctoTag=rel>=1.2?`<span style="color:#22C55E;font-weight:700">▲</span>`:rel<=0.8?`<span style="color:#EF4444;font-weight:700">▼</span>`:'';}
     const imp=cpcModel.postImpact.get(t.rows[t.rows.length-1]);
     const impTag=imp&&imp.salesChg<-15?` <span title="Sales fell ${fmtPct(imp.salesChg)} after CPC ended" style="font-size:9px;color:#EF4444;cursor:help">📉</span>`:'';
-    // Small lock badge for pooled outlets so the user can see at a glance which rows have
-    // editable budgets vs which roll up to a brand-level pool.
-    const poolTag=isPooled?` <span title="Budget is pooled at brand level — can't be edited per outlet. Top up the brand pool instead." style="font-size:9px;color:#60A5FA;cursor:help">🔒</span>`:'';
+    // Lock badge for pooled outlets (tooltip explains why no per-outlet recommendation)
+    const poolTag=isPooled?` <span title="Budget pooled with other ${brand} outlets on ${ag} — can't be topped up individually." style="font-size:9px;color:#60A5FA;cursor:help">🔒</span>`:'';
     // Investment + bid recommendation (current month only)
     let recCell='<span style="color:#475569;font-size:10px">—</span>';
     if(isCurrentMonth){
       const bidOpt=cpcDeliverooBidOpt(ag,brand,t.outlet,t.liveRow);
-      const inv=cpcInvestRec(ag,brand,t.outlet,t.liveRow,bidOpt);
       const parts=[];
-      const goodVerdict=d.verdict==="SCALE"||d.verdict==="INVEST";
-      const poorVerdict=d.verdict==="WITHDRAW";
-      if(inv){
-        if(inv.mode==="active"){
-          if(inv.additional>0&&goodVerdict){
-            // Running, will run dry before month end, worth keeping → top up.
-            // For pooled budgets we still tally into the brand-pool figure but DON'T show
-            // a per-outlet AED amount on the row (it's not actionable individually).
-            tInvest+=inv.additional;
-            if(isPooled){tInvestPool+=inv.additional;}else{tInvestSep+=inv.additional;}
-            const dryClr=inv.daysUntilDry<=3?'#EF4444':inv.daysUntilDry<=7?'#FBBF24':'#94a3b8';
-            if(isPooled){
-              parts.push(`<div style="font-size:10px;color:${dryClr};font-weight:700" title="Outlet would run dry in ${inv.daysUntilDry}d at the current burn rate. Budget is pooled — total pool top-up shown below.">dry in ${inv.daysUntilDry}d · 🔒 pool</div>`);
-            }else{
-              parts.push(`<div style="font-size:10px;color:${dryClr};font-weight:700">dry in ${inv.daysUntilDry}d · +${fmtAED(inv.additional)}</div>`);
+      if(isPooled){
+        // Pooled row: show POOL-level status, identical for every pooled outlet in this brand.
+        // The individual outlet's leftover/exhausted state is misleading because spend continues
+        // from the pool regardless.
+        if(poolRec){
+          if(poolRec.mode==="active"){
+            if(poolRec.additional>0&&poolHasSomeGoodVerdict){
+              const dryClr=poolRec.daysUntilDry<=3?'#EF4444':poolRec.daysUntilDry<=7?'#FBBF24':'#94a3b8';
+              parts.push(`<div style="font-size:10px;color:${dryClr};font-weight:700" title="Pool will run dry in ${poolRec.daysUntilDry} day(s) at current burn rate. Top-up shown in the summary below.">🔒 pool: dry in ${poolRec.daysUntilDry}d</div>`);
+            }else if(poolRec.additional<=0){
+              parts.push(`<div style="font-size:10px;color:#22C55E" title="Pool's remaining budget covers projected burn through month-end.">🔒 pool: covers month</div>`);
             }
-          }else if(inv.additional>0&&poorVerdict){
-            parts.push(`<div style="font-size:10px;color:#EF4444;font-weight:700">dry in ${inv.daysUntilDry}d · hold (below BE)</div>`);
-          }else if(inv.additional<=0){
-            parts.push(`<div style="font-size:10px;color:#22C55E">✓ covers month</div>`);
+          }else if(poolRec.mode==="restart"){
+            if(poolHasSomeGoodVerdict){
+              parts.push(`<div style="font-size:10px;color:#22C55E;font-weight:700" title="Pool budget exhausted. Restart amount shown in summary below.">🔒 pool: exhausted</div>`);
+            }else{
+              parts.push(`<div style="font-size:10px;color:#EF4444" title="Pool exhausted AND all outlets in pool are below break-even — don't restart.">🔒 pool: don't restart (below BE)</div>`);
+            }
           }
-        }else if(inv.mode==="restart"){
-          // Budget exhausted this month. Recommend a restart budget only if it's worth it.
-          if(goodVerdict&&inv.additional>0){
-            tInvest+=inv.additional;
-            if(isPooled){tInvestPool+=inv.additional;}else{tInvestSep+=inv.additional;}
-            if(isPooled){
-              parts.push(`<div style="font-size:10px;color:#22C55E;font-weight:700" title="Exhausted at the current burn rate; restart amount is rolled into the brand-pool figure shown below.">exhausted · 🔒 pool</div>`);
-            }else{
-              parts.push(`<div style="font-size:10px;color:#22C55E;font-weight:700">exhausted · restart +${fmtAED(inv.additional)}</div>`);
+        }else{
+          parts.push(`<div style="font-size:10px;color:#94a3b8">🔒 pooled</div>`);
+        }
+      }else{
+        // Separate row: per-outlet calculation as before
+        const inv=cpcInvestRec(ag,brand,t.outlet,t.liveRow,bidOpt);
+        const goodVerdict=d.verdict==="SCALE"||d.verdict==="INVEST";
+        const poorVerdict=d.verdict==="WITHDRAW";
+        if(inv){
+          if(inv.mode==="active"){
+            if(inv.additional>0&&goodVerdict){
+              tInvest+=inv.additional;tInvestSep+=inv.additional;
+              const dryClr=inv.daysUntilDry<=3?'#EF4444':inv.daysUntilDry<=7?'#FBBF24':'#94a3b8';
+              parts.push(`<div style="font-size:10px;color:${dryClr};font-weight:700">dry in ${inv.daysUntilDry}d · +${fmtAED(inv.additional)}</div>`);
+            }else if(inv.additional>0&&poorVerdict){
+              parts.push(`<div style="font-size:10px;color:#EF4444;font-weight:700">dry in ${inv.daysUntilDry}d · hold (below BE)</div>`);
+            }else if(inv.additional<=0){
+              parts.push(`<div style="font-size:10px;color:#22C55E">✓ covers month</div>`);
             }
-          }else if(poorVerdict){
-            parts.push(`<div style="font-size:10px;color:#EF4444">exhausted · don't restart (ROAS ${d.roi?d.roi.toFixed(2):'—'}×)</div>`);
+          }else if(inv.mode==="restart"){
+            if(goodVerdict&&inv.additional>0){
+              tInvest+=inv.additional;tInvestSep+=inv.additional;
+              parts.push(`<div style="font-size:10px;color:#22C55E;font-weight:700">exhausted · restart +${fmtAED(inv.additional)}</div>`);
+            }else if(poorVerdict){
+              parts.push(`<div style="font-size:10px;color:#EF4444">exhausted · don't restart (ROAS ${d.roi?d.roi.toFixed(2):'—'}×)</div>`);
+            }
           }
         }
       }
-      // Bid recommendation (Deliveroo only). Show raise/lower with the target bid.
+      // Bid recommendation (Deliveroo only) — applies to BOTH pooled and separate rows.
       if(bidOpt&&bidOpt.suggestedBid&&ag==="Deliveroo"&&bidOpt.direction!=='hold'){
         const bClr=bidOpt.direction==='raise'?'#22C55E':'#EF4444';
         const arrow=bidOpt.direction==='raise'?'↑':'↓';
-        parts.push(`<div style="font-size:10px;color:${bClr}" title="Best balance of ROAS & volume was ${cpcMonthLabel(bidOpt.bestMonth)} at this bid. ${bidOpt.direction==='lower'?'Lowering the bid reduces burn so less extra budget is needed.':'Raising the bid wins more volume but increases burn.'}">bid ${arrow} AED ${bidOpt.suggestedBid.toFixed(2)}</div>`);
+        parts.push(`<div style="font-size:10px;color:${bClr}" title="Best balance of ROAS & volume was ${cpcMonthLabel(bidOpt.bestMonth)} at this bid.">bid ${arrow} AED ${bidOpt.suggestedBid.toFixed(2)}</div>`);
       }
       if(parts.length)recCell=parts.join('');
     }
@@ -2594,7 +2655,7 @@ function cpcRenderOutletLevel(ag,brand){
       budget:Math.round(t.disp.alloc||0),spent:Math.round(t.disp.spent||0),leftover:Math.round(t.disp.leftover||0),
       roas:t.disp.roi?t.disp.roi.toFixed(2):"",mom:t.momChg!=null?t.momChg.toFixed(1):"",vsYear:t.yoyChg!=null?t.yoyChg.toFixed(1):"",
       bid:t.calcBid!=null?t.calcBid.toFixed(2):"",ftu:t.disp.ftu||0,
-      rec:(()=>{if(!isCurrentMonth)return"";const bidOpt=cpcDeliverooBidOpt(ag,brand,t.outlet,t.liveRow);const inv=cpcInvestRec(ag,brand,t.outlet,t.liveRow,bidOpt);const isPooled=(t.liveRow&&t.liveRow.budgetType==="combined");const bits=[];if(inv){if(inv.mode==="active"&&inv.additional>0&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST"))bits.push(isPooled?`Pool +AED ${inv.additional}`:`Top up AED ${inv.additional}`);else if(inv.mode==="restart"&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST")&&inv.additional>0)bits.push(isPooled?`Pool restart +AED ${inv.additional}`:`Restart AED ${inv.additional}`);else if(t.disp.verdict==="WITHDRAW")bits.push("Below BE — don't add");}if(bidOpt&&bidOpt.suggestedBid&&ag==="Deliveroo"&&bidOpt.direction!=='hold')bits.push(`Bid ${bidOpt.direction} to AED ${bidOpt.suggestedBid.toFixed(2)}`);return bits.join("; ");})()
+      rec:(()=>{if(!isCurrentMonth)return"";const bidOpt=cpcDeliverooBidOpt(ag,brand,t.outlet,t.liveRow);const isPooled=(t.liveRow&&t.liveRow.budgetType==="combined");const bits=[];if(isPooled){if(poolRec){if(poolRec.mode==='active'&&poolRec.additional>0&&poolHasSomeGoodVerdict)bits.push(`Pool dry in ${poolRec.daysUntilDry}d — top up +AED ${poolRec.additional} at brand level`);else if(poolRec.mode==='restart'&&poolHasSomeGoodVerdict)bits.push(`Pool exhausted — restart +AED ${poolRec.additional} at brand level`);else if(poolRec.mode==='active'&&poolRec.additional<=0)bits.push("Pool covers month");else if(poolRec.mode==='restart'&&!poolHasSomeGoodVerdict)bits.push("Pool below BE — don't restart");}}else{const inv=cpcInvestRec(ag,brand,t.outlet,t.liveRow,bidOpt);if(inv){if(inv.mode==="active"&&inv.additional>0&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST"))bits.push(`Top up AED ${inv.additional}`);else if(inv.mode==="restart"&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST")&&inv.additional>0)bits.push(`Restart AED ${inv.additional}`);else if(t.disp.verdict==="WITHDRAW")bits.push("Below BE — don't add");}}if(bidOpt&&bidOpt.suggestedBid&&ag==="Deliveroo"&&bidOpt.direction!=='hold')bits.push(`Bid ${bidOpt.direction} to AED ${bidOpt.suggestedBid.toFixed(2)}`);return bits.join("; ");})()
     })),
     totals:null // filled after totals computed below
   };
@@ -2612,12 +2673,31 @@ function cpcRenderOutletLevel(ag,brand){
   // so the user can act on each independently. Pool top-ups go to brand-level (single edit on
   // the aggregator's portal); per-outlet top-ups can be applied row-by-row.
   let investSummary='';
-  if(isCurrentMonth&&(tInvestPool>0||tInvestSep>0)){
+  // Helper to show pool aggregate numbers inline (Alloc / Spent / Leftover) so user can SEE
+  // the actual pool state instead of trying to read it across multiple "🔒 pool" row indicators.
+  const fmtPoolAgg=()=>{
+    if(!poolRec)return'';
+    const{poolAlloc,poolSpent,poolLeftover}=poolRec;
+    return `<div style="font-size:10px;color:#64748b;margin-top:3px">Pool: alloc <strong style="color:#cbd5e1">${fmtAEDExact(poolAlloc)}</strong> · spent <strong style="color:#cbd5e1">${fmtAEDExact(poolSpent)}</strong> · leftover <strong style="color:${poolLeftover>0?'#22C55E':'#EF4444'}">${fmtAEDExact(poolLeftover)}</strong></div>`;
+  };
+  if(isCurrentMonth&&(tInvestPool>0||tInvestSep>0||(poolRec&&poolRec.mode==='active'&&poolRec.additional<=0))){
     const monthLbl=cpcMonthLabel(selMonth);
     const bidAdjNote=ag==='Deliveroo'?' (adjusted for any suggested bid changes)':'';
     const lines=[];
-    if(tInvestPool>0){
-      lines.push(`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:6px 0"><div><div style="font-size:11px;color:#60A5FA;font-weight:700">🔒 Brand-pool top-up</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Edit at the ${ag} brand level — applies to all pooled ${brand} outlets together.</div></div><div style="font-size:18px;font-weight:800;color:#60A5FA;white-space:nowrap">+${fmtAED(tInvestPool)}</div></div>`);
+    if(poolRec){
+      // Always show the pool row when pooled outlets exist for this brand+ag — even if no
+      // top-up is needed (so the user sees the healthy pool state and knows it's covered).
+      if(poolRec.additional>0&&poolHasSomeGoodVerdict){
+        const label=poolRec.mode==='restart'?'Brand-pool restart needed':'Brand-pool top-up';
+        lines.push(`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:6px 0;border-bottom:1px solid rgba(96,165,250,.15)"><div style="flex:1"><div style="font-size:11px;color:#60A5FA;font-weight:700">🔒 ${label}</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Edit at the ${ag} brand level — applies to all ${pooledTableRows.length} pooled ${brand} outlets together.</div>${fmtPoolAgg()}</div><div style="font-size:18px;font-weight:800;color:#60A5FA;white-space:nowrap">+${fmtAED(poolRec.additional)}</div></div>`);
+      }else{
+        // Pool is healthy / covers month → still surface the state so user knows it was considered.
+        const stateLbl=poolRec.mode==='restart'
+          ?(poolHasSomeGoodVerdict?'Pool needs restart':'Pool exhausted (below BE — don\'t restart)')
+          :'Pool covers month';
+        const stateClr=poolRec.mode==='restart'?'#EF4444':'#22C55E';
+        lines.push(`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:6px 0;border-bottom:1px solid rgba(96,165,250,.15)"><div style="flex:1"><div style="font-size:11px;color:${stateClr};font-weight:700">🔒 ${stateLbl}</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">${pooledTableRows.length} pooled ${brand} outlets share this budget.</div>${fmtPoolAgg()}</div><div style="font-size:14px;font-weight:700;color:${stateClr};white-space:nowrap">${poolRec.mode==='restart'?'—':'✓'}</div></div>`);
+      }
     }
     if(tInvestSep>0){
       lines.push(`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:6px 0"><div><div style="font-size:11px;color:#22C55E;font-weight:700">Per-outlet top-ups</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Sum of individually-editable outlet budgets shown in the table above.</div></div><div style="font-size:18px;font-weight:800;color:#22C55E;white-space:nowrap">+${fmtAED(tInvestSep)}</div></div>`);
@@ -2626,10 +2706,12 @@ function cpcRenderOutletLevel(ag,brand){
     const grandTotal=tInvestPool+tInvestSep;
     const grandRow=hasBoth?`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding-top:8px;margin-top:6px;border-top:1px dashed rgba(34,197,94,.4)"><div style="font-size:11px;color:#86EFAC;font-weight:700;text-transform:uppercase;letter-spacing:.6px">💰 Total additional investment</div><div style="font-size:24px;font-weight:800;color:#22C55E;white-space:nowrap">+${fmtAED(grandTotal)}</div></div>`:'';
     const introBlurb=hasBoth
-      ?`<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">To keep all under-funded ${brand} outlets on ${ag} running through ${monthLbl}${bidAdjNote}. ${brand} has BOTH pooled and per-outlet budgets — actions are split below.</div>`
+      ?`<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">${brand} on ${ag} has BOTH pooled and per-outlet budgets — actions are split below. Recommendations cover through ${monthLbl}${bidAdjNote}.</div>`
       :tInvestPool>0
-        ?`<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Brand-level pooled budget for ${brand} on ${ag}. Top up the pool by this amount to keep campaigns running through ${monthLbl} at the current brand-wide burn rate.</div>`
-        :`<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Per-outlet top-ups needed to keep all under-funded ${brand} outlets on ${ag} running through ${monthLbl}${bidAdjNote}.</div>`;
+        ?`<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Brand-level pooled budget for ${brand} on ${ag}. Top up the pool by this amount to keep campaigns running through ${monthLbl}.</div>`
+        :tInvestSep>0
+          ?`<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">Per-outlet top-ups to keep all under-funded ${brand} outlets on ${ag} running through ${monthLbl}${bidAdjNote}.</div>`
+          :`<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">${brand} on ${ag} — pool status shown below. All separate-budget outlets cover the month.</div>`;
     investSummary=`<div style="margin-top:12px;padding:12px 16px;background:linear-gradient(135deg,rgba(34,197,94,.08),rgba(34,197,94,.02));border:1px solid rgba(34,197,94,.3);border-radius:10px">${introBlurb}${lines.join('')}${grandRow}</div>`;
   }
 
@@ -3741,7 +3823,7 @@ function allocateCampaignDiscount(c,start,end){
     if(exact){
       const M=brandTotalBranches(c.brand,c.aggregator)||1;
       const myN=(campOutlets(c)||new Set()).size||M;
-      return{allocatedDisc:exact.menuDisc,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"talabat_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
+      return{allocatedDisc:exact.menuDisc,coFundedDisc:exact.talabatDisc||0,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"talabat_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
     }
   }
   const M=brandTotalBranches(c.brand,c.aggregator)||1;
@@ -3954,7 +4036,7 @@ function campAnalysisV2(c){
     campContribTotal:campC.contribution,baseContribTotal:baseC.contribution,
     campContribPerDay,baseContribPerDay,incrContribPerDay,incrContribTotal,profitabilityPct,
     ordersLift,salesLift,aovChange,incrOrdersPerDay,incrSalesPerDay,
-    discountROI,discPctOfGross,campDisc:allocatedDisc,rawBrandDisc:cs.disc||0,allocatedDisc,hasOverlap,overlapDays:alloc.overlapDays,branchN:alloc.myN,branchM:alloc.M,
+    discountROI,discPctOfGross,campDisc:allocatedDisc,coFundedDisc:alloc.coFundedDisc||0,rawBrandDisc:cs.disc||0,allocatedDisc,hasOverlap,overlapDays:alloc.overlapDays,branchN:alloc.myN,branchM:alloc.M,
     discSource:alloc.source||"estimated",
     discPartialCoverage:!!alloc.partialCoverage,discCoveredDays:alloc.coveredDays,discTotalDays:alloc.totalDays,discUncoveredStart:alloc.uncoveredStart,discUncoveredEnd:alloc.uncoveredEnd,
     baselineCampaigns,concurrent,sameBrandPlatConcurrent,
@@ -4180,7 +4262,9 @@ function campDetailV2HTML(c,idx){
       <tr><td>Orders</td><td style="text-align:right">${a.cs.orders.toLocaleString()}</td><td style="text-align:right">${a.bs.orders.toLocaleString()}</td><td style="text-align:right;color:${a.incrOrdersPerDay>=0?'#22C55E':'#EF4444'}">${a.incrOrdersPerDay>=0?'+':''}${a.incrOrdersPerDay.toFixed(0)}</td></tr>
       <tr><td>Net Sales</td><td style="text-align:right">${fmtAEDx(a.cs.sales)}</td><td style="text-align:right">${fmtAEDx(a.bs.sales)}</td><td style="text-align:right;color:${a.incrSalesPerDay>=0?'#22C55E':'#EF4444'}">${a.incrSalesPerDay>=0?'+':''}${fmtAEDx(a.incrSalesPerDay)}</td></tr>
       <tr><td>Gross Sales</td><td style="text-align:right">${fmtAEDx(a.campGross)}</td><td style="text-align:right">${fmtAEDx(a.baseGross)}</td><td style="text-align:right;color:#94a3b8">—</td></tr>
-      <tr><td>Discount Given</td><td style="text-align:right">${fmtAEDx(a.campDisc)}</td><td style="text-align:right">${fmtAEDx(a.bs.disc||0)}</td><td style="text-align:right;color:#94a3b8">—</td></tr>
+      <tr><td>${a.coFundedDisc>0?'Merchant Discount Cost':'Discount Given'}</td><td style="text-align:right">${fmtAEDx(a.campDisc)}</td><td style="text-align:right">${fmtAEDx(a.bs.disc||0)}</td><td style="text-align:right;color:#94a3b8">—</td></tr>
+      ${a.coFundedDisc>0?`<tr style="color:#60A5FA"><td>＋ ${c.aggregator}-funded co-pay <span style="font-size:9px;color:#94a3b8;font-weight:400">(platform's share of the discount)</span></td><td style="text-align:right">${fmtAEDx(a.coFundedDisc)}</td><td style="text-align:right;color:#475569">—</td><td style="text-align:right;color:#94a3b8">—</td></tr>
+      <tr style="color:#cbd5e1;font-style:italic;font-size:11px"><td>= Total discount to customer</td><td style="text-align:right">${fmtAEDx(a.campDisc+a.coFundedDisc)}</td><td style="text-align:right;color:#475569">—</td><td style="text-align:right;color:#94a3b8">—</td></tr>`:''}
       <tr style="border-top:2px solid rgba(245,158,11,.3);font-weight:800"><td style="color:#f59e0b">Contribution</td><td style="text-align:right;color:#e2e8f0">${fmtAEDx(a.campContribTotal)}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDx(a.baseContribTotal)}</td><td style="text-align:right;color:${incrClr}">${a.incrContribPerDay>=0?'+':''}${fmtAEDx(a.incrContribPerDay)}</td></tr>
     </tbody></table></div></div>`;
   let scenarioBox='';
