@@ -13,11 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-006";
+const BUILD_VERSION="2026-06-25-007";
 const BUILD_NOTES=[
-  "🆕 Talabat co-fund now visible in campaign breakdowns — see the platform's share of the discount.",
-  "🆕 CPC pool math fixed — pooled outlets (Combined Per Brand) now show real pool status instead of misleading per-outlet 'exhausted'.",
-  "🆕 Smoother updates — no more forced logout; you'll be nudged to hard-refresh when there's a new version."
+  "🐛 Keeta Week 30% OFF CAP 20 now correctly attributed — orders with Alfredo + other items split between Offers for You (15.30) and Keeta Week (rest), instead of dumping everything on Offers for You. Removes the false 'overlap detected' warning.",
+  "🆕 Talabat co-fund visible in campaign breakdowns — see the platform's share of each discount.",
+  "🆕 CPC pool math fixed — pooled outlets (Combined Per Brand) show real pool status instead of misleading per-outlet 'exhausted'.",
+  "🆕 Smoother updates — no more forced logout; hard-refresh prompt instead."
 ];
 
 let _updateDialogShown=false;
@@ -291,22 +292,35 @@ const KEETA_OUTLET_CODE={
   Dip:"DIP",Tsqr:"Town Square",Dmc:"DMC",Villa:"Villa",Fur:"Furjan",Aq:"Al Quoz",
   "Reef-AUH":"Al Reef","For-AUH":"Al Forsan","Wtc-AUH":"WTC",Nas:"NAS"
 };
-// Oregano item → (campaign, expected merchant disc per item) for split attribution.
+// Oregano item → (campaign, expected merchant disc per item, date range when active) for split attribution.
 // Expected values come from menu price × merchant's share of headline discount:
 //   Alfredo  : 50% off, co-funded 60:40 → merchant share = 30% × 51 = AED 15.30
 //   25% items: 25% off, 100% Oregano-funded → merchant share = 25% × menu price
 //   Match Day combos: fixed AED amount (Increased Price − Discounted Price)
-// Multi-promo-item orders split the actual merchant discount in proportion to these weights.
-// When monthly campaigns rotate, update both this table AND parser.py's OREGANO_ITEMS to match.
+// Items are only matched on dates within their active range. Multi-promo-item orders split the
+// actual merchant discount in proportion to these weights. When monthly campaigns rotate, update
+// both this table AND parser.py's OREGANO_ITEMS to match.
 const KEETA_OREGANO_ITEMS={
-  "Alfredo Pasta":         {campaign:"Offers for You 50% OFF 1 Item",expected:15.30},
-  "Milanese":              {campaign:"25% OFF Select Items",         expected:13.25},
-  "Risotto Funghi":        {campaign:"25% OFF Select Items",         expected:14.25},
-  "Tuscan Pasta":          {campaign:"25% OFF Select Items",         expected:15.25},
-  "Pepperoni Pizza (R)":   {campaign:"25% OFF Select Items",         expected:12.75},
-  "Match Day Pizza Party": {campaign:"25% OFF Select Items",         expected:89.00},
-  "Match Day Solo Meal":   {campaign:"25% OFF Select Items",         expected:84.00}  // Oregano only
+  "Alfredo Pasta":         {campaign:"Offers for You 50% OFF 1 Item",expected:15.30,startDate:"2026-06-12",endDate:"2026-06-30"},
+  "Milanese":              {campaign:"25% OFF Select Items",         expected:13.25,startDate:"2026-06-12",endDate:"2026-06-23"},
+  "Risotto Funghi":        {campaign:"25% OFF Select Items",         expected:14.25,startDate:"2026-06-12",endDate:"2026-06-23"},
+  "Tuscan Pasta":          {campaign:"25% OFF Select Items",         expected:15.25,startDate:"2026-06-12",endDate:"2026-06-23"},
+  "Pepperoni Pizza (R)":   {campaign:"25% OFF Select Items",         expected:12.75,startDate:"2026-06-12",endDate:"2026-06-23"},
+  "Match Day Pizza Party": {campaign:"25% OFF Select Items",         expected:89.00,startDate:"2026-06-12",endDate:"2026-06-23"},
+  "Match Day Solo Meal":   {campaign:"25% OFF Select Items",         expected:84.00,startDate:"2026-06-12",endDate:"2026-06-23"}
 };
+// "Residual" campaigns receive any merchant_disc not attributable to specific promo items on a given
+// date. Used when a broad menu-wide campaign (e.g. "30% OFF CAP 20" Keeta Week) runs on top of
+// item-specific promos. List multiple if rotating; the first matching date range wins.
+const KEETA_OREGANO_RESIDUAL_CAMPAIGNS=[
+  {campaign:"30% OFF CAP 20",startDate:"2026-06-24",endDate:"2026-06-30"}
+];
+function keetaOreganoResidualCampaignForDate(date){
+  for(const r of KEETA_OREGANO_RESIDUAL_CAMPAIGNS){
+    if(date>=r.startDate&&date<=r.endDate)return r.campaign;
+  }
+  return null;
+}
 // Single Keeta campaign per non-Oregano brand — no item-level split needed.
 const KEETA_CAMPAIGN_DEFAULT={Lollorosso:"50% OFF",Smokeys:"50% OFF",Fyoozhen:"50% OFF","Wicked Wings":"50% OFF"};
 const KEETA_FD_COST=2.0; // AED per order — Keeta free-delivery share embedded in merchant-funded column
@@ -416,11 +430,14 @@ function parseKeetaItems(s){
   return String(s).replace(/;+$/,"").split(";").map(i=>i.trim()).filter(i=>i);
 }
 // Items in cart that match an Oregano promo item (case-insensitive substring).
-function matchKeetaOreganoPromos(items){
+function matchKeetaOreganoPromos(items,date){
   const hits=[];
   for(const item of items){
     const itemLower=item.toLowerCase();
     for(const[promoItem,info]of Object.entries(KEETA_OREGANO_ITEMS)){
+      // Only match if order date falls within the item's promo window. Prevents e.g. matching
+      // Milanese on Jun 25 to "25% OFF Select Items" which ended Jun 23.
+      if(date&&info.startDate&&info.endDate&&(date<info.startDate||date>info.endDate))continue;
       if(itemLower.includes(promoItem.toLowerCase())){
         hits.push({item:promoItem,campaign:info.campaign,expected:info.expected});
         break; // 1 promo match per cart line max
@@ -480,23 +497,49 @@ async function parseKeetaXlsx(file){
     const menuDisc=Math.max(0,merch-KEETA_FD_COST);
     const orderNo=r[headerIdx["Order no."]];
 
-    // Attribute menu_disc to one or more campaigns
+    // Attribute menu_disc to one or more campaigns. For Oregano this involves:
+    //   1. Matching items to known promo-item campaigns (Alfredo → Offers for You, 25% items → 25% OFF Select)
+    //   2. Computing each campaign's "expected" contribution from item prices
+    //   3. Any remaining merchant_disc (i.e. extra discount that DIDN'T come from those specific items)
+    //      is the residual — attributable to a broad menu-wide campaign for that date (Keeta Week
+    //      "30% OFF CAP 20" Jun 24-30). Without this, a Jun 24 order with Alfredo + Bolognese gets
+    //      its full discount (15.30 + 16.50 from the Keeta Week 30% off) attributed entirely to
+    //      "Offers for You", which is wrong — half belongs to Keeta Week.
     const attributions=[]; // [campaign, share]
     if(brand==="Oregano"){
       const items=parseKeetaItems(r[headerIdx["Items"]]);
-      const hits=matchKeetaOreganoPromos(items);
+      const hits=matchKeetaOreganoPromos(items,date);
       const expectedByCampaign={};
       for(const h of hits)expectedByCampaign[h.campaign]=(expectedByCampaign[h.campaign]||0)+h.expected;
       const campKeys=Object.keys(expectedByCampaign);
+      const residualCamp=keetaOreganoResidualCampaignForDate(date); // e.g. "30% OFF CAP 20" on Jun 24-30
+      const totalExpected=Object.values(expectedByCampaign).reduce((s,v)=>s+v,0);
+
       if(!campKeys.length){
-        // No recognized promo item — Keeta's "Percentage off" catch-all → Offers for You fallback.
-        attributions.push(["Offers for You 50% OFF 1 Item",menuDisc]);
+        // No recognized promo items in cart. If a residual campaign is active (e.g. Keeta Week
+        // Jun 24-30), the whole menu_disc belongs to it. Otherwise fall back to Offers for You
+        // (catch-all for the prior rotation).
+        attributions.push([residualCamp||"Offers for You 50% OFF 1 Item",menuDisc]);
+      }else if(residualCamp){
+        // Promo items matched AND a residual campaign is active. Each promo item's expected portion
+        // goes to its own campaign; anything beyond the sum of expecteds goes to the residual.
+        // Cap each expected at the actual menu_disc available (defensive — small orders can have
+        // less actual disc than expected if the platform applied edge cases).
+        const scale=totalExpected>0?Math.min(1,menuDisc/totalExpected):1;
+        let assigned=0;
+        for(const[camp,exp]of Object.entries(expectedByCampaign)){
+          const portion=exp*scale;assigned+=portion;
+          attributions.push([camp,portion]);
+        }
+        const residual=Math.max(0,menuDisc-assigned);
+        if(residual>0.01)attributions.push([residualCamp,residual]);
       }else if(campKeys.length===1){
+        // Single matched campaign and no residual to fall back on (e.g. Jun 12-23 single-campaign days)
         attributions.push([campKeys[0],menuDisc]);
       }else{
-        const total=Object.values(expectedByCampaign).reduce((s,v)=>s+v,0);
-        if(total>0){
-          for(const[camp,exp]of Object.entries(expectedByCampaign))attributions.push([camp,menuDisc*(exp/total)]);
+        // Multi-campaign matches with no residual: proportional split
+        if(totalExpected>0){
+          for(const[camp,exp]of Object.entries(expectedByCampaign))attributions.push([camp,menuDisc*(exp/totalExpected)]);
         }else{
           for(const camp of campKeys)attributions.push([camp,menuDisc/campKeys.length]);
         }
