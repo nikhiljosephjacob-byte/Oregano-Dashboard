@@ -13,12 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-007";
+const BUILD_VERSION="2026-06-25-008";
 const BUILD_NOTES=[
-  "🐛 Keeta Week 30% OFF CAP 20 now correctly attributed — orders with Alfredo + other items split between Offers for You (15.30) and Keeta Week (rest), instead of dumping everything on Offers for You. Removes the false 'overlap detected' warning.",
+  "🆕 Overview 'What Worked / Needs Attention' redesigned — click a platform tab (Deliveroo / Talabat / Careem / Noon / Keeta) to see that platform's top movers. Smiles & Instashop noise excluded.",
+  "🐛 Keeta Week 30% OFF CAP 20 correctly attributed — orders with Alfredo + other items split between Offers for You (15.30) and Keeta Week (rest), no more false 'overlap detected' warning.",
   "🆕 Talabat co-fund visible in campaign breakdowns — see the platform's share of each discount.",
-  "🆕 CPC pool math fixed — pooled outlets (Combined Per Brand) show real pool status instead of misleading per-outlet 'exhausted'.",
-  "🆕 Smoother updates — no more forced logout; hard-refresh prompt instead."
+  "🆕 CPC pool math fixed — pooled outlets show real pool status instead of misleading per-outlet 'exhausted'."
 ];
 
 let _updateDialogShown=false;
@@ -1742,6 +1742,27 @@ function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:n
 let aovDrill=false;
 function toggleAovDrill(){aovDrill=!aovDrill;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 
+// Switch the active aggregator tab on the Overview "Outlet Highlights" card. The verdict data
+// for all 5 aggregators is precomputed in renderOverview and stashed on window._verdByAg so
+// this swap is instant — no re-render of the whole overview.
+function selectVerdAggregator(ag){
+  const data=(window._verdByAg||{})[ag];
+  const renderer=window._renderVerdRows;
+  if(!data||!renderer)return;
+  // Repaint tab styles: previously-active gets neutral border, this one gets the aggregator's accent color
+  const aggColors={Deliveroo:'#00CCBC',Talabat:'#FF5A00',Careem:'#3FB87C',Noon:'#F2B600',Keeta:'#FFD54F'};
+  ['Deliveroo','Talabat','Careem','Noon','Keeta'].forEach(a=>{
+    const btn=document.getElementById('verd-tab-'+a);if(!btn)return;
+    const isActive=a===ag;
+    const accent=aggColors[a]||'#f59e0b';
+    btn.style.background=isActive?'rgba(245,158,11,.08)':'transparent';
+    btn.style.borderColor=isActive?accent:'#1b2f4a';
+    const lbl=btn.querySelector('span');if(lbl)lbl.style.color=isActive?accent:'#cbd5e1';
+  });
+  const wEl=document.getElementById('verd-winners');if(wEl)wEl.innerHTML=renderer(data.winners,'winners');
+  const iEl=document.getElementById('verd-issues');if(iEl)iEl.innerHTML=renderer(data.issues,'issues');
+}
+
 // OVERVIEW
 function renderOverview(){
   const ld=getLD(),pd=getPD(),ls=sumR(ld),ps=sumR(pd);
@@ -1758,13 +1779,50 @@ function renderOverview(){
   const brandRows=BR.map(({n,c})=>{const cv=sumR(ld.filter(r=>r.brand===n));const pv=sumR(pd.filter(r=>r.brand===n));return{n,c,cv,oc:pctOf(cv.orders,pv.orders),sc:pctOf(cv.sales,pv.sales)};}).filter(b=>b.cv.orders>0);
   const cm=mkMap(ld,r=>`${r.brand}|${r.branch}|${r.aggregator}`),pm=mkMap(pd,r=>`${r.brand}|${r.branch}|${r.aggregator}`);
   const combos=Object.values(cm).map(c=>{const pv=pm[c.k];return{...c,aov:c.orders>0?c.sales/c.orders:0,oc:pv?pctOf(c.orders,pv.orders):null};});
-  const winners=[...combos].filter(o=>o.oc!=null).sort((a,b)=>b.oc-a.oc).slice(0,5);
-  const drops=[...combos].filter(o=>o.oc!=null&&o.oc<-20).sort((a,b)=>a.oc-b.oc).slice(0,4);
-  const zeros=Object.keys(pm).filter(k=>pm[k].orders>0&&!cm[k]).map(k=>{const[brand,branch,aggregator]=k.split("|");return{brand,branch,aggregator,orders:0,sales:0,oc:-100};}).slice(0,3);
-  const issues=[...zeros,...drops].slice(0,5);
+  // Only show insights for the 5 core aggregators that drive the business. Smiles, Instashop,
+  // Chatfood, etc. are noise here (low volume, often ZERO orders triggering false "needs attention").
+  const CORE_VERDICT_AGGS=['Deliveroo','Talabat','Careem','Noon','Keeta'];
+  // Build per-aggregator winner & issue lists so the user can drill into one platform at a time.
+  // Each tab independently sorts its own combos so the top 5 winners in Deliveroo aren't
+  // crowded out by Keeta's bigger swings.
+  const verdByAg={};
+  CORE_VERDICT_AGGS.forEach(ag=>{
+    const combosAg=combos.filter(c=>c.aggregator===ag);
+    const winnersAg=[...combosAg].filter(o=>o.oc!=null).sort((a,b)=>b.oc-a.oc).slice(0,5);
+    const dropsAg=[...combosAg].filter(o=>o.oc!=null&&o.oc<-20).sort((a,b)=>a.oc-b.oc).slice(0,4);
+    const zerosAg=Object.keys(pm).filter(k=>{const r=pm[k];return r.aggregator===ag&&r.orders>0&&!cm[k];}).map(k=>{const[brand,branch,aggregator]=k.split("|");return{brand,branch,aggregator,orders:0,sales:0,oc:-100};}).slice(0,3);
+    const issuesAg=[...zerosAg,...dropsAg].slice(0,5);
+    verdByAg[ag]={winners:winnersAg,issues:issuesAg};
+  });
+  const verdVolByAg={};
+  CORE_VERDICT_AGGS.forEach(ag=>{verdVolByAg[ag]=ld.filter(r=>r.aggregator===ag).reduce((s,r)=>s+r.orders,0);});
+  // Default selected tab: aggregator with the most orders this period (so a meaningful view loads first).
+  const defaultVerdAg=CORE_VERDICT_AGGS.reduce((best,ag)=>verdVolByAg[ag]>(verdVolByAg[best]||0)?ag:best,CORE_VERDICT_AGGS[0]);
   const activeOutlets=new Set(allData.map(r=>`${r.brand}|${r.branch}`)).size;
-  const verdW=winners.map(w=>`<div class="vrow"><div style="width:3px;height:34px;border-radius:2px;background:${BMAP[w.brand]?.c||"#888"};flex-shrink:0"></div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.brand} · ${w.branch}</div><div style="font-size:11px;color:#64748b">${w.aggregator} · ${w.orders} orders · ${fmtAED(w.sales)}</div></div><div style="color:#22C55E;font-size:12px;font-weight:700;flex-shrink:0">${fmtPct(w.oc)}</div></div>`).join("");
-  const verdI=issues.map(w=>`<div class="vrow"><div style="width:3px;height:34px;border-radius:2px;background:${w.oc===-100?"#64748b":"#EF4444"};flex-shrink:0"></div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.brand} · ${w.branch}</div><div style="font-size:11px;color:#64748b">${w.aggregator} · ${w.orders===0?"ZERO orders":w.orders+" orders"}</div></div><div style="color:#EF4444;font-size:12px;font-weight:700;flex-shrink:0">${w.oc===-100?"ZERO":fmtPct(w.oc)}</div></div>`).join("");
+  // Renderer used for both initial paint and the tab-switch JS handler below
+  const renderVerdRows=(arr,kind)=>{
+    if(!arr.length){
+      return kind==='winners'
+        ?"<div style='color:#64748b;font-size:12px;padding:8px 4px'>No standout winners in this aggregator for the comparison period</div>"
+        :"<div style='color:#22C55E;font-size:12px;padding:8px 4px'>All outlets performing — no drops or zero-order branches</div>";
+    }
+    if(kind==='winners'){
+      return arr.map(w=>`<div class="vrow"><div style="width:3px;height:34px;border-radius:2px;background:${BMAP[w.brand]?.c||"#888"};flex-shrink:0"></div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.brand} · ${w.branch}</div><div style="font-size:11px;color:#64748b">${w.aggregator} · ${w.orders} orders · ${fmtAED(w.sales)}</div></div><div style="color:#22C55E;font-size:12px;font-weight:700;flex-shrink:0">${fmtPct(w.oc)}</div></div>`).join("");
+    }
+    return arr.map(w=>`<div class="vrow"><div style="width:3px;height:34px;border-radius:2px;background:${w.oc===-100?"#64748b":"#EF4444"};flex-shrink:0"></div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.brand} · ${w.branch}</div><div style="font-size:11px;color:#64748b">${w.aggregator} · ${w.orders===0?"ZERO orders":w.orders+" orders"}</div></div><div style="color:#EF4444;font-size:12px;font-weight:700;flex-shrink:0">${w.oc===-100?"ZERO":fmtPct(w.oc)}</div></div>`).join("");
+  };
+  // Stash the data for the tab-switch handler to consume
+  window._verdByAg=verdByAg;
+  window._renderVerdRows=renderVerdRows;
+  // Aggregator tabs row — each shows volume below name. Active tab uses brand-colored accent.
+  const verdTabs=CORE_VERDICT_AGGS.map(ag=>{
+    const isActive=ag===defaultVerdAg;
+    const vol=verdVolByAg[ag]||0;
+    const accent=AC[ag]||'#f59e0b';
+    return `<button id="verd-tab-${ag}" onclick="selectVerdAggregator('${ag}')" style="flex:1;min-width:0;background:${isActive?'rgba(245,158,11,.08)':'transparent'};border:1px solid ${isActive?accent:'#1b2f4a'};border-radius:8px;padding:8px 6px;cursor:pointer;transition:all .15s;display:flex;flex-direction:column;align-items:center;gap:4px"><div style="display:flex;align-items:center;gap:6px">${logoImg(ag,18)}<span style="font-size:12px;font-weight:700;color:${isActive?accent:'#cbd5e1'}">${ag}</span></div><div style="font-size:9px;color:#64748b;font-weight:600">${vol.toLocaleString()} orders</div></button>`;
+  }).join("");
+  const initialWinners=renderVerdRows(verdByAg[defaultVerdAg].winners,'winners');
+  const initialIssues=renderVerdRows(verdByAg[defaultVerdAg].issues,'issues');
 
   // AOV by Brand block — clickable to drill into per-brand line graphs
   const aovBlock=aovDrill?(()=>{
@@ -1801,7 +1859,14 @@ function renderOverview(){
 </div>
     <div class="g4">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders),null,ordPerDay)}${kpiCard("Total Net Sales",fmtAED(ls.sales),`${compShort}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales),null,salesPerDay)}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
     <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:150px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
-    <div class="g2"><div class="sm"><div class="ct" style="color:#22C55E">✅ What Worked</div>${verdW||"<div style='color:#64748b;font-size:12px'>No comparison data</div>"}</div><div class="sm"><div class="ct" style="color:#EF4444">⚠️ Needs Attention</div>${verdI||"<div style='color:#22C55E;font-size:12px'>All outlets performing</div>"}</div></div>
+    <div class="card" style="padding:14px">
+      <div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span>Outlet Highlights by Platform</span><span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0;font-size:10px">click a platform to see its top movers</span></div>
+      <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">${verdTabs}</div>
+      <div class="g2" style="margin:0">
+        <div style="background:#0d1524;border:1px solid #1b2f4a;border-radius:8px;padding:12px"><div class="ct" style="color:#22C55E;margin-bottom:8px">✅ What Worked</div><div id="verd-winners">${initialWinners}</div></div>
+        <div style="background:#0d1524;border:1px solid #1b2f4a;border-radius:8px;padding:12px"><div class="ct" style="color:#EF4444;margin-bottom:8px">⚠️ Needs Attention</div><div id="verd-issues">${initialIssues}</div></div>
+      </div>
+    </div>
     ${aovBlock}
     <div class="card"><div class="ct">All Brands — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click any header to sort</span></div>${sortableTable("ov-brands",heads,brandTableRows,2)}</div>
     <div class="card"><div class="ct">All Platforms — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click any header to sort</span></div>${sortableTable("ov-plats",heads,aggTableRows,2)}</div>`;
@@ -6000,7 +6065,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
   const fns=[gp,renderPage,toggleDD,fToggle,fClear,fSetPreset,fApply,
     genBrief,runAskAI,runCampAI,
     renderBrands,renderOutlets,renderPlatforms,renderOverview,renderCPC,renderCampaigns,renderKPI,renderCompare,
-    selectOutlet,backToOutlets,toggleAovDrill,selectBundleByKey,bundleDetailHTML,
+    selectOutlet,backToOutlets,toggleAovDrill,selectVerdAggregator,selectBundleByKey,bundleDetailHTML,
     cpcGoAgg,cpcGoBrands,cpcGoOutlets,cpcSetSort,cpcSetAdType,cpcSetMonth,cpcOpenOutletDetail,cpcCloseOutletDetail,cpcExportTable,
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
     sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campSetScope,campClearDates,campSetElasticity,
