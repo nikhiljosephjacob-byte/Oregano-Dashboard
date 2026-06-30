@@ -13,12 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-012";
+const BUILD_VERSION="2026-06-25-014";
 const BUILD_NOTES=[
-  "🐛 Investment Plan now opens — fixed an undefined `BRANDS` reference that was silently throwing inside the render (button looked dead, was actually a runtime error). Switched to the dashboard's actual brand array.",
-  "🐛 Compare tab now anchored beside KPI Tracker — was being appended after whatever the last tab happened to be in the DOM.",
-  "🛡 Investment Plan now shows an explicit error card if it ever fails to render, instead of silently doing nothing.",
-  "🆕 Investment Plan view (from v011) — Drill-Down / Investment Plan toggle, group obligations, per-outlet allocation with Deliveroo bid suggestions, Talabat 'tested' history, brand pool tables, declining outlets, aggregator strength heatmap, historical investments."
+  "🐛 Deliveroo upload no longer silently rejects all rows — switched to raw cell reading (matching the working Careem parser), made date parsing tolerant of multiple formats, and matched headers by prefix to handle Arabic-suffix encoding quirks.",
+  "🆕 Multi-file upload — select multiple weekly statements at once for any aggregator and the dashboard processes them sequentially, merging dates as it goes.",
+  "🆕 Helpful parse-failure messages — instead of 'no usable records', failed uploads now show exactly why (top unmapped restaurants, counts by skip reason). Logged to console too."
 ];
 
 let _updateDialogShown=false;
@@ -693,7 +692,7 @@ function keetaUploadBarHTML(){
         ?`<div style="font-size:9.5px;color:#cbd5e1;line-height:1.4"><strong style="color:${accent}">${orders.toLocaleString()}</strong> orders<br/>${dr[0]?fmtShort(dr[0]):'?'} → ${dr[1]?fmtShort(dr[1]):'?'}<br/><span style="color:#64748b">${fmtAgo(uploadDate)}${stale?' ⚠️':''}</span></div>`
         :`<div style="font-size:9.5px;color:#94a3b8;line-height:1.4">Not uploaded<br/><em style="color:#64748b">click to upload</em></div>`;
     const clearBtn=isLoaded?`<button onclick="event.stopPropagation();if(confirm('Clear uploaded ${label} data? It will revert to sales-weighted estimation.'))${clearFn}()" title="Clear ${label} data" style="position:absolute;top:6px;right:6px;background:transparent;border:none;color:#475569;font-size:11px;cursor:pointer;padding:2px 5px;line-height:1">✕</button>`:'';
-    return`<div class="agg-upload-btn ${blinkClass}" onclick="${handler}" style="position:relative;cursor:pointer;background:${bg};border:${borderStyle};border-radius:10px;padding:10px 8px 8px 8px;text-align:center;transition:transform .15s,border-color .15s;min-height:108px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:6px" onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${accent}99'" onmouseout="this.style.transform='none';this.style.borderColor=''" title="${placeholder?'Noon parser coming soon':isLoaded?(stale?'⚠️ Data is over 72h old — upload a fresh file':'Click to upload a newer file (merges with existing data)'):'Click to upload your '+label+' order export'}">${clearBtn}<div style="height:28px;display:flex;align-items:center;justify-content:center">${logoImg(logoKey,28)}</div><div style="font-size:11px;font-weight:800;color:${placeholder?'#64748b':isLoaded?accent:'#cbd5e1'};letter-spacing:.3px">${label}</div>${statusLine}</div>`;
+    return`<div class="agg-upload-btn ${blinkClass}" onclick="${handler}" style="position:relative;cursor:pointer;background:${bg};border:${borderStyle};border-radius:10px;padding:10px 8px 8px 8px;text-align:center;transition:transform .15s,border-color .15s;min-height:108px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:6px" onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${accent}99'" onmouseout="this.style.transform='none';this.style.borderColor=''" title="${placeholder?'Noon parser coming soon':isLoaded?(stale?'⚠️ Data is over 72h old — upload a fresh file (select multiple to bulk-update)':'Click to upload more files — select multiple at once to add several weeks in one go'):'Click to upload your '+label+' order exports — select multiple files for bulk import'}">${clearBtn}<div style="height:28px;display:flex;align-items:center;justify-content:center">${logoImg(logoKey,28)}</div><div style="font-size:11px;font-weight:800;color:${placeholder?'#64748b':isLoaded?accent:'#cbd5e1'};letter-spacing:.3px">${label}</div>${statusLine}</div>`;
   };
   const buttons=[
     aggButton("Deliveroo","Deliveroo",deliverooOrdersData,"clearDeliverooData",false),
@@ -702,10 +701,10 @@ function keetaUploadBarHTML(){
     aggButton("Noon","Noon",null,"",true), // placeholder — parser pending
     aggButton("Keeta","Keeta",keetaOrdersData,"clearKeetaData",false)
   ].join("");
-  const inputs=`<input type="file" id="orders-file-deliveroo" accept=".csv" style="display:none" onchange="handleOrdersUpload(this.files[0]);this.value='';">
-                <input type="file" id="orders-file-talabat" accept=".xlsx,.xls" style="display:none" onchange="handleOrdersUpload(this.files[0]);this.value='';">
-                <input type="file" id="orders-file-careem" accept=".csv" style="display:none" onchange="handleOrdersUpload(this.files[0]);this.value='';">
-                <input type="file" id="orders-file-keeta" accept=".xlsx,.xls" style="display:none" onchange="handleOrdersUpload(this.files[0]);this.value='';">`;
+  const inputs=`<input type="file" id="orders-file-deliveroo" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
+                <input type="file" id="orders-file-talabat" accept=".xlsx,.xls" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
+                <input type="file" id="orders-file-careem" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
+                <input type="file" id="orders-file-keeta" accept=".xlsx,.xls" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">`;
   return`<div style="margin-bottom:14px">
     <div style="font-size:10px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">📊 Per-order data sources</div>
     <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px">${buttons}</div>
@@ -736,64 +735,73 @@ const AGG_UPLOAD_CSS=`
 //   xlsx + "Voucher Funded by you" / "Talabat-Funded Voucher" → Talabat path (two-row header,
 //                                                               check row 0 AND row 1)
 // Routes to the right parser and stores in the right state slot.
-async function handleOrdersUpload(file){
-  if(!file)return;
+async function handleOrdersUpload(filesOrFile){
+  // Normalize argument: accept a single File, a FileList, or an array of Files.
+  let files=[];
+  if(!filesOrFile)return;
+  if(filesOrFile instanceof File){files=[filesOrFile];}
+  else if(filesOrFile.length!==undefined){files=Array.from(filesOrFile);}
+  else if(Array.isArray(filesOrFile)){files=filesOrFile;}
+  if(!files.length)return;
+
   const tab=typeof campNavTab==="function"?campNavTab():null;
   const oldTitle=tab?tab.title:"";
-  if(tab){tab.style.opacity="0.6";tab.title="Parsing orders file…";}
-  try{
-    await loadSheetJS();
-    const ab=await file.arrayBuffer();
-    const wb=XLSX.read(ab,{type:"array",raw:true,codepage:65001});
-    const ws=wb.Sheets[wb.SheetNames[0]];
-    const rowsForDetect=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
-    const firstRow=rowsForDetect[0]||[],secondRow=rowsForDetect[1]||[];
-    const headers=new Set();
-    firstRow.forEach(h=>headers.add(String(h).replace(/^\uFEFF/,"")));
-    secondRow.forEach(h=>headers.add(String(h).replace(/^\uFEFF/,"")));
-    let detected=null;
-    // Keeta: "Order no." + "Promotion funded by merchant"
-    if(headers.has("Order no.")&&headers.has("Promotion funded by merchant"))detected="keeta";
-    // Careem: "PARTNER_FUNDED_CATALOG_DISCOUNT" + "MERCHANT_AREA"
-    else if(headers.has("PARTNER_FUNDED_CATALOG_DISCOUNT")&&headers.has("MERCHANT_AREA"))detected="careem";
-    // Talabat: two-row header with "Voucher Funded by you" + "Talabat-Funded Voucher"
-    else if(headers.has("Voucher Funded by you")&&headers.has("Talabat-Funded Voucher"))detected="talabat";
-    // Deliveroo: banner row 0 = "Orders and related adjustments", row 1 has "Deliveroo Commission Rate" + "Order Value (د.إ)"
-    else if(secondRow.some(h=>String(h).includes("Deliveroo Commission Rate"))&&secondRow.some(h=>String(h).includes("Order Value")))detected="deliveroo";
-    if(!detected){
-      alert("Couldn't detect the file format.\n\nExpected one of:\n• Keeta Recent Orders (.xlsx)\n• Careem FOOD_ORDER (.csv)\n• Talabat orderDetails (.xlsx)\n• Deliveroo Oregano_Restaurant_LLC statement (.csv)\n\nMake sure you exported the right report.");
-      return;
+  const results=[];
+  const errors=[];
+
+  for(let n=0;n<files.length;n++){
+    const file=files[n];
+    if(tab){tab.style.opacity="0.6";tab.title=`Parsing file ${n+1} of ${files.length}: ${file.name}…`;}
+    try{
+      await loadSheetJS();
+      const ab=await file.arrayBuffer();
+      const wb=XLSX.read(ab,{type:"array",raw:true,codepage:65001});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const rowsForDetect=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+      const firstRow=rowsForDetect[0]||[],secondRow=rowsForDetect[1]||[];
+      const headers=new Set();
+      firstRow.forEach(h=>headers.add(String(h).replace(/^\uFEFF/,"")));
+      secondRow.forEach(h=>headers.add(String(h).replace(/^\uFEFF/,"")));
+      let detected=null;
+      if(headers.has("Order no.")&&headers.has("Promotion funded by merchant"))detected="keeta";
+      else if(headers.has("PARTNER_FUNDED_CATALOG_DISCOUNT")&&headers.has("MERCHANT_AREA"))detected="careem";
+      else if(headers.has("Voucher Funded by you")&&headers.has("Talabat-Funded Voucher"))detected="talabat";
+      else if(secondRow.some(h=>String(h).includes("Deliveroo Commission Rate"))&&secondRow.some(h=>String(h).includes("Order Value")))detected="deliveroo";
+      if(!detected){
+        errors.push(`${file.name}: format not recognized (expected Keeta XLSX, Careem CSV, Talabat XLSX, or Deliveroo CSV).`);
+        continue;
+      }
+      let fresh;
+      if(detected==="keeta")fresh=await parseKeetaXlsx(file);
+      else if(detected==="careem")fresh=await parseCareemCSV(file);
+      else if(detected==="talabat")fresh=await parseTalabatXlsx(file);
+      else if(detected==="deliveroo")fresh=await parseDeliverooCSV(file);
+      if(!fresh||!fresh.records.length){
+        errors.push(`${file.name}: parsed but contained 0 usable records.`);
+        continue;
+      }
+      if(detected==="keeta"){keetaOrdersData=mergeOrdersData(keetaOrdersData,fresh,null);saveKeetaToStorage();}
+      else if(detected==="careem"){careemOrdersData=mergeOrdersData(careemOrdersData,fresh,null);saveCareemToStorage();}
+      else if(detected==="talabat"){talabatOrdersData=mergeOrdersData(talabatOrdersData,fresh,null);saveTalabatToStorage();}
+      else if(detected==="deliveroo"){deliverooOrdersData=mergeOrdersData(deliverooOrdersData,fresh,deliverooRecomputeTotals);saveDeliverooToStorage();}
+      const dr=fresh.metadata.date_range||[];
+      results.push(`✓ ${file.name} (${detected.charAt(0).toUpperCase()+detected.slice(1)}): ${fresh.records.length.toLocaleString()} records, ${dr[0]||"?"} → ${dr[1]||"?"}`);
+    }catch(e){
+      console.error(`[Upload] ${file.name} failed:`,e);
+      errors.push(`${file.name}: ${e.message}`);
     }
-    if(detected==="keeta"){
-      const fresh=await parseKeetaXlsx(file);
-      if(!fresh.records.length){alert("File parsed but no usable Keeta records were found.");return;}
-      keetaOrdersData=mergeOrdersData(keetaOrdersData,fresh,null);
-      saveKeetaToStorage();
-    }else if(detected==="careem"){
-      const fresh=await parseCareemCSV(file);
-      if(!fresh.records.length){alert("File parsed but no usable Careem records were found.");return;}
-      careemOrdersData=mergeOrdersData(careemOrdersData,fresh,null);
-      saveCareemToStorage();
-    }else if(detected==="talabat"){
-      const fresh=await parseTalabatXlsx(file);
-      if(!fresh.records.length){alert("File parsed but no usable Talabat records were found.");return;}
-      talabatOrdersData=mergeOrdersData(talabatOrdersData,fresh,null);
-      saveTalabatToStorage();
-    }else if(detected==="deliveroo"){
-      const fresh=await parseDeliverooCSV(file);
-      if(!fresh.records.length){alert("File parsed but no usable Deliveroo records were found.");return;}
-      deliverooOrdersData=mergeOrdersData(deliverooOrdersData,fresh,deliverooRecomputeTotals);
-      saveDeliverooToStorage();
-    }
-    if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
-    renderCampaigns();
-    setTimeout(()=>{const tab2=typeof campNavTab==="function"?campNavTab():null;if(tab2){tab2.title=`Loaded ${detected.charAt(0).toUpperCase()+detected.slice(1)} orders`;setTimeout(()=>{if(tab2)tab2.title="";},2500);}},50);
-  }catch(e){
-    alert("Failed to parse file:\n\n"+e.message);
-    console.error("[Orders upload] parse error",e);
-  }finally{
-    if(tab){tab.style.opacity="1";tab.title=oldTitle;}
   }
+
+  if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
+  renderCampaigns();
+
+  // Summary alert — one message even when multiple files are processed.
+  const summary=[];
+  if(results.length)summary.push(`Successfully loaded ${results.length} file${results.length>1?"s":""}:\n\n${results.join("\n")}`);
+  if(errors.length)summary.push(`\n\n${errors.length} file${errors.length>1?"s":""} failed:\n\n${errors.join("\n\n")}`);
+  if(summary.length)alert(summary.join(""));
+
+  if(tab){tab.style.opacity="1";tab.title=oldTitle;}
 }
 // Back-compat: keep the old handler name in case external code references it
 async function handleKeetaUpload(file){return handleOrdersUpload(file);}
@@ -1375,39 +1383,77 @@ function deliverooRecomputeTotals(records){
 async function parseDeliverooCSV(file){
   await loadSheetJS();
   const ab=await file.arrayBuffer();
-  const wb=XLSX.read(ab,{type:"array",raw:false,codepage:65001});
+  // raw:true returns cell values verbatim, no auto-formatting (mirrors parseCareemCSV which works
+  // reliably for CSVs). With raw:false SheetJS was reformatting the date column and stripping
+  // the leading "Oregano Restaurant - …" rows from String() comparisons.
+  const wb=XLSX.read(ab,{type:"array",raw:true,codepage:65001});
   const ws=wb.Sheets[wb.SheetNames[0]];
-  // SheetJS will read the first row as a header by default. We use header:1 to get raw rows,
-  // skip the banner (row 0), use row 1 as our headers, and process row 2+ as data.
-  const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:"",raw:false});
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
   if(rows.length<3){throw new Error("Deliveroo CSV is too short — expected banner + headers + data rows.");}
-  // First row is the section banner "Orders and related adjustments"
-  const headers=rows[1].map(h=>String(h||"").trim());
+  // First row (index 0) is the banner "Orders and related adjustments"; row 1 has the headers.
+  const headers=rows[1].map(h=>String(h||"").replace(/^\uFEFF/,"").trim());
   const idx={};headers.forEach((h,i)=>idx[h]=i);
-  const need=["Restaurant Name","Order Number","Delivery Date & Time (UTC)","Activity","Order Value (د.إ)","Adjustment Net (د.إ)","Total Payable","Note"];
-  for(const k of need){if(idx[k]===undefined){throw new Error(`Deliveroo CSV missing expected header: ${k}`);}}
+  // We require the headers in any-language-tolerant form. Order Value & Adjustment Net have an
+  // Arabic suffix (د.إ) on Deliveroo's export — match by prefix so encoding quirks don't break us.
+  const findCol=(prefix)=>{const k=headers.find(h=>h.startsWith(prefix));return k!==undefined?idx[k]:undefined;};
+  const colRest=idx["Restaurant Name"];
+  const colOrd=idx["Order Number"];
+  const colDate=idx["Delivery Date & Time (UTC)"];
+  const colAct=idx["Activity"];
+  const colVal=findCol("Order Value");
+  const colAdj=findCol("Adjustment Net");
+  const colPay=idx["Total Payable"];
+  const colNote=idx["Note"];
+  const missing=[];
+  if(colRest===undefined)missing.push("Restaurant Name");
+  if(colOrd===undefined)missing.push("Order Number");
+  if(colDate===undefined)missing.push("Delivery Date & Time (UTC)");
+  if(colAct===undefined)missing.push("Activity");
+  if(colVal===undefined)missing.push("Order Value");
+  if(colAdj===undefined)missing.push("Adjustment Net");
+  if(colPay===undefined)missing.push("Total Payable");
+  if(colNote===undefined)missing.push("Note");
+  if(missing.length)throw new Error(`Deliveroo CSV missing expected headers: ${missing.join(", ")}\n\nHeaders found (${headers.length}):\n${headers.slice(0,20).join(" · ")}${headers.length>20?" …":""}`);
+
+  // Robust date extractor — handles "2026-06-01 07:50:15", "2026-06-01", Date objects, or Excel serial
+  const toIsoDate=(v)=>{
+    if(v==null||v==="")return null;
+    if(v instanceof Date&&!isNaN(v))return v.toISOString().slice(0,10);
+    const s=String(v).trim();
+    const m=s.match(/^(\d{4}-\d{2}-\d{2})/);
+    if(m)return m[1];
+    // Try parsing whatever string form we got
+    const d=new Date(s);
+    if(!isNaN(d))return d.toISOString().slice(0,10);
+    return null;
+  };
 
   const agg={};
+  let stats={considered:0,skippedNoOrder:0,skippedHeader:0,skippedActivity:0,skippedBrand:0,skippedDate:0,kept:0};
+  const unmappedRestaurants={};
   for(let i=2;i<rows.length;i++){
     const row=rows[i];
-    const orderNum=row[idx["Order Number"]];
-    // Skip section-banner rows (all-NaN except Restaurant Name) and repeated-header rows
-    if(!orderNum||orderNum==="Order Number")continue;
-    const activity=row[idx["Activity"]];
-    // Only process two activity types — everything else (cancellations, refunds, redeliveries,
-    // food remakes, marketer adverts/CPC) is excluded from discount totals.
-    if(activity!=="Delivery"&&activity!=="Restaurant funded voucher promotion")continue;
-    const restName=row[idx["Restaurant Name"]];
+    if(!row||!row.length)continue;
+    stats.considered++;
+    const orderNum=row[colOrd];
+    if(orderNum==null||orderNum===""){stats.skippedNoOrder++;continue;}
+    if(String(orderNum)==="Order Number"){stats.skippedHeader++;continue;}
+    const activity=String(row[colAct]||"").trim();
+    if(activity!=="Delivery"&&activity!=="Restaurant funded voucher promotion"){stats.skippedActivity++;continue;}
+    const restName=String(row[colRest]||"").trim();
     const{brand,outlet}=parseDeliverooBrandOutlet(restName);
-    if(!brand||!outlet)continue;
-    const dateRaw=row[idx["Delivery Date & Time (UTC)"]];
-    const dateStr=String(dateRaw||"").slice(0,10);
-    if(!dateStr||!/^\d{4}-\d{2}-\d{2}$/.test(dateStr))continue;
+    if(!brand||!outlet){
+      stats.skippedBrand++;
+      if(restName)unmappedRestaurants[restName]=(unmappedRestaurants[restName]||0)+1;
+      continue;
+    }
+    const dateStr=toIsoDate(row[colDate]);
+    if(!dateStr){stats.skippedDate++;continue;}
 
     if(activity==="Delivery"){
-      const orderValue=parseFloat(row[idx["Order Value (د.إ)"]]||0)||0;
-      const totalPayable=parseFloat(row[idx["Total Payable"]]||0)||0;
-      const marketerDisc=parseDeliverooMarketerDisc(row[idx["Note"]]||"");
+      const orderValue=parseFloat(row[colVal])||0;
+      const totalPayable=parseFloat(row[colPay])||0;
+      const marketerDisc=parseDeliverooMarketerDisc(String(row[colNote]||""));
       const key=`${brand}|${outlet}|${dateStr}|marketer_offer`;
       if(!agg[key])agg[key]={brand,outlet,date:dateStr,discount_type:"marketer_offer",orders:0,gross:0,net_payout:0,menu_disc:0};
       agg[key].orders++;
@@ -1415,18 +1461,30 @@ async function parseDeliverooCSV(file){
       agg[key].net_payout+=totalPayable;
       agg[key].menu_disc+=marketerDisc;
     }else{
-      // Restaurant funded voucher promotion → Rewards (Lollo/WW) or Unknown (Oregano)
-      const adj=Math.abs(parseFloat(row[idx["Adjustment Net (د.إ)"]]||0)||0);
+      const adj=Math.abs(parseFloat(row[colAdj])||0);
       if(adj<=0)continue;
       const discType=DELIVEROO_REWARDS_BRANDS.has(brand)?"rewards":"unknown";
       const key=`${brand}|${outlet}|${dateStr}|${discType}`;
       if(!agg[key])agg[key]={brand,outlet,date:dateStr,discount_type:discType,orders:0,gross:0,net_payout:0,menu_disc:0};
       agg[key].menu_disc+=adj;
     }
+    stats.kept++;
   }
 
   const records=Object.values(agg).map(r=>({...r,gross:+r.gross.toFixed(2),net_payout:+r.net_payout.toFixed(2),menu_disc:+r.menu_disc.toFixed(2)}))
     .sort((a,b)=>(a.brand+a.outlet+a.date+a.discount_type).localeCompare(b.brand+b.outlet+b.date+b.discount_type));
+
+  console.log("[Deliveroo] parse stats:",stats);
+  if(Object.keys(unmappedRestaurants).length){
+    console.warn("[Deliveroo] unmapped restaurant names:",unmappedRestaurants);
+  }
+
+  // If no records but we considered rows, throw a useful error rather than the generic "no usable
+  // records" alert — surfaces the real reason (unmapped brands, all rows skipped, etc.)
+  if(!records.length&&stats.considered>0){
+    const top=Object.entries(unmappedRestaurants).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([n,c])=>`  ${c}× "${n}"`).join("\n");
+    throw new Error(`Parsed ${stats.considered} rows from the file but kept 0 of them.\n\nReasons:\n  no Order Number: ${stats.skippedNoOrder}\n  banner/header: ${stats.skippedHeader}\n  excluded activity: ${stats.skippedActivity}\n  unmapped brand/outlet: ${stats.skippedBrand}\n  bad date: ${stats.skippedDate}${top?`\n\nTop unmapped restaurants:\n${top}`:""}\n\nIf this is a fresh Deliveroo export, check that the file is for Oregano Restaurant LLC and exported as the standard weekly statement.`);
+  }
 
   const dates=records.map(r=>r.date).sort();
   const totals=deliverooRecomputeTotals(records);
@@ -1437,7 +1495,8 @@ async function parseDeliverooCSV(file){
       date_range:dates.length?[dates[0],dates[dates.length-1]]:[null,null],
       totals_per_brand:totals,
       total_records:records.length,
-      source_file:file.name||"upload"
+      source_file:file.name||"upload",
+      parse_stats:stats
     },
     records
   };
@@ -3067,14 +3126,19 @@ const BREAK_EVEN_ROAS={
 // Mandatory floors per outlet (when we have to keep an outlet active at minimum)
 const CPC_MIN_PER_OUTLET={Deliveroo:90,Talabat:650,Noon:1000,Careem:500};
 
-// Returns the prior CLOSED month (e.g. if today is Jun 30, returns "2026-05"). Uses latest
-// available data date as the anchor so it works even on month-end edge cases.
+// Returns the "input month" for next-month planning. Always-available semantics: the most
+// recent month present in the dataset is treated as the closing-month basis for next month's
+// plan. On Jun 30 with data through Jun 30, returns "2026-06" (June). On Jul 5 also "2026-07"
+// if any data has arrived for July, else still "2026-06". This matches the user's mental model
+// — "show me a plan based on the freshest data I have" — and avoids the bug of asking for a
+// month that has no data yet (the source of all-zeros).
 function cpcPriorMonth(){
   const anchor=latest||new Date().toISOString().slice(0,10);
-  const d=new Date(anchor+"T12:00:00");
-  d.setDate(1);d.setMonth(d.getMonth()-1);
-  return d.toISOString().slice(0,7);
+  return anchor.slice(0,7);
 }
+// Helper: extract month-YYYY-MM from an allData record. allData carries `date` not `month` —
+// the `month` field only exists on cpcData rows. Centralizing this avoids the bug we hit in v011.
+function recMonth(r){return r.date?r.date.slice(0,7):null;}
 // Next month label (e.g. "Jul 2026") for the plan's title
 function cpcNextMonthLabel(){
   const anchor=latest||new Date().toISOString().slice(0,10);
@@ -3085,7 +3149,7 @@ function cpcNextMonthLabel(){
 
 // Sum of group GMV (net sales) for a given month + aggregator across all brands
 function cpcGroupGMV(month,ag){
-  return allData.filter(r=>r.month===month&&r.aggregator===ag).reduce((s,r)=>s+(r.sales||0),0);
+  return allData.filter(r=>recMonth(r)===month&&r.aggregator===ag).reduce((s,r)=>s+(r.sales||0),0);
 }
 
 // Mandatory budget per aggregator per skill rules
@@ -3139,7 +3203,7 @@ function cpcEverTested(brand,ag,outlet){
 function cpcAreaAggStrength(outlet,month){
   const out={};
   let total=0;
-  allData.filter(r=>r.branch===outlet&&r.month===month).forEach(r=>{
+  allData.filter(r=>r.branch===outlet&&recMonth(r)===month).forEach(r=>{
     out[r.aggregator]=(out[r.aggregator]||0)+(r.orders||0);
     total+=(r.orders||0);
   });
@@ -3150,14 +3214,15 @@ function cpcAreaAggStrength(outlet,month){
 
 // Outlets with > 15% MoM decline in net sales. Returns [{brand, outlet, prior, current, pct}].
 function cpcDecliningOutlets(threshold){
-  const cur=cpcPriorMonth(); // last closed month
+  const cur=cpcPriorMonth(); // input month — latest available
   const prior=(()=>{const d=new Date(cur+"-01T12:00:00");d.setMonth(d.getMonth()-1);return d.toISOString().slice(0,7);})();
   const byKey={};
   allData.forEach(r=>{
-    if(r.month!==cur&&r.month!==prior)return;
+    const m=recMonth(r);
+    if(m!==cur&&m!==prior)return;
     const k=`${r.brand}|${r.branch}`;
     if(!byKey[k])byKey[k]={brand:r.brand,outlet:r.branch,cur:0,prior:0};
-    if(r.month===cur)byKey[k].cur+=(r.sales||0);else byKey[k].prior+=(r.sales||0);
+    if(m===cur)byKey[k].cur+=(r.sales||0);else byKey[k].prior+=(r.sales||0);
   });
   return Object.values(byKey)
     .filter(o=>o.prior>1000&&o.cur>0)
@@ -3214,7 +3279,7 @@ function cpcObligationsCard(priorMonth,priorLabel,nextLabel){
   }).join("");
   const totalMand=aggs.reduce((s,ag)=>s+cpcMandatoryBudget(ag,cpcGroupGMV(priorMonth,ag)),0);
   return`<div class="card" style="border:1px solid rgba(245,158,11,.3);background:linear-gradient(135deg,rgba(245,158,11,.04),rgba(13,21,36,.5))">
-    <div style="margin-bottom:10px"><div style="font-size:13px;font-weight:800;color:#fbbf24;letter-spacing:.3px">${nextLabel.toUpperCase()} INVESTMENT PLAN</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">based on ${priorLabel} closing data · always available · recalculates as new data arrives</div></div>
+    <div style="margin-bottom:10px"><div style="font-size:13px;font-weight:800;color:#fbbf24;letter-spacing:.3px">${nextLabel.toUpperCase()} INVESTMENT PLAN</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">based on ${priorLabel} data (latest available) · always available · recalculates as new data arrives</div></div>
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:1px solid #1b2f4a;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px;text-align:left">Aggregator</th><th style="padding:6px;text-align:right">Prior GMV</th><th style="padding:6px;text-align:center">% Oblig</th><th style="padding:6px;text-align:right">Mandatory Budget</th><th style="padding:6px;text-align:left">Budget Type</th><th style="padding:6px;text-align:left">Status</th></tr></thead><tbody>${rows}</tbody><tfoot><tr style="border-top:1px solid #1b2f4a"><td colspan="3" style="padding:8px 6px;text-align:right;color:#94a3b8;font-size:11px;font-weight:700">GROUP TOTAL</td><td style="padding:8px 6px;text-align:right;color:#22C55E;font-weight:800;font-size:14px">${fmtAED(totalMand)}</td><td colspan="2"></td></tr></tfoot></table></div>
     <div style="margin-top:10px;padding:9px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px;font-size:11px;color:#cbd5e1;line-height:1.55">💡 <strong>Group-level obligations.</strong> The 2%/4% applies to total group GMV per aggregator — not per brand. Underperforming brands' shares get redirected to higher-ROAS combos in the per-outlet tables below.</div>
   </div>`;
@@ -3227,7 +3292,7 @@ function cpcDeliverooAllocCard(priorMonth){
   const floor=CPC_MIN_PER_OUTLET[ag];
   // Build unique (brand, outlet) combos from sales data
   const combos=new Set();
-  allData.filter(r=>r.aggregator===ag&&r.month===priorMonth&&r.sales>0).forEach(r=>combos.add(`${r.brand}|${r.branch}`));
+  allData.filter(r=>r.aggregator===ag&&recMonth(r)===priorMonth&&r.sales>0).forEach(r=>combos.add(`${r.brand}|${r.branch}`));
   const rows=[...combos].map(k=>{
     const[brand,outlet]=k.split("|");
     const cpcRow=cpcLatestRow(brand,ag,outlet);
@@ -3278,7 +3343,7 @@ function cpcTalabatAllocCard(priorMonth){
   const ag="Talabat";
   const floor=CPC_MIN_PER_OUTLET[ag];
   const combos=new Set();
-  allData.filter(r=>r.aggregator===ag&&r.month===priorMonth&&r.sales>0).forEach(r=>combos.add(`${r.brand}|${r.branch}`));
+  allData.filter(r=>r.aggregator===ag&&recMonth(r)===priorMonth&&r.sales>0).forEach(r=>combos.add(`${r.brand}|${r.branch}`));
   if(!combos.size)return`<div class="card" style="border:1px dashed rgba(251,191,36,.4);background:rgba(251,191,36,.04)"><div style="font-size:13px;font-weight:800;color:${AC.Talabat||'#FF5A00'}">🍔 Talabat Per-Outlet Allocation — Conditional</div><div style="color:#94a3b8;font-size:11px;margin-top:6px">No prior-month Talabat sales found. ${TALABAT_DEAL_SIGNED?"":"Deal not yet signed."}</div></div>`;
   const rows=[...combos].map(k=>{
     const[brand,outlet]=k.split("|");
@@ -3314,9 +3379,9 @@ function cpcPoolAllocCard(ag,priorMonth){
   const gmv=cpcGroupGMV(priorMonth,ag);
   const mand=cpcMandatoryBudget(ag,gmv);
   // Per-brand prior GMV & latest pool ROAS
-  const brands=BR.filter(b=>allData.some(r=>r.aggregator===ag&&r.month===priorMonth&&r.brand===b.n&&r.sales>0));
+  const brands=BR.filter(b=>allData.some(r=>r.aggregator===ag&&recMonth(r)===priorMonth&&r.brand===b.n&&r.sales>0));
   const rows=brands.map(b=>{
-    const bGMV=allData.filter(r=>r.aggregator===ag&&r.month===priorMonth&&r.brand===b.n).reduce((s,r)=>s+(r.sales||0),0);
+    const bGMV=allData.filter(r=>r.aggregator===ag&&recMonth(r)===priorMonth&&r.brand===b.n).reduce((s,r)=>s+(r.sales||0),0);
     const brandShare=gmv>0?bGMV/gmv:0;
     const brandMand=mand*brandShare; // proportional share before redirect
     const poolRows=cpcData.filter(r=>r.aggregator===ag&&r.brand===b.n&&r.adType==="CPC");
@@ -3373,7 +3438,7 @@ function cpcDecliningOutletsCard(){
 
 function cpcAreaStrengthCard(priorMonth){
   // Per-outlet aggregator share across all brands
-  const outlets=[...new Set(allData.filter(r=>r.month===priorMonth&&r.sales>0).map(r=>r.branch))].filter(o=>o&&o!=="(brand-level)").sort();
+  const outlets=[...new Set(allData.filter(r=>recMonth(r)===priorMonth&&r.sales>0).map(r=>r.branch))].filter(o=>o&&o!=="(brand-level)").sort();
   const aggs=["Deliveroo","Talabat","Careem","Noon","Keeta"];
   const tRows=outlets.map(o=>{
     const strength=cpcAreaAggStrength(o,priorMonth);
