@@ -13,11 +13,16 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-014";
+const BUILD_VERSION="2026-06-25-017";
 const BUILD_NOTES=[
-  "🐛 Deliveroo upload no longer silently rejects all rows — switched to raw cell reading (matching the working Careem parser), made date parsing tolerant of multiple formats, and matched headers by prefix to handle Arabic-suffix encoding quirks.",
-  "🆕 Multi-file upload — select multiple weekly statements at once for any aggregator and the dashboard processes them sequentially, merging dates as it goes.",
-  "🆕 Helpful parse-failure messages — instead of 'no usable records', failed uploads now show exactly why (top unmapped restaurants, counts by skip reason). Logged to console too."
+  "🐛 MAJOR FIX: a function-naming collision (cpcVerdict/cpcBE defined twice) was silently breaking ROAS verdicts across the ENTIRE Ads Performance tab, not just the Investment Plan — this is why active Noon campaigns with strong ROAS showed 'UNTESTED'. Renamed the Investment Plan's versions to cpcPlanVerdict/cpcPlanBE; all existing drilldowns are back to normal.",
+  "🐛 Remarks-column date parsing fixed — a remark like 'Funded by Noon, 18/06/2026' no longer loses the date. Now searches for numeric, DD-MMM-YY, and textual-month date patterns anywhere in the remark text instead of only succeeding when the cell is a bare date.",
+  "🆕 Banners recognized as a third ad type (alongside CPC and Keywords) — flows through automatically wherever Ad Type appears (e.g. Smokeys × Jumeirah × Noon Banners test).",
+  "🆕 Talabat allocation now tracks CPC and Keywords as separate levers (Keywords min AED 875/listing, active since Jun 2026) — recommends CPC-only, Keywords-only, or both based on which lever clears break-even.",
+  "🆕 Careem pool card now shows an outlet-level breakdown under each brand with 'EXCLUDE CANDIDATE' flags for outlets consistently below 80% of break-even — budget stays pooled at brand level, but weak outlets can be dropped from targeting.",
+  "🆕 Noon pool card shows a per-ad-type spend breakdown line when a brand has more than one type (e.g. Smokeys: CPC AED X · Banners AED 2,000).",
+  "🆕 Deliveroo allocation now reconciles bottom-up verdict recommendations to the top-down 2% mandate — if base recommendations fall short of the mandatory budget, the gap is redistributed to the best-ROAS outlets (Smokeys & PAUSE outlets excluded), shown transparently as 'base + redistributed'.",
+  "🆕 New 📜 History view in Ads Performance — filter every CPC sheet row by Month/Brand/Aggregator/Outlet/Ad Type, see Budget Type (pooled vs separate) and Last Updated per row, and use Compare Months to audit whether sheet entries are grouping the way you expect (flags when row-count per brand×aggregator changes between months)."
 ];
 
 let _updateDialogShown=false;
@@ -2481,28 +2486,51 @@ function parseCPCDate(s){
   if(typeof pd==="string")return pd;
   return `${pd.getFullYear()}-${String(pd.getMonth()+1).padStart(2,"0")}-${String(pd.getDate()).padStart(2,"0")}`;
 }
-// Extract an update date from the Remarks column. The column holds dates like "21/2/2025",
-// "02/06/2025", "18/06/2026" (DD/MM/YYYY, possibly with leading zeros or extra text around it).
-// Returns an ISO date string (YYYY-MM-DD) or null. Treats the format as DAY/MONTH/YEAR.
+// Extract an update date from the Remarks column. The column may hold ONLY a date ("21/2/2025"),
+// or a date alongside other text such as a funding note ("Funded by Noon - 18/06/2026", "Funded
+// by Noon, updated 18 June 2026"). The remark text must never cause the date to be dropped —
+// we always search for a date pattern anywhere in the string before giving up.
 function parseRemarksDate(s){
   if(!s)return null;
   const t=s.toString().trim();
   if(!t)return null;
-  // DD/MM/YYYY or D/M/YY (also accepts - or . separators), found anywhere in the text
+  // 1) Numeric DD/MM/YYYY or D/M/YY (also accepts - or . separators), found anywhere in the text
   let m=t.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
   if(m){
     let d=parseInt(m[1],10),mo=parseInt(m[2],10),yr=parseInt(m[3],10);
     if(yr<100)yr+=2000;
     if(mo>=1&&mo<=12&&d>=1&&d<=31)return `${yr}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
   }
-  // DD-MMM-YY (e.g. "09-Feb-26")
-  const iso=parseCPCDate(t);
-  if(typeof iso==="string")return iso;
-  // Any other format the browser can parse (e.g. "Feb 09 2026", "2026-02-09 ...") → normalize to ISO.
-  // CRITICAL: always return a STRING, never a Date object (a raw Date renders as
-  // "Mon Feb 09 2026 00:00:00 GMT+0400" in the UI).
-  const dObj=new Date(t);
-  if(!isNaN(dObj))return `${dObj.getFullYear()}-${String(dObj.getMonth()+1).padStart(2,"0")}-${String(dObj.getDate()).padStart(2,"0")}`;
+  // 2) DD-MMM-YY anywhere in the text (e.g. "09-Feb-26", embedded in "Funded by Noon, 09-Feb-26")
+  m=t.match(/(\d{1,2})[-\/](\w{3,9})[-\/](\d{2,4})/);
+  if(m){
+    const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+    const mo=months[m[2].toLowerCase().slice(0,3)];
+    if(mo){let yr=parseInt(m[3],10);if(yr<100)yr+=2000;return `${yr}-${String(mo).padStart(2,"0")}-${String(parseInt(m[1],10)).padStart(2,"0")}`;}
+  }
+  // 3) Textual "DD Month YYYY" or "Month DD, YYYY" anywhere in the text (e.g. "Funded by Noon,
+  // updated 18 June 2026" or "Funded by Noon - June 18, 2026")
+  const monthNames="jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+  m=t.match(new RegExp(`(\\d{1,2})\\s+(${monthNames})\\s+(\\d{2,4})`,"i"));
+  if(!m)m=t.match(new RegExp(`(${monthNames})\\s+(\\d{1,2}),?\\s+(\\d{2,4})`,"i"));
+  if(m){
+    const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+    // The two match shapes put day/month in different capture group positions — detect which
+    let day,monStr,yr;
+    if(/^\d/.test(m[1])){day=parseInt(m[1],10);monStr=m[2];yr=parseInt(m[3],10);}
+    else{monStr=m[1];day=parseInt(m[2],10);yr=parseInt(m[3],10);}
+    const mo=months[monStr.toLowerCase().slice(0,3)];
+    if(mo){if(yr<100)yr+=2000;return `${yr}-${String(mo).padStart(2,"0")}-${String(day).padStart(2,"0")}`;}
+  }
+  // 4) Last resort: try parsing the whole string as a date (works when remarks contains ONLY a
+  // date with no other text). Never attempted on strings with extra non-date words, since
+  // new Date() on garbled text like "Funded by Noon" silently returns Invalid Date (safe) but
+  // can also mis-parse things like "Noon 2026" into a bogus date — so we gate this on the string
+  // being short and not containing obvious non-date words.
+  if(t.length<=20&&!/funded|noon|deal|pending|tbc|tbd|n\/a|note/i.test(t)){
+    const dObj=new Date(t);
+    if(!isNaN(dObj))return `${dObj.getFullYear()}-${String(dObj.getMonth()+1).padStart(2,"0")}-${String(dObj.getDate()).padStart(2,"0")}`;
+  }
   return null;
 }
 // Brand-branch cache shared across a single parse pass
@@ -2561,7 +2589,7 @@ function parseCPCSheet(csv){
     const {brand,branch}=resolveBrandLocation(bl,brandCache,branchCache);
     if(!brand||CPC_EXCLUDE_BRANDS.has(brand.toLowerCase()))continue;
     const num=(idx)=>{if(idx<0)return 0;const v=(row[idx]||"").toString().replace(/[, ]/g,"").replace(/%/g,"").trim();const n=parseFloat(v);return isNaN(n)?0:n;};
-    const adType=((row[cm.adType]||"").trim()||"CPC").replace(/key\s*words?/i,"Keywords");
+    const adType=((row[cm.adType]||"").trim()||"CPC").replace(/key\s*words?/i,"Keywords").replace(/banners?/i,"Banners");
     const startDate=parseCPCDate(row[cm.startDate]),endDate=parseCPCDate(row[cm.endDate]);
     const remarksRaw=(row[cm.remarks]||"").toString().trim();
     // Normalize the new "Budget Combined/Seperate" column to either "combined" or "separate".
@@ -2572,7 +2600,7 @@ function parseCPCSheet(csv){
     const btRaw=((cm.budgetType>=0?row[cm.budgetType]:"")||"").toString().trim().toLowerCase();
     const budgetType=btRaw.includes("combin")?"combined":(btRaw.includes("seperat")||btRaw.includes("separat"))?"separate":"separate";
     const rec={
-      adType:/keyword/i.test(adType)?"Keywords":"CPC",
+      adType:/keyword/i.test(adType)?"Keywords":/banner/i.test(adType)?"Banners":"CPC",
       aggregator,brand,branch,brandLocation:bl,startDate,endDate,
       views:num(cm.views),orders:num(cm.orders),sales:num(cm.sales),aov:num(cm.aov),cto:num(cm.cto),
       budgetAlloc:num(cm.budgetAlloc),budgetSpent:num(cm.budgetSpent),leftover:num(cm.leftover),
@@ -2805,6 +2833,12 @@ let cpcDrill={level:"agg",agg:null,brand:null},cpcSort={col:"roas",dir:-1},cpcAd
 // 'plan' = the new monthly investment plan view rendered by cpcRenderInvestmentPlan().
 let cpcViewMode="drilldown";
 function cpcSetView(mode){cpcViewMode=mode;renderCPC();window.scrollTo({top:0,behavior:"smooth"});}
+// History view filters — Date/Brand/Aggregator/Outlet, plus an optional month-vs-month compare mode
+let cpcHistFilters={month:"all",brand:"all",aggregator:"all",outlet:"all",adType:"all"};
+let cpcHistCompare=false,cpcHistCompareA="",cpcHistCompareB="";
+function cpcHistSetFilter(key,val){cpcHistFilters[key]=val;renderCPC();}
+function cpcHistToggleCompare(){cpcHistCompare=!cpcHistCompare;renderCPC();}
+function cpcHistSetCompareMonth(side,val){if(side==="A")cpcHistCompareA=val;else cpcHistCompareB=val;renderCPC();}
 
 function cpcGoAgg(){cpcDrill={level:"agg",agg:null,brand:null};cpcAdTypeFilter="all";cpcMonthFilter="all";cpcOutletDetail=null;renderCPC();}
 function cpcGoBrands(ag){cpcDrill={level:"brand",agg:ag,brand:null};cpcAdTypeFilter="all";cpcMonthFilter="all";cpcOutletDetail=null;renderCPC();}
@@ -2836,6 +2870,7 @@ async function renderCPC(){
   // Render based on view mode + drill level
   let body='';
   if(cpcViewMode==="plan"){body=cpcRenderInvestmentPlan();pg.innerHTML=cpcShell(body,false);return;}
+  if(cpcViewMode==="history"){body=cpcRenderHistory();pg.innerHTML=cpcShell(body,false);return;}
   if(cpcDrill.level==="agg")body=cpcRenderAggLevel();
   else if(cpcDrill.level==="brand")body=cpcRenderBrandLevel(cpcDrill.agg);
   else if(cpcDrill.level==="outlet")body=cpcRenderOutletLevel(cpcDrill.agg,cpcDrill.brand);
@@ -2856,10 +2891,11 @@ function cpcShell(body,withCrumb){
     else if(cpcDrill.level==='outlet')backBtn=`<button onclick="cpcGoBrands('${cpcDrill.agg}')" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:600">← Back to ${cpcDrill.agg} Brands</button>`;
     crumb=`<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;padding:8px 12px;background:rgba(13,21,36,.4);border:1px solid rgba(27,47,74,.5);border-radius:8px"><div style="font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">${parts.join('<span style="color:#475569">→</span>')}</div>${backBtn}</div>`;
   }
-  // View-mode toggle (Drill-Down / Investment Plan). Both buttons present always.
+  // View-mode toggle (Drill-Down / Investment Plan / History). All three buttons present always.
   const drillBtnStyle=cpcViewMode==="drilldown"?"background:rgba(245,158,11,.15);border:1px solid #f59e0b;color:#f59e0b":"background:transparent;border:1px solid #1b2f4a;color:#94a3b8";
   const planBtnStyle=cpcViewMode==="plan"?"background:rgba(245,158,11,.15);border:1px solid #f59e0b;color:#f59e0b":"background:transparent;border:1px solid #1b2f4a;color:#94a3b8";
-  const viewToggle=`<div style="display:inline-flex;gap:4px;margin-right:8px"><button onclick="cpcSetView('drilldown')" style="${drillBtnStyle};border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:700">🔍 Drill-Down</button><button onclick="cpcSetView('plan')" style="${planBtnStyle};border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:700">📊 Investment Plan</button></div>`;
+  const histBtnStyle=cpcViewMode==="history"?"background:rgba(245,158,11,.15);border:1px solid #f59e0b;color:#f59e0b":"background:transparent;border:1px solid #1b2f4a;color:#94a3b8";
+  const viewToggle=`<div style="display:inline-flex;gap:4px;margin-right:8px"><button onclick="cpcSetView('drilldown')" style="${drillBtnStyle};border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:700">🔍 Drill-Down</button><button onclick="cpcSetView('plan')" style="${planBtnStyle};border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:700">📊 Investment Plan</button><button onclick="cpcSetView('history')" style="${histBtnStyle};border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:700">📜 History</button></div>`;
   return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(27,47,74,.5)"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">📊</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Ads Performance</div>${statusBar}</div><div style="font-size:10px;color:#64748b;margin-top:2px;letter-spacing:.4px">Spend · ROAS · Conversion · Reinvestment</div></div><div style="display:flex;align-items:center;gap:6px">${viewToggle}<button onclick="cpcLoaded=false;cpcModel=null;cpcDrill={level:'agg',agg:null,brand:null};renderCPC()" style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600">↻ Refresh</button></div></div>${crumb}${body}`;
 }
 
@@ -3125,6 +3161,8 @@ const BREAK_EVEN_ROAS={
 
 // Mandatory floors per outlet (when we have to keep an outlet active at minimum)
 const CPC_MIN_PER_OUTLET={Deliveroo:90,Talabat:650,Noon:1000,Careem:500};
+// Talabat Keywords minimum spend per listing (separate lever from CPC, introduced Jun 2026)
+const CPC_MIN_KEYWORDS_PER_LISTING=875;
 
 // Returns the "input month" for next-month planning. Always-available semantics: the most
 // recent month present in the dataset is treated as the closing-month basis for next month's
@@ -3161,14 +3199,14 @@ function cpcMandatoryBudget(ag,priorGMV){
   return 0;
 }
 
-function cpcBE(ag,brand){
+function cpcPlanBE(ag,brand){
   if(ag==="Talabat")return BREAK_EVEN_ROAS[`Talabat_${brand}`]||BREAK_EVEN_ROAS.Talabat_Lollorosso;
   return BREAK_EVEN_ROAS[ag]||2.0;
 }
 
 // Verdict ladder: PAUSE / MONITOR / INVEST / SCALE based on brand × break-even thresholds
-function cpcVerdict(brand,ag,latestROAS){
-  const be=cpcBE(ag,brand);
+function cpcPlanVerdict(brand,ag,latestROAS){
+  const be=cpcPlanBE(ag,brand);
   if(latestROAS==null||!isFinite(latestROAS))return"UNTESTED";
   const tiers=BRAND_ROAS_TIERS[brand]||{monitor:0.3,invest:0.7};
   if(latestROAS<be)return"PAUSE";
@@ -3188,10 +3226,26 @@ function cpcRecBudget(verdict,priorSpend,floor){
   return f;
 }
 
-// Sum of all historical CPC spend for a brand × aggregator (× optional outlet)
-function cpcHistoricalSpend(brand,ag,outlet){
-  return cpcData.filter(r=>r.brand===brand&&r.aggregator===ag&&(outlet?r.branch===outlet:true)&&r.adType==="CPC")
+// Sum of all historical CPC spend for a brand × aggregator (× optional outlet). Direct cpcData
+// scan first; falls back to model.byAgg if cpcData doesn't yield (brand-name variant safety).
+function cpcHistoricalSpend(brand,ag,outlet,adType){
+  adType=adType||"CPC";
+  const direct=cpcData.filter(r=>r.brand===brand&&r.aggregator===ag&&(outlet?r.branch===outlet:true)&&r.adType===adType)
     .reduce((s,r)=>s+(r.budgetSpent||0),0);
+  if(direct>0)return direct;
+  // Fallback via cpcModel.byAgg — only valid for the default CPC type since the model's brand/outlet
+  // aggregates don't currently split by adType. Keywords/Banners callers rely on the direct scan only.
+  if(adType==="CPC"&&cpcModel&&cpcModel.byAgg&&cpcModel.byAgg[ag]){
+    const B=cpcModel.byAgg[ag].brands&&cpcModel.byAgg[ag].brands[brand];
+    if(B){
+      if(outlet){
+        const O=B.outlets&&B.outlets[outlet];
+        return O?(O.spent||0):0;
+      }
+      return B.spent||0;
+    }
+  }
+  return 0;
 }
 
 // Has this brand × ag × outlet ever had meaningful CPC spend (> AED 500)?
@@ -3231,10 +3285,60 @@ function cpcDecliningOutlets(threshold){
     .sort((a,b)=>a.pct-b.pct);
 }
 
-// Latest CPC row for a brand × ag × outlet (most recent month with CPC ad type)
+// Latest CPC row for a brand × ag × outlet (most recent month with CPC ad type). Prefers raw
+// cpcData; falls back to cpcModel.monthly aggregates if no direct match (handles brand-name
+// variants the way the rest of the dashboard does).
 function cpcLatestRow(brand,ag,outlet){
-  return cpcData.filter(r=>r.brand===brand&&r.aggregator===ag&&r.branch===outlet&&r.adType==="CPC"&&r.month)
-    .sort((a,b)=>b.month.localeCompare(a.month))[0]||null;
+  return cpcLatestRowByType(brand,ag,outlet,"CPC");
+}
+// Generalized version — same lookup logic but parameterized by ad type, so Keywords and Banners
+// rows can be retrieved the same way as CPC rows.
+function cpcLatestRowByType(brand,ag,outlet,adType){
+  adType=adType||"CPC";
+  const direct=cpcData.filter(r=>r.brand===brand&&r.aggregator===ag&&r.branch===outlet&&r.adType===adType&&r.month)
+    .sort((a,b)=>b.month.localeCompare(a.month))[0];
+  if(direct)return direct;
+  if(cpcModel&&cpcModel.monthly){
+    let best=null;
+    for(const[k,o] of cpcModel.monthly){
+      if(o.brand===brand&&o.aggregator===ag&&o.branch===outlet&&o.adType===adType){
+        if(!best||(o.month||"")>(best.month||""))best=o;
+      }
+    }
+    if(best){
+      return{brand:best.brand,aggregator:best.aggregator,branch:best.branch,adType:best.adType,month:best.month,sales:best.sales,budgetSpent:best.spent,budgetAlloc:best.alloc,orders:best.orders,views:best.views,roi:best.roi,avgBid:best.spent>0&&best.views>0?best.spent/best.views:0};
+    }
+  }
+  return null;
+}
+
+// Model-based version of cpcDeliverooBidOpt. Mirrors the same algorithm (best ROAS-volume month
+// drives the suggested bid) but reads from cpcModel.monthly to bypass any brand-name spelling
+// issues in raw cpcData. Use this in the Investment Plan; existing drilldowns continue to use
+// cpcDeliverooBidOpt unchanged.
+function cpcDeliverooBidOptModel(brand,outlet){
+  if(!cpcModel||!cpcModel.monthly)return null;
+  const months=[];
+  for(const[k,o] of cpcModel.monthly){
+    if(o.brand!==brand||o.aggregator!=="Deliveroo"||o.branch!==outlet||o.adType!=="CPC")continue;
+    const bid=o.views>0?o.spent/o.views:0;
+    if(bid<=0)continue;
+    const roas=o.spent>0?o.sales/o.spent:0;
+    months.push({month:o.month,roas,orders:o.orders||0,bid,spent:o.spent,sales:o.sales});
+  }
+  if(months.length<2)return null;
+  // Score: ROAS weight 0.6 + volume weight 0.4
+  const maxRoas=Math.max(...months.map(m=>m.roas))||1;
+  const maxOrders=Math.max(...months.map(m=>m.orders))||1;
+  months.forEach(m=>{m.score=(m.roas/maxRoas)*0.6+(m.orders/maxOrders)*0.4;});
+  const best=[...months].sort((a,b)=>b.score-a.score)[0];
+  const suggestedBid=Math.round(best.bid*100)/100;
+  // Current bid = most recent month's bid (whatever's freshest, regardless of score)
+  const sortedByMonth=[...months].sort((a,b)=>(b.month||"").localeCompare(a.month||""));
+  const cur=sortedByMonth[0];
+  const curBid=cur?Math.round(cur.bid*100)/100:null;
+  if(!curBid||curBid<=0)return{suggestedBid,curBid:null,bestMonth:best.month,bestRoas:best.roas};
+  return{suggestedBid,curBid,bestMonth:best.month,bestRoas:best.roas,direction:suggestedBid>curBid?"raise":suggestedBid<curBid?"lower":"hold"};
 }
 
 // ─── RENDER FUNCTIONS ──────────────────────────────────────────────────
@@ -3287,134 +3391,269 @@ function cpcObligationsCard(priorMonth,priorLabel,nextLabel){
 
 // Deliveroo per-outlet allocation table. Key feature: bid recommendations leveraged from
 // cpcDeliverooBidOpt (Deliveroo is the only aggregator where bid is in our control).
+// Reconciles bottom-up recommendations to the top-down 2% mandate by redistributing any gap
+// to the best-performing outlets (weighted by ROAS upside).
 function cpcDeliverooAllocCard(priorMonth){
   const ag="Deliveroo";
   const floor=CPC_MIN_PER_OUTLET[ag];
-  // Build unique (brand, outlet) combos from sales data
   const combos=new Set();
   allData.filter(r=>r.aggregator===ag&&recMonth(r)===priorMonth&&r.sales>0).forEach(r=>combos.add(`${r.brand}|${r.branch}`));
-  const rows=[...combos].map(k=>{
+  let rows=[...combos].map(k=>{
     const[brand,outlet]=k.split("|");
     const cpcRow=cpcLatestRow(brand,ag,outlet);
     const latestROAS=cpcRow&&cpcRow.budgetSpent>0?cpcRow.sales/cpcRow.budgetSpent:null;
-    const verdict=cpcVerdict(brand,ag,latestROAS);
+    const verdict=cpcPlanVerdict(brand,ag,latestROAS);
     const priorSpend=cpcRow?cpcRow.budgetSpent:0;
-    const rec=cpcRecBudget(verdict,priorSpend,floor);
+    const baseRec=cpcRecBudget(verdict,priorSpend,floor);
     const histTotal=cpcHistoricalSpend(brand,ag,outlet);
-    const bidOpt=cpcRow?cpcDeliverooBidOpt(ag,brand,outlet,cpcRow):null;
-    return{brand,outlet,latestROAS,verdict,priorSpend,rec,histTotal,bidOpt,cpcRow};
+    const bidOpt=cpcDeliverooBidOptModel(brand,outlet)||(cpcRow?cpcDeliverooBidOpt(ag,brand,outlet,cpcRow):null);
+    return{brand,outlet,latestROAS,verdict,priorSpend,baseRec,rec:baseRec,surplusAlloc:0,histTotal,bidOpt,cpcRow};
   }).sort((a,b)=>{
-    // Sort by brand, then verdict severity (SCALE first, PAUSE last)
     if(a.brand!==b.brand)return a.brand.localeCompare(b.brand);
     const order={SCALE:0,INVEST:1,MONITOR:2,UNTESTED:3,PAUSE:4};
     return(order[a.verdict]||5)-(order[b.verdict]||5);
   });
+
+  // ── RECONCILE BOTTOM-UP TO TOP-DOWN MANDATE ──────────────────────────────
+  // The 2% × prior-month GMV is non-negotiable per the Deliveroo contract. If the bottom-up
+  // verdict-based recommendations sum to LESS than the mandate, distribute the surplus to the
+  // best-performing outlets (weighted by ROAS upside above break-even). Always exclude PAUSE
+  // outlets from receiving the surplus — they failed at break-even, more budget won't help.
+  // Smokeys is also excluded per the standing structural-decline guidance.
+  const mandate=cpcMandatoryBudget(ag,cpcGroupGMV(priorMonth,ag));
+  const baseTotal=rows.reduce((s,r)=>s+r.baseRec,0);
+  let surplusBanner="";
+  let reconciliationNote="";
+  if(mandate>0&&baseTotal<mandate*0.98){ // 2% tolerance — don't redistribute trivial amounts
+    const gap=mandate-baseTotal;
+    // Eligible for surplus: not PAUSE, not Smokeys, and has a positive ROAS upside vs BE
+    const eligible=rows.filter(r=>r.verdict!=="PAUSE"&&r.brand!=="Smokeys"&&r.latestROAS!=null);
+    if(eligible.length){
+      // Weight = ROAS - BE, floored at 0.1 so even at-BE outlets get some share
+      eligible.forEach(r=>{r.upside=Math.max(0.1,(r.latestROAS||0)-cpcPlanBE(ag,r.brand));});
+      const totalUpside=eligible.reduce((s,r)=>s+r.upside,0);
+      eligible.forEach(r=>{
+        r.surplusAlloc=Math.round(gap*(r.upside/totalUpside));
+        r.rec=r.baseRec+r.surplusAlloc;
+      });
+      const eligibleCount=eligible.length;
+      reconciliationNote=`Base verdict-driven recommendations sum to <strong style="color:#cbd5e1">${fmtAED(baseTotal)}</strong>. Mandate is <strong style="color:#fbbf24">${fmtAED(mandate)}</strong>. Distributing the <strong style="color:#22C55E">${fmtAED(gap)}</strong> gap across <strong>${eligibleCount}</strong> top-performing outlet${eligibleCount===1?"":"s"} (weighted by ROAS upside above break-even, Smokeys & PAUSE excluded).`;
+      surplusBanner=`<div style="background:rgba(34,197,94,.06);border-left:3px solid #22C55E;border-radius:4px;padding:7px 11px;margin-bottom:10px;font-size:11px;color:#cbd5e1">💡 <strong style="color:#22C55E">Mandate reconciliation:</strong> ${reconciliationNote}</div>`;
+    }else{
+      // No eligible outlets (everything is PAUSE or untested with no ROAS). Flag this — can't
+      // hit the mandate by just topping up; needs strategic decision.
+      surplusBanner=`<div style="background:rgba(239,68,68,.06);border-left:3px solid #EF4444;border-radius:4px;padding:7px 11px;margin-bottom:10px;font-size:11px;color:#cbd5e1">⚠️ <strong style="color:#EF4444">Mandate gap:</strong> Base recommendations sum to ${fmtAED(baseTotal)} but mandate is ${fmtAED(mandate)} (gap ${fmtAED(mandate-baseTotal)}). No SCALE/INVEST/MONITOR outlets with positive ROAS upside found — review whether to pause the mandate, run brand-level promos, or reallocate to areas not yet tested.</div>`;
+    }
+  }else if(mandate>0&&baseTotal>mandate*1.05){
+    surplusBanner=`<div style="background:rgba(251,191,36,.06);border-left:3px solid #FBBF24;border-radius:4px;padding:7px 11px;margin-bottom:10px;font-size:11px;color:#cbd5e1">⚠️ <strong style="color:#FBBF24">Over mandate:</strong> Base recommendations sum to ${fmtAED(baseTotal)} which exceeds the 2% mandate (${fmtAED(mandate)}) by ${fmtAED(baseTotal-mandate)}. Trim from MONITOR/INVEST first (preserve SCALE) — manual review recommended.</div>`;
+  }
+
   const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",PAUSE:"#EF4444",UNTESTED:"#94a3b8"};
   const verdBg={SCALE:"rgba(34,197,94,.08)",INVEST:"rgba(134,239,172,.06)",MONITOR:"rgba(251,191,36,.06)",PAUSE:"rgba(239,68,68,.06)",UNTESTED:"rgba(148,163,184,.06)"};
   const tRows=rows.map(r=>{
-    const beVal=cpcBE(ag,r.brand);
+    const beVal=cpcPlanBE(ag,r.brand);
     const roasTxt=r.latestROAS!=null?`<strong style="color:${r.latestROAS>=beVal?'#22C55E':'#EF4444'}">${r.latestROAS.toFixed(2)}×</strong> <span style="color:#64748b;font-size:10px">(BE ${beVal.toFixed(2)})</span>`:`<span style="color:#64748b">no data</span>`;
     const delta=r.rec-Math.round(r.priorSpend);
     const deltaTxt=delta>0?`<span style="color:#22C55E">+${fmtAED(delta)}</span>`:delta<0?`<span style="color:#EF4444">${fmtAED(delta)}</span>`:`<span style="color:#64748b">—</span>`;
-    // Bid suggestion — the lever unique to Deliveroo
-    let bidCol=`<span style="color:#64748b;font-size:10.5px">—</span>`;
-    if(r.bidOpt&&r.bidOpt.curBid&&r.bidOpt.direction){
-      const arrow=r.bidOpt.direction==="raise"?"↑":r.bidOpt.direction==="lower"?"↓":"=";
-      const clr=r.bidOpt.direction==="raise"?"#22C55E":r.bidOpt.direction==="lower"?"#FBBF24":"#94a3b8";
-      bidCol=`<span style="color:${clr};font-weight:700;font-size:11px">${arrow} AED ${r.bidOpt.suggestedBid.toFixed(2)}</span><br/><span style="color:#64748b;font-size:9.5px">from ${r.bidOpt.curBid.toFixed(2)}</span>`;
+    // Show surplus-redistribution badge next to the recommended budget so it's transparent
+    // where each AED came from
+    const recCell=r.surplusAlloc>0
+      ?`<div style="color:#fbbf24;font-weight:800">${fmtAED(r.rec)}</div><div style="font-size:9.5px;color:#22C55E;margin-top:1px">base ${fmtAED(r.baseRec)} + <strong>${fmtAED(r.surplusAlloc)}</strong> redistributed</div>`
+      :`<span style="color:#fbbf24;font-weight:800">${fmtAED(r.rec)}</span>`;
+    let bidCol=`<span style="color:#64748b;font-size:10px" title="Need at least 2 months of CPC history with click data to suggest a bid">insufficient data</span>`;
+    if(r.bidOpt){
+      if(r.bidOpt.curBid&&r.bidOpt.direction){
+        const arrow=r.bidOpt.direction==="raise"?"↑":r.bidOpt.direction==="lower"?"↓":"=";
+        const clr=r.bidOpt.direction==="raise"?"#22C55E":r.bidOpt.direction==="lower"?"#FBBF24":"#94a3b8";
+        bidCol=`<span style="color:${clr};font-weight:700;font-size:11px" title="Best ROAS-volume month: ${r.bidOpt.bestMonth||"?"} at ${r.bidOpt.bestRoas?r.bidOpt.bestRoas.toFixed(2)+"×":"?"} ROAS">${arrow} AED ${r.bidOpt.suggestedBid.toFixed(2)}</span><br/><span style="color:#64748b;font-size:9.5px">from ${r.bidOpt.curBid.toFixed(2)}</span>`;
+      }else if(r.bidOpt.suggestedBid){
+        bidCol=`<span style="color:#94a3b8;font-weight:700;font-size:11px" title="Best historical bid (no current bid to compare)">AED ${r.bidOpt.suggestedBid.toFixed(2)}</span><br/><span style="color:#64748b;font-size:9.5px">target (best mo ${r.bidOpt.bestMonth||"?"})</span>`;
+      }
     }
     const histTxt=r.histTotal>0?`<span style="color:#94a3b8;font-size:10.5px">${fmtAED(r.histTotal)}</span>`:`<span style="color:#64748b;font-size:10px">none</span>`;
-    return`<tr style="background:${verdBg[r.verdict]};border-bottom:1px solid #1b2f4a"><td style="padding:7px 6px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}</td><td style="padding:7px 6px;color:#e2e8f0;font-size:11.5px">${r.outlet}</td><td style="padding:7px 6px;font-size:11px">${roasTxt}</td><td style="padding:7px 6px"><span style="background:${verdClr[r.verdict]}22;color:${verdClr[r.verdict]};padding:2px 7px;border-radius:4px;font-size:10px;font-weight:800;letter-spacing:.3px">${r.verdict}</span></td><td style="padding:7px 6px;text-align:right;color:#94a3b8;font-size:11px">${fmtAED(r.priorSpend)}</td><td style="padding:7px 6px;text-align:right;color:#fbbf24;font-weight:800">${fmtAED(r.rec)}</td><td style="padding:7px 6px;text-align:right;font-size:11px">${deltaTxt}</td><td style="padding:7px 6px;text-align:right">${bidCol}</td><td style="padding:7px 6px;text-align:right">${histTxt}</td></tr>`;
+    return`<tr style="background:${verdBg[r.verdict]};border-bottom:1px solid #1b2f4a"><td style="padding:7px 6px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}</td><td style="padding:7px 6px;color:#e2e8f0;font-size:11.5px">${r.outlet}</td><td style="padding:7px 6px;font-size:11px">${roasTxt}</td><td style="padding:7px 6px"><span style="background:${verdClr[r.verdict]}22;color:${verdClr[r.verdict]};padding:2px 7px;border-radius:4px;font-size:10px;font-weight:800;letter-spacing:.3px">${r.verdict}</span></td><td style="padding:7px 6px;text-align:right;color:#94a3b8;font-size:11px">${fmtAED(r.priorSpend)}</td><td style="padding:7px 6px;text-align:right">${recCell}</td><td style="padding:7px 6px;text-align:right;font-size:11px">${deltaTxt}</td><td style="padding:7px 6px;text-align:right">${bidCol}</td><td style="padding:7px 6px;text-align:right">${histTxt}</td></tr>`;
   }).join("");
   const totalRec=rows.reduce((s,r)=>s+r.rec,0);
   const totalPrior=rows.reduce((s,r)=>s+r.priorSpend,0);
+  const totalBase=rows.reduce((s,r)=>s+r.baseRec,0);
   const lowerBidCount=rows.filter(r=>r.bidOpt&&r.bidOpt.direction==="lower").length;
+  // Total-cell color: green if matching mandate within 2%, amber otherwise
+  const totalMatchesMandate=mandate>0&&Math.abs(totalRec-mandate)/mandate<0.02;
+  const totalClr=totalMatchesMandate?"#22C55E":(mandate>0&&totalRec<mandate?"#FBBF24":"#22C55E");
+  const totalLabel=mandate>0?`<span style="font-size:10px;color:#64748b">vs mandate ${fmtAED(mandate)}</span>`:"";
   return`<div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-size:13px;font-weight:800;color:${AC.Deliveroo}">🛵 Deliveroo Per-Outlet Allocation</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Mandatory floor: AED ${floor}/outlet · 2% group GMV obligation · <strong style="color:#fbbf24">Bids are in our control</strong> — adjust to extend coverage on degrowing listings</div></div><div style="font-size:11px;color:#cbd5e1">Total recommended: <strong style="color:#22C55E;font-size:14px">${fmtAED(totalRec)}</strong></div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-size:13px;font-weight:800;color:${AC.Deliveroo}">🛵 Deliveroo Per-Outlet Allocation</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Mandatory floor: AED ${floor}/outlet · 2% group GMV obligation · <strong style="color:#fbbf24">Bids are in our control</strong> — adjust to extend coverage on degrowing listings</div></div><div style="text-align:right"><div style="font-size:11px;color:#cbd5e1">Total recommended: <strong style="color:${totalClr};font-size:14px">${fmtAED(totalRec)}</strong></div>${totalLabel?`<div style="margin-top:2px">${totalLabel}</div>`:""}</div></div>
+    ${surplusBanner}
     ${lowerBidCount>0?`<div style="background:rgba(251,191,36,.06);border-left:3px solid #FBBF24;border-radius:4px;padding:7px 11px;margin-bottom:10px;font-size:11px;color:#cbd5e1"><strong style="color:#FBBF24">${lowerBidCount} outlets</strong> have bid-reduction signals (they overspent vs. their best-ROAS month). Lowering bids preserves budget for the full month and supports declining listings.</div>`:""}
-    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="border-bottom:1px solid #1b2f4a;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px;text-align:left">Brand</th><th style="padding:6px;text-align:left">Outlet</th><th style="padding:6px;text-align:left">Latest ROAS</th><th style="padding:6px;text-align:left">Verdict</th><th style="padding:6px;text-align:right">Prior Spend</th><th style="padding:6px;text-align:right">Recommended</th><th style="padding:6px;text-align:right">Δ vs Prior</th><th style="padding:6px;text-align:right" title="Bid suggestion based on best historical ROAS-volume month">Bid Suggest</th><th style="padding:6px;text-align:right">All-Time Spend</th></tr></thead><tbody>${tRows}</tbody><tfoot><tr style="border-top:2px solid #1b2f4a"><td colspan="4" style="padding:8px 6px;color:#94a3b8;font-size:11px;font-weight:700">${rows.length} OUTLETS</td><td style="padding:8px 6px;text-align:right;color:#94a3b8">${fmtAED(totalPrior)}</td><td style="padding:8px 6px;text-align:right;color:#22C55E;font-weight:800">${fmtAED(totalRec)}</td><td colspan="3"></td></tr></tfoot></table></div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="border-bottom:1px solid #1b2f4a;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px;text-align:left">Brand</th><th style="padding:6px;text-align:left">Outlet</th><th style="padding:6px;text-align:left">Latest ROAS</th><th style="padding:6px;text-align:left">Verdict</th><th style="padding:6px;text-align:right">Prior Spend</th><th style="padding:6px;text-align:right">Recommended</th><th style="padding:6px;text-align:right">Δ vs Prior</th><th style="padding:6px;text-align:right" title="Bid suggestion based on best historical ROAS-volume month">Bid Suggest</th><th style="padding:6px;text-align:right">All-Time Spend</th></tr></thead><tbody>${tRows}</tbody><tfoot><tr style="border-top:2px solid #1b2f4a"><td colspan="4" style="padding:8px 6px;color:#94a3b8;font-size:11px;font-weight:700">${rows.length} OUTLETS · base ${fmtAED(totalBase)}${totalRec!==totalBase?` + ${fmtAED(totalRec-totalBase)} redistributed`:""}</td><td style="padding:8px 6px;text-align:right;color:#94a3b8">${fmtAED(totalPrior)}</td><td style="padding:8px 6px;text-align:right;color:${totalClr};font-weight:800">${fmtAED(totalRec)}</td><td colspan="3"></td></tr></tfoot></table></div>
   </div>`;
 }
 
 // Talabat per-outlet allocation. Marked CONDITIONAL since deal hasn't been signed.
 // "Tested" column references historical CPC spend — addresses Nikhil's "we have invested in
 // Talabat for Lollorosso and Smokeys" concern.
+// Talabat per-outlet allocation. Marked CONDITIONAL since deal hasn't been signed.
+// Since Jun 2026, Talabat campaigns can run as CPC, Keywords (min AED 875/listing), or both
+// simultaneously. We compute each lever's ROAS independently and recommend CPC-only,
+// Keywords-only, or a combination based on which lever (or both) clears break-even.
 function cpcTalabatAllocCard(priorMonth){
   const ag="Talabat";
   const floor=CPC_MIN_PER_OUTLET[ag];
+  const kwFloor=CPC_MIN_KEYWORDS_PER_LISTING;
   const combos=new Set();
   allData.filter(r=>r.aggregator===ag&&recMonth(r)===priorMonth&&r.sales>0).forEach(r=>combos.add(`${r.brand}|${r.branch}`));
   if(!combos.size)return`<div class="card" style="border:1px dashed rgba(251,191,36,.4);background:rgba(251,191,36,.04)"><div style="font-size:13px;font-weight:800;color:${AC.Talabat||'#FF5A00'}">🍔 Talabat Per-Outlet Allocation — Conditional</div><div style="color:#94a3b8;font-size:11px;margin-top:6px">No prior-month Talabat sales found. ${TALABAT_DEAL_SIGNED?"":"Deal not yet signed."}</div></div>`;
   const rows=[...combos].map(k=>{
     const[brand,outlet]=k.split("|");
-    const cpcRow=cpcLatestRow(brand,ag,outlet);
-    const latestROAS=cpcRow&&cpcRow.budgetSpent>0?cpcRow.sales/cpcRow.budgetSpent:null;
-    const verdict=cpcVerdict(brand,ag,latestROAS);
-    const priorSpend=cpcRow?cpcRow.budgetSpent:0;
-    const rec=TALABAT_DEAL_SIGNED?cpcRecBudget(verdict,priorSpend,floor):0;
-    const histTotal=cpcHistoricalSpend(brand,ag,outlet);
+    const cpcRow=cpcLatestRow(brand,ag,outlet); // adType="CPC" specifically
+    const kwRow=cpcLatestRowByType(brand,ag,outlet,"Keywords");
+    const cpcROAS=cpcRow&&cpcRow.budgetSpent>0?cpcRow.sales/cpcRow.budgetSpent:null;
+    const kwROAS=kwRow&&kwRow.budgetSpent>0?kwRow.sales/kwRow.budgetSpent:null;
+    const beVal=cpcPlanBE(ag,brand);
+    const cpcVerdict=cpcPlanVerdict(brand,ag,cpcROAS);
+    const kwVerdict=cpcPlanVerdict(brand,ag,kwROAS);
+    const cpcPriorSpend=cpcRow?cpcRow.budgetSpent:0;
+    const kwPriorSpend=kwRow?kwRow.budgetSpent:0;
+    const cpcRec=TALABAT_DEAL_SIGNED?cpcRecBudget(cpcVerdict,cpcPriorSpend,floor):0;
+    const kwRec=TALABAT_DEAL_SIGNED&&kwROAS!=null&&kwROAS>=beVal?Math.max(kwFloor,Math.round(kwPriorSpend*1.1)):0;
+    const histTotal=cpcHistoricalSpend(brand,ag,outlet); // CPC-only, for "tested" flag
+    const kwHistTotal=cpcHistoricalSpend(brand,ag,outlet,"Keywords");
     const tested=cpcEverTested(brand,ag,outlet);
-    return{brand,outlet,latestROAS,verdict,priorSpend,rec,histTotal,tested};
+    const kwTested=kwHistTotal>0;
+    // Recommendation lever: CPC-only / Keywords-only / Both / Neither (pause)
+    let lever="—",leverColor="#94a3b8";
+    const cpcGood=cpcROAS!=null&&cpcROAS>=beVal;
+    const kwGood=kwROAS!=null&&kwROAS>=beVal;
+    if(cpcGood&&kwGood){lever="Both — CPC + Keywords";leverColor="#22C55E";}
+    else if(cpcGood&&!kwTested){lever="CPC (Keywords untested)";leverColor="#86EFAC";}
+    else if(cpcGood){lever="CPC only";leverColor="#86EFAC";}
+    else if(kwGood){lever="Keywords only";leverColor="#86EFAC";}
+    else if(!tested&&!kwTested){lever="Test CPC first";leverColor="#FBBF24";}
+    else{lever="Neither clears BE — hold";leverColor="#EF4444";}
+    return{brand,outlet,cpcROAS,kwROAS,beVal,cpcVerdict,kwVerdict,cpcPriorSpend,kwPriorSpend,cpcRec,kwRec,histTotal,kwHistTotal,tested,kwTested,lever,leverColor};
   }).sort((a,b)=>{
     if(a.brand!==b.brand)return a.brand.localeCompare(b.brand);
     const order={SCALE:0,INVEST:1,MONITOR:2,UNTESTED:3,PAUSE:4};
-    return(order[a.verdict]||5)-(order[b.verdict]||5);
+    return(order[a.cpcVerdict]||5)-(order[b.cpcVerdict]||5);
   });
   const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",PAUSE:"#EF4444",UNTESTED:"#94a3b8"};
   const tRows=rows.map(r=>{
-    const beVal=cpcBE(ag,r.brand);
-    const roasTxt=r.latestROAS!=null?`<strong style="color:${r.latestROAS>=beVal?'#22C55E':'#EF4444'}">${r.latestROAS.toFixed(2)}×</strong> <span style="color:#64748b;font-size:10px">(BE ${beVal.toFixed(2)})</span>`:`<span style="color:#64748b">no data</span>`;
-    const testedTag=r.tested?`<span style="color:#22C55E;font-size:10px">✓ tested</span><br/><span style="color:#64748b;font-size:9.5px">${fmtAED(r.histTotal)} cumulative</span>`:`<span style="color:#fbbf24;font-size:10px">⚠ untested</span>`;
-    return`<tr style="border-bottom:1px solid #1b2f4a"><td style="padding:7px 6px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}</td><td style="padding:7px 6px;color:#e2e8f0;font-size:11.5px">${r.outlet}</td><td style="padding:7px 6px;font-size:11px">${roasTxt}</td><td style="padding:7px 6px"><span style="background:${verdClr[r.verdict]}22;color:${verdClr[r.verdict]};padding:2px 7px;border-radius:4px;font-size:10px;font-weight:800;letter-spacing:.3px">${r.verdict}</span></td><td style="padding:7px 6px;text-align:center">${testedTag}</td><td style="padding:7px 6px;text-align:right;color:#94a3b8;font-size:11px">${fmtAED(r.priorSpend)}</td><td style="padding:7px 6px;text-align:right;${TALABAT_DEAL_SIGNED?'color:#fbbf24;font-weight:800':'color:#64748b'}">${TALABAT_DEAL_SIGNED?fmtAED(r.rec):"AED 0"}</td></tr>`;
+    const cpcRoasTxt=r.cpcROAS!=null?`<strong style="color:${r.cpcROAS>=r.beVal?'#22C55E':'#EF4444'}">${r.cpcROAS.toFixed(2)}×</strong>`:`<span style="color:#64748b;font-size:10.5px">no data</span>`;
+    const kwRoasTxt=r.kwROAS!=null?`<strong style="color:${r.kwROAS>=r.beVal?'#22C55E':'#EF4444'}">${r.kwROAS.toFixed(2)}×</strong>`:r.kwTested?`<span style="color:#64748b;font-size:10.5px">no spend</span>`:`<span style="color:#64748b;font-size:10.5px">untested</span>`;
+    const recTxt=TALABAT_DEAL_SIGNED
+      ?`<span style="color:#fbbf24;font-weight:700;font-size:11px">CPC ${fmtAED(r.cpcRec)}</span>${r.kwRec>0?`<br/><span style="color:#86EFAC;font-weight:700;font-size:11px">KW ${fmtAED(r.kwRec)}</span>`:''}`
+      :`<span style="color:#64748b">AED 0</span>`;
+    return`<tr style="border-bottom:1px solid #1b2f4a"><td style="padding:7px 6px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}</td><td style="padding:7px 6px;color:#e2e8f0;font-size:11.5px">${r.outlet}</td><td style="padding:7px 6px;font-size:11px">${cpcRoasTxt}</td><td style="padding:7px 6px;font-size:11px">${kwRoasTxt}</td><td style="padding:7px 6px;font-size:10.5px;color:#94a3b8">(BE ${r.beVal.toFixed(2)})</td><td style="padding:7px 6px"><span style="color:${r.leverColor};font-weight:700;font-size:10.5px">${r.lever}</span></td><td style="padding:7px 6px;text-align:right">${recTxt}</td></tr>`;
   }).join("");
+  const totalCPCRec=rows.reduce((s,r)=>s+r.cpcRec,0),totalKWRec=rows.reduce((s,r)=>s+r.kwRec,0);
   return`<div class="card" style="border:1px dashed rgba(255,90,0,.4);background:rgba(255,90,0,.03)">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-size:13px;font-weight:800;color:${AC.Talabat||'#FF5A00'}">🍔 Talabat Per-Outlet Allocation ${TALABAT_DEAL_SIGNED?"":"<span style='color:#fbbf24;font-size:10px;font-weight:700;background:rgba(251,191,36,.12);padding:2px 8px;border-radius:4px;margin-left:6px'>⚠ DEAL PENDING</span>"}</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">${TALABAT_DEAL_SIGNED?`Active — AED 20K group obligation, AED ${floor}/outlet floor`:"Recommendations frozen until AED 20K deal signed · 'Tested' column shows brands × outlets with prior Talabat CPC history"}</div></div></div>
-    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="border-bottom:1px solid #1b2f4a;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px;text-align:left">Brand</th><th style="padding:6px;text-align:left">Outlet</th><th style="padding:6px;text-align:left">Latest ROAS</th><th style="padding:6px;text-align:left">Verdict</th><th style="padding:6px;text-align:center">CPC History</th><th style="padding:6px;text-align:right">Prior Spend</th><th style="padding:6px;text-align:right">Rec. Budget</th></tr></thead><tbody>${tRows}</tbody></table></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-size:13px;font-weight:800;color:${AC.Talabat||'#FF5A00'}">🍔 Talabat Per-Outlet Allocation — CPC + Keywords ${TALABAT_DEAL_SIGNED?"":"<span style='color:#fbbf24;font-size:10px;font-weight:700;background:rgba(251,191,36,.12);padding:2px 8px;border-radius:4px;margin-left:6px'>⚠ DEAL PENDING</span>"}</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">${TALABAT_DEAL_SIGNED?`Active — AED 20K group obligation, AED ${floor}/outlet CPC floor, AED ${kwFloor}/listing Keywords floor`:`Recommendations frozen until AED 20K deal signed · Keywords lever (min AED ${kwFloor}/listing) tracked separately from CPC since Jun 2026`}</div></div>${TALABAT_DEAL_SIGNED?`<div style="text-align:right;font-size:11px;color:#cbd5e1">CPC: <strong style="color:#fbbf24">${fmtAED(totalCPCRec)}</strong> · Keywords: <strong style="color:#86EFAC">${fmtAED(totalKWRec)}</strong></div>`:""}</div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="border-bottom:1px solid #1b2f4a;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px;text-align:left">Brand</th><th style="padding:6px;text-align:left">Outlet</th><th style="padding:6px;text-align:left">CPC ROAS</th><th style="padding:6px;text-align:left">Keywords ROAS</th><th style="padding:6px;text-align:left">Break-Even</th><th style="padding:6px;text-align:left">Recommended Lever</th><th style="padding:6px;text-align:right">Rec. Budget</th></tr></thead><tbody>${tRows}</tbody></table></div>
   </div>`;
 }
 
-// Noon + Careem brand-pool allocation (pool not per-outlet for these)
+// Noon + Careem brand-pool allocation (pool not per-outlet for these). Reads from cpcModel.byAgg
+// rather than raw cpcData — the model has already done the aggregator/brand-name normalization
+// and accumulated current-month totals (curSpent / curSales / curInvested) at the brand level.
 function cpcPoolAllocCard(ag,priorMonth){
   const floor=CPC_MIN_PER_OUTLET[ag];
   const gmv=cpcGroupGMV(priorMonth,ag);
   const mand=cpcMandatoryBudget(ag,gmv);
-  // Per-brand prior GMV & latest pool ROAS
+  const A=(cpcModel&&cpcModel.byAgg)?cpcModel.byAgg[ag]:null;
+  // Per-brand prior GMV (sales side) — keep this even when CPC model has no entries for the brand
+  // so we still show a row indicating untested
   const brands=BR.filter(b=>allData.some(r=>r.aggregator===ag&&recMonth(r)===priorMonth&&r.brand===b.n&&r.sales>0));
   const rows=brands.map(b=>{
     const bGMV=allData.filter(r=>r.aggregator===ag&&recMonth(r)===priorMonth&&r.brand===b.n).reduce((s,r)=>s+(r.sales||0),0);
     const brandShare=gmv>0?bGMV/gmv:0;
-    const brandMand=mand*brandShare; // proportional share before redirect
-    const poolRows=cpcData.filter(r=>r.aggregator===ag&&r.brand===b.n&&r.adType==="CPC");
-    const latestMonth=poolRows.map(r=>r.month).filter(Boolean).sort().pop();
-    const poolSales=poolRows.filter(r=>r.month===latestMonth).reduce((s,r)=>s+(r.sales||0),0);
-    const poolSpent=poolRows.filter(r=>r.month===latestMonth).reduce((s,r)=>s+(r.budgetSpent||0),0);
-    const poolAlloc=poolRows.filter(r=>r.month===latestMonth).reduce((s,r)=>s+(r.budgetAlloc||0),0);
+    const brandMand=mand*brandShare;
+    // Pool figures from cpcModel — uses current-month accumulators if present, otherwise all-time
+    const B=A&&A.brands?A.brands[b.n]:null;
+    // Use current-month figures when there's any current-month activity; else fall back to all-time
+    // so the table still surfaces something useful even if month rolled over and no CPC posted yet.
+    const hasCurrent=B&&((B.curSpent||0)>0||(B.curInvested||0)>0);
+    const poolSales=B?(hasCurrent?B.curSales:B.sales)||0:0;
+    const poolSpent=B?(hasCurrent?B.curSpent:B.spent)||0:0;
+    const poolAlloc=B?(hasCurrent?B.curInvested:B.invested)||0:0;
     const poolROAS=poolSpent>0?poolSales/poolSpent:null;
     const util=poolAlloc>0?poolSpent/poolAlloc*100:null;
-    const verdict=cpcVerdict(b.n,ag,poolROAS);
-    return{brand:b.n,bGMV,brandShare,brandMand,poolSpent,poolAlloc,poolROAS,util,verdict};
+    const verdict=cpcPlanVerdict(b.n,ag,poolROAS);
+    return{brand:b.n,bGMV,brandShare,brandMand,poolSpent,poolAlloc,poolROAS,util,verdict,hasCurrent,hasAnyHistory:!!B};
   });
   const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",PAUSE:"#EF4444",UNTESTED:"#94a3b8"};
   const tRows=rows.map(r=>{
-    const beVal=cpcBE(ag,r.brand);
-    const roasTxt=r.poolROAS!=null?`<strong style="color:${r.poolROAS>=beVal?'#22C55E':'#EF4444'}">${r.poolROAS.toFixed(2)}×</strong> <span style="color:#64748b;font-size:10px">(BE ${beVal.toFixed(2)})</span>`:`<span style="color:#64748b">no data</span>`;
+    const beVal=cpcPlanBE(ag,r.brand);
+    const roasTxt=r.poolROAS!=null?`<strong style="color:${r.poolROAS>=beVal?'#22C55E':'#EF4444'}">${r.poolROAS.toFixed(2)}×</strong> <span style="color:#64748b;font-size:10px">(BE ${beVal.toFixed(2)})</span>${r.hasCurrent?'':' <span style="color:#fbbf24;font-size:9.5px" title="No current-month CPC posted yet — showing all-time figures">all-time</span>'}`:r.hasAnyHistory?`<span style="color:#64748b">no spend</span>`:`<span style="color:#64748b">no data</span>`;
     const utilTxt=r.util!=null?`<span style="color:${r.util>=100?'#22C55E':r.util>=60?'#FBBF24':'#94a3b8'}">${r.util.toFixed(0)}%</span>`:`<span style="color:#64748b">—</span>`;
     let signal="";
-    if(ag==="Careem"&&r.util!=null){
-      if(r.util>120)signal=`<span style="color:#22C55E;font-size:10px">↑ raise budget</span>`;
-      else if(r.util<40)signal=`<span style="color:#EF4444;font-size:10px">↓ cut, redirect</span>`;
-      else signal=`<span style="color:#94a3b8;font-size:10px">maintain</span>`;
-    }else if(ag==="Noon"&&r.util!=null){
-      if(r.util>95)signal=`<span style="color:#22C55E;font-size:10px">↑ raise pool</span>`;
-      else if(r.util<50)signal=`<span style="color:#FBBF24;font-size:10px">monitor</span>`;
-      else signal=`<span style="color:#94a3b8;font-size:10px">maintain</span>`;
+    if(r.util!=null){
+      if(ag==="Careem"){
+        if(r.util>120)signal=`<span style="color:#22C55E;font-size:10px">↑ raise budget</span>`;
+        else if(r.util<40)signal=`<span style="color:#EF4444;font-size:10px">↓ cut, redirect</span>`;
+        else signal=`<span style="color:#94a3b8;font-size:10px">maintain</span>`;
+      }else if(ag==="Noon"){
+        if(r.util>95)signal=`<span style="color:#22C55E;font-size:10px">↑ raise pool</span>`;
+        else if(r.util<50)signal=`<span style="color:#FBBF24;font-size:10px">monitor</span>`;
+        else signal=`<span style="color:#94a3b8;font-size:10px">maintain</span>`;
+      }
+    }else{
+      signal=`<span style="color:#64748b;font-size:10px">awaiting data</span>`;
     }
-    return`<tr style="border-bottom:1px solid #1b2f4a"><td style="padding:7px 6px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}</td><td style="padding:7px 6px;text-align:right;color:#cbd5e1">${fmtAED(r.bGMV)}</td><td style="padding:7px 6px;text-align:right;color:#94a3b8;font-size:11px">${(r.brandShare*100).toFixed(0)}%</td><td style="padding:7px 6px;text-align:right;color:#fbbf24;font-weight:700">${fmtAED(r.brandMand)}</td><td style="padding:7px 6px;font-size:11px">${roasTxt}</td><td style="padding:7px 6px"><span style="background:${verdClr[r.verdict]}22;color:${verdClr[r.verdict]};padding:2px 7px;border-radius:4px;font-size:10px;font-weight:800">${r.verdict}</span></td><td style="padding:7px 6px;text-align:center">${utilTxt}</td><td style="padding:7px 6px">${signal}</td></tr>`;
+    const adTypeBreakdown=(()=>{
+      const Blocal=A&&A.brands?A.brands[r.brand]:null;
+      if(!Blocal||!Blocal.adTypes||Blocal.adTypes.size<2)return"";
+      const types=[...Blocal.adTypes];
+      const parts=types.map(t=>{
+        const spent=cpcData.filter(rr=>rr.aggregator===ag&&rr.brand===r.brand&&rr.adType===t).reduce((s,rr)=>s+(rr.budgetSpent||0),0);
+        return spent>0?`<span style="color:#94a3b8">${t}: <strong style="color:#cbd5e1">${fmtAED(spent)}</strong></span>`:null;
+      }).filter(Boolean);
+      return parts.length>1?`<div style="font-size:9.5px;margin-top:2px">${parts.join(" · ")}</div>`:"";
+    })();
+    return`<tr style="border-bottom:1px solid #1b2f4a"><td style="padding:7px 6px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}${adTypeBreakdown}</td><td style="padding:7px 6px;text-align:right;color:#cbd5e1">${fmtAED(r.bGMV)}</td><td style="padding:7px 6px;text-align:right;color:#94a3b8;font-size:11px">${(r.brandShare*100).toFixed(0)}%</td><td style="padding:7px 6px;text-align:right;color:#fbbf24;font-weight:700">${fmtAED(r.brandMand)}</td><td style="padding:7px 6px;font-size:11px">${roasTxt}</td><td style="padding:7px 6px"><span style="background:${verdClr[r.verdict]}22;color:${verdClr[r.verdict]};padding:2px 7px;border-radius:4px;font-size:10px;font-weight:800">${r.verdict}</span></td><td style="padding:7px 6px;text-align:center">${utilTxt}</td><td style="padding:7px 6px">${signal}</td></tr>`;
   }).join("");
   const lockedNote=ag==="Careem"?` · <strong style="color:#fbbf24">Bids locked at AED 2.00</strong> — only lever is budget size`:ag==="Noon"?` · Minimum AED ${floor} to activate a brand pool`:"";
+
+  // ── CAREEM-ONLY: outlet-level breakdown within each brand's pool ───────────────────────────
+  // The budget itself is pooled at brand level (can't allocate AED to a specific outlet inside
+  // Careem's system), but underperforming outlets can be EXCLUDED from the brand's Careem
+  // listing/targeting entirely — freeing up effective budget for the outlets that convert.
+  // We compute each outlet's own ROAS within the brand and flag any consistently below
+  // break-even as an exclude candidate.
+  let careemOutletSection="";
+  if(ag==="Careem"){
+    const outletCards=rows.filter(r=>r.hasAnyHistory||r.bGMV>0).map(r=>{
+      const brand=r.brand;
+      const beVal=cpcPlanBE(ag,brand);
+      // All outlets this brand has sold through on Careem this period
+      const outlets=[...new Set(allData.filter(rr=>rr.aggregator===ag&&rr.brand===brand&&recMonth(rr)===priorMonth&&rr.branch&&rr.branch!=="(brand-level)").map(rr=>rr.branch))];
+      const outletRows=outlets.map(outlet=>{
+        const cpcRow=cpcLatestRowByType(brand,ag,outlet,"CPC");
+        const oROAS=cpcRow&&cpcRow.budgetSpent>0?cpcRow.sales/cpcRow.budgetSpent:null;
+        const oSpent=cpcRow?cpcRow.budgetSpent:0;
+        const oSales=cpcRow?cpcRow.sales:0;
+        const exclude=oROAS!=null&&oROAS<beVal*0.8; // meaningfully below BE, not just borderline
+        return{outlet,oROAS,oSpent,oSales,exclude};
+      }).sort((a,b)=>(b.oROAS||0)-(a.oROAS||0));
+      if(!outletRows.length)return"";
+      const excludeCount=outletRows.filter(o=>o.exclude).length;
+      const outletRowsHtml=outletRows.map(o=>{
+        const roasTxt=o.oROAS!=null?`<strong style="color:${o.oROAS>=beVal?'#22C55E':o.exclude?'#EF4444':'#FBBF24'}">${o.oROAS.toFixed(2)}×</strong>`:`<span style="color:#64748b">no spend</span>`;
+        const tag=o.exclude?`<span style="background:rgba(239,68,68,.15);color:#EF4444;padding:1px 6px;border-radius:4px;font-size:9.5px;font-weight:800">EXCLUDE CANDIDATE</span>`:o.oROAS!=null&&o.oROAS>=beVal?`<span style="color:#22C55E;font-size:9.5px">keep</span>`:`<span style="color:#94a3b8;font-size:9.5px">monitor</span>`;
+        return`<tr style="border-bottom:1px solid rgba(27,47,74,.4)"><td style="padding:5px 8px 5px 20px;color:#cbd5e1;font-size:11px">${o.outlet}</td><td style="padding:5px 8px;text-align:right;font-size:10.5px">${roasTxt}</td><td style="padding:5px 8px;text-align:right;color:#94a3b8;font-size:10.5px">${fmtAED(o.oSpent)}</td><td style="padding:5px 8px;text-align:right;color:#94a3b8;font-size:10.5px">${fmtAED(o.oSales)}</td><td style="padding:5px 8px">${tag}</td></tr>`;
+      }).join("");
+      return`<div style="margin-bottom:8px;border:1px solid rgba(27,47,74,.5);border-radius:6px;overflow:hidden">
+        <div style="background:rgba(245,158,11,.05);padding:7px 10px;display:flex;justify-content:space-between;align-items:center"><span style="color:${BMAP[brand]?.c||'#fff'};font-weight:800;font-size:11.5px">${brand}</span><span style="font-size:10.5px;color:#94a3b8">${outletRows.length} outlets${excludeCount?` · <strong style="color:#EF4444">${excludeCount} exclude candidate${excludeCount===1?"":"s"}</strong>`:""} · Brand total: <strong style="color:#fbbf24">${fmtAED(r.poolSpent)}</strong></span></div>
+        <table style="width:100%;border-collapse:collapse">${outletRowsHtml}</table>
+      </div>`;
+    }).filter(Boolean).join("");
+    if(outletCards){
+      careemOutletSection=`<div style="margin-top:14px;padding-top:12px;border-top:1px solid #1b2f4a"><div style="font-size:11.5px;font-weight:800;color:#94a3b8;margin-bottom:8px">📍 Outlet-Level Breakdown — Exclude Underperformers</div><div style="font-size:10.5px;color:#94a3b8;margin-bottom:10px">Careem budget is pooled at brand level, but individual outlets can be excluded from targeting if they're consistently below break-even (shown at &lt;80% of BE). Excluding a weak outlet effectively concentrates the same pool budget on the outlets that convert.</div>${outletCards}</div>`;
+    }
+  }
   return`<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-size:13px;font-weight:800;color:${AC[ag]||'#fff'}">${ag==="Noon"?"🌙":"🚕"} ${ag} Brand Pool Allocation</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">4% group GMV obligation${lockedNote}</div></div><div style="font-size:11px;color:#cbd5e1">Group mandatory: <strong style="color:#22C55E;font-size:14px">${fmtAED(mand)}</strong></div></div>
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="border-bottom:1px solid #1b2f4a;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px;text-align:left">Brand</th><th style="padding:6px;text-align:right">Prior GMV</th><th style="padding:6px;text-align:right">Share</th><th style="padding:6px;text-align:right">Proportional Mand.</th><th style="padding:6px;text-align:left">Latest ROAS</th><th style="padding:6px;text-align:left">Verdict</th><th style="padding:6px;text-align:center">Last Util</th><th style="padding:6px;text-align:left">Signal</th></tr></thead><tbody>${tRows}</tbody></table></div>
+    ${careemOutletSection}
   </div>`;
 }
 
@@ -3477,6 +3716,139 @@ function cpcHistoricalRefCard(){
 
 // ═══════════════════════════════════════════════════════════════
 // END INVESTMENT PLAN MODULE
+// ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// AD INVESTMENT HISTORY MODULE
+// ═══════════════════════════════════════════════════════════════
+// Browsable, filterable view of every row in the CPC sheet — lets the user audit exactly which
+// raw rows feed into a brand/aggregator total (e.g. verifying that separately-entered Noon line
+// items grouped correctly, or that a combined-pool row didn't get double counted) without going
+// back to the Google Sheet. Also doubles as "previous months" reference since cpcData holds the
+// full history, not just the current month.
+
+function cpcHistUniqueVals(field){
+  return[...new Set(cpcData.map(r=>r[field]).filter(Boolean))].sort();
+}
+
+function cpcRenderHistory(){
+  try{
+    if(!cpcData||!cpcData.length)return`<div class="card">No CPC data loaded.</div>`;
+    const months=cpcHistUniqueVals("month").sort().reverse();
+    const brands=cpcHistUniqueVals("brand").sort();
+    const aggs=cpcHistUniqueVals("aggregator").sort();
+    const adTypes=cpcHistUniqueVals("adType").sort();
+    // Outlets list depends on the currently selected brand (avoids showing irrelevant outlets)
+    const outletPool=cpcHistFilters.brand!=="all"?cpcData.filter(r=>r.brand===cpcHistFilters.brand):cpcData;
+    const outlets=[...new Set(outletPool.map(r=>r.branch).filter(Boolean))].sort();
+
+    const selectHtml=(label,key,opts,curVal)=>{
+      const optsHtml=['<option value="all">All</option>',...opts.map(o=>`<option value="${o}" ${curVal===o?"selected":""}>${o}</option>`)].join("");
+      return`<div style="display:flex;flex-direction:column;gap:2px"><label style="font-size:9.5px;color:#64748b;text-transform:uppercase;font-weight:700">${label}</label><select onchange="cpcHistSetFilter('${key}',this.value)" style="background:#0d1524;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:5px 8px;font-size:11.5px;min-width:120px">${optsHtml}</select></div>`;
+    };
+
+    const compareToggleBtn=`<button onclick="cpcHistToggleCompare()" style="background:${cpcHistCompare?'rgba(245,158,11,.15)':'transparent'};border:1px solid ${cpcHistCompare?'#f59e0b':'#1b2f4a'};color:${cpcHistCompare?'#f59e0b':'#94a3b8'};border-radius:6px;padding:6px 14px;font-size:11px;cursor:pointer;font-weight:700;white-space:nowrap">⚖️ ${cpcHistCompare?"Comparing":"Compare Months"}</button>`;
+
+    const filterBar=`<div class="card" style="padding:12px 14px">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+        ${cpcHistCompare?"":selectHtml("Month",'month',months,cpcHistFilters.month)}
+        ${selectHtml("Brand",'brand',brands,cpcHistFilters.brand)}
+        ${selectHtml("Aggregator",'aggregator',aggs,cpcHistFilters.aggregator)}
+        ${selectHtml("Outlet",'outlet',outlets,cpcHistFilters.outlet)}
+        ${selectHtml("Ad Type",'adType',adTypes,cpcHistFilters.adType)}
+        <div style="margin-left:auto">${compareToggleBtn}</div>
+      </div>
+    </div>`;
+
+    if(cpcHistCompare){
+      return filterBar+cpcHistCompareView(months);
+    }
+    return filterBar+cpcHistTableView();
+  }catch(e){
+    console.error("[Ad History] render failed:",e);
+    return`<div class="card" style="border:1px solid rgba(239,68,68,.4)"><div style="color:#ef4444;font-weight:800;margin-bottom:6px">⚠️ History view failed</div><div style="color:#cbd5e1;font-size:11.5px">${(e&&e.message)||"unknown error"}</div></div>`;
+  }
+}
+
+// Apply the current filter set to cpcData
+function cpcHistFilteredRows(){
+  return cpcData.filter(r=>
+    (cpcHistFilters.month==="all"||r.month===cpcHistFilters.month)&&
+    (cpcHistFilters.brand==="all"||r.brand===cpcHistFilters.brand)&&
+    (cpcHistFilters.aggregator==="all"||r.aggregator===cpcHistFilters.aggregator)&&
+    (cpcHistFilters.outlet==="all"||r.branch===cpcHistFilters.outlet)&&
+    (cpcHistFilters.adType==="all"||r.adType===cpcHistFilters.adType)
+  );
+}
+
+// Default (non-compare) table view: every row matching filters, sorted newest-first, with a
+// totals strip. Surfaces budgetType (combined/separate) and updateDate/remarks so the user can
+// audit grouping accuracy directly against what they entered in the sheet.
+function cpcHistTableView(){
+  const rows=cpcHistFilteredRows().sort((a,b)=>(b.startDate||"").localeCompare(a.startDate||""));
+  if(!rows.length)return`<div class="card" style="margin-top:12px"><div style="color:#94a3b8;font-size:12px">No rows match the current filters.</div></div>`;
+  const totalAlloc=rows.reduce((s,r)=>s+(r.budgetAlloc||0),0);
+  const totalSpent=rows.reduce((s,r)=>s+(r.budgetSpent||0),0);
+  const totalSales=rows.reduce((s,r)=>s+(r.sales||0),0);
+  const totalOrders=rows.reduce((s,r)=>s+(r.orders||0),0);
+  const totalROAS=totalSpent>0?totalSales/totalSpent:null;
+  const summaryStrip=`<div class="card" style="padding:10px 14px;display:flex;gap:22px;flex-wrap:wrap;align-items:center">
+    <div><div style="font-size:9.5px;color:#64748b;text-transform:uppercase">Rows</div><div style="font-size:15px;font-weight:800;color:#e2e8f0">${rows.length}</div></div>
+    <div><div style="font-size:9.5px;color:#64748b;text-transform:uppercase">Budget Allocated</div><div style="font-size:15px;font-weight:800;color:#fbbf24">${fmtAED(totalAlloc)}</div></div>
+    <div><div style="font-size:9.5px;color:#64748b;text-transform:uppercase">Budget Spent</div><div style="font-size:15px;font-weight:800;color:#cbd5e1">${fmtAED(totalSpent)}</div></div>
+    <div><div style="font-size:9.5px;color:#64748b;text-transform:uppercase">Sales</div><div style="font-size:15px;font-weight:800;color:#22C55E">${fmtAED(totalSales)}</div></div>
+    <div><div style="font-size:9.5px;color:#64748b;text-transform:uppercase">Orders</div><div style="font-size:15px;font-weight:800;color:#e2e8f0">${totalOrders.toLocaleString()}</div></div>
+    <div><div style="font-size:9.5px;color:#64748b;text-transform:uppercase">Blended ROAS</div><div style="font-size:15px;font-weight:800;color:${totalROAS!=null?'#86EFAC':'#64748b'}">${totalROAS!=null?totalROAS.toFixed(2)+"×":"—"}</div></div>
+  </div>`;
+  const tRows=rows.map(r=>{
+    const roas=r.budgetSpent>0?r.sales/r.budgetSpent:null;
+    const roasTxt=roas!=null?`<strong style="color:${roas>=r.be?'#22C55E':'#EF4444'}">${roas.toFixed(2)}×</strong>`:`<span style="color:#64748b;font-size:10.5px">—</span>`;
+    const poolTag=r.budgetType==="combined"?`<span style="background:rgba(96,165,250,.12);color:#60A5FA;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700">POOL</span>`:`<span style="background:rgba(148,163,184,.1);color:#94a3b8;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700">SEPARATE</span>`;
+    const fundedTag=/funded\s+by\s+noon/i.test(r.remarks||"")?`<span style="background:rgba(34,197,94,.12);color:#22C55E;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700;margin-left:4px">FUNDED BY NOON</span>`:"";
+    return`<tr style="border-bottom:1px solid #1b2f4a"><td style="padding:6px 8px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11px">${r.brand}</td><td style="padding:6px 8px;color:#e2e8f0;font-size:11px">${r.branch||"—"}</td><td style="padding:6px 8px;color:${AC[r.aggregator]||'#fff'};font-size:11px">${r.aggregator}</td><td style="padding:6px 8px;color:#94a3b8;font-size:10.5px">${r.adType}</td><td style="padding:6px 8px;color:#94a3b8;font-size:10.5px">${r.startDate||"?"} → ${r.endDate||"?"}</td><td style="padding:6px 8px;text-align:right;color:#94a3b8;font-size:11px">${fmtAED(r.budgetAlloc)}</td><td style="padding:6px 8px;text-align:right;color:#cbd5e1;font-size:11px">${fmtAED(r.budgetSpent)}</td><td style="padding:6px 8px;text-align:right;color:#22C55E;font-size:11px">${fmtAED(r.sales)}</td><td style="padding:6px 8px;text-align:right">${roasTxt}</td><td style="padding:6px 8px">${poolTag}</td><td style="padding:6px 8px;color:#94a3b8;font-size:10px">${r.updateDate||"—"}${fundedTag}</td></tr>`;
+  }).join("");
+  return summaryStrip+`<div class="card" style="margin-top:12px"><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="border-bottom:1px solid #1b2f4a;color:#64748b;font-size:9.5px;text-transform:uppercase;letter-spacing:.3px"><th style="padding:6px 8px;text-align:left">Brand</th><th style="padding:6px 8px;text-align:left">Outlet</th><th style="padding:6px 8px;text-align:left">Aggregator</th><th style="padding:6px 8px;text-align:left">Ad Type</th><th style="padding:6px 8px;text-align:left">Period</th><th style="padding:6px 8px;text-align:right">Allocated</th><th style="padding:6px 8px;text-align:right">Spent</th><th style="padding:6px 8px;text-align:right">Sales</th><th style="padding:6px 8px;text-align:right">ROAS</th><th style="padding:6px 8px;text-align:left">Budget Type</th><th style="padding:6px 8px;text-align:left">Last Updated</th></tr></thead><tbody>${tRows}</tbody></table></div></div>`;
+}
+
+// Compare-months view: pick month A and month B, see brand × aggregator totals side by side.
+// Reuses the filter set (brand/aggregator/outlet/adType) so the user can narrow scope first,
+// then compare just that slice across two months.
+function cpcHistCompareView(months){
+  if(!cpcHistCompareA&&months.length)cpcHistCompareA=months[1]||months[0];
+  if(!cpcHistCompareB&&months.length)cpcHistCompareB=months[0];
+  const monthSelect=(side,val)=>`<select onchange="cpcHistSetCompareMonth('${side}',this.value)" style="background:#0d1524;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:6px 10px;font-size:12px;font-weight:700">${months.map(m=>`<option value="${m}" ${val===m?"selected":""}>${m}</option>`).join("")}</select>`;
+  const picker=`<div class="card" style="padding:12px 14px;display:flex;gap:16px;align-items:center;margin-top:12px"><span style="font-size:11px;color:#94a3b8;font-weight:700">Compare</span><span style="color:#60A5FA;font-weight:700">A:</span>${monthSelect("A",cpcHistCompareA)}<span style="color:#64748b">vs</span><span style="color:#F59E0B;font-weight:700">B:</span>${monthSelect("B",cpcHistCompareB)}</div>`;
+  if(!cpcHistCompareA||!cpcHistCompareB)return picker;
+
+  const base=cpcHistFilteredRows().filter(r=>r.month===cpcHistCompareA||r.month===cpcHistCompareB);
+  const keys=new Set(base.map(r=>`${r.brand}|${r.aggregator}`));
+  const compRows=[...keys].map(k=>{
+    const[brand,ag]=k.split("|");
+    const aRows=base.filter(r=>r.brand===brand&&r.aggregator===ag&&r.month===cpcHistCompareA);
+    const bRows=base.filter(r=>r.brand===brand&&r.aggregator===ag&&r.month===cpcHistCompareB);
+    const aSpent=aRows.reduce((s,r)=>s+(r.budgetSpent||0),0),bSpent=bRows.reduce((s,r)=>s+(r.budgetSpent||0),0);
+    const aSales=aRows.reduce((s,r)=>s+(r.sales||0),0),bSales=bRows.reduce((s,r)=>s+(r.sales||0),0);
+    const aROAS=aSpent>0?aSales/aSpent:null,bROAS=bSpent>0?bSales/bSpent:null;
+    const aRowCount=aRows.length,bRowCount=bRows.length;
+    return{brand,ag,aSpent,bSpent,aSales,bSales,aROAS,bROAS,aRowCount,bRowCount,deltaSpent:bSpent-aSpent,deltaSales:bSales-aSales};
+  }).filter(r=>r.aSpent>0||r.bSpent>0).sort((a,b)=>a.brand.localeCompare(b.brand)||a.ag.localeCompare(b.ag));
+
+  const tRows=compRows.map(r=>{
+    const deltaTxt=r.deltaSpent>0?`<span style="color:#22C55E">+${fmtAED(r.deltaSpent)}</span>`:r.deltaSpent<0?`<span style="color:#EF4444">${fmtAED(r.deltaSpent)}</span>`:`<span style="color:#64748b">—</span>`;
+    // Row-count mismatch is a grouping signal: if A had 1 row (combined) and B has 3 (separate),
+    // or vice versa, flag it so the user can verify that's intentional.
+    const rowCountFlag=r.aRowCount!==r.bRowCount?`<span style="color:#FBBF24;font-size:9.5px" title="Number of sheet rows feeding this total changed between months — check if entries were grouped/split differently">⚠ ${r.aRowCount}→${r.bRowCount} rows</span>`:`<span style="color:#64748b;font-size:9.5px">${r.aRowCount} rows</span>`;
+    return`<tr style="border-bottom:1px solid #1b2f4a"><td style="padding:7px 8px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}</td><td style="padding:7px 8px;color:${AC[r.ag]||'#fff'};font-size:11.5px">${r.ag}</td><td style="padding:7px 8px;text-align:right;color:#60A5FA;font-size:11px">${fmtAED(r.aSpent)}</td><td style="padding:7px 8px;text-align:right;color:#F59E0B;font-size:11px">${fmtAED(r.bSpent)}</td><td style="padding:7px 8px;text-align:right;font-size:11px">${deltaTxt}</td><td style="padding:7px 8px;text-align:right;color:#60A5FA;font-size:11px">${r.aROAS!=null?r.aROAS.toFixed(2)+"×":"—"}</td><td style="padding:7px 8px;text-align:right;color:#F59E0B;font-size:11px">${r.bROAS!=null?r.bROAS.toFixed(2)+"×":"—"}</td><td style="padding:7px 8px;text-align:center">${rowCountFlag}</td></tr>`;
+  }).join("");
+  const totA=compRows.reduce((s,r)=>s+r.aSpent,0),totB=compRows.reduce((s,r)=>s+r.bSpent,0);
+  return picker+`<div class="card" style="margin-top:12px">
+    <div style="margin-bottom:10px"><div style="font-size:12px;font-weight:800;color:#e2e8f0">Brand × Aggregator — ${cpcHistCompareA} vs ${cpcHistCompareB}</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Row-count column flags when the number of underlying sheet entries changed — useful for catching unintended grouping/splitting between months.</div></div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="border-bottom:1px solid #1b2f4a;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px 8px;text-align:left">Brand</th><th style="padding:6px 8px;text-align:left">Aggregator</th><th style="padding:6px 8px;text-align:right">A Spent</th><th style="padding:6px 8px;text-align:right">B Spent</th><th style="padding:6px 8px;text-align:right">Δ Spent</th><th style="padding:6px 8px;text-align:right">A ROAS</th><th style="padding:6px 8px;text-align:right">B ROAS</th><th style="padding:6px 8px;text-align:center">Sheet Rows</th></tr></thead><tbody>${tRows}</tbody><tfoot><tr style="border-top:2px solid #1b2f4a"><td colspan="2" style="padding:8px;color:#94a3b8;font-size:11px;font-weight:700">TOTAL</td><td style="padding:8px;text-align:right;color:#60A5FA;font-weight:800">${fmtAED(totA)}</td><td style="padding:8px;text-align:right;color:#F59E0B;font-weight:800">${fmtAED(totB)}</td><td colspan="4"></td></tr></tfoot></table></div>
+  </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// END AD INVESTMENT HISTORY MODULE
 // ═══════════════════════════════════════════════════════════════
 
 function cpcRenderOutletLevel(ag,brand){
@@ -6969,6 +7341,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     renderBrands,renderOutlets,renderPlatforms,renderOverview,renderCPC,renderCampaigns,renderKPI,renderCompare,
     selectOutlet,backToOutlets,toggleAovDrill,selectVerdAggregator,selectBundleByKey,bundleDetailHTML,
     cpcGoAgg,cpcGoBrands,cpcGoOutlets,cpcSetSort,cpcSetAdType,cpcSetMonth,cpcOpenOutletDetail,cpcCloseOutletDetail,cpcExportTable,cpcSetView,
+    cpcHistSetFilter,cpcHistToggleCompare,cpcHistSetCompareMonth,
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
     sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campSetScope,campClearDates,campSetElasticity,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,cmpToggleExpand,
