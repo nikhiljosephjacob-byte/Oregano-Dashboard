@@ -13,18 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-011";
+const BUILD_VERSION="2026-06-25-012";
 const BUILD_NOTES=[
-  "🆕 Investment Plan view added to Ad Investments — toggle between 'Drill-Down' and '📊 Investment Plan' at the top of the CPC tab.",
-  "🆕 Group obligations summary — prior-month GMV × 2%/4% per aggregator, with Talabat flagged 'Deal Pending' since it isn't signed yet.",
-  "🆕 Per-outlet allocation tables for Deliveroo & Talabat — verdict ladder (SCALE/INVEST/MONITOR/PAUSE), recommended budget, Δ vs prior, all-time historical spend reference.",
-  "🆕 Deliveroo bid-management column — leverages cpcDeliverooBidOpt to recommend bid changes when budgets are exhausted early, extending coverage for the full month and protecting degrowing listings.",
-  "🆕 Talabat 'tested' column — references actual historical CPC spend so Lollorosso/Smokeys appear correctly as tested (not untested) per Nikhil's note.",
-  "🆕 Noon & Careem brand-pool tables with utilization signal (>120% raise, <40% redirect) and Careem 'bids locked AED 2' callout.",
-  "🆕 Declining-outlets section — outlets with MoM > 15% drop get a visibility-boost suggestion on their dominant aggregator.",
-  "🆕 Aggregator-strength-by-outlet heatmap — per-outlet aggregator order share, informs redirect decisions.",
-  "🆕 Historical investment reference table — all-time spend per brand × aggregator + months active.",
-  "🆕 Sticky Smokeys structural-decline banner — flagged every month per skill's recurring requirement until trend reverses."
+  "🐛 Investment Plan now opens — fixed an undefined `BRANDS` reference that was silently throwing inside the render (button looked dead, was actually a runtime error). Switched to the dashboard's actual brand array.",
+  "🐛 Compare tab now anchored beside KPI Tracker — was being appended after whatever the last tab happened to be in the DOM.",
+  "🛡 Investment Plan now shows an explicit error card if it ever fails to render, instead of silently doing nothing.",
+  "🆕 Investment Plan view (from v011) — Drill-Down / Investment Plan toggle, group obligations, per-outlet allocation with Deliveroo bid suggestions, Talabat 'tested' history, brand pool tables, declining outlets, aggregator strength heatmap, historical investments."
 ];
 
 let _updateDialogShown=false;
@@ -3181,20 +3175,25 @@ function cpcLatestRow(brand,ag,outlet){
 // ─── RENDER FUNCTIONS ──────────────────────────────────────────────────
 
 function cpcRenderInvestmentPlan(){
-  const priorMonth=cpcPriorMonth();
-  const priorMonthLabel=new Date(priorMonth+"-01T12:00:00").toLocaleString("en-US",{month:"long",year:"numeric"});
-  const nextLabel=cpcNextMonthLabel();
-  return [
-    cpcSmokeysBanner(),
-    cpcObligationsCard(priorMonth,priorMonthLabel,nextLabel),
-    cpcDeliverooAllocCard(priorMonth),
-    cpcTalabatAllocCard(priorMonth),
-    cpcPoolAllocCard("Noon",priorMonth),
-    cpcPoolAllocCard("Careem",priorMonth),
-    cpcDecliningOutletsCard(),
-    cpcAreaStrengthCard(priorMonth),
-    cpcHistoricalRefCard()
-  ].join("");
+  try{
+    const priorMonth=cpcPriorMonth();
+    const priorMonthLabel=new Date(priorMonth+"-01T12:00:00").toLocaleString("en-US",{month:"long",year:"numeric"});
+    const nextLabel=cpcNextMonthLabel();
+    return [
+      cpcSmokeysBanner(),
+      cpcObligationsCard(priorMonth,priorMonthLabel,nextLabel),
+      cpcDeliverooAllocCard(priorMonth),
+      cpcTalabatAllocCard(priorMonth),
+      cpcPoolAllocCard("Noon",priorMonth),
+      cpcPoolAllocCard("Careem",priorMonth),
+      cpcDecliningOutletsCard(),
+      cpcAreaStrengthCard(priorMonth),
+      cpcHistoricalRefCard()
+    ].join("");
+  }catch(e){
+    console.error("[Investment Plan] render failed:",e);
+    return `<div class="card" style="border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.04)"><div style="color:#ef4444;font-weight:800;margin-bottom:6px;font-size:13px">⚠️ Investment Plan render failed</div><div style="color:#cbd5e1;font-size:11.5px;margin-bottom:8px">${(e&&e.message)||"unknown error"}</div><div style="color:#64748b;font-size:10.5px">Open the browser console (F12) for full stack trace and send to Nikhil.</div></div>`;
+  }
 }
 
 function cpcSmokeysBanner(){
@@ -3315,7 +3314,7 @@ function cpcPoolAllocCard(ag,priorMonth){
   const gmv=cpcGroupGMV(priorMonth,ag);
   const mand=cpcMandatoryBudget(ag,gmv);
   // Per-brand prior GMV & latest pool ROAS
-  const brands=BRANDS.filter(b=>allData.some(r=>r.aggregator===ag&&r.month===priorMonth&&r.brand===b.n&&r.sales>0));
+  const brands=BR.filter(b=>allData.some(r=>r.aggregator===ag&&r.month===priorMonth&&r.brand===b.n&&r.sales>0));
   const rows=brands.map(b=>{
     const bGMV=allData.filter(r=>r.aggregator===ag&&r.month===priorMonth&&r.brand===b.n).reduce((s,r)=>s+(r.sales||0),0);
     const brandShare=gmv>0?bGMV/gmv:0;
@@ -3395,7 +3394,7 @@ function cpcAreaStrengthCard(priorMonth){
 
 function cpcHistoricalRefCard(){
   const aggs=["Deliveroo","Talabat","Careem","Noon"];
-  const tRows=BRANDS.map(b=>{
+  const tRows=BR.map(b=>{
     const cells=aggs.map(ag=>{
       const total=cpcHistoricalSpend(b.n,ag,null);
       if(total===0)return`<td style="padding:7px 8px;text-align:right;color:#475569;font-size:10.5px">none</td>`;
@@ -6211,14 +6210,22 @@ function injectCompareTab(){
     div.className="pg";div.id="page-compare";
     anyPage.parentNode.appendChild(div);
   }
-  // 2) Add a nav tab button after the last existing tab
+  // 2) Add the Compare tab DIRECTLY AFTER the KPI Tracker tab so it stays beside KPI even if
+  // other tabs are present further right. Falls back to appending after the last tab if KPI
+  // can't be located (defensive — shouldn't happen in practice).
   const tabs=document.querySelectorAll(".tab");
   if(tabs.length){
-    const last=tabs[tabs.length-1];
-    const btn=document.createElement(last.tagName.toLowerCase());
+    const btn=document.createElement(tabs[0].tagName.toLowerCase());
     btn.className="tab";btn.innerHTML="⚖️ Compare";
     btn.onclick=()=>gp("compare");
-    last.parentNode.insertBefore(btn,last.nextSibling);
+    let kpiTab=null;
+    tabs.forEach(t=>{if(/kpi/i.test(t.textContent||""))kpiTab=t;});
+    if(kpiTab){
+      kpiTab.parentNode.insertBefore(btn,kpiTab.nextSibling);
+    }else{
+      const last=tabs[tabs.length-1];
+      last.parentNode.insertBefore(btn,last.nextSibling);
+    }
   }
 }
 
