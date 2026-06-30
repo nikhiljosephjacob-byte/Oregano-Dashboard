@@ -13,15 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-018";
+const BUILD_VERSION="2026-06-25-019";
 const BUILD_NOTES=[
-  "🐛 Drilldown now correctly shows the REAL current month (July), not June — CPC campaign status (Active/Upcoming/Completed) and 'current month' badges were anchored to sales-data freshness (or a hardcoded fallback date) instead of today's actual calendar date. New cpcRealToday() helper used consistently for all CPC status logic.",
-  "🆕 'All' ad-type filter now shows CPC, Keywords, and Banners as SEPARATE headlined cards/sections instead of blending their budget and ROAS into one merged figure — applies to both the brand-card grid and the outlet-level drilldown table.",
-  "🆕 Noon Investment Plan now shows the same outlet-level breakdown (with EXCLUDE CANDIDATE flags) that Careem got last build — previously Noon-only lacked this.",
-  "🐛 History tab Brand filter no longer shows junk values like 'Reem' — restricted to real brand names, with a new data-quality warning card listing which sheet rows didn't parse (so they're visible, not silently dropped).",
-  "🐛 History tab Outlet filter no longer shows duplicates like 'AQ' and 'Al Quoz' — added the missing alias, plus a defensive canonicalization pass so the dropdown stays deduped even before the next data refresh picks up the alias fix.",
-  "🆕 Ad Investment Compare rebuilt with two fully independent filter panels (Month/Brand/Aggregator/Outlet/Ad Type for each side A and B), matching the ergonomics of the main Compare page instead of sharing one filter set and only varying by month.",
-  "⚡ Compare aggregation rewritten as a single pass per side (one forEach building a brand×aggregator map) instead of re-filtering the full row array once per unique key — should be noticeably faster on larger datasets."
+  "🐛 Fixed a timezone bug in 'today' detection — cpcRealToday() used UTC-based toISOString(), which can report the PREVIOUS calendar day for UTC+4 users (Dubai) during early morning hours. Now uses local date components, so July shows as July immediately, not delayed until UTC catches up.",
+  "🐛 Bogus brand cards removed — CPC sheet rows whose Brand-Location cell didn't parse into a real brand (e.g. entered as just 'Khalifa West' instead of 'Oregano - Al Reem') no longer show up as fake brand cards with 'no active CPCs'. They're still visible in the History tab's data-quality warning so they can be fixed at the source.",
+  "🐛 Reverted brand-card splitting by ad type — Smokeys (Noon) and Oregano (Talabat) were showing TWICE in the brand grid. Restored to one card per brand; clicking it still drills into the outlet level, where CPC and Banners/Keywords correctly render as separate headlined sections (CPC table first, then Keywords/Banners below) — that part was already right.",
+  "🆕 Ad-type sections now always order CPC → Keywords → Banners, regardless of how they appear in the raw sheet.",
+  "🆕 Compare and History filter Month dropdowns now show 'Jun 26' style labels instead of raw '2026-06' strings."
 ];
 
 let _updateDialogShown=false;
@@ -1938,7 +1936,13 @@ let allData=[],latest=null,curPage="overview",charts={};
 // "June (current month)" after the calendar had already rolled into July with no July sales rows
 // yet pulled. cpcPriorMonth() in the Investment Plan intentionally still uses `latest` — that one
 // SHOULD track sales-data freshness, since obligation math needs an actual closed GMV month.
-function cpcRealToday(){return new Date().toISOString().slice(0,10);}
+function cpcRealToday(){
+  const d=new Date();
+  const yyyy=d.getFullYear();
+  const mm=String(d.getMonth()+1).padStart(2,"0");
+  const dd=String(d.getDate()).padStart(2,"0");
+  return `${yyyy}-${mm}-${dd}`;
+}
 let selBrand="Oregano",selPlatform="Deliveroo";
 let expandedBrand=null,expandedPlatform=null;
 // Per-page filter state — each page (overview/brands/outlets/platforms) keeps its OWN
@@ -2454,6 +2458,9 @@ const CPC_COMM={
 };
 // Brands we exclude from the Ads dashboard entirely
 const CPC_EXCLUDE_BRANDS=new Set(["smiles","burgerstack"]);
+// The set of real brand names — used to flag CPC sheet rows whose Brand-Location cell didn't
+// parse into one of these (see rec.brandUnmapped in parseCPCSheet).
+const CPC_VALID_BRANDS=new Set(BR.map(b=>b.n));
 const CPC_EXCLUDE_AGGS=new Set(["smiles","keeta"]);
 
 function cpcBE(brand,aggregator){
@@ -2615,7 +2622,12 @@ function parseCPCSheet(csv){
       budgetType,
       remarks:remarksRaw,
       updateDate:parseRemarksDate(remarksRaw),
-      month:startDate?startDate.slice(0,7):null
+      month:startDate?startDate.slice(0,7):null,
+      // True when the Brand-Location cell didn't parse into a real brand (e.g. entered as just
+      // "Khalifa West" or "Al Reem Island" instead of "Oregano - Al Reem"). These rows are kept
+      // here (so the History tab's data-quality diagnostic can surface them) but excluded from
+      // buildCPCModel so they don't show up as bogus brand cards in the drilldown.
+      brandUnmapped:!CPC_VALID_BRANDS.has(brand)
     };
     if(rec.startDate&&rec.endDate){
       rec.days=Math.max(1,Math.round((new Date(rec.endDate)-new Date(rec.startDate))/86400000)+1);
@@ -2649,7 +2661,11 @@ let cpcModel=null,cpcModelProgress=0,cpcModelBuilding=false;
 
 function buildCPCModel(onProgress){
   return new Promise((resolve)=>{
-    const rows=cpcData;
+    // Exclude rows whose Brand-Location cell didn't resolve to a real brand (e.g. a sheet row
+    // entered as just "Khalifa West" or "Al Reem Island" instead of "Oregano - Al Reem"). Those
+    // stay in cpcData untouched so the History tab's data-quality warning can still surface them,
+    // but they must never become a bogus "brand" card in the agg/brand-level drilldown.
+    const rows=cpcData.filter(r=>!r.brandUnmapped);
     const today=cpcRealToday();
     const model={byAgg:{},monthly:new Map(),yearROI:new Map(),postImpact:new Map(),actions:[]};
     // Pre-index allData by brand+aggregator+branch for fast post-impact lookups
@@ -2972,49 +2988,40 @@ function cpcRenderBrandLevel(ag){
   const aggAdTypes=[...A.adTypes];
   // If the active ad-type filter isn't valid for this aggregator, treat as 'all'
   const effAdType=(cpcAdTypeFilter!=='all'&&aggAdTypes.includes(cpcAdTypeFilter))?cpcAdTypeFilter:'all';
-  const cards=brands.flatMap(B=>{
+  const cards=brands.map(B=>{
     const bClr=BMAP[B.name]?.c||'#94a3b8';
-    const brandAdTypes=[...B.adTypes];
-    // Determine which ad-type "slices" to render as cards for this brand:
-    //  - a specific type selected (effAdType !== 'all') → one card, filtered to that type
-    //  - 'all' selected + brand has only one ad type → one card, unfiltered (current behavior)
-    //  - 'all' selected + brand has MULTIPLE ad types → one card PER type, so e.g. CPC and
-    //    Banners show as separate headlined cards instead of a blended budget/ROAS figure
-    const slices=effAdType!=='all'?[effAdType]:(brandAdTypes.length>1?brandAdTypes:['all']);
-    return slices.map(sliceType=>{
-      let rows=B.rows;if(sliceType!=='all')rows=rows.filter(r=>r.adType===sliceType);
-      if(!rows.length)return '';
-      const curRows=rows.filter(r=>r.month===cpcModel.curMonth);
-      const useRows=curRows.length?curRows:rows; // fall back to all-time if no current-month data
-      const hasCur=curRows.length>0;
-      const inv=useRows.reduce((s,r)=>s+r.budgetAlloc,0),spent=useRows.reduce((s,r)=>s+r.budgetSpent,0),sales=useRows.reduce((s,r)=>s+r.sales,0);
-      const roas=spent>0?sales/spent:null;const be=cpcBE(B.name,ag);const verdict=cpcVerdict(roas,be);
-      const consum=inv>0?(spent/inv)*100:0;
-      const vClr=verdict?CPC_VC[verdict]:'#64748b';
-      const actCount=cpcModel.actions.filter(a=>a.r.aggregator===ag&&a.r.brand===B.name&&(sliceType==='all'||a.r.adType===sliceType)).length;
-      // Headline shows the ad type as a suffix whenever we've split a multi-type brand into
-      // separate cards, so "Smokeys" → "Smokeys · CPC" and "Smokeys · Banners" appear distinctly.
-      const typeSuffix=(sliceType!=='all')?` <span style="font-size:11px;font-weight:700;color:${bClr}99">· ${sliceType}</span>`:'';
-      const outletCount=sliceType==='all'?Object.keys(B.outlets).length:new Set(rows.map(r=>r.branch)).size;
-      return `<div onclick="cpcAdTypeFilter='${sliceType==='all'?'all':sliceType}';cpcGoOutlets('${ag}','${B.name}')" style="cursor:pointer;background:linear-gradient(135deg,${bClr}0d,rgba(13,21,36,.4));border:1px solid ${bClr}33;border-radius:14px;padding:16px;position:relative;overflow:hidden;transition:transform .15s,border-color .15s" onmouseover="this.style.borderColor='${bClr}88';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='${bClr}33';this.style.transform='none'">
-        <div style="position:absolute;top:-20px;right:-20px;width:80px;height:80px;background:radial-gradient(circle,${bClr}22,transparent 70%);pointer-events:none"></div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <div style="font-size:15px;font-weight:800;color:${bClr}">${B.name}${typeSuffix}</div>
-          <div style="display:flex;gap:6px;align-items:center">${actCount?`<div style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:8px;padding:2px 7px;font-size:10px;font-weight:700;color:#EF4444">⚡ ${actCount}</div>`:''}${verdict?`<div style="background:${CPC_VB[verdict]};border:1px solid ${vClr}44;border-radius:8px;padding:2px 8px;font-size:9px;font-weight:800;color:${vClr}">${verdict}</div>`:''}</div>
-        </div>
-        <div style="font-size:9px;color:${hasCur?'#f59e0b':'#94a3b8'};font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">${hasCur?cpcMonthLabel(cpcModel.curMonth)+' (current month)':'⚠ No active CPCs this month · showing historical'}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-          <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Budget</div><div style="font-size:16px;font-weight:800;color:#e2e8f0">${fmtAED(inv)}</div></div>
-          <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Consumed</div><div style="font-size:16px;font-weight:800;color:#e2e8f0">${fmtAED(spent)}</div></div>
-        </div>
-        <div style="width:100%;height:6px;background:rgba(27,47,74,.4);border-radius:3px;overflow:hidden;margin-bottom:10px"><div style="height:100%;width:${Math.min(100,consum)}%;background:linear-gradient(90deg,${bClr},${bClr}88)"></div></div>
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">ROAS</div><div style="font-size:17px;font-weight:800;color:${vClr}">${roas?roas.toFixed(2)+'×':'—'}</div></div>
-          <div style="text-align:right"><div style="font-size:9px;color:#64748b">break-even</div><div style="font-size:12px;color:#94a3b8">${be.toFixed(2)}×</div></div>
-        </div>
-        <div style="margin-top:10px;font-size:10px;color:#f59e0b;font-weight:600">View ${outletCount} outlets →</div>
-      </div>`;
-    });
+    // filter rows by ad type AND current month for the displayed numbers. Note: this card always
+    // shows ONE blended figure per brand regardless of how many ad types it has — the CPC vs
+    // Banners/Keywords split happens at the next drill level (cpcRenderOutletLevel), which renders
+    // separate headlined sections per type. Splitting here too would show "Smokeys" twice.
+    let rows=B.rows;if(effAdType!=='all')rows=rows.filter(r=>r.adType===effAdType);
+    if(!rows.length)return '';
+    const curRows=rows.filter(r=>r.month===cpcModel.curMonth);
+    const useRows=curRows.length?curRows:rows; // fall back to all-time if no current-month data
+    const hasCur=curRows.length>0;
+    const inv=useRows.reduce((s,r)=>s+r.budgetAlloc,0),spent=useRows.reduce((s,r)=>s+r.budgetSpent,0),sales=useRows.reduce((s,r)=>s+r.sales,0);
+    const roas=spent>0?sales/spent:null;const be=cpcBE(B.name,ag);const verdict=cpcVerdict(roas,be);
+    const consum=inv>0?(spent/inv)*100:0;
+    const vClr=verdict?CPC_VC[verdict]:'#64748b';
+    const actCount=cpcModel.actions.filter(a=>a.r.aggregator===ag&&a.r.brand===B.name&&(effAdType==='all'||a.r.adType===effAdType)).length;
+    return `<div onclick="cpcGoOutlets('${ag}','${B.name}')" style="cursor:pointer;background:linear-gradient(135deg,${bClr}0d,rgba(13,21,36,.4));border:1px solid ${bClr}33;border-radius:14px;padding:16px;position:relative;overflow:hidden;transition:transform .15s,border-color .15s" onmouseover="this.style.borderColor='${bClr}88';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='${bClr}33';this.style.transform='none'">
+      <div style="position:absolute;top:-20px;right:-20px;width:80px;height:80px;background:radial-gradient(circle,${bClr}22,transparent 70%);pointer-events:none"></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-size:15px;font-weight:800;color:${bClr}">${B.name}</div>
+        <div style="display:flex;gap:6px;align-items:center">${actCount?`<div style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:8px;padding:2px 7px;font-size:10px;font-weight:700;color:#EF4444">⚡ ${actCount}</div>`:''}${verdict?`<div style="background:${CPC_VB[verdict]};border:1px solid ${vClr}44;border-radius:8px;padding:2px 8px;font-size:9px;font-weight:800;color:${vClr}">${verdict}</div>`:''}</div>
+      </div>
+      <div style="font-size:9px;color:${hasCur?'#f59e0b':'#94a3b8'};font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">${hasCur?cpcMonthLabel(cpcModel.curMonth)+' (current month)':'⚠ No active CPCs this month · showing historical'}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Budget</div><div style="font-size:16px;font-weight:800;color:#e2e8f0">${fmtAED(inv)}</div></div>
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Consumed</div><div style="font-size:16px;font-weight:800;color:#e2e8f0">${fmtAED(spent)}</div></div>
+      </div>
+      <div style="width:100%;height:6px;background:rgba(27,47,74,.4);border-radius:3px;overflow:hidden;margin-bottom:10px"><div style="height:100%;width:${Math.min(100,consum)}%;background:linear-gradient(90deg,${bClr},${bClr}88)"></div></div>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">ROAS</div><div style="font-size:17px;font-weight:800;color:${vClr}">${roas?roas.toFixed(2)+'×':'—'}</div></div>
+        <div style="text-align:right"><div style="font-size:9px;color:#64748b">break-even</div><div style="font-size:12px;color:#94a3b8">${be.toFixed(2)}×</div></div>
+      </div>
+      <div style="margin-top:10px;font-size:10px;color:#f59e0b;font-weight:600">View ${Object.keys(B.outlets).length} outlets →</div>
+    </div>`;
   }).filter(Boolean).join('');
   // pooling note
   const poolNote=(ag==='Careem'||ag==='Noon')?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px">ℹ️ ${ag} budgets are <strong>pooled at brand level</strong> — outlets that burn faster automatically draw more. Per-outlet budget figures are indicative; the brand total is the real budget. Per-outlet <strong>results</strong> (orders, sales, ROAS, CTO) are exact.</div>`:'';
@@ -3797,7 +3804,7 @@ function cpcRenderHistory(){
     const outlets=[...outletSeen.values()].sort();
 
     const selectHtml=(label,key,opts,curVal)=>{
-      const optsHtml=['<option value="all">All</option>',...opts.map(o=>`<option value="${o}" ${curVal===o?"selected":""}>${o}</option>`)].join("");
+      const optsHtml=['<option value="all">All</option>',...opts.map(o=>`<option value="${o}" ${curVal===o?"selected":""}>${key==='month'?cpcMonthLabel(o):o}</option>`)].join("");
       return`<div style="display:flex;flex-direction:column;gap:2px"><label style="font-size:9.5px;color:#64748b;text-transform:uppercase;font-weight:700">${label}</label><select onchange="cpcHistSetFilter('${key}',this.value)" style="background:#0d1524;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:5px 8px;font-size:11.5px;min-width:120px">${optsHtml}</select></div>`;
     };
 
@@ -3897,7 +3904,7 @@ function cpcHistCompareView(months){
     return[...seen.values()].sort();
   };
   const sel=(side,label,key,opts,curVal)=>{
-    const optsHtml=['<option value="all">All</option>',...opts.map(o=>`<option value="${o}" ${curVal===o?"selected":""}>${o}</option>`)].join("");
+    const optsHtml=['<option value="all">All</option>',...opts.map(o=>`<option value="${o}" ${curVal===o?"selected":""}>${key==='month'?cpcMonthLabel(o):o}</option>`)].join("");
     return`<div style="display:flex;flex-direction:column;gap:2px"><label style="font-size:9px;color:#64748b;text-transform:uppercase;font-weight:700">${label}</label><select onchange="cpcCompSet('${side}','${key}',this.value)" style="background:#0d1524;border:1px solid #1b2f4a;border-radius:5px;color:#e2e8f0;padding:5px 7px;font-size:11px;min-width:105px">${optsHtml}</select></div>`;
   };
   const panel=(side,f,accent)=>`<div style="flex:1;min-width:260px;border:1px solid ${accent}44;border-radius:8px;padding:10px;background:${accent}0a">
@@ -3963,7 +3970,10 @@ function cpcHistCompareView(months){
 function cpcRenderOutletLevel(ag,brand){
   const A=cpcModel.byAgg[ag];if(!A||!A.brands[brand])return `<div class="card">No data</div>`;
   const B=A.brands[brand];
-  const aggAdTypes=[...B.adTypes];
+  // Fixed reading order: CPC always first, then Keywords, then Banners, then anything else —
+  // independent of Set insertion order (which follows raw sheet row order and isn't reliable).
+  const TYPE_ORDER={CPC:0,Keywords:1,Banners:2};
+  const aggAdTypes=[...B.adTypes].sort((a,b)=>(TYPE_ORDER[a]??99)-(TYPE_ORDER[b]??99));
   if(cpcAdTypeFilter!=='all'||aggAdTypes.length<=1){
     return cpcRenderOutletLevelSingle(ag,brand);
   }
