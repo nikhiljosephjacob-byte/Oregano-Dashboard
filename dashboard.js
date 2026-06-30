@@ -13,12 +13,14 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-008";
+const BUILD_VERSION="2026-06-25-009";
 const BUILD_NOTES=[
-  "🆕 Overview 'What Worked / Needs Attention' redesigned — click a platform tab (Deliveroo / Talabat / Careem / Noon / Keeta) to see that platform's top movers. Smiles & Instashop noise excluded.",
-  "🐛 Keeta Week 30% OFF CAP 20 correctly attributed — orders with Alfredo + other items split between Offers for You (15.30) and Keeta Week (rest), no more false 'overlap detected' warning.",
-  "🆕 Talabat co-fund visible in campaign breakdowns — see the platform's share of each discount.",
-  "🆕 CPC pool math fixed — pooled outlets show real pool status instead of misleading per-outlet 'exhausted'."
+  "🆕 Deliveroo orders parser — upload weekly Oregano_Restaurant_LLC statement CSVs for exact per-order discount data (parallel to Keeta/Careem/Talabat).",
+  "🆕 New 5-aggregator upload bar — one button per platform (Deliveroo, Talabat, Careem, Noon, Keeta) with logos, last-upload date, and key figures. Noon is a placeholder (parser coming next).",
+  "🆕 Upload-merge logic — new files no longer overwrite older data. Upload Jun 1-10, then Jun 11-20, and both ranges are retained. Re-uploading the same range corrects the overlap.",
+  "🆕 72-hour stale-data reminder — aggregator buttons blink when their data is over 72h old, prompting a fresh upload.",
+  "🐛 BOGO campaign labels fixed — no longer shows '35% off' (the co-fund %) as the headline. Reads as 'BOGO · select items' or just 'BOGO'.",
+  "🆕 BOGO co-fund display — Deliveroo's 35% co-funded share is now shown alongside the merchant's 65% cost in contribution breakdowns."
 ];
 
 let _updateDialogShown=false;
@@ -326,6 +328,58 @@ const KEETA_CAMPAIGN_DEFAULT={Lollorosso:"50% OFF",Smokeys:"50% OFF",Fyoozhen:"5
 const KEETA_FD_COST=2.0; // AED per order — Keeta free-delivery share embedded in merchant-funded column
 const KEETA_STORAGE_KEY="keeta_orders_data_v1";
 
+// ═══════════════════════════════════════════════════════════════
+// GENERIC ORDERS-DATA MERGE HELPER (used by every aggregator)
+// ═══════════════════════════════════════════════════════════════
+// When the user uploads a file covering a date range, we don't blow away existing data.
+// Instead: any record whose date falls inside the NEW file's range gets replaced; records
+// outside that range are kept. So uploading Jun 1-10 then Jun 11-20 retains both ranges
+// (cumulative). Re-uploading Jun 1-20 replaces both (corrective overwrite). Re-uploading
+// Jun 1-10 (after Jun 11-20 already exists) keeps Jun 11-20 untouched and replaces Jun 1-10.
+//
+// Each aggregator's data shape is the same:
+//   { metadata: { aggregator, date_range:[min,max], totals_per_brand, ... },
+//     records:  [{brand, outlet, date, ...}] }
+//
+// recomputeTotals(records) is aggregator-specific because totals shapes differ. Caller passes
+// the recompute function. The returned object also carries an `uploadDate` ISO timestamp on
+// the metadata so the upload bar can show "uploaded N hours ago" and trigger the 72-hour
+// reminder blink.
+function mergeOrdersData(existing,fresh,recomputeTotals){
+  const now=new Date().toISOString();
+  if(!existing||!existing.records||!existing.records.length){
+    // Nothing to merge into — accept fresh as-is, just stamp upload time.
+    const out={...fresh,metadata:{...fresh.metadata,uploadDate:now,lastFileDate:fresh.metadata?.date_range?.[1]||null}};
+    return out;
+  }
+  const freshDates=new Set(fresh.records.map(r=>r.date));
+  // Keep existing records whose date isn't in the fresh upload's date set
+  const kept=existing.records.filter(r=>!freshDates.has(r.date));
+  const merged=[...kept,...fresh.records].sort((a,b)=>{
+    if(a.brand!==b.brand)return a.brand.localeCompare(b.brand);
+    if(a.outlet!==b.outlet)return a.outlet.localeCompare(b.outlet);
+    if(a.date!==b.date)return a.date.localeCompare(b.date);
+    return 0;
+  });
+  // Recompute date range from merged records
+  const allDates=merged.map(r=>r.date).sort();
+  const newRange=allDates.length?[allDates[0],allDates[allDates.length-1]]:[null,null];
+  // Recompute totals via caller-supplied function (aggregator-specific shape)
+  const totals=recomputeTotals?recomputeTotals(merged):(existing.metadata?.totals_per_brand||{});
+  return{
+    metadata:{
+      ...existing.metadata,
+      ...fresh.metadata,
+      date_range:newRange,
+      totals_per_brand:totals,
+      uploadDate:now,
+      lastFileDate:fresh.metadata?.date_range?.[1]||null,
+      mergedFromFiles:[...(existing.metadata?.mergedFromFiles||[]),...(fresh.metadata?.source_files||[fresh.metadata?.source_file||"upload"])].slice(-10)
+    },
+    records:merged
+  };
+}
+
 // ── State ────────────────────────────────────────────────────────────────
 // keetaOrdersData = { metadata:{...}, records:[{brand,outlet,date,campaign,orders,gross,net,menu_disc}] }
 // or null if user hasn't uploaded a file. Loaded once from localStorage at startup so the
@@ -593,34 +647,89 @@ async function parseKeetaXlsx(file){
   };
 }
 
-// ── Unified upload UI bar (top of Campaigns page) — handles Keeta XLSX, Careem CSV, Talabat XLSX
+// ── Aggregator upload buttons (top of Campaigns page) — 5 buttons, one per aggregator.
+// Each button shows aggregator logo, last upload status, and key figures. If data is older
+// than 72 hours, the button blinks to remind the user to upload a fresh file. Noon is shown
+// as a placeholder since its parser is pending — clicking it shows a "coming soon" message.
 function keetaUploadBarHTML(){
-  const fmtSourceStatus=(label,data,clearFn)=>{
-    if(!data)return`<span style="font-size:11px;color:#64748b">${label}: <em style="color:#475569">not uploaded</em></span>`;
-    const md=data.metadata||{};const dr=md.date_range||[];
-    // Order total can be in metadata.totals.orders (Keeta) or summed from totals_per_brand (Careem/Talabat)
-    let orders=0;
-    if(md.totals&&md.totals.orders)orders=md.totals.orders;
-    else if(md.totals_per_brand)Object.values(md.totals_per_brand).forEach(t=>{orders+=t.orders||0;});
-    return`<span style="font-size:11px;color:#cbd5e1"><strong style="color:#22C55E">${label}:</strong> ${orders.toLocaleString()} orders · ${dr[0]?fmtShort(dr[0]):"?"} → ${dr[1]?fmtShort(dr[1]):"?"} <button onclick="if(confirm('Clear uploaded ${label} data? Reverts to sales-weighted estimation.'))${clearFn}()" style="background:transparent;border:none;color:#64748b;font-size:9px;cursor:pointer;padding:0 4px;text-decoration:underline">clear</button></span>`;
+  const STALE_HOURS=72;
+  const fmtAgo=(iso)=>{
+    if(!iso)return"";
+    const ms=Date.now()-new Date(iso).getTime();
+    const h=ms/3600000;
+    if(h<1)return"just now";
+    if(h<24)return`${Math.floor(h)}h ago`;
+    const d=Math.floor(h/24);
+    return d===1?"1 day ago":`${d} days ago`;
   };
-  const keetaStatus=fmtSourceStatus("Keeta",keetaOrdersData,"clearKeetaData");
-  const careemStatus=fmtSourceStatus("Careem",careemOrdersData,"clearCareemData");
-  const talabatStatus=fmtSourceStatus("Talabat",talabatOrdersData,"clearTalabatData");
-  const anyLoaded=keetaOrdersData||careemOrdersData||talabatOrdersData;
-  const accent=anyLoaded?"rgba(34,197,94,.3)":"rgba(232,214,20,.3)";
-  const accentBg=anyLoaded?"rgba(34,197,94,.04)":"rgba(232,214,20,.06)";
-  const accentBorder=anyLoaded?"1px solid":"1px dashed";
-  const blurb=anyLoaded
-    ?`<span style="font-size:11px;color:#94a3b8;margin-right:8px">📊 Exact-order data is in use for campaigns where uploaded data covers the window:</span>`
-    :`<span style="font-size:11px;color:#94a3b8;margin-right:8px;flex:1">📊 No exact-order data uploaded — campaigns currently use sales-weighted estimation. Upload Keeta "Recent Orders" (.xlsx), Careem "FOOD_ORDER" (.csv), or Talabat "orderDetails" (.xlsx) for exact per-outlet discount data.</span>`;
-  return`<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:${accentBg};border:${accentBorder} ${accent};border-radius:8px;margin-bottom:12px;flex-wrap:wrap">
-    ${blurb}
-    ${anyLoaded?`<div style="display:flex;gap:14px;flex-wrap:wrap;flex:1">${keetaStatus}${careemStatus}${talabatStatus}</div>`:''}
-    <input type="file" id="orders-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleOrdersUpload(this.files[0])">
-    <button onclick="document.getElementById('orders-file').click()" style="background:rgba(232,214,20,.15);border:1px solid rgba(232,214,20,.4);border-radius:5px;color:#E8D614;padding:5px 14px;font-size:11px;cursor:pointer;font-weight:700;white-space:nowrap">${anyLoaded?'↻ Upload More':'Upload Orders File'}</button>
+  const isStale=(iso)=>{if(!iso)return false;return(Date.now()-new Date(iso).getTime())>STALE_HOURS*3600000;};
+  const aggButton=(label,logoKey,data,clearFn,placeholder)=>{
+    const accent=AC[logoKey]||AC[label]||'#f59e0b';
+    const md=data&&data.metadata?data.metadata:null;
+    const uploadDate=md?md.uploadDate:null;
+    const stale=!placeholder&&isStale(uploadDate);
+    const dr=md?md.date_range:[null,null];
+    // Sum orders + disc for the status line
+    let orders=0,totalDisc=0;
+    if(md){
+      if(md.totals&&md.totals.orders)orders=md.totals.orders;
+      else if(md.totals_per_brand)Object.values(md.totals_per_brand).forEach(t=>{orders+=t.orders||0;});
+      if(md.totals_per_brand){
+        Object.values(md.totals_per_brand).forEach(t=>{
+          // Different aggregators use different field names — sum whichever exist
+          totalDisc+=(t.menu_disc||0)+(t.marketer_offer_disc||0)+(t.rewards_disc||0)+(t.unknown_disc||0);
+        });
+      }
+    }
+    // Three states per button: placeholder (no parser yet), loaded (green), not-uploaded (yellow dashed)
+    const isLoaded=!!md&&!placeholder;
+    const borderStyle=placeholder?'1px dashed rgba(100,116,139,.4)':(isLoaded?`1px solid ${accent}55`:'1px dashed rgba(232,214,20,.4)');
+    const bg=placeholder?'rgba(100,116,139,.04)':(isLoaded?`linear-gradient(135deg,${accent}11,rgba(13,21,36,.5))`:'rgba(232,214,20,.04)');
+    const handler=placeholder
+      ?`alert('Noon parser is being built next. For now, Noon discount data still uses sales-weighted estimation from the brand totals in your Google Sheet.');`
+      :`document.getElementById('orders-file-${label.toLowerCase()}').click()`;
+    const blinkClass=stale?'agg-btn-blink':'';
+    const statusLine=placeholder
+      ?`<div style="font-size:9.5px;color:#64748b;line-height:1.4">Coming soon<br/><em>parser pending</em></div>`
+      :isLoaded
+        ?`<div style="font-size:9.5px;color:#cbd5e1;line-height:1.4"><strong style="color:${accent}">${orders.toLocaleString()}</strong> orders<br/>${dr[0]?fmtShort(dr[0]):'?'} → ${dr[1]?fmtShort(dr[1]):'?'}<br/><span style="color:#64748b">${fmtAgo(uploadDate)}${stale?' ⚠️':''}</span></div>`
+        :`<div style="font-size:9.5px;color:#94a3b8;line-height:1.4">Not uploaded<br/><em style="color:#64748b">click to upload</em></div>`;
+    const clearBtn=isLoaded?`<button onclick="event.stopPropagation();if(confirm('Clear uploaded ${label} data? It will revert to sales-weighted estimation.'))${clearFn}()" title="Clear ${label} data" style="position:absolute;top:6px;right:6px;background:transparent;border:none;color:#475569;font-size:11px;cursor:pointer;padding:2px 5px;line-height:1">✕</button>`:'';
+    return`<div class="agg-upload-btn ${blinkClass}" onclick="${handler}" style="position:relative;cursor:pointer;background:${bg};border:${borderStyle};border-radius:10px;padding:10px 8px 8px 8px;text-align:center;transition:transform .15s,border-color .15s;min-height:108px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:6px" onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${accent}99'" onmouseout="this.style.transform='none';this.style.borderColor=''" title="${placeholder?'Noon parser coming soon':isLoaded?(stale?'⚠️ Data is over 72h old — upload a fresh file':'Click to upload a newer file (merges with existing data)'):'Click to upload your '+label+' order export'}">${clearBtn}<div style="height:28px;display:flex;align-items:center;justify-content:center">${logoImg(logoKey,28)}</div><div style="font-size:11px;font-weight:800;color:${placeholder?'#64748b':isLoaded?accent:'#cbd5e1'};letter-spacing:.3px">${label}</div>${statusLine}</div>`;
+  };
+  const buttons=[
+    aggButton("Deliveroo","Deliveroo",deliverooOrdersData,"clearDeliverooData",false),
+    aggButton("Talabat","Talabat",talabatOrdersData,"clearTalabatData",false),
+    aggButton("Careem","Careem",careemOrdersData,"clearCareemData",false),
+    aggButton("Noon","Noon",null,"",true), // placeholder — parser pending
+    aggButton("Keeta","Keeta",keetaOrdersData,"clearKeetaData",false)
+  ].join("");
+  const inputs=`<input type="file" id="orders-file-deliveroo" accept=".csv" style="display:none" onchange="handleOrdersUpload(this.files[0]);this.value='';">
+                <input type="file" id="orders-file-talabat" accept=".xlsx,.xls" style="display:none" onchange="handleOrdersUpload(this.files[0]);this.value='';">
+                <input type="file" id="orders-file-careem" accept=".csv" style="display:none" onchange="handleOrdersUpload(this.files[0]);this.value='';">
+                <input type="file" id="orders-file-keeta" accept=".xlsx,.xls" style="display:none" onchange="handleOrdersUpload(this.files[0]);this.value='';">`;
+  return`<div style="margin-bottom:14px">
+    <div style="font-size:10px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">📊 Per-order data sources</div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px">${buttons}</div>
+    ${inputs}
   </div>`;
 }
+
+// CSS for the 72-hour stale-data blink + responsive grid. Injected once via injectResponsiveCSS.
+const AGG_UPLOAD_CSS=`
+@keyframes aggBlink {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245,158,11,0); border-color: rgba(245,158,11,.3); }
+  50% { box-shadow: 0 0 12px 2px rgba(245,158,11,.5); border-color: rgba(245,158,11,.9); }
+}
+.agg-btn-blink { animation: aggBlink 2s ease-in-out infinite; }
+@media (max-width:760px) {
+  .agg-upload-btn { min-height:96px !important; padding:8px 5px !important; }
+  .agg-upload-btn > div:nth-child(3) { font-size:10px !important; }
+}
+@media (max-width:520px) {
+  div[style*="grid-template-columns:repeat(5,1fr)"] { grid-template-columns:repeat(3,1fr) !important; }
+}
+`;
 
 // ── Unified upload handler ──────────────────────────────────────────────
 // Auto-detects file format from headers:
@@ -645,25 +754,38 @@ async function handleOrdersUpload(file){
     firstRow.forEach(h=>headers.add(String(h).replace(/^\uFEFF/,"")));
     secondRow.forEach(h=>headers.add(String(h).replace(/^\uFEFF/,"")));
     let detected=null;
+    // Keeta: "Order no." + "Promotion funded by merchant"
     if(headers.has("Order no.")&&headers.has("Promotion funded by merchant"))detected="keeta";
+    // Careem: "PARTNER_FUNDED_CATALOG_DISCOUNT" + "MERCHANT_AREA"
     else if(headers.has("PARTNER_FUNDED_CATALOG_DISCOUNT")&&headers.has("MERCHANT_AREA"))detected="careem";
+    // Talabat: two-row header with "Voucher Funded by you" + "Talabat-Funded Voucher"
     else if(headers.has("Voucher Funded by you")&&headers.has("Talabat-Funded Voucher"))detected="talabat";
+    // Deliveroo: banner row 0 = "Orders and related adjustments", row 1 has "Deliveroo Commission Rate" + "Order Value (د.إ)"
+    else if(secondRow.some(h=>String(h).includes("Deliveroo Commission Rate"))&&secondRow.some(h=>String(h).includes("Order Value")))detected="deliveroo";
     if(!detected){
-      alert("Couldn't detect the file format.\n\nExpected either:\n• Keeta Recent Orders (.xlsx)\n• Careem FOOD_ORDER (.csv)\n• Talabat orderDetails (.xlsx)\n\nMake sure you exported the right report.");
+      alert("Couldn't detect the file format.\n\nExpected one of:\n• Keeta Recent Orders (.xlsx)\n• Careem FOOD_ORDER (.csv)\n• Talabat orderDetails (.xlsx)\n• Deliveroo Oregano_Restaurant_LLC statement (.csv)\n\nMake sure you exported the right report.");
       return;
     }
     if(detected==="keeta"){
-      const data=await parseKeetaXlsx(file);
-      if(!data.records.length){alert("File parsed but no usable Keeta records were found.");return;}
-      keetaOrdersData=data;saveKeetaToStorage();
+      const fresh=await parseKeetaXlsx(file);
+      if(!fresh.records.length){alert("File parsed but no usable Keeta records were found.");return;}
+      keetaOrdersData=mergeOrdersData(keetaOrdersData,fresh,null);
+      saveKeetaToStorage();
     }else if(detected==="careem"){
-      const data=await parseCareemCSV(file);
-      if(!data.records.length){alert("File parsed but no usable Careem records were found.");return;}
-      careemOrdersData=data;saveCareemToStorage();
-    }else{
-      const data=await parseTalabatXlsx(file);
-      if(!data.records.length){alert("File parsed but no usable Talabat records were found.");return;}
-      talabatOrdersData=data;saveTalabatToStorage();
+      const fresh=await parseCareemCSV(file);
+      if(!fresh.records.length){alert("File parsed but no usable Careem records were found.");return;}
+      careemOrdersData=mergeOrdersData(careemOrdersData,fresh,null);
+      saveCareemToStorage();
+    }else if(detected==="talabat"){
+      const fresh=await parseTalabatXlsx(file);
+      if(!fresh.records.length){alert("File parsed but no usable Talabat records were found.");return;}
+      talabatOrdersData=mergeOrdersData(talabatOrdersData,fresh,null);
+      saveTalabatToStorage();
+    }else if(detected==="deliveroo"){
+      const fresh=await parseDeliverooCSV(file);
+      if(!fresh.records.length){alert("File parsed but no usable Deliveroo records were found.");return;}
+      deliverooOrdersData=mergeOrdersData(deliverooOrdersData,fresh,deliverooRecomputeTotals);
+      saveDeliverooToStorage();
     }
     if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
     renderCampaigns();
@@ -1145,6 +1267,225 @@ async function parseTalabatXlsx(file){
 // ═══════════════════════════════════════════════════════════════
 
 
+// ═══════════════════════════════════════════════════════════════
+// DELIVEROO EXACT-DISCOUNT MODULE
+// ═══════════════════════════════════════════════════════════════
+// Mirrors the Keeta/Careem/Talabat pattern. Parses weekly Deliveroo "Oregano_Restaurant_LLC_*.csv"
+// statement exports. Two discount sources per file:
+//   1) "Marketer offer discount: XX.XX" in the Note column of Delivery rows → main campaign discount
+//   2) "Restaurant funded voucher promotion" standalone adjustment rows → AED 20/30 vouchers, tagged
+//      as Deliveroo Rewards for Lollorosso & Wicked Wings, "Unknown" for Oregano (pending account
+//      manager clarification per Nikhil).
+// See /deliveroo-orders/SKILL.md for the methodology.
+
+const DELIVEROO_STORAGE_KEY="deliveroo_orders_data_v1";
+
+// Brand prefix matching — case-insensitive, longest-prefix-wins via array order. "Oregano" is last
+// because it would also match nothing else.
+const DELIVEROO_BRAND_PREFIXES=[
+  ["lollo rosso","Lollorosso"],
+  ["lollorosso","Lollorosso"],
+  ["smokey's","Smokeys"],
+  ["smokeys","Smokeys"],
+  ["fyoo zhen","Fyoozhen"],
+  ["fyoozhen","Fyoozhen"],
+  ["wicked wings","Wicked Wings"],
+  ["oregano","Oregano"]
+];
+
+// Outlet substring matching — sorted longest-first at match time to avoid "Reem" winning over
+// "Reem Island". Deliveroo's outlet naming is messy: "Media City" vs "DMC", "Silicon Oasis" vs "DSO",
+// "Mirdif" vs "Mirdiff", "Al Furjan" vs "Furjan" — both forms appear, all map to one outlet.
+const DELIVEROO_OUTLET_MAP={
+  "al forsan":"Al Forsan","al furjan":"Furjan","al qouz":"Al Quoz","al quoz":"Al Quoz",
+  "al reef":"Al Reef","reem island":"Al Reem","al reem":"Al Reem","dip":"DIP",
+  "dubai marina":"Marina","marina":"Marina","jumeirah":"Jumeirah","media city":"DMC","dmc":"DMC",
+  "mirdiff":"Mirdiff","mirdif":"Mirdiff","motor city":"Motorcity","motorcity":"Motorcity",
+  "nad al sheba":"NAS","silicon oasis":"DSO","dso":"DSO","town square":"Town Square",
+  "the villa":"Villa","villa":"Villa","wtc mall":"WTC","wtc":"WTC"
+};
+
+// Rewards is currently only active for these two brands (confirmed by Nikhil)
+const DELIVEROO_REWARDS_BRANDS=new Set(["Lollorosso","Wicked Wings"]);
+
+let deliverooOrdersData=null;
+
+function loadDeliverooFromStorage(){
+  try{const raw=localStorage.getItem(DELIVEROO_STORAGE_KEY);if(raw)deliverooOrdersData=JSON.parse(raw);}
+  catch(e){console.log("[Deliveroo] localStorage load failed:",e.message);deliverooOrdersData=null;}
+}
+function saveDeliverooToStorage(){
+  if(!deliverooOrdersData)return;
+  try{localStorage.setItem(DELIVEROO_STORAGE_KEY,JSON.stringify(deliverooOrdersData));}
+  catch(e){console.log("[Deliveroo] localStorage save failed (quota?):",e.message);}
+}
+function clearDeliverooData(){
+  deliverooOrdersData=null;
+  try{localStorage.removeItem(DELIVEROO_STORAGE_KEY);}catch(e){}
+  if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
+  renderCampaigns();
+}
+
+// Parse "Restaurant Name" → {brand, outlet}. Returns nulls if unmappable.
+function parseDeliverooBrandOutlet(name){
+  if(!name)return{brand:null,outlet:null};
+  const s=String(name).toLowerCase().trim();
+  let brand=null;
+  for(const[prefix,b]of DELIVEROO_BRAND_PREFIXES){if(s.includes(prefix)){brand=b;break;}}
+  if(!brand)return{brand:null,outlet:null};
+  // Bare "Fyoozhen" (no outlet suffix) → Al Forsan per Nikhil
+  if(brand==="Fyoozhen"){
+    const stripped=s.replace(/fyoo\s*zhen|fyoozhen/g,"").trim().replace(/^[-\s]+|[-\s]+$/g,"");
+    if(!stripped)return{brand:"Fyoozhen",outlet:"Al Forsan"};
+  }
+  // Outlet: try longest-key-first
+  const keys=Object.keys(DELIVEROO_OUTLET_MAP).sort((a,b)=>b.length-a.length);
+  for(const k of keys){if(s.includes(k))return{brand,outlet:DELIVEROO_OUTLET_MAP[k]};}
+  return{brand,outlet:null};
+}
+
+// Extract the merchant-funded marketer offer discount value from the Note field. Returns 0 if absent.
+function parseDeliverooMarketerDisc(note){
+  if(!note)return 0;
+  const m=String(note).match(/Marketer offer discount:\s*([\d.]+)/i);
+  return m?parseFloat(m[1]):0;
+}
+
+// Recompute per-brand totals from a flat records array (used by merge helper)
+function deliverooRecomputeTotals(records){
+  const totals={};
+  for(const r of records){
+    if(!totals[r.brand])totals[r.brand]={orders:0,gross:0,net_payout:0,marketer_offer_disc:0,rewards_disc:0,unknown_disc:0};
+    const t=totals[r.brand];
+    if(r.discount_type==="marketer_offer"){
+      t.orders+=r.orders||0;t.gross+=r.gross||0;t.net_payout+=r.net_payout||0;t.marketer_offer_disc+=r.menu_disc||0;
+    }else if(r.discount_type==="rewards"){
+      t.rewards_disc+=r.menu_disc||0;
+    }else if(r.discount_type==="unknown"){
+      t.unknown_disc+=r.menu_disc||0;
+    }
+  }
+  Object.values(totals).forEach(t=>{
+    ["gross","net_payout","marketer_offer_disc","rewards_disc","unknown_disc"].forEach(k=>t[k]=+t[k].toFixed(2));
+  });
+  return totals;
+}
+
+// Parse a Deliveroo weekly statement CSV. Handles the multi-section structure (banner row + repeated
+// headers later in the file for "Payments for contested customer refunds" and "Other payments and
+// fees" sections — those rows have Order Number === "Order Number" or Activity === NaN, filtered out).
+async function parseDeliverooCSV(file){
+  await loadSheetJS();
+  const ab=await file.arrayBuffer();
+  const wb=XLSX.read(ab,{type:"array",raw:false,codepage:65001});
+  const ws=wb.Sheets[wb.SheetNames[0]];
+  // SheetJS will read the first row as a header by default. We use header:1 to get raw rows,
+  // skip the banner (row 0), use row 1 as our headers, and process row 2+ as data.
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:"",raw:false});
+  if(rows.length<3){throw new Error("Deliveroo CSV is too short — expected banner + headers + data rows.");}
+  // First row is the section banner "Orders and related adjustments"
+  const headers=rows[1].map(h=>String(h||"").trim());
+  const idx={};headers.forEach((h,i)=>idx[h]=i);
+  const need=["Restaurant Name","Order Number","Delivery Date & Time (UTC)","Activity","Order Value (د.إ)","Adjustment Net (د.إ)","Total Payable","Note"];
+  for(const k of need){if(idx[k]===undefined){throw new Error(`Deliveroo CSV missing expected header: ${k}`);}}
+
+  const agg={};
+  for(let i=2;i<rows.length;i++){
+    const row=rows[i];
+    const orderNum=row[idx["Order Number"]];
+    // Skip section-banner rows (all-NaN except Restaurant Name) and repeated-header rows
+    if(!orderNum||orderNum==="Order Number")continue;
+    const activity=row[idx["Activity"]];
+    // Only process two activity types — everything else (cancellations, refunds, redeliveries,
+    // food remakes, marketer adverts/CPC) is excluded from discount totals.
+    if(activity!=="Delivery"&&activity!=="Restaurant funded voucher promotion")continue;
+    const restName=row[idx["Restaurant Name"]];
+    const{brand,outlet}=parseDeliverooBrandOutlet(restName);
+    if(!brand||!outlet)continue;
+    const dateRaw=row[idx["Delivery Date & Time (UTC)"]];
+    const dateStr=String(dateRaw||"").slice(0,10);
+    if(!dateStr||!/^\d{4}-\d{2}-\d{2}$/.test(dateStr))continue;
+
+    if(activity==="Delivery"){
+      const orderValue=parseFloat(row[idx["Order Value (د.إ)"]]||0)||0;
+      const totalPayable=parseFloat(row[idx["Total Payable"]]||0)||0;
+      const marketerDisc=parseDeliverooMarketerDisc(row[idx["Note"]]||"");
+      const key=`${brand}|${outlet}|${dateStr}|marketer_offer`;
+      if(!agg[key])agg[key]={brand,outlet,date:dateStr,discount_type:"marketer_offer",orders:0,gross:0,net_payout:0,menu_disc:0};
+      agg[key].orders++;
+      agg[key].gross+=orderValue+marketerDisc;
+      agg[key].net_payout+=totalPayable;
+      agg[key].menu_disc+=marketerDisc;
+    }else{
+      // Restaurant funded voucher promotion → Rewards (Lollo/WW) or Unknown (Oregano)
+      const adj=Math.abs(parseFloat(row[idx["Adjustment Net (د.إ)"]]||0)||0);
+      if(adj<=0)continue;
+      const discType=DELIVEROO_REWARDS_BRANDS.has(brand)?"rewards":"unknown";
+      const key=`${brand}|${outlet}|${dateStr}|${discType}`;
+      if(!agg[key])agg[key]={brand,outlet,date:dateStr,discount_type:discType,orders:0,gross:0,net_payout:0,menu_disc:0};
+      agg[key].menu_disc+=adj;
+    }
+  }
+
+  const records=Object.values(agg).map(r=>({...r,gross:+r.gross.toFixed(2),net_payout:+r.net_payout.toFixed(2),menu_disc:+r.menu_disc.toFixed(2)}))
+    .sort((a,b)=>(a.brand+a.outlet+a.date+a.discount_type).localeCompare(b.brand+b.outlet+b.date+b.discount_type));
+
+  const dates=records.map(r=>r.date).sort();
+  const totals=deliverooRecomputeTotals(records);
+
+  return{
+    metadata:{
+      aggregator:"Deliveroo",
+      date_range:dates.length?[dates[0],dates[dates.length-1]]:[null,null],
+      totals_per_brand:totals,
+      total_records:records.length,
+      source_file:file.name||"upload"
+    },
+    records
+  };
+}
+
+// Lookup used by allocateCampaignDiscount: sums exact merchant disc for a campaign's brand/outlets/dates,
+// filtered to the right discount_type (marketer_offer for main campaigns, rewards for "Deliveroo Rewards"
+// campaigns, unknown for the Oregano stragglers). Same partial-coverage semantics as Keeta/Careem/Talabat.
+function getDeliverooExactDisc(c,start,end,discountTypeFilter){
+  if(!deliverooOrdersData||!deliverooOrdersData.records||!deliverooOrdersData.metadata)return null;
+  const dr=deliverooOrdersData.metadata.date_range||[];
+  if(!dr[0]||!dr[1])return null;
+  if(end<dr[0]||start>dr[1])return null;
+  const myScope=campOutlets(c);
+  let menuDisc=0;const dailyAlloc={};let matched=0;
+  for(const rec of deliverooOrdersData.records){
+    if(rec.brand!==c.brand)continue;
+    if(rec.date<start||rec.date>end)continue;
+    if(myScope&&!myScope.has(rec.outlet))continue;
+    if(discountTypeFilter&&rec.discount_type!==discountTypeFilter)continue;
+    menuDisc+=rec.menu_disc;
+    dailyAlloc[rec.date]=(dailyAlloc[rec.date]||0)+rec.menu_disc;
+    matched++;
+  }
+  if(!matched)return null;
+  const daysIn=(s,e)=>Math.max(0,Math.round((new Date(e+"T12:00:00")-new Date(s+"T12:00:00"))/86400000)+1);
+  const totalDays=daysIn(start,end);
+  const covStart=start>dr[0]?start:dr[0];
+  const covEnd=end<dr[1]?end:dr[1];
+  const coveredDays=daysIn(covStart,covEnd);
+  return{menuDisc,dailyAlloc,matchedRecords:matched,coveredDays,totalDays,partialCoverage:coveredDays<totalDays,uncoveredStart:end>dr[1]?dr[1]:null,uncoveredEnd:end>dr[1]?end:null};
+}
+
+// Classify a Deliveroo campaign by its name/comment to decide which discount_type to read.
+// "Deliveroo Rewards" → rewards records. Anything else → marketer_offer (the main campaign).
+function classifyDeliverooCampaign(c){
+  const txt=((c.name||"")+" "+(c.comments||"")).toLowerCase();
+  if(/\brewards?\b/.test(txt)&&/deliveroo/.test(txt))return"rewards";
+  return"marketer_offer";
+}
+
+// ═══════════════════════════════════════════════════════════════
+// END DELIVEROO MODULE
+// ═══════════════════════════════════════════════════════════════
+
+
 
 // CSV PARSING
 function parseCSV(txt){const rows=[];let row=[],c="",q=false;for(let i=0;i<txt.length;i++){const ch=txt[i];if(ch==='"')q=!q;else if(ch===","&&!q){row.push(c.trim());c="";}else if((ch==="\n"||ch==="\r")&&!q){if(ch==="\r"&&txt[i+1]==="\n")i++;row.push(c.trim());c="";if(row.some(x=>x))rows.push(row);row=[];}else c+=ch;}row.push(c.trim());if(row.some(x=>x))rows.push(row);return rows;}
@@ -1325,6 +1666,7 @@ async function doLoad(){
   loadKeetaFromStorage();
   loadCareemFromStorage();
   loadTalabatFromStorage();
+  loadDeliverooFromStorage();
   // ── DISCOUNT PARSE DIAGNOSTIC ──
   // Prints how much Disc was parsed per brand × aggregator so we can see if the sheet's
   // Disc column is being read. If a brand/aggregator you entered shows 0, the column header
@@ -1386,7 +1728,7 @@ function injectResponsiveCSS(){
   if(document.getElementById("dash-responsive-css"))return;
   const s=document.createElement("style");
   s.id="dash-responsive-css";
-  s.textContent=`
+  s.textContent=AGG_UPLOAD_CSS+`
 /* ── Mobile (phones, ≤640px) ────────────────────────────────────────────── */
 @media (max-width: 640px){
   /* Make the top nav strip horizontally scrollable so all tabs (incl. Compare) are reachable.
@@ -3752,10 +4094,23 @@ function campCardGrid(camps,showProfit){
       headlineHTML=`<div style="font-size:11px;color:#F59E0B;margin-top:10px;font-weight:600">Starts in ${daysToStart} day${daysToStart!==1?'s':''} · ${fmtDisp(c.startDate)}</div>`;
     }
     const coFundChip=(()=>{const p=parseCampComment(c).coFundedPctOfDiscount;return p>0?`<span style="font-size:8px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:1px 6px;border-radius:6px">🤝 ${Math.round(p*100)}%</span>`:'';})();
-    // Offer text: discount % plus any cap (e.g. "50% off · cap AED 30") parsed from the comment.
+    // Offer text: detect BOGO first (Buy One Get One — discount isn't a flat %), then a real
+    // "X% off" / "X% discount" pattern, ignoring co-funding mentions like "35% co-funded by
+    // Deliveroo" (which is the platform's share, not the discount the customer sees).
     const offer=(()=>{
-      const txt=c.comments||c.name||'';
-      const pm=txt.match(/(\d{1,2})\s*%/);
+      const txt=(c.comments||c.name||'').trim();
+      const txtLower=txt.toLowerCase();
+      // BOGO detection — covers "BOGO", "Buy One Get One", "Buy 1 Get 1", "BOGOF"
+      const isBOGO=/\b(bogo(?:f)?|buy\s*one\s*get\s*one|buy\s*1\s*get\s*1)\b/i.test(txt);
+      if(isBOGO){
+        // Try to extract whether it applies to select items vs all items
+        const onSelect=/select\s+(items?|menu)/i.test(txt);
+        return onSelect?'BOGO · select items':'BOGO';
+      }
+      // Strip out co-funding mentions before extracting the headline %, so "35% Co-funded" doesn't get
+      // confused for the headline discount.
+      const cleanedTxt=txt.replace(/\d{1,2}\s*%\s*(co[\s-]?fund(?:ed|ing)?|funded\s+by|deliveroo\s+share|platform\s+share)/gi,'');
+      const pm=cleanedTxt.match(/(\d{1,2})\s*%\s*(?:off|discount|disc)\b/i)||cleanedTxt.match(/(\d{1,2})\s*%/);
       const capM=txt.match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i)||txt.match(/(?:aed\s*)?(\d{1,4})\s*cap/i);
       const pct=pm?`${pm[1]}% off`:(c.name||'');
       return capM?`${pct} · cap AED ${capM[1]}`:pct;
@@ -3767,10 +4122,11 @@ function campCardGrid(camps,showProfit){
     const exactChip=(showProfit&&(
       (c.aggregator==='Keeta'&&keetaOrdersData)||
       (c.aggregator==='Careem'&&careemOrdersData)||
-      (c.aggregator==='Talabat'&&talabatOrdersData)
+      (c.aggregator==='Talabat'&&talabatOrdersData)||
+      (c.aggregator==='Deliveroo'&&deliverooOrdersData)
     ))?(()=>{
       const a=campAnalysisCached(c);
-      return(a.discSource==='keeta_exact'||a.discSource==='careem_exact'||a.discSource==='talabat_exact')?`<span style="font-size:8px;background:rgba(34,197,94,.12);color:#22C55E;font-weight:700;padding:1px 6px;border-radius:6px" title="Discount sourced from uploaded ${c.aggregator} orders file (exact per-order data, not estimated)">📊 Exact</span>`:'';
+      return(a.discSource==='keeta_exact'||a.discSource==='careem_exact'||a.discSource==='talabat_exact'||a.discSource==='deliveroo_exact')?`<span style="font-size:8px;background:rgba(34,197,94,.12);color:#22C55E;font-weight:700;padding:1px 6px;border-radius:6px" title="Discount sourced from uploaded ${c.aggregator} orders file (exact per-order data, not estimated)">📊 Exact</span>`:'';
     })():'';
     return `<div onclick="selectCamp(${idx})" style="cursor:pointer;background:linear-gradient(135deg,${accent}0d,rgba(13,21,36,.5));border:1px solid ${accent}33;border-left:3px solid ${accent};border-radius:12px;padding:14px;transition:transform .12s,border-color .12s" onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${accent}77'" onmouseout="this.style.transform='none';this.style.borderColor='${accent}33'">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
@@ -4014,6 +4370,23 @@ function allocateCampaignDiscount(c,start,end){
       const M=brandTotalBranches(c.brand,c.aggregator)||1;
       const myN=(campOutlets(c)||new Set()).size||M;
       return{allocatedDisc:exact.menuDisc,coFundedDisc:exact.talabatDisc||0,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"talabat_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
+    }
+  }
+  if(c.aggregator==="Deliveroo"){
+    // classify the campaign so we read the right bucket of records — Rewards records for "Deliveroo
+    // Rewards" campaigns (Lollorosso / Wicked Wings AED 20-30 vouchers), marketer_offer otherwise.
+    const discType=classifyDeliverooCampaign(c);
+    const exact=getDeliverooExactDisc(c,start,end,discType);
+    if(exact){
+      const M=brandTotalBranches(c.brand,c.aggregator)||1;
+      const myN=(campOutlets(c)||new Set()).size||M;
+      // For BOGO co-funded campaigns, the merchant-funded discount we summed represents the 65%
+      // merchant share. Deliveroo's 35% co-fund is computed from the merchant cost: co_fund = merchant × 35/65.
+      // Detect BOGO by the campaign comment containing "BOGO" or "Buy One Get One".
+      const txt=((c.name||"")+" "+(c.comments||"")).toLowerCase();
+      const isBOGO=/\b(bogo|buy\s*one\s*get\s*one|buy\s*1\s*get\s*1)\b/.test(txt);
+      const coFundedDisc=isBOGO?+(exact.menuDisc*35/65).toFixed(2):0;
+      return{allocatedDisc:exact.menuDisc,coFundedDisc,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"deliveroo_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
     }
   }
   const M=brandTotalBranches(c.brand,c.aggregator)||1;
