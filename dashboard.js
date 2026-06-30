@@ -13,13 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-019";
+const BUILD_VERSION="2026-06-25-020";
 const BUILD_NOTES=[
-  "🐛 Fixed a timezone bug in 'today' detection — cpcRealToday() used UTC-based toISOString(), which can report the PREVIOUS calendar day for UTC+4 users (Dubai) during early morning hours. Now uses local date components, so July shows as July immediately, not delayed until UTC catches up.",
-  "🐛 Bogus brand cards removed — CPC sheet rows whose Brand-Location cell didn't parse into a real brand (e.g. entered as just 'Khalifa West' instead of 'Oregano - Al Reem') no longer show up as fake brand cards with 'no active CPCs'. They're still visible in the History tab's data-quality warning so they can be fixed at the source.",
-  "🐛 Reverted brand-card splitting by ad type — Smokeys (Noon) and Oregano (Talabat) were showing TWICE in the brand grid. Restored to one card per brand; clicking it still drills into the outlet level, where CPC and Banners/Keywords correctly render as separate headlined sections (CPC table first, then Keywords/Banners below) — that part was already right.",
-  "🆕 Ad-type sections now always order CPC → Keywords → Banners, regardless of how they appear in the raw sheet.",
-  "🆕 Compare and History filter Month dropdowns now show 'Jun 26' style labels instead of raw '2026-06' strings."
+  "🐛 Careem CPC total fixed (was 26.2K, should be 28K) — last build's fix for bogus 'brand' cards (like 'Khalifa West') accidentally excluded that real spend from the AGGREGATOR total too, not just the brand breakdown. Now: unattributed spend still counts toward the aggregator's total (it's real money spent on the platform), it just doesn't get its own fake brand card. Each aggregator card now shows a small '⚠ AED X unattributed' note when this happens, with a pointer to the History tab to find and fix the source rows.",
+  "🆕 'FUNDED BY NOON' badge now shows directly in the Drill-Down outlet table next to the outlet name (previously only visible in the History tab) — derived from the Remarks column on any row contributing to that outlet's current display.",
+  "🐛 CPC landing page no longer falls back to all-time historical totals when an aggregator has no campaigns in the viewed month — this was the source of Talabat showing confusing big numbers under a 'current month' label when nothing was actually active. Now shows a clean '⚠ No campaigns in [month]' state instead.",
+  "🆕 Quick View month buttons on the CPC landing page — 'This Month' + the past 3 months, one click to see the exact same card layout for any of those months without leaving the page or going into History."
 ];
 
 let _updateDialogShown=false;
@@ -2661,11 +2660,14 @@ let cpcModel=null,cpcModelProgress=0,cpcModelBuilding=false;
 
 function buildCPCModel(onProgress){
   return new Promise((resolve)=>{
-    // Exclude rows whose Brand-Location cell didn't resolve to a real brand (e.g. a sheet row
-    // entered as just "Khalifa West" or "Al Reem Island" instead of "Oregano - Al Reem"). Those
-    // stay in cpcData untouched so the History tab's data-quality warning can still surface them,
-    // but they must never become a bogus "brand" card in the agg/brand-level drilldown.
-    const rows=cpcData.filter(r=>!r.brandUnmapped);
+    // IMPORTANT: do NOT filter out brandUnmapped rows here. That spend is real money spent on
+    // the platform — excluding it from `rows` would also exclude it from the AGGREGATOR-level
+    // totals (model.byAgg[ag].invested/spent/sales), undercounting the true total (this caused
+    // Careem's landing-page total to read 26.2K instead of the actual 28K invested). The
+    // brandUnmapped exclusion is applied surgically inside Step 4 below — only to the BRAND-level
+    // nesting, so unmapped rows still count toward the aggregator total but don't create a phantom
+    // "brand" card.
+    const rows=cpcData;
     const today=cpcRealToday();
     const model={byAgg:{},monthly:new Map(),yearROI:new Map(),postImpact:new Map(),actions:[]};
     // Pre-index allData by brand+aggregator+branch for fast post-impact lookups
@@ -2721,12 +2723,21 @@ function buildCPCModel(onProgress){
       for(const r of rows){
         const ag=r.aggregator;
         const isCur=r.month===curMonth;
-        if(!model.byAgg[ag])model.byAgg[ag]={name:ag,invested:0,spent:0,sales:0,orders:0,curInvested:0,curSpent:0,curSales:0,curOrders:0,lastUpdate:null,brands:{},rows:[],adTypes:new Set()};
+        if(!model.byAgg[ag])model.byAgg[ag]={name:ag,invested:0,spent:0,sales:0,orders:0,curInvested:0,curSpent:0,curSales:0,curOrders:0,unmappedSpent:0,unmappedCurSpent:0,lastUpdate:null,brands:{},rows:[],adTypes:new Set()};
         const A=model.byAgg[ag];
+        // Aggregator-level totals ALWAYS include this row, whether or not its brand resolved —
+        // this is real spend on the platform and must not silently disappear from the landing total.
         A.invested+=r.budgetAlloc;A.spent+=r.budgetSpent;A.sales+=r.sales;A.orders+=r.orders;A.rows.push(r);A.adTypes.add(r.adType);
         if(isCur){A.curInvested+=r.budgetAlloc;A.curSpent+=r.budgetSpent;A.curSales+=r.sales;A.curOrders+=r.orders;}
         // Last update comes from the Remarks column (column S), not the campaign end date.
         if(r.updateDate&&(!A.lastUpdate||r.updateDate>A.lastUpdate))A.lastUpdate=r.updateDate;
+        if(r.brandUnmapped){
+          // Track separately so the landing card can show "AED X unattributed" instead of the
+          // money just vanishing from view. Do NOT create a brand/outlet entry for these.
+          A.unmappedSpent+=r.budgetSpent;
+          if(isCur)A.unmappedCurSpent+=r.budgetSpent;
+          continue;
+        }
         if(!A.brands[r.brand])A.brands[r.brand]={name:r.brand,invested:0,spent:0,sales:0,orders:0,curInvested:0,curSpent:0,curSales:0,curOrders:0,outlets:{},rows:[],adTypes:new Set()};
         const B=A.brands[r.brand];
         B.invested+=r.budgetAlloc;B.spent+=r.budgetSpent;B.sales+=r.sales;B.orders+=r.orders;B.rows.push(r);B.adTypes.add(r.adType);
@@ -2856,6 +2867,19 @@ let cpcDrill={level:"agg",agg:null,brand:null},cpcSort={col:"roas",dir:-1},cpcAd
 // 'plan' = the new monthly investment plan view rendered by cpcRenderInvestmentPlan().
 let cpcViewMode="drilldown";
 function cpcSetView(mode){cpcViewMode=mode;renderCPC();window.scrollTo({top:0,behavior:"smooth"});}
+// Quick View month pin for the CPC landing page (cpcRenderAggLevel). null = always show the
+// REAL current month (recomputed live each render via cpcModel.curMonth). A specific "YYYY-MM"
+// pins the landing page to that month instead, so the user can quickly check last month's
+// figures without leaving the landing view or going into Drill-Down → History.
+let cpcAggViewMonth=null;
+function cpcSetAggMonth(m){cpcAggViewMonth=m;renderCPC();}
+function cpcResetAggMonth(){cpcAggViewMonth=null;renderCPC();}
+// Shift a "YYYY-MM" string by N months (negative = past). Used to compute the Quick View buttons.
+function cpcShiftMonth(monthStr,delta){
+  const[y,m]=monthStr.split("-").map(Number);
+  const d=new Date(y,m-1+delta,1);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+}
 // History view filters — Date/Brand/Aggregator/Outlet, plus an optional month-vs-month compare mode
 let cpcHistFilters={month:"all",brand:"all",aggregator:"all",outlet:"all",adType:"all"};
 let cpcHistCompare=false;
@@ -2944,23 +2968,49 @@ function cpcActionStrip(){
 // LEVEL 1 — Aggregator cards
 function cpcRenderAggLevel(){
   const aggs=Object.values(cpcModel.byAgg).sort((a,b)=>(b.curSpent||b.spent||0)-(a.curSpent||a.spent||0));
-  const monthLbl=cpcMonthLabel(cpcModel.curMonth);
+  const targetMonth=cpcAggViewMonth||cpcModel.curMonth;
+  const isViewingCurrent=targetMonth===cpcModel.curMonth;
+  const monthLbl=cpcMonthLabel(targetMonth);
+
+  // ── Quick View month bar ──────────────────────────────────────────────────────────────────
+  const pastMonths=[1,2,3].map(n=>cpcShiftMonth(cpcModel.curMonth,-n));
+  const monthBtn=(m,label)=>{
+    const isActive=targetMonth===m;
+    return `<button onclick="cpcSetAggMonth('${m}')" style="padding:5px 13px;border-radius:7px;border:1px solid ${isActive?'#f59e0b':'rgba(27,47,74,.6)'};background:${isActive?'rgba(245,158,11,.14)':'transparent'};color:${isActive?'#f59e0b':'#94a3b8'};font-size:11.5px;font-weight:700;cursor:pointer">${label}</button>`;
+  };
+  const quickViewBar=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Quick View</span>${monthBtn(cpcModel.curMonth,"This Month")}${pastMonths.map(m=>monthBtn(m,cpcMonthLabel(m))).join("")}</div>`;
+
   const cards=aggs.map(A=>{
     const clr=AGG_LOGO_CLR[A.name]||'#94a3b8';
-    // Show current month figures (fall back to all-time if no current-month data)
-    const hasCur=A.curSpent>0||A.curInvested>0;
-    const inv=hasCur?A.curInvested:A.invested,spent=hasCur?A.curSpent:A.spent,roas=hasCur?A.curRoas:A.roas;
+    // Figures are ALWAYS scoped strictly to targetMonth — no falling back to all-time historical
+    // data when the month has no campaigns. Showing a brand-blended all-time total under a
+    // "current month" label was the source of confusion (e.g. Talabat showing big historical
+    // numbers on the default landing page when nothing is actually running this month).
+    const monthRows=A.rows.filter(r=>r.month===targetMonth);
+    const hasData=monthRows.length>0;
+    const inv=hasData?monthRows.reduce((s,r)=>s+(r.budgetAlloc||0),0):0;
+    const spent=hasData?monthRows.reduce((s,r)=>s+(r.budgetSpent||0),0):0;
+    const sales=hasData?monthRows.reduce((s,r)=>s+(r.sales||0),0):0;
+    const roas=spent>0?sales/spent:null;
     const consum=inv>0?(spent/inv)*100:0;
     const roasStr=roas?roas.toFixed(2)+'×':'—';
-    const actCount=cpcModel.actions.filter(a=>a.r.aggregator===A.name).length;
+    const actCount=isViewingCurrent?cpcModel.actions.filter(a=>a.r.aggregator===A.name).length:0;
     const adTypes=[...A.adTypes].join(' + ');
+    // Unattributed spend for this specific month — money spent on this aggregator whose
+    // Brand-Location cell didn't resolve to a real brand. Surfaced so the gap between this card's
+    // total and the sum of brand cards inside it is explained, not silently missing.
+    const unmappedThisMonth=cpcData.filter(r=>r.aggregator===A.name&&r.month===targetMonth&&r.brandUnmapped).reduce((s,r)=>s+(r.budgetSpent||0),0);
+    const unmappedNote=unmappedThisMonth>0?`<div style="margin-top:8px;font-size:9.5px;color:#FBBF24" title="These rows' Brand-Location cell didn't match a known brand — fix the sheet format to attribute this spend correctly">⚠ ${fmtAED(unmappedThisMonth)} unattributed (check History tab)</div>`:'';
+    const statusLine=hasData
+      ?`${monthLbl}${isViewingCurrent?' (current month)':''}`
+      :`⚠ No campaigns in ${monthLbl}`;
     return `<div onclick="cpcGoBrands('${A.name}')" style="cursor:pointer;background:linear-gradient(135deg,${clr}0d,rgba(13,21,36,.4));border:1px solid ${clr}33;border-radius:14px;padding:16px;position:relative;overflow:hidden;transition:transform .15s,border-color .15s" onmouseover="this.style.borderColor='${clr}88';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='${clr}33';this.style.transform='none'">
       <div style="position:absolute;top:-20px;right:-20px;width:90px;height:90px;background:radial-gradient(circle,${clr}22,transparent 70%);pointer-events:none"></div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <div style="display:flex;align-items:center;gap:8px"><div style="width:34px;height:34px;border-radius:9px;background:${clr}22;border:1px solid ${clr}44;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:${clr}">${A.name[0]}</div><div><div style="font-size:15px;font-weight:800;color:#e2e8f0">${A.name}</div><div style="font-size:9px;color:#64748b">${adTypes}</div></div></div>
         ${actCount?`<div style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:8px;padding:2px 8px;font-size:10px;font-weight:700;color:#EF4444">⚡ ${actCount}</div>`:''}
       </div>
-      <div style="font-size:9px;color:${hasCur?'#f59e0b':'#94a3b8'};font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">${hasCur?monthLbl+' (current month)':'⚠ No active CPCs this month · showing historical'}</div>
+      <div style="font-size:9px;color:${hasData?'#f59e0b':'#94a3b8'};font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">${statusLine}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
         <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Invested</div><div style="font-size:17px;font-weight:800;color:#e2e8f0">${fmtAED(inv)}</div></div>
         <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Consumed</div><div style="font-size:17px;font-weight:800;color:#e2e8f0">${fmtAED(spent)}</div></div>
@@ -2970,11 +3020,12 @@ function cpcRenderAggLevel(){
         <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">ROAS</div><div style="font-size:18px;font-weight:800;color:${clr}">${roasStr}</div></div>
         <div style="text-align:right"><div style="font-size:9px;color:#64748b">Last update</div><div style="font-size:11px;color:#94a3b8">${A.lastUpdate?fmtDisp(A.lastUpdate):'—'}</div></div>
       </div>
+      ${unmappedNote}
       <div style="margin-top:10px;font-size:10px;color:#f59e0b;font-weight:600">View ${Object.keys(A.brands).length} brands →</div>
-      ${(()=>{const ct=cpcModel.contractual&&cpcModel.contractual[A.name];if(!ct)return '';const gap=ct.expected-ct.investedSoFar;const metClr=ct.investedSoFar>=ct.expected?'#22C55E':'#FBBF24';return `<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(27,47,74,.5)"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">Contractual (${(ct.pct*100).toFixed(0)}% of ${cpcMonthLabel(ct.priorMonth)} group sales)</div><div style="display:flex;justify-content:space-between;align-items:baseline"><div><span style="font-size:13px;font-weight:800;color:#e2e8f0">${fmtAED(ct.investedSoFar)}</span><span style="font-size:10px;color:#64748b"> / ${fmtAED(ct.expected)}</span></div><div style="font-size:10px;font-weight:700;color:${metClr}">${ct.investedSoFar>=ct.expected?'✓ met':fmtAED(gap)+' short'}</div></div></div>`;})()}
+      ${isViewingCurrent?(()=>{const ct=cpcModel.contractual&&cpcModel.contractual[A.name];if(!ct)return '';const gap=ct.expected-ct.investedSoFar;const metClr=ct.investedSoFar>=ct.expected?'#22C55E':'#FBBF24';return `<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(27,47,74,.5)"><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">Contractual (${(ct.pct*100).toFixed(0)}% of ${cpcMonthLabel(ct.priorMonth)} group sales)</div><div style="display:flex;justify-content:space-between;align-items:baseline"><div><span style="font-size:13px;font-weight:800;color:#e2e8f0">${fmtAED(ct.investedSoFar)}</span><span style="font-size:10px;color:#64748b"> / ${fmtAED(ct.expected)}</span></div><div style="font-size:10px;font-weight:700;color:${metClr}">${ct.investedSoFar>=ct.expected?'✓ met':fmtAED(gap)+' short'}</div></div></div>`;})():''}
     </div>`;
   }).join('');
-  return cpcActionStrip()+`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${cards}</div>`;
+  return quickViewBar+cpcActionStrip()+`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${cards}</div>`;
 }
 
 // LEVEL 2 — Brand cards within an aggregator
@@ -4079,6 +4130,12 @@ function cpcRenderOutletLevelSingle(ag,brand){
     if(d.cto!=null&&brandAvgCTO){const rel=d.cto/brandAvgCTO;ctoTag=rel>=1.2?`<span style="color:#22C55E;font-weight:700">▲</span>`:rel<=0.8?`<span style="color:#EF4444;font-weight:700">▼</span>`:'';}
     const imp=cpcModel.postImpact.get(t.rows[t.rows.length-1]);
     const impTag=imp&&imp.salesChg<-15?` <span title="Sales fell ${fmtPct(imp.salesChg)} after CPC ended" style="font-size:9px;color:#EF4444;cursor:help">📉</span>`:'';
+    // "Funded by Noon" detection — surfaces in the drilldown table (not just the History tab).
+    // Checks every row contributing to this outlet's current display (monthRows, falling back to
+    // all rows if month-filtered set is empty) for the remark, case-insensitive.
+    const fundedSource=(t.monthRows&&t.monthRows.length?t.monthRows:t.rows)||[];
+    const isFundedByNoon=fundedSource.some(rr=>/funded\s+by\s+noon/i.test(rr.remarks||""));
+    const fundedTag=isFundedByNoon?` <span title="This campaign is funded by Noon, not 100% merchant cost." style="background:rgba(34,197,94,.15);color:#22C55E;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;vertical-align:middle">FUNDED BY NOON</span>`:'';
     // Lock badge for pooled outlets (tooltip explains why no per-outlet recommendation)
     const poolTag=isPooled?` <span title="Budget pooled with other ${brand} outlets on ${ag} — can't be topped up individually." style="font-size:9px;color:#60A5FA;cursor:help">🔒</span>`:'';
     // Investment + bid recommendation (current month only)
@@ -4142,7 +4199,7 @@ function cpcRenderOutletLevelSingle(ag,brand){
       }
       if(parts.length)recCell=parts.join('');
     }
-    return `<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:#e2e8f0">${t.outlet}</strong>${impTag}${poolTag}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right">${(d.views||0).toLocaleString()}</td><td style="text-align:right">${(d.orders||0).toLocaleString()}</td><td style="text-align:right">${fmtAEDExact(d.sales)}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${fmtAEDExact(d.alloc)}</td><td style="text-align:right">${fmtAEDExact(d.spent)}</td><td style="text-align:right">${fmtAEDExact(d.leftover)}</td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}<div style="font-size:8px;color:${t.momChg==null?'#475569':pctClr(t.momChg)}">${t.momChg!=null?'MoM '+fmtPct(t.momChg):''}</div></td><td style="text-align:right">${t.calcBid!=null?'AED '+t.calcBid.toFixed(2):'—'}</td><td style="text-align:right">${d.ftu||0}</td>${showInvestCol?`<td style="text-align:right">${recCell}</td>`:''}</tr>`;
+    return `<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:#e2e8f0">${t.outlet}</strong>${impTag}${poolTag}${fundedTag}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right">${(d.views||0).toLocaleString()}</td><td style="text-align:right">${(d.orders||0).toLocaleString()}</td><td style="text-align:right">${fmtAEDExact(d.sales)}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${fmtAEDExact(d.alloc)}</td><td style="text-align:right">${fmtAEDExact(d.spent)}</td><td style="text-align:right">${fmtAEDExact(d.leftover)}</td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}<div style="font-size:8px;color:${t.momChg==null?'#475569':pctClr(t.momChg)}">${t.momChg!=null?'MoM '+fmtPct(t.momChg):''}</div></td><td style="text-align:right">${t.calcBid!=null?'AED '+t.calcBid.toFixed(2):'—'}</td><td style="text-align:right">${d.ftu||0}</td>${showInvestCol?`<td style="text-align:right">${recCell}</td>`:''}</tr>`;
   }).join('');
 
   // Capture the table data for export (raw numbers, exactly what's filtered on screen).
@@ -7482,7 +7539,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     renderBrands,renderOutlets,renderPlatforms,renderOverview,renderCPC,renderCampaigns,renderKPI,renderCompare,
     selectOutlet,backToOutlets,toggleAovDrill,selectVerdAggregator,selectBundleByKey,bundleDetailHTML,
     cpcGoAgg,cpcGoBrands,cpcGoOutlets,cpcSetSort,cpcSetAdType,cpcSetMonth,cpcOpenOutletDetail,cpcCloseOutletDetail,cpcExportTable,cpcSetView,
-    cpcHistSetFilter,cpcHistToggleCompare,cpcCompSet,
+    cpcHistSetFilter,cpcHistToggleCompare,cpcCompSet,cpcSetAggMonth,cpcResetAggMonth,
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
     sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campSetScope,campClearDates,campSetElasticity,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,cmpToggleExpand,
