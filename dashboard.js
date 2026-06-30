@@ -13,14 +13,14 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-009";
+const BUILD_VERSION="2026-06-25-010";
 const BUILD_NOTES=[
-  "🆕 Deliveroo orders parser — upload weekly Oregano_Restaurant_LLC statement CSVs for exact per-order discount data (parallel to Keeta/Careem/Talabat).",
-  "🆕 New 5-aggregator upload bar — one button per platform (Deliveroo, Talabat, Careem, Noon, Keeta) with logos, last-upload date, and key figures. Noon is a placeholder (parser coming next).",
-  "🆕 Upload-merge logic — new files no longer overwrite older data. Upload Jun 1-10, then Jun 11-20, and both ranges are retained. Re-uploading the same range corrects the overlap.",
-  "🆕 72-hour stale-data reminder — aggregator buttons blink when their data is over 72h old, prompting a fresh upload.",
-  "🐛 BOGO campaign labels fixed — no longer shows '35% off' (the co-fund %) as the headline. Reads as 'BOGO · select items' or just 'BOGO'.",
-  "🆕 BOGO co-fund display — Deliveroo's 35% co-funded share is now shown alongside the merchant's 65% cost in contribution breakdowns."
+  "🆕 Compare page outlet drill-down — click any row in the Brand × Platform Breakdown to expand an outlet-level A vs B comparison underneath (with AOV columns added).",
+  "🆕 Deliveroo orders parser — upload weekly Oregano_Restaurant_LLC statement CSVs for exact per-order discount data.",
+  "🆕 New 5-aggregator upload bar — one button per platform with logos, last-upload date, key figures, and a 72-hour stale-data blink. Noon button is a placeholder.",
+  "🆕 Upload-merge logic — new files no longer overwrite older data, they merge by date range so you can build up coverage across weeks.",
+  "🐛 BOGO campaign labels fixed — no longer shows '35% off' (the co-fund %) as the headline. Reads as 'BOGO · select items'.",
+  "🆕 BOGO co-fund display — Deliveroo's 35% co-funded share now appears alongside the merchant's 65% cost in contribution breakdowns."
 ];
 
 let _updateDialogShown=false;
@@ -1965,6 +1965,7 @@ function handleDelegatedClick(e){
   if(act==="cmpClear"){cmpClear(v1);return;}
   if(act==="cmpPreset"){cmpPreset(v1,v2);return;}
   if(act==="cmpMetric"){cmpSetMetric(v1);return;}
+  if(act==="cmpToggleExpand"){e.stopPropagation();cmpToggleExpand(v1,v2);return;}
   if(act==="cmpSwap"){cmpSwap();return;}
   if(act==="cmpCopy"){cmpCopyAtoB();return;}
 }
@@ -5833,6 +5834,13 @@ function injectCompareTab(){
 const cmpDefault=()=>({brands:new Set(),platforms:new Set(),branches:new Set(),start:null,end:null,preset:"custom"});
 let cmpA=cmpDefault(),cmpB=cmpDefault();
 let cmpMetric="sales"; // which metric the trend chart plots: sales | orders | aov
+let cmpExpandedRow=null; // "<brand>|<aggregator>" when user clicked a row in the Brand × Platform Breakdown to see per-outlet drill-down. null = nothing expanded.
+
+function cmpToggleExpand(brand,ag){
+  const k=`${brand}|${ag}`;
+  cmpExpandedRow=(cmpExpandedRow===k)?null:k;
+  renderCompare();
+}
 let cmpInit=false;
 
 function cmpSeed(){
@@ -6140,16 +6148,72 @@ function renderCompare(){
     const b=sumR(dB.filter(r=>r.brand===brand&&r.aggregator===ag));
     return{brand,ag,a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales)};
   }).filter(r=>r.a.orders>0||r.b.orders>0);
-  const tRows=tableRows.map(r=>({cells:[
-    `<span style="display:inline-flex;align-items:center;gap:6px"><span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span><span style="color:${AC[r.ag]||'#888'};font-size:11px">${r.ag}</span></span>`,
-    `<span style="color:#60A5FA">${r.a.orders.toLocaleString()}</span>`,
-    `<span style="color:#F59E0B">${r.b.orders.toLocaleString()}</span>`,
-    `<span style="color:${pctClr(r.oDiff)};font-weight:700">${fmtPct(r.oDiff)}</span>`,
-    `<span style="color:#60A5FA">${fmtAED(r.a.sales)}</span>`,
-    `<span style="color:#F59E0B">${fmtAED(r.b.sales)}</span>`,
-    `<span style="color:${pctClr(r.sDiff)};font-weight:700">${fmtPct(r.sDiff)}</span>`
-  ],sortVals:[r.brand,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff]}));
+  // Make each row clickable to expand into per-outlet drill-down (rendered as a separate card
+  // below the table). A small chevron in the brand cell shows the state; the row gets a subtle
+  // background highlight when expanded so the user sees which one drives the breakdown below.
+  const tRows=tableRows.map(r=>{
+    const key=`${r.brand}|${r.ag}`;
+    const isExpanded=cmpExpandedRow===key;
+    const chev=isExpanded?'▾':'▸';
+    const rowBg=isExpanded?'background:rgba(245,158,11,.08);':'';
+    return{
+      cells:[
+        `<span data-act="cmpToggleExpand" data-v1="${r.brand}" data-v2="${r.ag}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;${rowBg}padding:2px 4px;border-radius:4px" title="Click to see per-outlet breakdown for ${r.brand} on ${r.ag}"><span style="color:${isExpanded?'#f59e0b':'#64748b'};font-size:10px;font-weight:700">${chev}</span><span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span><span style="color:${AC[r.ag]||'#888'};font-size:11px">${r.ag}</span></span>`,
+        `<span style="color:#60A5FA">${r.a.orders.toLocaleString()}</span>`,
+        `<span style="color:#F59E0B">${r.b.orders.toLocaleString()}</span>`,
+        `<span style="color:${pctClr(r.oDiff)};font-weight:700">${fmtPct(r.oDiff)}</span>`,
+        `<span style="color:#60A5FA">${fmtAED(r.a.sales)}</span>`,
+        `<span style="color:#F59E0B">${fmtAED(r.b.sales)}</span>`,
+        `<span style="color:${pctClr(r.sDiff)};font-weight:700">${fmtPct(r.sDiff)}</span>`
+      ],
+      sortVals:[r.brand,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff]
+    };
+  });
   const tHeads=["Brand · Platform","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales"];
+
+  // Outlet drill-down card content (rendered below the breakdown table when a row is expanded)
+  let outletDrillCard='';
+  if(cmpExpandedRow){
+    const[xBrand,xAg]=cmpExpandedRow.split("|");
+    const xBrandColor=BMAP[xBrand]?.c||'#f59e0b';
+    const xAgColor=AC[xAg]||'#f59e0b';
+    // Build per-branch aggregates within this brand × platform on both sides
+    const brSet=new Set([
+      ...dA.filter(r=>r.brand===xBrand&&r.aggregator===xAg).map(r=>r.branch),
+      ...dB.filter(r=>r.brand===xBrand&&r.aggregator===xAg).map(r=>r.branch)
+    ]);
+    brSet.delete("(brand-level)"); // pseudo-branch for unattributed brand-level discount rows — not a real outlet
+    const branchRows=[...brSet].map(branch=>{
+      const a=sumR(dA.filter(r=>r.brand===xBrand&&r.aggregator===xAg&&r.branch===branch));
+      const b=sumR(dB.filter(r=>r.brand===xBrand&&r.aggregator===xAg&&r.branch===branch));
+      const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
+      return{branch,a,b,aov_a,aov_b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a)};
+    }).filter(r=>r.a.orders>0||r.b.orders>0);
+    const oHeads=["Outlet","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A AOV","B AOV","Δ AOV"];
+    const oRows=branchRows.map(r=>({
+      cells:[
+        `<strong style="color:#e2e8f0;font-size:12px">${r.branch}</strong>`,
+        `<span style="color:#60A5FA">${r.a.orders.toLocaleString()}</span>`,
+        `<span style="color:#F59E0B">${r.b.orders.toLocaleString()}</span>`,
+        `<span style="color:${pctClr(r.oDiff)};font-weight:700">${fmtPct(r.oDiff)}</span>`,
+        `<span style="color:#60A5FA">${fmtAED(r.a.sales)}</span>`,
+        `<span style="color:#F59E0B">${fmtAED(r.b.sales)}</span>`,
+        `<span style="color:${pctClr(r.sDiff)};font-weight:700">${fmtPct(r.sDiff)}</span>`,
+        `<span style="color:#60A5FA">${r.a.orders>0?'AED '+r.aov_a.toFixed(1):'—'}</span>`,
+        `<span style="color:#F59E0B">${r.b.orders>0?'AED '+r.aov_b.toFixed(1):'—'}</span>`,
+        `<span style="color:${pctClr(r.aDiff)};font-weight:700">${fmtPct(r.aDiff)}</span>`
+      ],
+      sortVals:[r.branch,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff,r.aov_a,r.aov_b,r.aDiff]
+    }));
+    // Totals strip (optional but helpful — confirms drill-down sums to the parent brand × platform row)
+    const totA=branchRows.reduce((s,r)=>({orders:s.orders+r.a.orders,sales:s.sales+r.a.sales}),{orders:0,sales:0});
+    const totB=branchRows.reduce((s,r)=>({orders:s.orders+r.b.orders,sales:s.sales+r.b.sales}),{orders:0,sales:0});
+    const totODiff=pctOf(totB.orders,totA.orders),totSDiff=pctOf(totB.sales,totA.sales);
+    const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:11px;color:#94a3b8;margin-bottom:10px;padding:8px 12px;background:rgba(245,158,11,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center"><span><span style="color:#60A5FA">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAED(totA.sales)}</span><span><span style="color:#F59E0B">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAED(totB.sales)}</span><span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span></div></div>`;
+    outletDrillCard=branchRows.length
+      ?`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid #1b2f4a;color:#94a3b8;padding:4px 10px;font-size:10px;border-radius:5px;cursor:pointer" title="Close drill-down">✕ close</button></div>${totsLine}${sortableTable("cmp-outlet-tbl",oHeads,oRows,4)}</div>`
+      :`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown</span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid #1b2f4a;color:#94a3b8;padding:4px 10px;font-size:10px;border-radius:5px;cursor:pointer">✕ close</button></div><div style="color:#64748b;font-size:12px;padding:8px 0">No outlets with activity in either window for this combination.</div></div>`;
+  }
 
   // Metric toggle for the trend chart
   const metricBtns=[["sales","Net Sales"],["orders","Orders"],["aov","AOV"]].map(([k,l])=>`<button data-act="cmpMetric" data-v1="${k}" style="padding:4px 12px;border-radius:5px;border:1px solid ${cmpMetric===k?'#f59e0b':'#1b2f4a'};background:${cmpMetric===k?'#f59e0b22':'transparent'};color:${cmpMetric===k?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${l}</button>`).join("");
@@ -6197,7 +6261,8 @@ function renderCompare(){
       `<span style="color:${pctClr(p.aDiff)};font-weight:700">${fmtPct(p.aDiff)}</span>`
     ]))}</div>
 
-    <div class="card"><div class="ct">Brand × Platform Breakdown <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("cmp-tbl",tHeads,tRows,4)}</div>`;
+    <div class="card"><div class="ct">Brand × Platform Breakdown <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click a row to drill down to outlets</span></div>${sortableTable("cmp-tbl",tHeads,tRows,4)}</div>
+    ${outletDrillCard}`;
 
   // Draw the overlaid trend chart (aligned by day index)
   setTimeout(()=>cmpDrawChart(dA,dB),50);
@@ -6442,7 +6507,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     cpcGoAgg,cpcGoBrands,cpcGoOutlets,cpcSetSort,cpcSetAdType,cpcSetMonth,cpcOpenOutletDetail,cpcCloseOutletDetail,cpcExportTable,
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
     sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campSetScope,campClearDates,campSetElasticity,
-    cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,
+    cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,cmpToggleExpand,
     injectCompareTab,loadKPIData,doLoad,
     dismissUpdateModal,hardRefreshNow,dismissWhatsNew,showWhatsNewIfNeeded,
     renderAdmin,adminKick,adminBan,adminUnban,initAdminUI];
