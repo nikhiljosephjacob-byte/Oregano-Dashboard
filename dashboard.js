@@ -13,12 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-020";
+const BUILD_VERSION="2026-06-25-022";
 const BUILD_NOTES=[
-  "🐛 Careem CPC total fixed (was 26.2K, should be 28K) — last build's fix for bogus 'brand' cards (like 'Khalifa West') accidentally excluded that real spend from the AGGREGATOR total too, not just the brand breakdown. Now: unattributed spend still counts toward the aggregator's total (it's real money spent on the platform), it just doesn't get its own fake brand card. Each aggregator card now shows a small '⚠ AED X unattributed' note when this happens, with a pointer to the History tab to find and fix the source rows.",
-  "🆕 'FUNDED BY NOON' badge now shows directly in the Drill-Down outlet table next to the outlet name (previously only visible in the History tab) — derived from the Remarks column on any row contributing to that outlet's current display.",
-  "🐛 CPC landing page no longer falls back to all-time historical totals when an aggregator has no campaigns in the viewed month — this was the source of Talabat showing confusing big numbers under a 'current month' label when nothing was actually active. Now shows a clean '⚠ No campaigns in [month]' state instead.",
-  "🆕 Quick View month buttons on the CPC landing page — 'This Month' + the past 3 months, one click to see the exact same card layout for any of those months without leaving the page or going into History."
+  "🐛 Mixed pooled + separate budgets now handled correctly (e.g. Oregano on Noon where Jumeirah has its own budget but other outlets share a pool). Pooled outlets show '—' for Budget/Leftover, separate outlets show their real per-outlet numbers, and the TOTAL row sums both correctly — separate budgets + pool total (once, not split per outlet).",
+  "🆕 TOTAL row label adapts: 'BRAND POOL TOTAL' when all pooled, 'TOTAL (incl. pool)' when mixed, 'TOTAL' when all separate.",
+  "🆕 Mixed-budget info banner shows the pool size explicitly so the user knows what the '—' cells represent and what the grand total includes."
 ];
 
 let _updateDialogShown=false;
@@ -3075,7 +3074,12 @@ function cpcRenderBrandLevel(ag){
     </div>`;
   }).filter(Boolean).join('');
   // pooling note
-  const poolNote=(ag==='Careem'||ag==='Noon')?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px">ℹ️ ${ag} budgets are <strong>pooled at brand level</strong> — outlets that burn faster automatically draw more. Per-outlet budget figures are indicative; the brand total is the real budget. Per-outlet <strong>results</strong> (orders, sales, ROAS, CTO) are exact.</div>`:'';
+  const poolNote=(()=>{
+    if(!hasSomePooled)return ''; // pure separate — no pool note needed
+    if(isAllPooled) return `<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px">ℹ️ ${ag} uses <strong>auto-bidding</strong>, so only budget recommendations are shown. 📉 = sales dropped after a CPC ended.<br/><span style="color:#cbd5e1">Budget is pooled at brand level (🔒) — per-outlet Budget shows "—" because ${ag} auto-distributes across outlets. The <strong>TOTAL</strong> row shows the actual brand pool. Per-outlet <strong>Spent</strong>, <strong>Sales</strong>, and <strong>ROAS</strong> are real per-outlet figures from ${ag}'s auto-distribution.</span></div>`;
+    // Mixed: some pooled, some separate
+    return `<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px">ℹ️ This brand has a <strong>mix</strong> of pooled (🔒) and separate-budget outlets on ${ag}.<br/><span style="color:#cbd5e1">Pooled outlets show "—" for Budget (shared pool: <strong style="color:#fbbf24">${fmtAED(poolTotalAlloc)}</strong>). Separate outlets show their own individual budget. The <strong>TOTAL (incl. pool)</strong> row sums both correctly.</span></div>`;
+  })();
   return adToggle+poolNote+`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${cards}</div>`;
 }
 
@@ -4092,6 +4096,15 @@ function cpcRenderOutletLevelSingle(ag,brand){
   const getVal=(t)=>{const d=t.disp;switch(sc){case'clicks':return d.views||0;case'orders':return d.orders||0;case'sales':return d.sales||0;case'aov':return d.aov||0;case'cto':return d.cto||0;case'budget':return d.alloc||0;case'spent':return d.spent||0;case'leftover':return d.leftover||0;case'roas':return d.roi||0;case'bid':return t.calcBid||0;case'ftu':return d.ftu||0;default:return d.roi||0;}};
   tableRows.sort((a,b)=>(getVal(a)-getVal(b))*sd);
 
+  // Determine whether this brand has pooled rows, separate rows, or a mix of both.
+  // Mixed brands (e.g. Oregano on Noon where Jumeirah is separate but the rest are pooled) need
+  // both treatments: separate rows show per-outlet budget normally, pooled rows show "—", and the
+  // TOTAL row sums separate budgets + pool total (once, not split per outlet).
+  const hasSomePooled=tableRows.some(t=>{const bt=(t.liveRow&&t.liveRow.budgetType)||"separate";return bt==="combined";});
+  const hasSomeSeparate=tableRows.some(t=>{const bt=(t.liveRow&&t.liveRow.budgetType)||"separate";return bt!=="combined";});
+  const isAllPooled=hasSomePooled&&!hasSomeSeparate;
+  const isMixed=hasSomePooled&&hasSomeSeparate;
+
   const arrow=(col)=>cpcSort.col===col?(cpcSort.dir<0?' ▼':' ▲'):'';
   const th=(col,lbl)=>`<th style="cursor:pointer;text-align:right" onclick="cpcSetSort('${col}')">${lbl}${arrow(col)}</th>`;
 
@@ -4120,11 +4133,26 @@ function cpcRenderOutletLevelSingle(ag,brand){
     tInvest+=poolRec.additional;
   }
 
+  // For brands with ANY pooled rows: compute the pool total from the brand-model's POOLED rows
+  // only (not separate rows, which are counted individually in the per-row loop below). This
+  // correctly handles the mixed case where e.g. 12 outlets share a pool and 2 have their own
+  // separate budgets — pool total + separate totals = correct grand total.
+  let poolTotalAlloc=0,poolTotalSpent=0;
+  if(hasSomePooled&&tableRows.length){
+    const bModel=cpcModel.byAgg[ag]&&cpcModel.byAgg[ag].brands[brand];
+    const poolRows=bModel?bModel.rows.filter(r=>r.month===selMonth&&r.budgetType==="combined"):rows.filter(r=>r.month===selMonth&&r.budgetType==="combined");
+    poolTotalAlloc=poolRows.reduce((s,r)=>s+(r.budgetAlloc||0),0);
+    poolTotalSpent=poolRows.reduce((s,r)=>s+(r.budgetSpent||0),0);
+  }
+
   const body=tableRows.map(t=>{
     const d=t.disp;const vClr=d.verdict?CPC_VC[d.verdict]:'#64748b';
     const budgetType=(t.liveRow&&t.liveRow.budgetType)||"separate";
     const isPooled=budgetType==="combined";
-    tClicks+=d.views||0;tOrders+=d.orders||0;tSales+=d.sales||0;tBudget+=d.alloc||0;tSpent+=d.spent||0;tLeftover+=d.leftover||0;tFtu+=d.ftu||0;
+    // For pooled outlets: per-outlet budget/leftover are NOT added to the running total (the pool
+    // total is added once outside this loop). Per-outlet spent IS accumulated because it's real.
+    if(!isPooled){tBudget+=d.alloc||0;tLeftover+=d.leftover||0;}
+    tClicks+=d.views||0;tOrders+=d.orders||0;tSales+=d.sales||0;tSpent+=d.spent||0;tFtu+=d.ftu||0;
     // CTO relative
     let ctoTag='';
     if(d.cto!=null&&brandAvgCTO){const rel=d.cto/brandAvgCTO;ctoTag=rel>=1.2?`<span style="color:#22C55E;font-weight:700">▲</span>`:rel<=0.8?`<span style="color:#EF4444;font-weight:700">▼</span>`:'';}
@@ -4199,8 +4227,16 @@ function cpcRenderOutletLevelSingle(ag,brand){
       }
       if(parts.length)recCell=parts.join('');
     }
-    return `<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:#e2e8f0">${t.outlet}</strong>${impTag}${poolTag}${fundedTag}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right">${(d.views||0).toLocaleString()}</td><td style="text-align:right">${(d.orders||0).toLocaleString()}</td><td style="text-align:right">${fmtAEDExact(d.sales)}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${fmtAEDExact(d.alloc)}</td><td style="text-align:right">${fmtAEDExact(d.spent)}</td><td style="text-align:right">${fmtAEDExact(d.leftover)}</td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}<div style="font-size:8px;color:${t.momChg==null?'#475569':pctClr(t.momChg)}">${t.momChg!=null?'MoM '+fmtPct(t.momChg):''}</div></td><td style="text-align:right">${t.calcBid!=null?'AED '+t.calcBid.toFixed(2):'—'}</td><td style="text-align:right">${d.ftu||0}</td>${showInvestCol?`<td style="text-align:right">${recCell}</td>`:''}</tr>`;
+    return `<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:#e2e8f0">${t.outlet}</strong>${impTag}${poolTag}${fundedTag}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right">${(d.views||0).toLocaleString()}</td><td style="text-align:right">${(d.orders||0).toLocaleString()}</td><td style="text-align:right">${fmtAEDExact(d.sales)}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${isPooled?'<span style="color:#64748b;font-size:10px" title="Budget is pooled at brand level — per-outlet split is not meaningful">—</span>':fmtAEDExact(d.alloc)}</td><td style="text-align:right">${fmtAEDExact(d.spent)}</td><td style="text-align:right">${isPooled?'<span style="color:#64748b;font-size:10px">—</span>':fmtAEDExact(d.leftover)}</td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}<div style="font-size:8px;color:${t.momChg==null?'#475569':pctClr(t.momChg)}">${t.momChg!=null?'MoM '+fmtPct(t.momChg):''}</div></td><td style="text-align:right">${t.calcBid!=null?'AED '+t.calcBid.toFixed(2):'—'}</td><td style="text-align:right">${d.ftu||0}</td>${showInvestCol?`<td style="text-align:right">${recCell}</td>`:''}</tr>`;
   }).join('');
+
+  // For brands with ANY pooled rows: add the ACTUAL pool total (computed once above) to the
+  // running totals. Separate rows already added their own budgets during the loop. This correctly
+  // handles pure-pooled, pure-separate, AND mixed brands.
+  if(hasSomePooled){
+    tBudget+=poolTotalAlloc;
+    tLeftover+=Math.max(0,poolTotalAlloc-poolTotalSpent);
+  }
 
   // Capture the table data for export (raw numbers, exactly what's filtered on screen).
   cpcExportData={
@@ -4224,7 +4260,7 @@ function cpcRenderOutletLevelSingle(ag,brand){
   const totBid=tClicks>0?(tSpent/tClicks):null;
   // Fill export totals now that they're computed
   if(cpcExportData)cpcExportData.totals={label:"TOTAL",clicks:tClicks,orders:tOrders,sales:Math.round(tSales),aov:totAov?Math.round(totAov):"",cto:totCto!=null?totCto.toFixed(1):"",budget:Math.round(tBudget),spent:Math.round(tSpent),leftover:Math.round(tLeftover),roas:totRoas?totRoas.toFixed(2):"",bid:totBid!=null?totBid.toFixed(2):"",ftu:tFtu,invest:isCurrentMonth&&tInvest>0?tInvest:""};
-  const totalsRow=`<tr style="border-top:2px solid rgba(245,158,11,.4);background:rgba(245,158,11,.04);font-weight:800"><td style="color:#f59e0b">TOTAL</td><td></td><td style="text-align:right;color:#e2e8f0">${tClicks.toLocaleString()}</td><td style="text-align:right;color:#e2e8f0">${tOrders.toLocaleString()}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tSales)}</td><td style="text-align:right;color:#e2e8f0">${totAov?totAov.toFixed(0):'—'}</td><td style="text-align:right;color:#e2e8f0">${totCto!=null?totCto.toFixed(1)+'%':'—'}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tBudget)}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tSpent)}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tLeftover)}</td><td style="text-align:right;color:#f59e0b">${totRoas?totRoas.toFixed(2)+'×':'—'}</td><td style="text-align:right;color:#e2e8f0">${totBid!=null?'AED '+totBid.toFixed(2):'—'}</td><td style="text-align:right;color:#e2e8f0">${tFtu.toLocaleString()}</td>${showInvestCol?`<td style="text-align:right">${isCurrentMonth&&tInvest>0?`<span style="color:#22C55E;font-weight:800">+${fmtAEDExact(tInvest)}</span>`:''}</td>`:''}</tr>`;
+  const totalsRow=`<tr style="border-top:2px solid rgba(245,158,11,.4);background:rgba(245,158,11,.04);font-weight:800"><td style="color:#f59e0b">${isAllPooled?"BRAND POOL TOTAL":isMixed?"TOTAL (incl. pool)":"TOTAL"}</td><td></td><td style="text-align:right;color:#e2e8f0">${tClicks.toLocaleString()}</td><td style="text-align:right;color:#e2e8f0">${tOrders.toLocaleString()}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tSales)}</td><td style="text-align:right;color:#e2e8f0">${totAov?totAov.toFixed(0):'—'}</td><td style="text-align:right;color:#e2e8f0">${totCto!=null?totCto.toFixed(1)+'%':'—'}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tBudget)}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tSpent)}</td><td style="text-align:right;color:#e2e8f0">${fmtAEDExact(tLeftover)}</td><td style="text-align:right;color:#f59e0b">${totRoas?totRoas.toFixed(2)+'×':'—'}</td><td style="text-align:right;color:#e2e8f0">${totBid!=null?'AED '+totBid.toFixed(2):'—'}</td><td style="text-align:right;color:#e2e8f0">${tFtu.toLocaleString()}</td>${showInvestCol?`<td style="text-align:right">${isCurrentMonth&&tInvest>0?`<span style="color:#22C55E;font-weight:800">+${fmtAEDExact(tInvest)}</span>`:''}</td>`:''}</tr>`;
 
   // Investment summary: when both pool-level and per-outlet top-ups exist, show them split
   // so the user can act on each independently. Pool top-ups go to brand-level (single edit on
