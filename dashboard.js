@@ -13,11 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-022";
+const BUILD_VERSION="2026-06-25-023";
 const BUILD_NOTES=[
-  "🐛 Mixed pooled + separate budgets now handled correctly (e.g. Oregano on Noon where Jumeirah has its own budget but other outlets share a pool). Pooled outlets show '—' for Budget/Leftover, separate outlets show their real per-outlet numbers, and the TOTAL row sums both correctly — separate budgets + pool total (once, not split per outlet).",
-  "🆕 TOTAL row label adapts: 'BRAND POOL TOTAL' when all pooled, 'TOTAL (incl. pool)' when mixed, 'TOTAL' when all separate.",
-  "🆕 Mixed-budget info banner shows the pool size explicitly so the user knows what the '—' cells represent and what the grand total includes."
+  "🐛 CRITICAL: Fixed crash when clicking any aggregator card — the brand-level poolNote referenced variables only defined in the outlet-level function, causing a ReferenceError that killed the page.",
+  "🛡 Added try/catch error cards around agg-level and brand-level renders — runtime errors now show visibly instead of silently dying."
 ];
 
 let _updateDialogShown=false;
@@ -2966,6 +2965,7 @@ function cpcActionStrip(){
 
 // LEVEL 1 — Aggregator cards
 function cpcRenderAggLevel(){
+  try{
   const aggs=Object.values(cpcModel.byAgg).sort((a,b)=>(b.curSpent||b.spent||0)-(a.curSpent||a.spent||0));
   const targetMonth=cpcAggViewMonth||cpcModel.curMonth;
   const isViewingCurrent=targetMonth===cpcModel.curMonth;
@@ -3025,10 +3025,15 @@ function cpcRenderAggLevel(){
     </div>`;
   }).join('');
   return quickViewBar+cpcActionStrip()+`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${cards}</div>`;
+  }catch(e){
+    console.error("[cpcRenderAggLevel] Error:",e);
+    return `<div class="card" style="border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.04)"><div style="color:#ef4444;font-weight:800;margin-bottom:6px">⚠️ CPC landing page render failed</div><div style="color:#cbd5e1;font-size:11.5px;margin-bottom:8px">${(e&&e.message)||"unknown error"}</div><div style="color:#64748b;font-size:10.5px">Open the browser console (F12) for the full stack trace.</div></div>`;
+  }
 }
 
 // LEVEL 2 — Brand cards within an aggregator
 function cpcRenderBrandLevel(ag){
+  try{
   const A=cpcModel.byAgg[ag];if(!A)return `<div class="card">No data for ${ag}</div>`;
   const clr=AGG_LOGO_CLR[ag]||'#94a3b8';
   const brands=Object.values(A.brands).sort((a,b)=>(b.spent||0)-(a.spent||0));
@@ -3074,13 +3079,15 @@ function cpcRenderBrandLevel(ag){
     </div>`;
   }).filter(Boolean).join('');
   // pooling note
-  const poolNote=(()=>{
-    if(!hasSomePooled)return ''; // pure separate — no pool note needed
-    if(isAllPooled) return `<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px">ℹ️ ${ag} uses <strong>auto-bidding</strong>, so only budget recommendations are shown. 📉 = sales dropped after a CPC ended.<br/><span style="color:#cbd5e1">Budget is pooled at brand level (🔒) — per-outlet Budget shows "—" because ${ag} auto-distributes across outlets. The <strong>TOTAL</strong> row shows the actual brand pool. Per-outlet <strong>Spent</strong>, <strong>Sales</strong>, and <strong>ROAS</strong> are real per-outlet figures from ${ag}'s auto-distribution.</span></div>`;
-    // Mixed: some pooled, some separate
-    return `<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px">ℹ️ This brand has a <strong>mix</strong> of pooled (🔒) and separate-budget outlets on ${ag}.<br/><span style="color:#cbd5e1">Pooled outlets show "—" for Budget (shared pool: <strong style="color:#fbbf24">${fmtAED(poolTotalAlloc)}</strong>). Separate outlets show their own individual budget. The <strong>TOTAL (incl. pool)</strong> row sums both correctly.</span></div>`;
-  })();
+  // Simple aggregator-level pool note for brand-card grid. Detailed per-outlet pool info
+  // (isAllPooled, isMixed, poolTotalAlloc) lives in cpcRenderOutletLevelSingle, not here.
+  const somePooled=brands.some(B=>B.rows.some(r=>r.budgetType==="combined"));
+  const poolNote=somePooled?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px">ℹ️ Some ${ag} outlets have <strong>pooled budgets</strong> (🔒) — outlets that burn faster automatically draw more. Per-outlet budget figures are indicative; the brand total is the real budget. Per-outlet <strong>results</strong> (orders, sales, ROAS, CTO) are exact.</div>`:'';
   return adToggle+poolNote+`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${cards}</div>`;
+  }catch(e){
+    console.error("[cpcRenderBrandLevel] Error:",e);
+    return `<div class="card" style="border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.04)"><div style="color:#ef4444;font-weight:800;margin-bottom:6px">⚠️ Brand-level render failed for ${ag}</div><div style="color:#cbd5e1;font-size:11.5px;margin-bottom:8px">${(e&&e.message)||"unknown error"}</div><div style="color:#64748b;font-size:10.5px">Open browser console (F12) for stack trace.</div></div>`;
+  }
 }
 
 // LEVEL 3 — Outlet drill-down table
