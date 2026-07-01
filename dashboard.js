@@ -13,7 +13,7 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-026";
+const BUILD_VERSION="2026-06-25-027";
 const BUILD_NOTES=[
   "🐛 CRITICAL: Fixed crash when clicking any aggregator card — the brand-level poolNote referenced variables only defined in the outlet-level function, causing a ReferenceError that killed the page.",
   "🛡 Added try/catch error cards around agg-level and brand-level renders — runtime errors now show visibly instead of silently dying."
@@ -3066,11 +3066,19 @@ function cpcRenderBrandLevel(ag){
     const bClr=BMAP[B.name]?.c||'#94a3b8';
     let rows=B.rows;if(effAdType!=='all')rows=rows.filter(r=>r.adType===effAdType);
     if(!rows.length)return '';
-    // Use targetMonth (from Quick View pin), not cpcModel.curMonth — so past months render correctly
+    // STRICT month scoping: if there's no data for the selected month, show zeros — NEVER
+    // fall back to all-time historical totals. Showing historical data under a month label
+    // like "Jun 26" when the brand had no campaigns in June is misleading (this was the
+    // Fyoozhen-on-Talabat bug that kept recurring). The user has explicitly asked for this
+    // to be eliminated across the entire drill-down chain.
     const monthRows=rows.filter(r=>r.month===targetMonth);
     const hasData=monthRows.length>0;
-    const useRows=hasData?monthRows:rows; // fall back to all-time only if NO data for this month
-    const inv=useRows.reduce((s,r)=>s+r.budgetAlloc,0),spent=useRows.reduce((s,r)=>s+r.budgetSpent,0),sales=useRows.reduce((s,r)=>s+r.sales,0);
+    // For past months: skip brands with no data entirely (an empty card adds nothing).
+    // For the current month: keep the card so the user sees "you haven't set up campaigns yet".
+    if(!hasData&&!isViewingCurrent)return '';
+    const inv=hasData?monthRows.reduce((s,r)=>s+r.budgetAlloc,0):0;
+    const spent=hasData?monthRows.reduce((s,r)=>s+r.budgetSpent,0):0;
+    const sales=hasData?monthRows.reduce((s,r)=>s+r.sales,0):0;
     const roas=spent>0?sales/spent:null;const be=cpcBE(B.name,ag);const verdict=cpcVerdict(roas,be);
     const consum=inv>0?(spent/inv)*100:0;
     const vClr=verdict?CPC_VC[verdict]:'#64748b';
