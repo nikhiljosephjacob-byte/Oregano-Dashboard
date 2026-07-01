@@ -13,7 +13,7 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-025";
+const BUILD_VERSION="2026-06-25-026";
 const BUILD_NOTES=[
   "🐛 CRITICAL: Fixed crash when clicking any aggregator card — the brand-level poolNote referenced variables only defined in the outlet-level function, causing a ReferenceError that killed the page.",
   "🛡 Added try/catch error cards around agg-level and brand-level renders — runtime errors now show visibly instead of silently dying."
@@ -3048,35 +3048,43 @@ function cpcRenderBrandLevel(ag){
   const A=cpcModel.byAgg[ag];if(!A)return `<div class="card">No data for ${ag}</div>`;
   const clr=AGG_LOGO_CLR[ag]||'#94a3b8';
   const brands=Object.values(A.brands).sort((a,b)=>(b.spent||0)-(a.spent||0));
+  // Respect the Quick View month pin from the landing page — if the user clicked "Jun 26" on the
+  // landing page then drilled into Talabat, show June data here (not July).
+  const targetMonth=cpcAggViewMonth||cpcModel.curMonth;
+  const isViewingCurrent=targetMonth===cpcModel.curMonth;
+  const monthLbl=cpcMonthLabel(targetMonth);
+  // Quick View month buttons (same as landing page — so user can switch months without going back)
+  const pastMonths=[1,2,3].map(n=>cpcShiftMonth(cpcModel.curMonth,-n));
+  const monthBtn=(m,label)=>{const isActive=targetMonth===m;return `<button onclick="cpcSetAggMonth('${m}')" style="padding:5px 13px;border-radius:7px;border:1px solid ${isActive?'#f59e0b':'rgba(27,47,74,.6)'};background:${isActive?'rgba(245,158,11,.14)':'transparent'};color:${isActive?'#f59e0b':'#94a3b8'};font-size:11.5px;font-weight:700;cursor:pointer">${label}</button>`;};
+  const quickViewBar=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Quick View</span>${monthBtn(cpcModel.curMonth,"This Month")}${pastMonths.map(m=>monthBtn(m,cpcMonthLabel(m))).join("")}</div>`;
   // Ad-type toggle (only if this aggregator has more than one)
   const adTypes=[...A.adTypes];
   const adToggle=adTypes.length>1?`<div style="display:flex;gap:6px;margin-bottom:14px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Ad Type</span>${['all',...adTypes].map(t=>`<button onclick="cpcSetAdType('${t}')" style="padding:4px 12px;border-radius:6px;border:1px solid ${cpcAdTypeFilter===t?clr:'rgba(27,47,74,.6)'};background:${cpcAdTypeFilter===t?clr+'22':'transparent'};color:${cpcAdTypeFilter===t?clr:'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${t==='all'?'All':t}</button>`).join('')}</div>`:'';
   const aggAdTypes=[...A.adTypes];
-  // If the active ad-type filter isn't valid for this aggregator, treat as 'all'
   const effAdType=(cpcAdTypeFilter!=='all'&&aggAdTypes.includes(cpcAdTypeFilter))?cpcAdTypeFilter:'all';
   const cards=brands.map(B=>{
     const bClr=BMAP[B.name]?.c||'#94a3b8';
-    // filter rows by ad type AND current month for the displayed numbers. Note: this card always
-    // shows ONE blended figure per brand regardless of how many ad types it has — the CPC vs
-    // Banners/Keywords split happens at the next drill level (cpcRenderOutletLevel), which renders
-    // separate headlined sections per type. Splitting here too would show "Smokeys" twice.
     let rows=B.rows;if(effAdType!=='all')rows=rows.filter(r=>r.adType===effAdType);
     if(!rows.length)return '';
-    const curRows=rows.filter(r=>r.month===cpcModel.curMonth);
-    const useRows=curRows.length?curRows:rows; // fall back to all-time if no current-month data
-    const hasCur=curRows.length>0;
+    // Use targetMonth (from Quick View pin), not cpcModel.curMonth — so past months render correctly
+    const monthRows=rows.filter(r=>r.month===targetMonth);
+    const hasData=monthRows.length>0;
+    const useRows=hasData?monthRows:rows; // fall back to all-time only if NO data for this month
     const inv=useRows.reduce((s,r)=>s+r.budgetAlloc,0),spent=useRows.reduce((s,r)=>s+r.budgetSpent,0),sales=useRows.reduce((s,r)=>s+r.sales,0);
     const roas=spent>0?sales/spent:null;const be=cpcBE(B.name,ag);const verdict=cpcVerdict(roas,be);
     const consum=inv>0?(spent/inv)*100:0;
     const vClr=verdict?CPC_VC[verdict]:'#64748b';
-    const actCount=cpcModel.actions.filter(a=>a.r.aggregator===ag&&a.r.brand===B.name&&(effAdType==='all'||a.r.adType===effAdType)).length;
+    const actCount=isViewingCurrent?cpcModel.actions.filter(a=>a.r.aggregator===ag&&a.r.brand===B.name&&(effAdType==='all'||a.r.adType===effAdType)).length:0;
+    const statusLine=hasData
+      ?`${monthLbl}${isViewingCurrent?' (current month)':''}`
+      :`⚠ No campaigns in ${monthLbl}`;
     return `<div onclick="cpcGoOutlets('${ag}','${B.name}')" style="cursor:pointer;background:linear-gradient(135deg,${bClr}0d,rgba(13,21,36,.4));border:1px solid ${bClr}33;border-radius:14px;padding:16px;position:relative;overflow:hidden;transition:transform .15s,border-color .15s" onmouseover="this.style.borderColor='${bClr}88';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='${bClr}33';this.style.transform='none'">
       <div style="position:absolute;top:-20px;right:-20px;width:80px;height:80px;background:radial-gradient(circle,${bClr}22,transparent 70%);pointer-events:none"></div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <div style="font-size:15px;font-weight:800;color:${bClr}">${B.name}</div>
         <div style="display:flex;gap:6px;align-items:center">${actCount?`<div style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:8px;padding:2px 7px;font-size:10px;font-weight:700;color:#EF4444">⚡ ${actCount}</div>`:''}${verdict?`<div style="background:${CPC_VB[verdict]};border:1px solid ${vClr}44;border-radius:8px;padding:2px 8px;font-size:9px;font-weight:800;color:${vClr}">${verdict}</div>`:''}</div>
       </div>
-      <div style="font-size:9px;color:${hasCur?'#f59e0b':'#94a3b8'};font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">${hasCur?cpcMonthLabel(cpcModel.curMonth)+' (current month)':'⚠ No active CPCs this month · showing historical'}</div>
+      <div style="font-size:9px;color:${hasData?'#f59e0b':'#94a3b8'};font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">${statusLine}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
         <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Budget</div><div style="font-size:16px;font-weight:800;color:#e2e8f0">${fmtAED(inv)}</div></div>
         <div><div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.7px">Consumed</div><div style="font-size:16px;font-weight:800;color:#e2e8f0">${fmtAED(spent)}</div></div>
@@ -3094,7 +3102,7 @@ function cpcRenderBrandLevel(ag){
   // (isAllPooled, isMixed, poolTotalAlloc) lives in cpcRenderOutletLevelSingle, not here.
   const somePooled=brands.some(B=>B.rows.some(r=>r.budgetType==="combined"));
   const poolNote=somePooled?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px">ℹ️ Some ${ag} outlets have <strong>pooled budgets</strong> (🔒) — outlets that burn faster automatically draw more. Per-outlet budget figures are indicative; the brand total is the real budget. Per-outlet <strong>results</strong> (orders, sales, ROAS, CTO) are exact.</div>`:'';
-  return adToggle+poolNote+`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${cards}</div>`;
+  return quickViewBar+adToggle+poolNote+`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${cards}</div>`;
   }catch(e){
     console.error("[cpcRenderBrandLevel] Error:",e);
     return `<div class="card" style="border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.04)"><div style="color:#ef4444;font-weight:800;margin-bottom:6px">⚠️ Brand-level render failed for ${ag}</div><div style="color:#cbd5e1;font-size:11.5px;margin-bottom:8px">${(e&&e.message)||"unknown error"}</div><div style="color:#64748b;font-size:10.5px">Open browser console (F12) for stack trace.</div></div>`;
@@ -4048,22 +4056,25 @@ function cpcRenderOutletLevel(ag,brand){
   const TYPE_ORDER={CPC:0,Keywords:1,Banners:2};
   const aggAdTypes=[...B.adTypes].sort((a,b)=>(TYPE_ORDER[a]??99)-(TYPE_ORDER[b]??99));
   if(cpcAdTypeFilter!=='all'||aggAdTypes.length<=1){
-    return cpcRenderOutletLevelSingle(ag,brand);
+    return cpcRenderOutletLevelSingle(ag,brand,false);
   }
+  // Build toggle at the dispatcher level with 'All' correctly highlighted
+  const clr=AGG_LOGO_CLR[ag]||'#94a3b8';
+  const adToggle=`<div style="display:flex;gap:6px;margin-bottom:14px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Ad Type</span>${['all',...aggAdTypes].map(t=>`<button onclick="cpcSetAdType('${t}')" style="padding:4px 12px;border-radius:6px;border:1px solid ${cpcAdTypeFilter===t?clr:'rgba(27,47,74,.6)'};background:${cpcAdTypeFilter===t?clr+'22':'transparent'};color:${cpcAdTypeFilter===t?clr:'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${t==='all'?'All':t}</button>`).join('')}</div>`;
   // Split into one section per ad type. Temporarily pin cpcAdTypeFilter to each type while
   // capturing that section's HTML, then restore 'all' so the real app state is unchanged.
   const savedFilter=cpcAdTypeFilter;
   const sections=aggAdTypes.map(t=>{
     cpcAdTypeFilter=t;
-    const html=cpcRenderOutletLevelSingle(ag,brand);
+    const html=cpcRenderOutletLevelSingle(ag,brand,true);
     const headline=`<div style="display:flex;align-items:center;gap:8px;margin:18px 0 8px 0"><span style="font-size:14px;font-weight:800;color:${AC[ag]||'#f59e0b'}">📌 ${brand} on ${ag} — ${t} Campaigns</span><div style="flex:1;height:1px;background:rgba(27,47,74,.6)"></div></div>`;
     return headline+html;
   });
   cpcAdTypeFilter=savedFilter; // restore 'all' — this loop must never leak a pinned filter into global state
-  return sections.join("");
+  return adToggle+sections.join("");
 }
 
-function cpcRenderOutletLevelSingle(ag,brand){
+function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
   const A=cpcModel.byAgg[ag];if(!A||!A.brands[brand])return `<div class="card">No data</div>`;
   const B=A.brands[brand];
   const aggAdTypes=[...B.adTypes];
@@ -4081,7 +4092,7 @@ function cpcRenderOutletLevelSingle(ag,brand){
 
   // Month/Year picker on the RIGHT
   const monthBtns=monthsAvail.map(m=>{const isCur=m===curMonthStr;const act=selMonth===m;return `<button onclick="cpcSetMonth('${m}')" style="padding:4px 11px;border-radius:6px;border:1px solid ${act?'#f59e0b':'rgba(27,47,74,.6)'};background:${act?'rgba(245,158,11,.12)':'transparent'};color:${act?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${cpcMonthLabel(m)}${isCur?' •':''}</button>`;}).join('');
-  const adToggle=(aggAdTypes.length>1)?`<div style="display:flex;gap:6px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Ad Type</span>${['all',...aggAdTypes].map(tp=>`<button onclick="cpcSetAdType('${tp}')" style="padding:4px 12px;border-radius:6px;border:1px solid ${effAdType===tp?'#f59e0b':'rgba(27,47,74,.6)'};background:${effAdType===tp?'rgba(245,158,11,.12)':'transparent'};color:${effAdType===tp?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${tp==='all'?'All':tp}</button>`).join('')}</div>`:'';
+  const adToggle=(!skipToggle&&aggAdTypes.length>1)?`<div style="display:flex;gap:6px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Ad Type</span>${['all',...aggAdTypes].map(tp=>`<button onclick="cpcSetAdType('${tp}')" style="padding:4px 12px;border-radius:6px;border:1px solid ${effAdType===tp?'#f59e0b':'rgba(27,47,74,.6)'};background:${effAdType===tp?'rgba(245,158,11,.12)':'transparent'};color:${effAdType===tp?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${tp==='all'?'All':tp}</button>`).join('')}</div>`:'';
   const controlBar=`<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">${adToggle||'<div></div>'}<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Month</span>${monthBtns}</div></div>`;
 
   // Build per-outlet rows for the selected month
