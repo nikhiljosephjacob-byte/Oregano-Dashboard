@@ -13,7 +13,7 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-023";
+const BUILD_VERSION="2026-06-25-024";
 const BUILD_NOTES=[
   "🐛 CRITICAL: Fixed crash when clicking any aggregator card — the brand-level poolNote referenced variables only defined in the outlet-level function, causing a ReferenceError that killed the page.",
   "🛡 Added try/catch error cards around agg-level and brand-level renders — runtime errors now show visibly instead of silently dying."
@@ -4152,7 +4152,17 @@ function cpcRenderOutletLevelSingle(ag,brand){
     poolTotalSpent=poolRows.reduce((s,r)=>s+(r.budgetSpent||0),0);
   }
 
-  const body=tableRows.map(t=>{
+  const body=(()=>{
+    // Sort: separate-budget outlets first, pooled outlets grouped together at the bottom
+    const sorted=[...tableRows].sort((a,b)=>{
+      const aPooled=((a.liveRow&&a.liveRow.budgetType)||"separate")==="combined"?1:0;
+      const bPooled=((b.liveRow&&b.liveRow.budgetType)||"separate")==="combined"?1:0;
+      if(aPooled!==bPooled)return aPooled-bPooled; // separate first
+      return 0; // preserve existing sort within each group
+    });
+    let poolBannerEmitted=false;
+    const colCount=showInvestCol?14:13; // total columns in the table
+    return sorted.map(t=>{
     const d=t.disp;const vClr=d.verdict?CPC_VC[d.verdict]:'#64748b';
     const budgetType=(t.liveRow&&t.liveRow.budgetType)||"separate";
     const isPooled=budgetType==="combined";
@@ -4234,8 +4244,20 @@ function cpcRenderOutletLevelSingle(ag,brand){
       }
       if(parts.length)recCell=parts.join('');
     }
-    return `<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:#e2e8f0">${t.outlet}</strong>${impTag}${poolTag}${fundedTag}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right">${(d.views||0).toLocaleString()}</td><td style="text-align:right">${(d.orders||0).toLocaleString()}</td><td style="text-align:right">${fmtAEDExact(d.sales)}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${isPooled?'<span style="color:#64748b;font-size:10px" title="Budget is pooled at brand level — per-outlet split is not meaningful">—</span>':fmtAEDExact(d.alloc)}</td><td style="text-align:right">${fmtAEDExact(d.spent)}</td><td style="text-align:right">${isPooled?'<span style="color:#64748b;font-size:10px">—</span>':fmtAEDExact(d.leftover)}</td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}<div style="font-size:8px;color:${t.momChg==null?'#475569':pctClr(t.momChg)}">${t.momChg!=null?'MoM '+fmtPct(t.momChg):''}</div></td><td style="text-align:right">${t.calcBid!=null?'AED '+t.calcBid.toFixed(2):'—'}</td><td style="text-align:right">${d.ftu||0}</td>${showInvestCol?`<td style="text-align:right">${recCell}</td>`:''}</tr>`;
+    // Pool banner: emitted once, right before the first pooled outlet row. Shows the total pool
+    // budget in a highlighted row spanning the full table width, so the user sees at a glance
+    // "these outlets below share this pool" instead of seeing scattered "—" cells.
+    let bannerRow='';
+    if(isPooled&&!poolBannerEmitted){
+      poolBannerEmitted=true;
+      const poolLeft=Math.max(0,poolTotalAlloc-poolTotalSpent);
+      const poolPct=poolTotalAlloc>0?Math.round(poolTotalSpent/poolTotalAlloc*100):0;
+      bannerRow=`<tr><td colspan="${colCount}" style="padding:0"><div style="margin:12px 0 6px 0;padding:10px 14px;background:linear-gradient(135deg,rgba(96,165,250,.08),rgba(96,165,250,.02));border:1px solid rgba(96,165,250,.25);border-radius:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:14px">🔒</span><div><div style="font-size:12px;font-weight:800;color:#60A5FA">Pooled Budget — ${pooledTableRows.length} outlets share this pool</div><div style="font-size:10px;color:#94a3b8;margin-top:2px">${ag} auto-distributes spend across these outlets. Per-outlet budget is not controllable individually.</div></div></div><div style="display:flex;gap:16px;align-items:center"><div style="text-align:center"><div style="font-size:9px;color:#64748b;text-transform:uppercase">Allocated</div><div style="font-size:15px;font-weight:800;color:#fbbf24">${fmtAED(poolTotalAlloc)}</div></div><div style="text-align:center"><div style="font-size:9px;color:#64748b;text-transform:uppercase">Spent</div><div style="font-size:15px;font-weight:800;color:#cbd5e1">${fmtAED(poolTotalSpent)}</div></div><div style="text-align:center"><div style="font-size:9px;color:#64748b;text-transform:uppercase">Remaining</div><div style="font-size:15px;font-weight:800;color:${poolLeft>0?'#22C55E':'#EF4444'}">${fmtAED(poolLeft)}</div></div><div style="text-align:center"><div style="font-size:9px;color:#64748b;text-transform:uppercase">Burn</div><div style="font-size:15px;font-weight:800;color:#94a3b8">${poolPct}%</div></div></div></div></td></tr>`;
+    }
+    const row=`<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:#e2e8f0">${t.outlet}</strong>${impTag}${poolTag}${fundedTag}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right">${(d.views||0).toLocaleString()}</td><td style="text-align:right">${(d.orders||0).toLocaleString()}</td><td style="text-align:right">${fmtAEDExact(d.sales)}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${isPooled?'<span style="color:#60A5FA;font-size:10px">pool</span>':fmtAEDExact(d.alloc)}</td><td style="text-align:right">${fmtAEDExact(d.spent)}</td><td style="text-align:right">${isPooled?'<span style="color:#60A5FA;font-size:10px">pool</span>':fmtAEDExact(d.leftover)}</td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}<div style="font-size:8px;color:${t.momChg==null?'#475569':pctClr(t.momChg)}">${t.momChg!=null?'MoM '+fmtPct(t.momChg):''}</div></td><td style="text-align:right">${t.calcBid!=null?'AED '+t.calcBid.toFixed(2):'—'}</td><td style="text-align:right">${d.ftu||0}</td>${showInvestCol?`<td style="text-align:right">${recCell}</td>`:''}</tr>`;
+    return bannerRow+row;
   }).join('');
+  })();
 
   // For brands with ANY pooled rows: add the ACTUAL pool total (computed once above) to the
   // running totals. Separate rows already added their own budgets during the loop. This correctly
