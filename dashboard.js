@@ -13,7 +13,7 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-024";
+const BUILD_VERSION="2026-06-25-025";
 const BUILD_NOTES=[
   "🐛 CRITICAL: Fixed crash when clicking any aggregator card — the brand-level poolNote referenced variables only defined in the outlet-level function, causing a ReferenceError that killed the page.",
   "🛡 Added try/catch error cards around agg-level and brand-level renders — runtime errors now show visibly instead of silently dying."
@@ -2600,9 +2600,14 @@ function parseCPCSheet(csv){
     const {brand,branch}=resolveBrandLocation(bl,brandCache,branchCache);
     if(!brand||CPC_EXCLUDE_BRANDS.has(brand.toLowerCase()))continue;
     const num=(idx)=>{if(idx<0)return 0;const v=(row[idx]||"").toString().replace(/[, ]/g,"").replace(/%/g,"").trim();const n=parseFloat(v);return isNaN(n)?0:n;};
-    const adType=((row[cm.adType]||"").trim()||"CPC").replace(/key\s*words?/i,"Keywords").replace(/banners?/i,"Banners");
-    const startDate=parseCPCDate(row[cm.startDate]),endDate=parseCPCDate(row[cm.endDate]);
     const remarksRaw=(row[cm.remarks]||"").toString().trim();
+    const adTypeRaw=((row[cm.adType]||"").trim()||"CPC").replace(/key\s*words?/i,"Keywords").replace(/banners?/i,"Banners");
+    // Fallback: if column A says "CPC" but Remarks or Brand-Location mentions "banner", treat as Banners.
+    // This handles the common case where column A is still "CPC/Key Words" labeled and the user
+    // didn't realize they need to type "Banner" there — they wrote it in the remarks instead.
+    const remarksMentionsBanner=/banner/i.test(remarksRaw)||/banner/i.test(bl);
+    const adType=remarksMentionsBanner&&!/banner/i.test(adTypeRaw)?"Banners":adTypeRaw;
+    const startDate=parseCPCDate(row[cm.startDate]),endDate=parseCPCDate(row[cm.endDate]);
     // Normalize the new "Budget Combined/Seperate" column to either "combined" or "separate".
     // "Combined Per Brand"      → combined (pooled, can't edit individually — Careem, Noon)
     // "Seperate Budget Per Outlet" → separate (per-outlet editable — Deliveroo, Talabat)
@@ -2641,6 +2646,12 @@ function parseCPCSheet(csv){
     rec.verdict=cpcVerdict(rec.roi,rec.be);
     recs.push(rec);
   }
+  // Diagnostic: log ad-type distribution per aggregator so classification issues are visible
+  const adTypeDist={};
+  recs.forEach(r=>{const k=`${r.aggregator}|${r.adType}`;adTypeDist[k]=(adTypeDist[k]||0)+1;});
+  console.log("[CPC] Ad-type distribution:",Object.entries(adTypeDist).sort().map(([k,v])=>`${k}: ${v} rows`).join(", "));
+  const brandUnmappedCount=recs.filter(r=>r.brandUnmapped).length;
+  if(brandUnmappedCount)console.warn(`[CPC] ${brandUnmappedCount} rows have brandUnmapped=true — check Brand-Location format in the sheet`);
   return recs;
 }
 
@@ -4147,7 +4158,11 @@ function cpcRenderOutletLevelSingle(ag,brand){
   let poolTotalAlloc=0,poolTotalSpent=0;
   if(hasSomePooled&&tableRows.length){
     const bModel=cpcModel.byAgg[ag]&&cpcModel.byAgg[ag].brands[brand];
-    const poolRows=bModel?bModel.rows.filter(r=>r.month===selMonth&&r.budgetType==="combined"):rows.filter(r=>r.month===selMonth&&r.budgetType==="combined");
+    // Filter by BOTH budgetType AND the effective ad-type filter, so viewing "CPC only" doesn't
+    // include Keywords/Banners pool budget in the pool banner.
+    const poolRows=bModel
+      ?bModel.rows.filter(r=>r.month===selMonth&&r.budgetType==="combined"&&(effAdType==='all'||r.adType===effAdType))
+      :rows.filter(r=>r.month===selMonth&&r.budgetType==="combined"&&(effAdType==='all'||r.adType===effAdType));
     poolTotalAlloc=poolRows.reduce((s,r)=>s+(r.budgetAlloc||0),0);
     poolTotalSpent=poolRows.reduce((s,r)=>s+(r.budgetSpent||0),0);
   }
