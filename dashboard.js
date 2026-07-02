@@ -13,7 +13,7 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-027";
+const BUILD_VERSION="2026-06-25-029";
 const BUILD_NOTES=[
   "🐛 CRITICAL: Fixed crash when clicking any aggregator card — the brand-level poolNote referenced variables only defined in the outlet-level function, causing a ReferenceError that killed the page.",
   "🛡 Added try/catch error cards around agg-level and brand-level renders — runtime errors now show visibly instead of silently dying."
@@ -1743,7 +1743,9 @@ async function doLoad(){
   latest=all.reduce((m,r)=>r.date>m?r.date:m,all[0].date);
   // Default every page's filter to "yesterday" (the latest day) independently.
   Object.values(pageFilters).forEach(f=>{f.start=latest;f.end=latest;f.preset="yesterday";f.brands.clear();f.platforms.clear();f.branches.clear();});
-  document.getElementById("ts-label").textContent=`Latest: ${fmtDisp(latest)}`;
+  const realToday=dk(new Date());
+  const todayLabel=realToday!==latest?` · Today: ${fmtDisp(realToday)}`:'';
+  document.getElementById("ts-label").textContent=`Latest: ${fmtDisp(latest)}${todayLabel}`;
   document.getElementById("loading-screen").style.display="none";
   document.getElementById("main-app").style.display="block";
   injectResponsiveCSS();
@@ -1989,7 +1991,19 @@ function getCompShort(){
   return`vs ${fmtShort(s)}–${fmtShort(e)}${suffix}`;
 }
 function getPeriodLabel(){const f=curFilters();if(!f.start)return"";if(f.start===f.end)return fmtDisp(f.start);return`${fmtDisp(f.start)} → ${fmtDisp(f.end)}`;}
-function fSetPreset(p){const f=curFilters();f.preset=p;if(p==="yesterday"){f.start=f.end=latest;}else if(p==="7d"){f.start=subDays(latest,6);f.end=latest;}else if(p==="30d"){f.start=subDays(latest,29);f.end=latest;}else if(p==="month"){f.start=latest.slice(0,7)+"-01";f.end=latest;}else if(p==="lmonth"){const now=new Date(latest+"T12:00:00");f.start=dk(new Date(now.getFullYear(),now.getMonth()-1,1));f.end=dk(new Date(now.getFullYear(),now.getMonth(),0));}Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
+function fSetPreset(p){const f=curFilters();f.preset=p;
+  // CRITICAL: all presets are anchored to the REAL calendar date, not `latest` (the most recent
+  // date in the sales data). Using `latest` caused "This Month" to show June on July 1 when no
+  // July data had arrived yet — confusing the user into thinking the dashboard didn't know the
+  // month had changed. If the real calendar month has no data, the dashboard shows zeros — honest
+  // behavior. The user can always click "Last Month" to see the most recent complete month.
+  const today=dk(new Date());
+  if(p==="yesterday"){const y=subDays(today,1);f.start=f.end=y;}
+  else if(p==="7d"){f.start=subDays(today,6);f.end=today;}
+  else if(p==="30d"){f.start=subDays(today,29);f.end=today;}
+  else if(p==="month"){f.start=today.slice(0,7)+"-01";f.end=today;}
+  else if(p==="lmonth"){const now=new Date();f.start=dk(new Date(now.getFullYear(),now.getMonth()-1,1));f.end=dk(new Date(now.getFullYear(),now.getMonth(),0));}
+  Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
 function fApply(){const f=curFilters();const s=document.getElementById("f-s"),e=document.getElementById("f-e");if(s&&e){f.start=s.value;f.end=e.value;}f.preset="custom";Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
 function fToggle(type,val){const f=curFilters();const sets={brand:f.brands,platform:f.platforms,branch:f.branches};const s=sets[type];if(s.has(val))s.delete(val);else s.add(val);Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
 function fClear(){const f=curFilters();f.brands.clear();f.platforms.clear();f.branches.clear();Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
@@ -2306,7 +2320,7 @@ function renderBrands(){
   const ls=sumR(ld),ps=sumR(pd);const compShort=getCompShort();
   const cm=mkMap(ld,r=>`${r.branch}|${r.aggregator}`),pm=mkMap(pd,r=>`${r.branch}|${r.aggregator}`);
   const rows=Object.values(cm).map(c=>{const[branch,aggregator]=c.k.split("|");const pv=pm[c.k];return{branch,aggregator,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};});
-  const aggBar=AGGS.map(ag=>{const c=sumR(ld.filter(r=>r.aggregator===ag));return{ag,sales:c.sales,orders:c.orders,clr:AC[ag]};}).filter(a=>a.orders>0);
+  const aggBar=AGGS.map(ag=>{const c=sumR(ld.filter(r=>r.aggregator===ag));return{ag,sales:c.sales,orders:c.orders,clr:AC[ag]};}).filter(a=>a.orders>0).sort((a,b)=>b.sales-a.sales);
   const btnH=BR.map(br=>{const act=selBrand===br.n;return`<button onclick="selBrand='${br.n}';renderBrands()" class="brbtn" style="border-color:${act?br.c:"#1b2f4a"};background:${act?br.c+"22":"#0d1524"};color:${act?br.c:"#94a3b8"}">${logoImg(br.n,38)}<span style="font-size:12px;font-weight:700;white-space:nowrap">${br.n}</span></button>`;}).join("");
   const tRows=rows.map(r=>({cells:[
     `<strong>${r.branch}</strong>`,
@@ -2319,9 +2333,13 @@ function renderBrands(){
   document.getElementById("page-brands").innerHTML=makeFilterBar({hideBrand:true})+
     `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
     <div class="g4">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAED(ls.sales),compShort+": "+fmtAED(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Active Outlets",new Set(ld.map(r=>r.branch)).size,"outlets",null)}</div>
-    <div class="g2"><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — Net Sales Trend</div><div style="position:relative;height:140px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform</div><div style="position:relative;height:140px"><canvas id="ch-b-agg"></canvas></div></div></div>
+    <div class="g2"><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — Net Sales Trend</div><div style="position:relative;height:140px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0;font-size:10px">sorted by net sales</span></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div style="position:relative;height:140px"><canvas id="ch-b-agg-sales"></canvas></div><div style="position:relative;height:140px"><canvas id="ch-b-agg-orders"></canvas></div></div></div></div>
     <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>`;
-  setTimeout(()=>{const f=curFilters();const mf=(r)=>r.brand===selBrand&&(!f.platforms.size||f.platforms.has(r.aggregator))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-b-trend",trend30(mf,f.start,f.end),b?.c||"#888");barChart("ch-b-agg",aggBar.map(a=>a.ag),aggBar.map(a=>a.orders),aggBar.map(a=>a.clr),aggBar.map(a=>a.sales),"orders");},50);
+  setTimeout(()=>{const f=curFilters();const mf=(r)=>r.brand===selBrand&&(!f.platforms.size||f.platforms.has(r.aggregator))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-b-trend",trend30(mf,f.start,f.end),b?.c||"#888");
+    // Two bar charts side by side: Net Sales (left) + Orders (right), both internally sorted by their own metric (highest to lowest)
+    barChart("ch-b-agg-sales",aggBar.map(a=>a.ag),aggBar.map(a=>a.sales),aggBar.map(a=>a.clr),aggBar.map(a=>a.orders),"sales");
+    barChart("ch-b-agg-orders",aggBar.map(a=>a.ag),aggBar.map(a=>a.orders),aggBar.map(a=>a.clr),aggBar.map(a=>a.sales),"orders");
+  },50);
 }
 
 // OUTLETS — card grid with click-to-drill-down
@@ -7093,7 +7111,7 @@ function cmpDateLabel(cfg){
 // State mutators (side = 'A' | 'B')
 function cmpToggle(side,type,val){const cfg=side==="A"?cmpA:cmpB;const s={brand:cfg.brands,platform:cfg.platforms,branch:cfg.branches}[type];if(s.has(val))s.delete(val);else s.add(val);renderCompare();}
 function cmpSetDate(side,which,val){const cfg=side==="A"?cmpA:cmpB;cfg[which]=val;cfg.preset="custom";renderCompare();}
-function cmpPreset(side,p){const cfg=side==="A"?cmpA:cmpB;cfg.preset=p;if(p==="yesterday"){cfg.start=cfg.end=latest;}else if(p==="7d"){cfg.start=subDays(latest,6);cfg.end=latest;}else if(p==="30d"){cfg.start=subDays(latest,29);cfg.end=latest;}else if(p==="month"){cfg.start=latest.slice(0,7)+"-01";cfg.end=latest;}renderCompare();}
+function cmpPreset(side,p){const cfg=side==="A"?cmpA:cmpB;cfg.preset=p;const today=dk(new Date());if(p==="yesterday"){cfg.start=cfg.end=subDays(today,1);}else if(p==="7d"){cfg.start=subDays(today,6);cfg.end=today;}else if(p==="30d"){cfg.start=subDays(today,29);cfg.end=today;}else if(p==="month"){cfg.start=today.slice(0,7)+"-01";cfg.end=today;}renderCompare();}
 function cmpClear(side){const cfg=side==="A"?cmpA:cmpB;cfg.brands.clear();cfg.platforms.clear();cfg.branches.clear();renderCompare();}
 function cmpCopyAtoB(){cmpB.brands=new Set(cmpA.brands);cmpB.platforms=new Set(cmpA.platforms);cmpB.branches=new Set(cmpA.branches);renderCompare();}
 function cmpSwap(){const t=cmpA;cmpA=cmpB;cmpB=t;renderCompare();}
