@@ -13,7 +13,7 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-029";
+const BUILD_VERSION="2026-06-25-030";
 const BUILD_NOTES=[
   "🐛 CRITICAL: Fixed crash when clicking any aggregator card — the brand-level poolNote referenced variables only defined in the outlet-level function, causing a ReferenceError that killed the page.",
   "🛡 Added try/catch error cards around agg-level and brand-level renders — runtime errors now show visibly instead of silently dying."
@@ -697,12 +697,13 @@ function keetaUploadBarHTML(){
     aggButton("Deliveroo","Deliveroo",deliverooOrdersData,"clearDeliverooData",false),
     aggButton("Talabat","Talabat",talabatOrdersData,"clearTalabatData",false),
     aggButton("Careem","Careem",careemOrdersData,"clearCareemData",false),
-    aggButton("Noon","Noon",null,"",true), // placeholder — parser pending
+    aggButton("Noon","Noon",noonOrdersData,"clearNoonData",false),
     aggButton("Keeta","Keeta",keetaOrdersData,"clearKeetaData",false)
   ].join("");
   const inputs=`<input type="file" id="orders-file-deliveroo" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
                 <input type="file" id="orders-file-talabat" accept=".xlsx,.xls" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
                 <input type="file" id="orders-file-careem" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
+                <input type="file" id="orders-file-noon" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
                 <input type="file" id="orders-file-keeta" accept=".xlsx,.xls" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">`;
   return`<div style="margin-bottom:14px">
     <div style="font-size:10px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">📊 Per-order data sources</div>
@@ -766,8 +767,10 @@ async function handleOrdersUpload(filesOrFile){
       else if(headers.has("PARTNER_FUNDED_CATALOG_DISCOUNT")&&headers.has("MERCHANT_AREA"))detected="careem";
       else if(headers.has("Voucher Funded by you")&&headers.has("Talabat-Funded Voucher"))detected="talabat";
       else if(secondRow.some(h=>String(h).includes("Deliveroo Commission Rate"))&&secondRow.some(h=>String(h).includes("Order Value")))detected="deliveroo";
+      // Noon: statement_orders CSV — has "outlet_name" + "order_status" + "item_value" headers on row 0
+      else if(headers.has("outlet_name")&&headers.has("order_status")&&headers.has("item_value"))detected="noon";
       if(!detected){
-        errors.push(`${file.name}: format not recognized (expected Keeta XLSX, Careem CSV, Talabat XLSX, or Deliveroo CSV).`);
+        errors.push(`${file.name}: format not recognized (expected Keeta XLSX, Careem CSV, Talabat XLSX, Deliveroo CSV, or Noon statement_orders CSV).`);
         continue;
       }
       let fresh;
@@ -775,6 +778,7 @@ async function handleOrdersUpload(filesOrFile){
       else if(detected==="careem")fresh=await parseCareemCSV(file);
       else if(detected==="talabat")fresh=await parseTalabatXlsx(file);
       else if(detected==="deliveroo")fresh=await parseDeliverooCSV(file);
+      else if(detected==="noon")fresh=await parseNoonCSV(file);
       if(!fresh||!fresh.records.length){
         errors.push(`${file.name}: parsed but contained 0 usable records.`);
         continue;
@@ -783,6 +787,7 @@ async function handleOrdersUpload(filesOrFile){
       else if(detected==="careem"){careemOrdersData=mergeOrdersData(careemOrdersData,fresh,null);saveCareemToStorage();}
       else if(detected==="talabat"){talabatOrdersData=mergeOrdersData(talabatOrdersData,fresh,null);saveTalabatToStorage();}
       else if(detected==="deliveroo"){deliverooOrdersData=mergeOrdersData(deliverooOrdersData,fresh,deliverooRecomputeTotals);saveDeliverooToStorage();}
+      else if(detected==="noon"){noonOrdersData=mergeOrdersData(noonOrdersData,fresh,noonRecomputeTotals);saveNoonToStorage();}
       const dr=fresh.metadata.date_range||[];
       results.push(`✓ ${file.name} (${detected.charAt(0).toUpperCase()+detected.slice(1)}): ${fresh.records.length.toLocaleString()} records, ${dr[0]||"?"} → ${dr[1]||"?"}`);
     }catch(e){
@@ -1542,6 +1547,226 @@ function classifyDeliverooCampaign(c){
 // ═══════════════════════════════════════════════════════════════
 
 
+// ═══════════════════════════════════════════════════════════════
+// NOON EXACT-DISCOUNT MODULE
+// ═══════════════════════════════════════════════════════════════
+// Parses per-brand Noon "statement_orders_{brand}_{timestamp}.csv" exports.
+// Key differences from other aggregators:
+//   - One file PER BRAND (not one file with all brands)
+//   - Brand detected from FILENAME, not a column
+//   - outlet_discount = total merchant-funded discount (negative)
+//   - Exclude cancelled/undelivered orders
+//   - Exclude outlet_adj from discount totals (operational, not marketing)
+// See /noon-orders/SKILL.md for full methodology.
+
+const NOON_STORAGE_KEY="noon_orders_data_v1";
+
+// Brand detection from filename
+const NOON_BRAND_PATTERNS=[
+  [/lollorosso/i,"Lollorosso"],
+  [/smokey/i,"Smokeys"],
+  [/fyoo_zhen|fyoozhen/i,"Fyoozhen"],
+  [/wicked.?wings/i,"Wicked Wings"],
+  [/oregano/i,"Oregano"]
+];
+
+// Outlet substring mapping (applied to outlet_name after lowercasing). Longest-first matching.
+const NOON_OUTLET_MAP=[
+  ["al_forsan","Al Forsan"],["khalifa_city","Al Forsan"],
+  ["al_furjan","Furjan"],["furjan","Furjan"],
+  ["al_qouz","Al Quoz"],["al_quoz","Al Quoz"],
+  ["al_reef","Al Reef"],
+  ["al_reem_island","Al Reem"],["al_reem","Al Reem"],["reem_island","Al Reem"],
+  ["dubai_investment_park","DIP"],["dip","DIP"],
+  ["dubai_internet_city","DMC"],["dubai_media_city","DMC"],
+  ["dubai_marina","Marina"],["marina","Marina"],
+  ["jumeirah","Jumeirah"],
+  ["mirdiff","Mirdiff"],["mirdif","Mirdiff"],
+  ["motor_city","Motorcity"],["motorcity","Motorcity"],
+  ["nad_al_sheba","NAS"],
+  ["silicon_oasis","DSO"],["dso","DSO"],
+  ["town_square","Town Square"],
+  ["the_villa","Villa"],["villa","Villa"],
+  ["wtc","WTC"]
+];
+
+let noonOrdersData=null;
+
+function loadNoonFromStorage(){
+  try{const raw=localStorage.getItem(NOON_STORAGE_KEY);if(raw)noonOrdersData=JSON.parse(raw);}
+  catch(e){console.log("[Noon] localStorage load failed:",e.message);noonOrdersData=null;}
+}
+function saveNoonToStorage(){
+  if(!noonOrdersData)return;
+  try{localStorage.setItem(NOON_STORAGE_KEY,JSON.stringify(noonOrdersData));}
+  catch(e){console.log("[Noon] localStorage save failed (quota?):",e.message);}
+}
+function clearNoonData(){
+  noonOrdersData=null;
+  try{localStorage.removeItem(NOON_STORAGE_KEY);}catch(e){}
+  if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
+  renderCampaigns();
+}
+
+// Detect brand from filename
+function noonDetectBrand(filename){
+  for(const[re,brand]of NOON_BRAND_PATTERNS){
+    if(re.test(filename))return brand;
+  }
+  return null;
+}
+
+// Map outlet_name to dashboard outlet
+function noonMapOutlet(outletName){
+  if(!outletName)return null;
+  const s=String(outletName).toLowerCase().trim();
+  // Sort by key length descending for longest-match-first
+  const sorted=[...NOON_OUTLET_MAP].sort((a,b)=>b[0].length-a[0].length);
+  for(const[key,val]of sorted){
+    if(s.includes(key))return val;
+  }
+  return null;
+}
+
+// Recompute per-brand totals from a flat records array (used by merge helper)
+function noonRecomputeTotals(records){
+  const totals={};
+  for(const r of records){
+    if(!totals[r.brand])totals[r.brand]={orders:0,gross:0,net_payout:0,campaign_disc:0};
+    const t=totals[r.brand];
+    t.orders+=r.orders||0;
+    t.gross+=r.gross||0;
+    t.net_payout+=r.net_payout||0;
+    t.campaign_disc+=r.menu_disc||0;
+  }
+  Object.values(totals).forEach(t=>{
+    ["gross","net_payout","campaign_disc"].forEach(k=>t[k]=+t[k].toFixed(2));
+  });
+  return totals;
+}
+
+// Parse a single Noon statement_orders CSV. Brand comes from filename.
+async function parseNoonCSV(file){
+  const brand=noonDetectBrand(file.name);
+  if(!brand)throw new Error(`Couldn't detect brand from filename: ${file.name}\n\nExpected pattern: statement_orders_{brand}_{timestamp}.csv`);
+
+  await loadSheetJS();
+  const ab=await file.arrayBuffer();
+  const wb=XLSX.read(ab,{type:"array",raw:true,codepage:65001});
+  const ws=wb.Sheets[wb.SheetNames[0]];
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+  if(rows.length<2)throw new Error("Noon CSV is too short — expected headers + data rows.");
+
+  const headers=rows[0].map(h=>String(h||"").replace(/^\uFEFF/,"").trim());
+  const idx={};headers.forEach((h,i)=>idx[h]=i);
+
+  const need=["outlet_name","order_date","order_status","item_value","outlet_discount","net_payable"];
+  const missing=need.filter(k=>idx[k]===undefined);
+  if(missing.length)throw new Error(`Noon CSV missing headers: ${missing.join(", ")}`);
+
+  const agg={};
+  let stats={considered:0,delivered:0,skipped:0,unmapped:0};
+  const unmappedOutlets={};
+
+  for(let i=1;i<rows.length;i++){
+    const row=rows[i];
+    stats.considered++;
+    const status=String(row[idx["order_status"]]||"").trim().toLowerCase();
+    if(status!=="delivered"){stats.skipped++;continue;}
+    stats.delivered++;
+
+    const outletName=String(row[idx["outlet_name"]]||"").trim();
+    const outlet=noonMapOutlet(outletName);
+    if(!outlet){
+      stats.unmapped++;
+      if(outletName)unmappedOutlets[outletName]=(unmappedOutlets[outletName]||0)+1;
+      continue;
+    }
+
+    // Date — handle "YYYY-MM-DD" or Date objects or Excel serials
+    const dateRaw=row[idx["order_date"]];
+    let dateStr=null;
+    if(dateRaw instanceof Date&&!isNaN(dateRaw)){dateStr=dk(dateRaw);}
+    else{
+      const s=String(dateRaw||"").trim();
+      const m=s.match(/^(\d{4}-\d{2}-\d{2})/);
+      if(m)dateStr=m[1];
+      else{const d=new Date(s);if(!isNaN(d))dateStr=dk(d);}
+    }
+    if(!dateStr)continue;
+
+    const itemValue=parseFloat(row[idx["item_value"]])||0;
+    const outletDisc=Math.abs(parseFloat(row[idx["outlet_discount"]])||0);
+    const netPayable=parseFloat(row[idx["net_payable"]])||0;
+
+    const key=`${brand}|${outlet}|${dateStr}`;
+    if(!agg[key])agg[key]={brand,outlet,date:dateStr,discount_type:"campaign",orders:0,gross:0,net_payout:0,menu_disc:0};
+    agg[key].orders++;
+    agg[key].gross+=itemValue;
+    agg[key].menu_disc+=outletDisc;
+    agg[key].net_payout+=netPayable;
+  }
+
+  const records=Object.values(agg).map(r=>({...r,gross:+r.gross.toFixed(2),net_payout:+r.net_payout.toFixed(2),menu_disc:+r.menu_disc.toFixed(2)}))
+    .sort((a,b)=>(a.brand+a.outlet+a.date).localeCompare(b.brand+b.outlet+b.date));
+
+  console.log(`[Noon] ${file.name}: brand=${brand}, ${stats.delivered} delivered, ${records.length} records, ${stats.unmapped} unmapped`);
+  if(Object.keys(unmappedOutlets).length){
+    console.warn("[Noon] unmapped outlets:",unmappedOutlets);
+  }
+
+  if(!records.length&&stats.considered>0){
+    const top=Object.entries(unmappedOutlets).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([n,c])=>`  ${c}× "${n}"`).join("\n");
+    throw new Error(`Parsed ${stats.considered} rows but kept 0.\n\nDelivered: ${stats.delivered}\nUnmapped: ${stats.unmapped}${top?`\n\nTop unmapped:\n${top}`:""}`);
+  }
+
+  const dates=records.map(r=>r.date).sort();
+  const totals=noonRecomputeTotals(records);
+
+  return{
+    metadata:{
+      aggregator:"Noon",
+      date_range:dates.length?[dates[0],dates[dates.length-1]]:[null,null],
+      totals_per_brand:totals,
+      total_records:records.length,
+      source_file:file.name||"upload",
+      brand_detected:brand,
+      parse_stats:stats
+    },
+    records
+  };
+}
+
+// Lookup used by allocateCampaignDiscount: sums exact merchant disc for a campaign's brand/outlets/dates.
+function getNoonExactDisc(c,start,end){
+  if(!noonOrdersData||!noonOrdersData.records||!noonOrdersData.metadata)return null;
+  const dr=noonOrdersData.metadata.date_range||[];
+  if(!dr[0]||!dr[1])return null;
+  if(end<dr[0]||start>dr[1])return null;
+  const myScope=campOutlets(c);
+  let menuDisc=0;const dailyAlloc={};let matched=0;
+  for(const rec of noonOrdersData.records){
+    if(rec.brand!==c.brand)continue;
+    if(rec.date<start||rec.date>end)continue;
+    if(myScope&&!myScope.has(rec.outlet))continue;
+    menuDisc+=rec.menu_disc;
+    dailyAlloc[rec.date]=(dailyAlloc[rec.date]||0)+rec.menu_disc;
+    matched++;
+  }
+  if(!matched)return null;
+  const daysIn=(s,e)=>Math.max(0,Math.round((new Date(e+"T12:00:00")-new Date(s+"T12:00:00"))/86400000)+1);
+  const totalDays=daysIn(start,end);
+  const covStart=start>dr[0]?start:dr[0];
+  const covEnd=end<dr[1]?end:dr[1];
+  const coveredDays=daysIn(covStart,covEnd);
+  return{menuDisc,dailyAlloc,matchedRecords:matched,coveredDays,totalDays,partialCoverage:coveredDays<totalDays,uncoveredStart:end>dr[1]?dr[1]:null,uncoveredEnd:end>dr[1]?end:null};
+}
+
+// ═══════════════════════════════════════════════════════════════
+// END NOON MODULE
+// ═══════════════════════════════════════════════════════════════
+
+
 
 // CSV PARSING
 function parseCSV(txt){const rows=[];let row=[],c="",q=false;for(let i=0;i<txt.length;i++){const ch=txt[i];if(ch==='"')q=!q;else if(ch===","&&!q){row.push(c.trim());c="";}else if((ch==="\n"||ch==="\r")&&!q){if(ch==="\r"&&txt[i+1]==="\n")i++;row.push(c.trim());c="";if(row.some(x=>x))rows.push(row);row=[];}else c+=ch;}row.push(c.trim());if(row.some(x=>x))rows.push(row);return rows;}
@@ -1723,6 +1948,7 @@ async function doLoad(){
   loadCareemFromStorage();
   loadTalabatFromStorage();
   loadDeliverooFromStorage();
+  loadNoonFromStorage();
   // ── DISCOUNT PARSE DIAGNOSTIC ──
   // Prints how much Disc was parsed per brand × aggregator so we can see if the sheet's
   // Disc column is being read. If a brand/aggregator you entered shows 0, the column header
@@ -5267,10 +5493,11 @@ function campCardGrid(camps,showProfit){
       (c.aggregator==='Keeta'&&keetaOrdersData)||
       (c.aggregator==='Careem'&&careemOrdersData)||
       (c.aggregator==='Talabat'&&talabatOrdersData)||
-      (c.aggregator==='Deliveroo'&&deliverooOrdersData)
+      (c.aggregator==='Deliveroo'&&deliverooOrdersData)||
+      (c.aggregator==='Noon'&&noonOrdersData)
     ))?(()=>{
       const a=campAnalysisCached(c);
-      return(a.discSource==='keeta_exact'||a.discSource==='careem_exact'||a.discSource==='talabat_exact'||a.discSource==='deliveroo_exact')?`<span style="font-size:8px;background:rgba(34,197,94,.12);color:#22C55E;font-weight:700;padding:1px 6px;border-radius:6px" title="Discount sourced from uploaded ${c.aggregator} orders file (exact per-order data, not estimated)">📊 Exact</span>`:'';
+      return(a.discSource==='keeta_exact'||a.discSource==='careem_exact'||a.discSource==='talabat_exact'||a.discSource==='deliveroo_exact'||a.discSource==='noon_exact')?`<span style="font-size:8px;background:rgba(34,197,94,.12);color:#22C55E;font-weight:700;padding:1px 6px;border-radius:6px" title="Discount sourced from uploaded ${c.aggregator} orders file (exact per-order data, not estimated)">📊 Exact</span>`:'';
     })():'';
     return `<div onclick="selectCamp(${idx})" style="cursor:pointer;background:linear-gradient(135deg,${accent}0d,rgba(13,21,36,.5));border:1px solid ${accent}33;border-left:3px solid ${accent};border-radius:12px;padding:14px;transition:transform .12s,border-color .12s" onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${accent}77'" onmouseout="this.style.transform='none';this.style.borderColor='${accent}33'">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
@@ -5531,6 +5758,14 @@ function allocateCampaignDiscount(c,start,end){
       const isBOGO=/\b(bogo|buy\s*one\s*get\s*one|buy\s*1\s*get\s*1)\b/.test(txt);
       const coFundedDisc=isBOGO?+(exact.menuDisc*35/65).toFixed(2):0;
       return{allocatedDisc:exact.menuDisc,coFundedDisc,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"deliveroo_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
+    }
+  }
+  if(c.aggregator==="Noon"){
+    const exact=getNoonExactDisc(c,start,end);
+    if(exact){
+      const M=brandTotalBranches(c.brand,c.aggregator)||1;
+      const myN=(campOutlets(c)||new Set()).size||M;
+      return{allocatedDisc:exact.menuDisc,coFundedDisc:0,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"noon_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
     }
   }
   const M=brandTotalBranches(c.brand,c.aggregator)||1;
