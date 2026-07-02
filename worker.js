@@ -14,17 +14,17 @@
 // User directory. Edit here to add/remove users — these passwords are NEVER
 // shipped to clients (this code only runs on Cloudflare's edge).
 const AUTH_USERS = {
-  "nikhil":   { password: "oregano2024", displayName: "Nikhil",   initials: "N",  admin: true },
-  "biju":     { password: "oregano2025", displayName: "Biju",     initials: "B" },
-  "tony":     { password: "oregano2023", displayName: "Tony",     initials: "T" },
-  "rijeesh":  { password: "oregano2020", displayName: "Rijeesh",  initials: "R" },
-  "nicole":   { password: "oregano2021", displayName: "Nicole",   initials: "N" },
-  "arun":     { password: "oregano2028", displayName: "Arun",     initials: "A" },
-  "admin":    { password: "admin3300",       displayName: "Admin",    initials: "A" },
-  "bd":       { password: "oregano3377", displayName: "BD Team",  initials: "BD" }
+  "nikhil":   { password: "oregano2026", displayName: "Nikhil",   initials: "N",  admin: true },
+  "biju":     { password: "oregano2026", displayName: "Biju",     initials: "B" },
+  "tony":     { password: "oregano2026", displayName: "Tony",     initials: "T" },
+  "rijeesh":  { password: "oregano2026", displayName: "Rijeesh",  initials: "R" },
+  "nicole":   { password: "oregano2026", displayName: "Nicole",   initials: "N" },
+  "arun":     { password: "oregano2026", displayName: "Arun",     initials: "A" },
+  "admin":    { password: "admin",       displayName: "Admin",    initials: "A" },
+  "bd":       { password: "oregano2026", displayName: "BD Team",  initials: "BD" }
 };
 
-const SESSION_TTL_SECONDS = 300; // 5 min — refreshed by 60s heartbeats
+const SESSION_TTL_SECONDS = 86400; // 24 hours — refreshed by 60s heartbeats. Was 300 (5 min) which caused frequent logouts when tab was backgrounded or phone screen turned off.
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 function json(data, status = 200) {
