@@ -1,3 +1,11 @@
 /version.txt
   Cache-Control: no-store, no-cache, must-revalidate
   CDN-Cache-Control: no-store
+
+/dashboard.js
+  Cache-Control: no-cache, must-revalidate
+  CDN-Cache-Control: no-store
+
+/worker.js
+  Cache-Control: no-cache, must-revalidate
+  CDN-Cache-Control: no-store
