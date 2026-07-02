@@ -4,7 +4,7 @@
   "description": "Business Development Dashboard for Oregano Group UAE",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#060C14",
+  "background_color": "#F0F2F5",
   "theme_color": "#C9933A",
   "orientation": "any",
   "icons": [
