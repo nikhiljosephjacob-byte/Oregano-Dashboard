@@ -13,7 +13,7 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-030";
+const BUILD_VERSION="2026-06-25-031";
 const BUILD_NOTES=[
   "🐛 CRITICAL: Fixed crash when clicking any aggregator card — the brand-level poolNote referenced variables only defined in the outlet-level function, causing a ReferenceError that killed the page.",
   "🛡 Added try/catch error cards around agg-level and brand-level renders — runtime errors now show visibly instead of silently dying."
@@ -74,9 +74,19 @@ function dismissUpdateModal(snooze){
 function hardRefreshNow(){
   // Mark the upgrade as "user accepted" so the What's New popup fires after reload.
   try{sessionStorage.setItem("show_whats_new","1");}catch(e){}
-  // location.reload(true) is deprecated but still hints to bypass cache.
-  // The ?_v= param defeats any remaining cache layers.
-  location.href=location.pathname+"?_v="+Date.now()+location.hash;
+  // Clear the browser's Cache API entries for dashboard.js + version.txt so a stale
+  // script can't survive the reload. Without this, the browser might serve a cached
+  // dashboard.js even after reload — causing the update popup to re-appear (the
+  // "refresh 3 times" bug).
+  if(typeof caches!=="undefined"&&caches.keys){
+    caches.keys().then(names=>Promise.all(names.map(n=>caches.open(n).then(c=>{
+      c.delete("/dashboard.js");c.delete("/version.txt");
+    })))).catch(()=>{}).finally(()=>{
+      location.reload(true); // forceReload hint (deprecated but still respected by most browsers)
+    });
+  }else{
+    location.reload(true);
+  }
 }
 
 // Show the "What's New" popup IF the user just refreshed to a new BUILD_VERSION.
