@@ -1,0 +1,17 @@
+{
+  "name": "Oregano Group Dashboard",
+  "short_name": "Oregano BD",
+  "description": "Business Development Dashboard for Oregano Group UAE",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#060C14",
+  "theme_color": "#C9933A",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='32' fill='%23060C14'/><text x='96' y='120' font-family='Arial' font-size='90' font-weight='bold' fill='%23C9933A' text-anchor='middle'>O</text></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ]
+}
