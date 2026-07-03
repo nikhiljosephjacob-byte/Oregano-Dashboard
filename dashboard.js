@@ -13,7 +13,7 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-037";
+const BUILD_VERSION="2026-06-25-038";
 const BUILD_NOTES=[
   "🐛 CRITICAL: Fixed crash when clicking any aggregator card — the brand-level poolNote referenced variables only defined in the outlet-level function, causing a ReferenceError that killed the page.",
   "🛡 Added try/catch error cards around agg-level and brand-level renders — runtime errors now show visibly instead of silently dying."
@@ -2409,7 +2409,38 @@ function barChart(id,labels,values,colors,extra,mode){const ctx=document.getElem
 function multiLineChart(id,labels,series){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);charts[id]=new Chart(ctx,{type:"line",data:{labels,datasets:series.map(s=>({label:s.name,data:s.data,borderColor:s.color,backgroundColor:s.color,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false,spanGaps:true}))},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#475569",font:{size:10},boxWidth:12,padding:8}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label}: ${c.raw==null?'—':'AED '+Number(c.raw).toFixed(1)}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"#F1F5F9"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#F1F5F9"},border:{display:false}}}}});}
 
 // NAVIGATION
-function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>t.classList.remove("act"));const idx={overview:0,brands:1,outlets:2,platforms:3,cpc:4,campaigns:5,kpi:6,compare:7}[page]||0;document.querySelectorAll(".tab")[idx]?.classList.add("act");Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
+function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>t.classList.remove("act"));const idx={overview:0,brands:1,outlets:2,platforms:3,cpc:4,campaigns:5,kpi:6,compare:7}[page]||0;document.querySelectorAll(".tab")[idx]?.classList.add("act");document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
+
+// ── MOBILE NAV DRAWER ──
+// Slides in from the left on tap of hamburger. Overlay dims the page. Any tap on a nav item or
+// the overlay closes it.
+function toggleMobileNav(){
+  const drawer=document.getElementById("mobile-nav-drawer");
+  const overlay=document.getElementById("mobile-nav-overlay");
+  if(!drawer||!overlay)return;
+  const open=drawer.style.left==="0px";
+  if(open){
+    drawer.style.left="-280px";
+    overlay.style.opacity="0";
+    setTimeout(()=>{drawer.style.display="none";overlay.style.display="none";},250);
+  }else{
+    drawer.style.display="flex";
+    overlay.style.display="block";
+    // Sync drawer logo with header logo
+    const headerLogo=document.getElementById("nav-logo");
+    const drawerLogo=document.getElementById("drawer-logo");
+    if(headerLogo&&drawerLogo)drawerLogo.src=headerLogo.src;
+    // Sync active state
+    document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===curPage);});
+    requestAnimationFrame(()=>{drawer.style.left="0px";overlay.style.opacity="1";});
+  }
+}
+// Navigate from mobile drawer + close it
+function mNavGo(page){
+  gp(page);
+  toggleMobileNav();
+  window.scrollTo({top:0,behavior:"smooth"});
+}
 function renderPage(p){if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();}
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
@@ -7867,7 +7898,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
 // Depending on how index.html loads this script, top-level function declarations
 // may not automatically become global — so we attach them explicitly here.
 (function(){
-  const fns=[gp,renderPage,toggleDD,fToggle,fClear,fSetPreset,fApply,
+  const fns=[gp,renderPage,toggleDD,fToggle,fClear,fSetPreset,fApply,toggleMobileNav,mNavGo,
     runCampAI,
     renderBrands,renderOutlets,renderPlatforms,renderOverview,renderCPC,renderCampaigns,renderKPI,renderCompare,
     selectOutlet,backToOutlets,toggleAovDrill,selectVerdAggregator,selectBundleByKey,bundleDetailHTML,
