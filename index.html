@@ -52,31 +52,36 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
 .loading{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh}
 ::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:#F1F5F9}::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px}::-webkit-scrollbar-thumb:hover{background:#94A3B8}
 
+/* ── Mobile-nav drawer buttons ── */
+.mnav{display:flex;align-items:center;gap:12px;width:100%;padding:12px 14px;margin-bottom:2px;background:none;border:none;border-radius:8px;color:rgba(255,255,255,.7);font-size:13px;font-weight:700;cursor:pointer;text-align:left;transition:all .15s;font-family:inherit;letter-spacing:.2px}
+.mnav:hover{background:rgba(255,255,255,.06);color:#FFFFFF}
+.mnav.act{background:linear-gradient(90deg,rgba(251,191,36,.15),transparent);color:#fbbf24;border-left:3px solid #fbbf24;padding-left:11px}
+
 /* ── Mobile responsive ── */
 @media(max-width:900px){
   body{font-size:12px}
-  nav{padding:0 10px;height:50px;flex-wrap:nowrap;gap:0;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
-  nav::-webkit-scrollbar{display:none}
-  .logo{font-size:9px;margin-right:8px;flex-shrink:0}
-  .logo img{width:28px!important;height:28px!important}
-  .tab{padding:0 9px;height:50px;font-size:10px;flex-shrink:0}
-  .pg{padding:10px 12px;max-width:100%}
-  .card,.sm{padding:10px}
-  .ct{font-size:9px;margin-bottom:8px}
+  /* Hide nav tabs on mobile — the hamburger drawer replaces them */
+  nav{padding:0 12px;height:54px;flex-wrap:nowrap;gap:0;justify-content:flex-start}
+  nav .tab{display:none}
+  #mobile-menu-btn{display:block!important}
+  nav::after{display:none!important} /* remove scroll-fade on mobile */
+  #ts-label{display:none}
+  nav > button:not(#mobile-menu-btn){display:none} /* hide refresh/logout on mobile — they're in the drawer */
+  .logo{font-size:10px;margin-left:4px;margin-right:auto;flex-shrink:1;min-width:0;overflow:hidden}
+  .logo img{width:32px!important;height:32px!important;flex-shrink:0}
+  .pg{padding:12px 12px;max-width:100%}
+  .card,.sm{padding:12px;border-radius:10px}
+  .ct{font-size:10px;margin-bottom:8px}
   .g4{grid-template-columns:1fr 1fr;gap:8px}
   .g2{grid-template-columns:1fr;gap:10px}
   .tbl{font-size:11px}
   .tbl th{padding:5px 6px;font-size:9px}
   .tbl td{padding:5px 6px}
-  .fbar{padding:8px 10px}
-  .preset{padding:3px 9px;font-size:10px}
-  .fpill{padding:3px 9px;font-size:10px}
+  .fbar{padding:10px 12px}
+  .preset{padding:5px 11px;font-size:11px}
+  .fpill{padding:5px 11px;font-size:11px}
   .brbtn{padding:6px 10px}
   .brbtn img{width:30px!important;height:30px!important}
-}
-/* Scroll-fade on nav — gradient fades into the dark nav bg so mobile users see more tabs exist */
-@media(max-width:900px){
-  nav::after{content:"";position:sticky;right:0;top:0;height:100%;width:30px;background:linear-gradient(90deg,transparent,#1E293B);pointer-events:none;flex-shrink:0}
 }
 @media(max-width:900px){
   .aov-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
@@ -89,13 +94,12 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
   .aov-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px}
   .aov-grid > div{padding:8px!important}
   body{font-size:11px}
-  nav{padding:0 8px;height:auto}
+  nav{padding:0 8px;height:54px}
   .logo span{display:none}
   .aov-grid{grid-template-columns:1fr!important;gap:8px!important}
-  .tab{padding:0 6px;height:40px;font-size:9px}
   .pg{padding:8px 10px}
   .g4{grid-template-columns:1fr 1fr;gap:6px}
-  .card,.sm{padding:8px;margin-bottom:8px}
+  .card,.sm{padding:10px;margin-bottom:10px;border-radius:10px}
   .tbl th,.tbl td{padding:4px 5px;font-size:10px}
   .sm > div:nth-child(2){font-size:16px!important}
   .tbl th:nth-child(n+6),.tbl td:nth-child(n+6){display:none}
@@ -131,6 +135,7 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
 
 <div id="main-app" style="display:none">
   <nav>
+    <button id="mobile-menu-btn" onclick="toggleMobileNav()" style="display:none;background:none;border:none;color:#FFFFFF;font-size:22px;cursor:pointer;padding:0 12px 0 0;font-weight:700" title="Menu">☰</button>
     <div class="logo"><img id="nav-logo" style="width:34px;height:34px;border-radius:6px;object-fit:cover"><span>Oregano<br>Restaurants</span></div>
     <button class="tab act" onclick="gp('overview')">Overview</button>
     <button class="tab" onclick="gp('brands')">Brands</button>
@@ -139,11 +144,36 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
     <button class="tab" onclick="gp('cpc')">Ads Performance</button>
     <button class="tab" onclick="gp('campaigns')">📅 Campaigns</button>
     <button class="tab" onclick="gp('kpi')">📊 KPI Tracker</button>
+    <button class="tab" onclick="gp('compare')">⚖️ Compare</button>
     <div style="flex:1"></div>
-    <span id="ts-label" style="font-size:10px;color:#64748b"></span>
-    <button onclick="doLoad()" style="margin-left:10px;background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 10px;font-size:12px;cursor:pointer">↻ Refresh</button>
-    <button onclick="doLogout()" style="margin-left:6px;background:none;border:1px solid #1b2f4a;border-radius:4px;color:#64748b;padding:3px 10px;font-size:12px;cursor:pointer" title="Sign out">⎋</button>
+    <span id="ts-label" style="font-size:10px;color:rgba(255,255,255,.7)"></span>
+    <button onclick="doLoad()" style="margin-left:10px;background:none;border:1px solid rgba(255,255,255,.2);border-radius:4px;color:rgba(255,255,255,.85);padding:3px 10px;font-size:12px;cursor:pointer" title="Refresh">↻ Refresh</button>
+    <button onclick="doLogout()" style="margin-left:6px;background:none;border:1px solid rgba(255,255,255,.2);border-radius:4px;color:rgba(255,255,255,.85);padding:3px 10px;font-size:12px;cursor:pointer" title="Sign out">⎋</button>
   </nav>
+
+  <!-- MOBILE SLIDE-OUT NAV DRAWER -->
+  <div id="mobile-nav-overlay" onclick="toggleMobileNav()" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:998;opacity:0;transition:opacity .25s ease"></div>
+  <div id="mobile-nav-drawer" style="display:none;position:fixed;top:0;left:-280px;width:280px;height:100vh;background:linear-gradient(180deg,#1E293B 0%,#0F172A 100%);z-index:999;transition:left .25s ease;box-shadow:4px 0 24px rgba(0,0,0,.3);flex-direction:column">
+    <div style="padding:20px 20px 24px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;gap:12px">
+      <img id="drawer-logo" style="width:40px;height:40px;border-radius:8px;object-fit:cover">
+      <div><div style="font-size:14px;font-weight:800;color:#fbbf24;letter-spacing:1.5px">OREGANO</div><div style="font-size:11px;color:rgba(255,255,255,.6);font-weight:600">Restaurants BD</div></div>
+    </div>
+    <div style="flex:1;padding:12px 8px;overflow-y:auto">
+      <button class="mnav" data-pg="overview" onclick="mNavGo('overview')"><span style="font-size:18px">🏠</span><span>Overview</span></button>
+      <button class="mnav" data-pg="brands" onclick="mNavGo('brands')"><span style="font-size:18px">🏷️</span><span>Brands</span></button>
+      <button class="mnav" data-pg="outlets" onclick="mNavGo('outlets')"><span style="font-size:18px">📍</span><span>Outlets</span></button>
+      <button class="mnav" data-pg="platforms" onclick="mNavGo('platforms')"><span style="font-size:18px">🛵</span><span>Platforms</span></button>
+      <button class="mnav" data-pg="cpc" onclick="mNavGo('cpc')"><span style="font-size:18px">📈</span><span>Ads Performance</span></button>
+      <button class="mnav" data-pg="campaigns" onclick="mNavGo('campaigns')"><span style="font-size:18px">📅</span><span>Campaigns</span></button>
+      <button class="mnav" data-pg="kpi" onclick="mNavGo('kpi')"><span style="font-size:18px">📊</span><span>KPI Tracker</span></button>
+      <button class="mnav" data-pg="compare" onclick="mNavGo('compare')"><span style="font-size:18px">⚖️</span><span>Compare</span></button>
+    </div>
+    <div style="padding:14px 20px;border-top:1px solid rgba(255,255,255,.08);display:flex;gap:8px">
+      <button onclick="doLoad();toggleMobileNav()" style="flex:1;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:#FFFFFF;padding:8px;font-size:12px;font-weight:700;cursor:pointer">↻ Refresh</button>
+      <button onclick="doLogout()" style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.3);border-radius:8px;color:#F87171;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer" title="Sign out">⎋</button>
+    </div>
+  </div>
+
   <div id="page-overview" class="pg act"></div>
   <div id="page-brands" class="pg"></div>
   <div id="page-outlets" class="pg"></div>
@@ -151,6 +181,7 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
   <div id="page-cpc" class="pg"></div>
   <div id="page-campaigns" class="pg"></div>
   <div id="page-kpi" class="pg"></div>
+  <div id="page-compare" class="pg"></div>
 </div>
 <div id="etoa" style="position:fixed;bottom:12px;right:12px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.35);border-radius:6px;padding:6px 10px;font-size:10px;color:#ef4444;max-width:240px;display:none"></div>
 
