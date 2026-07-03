@@ -13,7 +13,7 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-036";
+const BUILD_VERSION="2026-06-25-037";
 const BUILD_NOTES=[
   "🐛 CRITICAL: Fixed crash when clicking any aggregator card — the brand-level poolNote referenced variables only defined in the outlet-level function, causing a ReferenceError that killed the page.",
   "🛡 Added try/catch error cards around agg-level and brand-level renders — runtime errors now show visibly instead of silently dying."
@@ -2637,28 +2637,35 @@ function renderOutlets(){
   const tiles=Object.values(cm).map(c=>{const branch=c.k;const pv=pmO[branch];const bm=brandGmv[branch]||{};const brandsSorted=Object.keys(bm).sort((a,b)=>bm[b]-bm[a]);return{branch,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,brands:brandsSorted,brandGmv:bm,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};}).sort((a,b)=>b.sales-a.sales);
   const renderTile=t=>{
     const region=AUH.has(t.branch)?'AUH':'DXB';
-    return `<div onclick="selectOutlet('${t.branch.replace(/'/g,"\\'")}')" style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;padding:14px;cursor:pointer;transition:all .2s ease;box-shadow:0 1px 3px rgba(15,23,42,.04)" onmouseover="this.style.borderColor='#f59e0b';this.style.boxShadow='0 8px 25px rgba(15,23,42,.08)';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='#E2E8F0';this.style.boxShadow='0 1px 3px rgba(15,23,42,.04)';this.style.transform='none'">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-        <div>
-          <div style="display:flex;align-items:center;gap:6px">
-            <div style="font-size:13px;font-weight:800;color:#0F172A">${t.branch}</div>
-            <span style="font-size:8px;font-weight:700;padding:1px 6px;border-radius:8px;background:#E2E8F0;color:#94a3b8;letter-spacing:.5px">${region}</span>
+    const regionColor=region==='AUH'?'#8B5CF6':'#3B82F6';
+    const scClr=pctClr(t.sc);
+    // Top brand determines the accent color of the tile (gradient header stripe)
+    const topBrand=t.brands[0];
+    const accent=topBrand?(BMAP[topBrand]?.c||'#f59e0b'):'#f59e0b';
+    return `<div onclick="selectOutlet('${t.branch.replace(/'/g,"\\'")}')" style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:14px;padding:0;cursor:pointer;transition:all .25s ease;box-shadow:0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04);overflow:hidden;position:relative" onmouseover="this.style.borderColor='${accent}';this.style.boxShadow='0 14px 30px rgba(15,23,42,.12)';this.style.transform='translateY(-3px)'" onmouseout="this.style.borderColor='#E2E8F0';this.style.boxShadow='0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04)';this.style.transform='none'">
+      <div style="height:4px;background:linear-gradient(90deg,${accent},${accent}88)"></div>
+      <div style="padding:14px 16px 12px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;gap:8px">
+          <div style="min-width:0;flex:1">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <div style="font-size:16px;font-weight:800;color:#0F172A;letter-spacing:.2px">${t.branch}</div>
+              <span style="font-size:9px;font-weight:800;padding:2px 7px;border-radius:10px;background:${regionColor}15;color:${regionColor};letter-spacing:.6px">${region}</span>
+            </div>
+            <div style="font-size:11px;color:#64748B;margin-top:3px;font-weight:600">${t.brands.length} brand${t.brands.length!==1?'s':''} · AOV AED ${t.aov.toFixed(1)}</div>
           </div>
-          <div style="font-size:10px;color:#64748b;margin-top:2px">${t.brands.length} brand${t.brands.length!==1?'s':''}</div>
+          <div style="text-align:right;background:${scClr==='#22C55E'?'rgba(34,197,94,.08)':scClr==='#EF4444'?'rgba(239,68,68,.08)':'rgba(148,163,184,.08)'};border-radius:8px;padding:4px 8px;white-space:nowrap"><div style="font-size:12px;color:${scClr};font-weight:800" title="Net Sales change ${getCompShort()}">${fmtPct(t.sc)}</div></div>
         </div>
-        <div style="font-size:11px;color:${pctClr(t.sc)};font-weight:700;white-space:nowrap" title="Net Sales change ${getCompShort()}">${fmtPct(t.sc)}</div>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:8px">
-        <div><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Orders</div><div style="font-size:16px;font-weight:800;font-variant-numeric:tabular-nums">${t.orders.toLocaleString()}</div></div>
-        <div style="text-align:right"><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Net Sales</div><div style="font-size:16px;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(t.sales)}</div></div>
-      </div>
-      <div style="font-size:10px;color:#64748b;margin-top:6px">AOV AED ${t.aov.toFixed(1)}</div>
-      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #E2E8F0;align-items:center">
-        ${t.brands.map(b=>`<span title="${b}: ${fmtAED(t.brandGmv[b]||0)}" style="display:inline-flex;align-items:center;gap:3px;background:${BMAP[b]?.c||'#888'}22;color:${BMAP[b]?.c||'#888'};font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px">${logoImg(b,14)}${b}</span>`).join('')}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px 0;border-top:1px solid #F1F5F9;border-bottom:1px solid #F1F5F9;margin-bottom:10px">
+          <div><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:3px">Orders</div><div style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:#0F172A;line-height:1">${t.orders.toLocaleString()}</div></div>
+          <div style="text-align:right"><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:3px">Net Sales</div><div style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:#0F172A;line-height:1">${fmtAED(t.sales)}</div></div>
+        </div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center">
+          ${t.brands.map(b=>`<span title="${b}: ${fmtAED(t.brandGmv[b]||0)}" style="display:inline-flex;align-items:center;gap:4px;background:${BMAP[b]?.c||'#888'}18;color:${BMAP[b]?.c||'#888'};font-size:10px;font-weight:800;padding:3px 8px;border-radius:6px;border:1px solid ${BMAP[b]?.c||'#888'}33">${logoImg(b,16)}${b}</span>`).join('')}
+        </div>
       </div>
     </div>`;
   };
-  const grid=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${tiles.map(renderTile).join('')}</div>`;
+  const grid=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${tiles.map(renderTile).join('')}</div>`;
   document.getElementById("page-outlets").innerHTML=
     makeFilterBar({hideOutlet:true})+
     `<div style="font-size:11px;color:#475569;font-weight:600;margin-bottom:14px">💡 Click any outlet tile to drill in. Brand chips are ordered by Net Sales (highest first).</div>
