@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-042";
+const BUILD_VERSION="2026-06-25-043";
 const BUILD_NOTES=[
-  "📱 Brand logos in mobile nav now display cleanly. Fixed two issues: (1) object-fit:cover was cropping the edges of non-square logos, and (2) transparent-background logos looked muddy against the dark nav gradient. Now uses object-fit:contain with a subtle white pill background so every logo reads clearly at 42px."
+  "📱 Mobile brand logos cleaned up — removed the awkward white pill background. Logos now display as-is (using their own designed backgrounds) with rounded 10px corners and a subtle drop shadow for a clean 3D pop. Spaced evenly across the nav bar using justify-content: space-evenly."
 ];
 
 let _updateDialogShown=false;
