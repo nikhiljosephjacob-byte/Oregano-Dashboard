@@ -74,7 +74,7 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
   .logo{font-size:10px;margin-left:4px;margin-right:8px;flex-shrink:0;min-width:0;overflow:hidden}
   .logo span{display:none} /* hide "Oregano Restaurants" text on mobile — brand strip takes the space instead */
   .logo img{width:42px!important;height:42px!important;flex-shrink:0}
-  .nav-brand-logo{height:42px!important;width:42px!important}
+  .nav-brand-logo{height:42px!important;width:42px!important;object-fit:contain!important;background:#FFFFFF!important;padding:3px!important;border-radius:8px!important}
   .pg{padding:12px 12px;max-width:100%}
   .card,.sm{padding:12px;border-radius:10px}
   .ct{font-size:10px;margin-bottom:8px}
@@ -112,7 +112,7 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
 }
 @media(max-width:400px){
   .tbl th:nth-child(n+5),.tbl td:nth-child(n+5){display:none}
-  .nav-brand-logo{height:34px!important;width:34px!important}
+  .nav-brand-logo{height:34px!important;width:34px!important;padding:2px!important}
   .logo img{width:36px!important;height:36px!important}
   #nav-brand-strip{gap:4px!important;padding:0 4px!important}
   #mobile-menu-btn span:last-child{display:none} /* on tiny screens, just show ☰ icon */
@@ -146,12 +146,12 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
 <div id="main-app" style="display:none">
   <nav>
     <button id="mobile-menu-btn" onclick="toggleMobileNav()" style="display:none;background:rgba(251,191,36,.15);border:1px solid rgba(251,191,36,.35);color:#fbbf24;font-size:14px;cursor:pointer;padding:6px 12px;font-weight:800;border-radius:8px;align-items:center;gap:6px;letter-spacing:.5px" title="Menu"><span style="font-size:18px;line-height:1">☰</span><span>MENU</span></button>
-    <div class="logo"><img id="nav-logo" style="width:34px;height:34px;border-radius:6px;object-fit:cover"><span>Oregano<br>Restaurants</span></div>
+    <div class="logo"><img id="nav-logo" style="width:42px;height:42px;border-radius:8px;object-fit:contain;background:#FFFFFF;padding:3px"><span>Oregano<br>Restaurants</span></div>
     <div id="nav-brand-strip" style="display:none;flex:1;justify-content:space-around;align-items:center;gap:8px;padding:0 10px;overflow:hidden">
-      <img class="nav-brand-logo" data-brand="Lollorosso" style="height:32px;width:32px;border-radius:6px;object-fit:cover;opacity:.9">
-      <img class="nav-brand-logo" data-brand="Smokeys" style="height:32px;width:32px;border-radius:6px;object-fit:cover;opacity:.9">
-      <img class="nav-brand-logo" data-brand="Fyoozhen" style="height:32px;width:32px;border-radius:6px;object-fit:cover;opacity:.9">
-      <img class="nav-brand-logo" data-brand="Wicked Wings" style="height:32px;width:32px;border-radius:6px;object-fit:cover;opacity:.9">
+      <img class="nav-brand-logo" data-brand="Lollorosso" style="height:42px;width:42px;border-radius:8px;object-fit:contain;background:#FFFFFF;padding:3px">
+      <img class="nav-brand-logo" data-brand="Smokeys" style="height:42px;width:42px;border-radius:8px;object-fit:contain;background:#FFFFFF;padding:3px">
+      <img class="nav-brand-logo" data-brand="Fyoozhen" style="height:42px;width:42px;border-radius:8px;object-fit:contain;background:#FFFFFF;padding:3px">
+      <img class="nav-brand-logo" data-brand="Wicked Wings" style="height:42px;width:42px;border-radius:8px;object-fit:contain;background:#FFFFFF;padding:3px">
     </div>
     <button class="tab act" onclick="gp('overview')">Overview</button>
     <button class="tab" onclick="gp('brands')">Brands</button>
