@@ -13,10 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-039";
+const BUILD_VERSION="2026-06-25-040";
 const BUILD_NOTES=[
-  "🐛 CRITICAL: Fixed crash when clicking any aggregator card — the brand-level poolNote referenced variables only defined in the outlet-level function, causing a ReferenceError that killed the page.",
-  "🛡 Added try/catch error cards around agg-level and brand-level renders — runtime errors now show visibly instead of silently dying."
+  "🎨 Campaigns page filter bar redesigned — the dark grey gradient is gone. Now a clean white card matching the rest of the light theme, with proper contrast on scope pills, date inputs, and status chips.",
+  "📱 Mobile menu discoverability — the hamburger icon on mobile now reads ☰ MENU with a gold tint and gentle pulse animation on first load, so new users immediately see it's clickable.",
+  "🏷️ Brand logos on mobile — the top nav now shows all 5 brand logos next to the Oregano lockup, using the empty space that was there before.",
+  "🐛 What's-new popup — no longer re-triggers on every reload. Triple-defense (in-memory + sessionStorage + localStorage) means once you dismiss it, it stays dismissed for that version."
 ];
 
 let _updateDialogShown=false;
@@ -2011,6 +2013,13 @@ async function doLoad(){
   document.getElementById("main-app").style.display="block";
   injectResponsiveCSS();
   const nl=document.getElementById("nav-logo");if(nl&&typeof LOGOS!=="undefined")nl.src=LOGOS["Oregano"]||"";
+  // Populate the mobile-only brand logo strip
+  if(typeof LOGOS!=="undefined"){
+    document.querySelectorAll(".nav-brand-logo").forEach(img=>{
+      const brand=img.dataset.brand;
+      if(brand&&LOGOS[brand])img.src=LOGOS[brand];
+    });
+  }
   injectCompareTab();
   // Inject the Admin tab if the logged-in user is an admin. This runs AFTER login
   // (doLoad fires from doLogin's success path), unlike the DOMContentLoaded handler
