@@ -57,13 +57,16 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
 .mnav:hover{background:rgba(255,255,255,.06);color:#FFFFFF}
 .mnav.act{background:linear-gradient(90deg,rgba(251,191,36,.15),transparent);color:#fbbf24;border-left:3px solid #fbbf24;padding-left:11px}
 
+/* Menu button attention-pulse — plays twice on first load to draw the eye */
+@keyframes menuPulse{0%,100%{box-shadow:0 0 0 0 rgba(251,191,36,0)}50%{box-shadow:0 0 0 8px rgba(251,191,36,.25)}}
+
 /* ── Mobile responsive ── */
 @media(max-width:900px){
   body{font-size:12px}
   /* Hide nav tabs on mobile — the hamburger drawer replaces them */
   nav{padding:0 12px;height:54px;flex-wrap:nowrap;gap:0;justify-content:flex-start}
   nav .tab{display:none}
-  #mobile-menu-btn{display:block!important}
+  #mobile-menu-btn{display:inline-flex!important;animation:menuPulse 2.5s ease-in-out 2}
   nav::after{display:none!important} /* remove scroll-fade on mobile */
   #ts-label{display:none}
   nav > button:not(#mobile-menu-btn){display:none} /* hide refresh/logout on mobile — they're in the drawer */
@@ -135,7 +138,7 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
 
 <div id="main-app" style="display:none">
   <nav>
-    <button id="mobile-menu-btn" onclick="toggleMobileNav()" style="display:none;background:none;border:none;color:#FFFFFF;font-size:22px;cursor:pointer;padding:0 12px 0 0;font-weight:700" title="Menu">☰</button>
+    <button id="mobile-menu-btn" onclick="toggleMobileNav()" style="display:none;background:rgba(251,191,36,.15);border:1px solid rgba(251,191,36,.35);color:#fbbf24;font-size:14px;cursor:pointer;padding:6px 12px;font-weight:800;border-radius:8px;align-items:center;gap:6px;letter-spacing:.5px" title="Menu"><span style="font-size:18px;line-height:1">☰</span><span>MENU</span></button>
     <div class="logo"><img id="nav-logo" style="width:34px;height:34px;border-radius:6px;object-fit:cover"><span>Oregano<br>Restaurants</span></div>
     <button class="tab act" onclick="gp('overview')">Overview</button>
     <button class="tab" onclick="gp('brands')">Brands</button>
