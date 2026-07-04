@@ -13,12 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-040";
+const BUILD_VERSION="2026-06-25-041";
 const BUILD_NOTES=[
-  "🎨 Campaigns page filter bar redesigned — the dark grey gradient is gone. Now a clean white card matching the rest of the light theme, with proper contrast on scope pills, date inputs, and status chips.",
-  "📱 Mobile menu discoverability — the hamburger icon on mobile now reads ☰ MENU with a gold tint and gentle pulse animation on first load, so new users immediately see it's clickable.",
-  "🏷️ Brand logos on mobile — the top nav now shows all 5 brand logos next to the Oregano lockup, using the empty space that was there before.",
-  "🐛 What's-new popup — no longer re-triggers on every reload. Triple-defense (in-memory + sessionStorage + localStorage) means once you dismiss it, it stays dismissed for that version."
+  "📱 Mobile top nav polished — removed the duplicate Oregano logo from the brand strip (it's already shown as the main lockup on the left). The remaining 4 brand logos (Lollorosso, Smokeys, Fyoozhen, Wicked Wings) are now bigger (42px) and use the full space nicely.",
+  "📱 Mobile nav bar height bumped from 54px to 64px to give the larger logos proper breathing room."
 ];
 
 let _updateDialogShown=false;
