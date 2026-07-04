@@ -13,7 +13,7 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-038";
+const BUILD_VERSION="2026-06-25-039";
 const BUILD_NOTES=[
   "🐛 CRITICAL: Fixed crash when clicking any aggregator card — the brand-level poolNote referenced variables only defined in the outlet-level function, causing a ReferenceError that killed the page.",
   "🛡 Added try/catch error cards around agg-level and brand-level renders — runtime errors now show visibly instead of silently dying."
@@ -91,19 +91,29 @@ function hardRefreshNow(){
 
 // Show the "What's New" popup IF the user just refreshed to a new BUILD_VERSION.
 // Triggers after doLoad completes (so it doesn't compete with the loading screen).
+let _whatsNewShownThisSession=false;
 function showWhatsNewIfNeeded(){
+  // Triple defense: global flag → sessionStorage → localStorage. If any layer says "already shown", skip.
+  if(_whatsNewShownThisSession)return;
+  try{if(sessionStorage.getItem("whatsnew_shown_"+BUILD_VERSION)==="1")return;}catch(e){}
   let lastSeen=null;
   try{lastSeen=localStorage.getItem("oregano_last_seen_version");}catch(e){}
   if(lastSeen===BUILD_VERSION)return; // already shown for this version
   if(!BUILD_NOTES||!BUILD_NOTES.length){
     try{localStorage.setItem("oregano_last_seen_version",BUILD_VERSION);}catch(e){}
+    try{sessionStorage.setItem("whatsnew_shown_"+BUILD_VERSION,"1");}catch(e){}
+    _whatsNewShownThisSession=true;
     return;
   }
   // Skip on first-ever load (no lastSeen at all) so brand-new users aren't bombarded
   if(!lastSeen){
     try{localStorage.setItem("oregano_last_seen_version",BUILD_VERSION);}catch(e){}
+    try{sessionStorage.setItem("whatsnew_shown_"+BUILD_VERSION,"1");}catch(e){}
+    _whatsNewShownThisSession=true;
     return;
   }
+  _whatsNewShownThisSession=true; // set BEFORE creating modal, so a second call while dismissing won't double-fire
+  try{sessionStorage.setItem("whatsnew_shown_"+BUILD_VERSION,"1");}catch(e){}
   const overlay=document.createElement("div");
   overlay.id="whatsnew-modal";
   overlay.style.cssText="position:fixed;inset:0;background:rgba(15,23,42,.78);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:99999;padding:20px";
@@ -126,10 +136,10 @@ function showWhatsNewIfNeeded(){
 }
 function dismissWhatsNew(){
   const m=document.getElementById("whatsnew-modal");if(m)m.remove();
-  try{
-    localStorage.setItem("oregano_last_seen_version",BUILD_VERSION);
-    sessionStorage.removeItem("show_whats_new");
-  }catch(e){}
+  _whatsNewShownThisSession=true;
+  try{localStorage.setItem("oregano_last_seen_version",BUILD_VERSION);}catch(e){}
+  try{sessionStorage.setItem("whatsnew_shown_"+BUILD_VERSION,"1");}catch(e){}
+  try{sessionStorage.removeItem("show_whats_new");}catch(e){}
 }
 
 // Kick off the update check after the page has had a chance to load
@@ -684,33 +694,39 @@ function keetaUploadBarHTML(){
     const uploadDate=md?md.uploadDate:null;
     const stale=!placeholder&&isStale(uploadDate);
     const dr=md?md.date_range:[null,null];
-    // Sum orders + disc for the status line
     let orders=0,totalDisc=0;
     if(md){
       if(md.totals&&md.totals.orders)orders=md.totals.orders;
       else if(md.totals_per_brand)Object.values(md.totals_per_brand).forEach(t=>{orders+=t.orders||0;});
       if(md.totals_per_brand){
         Object.values(md.totals_per_brand).forEach(t=>{
-          // Different aggregators use different field names — sum whichever exist
           totalDisc+=(t.menu_disc||0)+(t.marketer_offer_disc||0)+(t.rewards_disc||0)+(t.unknown_disc||0);
         });
       }
     }
-    // Three states per button: placeholder (no parser yet), loaded (green), not-uploaded (yellow dashed)
     const isLoaded=!!md&&!placeholder;
-    const borderStyle=placeholder?'1px dashed rgba(100,116,139,.4)':(isLoaded?`1px solid ${accent}55`:'1px dashed rgba(232,214,20,.4)');
-    const bg=placeholder?'rgba(100,116,139,.04)':(isLoaded?`linear-gradient(135deg,${accent}11,rgba(255,255,255,.5))`:'rgba(232,214,20,.04)');
+    // Premium card: white base + colored top stripe + shadow. Loaded/not-uploaded/placeholder each get distinct treatment.
+    const topStripe=isLoaded?accent:(placeholder?'#94a3b8':'#F59E0B');
+    const border=isLoaded?`1px solid ${accent}44`:(placeholder?'1px dashed #CBD5E1':'1px dashed #FCD34D');
     const handler=placeholder
       ?`alert('Noon parser is being built next. For now, Noon discount data still uses sales-weighted estimation from the brand totals in your Google Sheet.');`
       :`document.getElementById('orders-file-${label.toLowerCase()}').click()`;
     const blinkClass=stale?'agg-btn-blink':'';
     const statusLine=placeholder
-      ?`<div style="font-size:9.5px;color:#64748b;line-height:1.4">Coming soon<br/><em>parser pending</em></div>`
+      ?`<div style="font-size:10px;color:#64748B;line-height:1.4;font-weight:600">Coming soon<br/><em style="color:#94A3B8">parser pending</em></div>`
       :isLoaded
-        ?`<div style="font-size:9.5px;color:#475569;line-height:1.4"><strong style="color:${accent}">${orders.toLocaleString()}</strong> orders<br/>${dr[0]?fmtShort(dr[0]):'?'} → ${dr[1]?fmtShort(dr[1]):'?'}<br/><span style="color:#64748b">${fmtAgo(uploadDate)}${stale?' ⚠️':''}</span></div>`
-        :`<div style="font-size:9.5px;color:#94a3b8;line-height:1.4">Not uploaded<br/><em style="color:#64748b">click to upload</em></div>`;
-    const clearBtn=isLoaded?`<button onclick="event.stopPropagation();if(confirm('Clear uploaded ${label} data? It will revert to sales-weighted estimation.'))${clearFn}()" title="Clear ${label} data" style="position:absolute;top:6px;right:6px;background:transparent;border:none;color:#475569;font-size:11px;cursor:pointer;padding:2px 5px;line-height:1">✕</button>`:'';
-    return`<div class="agg-upload-btn ${blinkClass}" onclick="${handler}" style="position:relative;cursor:pointer;background:${bg};border:${borderStyle};border-radius:10px;padding:10px 8px 8px 8px;text-align:center;transition:transform .15s,border-color .15s;min-height:108px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:6px" onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${accent}99'" onmouseout="this.style.transform='none';this.style.borderColor=''" title="${placeholder?'Noon parser coming soon':isLoaded?(stale?'⚠️ Data is over 72h old — upload a fresh file (select multiple to bulk-update)':'Click to upload more files — select multiple at once to add several weeks in one go'):'Click to upload your '+label+' order exports — select multiple files for bulk import'}">${clearBtn}<div style="height:28px;display:flex;align-items:center;justify-content:center">${logoImg(logoKey,28)}</div><div style="font-size:11px;font-weight:800;color:${placeholder?'#64748b':isLoaded?accent:'#cbd5e1'};letter-spacing:.3px">${label}</div>${statusLine}</div>`;
+        ?`<div style="font-size:10px;color:#475569;line-height:1.4;font-weight:600"><strong style="color:${accent};font-size:12px">${orders.toLocaleString()}</strong> orders<br/><span style="color:#64748B">${dr[0]?fmtShort(dr[0]):'?'} → ${dr[1]?fmtShort(dr[1]):'?'}</span><br/><span style="color:#94A3B8;font-size:9.5px">${fmtAgo(uploadDate)}${stale?' ⚠️':''}</span></div>`
+        :`<div style="font-size:10px;color:#94A3B8;line-height:1.4;font-weight:600">Not uploaded<br/><em style="color:#64748B">click to upload</em></div>`;
+    const clearBtn=isLoaded?`<button onclick="event.stopPropagation();if(confirm('Clear uploaded ${label} data? It will revert to sales-weighted estimation.'))${clearFn}()" title="Clear ${label} data" style="position:absolute;top:8px;right:8px;background:#F1F5F9;border:none;color:#64748B;font-size:11px;cursor:pointer;padding:2px 6px;line-height:1;border-radius:4px">✕</button>`:'';
+    return`<div class="agg-upload-btn ${blinkClass}" onclick="${handler}" style="position:relative;cursor:pointer;background:#FFFFFF;border:${border};border-radius:12px;padding:0;text-align:center;transition:all .2s ease;min-height:130px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04)" onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 12px 20px -5px rgba(15,23,42,.1)';this.style.borderColor='${accent}'" onmouseout="this.style.transform='none';this.style.boxShadow='0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04)';this.style.borderColor=''" title="${placeholder?'Noon parser coming soon':isLoaded?(stale?'⚠️ Data is over 72h old — upload a fresh file (select multiple to bulk-update)':'Click to upload more files — select multiple at once to add several weeks in one go'):'Click to upload your '+label+' order exports — select multiple files for bulk import'}">
+      <div style="height:4px;background:${topStripe}"></div>
+      ${clearBtn}
+      <div style="padding:12px 10px 10px;display:flex;flex-direction:column;align-items:center;gap:6px;flex:1">
+        <div style="height:32px;display:flex;align-items:center;justify-content:center">${logoImg(logoKey,32)}</div>
+        <div style="font-size:12px;font-weight:800;color:${placeholder?'#64748B':accent};letter-spacing:.4px">${label}</div>
+        ${statusLine}
+      </div>
+    </div>`;
   };
   const buttons=[
     aggButton("Deliveroo","Deliveroo",deliverooOrdersData,"clearDeliverooData",false),
@@ -5251,16 +5267,16 @@ function campFilterBar(){
   const brDD=ddHTMLCamp('cdd-br','Brand',campFBrands,brands.map(b=>({val:b,lbl:b,clr:BMAP[b]?.c||'#94a3b8'})),'brand');
   const plDD=ddHTMLCamp('cdd-pl','Platform',campFPlatforms,platforms.map(p=>({val:p,lbl:p,clr:AC[p]||'#94a3b8'})),'platform');
   const stDD=ddHTMLCamp('cdd-st','Status',campFStatuses,statuses.map(s=>({val:s,lbl:s,clr:s==='Running'?'#22C55E':s==='Upcoming'?'#F59E0B':'#64748b'})),'status');
-  const chips=[...[...campFBrands].map(b=>`<span class="fchip" style="background:${BMAP[b]?.c||'#888'}22;color:${BMAP[b]?.c||'#888'};border:1px solid ${BMAP[b]?.c||'#888'}55" onclick="campToggleFilter('brand','${b}')">✕ ${b}</span>`),...[...campFPlatforms].map(p=>`<span class="fchip" style="background:${AC[p]||'#888'}22;color:${AC[p]||'#888'};border:1px solid ${AC[p]||'#888'}55" onclick="campToggleFilter('platform','${p}')">✕ ${p}</span>`),...[...campFStatuses].map(s=>`<span class="fchip" style="background:#E2E8F0;color:#94a3b8;border:1px solid #E2E8F0" onclick="campToggleFilter('status','${s}')">✕ ${s}</span>`)].join('');
+  const chips=[...[...campFBrands].map(b=>`<span class="fchip" style="background:${BMAP[b]?.c||'#888'}22;color:${BMAP[b]?.c||'#888'};border:1px solid ${BMAP[b]?.c||'#888'}55" onclick="campToggleFilter('brand','${b}')">✕ ${b}</span>`),...[...campFPlatforms].map(p=>`<span class="fchip" style="background:${AC[p]||'#888'}22;color:${AC[p]||'#888'};border:1px solid ${AC[p]||'#888'}55" onclick="campToggleFilter('platform','${p}')">✕ ${p}</span>`),...[...campFStatuses].map(s=>{const sClr=s==='Running'?'#22C55E':s==='Upcoming'?'#F59E0B':'#64748B';return `<span class="fchip" style="background:${sClr}18;color:${sClr};border:1px solid ${sClr}44" onclick="campToggleFilter('status','${s}')">✕ ${s}</span>`;})].join('');
   const hasFilters=campFBrands.size||campFPlatforms.size||campFStatuses.size||campFStartFrom||campFStartTo||campFOutletScope!=="all";
   const clearBtn=hasFilters?`<button class="fpill" onclick="campClearFilters();campClearDates();campSetScope('all')" style="color:#ef4444;border-color:#ef444444">✕ Clear All</button>`:'';
   // Outlet-scope pills (DXB / AUH / single branch)
-  const scopePill=(v,lbl,icon)=>`<button onclick="campSetScope('${v}')" style="padding:5px 11px;border-radius:6px;border:1px solid ${campFOutletScope===v?'#f59e0b':'#E2E8F0'};background:${campFOutletScope===v?'rgba(245,158,11,.12)':'transparent'};color:${campFOutletScope===v?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px">${icon} ${lbl}</button>`;
-  const scopeRow=`<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-right:2px">Scope</span>${scopePill('all','All','🌐')}${scopePill('dxb','Dubai (DXB)','🏙️')}${scopePill('auh','Abu Dhabi (AUH)','🏛️')}${scopePill('specific','Specific Branch','📍')}</div>`;
+  const scopePill=(v,lbl,icon)=>`<button onclick="campSetScope('${v}')" style="padding:6px 12px;border-radius:8px;border:1px solid ${campFOutletScope===v?'#f59e0b':'#E2E8F0'};background:${campFOutletScope===v?'rgba(245,158,11,.12)':'#FFFFFF'};color:${campFOutletScope===v?'#f59e0b':'#475569'};font-size:11px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all .15s">${icon} ${lbl}</button>`;
+  const scopeRow=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:11px;color:#64748B;font-weight:800;text-transform:uppercase;letter-spacing:.9px;margin-right:2px">Scope</span>${scopePill('all','All','🌐')}${scopePill('dxb','Dubai (DXB)','🏙️')}${scopePill('auh','Abu Dhabi (AUH)','🏛️')}${scopePill('specific','Specific Branch','📍')}</div>`;
   // Date filter row
-  const inp=(id,val,ph)=>`<input type="date" value="${val||''}" id="${id}" onchange="campSetDate('${id==='cf-from'?'from':'to'}',this.value)" style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:5px 9px;font-size:11px;font-family:inherit;color-scheme:light" title="${ph}">`;
-  const dateRow=`<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-right:2px">Start Date</span>${inp('cf-from',campFStartFrom,'From')}<span style="color:#64748b;font-size:11px">→</span>${inp('cf-to',campFStartTo,'To')}${(campFStartFrom||campFStartTo)?`<button onclick="campClearDates()" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:3px 9px;font-size:10px;cursor:pointer">clear dates</button>`:''}</div>`;
-  return `<div class="card" style="margin-bottom:12px;background:linear-gradient(180deg,rgba(11,18,32,.5),rgba(255,255,255,.3));border:1px solid rgba(245,158,11,.15);padding:14px"><div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:10px"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-right:2px">Filters</span>${brDD}${plDD}${stDD}${clearBtn}</div><div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:${chips?'10px':'0'}">${scopeRow}<div style="width:1px;height:18px;background:rgba(15,23,42,.6)"></div>${dateRow}</div>${chips?`<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(15,23,42,.4)">${chips}</div>`:''}</div>`;
+  const inp=(id,val,ph)=>`<input type="date" value="${val||''}" id="${id}" onchange="campSetDate('${id==='cf-from'?'from':'to'}',this.value)" style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:6px 10px;font-size:12px;font-family:inherit;color-scheme:light;font-weight:600" title="${ph}">`;
+  const dateRow=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:11px;color:#64748B;font-weight:800;text-transform:uppercase;letter-spacing:.9px;margin-right:2px">Start Date</span>${inp('cf-from',campFStartFrom,'From')}<span style="color:#94A3B8;font-size:12px">→</span>${inp('cf-to',campFStartTo,'To')}${(campFStartFrom||campFStartTo)?`<button onclick="campClearDates()" style="background:#F1F5F9;border:1px solid #E2E8F0;border-radius:6px;color:#64748B;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">clear dates</button>`:''}</div>`;
+  return `<div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;padding:14px 16px;margin-bottom:14px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04)"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px"><span style="font-size:11px;color:#64748B;font-weight:800;text-transform:uppercase;letter-spacing:.9px;margin-right:4px">Filters</span>${brDD}${plDD}${stDD}${clearBtn}</div><div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:${chips?'12px':'0'}">${scopeRow}<div style="width:1px;height:22px;background:#E2E8F0"></div>${dateRow}</div>${chips?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid #F1F5F9">${chips}</div>`:''}</div>`;
 }
 let calFilter='all',calView='month';
 function setCalFilter(f){calFilter=f;renderCampaigns();}
@@ -6487,9 +6503,9 @@ async function renderCampaigns(){
   if(campaignData.length===0){pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Sheet loaded but no valid campaigns found</div></div>`;return;}
   try{
     const active=campaignData.filter(c=>campStatus(c)==='Running'),upcoming=campaignData.filter(c=>campStatus(c)==='Upcoming'),completed=campaignData.filter(c=>campStatus(c)==='Completed');
-    // ── Futuristic top bar ──
-    const tile=(emoji,label,n,clr)=>`<div style="flex:1;min-width:130px;background:linear-gradient(135deg,${clr}11,transparent);border:1px solid ${clr}33;border-radius:10px;padding:10px 14px;position:relative;overflow:hidden"><div style="position:absolute;top:0;right:0;width:60px;height:60px;background:radial-gradient(circle at top right,${clr}22,transparent 70%);pointer-events:none"></div><div style="font-size:9px;color:#64748b;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">${emoji} ${label}</div><div style="font-size:24px;font-weight:800;color:${clr};font-variant-numeric:tabular-nums;line-height:1.1;margin-top:4px">${n}</div></div>`;
-    const statBar=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">${tile('🟢','Running Now',active.length,'#22C55E')}${tile('⏰','Upcoming',upcoming.length,'#F59E0B')}${tile('✅','Completed',completed.length,'#64748b')}${tile('📊','Total Tracked',campaignData.length,'#f59e0b')}</div>`;
+    // ── Premium stat tiles ──
+    const tile=(emoji,label,n,clr)=>`<div style="flex:1;min-width:150px;background:#FFFFFF;border:1px solid #E2E8F0;border-left:4px solid ${clr};border-radius:12px;padding:14px 18px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04);transition:all .2s ease" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 10px 20px -5px rgba(15,23,42,.1)'" onmouseout="this.style.transform='none';this.style.boxShadow='0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04)'"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:20px">${emoji}</span><div style="font-size:11px;color:#64748B;font-weight:800;letter-spacing:1px;text-transform:uppercase">${label}</div></div><div style="font-size:32px;font-weight:800;color:${clr};font-variant-numeric:tabular-nums;line-height:1">${n}</div></div>`;
+    const statBar=`<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px">${tile('🟢','Running Now',active.length,'#22C55E')}${tile('⏰','Upcoming',upcoming.length,'#F59E0B')}${tile('✅','Completed',completed.length,'#64748B')}${tile('📊','Total Tracked',campaignData.length,'#f59e0b')}</div>`;
     // ── Tab pills ──
     const tabs=[
       ['active',`🟢 Active`,active.length],
