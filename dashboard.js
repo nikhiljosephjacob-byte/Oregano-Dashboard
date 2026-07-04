@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-043";
+const BUILD_VERSION="2026-06-25-044";
 const BUILD_NOTES=[
-  "📱 Mobile brand logos cleaned up — removed the awkward white pill background. Logos now display as-is (using their own designed backgrounds) with rounded 10px corners and a subtle drop shadow for a clean 3D pop. Spaced evenly across the nav bar using justify-content: space-evenly."
+  "📱 Mobile brand strip switched to space-around distribution — each logo now gets equal padding on both sides, so they're visually balanced across the nav width with breathing room around each one."
 ];
 
 let _updateDialogShown=false;
