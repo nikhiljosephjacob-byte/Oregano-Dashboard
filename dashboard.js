@@ -13,10 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-041";
+const BUILD_VERSION="2026-06-25-042";
 const BUILD_NOTES=[
-  "📱 Mobile top nav polished — removed the duplicate Oregano logo from the brand strip (it's already shown as the main lockup on the left). The remaining 4 brand logos (Lollorosso, Smokeys, Fyoozhen, Wicked Wings) are now bigger (42px) and use the full space nicely.",
-  "📱 Mobile nav bar height bumped from 54px to 64px to give the larger logos proper breathing room."
+  "📱 Brand logos in mobile nav now display cleanly. Fixed two issues: (1) object-fit:cover was cropping the edges of non-square logos, and (2) transparent-background logos looked muddy against the dark nav gradient. Now uses object-fit:contain with a subtle white pill background so every logo reads clearly at 42px."
 ];
 
 let _updateDialogShown=false;
