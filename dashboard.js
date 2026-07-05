@@ -13,10 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-046";
+const BUILD_VERSION="2026-06-25-047";
 const BUILD_NOTES=[
-  "⏱ Loading progress bar now animates smoothly instead of jumping from 20% to 40% (and getting stuck in between). A time-based ticker fills in progress between brand completions so users always see movement — no more 'stuck at 20%' confusion when a brand takes a while to fetch.",
-  "📱 Added visible gaps between the 4 brand logos in mobile nav (Lollorosso, Smokeys, Fyoozhen, Wicked Wings) — matches the spacing between Oregano and Lollorosso for a consistent look."
+  "📱 Added left margin to the Oregano header logo so it has the same gap from MENU as the other logos have between each other — all 5 logos are now uniformly spaced."
 ];
 
 let _updateDialogShown=false;
