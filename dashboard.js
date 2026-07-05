@@ -13,9 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-044";
+const BUILD_VERSION="2026-06-25-045";
 const BUILD_NOTES=[
-  "📱 Mobile brand strip switched to space-around distribution — each logo now gets equal padding on both sides, so they're visually balanced across the nav width with breathing room around each one."
+  "🐛 Loading page now covers full viewport width — no more white blank strips on the left and right sides on mobile.",
+  "🐛 Wicked Wings logo no longer gets cut off in mobile nav. Reduced logo sizes (44px → 40px) and made MENU button more compact so all 4 brand logos + Oregano header fit comfortably across the top."
 ];
 
 let _updateDialogShown=false;
@@ -1927,7 +1928,7 @@ function injectLoadingScreen(){
       <div style="font-size:10px;color:#94a3b8;font-weight:600;letter-spacing:.3px">${b.n}</div>
     </div>`;
   }).join("");
-  ls.innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:40px 30px;text-align:center;background:linear-gradient(135deg,#F8FAFC 0%,#E2E8F0 100%);color:#0F172A">
+  ls.innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;width:100%;padding:40px 20px;text-align:center;background:linear-gradient(135deg,#F8FAFC 0%,#E2E8F0 100%);color:#0F172A;box-sizing:border-box">
     <div style="font-size:11px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:3px;margin-bottom:6px">Oregano Restaurants UAE</div>
     <h1 id="ls-greeting" style="font-size:30px;font-weight:800;color:#f59e0b;margin:0 0 6px;letter-spacing:-.5px">${greetLine}</h1>
     <div style="font-size:12px;color:#94a3b8;margin-bottom:24px">Preparing your performance view across all brands…</div>
