@@ -13,10 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-045";
+const BUILD_VERSION="2026-06-25-046";
 const BUILD_NOTES=[
-  "🐛 Loading page now covers full viewport width — no more white blank strips on the left and right sides on mobile.",
-  "🐛 Wicked Wings logo no longer gets cut off in mobile nav. Reduced logo sizes (44px → 40px) and made MENU button more compact so all 4 brand logos + Oregano header fit comfortably across the top."
+  "⏱ Loading progress bar now animates smoothly instead of jumping from 20% to 40% (and getting stuck in between). A time-based ticker fills in progress between brand completions so users always see movement — no more 'stuck at 20%' confusion when a brand takes a while to fetch.",
+  "📱 Added visible gaps between the 4 brand logos in mobile nav (Lollorosso, Smokeys, Fyoozhen, Wicked Wings) — matches the spacing between Oregano and Lollorosso for a consistent look."
 ];
 
 let _updateDialogShown=false;
@@ -1971,11 +1971,36 @@ async function doLoad(){
   const pb=document.getElementById("pbar"),pt=document.getElementById("ptxt"),pe=document.getElementById("perr");
   pb.style.width="0%";pe.innerHTML="";setLoadingProgress(0);
   const all=[],errs=[];
+  // Track load progress — brand fetches happen in parallel, but the progress bar animates
+  // smoothly. Each completed brand raises the ceiling; a time-based ticker fills in between
+  // milestones so the user always sees movement instead of the bar being "stuck at 20%".
+  let completedCount=0;
+  const totalBrands=BR.length;
+  const startedAt=Date.now();
+  // Time-based ticker: assume typical load takes ~6s. Climb toward the current ceiling
+  // (based on completed brands) at a rate of ~1% per 60ms.
+  let currentPct=0;
+  const ticker=setInterval(()=>{
+    const ceiling=(completedCount/totalBrands)*100;
+    // Even before the first brand completes, show some progress so the user knows things are happening
+    const timeBasedFloor=Math.min(Math.max(ceiling,0),(Date.now()-startedAt)/8000*100);
+    const target=Math.max(ceiling,timeBasedFloor);
+    // Never go backward
+    if(target>currentPct)currentPct=Math.min(currentPct+2,target);
+    // Once all brands done, race to 100
+    if(completedCount===totalBrands){currentPct=Math.min(currentPct+5,100);}
+    setLoadingProgress(currentPct);
+    if(currentPct>=100)clearInterval(ticker);
+  },80);
   await Promise.all(BR.map(async({n,gid},idx)=>{
     try{all.push(...parseBrand(await fetchCSV(gid),n));}
     catch(e){errs.push(`${n}: ${e.message}`);}
-    pb.style.width=`${((idx+1)/5)*100}%`;pt.textContent=`${n} loaded · ${idx+1} of 5 brands`;setLoadingProgress(((idx+1)/5)*100);
+    completedCount++;
+    pt.textContent=`${n} loaded · ${completedCount} of ${totalBrands} brands`;
   }));
+  // Ensure we hit 100 even if the ticker is behind
+  completedCount=totalBrands;
+  setTimeout(()=>{clearInterval(ticker);setLoadingProgress(100);},100);
   allData=all;
   buildDataIndex();
   // Restore any previously-uploaded exact-discount data from localStorage (both aggregators)
