@@ -49,7 +49,7 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
 .brbtn:hover{box-shadow:0 4px 12px rgba(15,23,42,.08);transform:translateY(-1px)}
 .exp-st{padding:6px 16px;border-radius:6px;border:1px solid #E2E8F0;background:transparent;color:#64748B;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
 .exp-st.act{background:#f59e0b22;border-color:#f59e0b;color:#f59e0b}
-.loading{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh}
+.loading{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;width:100%;position:fixed;top:0;left:0;right:0;bottom:0}
 ::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:#F1F5F9}::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px}::-webkit-scrollbar-thumb:hover{background:#94A3B8}
 
 /* ── Mobile-nav drawer buttons ── */
@@ -64,17 +64,18 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
 @media(max-width:900px){
   body{font-size:12px}
   /* Hide nav tabs on mobile — the hamburger drawer replaces them */
-  nav{padding:0 12px;height:64px;flex-wrap:nowrap;gap:0;justify-content:flex-start}
+  nav{padding:0 8px;height:64px;flex-wrap:nowrap;gap:0;justify-content:flex-start}
   nav .tab{display:none}
-  #mobile-menu-btn{display:inline-flex!important;animation:menuPulse 2.5s ease-in-out 2}
-  #nav-brand-strip{display:flex!important}
+  #mobile-menu-btn{display:inline-flex!important;animation:menuPulse 2.5s ease-in-out 2;padding:5px 9px!important;font-size:12px!important}
+  #mobile-menu-btn span:first-child{font-size:16px!important}
+  #nav-brand-strip{display:flex!important;overflow:visible!important}
   nav::after{display:none!important} /* remove scroll-fade on mobile */
   #ts-label{display:none}
   nav > button:not(#mobile-menu-btn){display:none} /* hide refresh/logout on mobile — they're in the drawer */
-  .logo{font-size:10px;margin-left:4px;margin-right:8px;flex-shrink:0;min-width:0;overflow:hidden}
+  .logo{font-size:10px;margin-left:2px;margin-right:4px;flex-shrink:0;min-width:0;overflow:hidden}
   .logo span{display:none} /* hide "Oregano Restaurants" text on mobile — brand strip takes the space instead */
-  .logo img{width:44px!important;height:44px!important;flex-shrink:0}
-  .nav-brand-logo{height:44px!important;width:44px!important;object-fit:cover!important;border-radius:10px!important}
+  .logo img{width:40px!important;height:40px!important;flex-shrink:0}
+  .nav-brand-logo{height:40px!important;width:40px!important;object-fit:cover!important;border-radius:9px!important;flex-shrink:0}
   .pg{padding:12px 12px;max-width:100%}
   .card,.sm{padding:12px;border-radius:10px}
   .ct{font-size:10px;margin-bottom:8px}
@@ -112,10 +113,11 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
 }
 @media(max-width:400px){
   .tbl th:nth-child(n+5),.tbl td:nth-child(n+5){display:none}
-  .nav-brand-logo{height:36px!important;width:36px!important}
-  .logo img{width:38px!important;height:38px!important}
-  #nav-brand-strip{gap:4px!important;padding:0 4px!important}
+  .nav-brand-logo{height:34px!important;width:34px!important}
+  .logo img{width:36px!important;height:36px!important}
+  #nav-brand-strip{padding:0 2px!important}
   #mobile-menu-btn span:last-child{display:none} /* on tiny screens, just show ☰ icon */
+  #mobile-menu-btn{padding:5px 8px!important}
 }
 </style>
 </head>
@@ -147,7 +149,7 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
   <nav>
     <button id="mobile-menu-btn" onclick="toggleMobileNav()" style="display:none;background:rgba(251,191,36,.15);border:1px solid rgba(251,191,36,.35);color:#fbbf24;font-size:14px;cursor:pointer;padding:6px 12px;font-weight:800;border-radius:8px;align-items:center;gap:6px;letter-spacing:.5px" title="Menu"><span style="font-size:18px;line-height:1">☰</span><span>MENU</span></button>
     <div class="logo"><img id="nav-logo" style="width:44px;height:44px;border-radius:10px;object-fit:cover;box-shadow:0 2px 6px rgba(0,0,0,.35)"><span>Oregano<br>Restaurants</span></div>
-    <div id="nav-brand-strip" style="display:none;flex:1;justify-content:space-around;align-items:center;padding:0 8px;overflow:hidden">
+    <div id="nav-brand-strip" style="display:none;flex:1;justify-content:space-around;align-items:center;padding:0 4px;min-width:0">
       <img class="nav-brand-logo" data-brand="Lollorosso" style="height:40px;width:40px;border-radius:10px;object-fit:cover;box-shadow:0 2px 6px rgba(0,0,0,.35);flex-shrink:0">
       <img class="nav-brand-logo" data-brand="Smokeys" style="height:40px;width:40px;border-radius:10px;object-fit:cover;box-shadow:0 2px 6px rgba(0,0,0,.35);flex-shrink:0">
       <img class="nav-brand-logo" data-brand="Fyoozhen" style="height:40px;width:40px;border-radius:10px;object-fit:cover;box-shadow:0 2px 6px rgba(0,0,0,.35);flex-shrink:0">
