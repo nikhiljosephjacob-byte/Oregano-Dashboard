@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-050";
+const BUILD_VERSION="2026-07-06-051";
 const BUILD_NOTES=[
-  "🎯 Fixed CPC bid recommendation clarity — the outlet-performance table showed \"bid ↓ AED 2.70\" arrows that were ambiguous AND used a different \"current bid\" figure (last active weekly row's Σspent/Σclicks) than the Avg Bid column displayed (whole month's Σspent/Σclicks). Same numbers could give different arrows. Now both use the same current bid, and the arrow is replaced with explicit \"Raise bid to AED X (from Y)\" / \"Lower bid to AED X (from Y)\"."
+  "🎯 Fixed \"Lower bid to AED 1.93 (from 1.93)\" nonsense recommendations — the direction was being computed from the unrounded current bid (e.g. 1.934) while both values display rounded to 2 decimals (1.93). Now direction is computed after rounding, so displayed-equal bids correctly resolve to \"hold\" and hide the row entirely."
 ];
 
 let _updateDialogShown=false;
@@ -3523,7 +3523,11 @@ function cpcDeliverooBidOpt(ag,brand,outlet,curRow,curBidOverride){
     :(curRow&&curRow.views>0?curRow.spent/curRow.views:(curRow?.avgBid||null));
   if(!curBid||curBid<=0)return{suggestedBid,curBid:null,burnFactor:null,bestMonth:best.month,bestRoas:best.roas};
   const burnFactor=suggestedBid/curBid; // simple proportional model
-  return{suggestedBid,curBid:Math.round(curBid*100)/100,burnFactor,bestMonth:best.month,bestRoas:best.roas,direction:suggestedBid>curBid?"raise":suggestedBid<curBid?"lower":"hold"};
+  // Round curBid to the same 2-decimal precision the UI displays BEFORE the direction comparison.
+  // Otherwise an unrounded curBid like 1.934 vs a suggestedBid of 1.93 gives direction="lower"
+  // while both values display as "1.93" — showing users "Lower bid to AED 1.93 (from 1.93)".
+  const curBidR=Math.round(curBid*100)/100;
+  return{suggestedBid,curBid:curBidR,burnFactor,bestMonth:best.month,bestRoas:best.roas,direction:suggestedBid>curBidR?"raise":suggestedBid<curBidR?"lower":"hold"};
 }
 // Investment recommendation for a POOL of combined-budget outlets (Combined Per Brand).
 // Sums alloc/spent/burn across all pooled outlets in the brand → treats them as one budget.
