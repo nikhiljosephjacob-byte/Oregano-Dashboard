@@ -13,12 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-049";
+const BUILD_VERSION="2026-07-06-050";
 const BUILD_NOTES=[
-  "🎯 Fixed CPC bid recommendation clarity — the outlet-performance table showed \"bid ↓ AED 2.70\" arrows that were ambiguous AND used a different \"current bid\" figure (last active weekly row's Σspent/Σclicks) than the Avg Bid column displayed (whole month's Σspent/Σclicks). Same numbers could give different arrows. Now both use the same current bid, and the arrow is replaced with explicit \"Raise bid to AED X (from Y)\" / \"Lower bid to AED X (from Y)\".",
-  "🎯 Fixed Talabat campaign detail showing phantom \"co-pay\" — the \"Talabat-funded co-pay\" line was firing whenever ANY Talabat-Funded Voucher amount showed up in the campaign window (from ambient Talabat Pro / first-order codes), even when no co-funding was declared for that campaign. Now this row only appears when co-funding is actually declared in the Google Sheet comment.",
-  "🛟 Fixed \"Dashboard updates ready\" popup trap — instruction text was invisible (white-on-white), \"Refresh now\" sometimes loaded the same stale JS, and \"Remind me in 5 min\" made the modal return forever. Now: visible text, [×] close, session-long dismissal keyed by version, URL cache-bust reload that bypasses HTTP cache, BOM-safe version comparison, diagnostic log to DevTools console, and emergency ?nocheck=1 URL flag to disable version checking entirely.",
-  "🛠️ Fixed Careem CSV upload — some Careem exports omit the PARTNER_FUNDED_CATALOG_DISCOUNT column when no catalog-funded promos ran in the window. Detection + parser now handle that variant (catalog discount treated as 0)."
+  "🎯 Fixed CPC bid recommendation clarity — the outlet-performance table showed \"bid ↓ AED 2.70\" arrows that were ambiguous AND used a different \"current bid\" figure (last active weekly row's Σspent/Σclicks) than the Avg Bid column displayed (whole month's Σspent/Σclicks). Same numbers could give different arrows. Now both use the same current bid, and the arrow is replaced with explicit \"Raise bid to AED X (from Y)\" / \"Lower bid to AED X (from Y)\"."
 ];
 
 let _updateDialogShown=false;
