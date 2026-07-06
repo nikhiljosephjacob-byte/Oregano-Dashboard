@@ -13,20 +13,30 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-048";
+const BUILD_VERSION="2026-07-06-049";
 const BUILD_NOTES=[
-  "🛟 Fixed \"Dashboard updates ready\" popup trap — the instruction text \"hard refresh\" was white-on-white and invisible, \"Refresh now\" sometimes loaded the same stale JS, and \"Remind me in 5 min\" made it come back forever. Now: visible text, [×] close button, session-long dismissal keyed by version, and a real URL cache-bust reload that bypasses HTTP cache.",
+  "🎯 Fixed Talabat campaign detail showing phantom \"co-pay\" — the \"Talabat-funded co-pay\" line was firing whenever ANY Talabat-Funded Voucher amount showed up in the campaign window (from ambient Talabat Pro / first-order codes), even when no co-funding was declared for that campaign. Now this row only appears when co-funding is actually declared in the Google Sheet comment.",
+  "🛟 Fixed \"Dashboard updates ready\" popup trap — instruction text was invisible (white-on-white), \"Refresh now\" sometimes loaded the same stale JS, and \"Remind me in 5 min\" made the modal return forever. Now: visible text, [×] close, session-long dismissal keyed by version, URL cache-bust reload that bypasses HTTP cache, BOM-safe version comparison, diagnostic log to DevTools console, and emergency ?nocheck=1 URL flag to disable version checking entirely.",
   "🛠️ Fixed Careem CSV upload — some Careem exports omit the PARTNER_FUNDED_CATALOG_DISCOUNT column when no catalog-funded promos ran in the window. Detection + parser now handle that variant (catalog discount treated as 0)."
 ];
 
 let _updateDialogShown=false;
 async function checkForUpdate(){
   if(_updateDialogShown)return; // don't nag while dialog is open
+  // Emergency escape hatch: append ?nocheck=1 to the URL to disable version checking
+  // entirely for this tab. Useful when a deployment left version.txt and dashboard.js
+  // with mismatched BUILD_VERSION strings (e.g. only one of the two got pushed).
+  try{if(new URLSearchParams(location.search).get("nocheck")==="1")return;}catch(e){}
   try{
     const res=await fetch("/version.txt?t="+Date.now(),{cache:"no-store"});
     if(!res.ok)return;
-    const remote=(await res.text()).trim();
-    if(!remote||remote===BUILD_VERSION)return;
+    // Strip UTF-8 BOM in case version.txt was saved with one (would break === comparison)
+    const remote=(await res.text()).replace(/^\uFEFF/,"").trim();
+    if(!remote)return;
+    if(remote===BUILD_VERSION)return;
+    // Log the mismatch so it's diagnosable from DevTools without paging through source.
+    // If these two are supposed to match but don't, one of the deployed files is stale.
+    console.info("[update-check] local BUILD_VERSION =",BUILD_VERSION,"| remote version.txt =",remote);
     // Honor session-scoped dismissal: if user already said "Not now" for THIS remote version,
     // stay silent until either (a) a newer remote version appears, or (b) they open a new tab.
     try{
@@ -6285,8 +6295,8 @@ function campDetailV2HTML(c,idx){
       <tr><td>Orders</td><td style="text-align:right">${a.cs.orders.toLocaleString()}</td><td style="text-align:right">${a.bs.orders.toLocaleString()}</td><td style="text-align:right;color:${a.incrOrdersPerDay>=0?'#22C55E':'#EF4444'}">${a.incrOrdersPerDay>=0?'+':''}${a.incrOrdersPerDay.toFixed(0)}</td></tr>
       <tr><td>Net Sales</td><td style="text-align:right">${fmtAEDx(a.cs.sales)}</td><td style="text-align:right">${fmtAEDx(a.bs.sales)}</td><td style="text-align:right;color:${a.incrSalesPerDay>=0?'#22C55E':'#EF4444'}">${a.incrSalesPerDay>=0?'+':''}${fmtAEDx(a.incrSalesPerDay)}</td></tr>
       <tr><td>Gross Sales</td><td style="text-align:right">${fmtAEDx(a.campGross)}</td><td style="text-align:right">${fmtAEDx(a.baseGross)}</td><td style="text-align:right;color:#94a3b8">—</td></tr>
-      <tr><td>${a.coFundedDisc>0?'Merchant Discount Cost':'Discount Given'}</td><td style="text-align:right">${fmtAEDx(a.campDisc)}</td><td style="text-align:right">${fmtAEDx(a.bs.disc||0)}</td><td style="text-align:right;color:#94a3b8">—</td></tr>
-      ${a.coFundedDisc>0?`<tr style="color:#60A5FA"><td>＋ ${c.aggregator}-funded co-pay <span style="font-size:9px;color:#94a3b8;font-weight:400">(platform's share of the discount)</span></td><td style="text-align:right">${fmtAEDx(a.coFundedDisc)}</td><td style="text-align:right;color:#475569">—</td><td style="text-align:right;color:#94a3b8">—</td></tr>
+      <tr><td>${(a.coFundedDisc>0&&a.coFundedPct>0)?'Merchant Discount Cost':'Discount Given'}</td><td style="text-align:right">${fmtAEDx(a.campDisc)}</td><td style="text-align:right">${fmtAEDx(a.bs.disc||0)}</td><td style="text-align:right;color:#94a3b8">—</td></tr>
+      ${(a.coFundedDisc>0&&a.coFundedPct>0)?`<tr style="color:#60A5FA"><td>＋ ${c.aggregator}-funded co-pay <span style="font-size:9px;color:#94a3b8;font-weight:400">(platform's share of the discount)</span></td><td style="text-align:right">${fmtAEDx(a.coFundedDisc)}</td><td style="text-align:right;color:#475569">—</td><td style="text-align:right;color:#94a3b8">—</td></tr>
       <tr style="color:#475569;font-style:italic;font-size:11px"><td>= Total discount to customer</td><td style="text-align:right">${fmtAEDx(a.campDisc+a.coFundedDisc)}</td><td style="text-align:right;color:#475569">—</td><td style="text-align:right;color:#94a3b8">—</td></tr>`:''}
       <tr style="border-top:2px solid rgba(245,158,11,.3);font-weight:800"><td style="color:#f59e0b">Contribution</td><td style="text-align:right;color:#0F172A">${fmtAEDx(a.campContribTotal)}</td><td style="text-align:right;color:#0F172A">${fmtAEDx(a.baseContribTotal)}</td><td style="text-align:right;color:${incrClr}">${a.incrContribPerDay>=0?'+':''}${fmtAEDx(a.incrContribPerDay)}</td></tr>
     </tbody></table></div></div>`;
