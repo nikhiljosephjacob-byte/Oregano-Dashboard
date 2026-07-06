@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-06-25-047";
+const BUILD_VERSION="2026-07-06-048";
 const BUILD_NOTES=[
-  "📱 Added left margin to the Oregano header logo so it has the same gap from MENU as the other logos have between each other — all 5 logos are now uniformly spaced."
+  "🛠️ Fixed Careem CSV upload — some Careem exports omit the PARTNER_FUNDED_CATALOG_DISCOUNT column when no catalog-funded promos ran in the window. Detection + parser now handle that variant (catalog discount treated as 0)."
 ];
 
 let _updateDialogShown=false;
@@ -765,7 +765,9 @@ const AGG_UPLOAD_CSS=`
 // ── Unified upload handler ──────────────────────────────────────────────
 // Auto-detects file format from headers:
 //   xlsx + "Order no." / "Promotion funded by merchant"  → Keeta path
-//   csv  + "PARTNER_FUNDED_CATALOG_DISCOUNT" / "MERCHANT_AREA" → Careem path
+//   csv  + "TOTAL_PAYOUT_AMOUNT" / "MERCHANT_AREA" → Careem path
+//         (using TOTAL_PAYOUT_AMOUNT rather than PARTNER_FUNDED_CATALOG_DISCOUNT: Careem
+//         omits the catalog-discount column when no catalog-funded promos ran in the window)
 //   xlsx + "Voucher Funded by you" / "Talabat-Funded Voucher" → Talabat path (two-row header,
 //                                                               check row 0 AND row 1)
 // Routes to the right parser and stores in the right state slot.
@@ -798,7 +800,7 @@ async function handleOrdersUpload(filesOrFile){
       secondRow.forEach(h=>headers.add(String(h).replace(/^\uFEFF/,"")));
       let detected=null;
       if(headers.has("Order no.")&&headers.has("Promotion funded by merchant"))detected="keeta";
-      else if(headers.has("PARTNER_FUNDED_CATALOG_DISCOUNT")&&headers.has("MERCHANT_AREA"))detected="careem";
+      else if(headers.has("TOTAL_PAYOUT_AMOUNT")&&headers.has("MERCHANT_AREA"))detected="careem";
       else if(headers.has("Voucher Funded by you")&&headers.has("Talabat-Funded Voucher"))detected="talabat";
       else if(secondRow.some(h=>String(h).includes("Deliveroo Commission Rate"))&&secondRow.some(h=>String(h).includes("Order Value")))detected="deliveroo";
       // Noon: statement_orders CSV — has "outlet_name" + "order_status" + "item_value" headers on row 0
@@ -985,7 +987,9 @@ async function parseCareemCSV(file){
   const header=rows[0],headerIdx={};
   // Careem's first header has a BOM prefix on the first column — strip it
   header.forEach((h,i)=>{headerIdx[String(h).replace(/^\uFEFF/,"")]=i;});
-  const required=["REFERENCE_ID","TRANSACTION_DATE","TOTAL_AMOUNT","TOTAL_PAYOUT_AMOUNT","FOOD_GROSS_BASKET_AMOUNT","PARTNER_FUNDED_CATALOG_DISCOUNT","PARTNER_FUNDED_PROMO_DISCOUNT","BRAND_NAME","MERCHANT_AREA","STATUS"];
+  // PARTNER_FUNDED_CATALOG_DISCOUNT is NOT required: Careem omits this column entirely on
+  // exports where no catalog-funded promos ran in the window. Guarded below (defaults to 0).
+  const required=["REFERENCE_ID","TRANSACTION_DATE","TOTAL_AMOUNT","TOTAL_PAYOUT_AMOUNT","FOOD_GROSS_BASKET_AMOUNT","PARTNER_FUNDED_PROMO_DISCOUNT","BRAND_NAME","MERCHANT_AREA","STATUS"];
   const missing=required.filter(c=>!(c in headerIdx));
   if(missing.length)throw new Error("Missing required columns: "+missing.join(", "));
 
@@ -1011,7 +1015,10 @@ async function parseCareemCSV(file){
 
     const gross=parseCareemAmount(r[headerIdx["FOOD_GROSS_BASKET_AMOUNT"]])||parseCareemAmount(r[headerIdx["TOTAL_AMOUNT"]]);
     const netPayout=parseCareemAmount(r[headerIdx["TOTAL_PAYOUT_AMOUNT"]]);
-    const catDisc=Math.abs(parseCareemAmount(r[headerIdx["PARTNER_FUNDED_CATALOG_DISCOUNT"]]));
+    // catalog-discount column may be absent on Careem exports where no catalog-funded promos ran
+    const catDisc=headerIdx["PARTNER_FUNDED_CATALOG_DISCOUNT"]!==undefined
+      ? Math.abs(parseCareemAmount(r[headerIdx["PARTNER_FUNDED_CATALOG_DISCOUNT"]]))
+      : 0;
     const promoDisc=Math.abs(parseCareemAmount(r[headerIdx["PARTNER_FUNDED_PROMO_DISCOUNT"]]));
 
     // Per-brand totals for validation
