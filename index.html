@@ -12,49 +12,49 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#F8FAFC;color:#0F172A;font-family:Inter,system-ui,sans-serif;font-size:14px;font-weight:500}
+body{background:#FAF7F0;color:#0F172A;font-family:Inter,system-ui,sans-serif;font-size:14px;font-weight:500}
 nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);border-bottom:1px solid rgba(255,255,255,.08);padding:0 20px;display:flex;align-items:center;height:54px;position:sticky;top:0;z-index:100;box-shadow:0 4px 12px rgba(15,23,42,.15)}
 .logo{font-weight:800;font-size:11px;color:#fbbf24;margin-right:20px;letter-spacing:2px;text-transform:uppercase;line-height:1.3;flex-shrink:0;display:flex;align-items:center;gap:8px;text-shadow:0 1px 2px rgba(0,0,0,.3)}
 .tab{padding:0 14px;height:54px;border:none;background:none;cursor:pointer;font-size:12px;font-weight:700;color:rgba(255,255,255,.75);border-bottom:3px solid transparent;transition:all .15s;letter-spacing:.3px}
-.tab:hover{color:#FFFFFF}
+.tab:hover{color:#FEFDFA}
 .tab.act{color:#fbbf24;border-bottom:3px solid #fbbf24;text-shadow:0 1px 2px rgba(0,0,0,.2)}
 .pg{padding:14px 20px;max-width:1600px;margin:0 auto;display:none}.pg.act{display:block}
-.card{background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04)}
-.sm{background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;padding:14px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04);transition:all .2s ease}
+.card{background:#FEFDFA;border:1px solid #EDE7D9;border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04)}
+.sm{background:#FEFDFA;border:1px solid #EDE7D9;border-radius:12px;padding:14px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04);transition:all .2s ease}
 .sm:hover{box-shadow:0 10px 20px -5px rgba(15,23,42,.1),0 4px 8px -4px rgba(15,23,42,.06);transform:translateY(-2px)}
 .ct{font-size:11px;color:#64748B;font-weight:800;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:12px}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
 .g4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
 .tbl{width:100%;border-collapse:collapse;font-size:12px}
-.tbl th{padding:7px 8px;text-align:left;color:#64748B;font-weight:700;font-size:10px;text-transform:uppercase;border-bottom:2px solid #E2E8F0;cursor:pointer;user-select:none}
+.tbl th{padding:7px 8px;text-align:left;color:#64748B;font-weight:700;font-size:10px;text-transform:uppercase;border-bottom:2px solid #EDE7D9;cursor:pointer;user-select:none}
 .tbl th:hover{color:#f59e0b}
-.tbl td{padding:7px 8px;border-bottom:1px solid #F1F5F9;font-variant-numeric:tabular-nums}
-.tbl tr:hover td{background:rgba(15,23,42,.02)}
-.vrow{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #F1F5F9}
+.tbl td{padding:7px 8px;border-bottom:1px solid #F5F0E5;font-variant-numeric:tabular-nums}
+.tbl tr:hover td{background:rgba(139,92,20,.03)}
+.vrow{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #F5F0E5}
 .chip{font-size:9px;padding:2px 6px;border-radius:3px;font-weight:700;margin-right:3px}
-.fbar{background:#FFFFFF;border:1px solid #E2E8F0;border-radius:10px;padding:10px 14px;margin-bottom:12px;box-shadow:0 1px 3px rgba(15,23,42,.04)}
-.preset{padding:4px 11px;border-radius:5px;border:1px solid #E2E8F0;background:transparent;color:#64748B;font-size:11px;font-weight:600;cursor:pointer;transition:all .12s;white-space:nowrap}
-.preset:hover{border-color:#CBD5E1;color:#475569}
+.fbar{background:#FEFDFA;border:1px solid #EDE7D9;border-radius:10px;padding:10px 14px;margin-bottom:12px;box-shadow:0 1px 3px rgba(15,23,42,.04)}
+.preset{padding:4px 11px;border-radius:5px;border:1px solid #EDE7D9;background:transparent;color:#64748B;font-size:11px;font-weight:600;cursor:pointer;transition:all .12s;white-space:nowrap}
+.preset:hover{border-color:#D6CFB8;color:#475569}
 .preset.act{background:#f59e0b22;border-color:#f59e0b;color:#f59e0b}
-.fpill{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border-radius:16px;border:1px solid #E2E8F0;background:#FFFFFF;color:#64748B;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
+.fpill{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border-radius:16px;border:1px solid #EDE7D9;background:#FEFDFA;color:#64748B;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
 .fpill.on{border-color:#f59e0b;background:#f59e0b22;color:#f59e0b}
 .dd-wrap{position:relative;display:inline-block}
-.dd-menu{display:none;position:absolute;top:110%;left:0;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:10px;padding:8px;z-index:300;min-width:175px;max-height:250px;overflow-y:auto;box-shadow:0 20px 25px -5px rgba(15,23,42,.1),0 8px 10px -6px rgba(15,23,42,.1)}
+.dd-menu{display:none;position:absolute;top:110%;left:0;background:#FEFDFA;border:1px solid #EDE7D9;border-radius:10px;padding:8px;z-index:300;min-width:175px;max-height:250px;overflow-y:auto;box-shadow:0 20px 25px -5px rgba(15,23,42,.1),0 8px 10px -6px rgba(15,23,42,.1)}
 .dd-menu.open{display:block}
 .ddi{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:5px;cursor:pointer;font-size:12px;color:#0F172A}
-.ddi:hover{background:#F1F5F9}
+.ddi:hover{background:#F5F0E5}
 .ddi input[type=checkbox]{accent-color:#f59e0b;width:14px;height:14px;cursor:pointer}
 .fchip{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:10px;font-size:11px;font-weight:600;cursor:pointer}
-.brbtn{display:flex;align-items:center;gap:8px;padding:7px 14px;border-radius:10px;cursor:pointer;border:2px solid;background:#FFFFFF;transition:all .15s}
+.brbtn{display:flex;align-items:center;gap:8px;padding:7px 14px;border-radius:10px;cursor:pointer;border:2px solid;background:#FEFDFA;transition:all .15s}
 .brbtn:hover{box-shadow:0 4px 12px rgba(15,23,42,.08);transform:translateY(-1px)}
-.exp-st{padding:6px 16px;border-radius:6px;border:1px solid #E2E8F0;background:transparent;color:#64748B;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+.exp-st{padding:6px 16px;border-radius:6px;border:1px solid #EDE7D9;background:transparent;color:#64748B;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
 .exp-st.act{background:#f59e0b22;border-color:#f59e0b;color:#f59e0b}
 .loading{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;width:100%;position:fixed;top:0;left:0;right:0;bottom:0}
-::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:#F1F5F9}::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px}::-webkit-scrollbar-thumb:hover{background:#94A3B8}
+::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:#F5F0E5}::-webkit-scrollbar-thumb{background:#D6CFB8;border-radius:3px}::-webkit-scrollbar-thumb:hover{background:#94A3B8}
 
 /* ── Mobile-nav drawer buttons ── */
 .mnav{display:flex;align-items:center;gap:12px;width:100%;padding:12px 14px;margin-bottom:2px;background:none;border:none;border-radius:8px;color:rgba(255,255,255,.7);font-size:13px;font-weight:700;cursor:pointer;text-align:left;transition:all .15s;font-family:inherit;letter-spacing:.2px}
-.mnav:hover{background:rgba(255,255,255,.06);color:#FFFFFF}
+.mnav:hover{background:rgba(255,255,255,.06);color:#FEFDFA}
 .mnav.act{background:linear-gradient(90deg,rgba(251,191,36,.15),transparent);color:#fbbf24;border-left:3px solid #fbbf24;padding-left:11px}
 
 /* Menu button attention-pulse — plays twice on first load to draw the eye */
@@ -124,17 +124,17 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
 <body>
 
 <!-- Login Screen -->
-<div id="login-screen" style="position:fixed;inset:0;background:linear-gradient(135deg,#F8FAFC 0%,#E2E8F0 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999">
+<div id="login-screen" style="position:fixed;inset:0;background:linear-gradient(135deg,#FAF7F0 0%,#EDE7D9 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999">
   <div style="font-size:14px;color:#f59e0b;font-weight:800;letter-spacing:3px;text-transform:uppercase;margin-bottom:6px">OREGANO RESTAURANTS</div>
   <div style="font-size:13px;color:#475569;font-weight:500;letter-spacing:.5px;margin-bottom:32px">BD Dashboard — Sign In</div>
-  <div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;padding:28px;width:min(360px,90vw);box-shadow:0 20px 25px -5px rgba(15,23,42,.1),0 8px 10px -6px rgba(15,23,42,.1)">
+  <div style="background:#FEFDFA;border:1px solid #EDE7D9;border-radius:12px;padding:28px;width:min(360px,90vw);box-shadow:0 20px 25px -5px rgba(15,23,42,.1),0 8px 10px -6px rgba(15,23,42,.1)">
     <div style="margin-bottom:14px">
       <label style="display:block;font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:6px">Username</label>
-      <input type="text" id="login-user" placeholder="Enter your name" autocomplete="username" style="width:100%;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:10px 12px;font-size:14px;outline:none" onfocus="this.style.borderColor='#f59e0b'" onblur="this.style.borderColor='#E2E8F0'">
+      <input type="text" id="login-user" placeholder="Enter your name" autocomplete="username" style="width:100%;background:#FAF7F0;border:1px solid #EDE7D9;border-radius:6px;color:#0F172A;padding:10px 12px;font-size:14px;outline:none" onfocus="this.style.borderColor='#f59e0b'" onblur="this.style.borderColor='#EDE7D9'">
     </div>
     <div style="margin-bottom:20px">
       <label style="display:block;font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:6px">Password</label>
-      <input type="password" id="login-pass" placeholder="Enter password" autocomplete="current-password" style="width:100%;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:10px 12px;font-size:14px;outline:none" onfocus="this.style.borderColor='#f59e0b'" onblur="this.style.borderColor='#E2E8F0'" onkeydown="if(event.key==='Enter')doLogin()">
+      <input type="password" id="login-pass" placeholder="Enter password" autocomplete="current-password" style="width:100%;background:#FAF7F0;border:1px solid #EDE7D9;border-radius:6px;color:#0F172A;padding:10px 12px;font-size:14px;outline:none" onfocus="this.style.borderColor='#f59e0b'" onblur="this.style.borderColor='#EDE7D9'" onkeydown="if(event.key==='Enter')doLogin()">
     </div>
     <button onclick="doLogin()" style="width:100%;background:#f59e0b;border:none;border-radius:6px;color:#000;font-weight:700;font-size:13px;padding:11px;cursor:pointer;letter-spacing:.5px;text-transform:uppercase">Sign In</button>
     <div id="login-err" style="color:#ef4444;font-size:11px;margin-top:10px;text-align:center;min-height:14px"></div>
@@ -187,7 +187,7 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
       <button class="mnav" data-pg="compare" onclick="mNavGo('compare')"><span style="font-size:18px">⚖️</span><span>Compare</span></button>
     </div>
     <div style="padding:14px 20px;border-top:1px solid rgba(255,255,255,.08);display:flex;gap:8px">
-      <button onclick="doLoad();toggleMobileNav()" style="flex:1;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:#FFFFFF;padding:8px;font-size:12px;font-weight:700;cursor:pointer">↻ Refresh</button>
+      <button onclick="doLoad();toggleMobileNav()" style="flex:1;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:#FEFDFA;padding:8px;font-size:12px;font-weight:700;cursor:pointer">↻ Refresh</button>
       <button onclick="doLogout()" style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.3);border-radius:8px;color:#F87171;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer" title="Sign out">⎋</button>
     </div>
   </div>
