@@ -13,13 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-052";
+const BUILD_VERSION="2026-07-06-053";
 const BUILD_NOTES=[
-  "✨ Campaigns page revamp — removed the 4 duplicate stat cards (Running/Upcoming/Completed/Total) and the 5 big data-source cards. Replaced with a compact freshness strip (one row of aggregator chips with green/amber/red dots for data age).",
-  "⚠️ New \"Needs Attention\" panel at the top of the Campaigns page — surfaces campaigns ending in ≤48h, running campaigns with sub-1× ROI, and aggregator data older than 72h. Hides itself entirely when there's nothing to attend to.",
-  "🚨 End-soon toast popups (non-blocking, bottom-right) for campaigns ending in 48h and 24h. Session-scoped dismissal per campaign per threshold, auto-hide after 15s, [×] close button.",
-  "🔢 Active campaigns now sorted by end date ascending — the one ending soonest sits at the top of the list where it needs your attention.",
-  "💎 Loyalty programs (Deliveroo Rewards, Noon Rewards, etc.) are now segregated into their own \"Loyalty programs\" sub-section within Active and History — so their unusual ROI doesn't distort visual comparison of regular campaigns. Detected by \"Rewards\" keyword in campaign name/comment."
+  "🎨 Warm paper theme — page backgrounds and cards shifted from cool clinical white/slate to a warm off-white/cream palette that harmonizes with the amber Oregano brand accent. Same layout, softer feel."
 ];
 
 let _updateDialogShown=false;
