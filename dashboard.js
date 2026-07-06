@@ -15,6 +15,7 @@
 // against localStorage.oregano_last_seen_version to decide whether to show.
 const BUILD_VERSION="2026-07-06-049";
 const BUILD_NOTES=[
+  "🎯 Fixed CPC bid recommendation clarity — the outlet-performance table showed \"bid ↓ AED 2.70\" arrows that were ambiguous AND used a different \"current bid\" figure (last active weekly row's Σspent/Σclicks) than the Avg Bid column displayed (whole month's Σspent/Σclicks). Same numbers could give different arrows. Now both use the same current bid, and the arrow is replaced with explicit \"Raise bid to AED X (from Y)\" / \"Lower bid to AED X (from Y)\".",
   "🎯 Fixed Talabat campaign detail showing phantom \"co-pay\" — the \"Talabat-funded co-pay\" line was firing whenever ANY Talabat-Funded Voucher amount showed up in the campaign window (from ambient Talabat Pro / first-order codes), even when no co-funding was declared for that campaign. Now this row only appears when co-funding is actually declared in the Google Sheet comment.",
   "🛟 Fixed \"Dashboard updates ready\" popup trap — instruction text was invisible (white-on-white), \"Refresh now\" sometimes loaded the same stale JS, and \"Remind me in 5 min\" made the modal return forever. Now: visible text, [×] close, session-long dismissal keyed by version, URL cache-bust reload that bypasses HTTP cache, BOM-safe version comparison, diagnostic log to DevTools console, and emergency ?nocheck=1 URL flag to disable version checking entirely.",
   "🛠️ Fixed Careem CSV upload — some Careem exports omit the PARTNER_FUNDED_CATALOG_DISCOUNT column when no catalog-funded promos ran in the window. Detection + parser now handle that variant (catalog discount treated as 0)."
@@ -3497,7 +3498,7 @@ function cpcRenderBrandLevel(ag){
 // Looks at the past 6 months of this brand-outlet's Deliveroo bids and finds the bid that
 // delivered the best balance of return (ROAS) and volume (orders). Returns the suggested bid
 // plus the burn impact (simple proportional model: new burn = burn × newBid/oldBid).
-function cpcDeliverooBidOpt(ag,brand,outlet,curRow){
+function cpcDeliverooBidOpt(ag,brand,outlet,curRow,curBidOverride){
   if(ag!=="Deliveroo")return null;
   const today=cpcRealToday();
   const sixAgo=subDays(today,183);
@@ -3516,8 +3517,13 @@ function cpcDeliverooBidOpt(ag,brand,outlet,curRow){
   months.sort((a,b)=>b.score-a.score);
   const best=months[0];
   const suggestedBid=Math.round(best.bid*100)/100;
-  // Current bid = current row's spent/clicks (calculated), fall back to its avgBid
-  const curBid=curRow&&curRow.views>0?curRow.spent/curRow.views:(curRow?.avgBid||null);
+  // Current bid: prefer the caller-supplied override (the same figure displayed as "Avg Bid" in the
+  // outlet table — Σspent/Σclicks for the whole month). Falling back to a single-row spent/views
+  // caused the "Avg Bid" column and the bid-recommendation direction arrow to disagree, because the
+  // most recent weekly row often has a bid quite different from the month average.
+  const curBid=(curBidOverride!=null&&curBidOverride>0)
+    ?curBidOverride
+    :(curRow&&curRow.views>0?curRow.spent/curRow.views:(curRow?.avgBid||null));
   if(!curBid||curBid<=0)return{suggestedBid,curBid:null,burnFactor:null,bestMonth:best.month,bestRoas:best.roas};
   const burnFactor=suggestedBid/curBid; // simple proportional model
   return{suggestedBid,curBid:Math.round(curBid*100)/100,burnFactor,bestMonth:best.month,bestRoas:best.roas,direction:suggestedBid>curBid?"raise":suggestedBid<curBid?"lower":"hold"};
@@ -3955,9 +3961,9 @@ function cpcDeliverooAllocCard(priorMonth){
     let bidCol=`<span style="color:#64748b;font-size:10px" title="Need at least 2 months of CPC history with click data to suggest a bid">insufficient data</span>`;
     if(r.bidOpt){
       if(r.bidOpt.curBid&&r.bidOpt.direction){
-        const arrow=r.bidOpt.direction==="raise"?"↑":r.bidOpt.direction==="lower"?"↓":"=";
+        const action=r.bidOpt.direction==="raise"?"Raise to":r.bidOpt.direction==="lower"?"Lower to":"Hold at";
         const clr=r.bidOpt.direction==="raise"?"#22C55E":r.bidOpt.direction==="lower"?"#FBBF24":"#94a3b8";
-        bidCol=`<span style="color:${clr};font-weight:700;font-size:11px" title="Best ROAS-volume month: ${r.bidOpt.bestMonth||"?"} at ${r.bidOpt.bestRoas?r.bidOpt.bestRoas.toFixed(2)+"×":"?"} ROAS">${arrow} AED ${r.bidOpt.suggestedBid.toFixed(2)}</span><br/><span style="color:#64748b;font-size:9.5px">from ${r.bidOpt.curBid.toFixed(2)}</span>`;
+        bidCol=`<span style="color:${clr};font-weight:700;font-size:11px" title="Best ROAS-volume month: ${r.bidOpt.bestMonth||"?"} at ${r.bidOpt.bestRoas?r.bidOpt.bestRoas.toFixed(2)+"×":"?"} ROAS">${action} AED ${r.bidOpt.suggestedBid.toFixed(2)}</span><br/><span style="color:#64748b;font-size:9.5px">from ${r.bidOpt.curBid.toFixed(2)}</span>`;
       }else if(r.bidOpt.suggestedBid){
         bidCol=`<span style="color:#94a3b8;font-weight:700;font-size:11px" title="Best historical bid (no current bid to compare)">AED ${r.bidOpt.suggestedBid.toFixed(2)}</span><br/><span style="color:#64748b;font-size:9.5px">target (best mo ${r.bidOpt.bestMonth||"?"})</span>`;
       }
@@ -4595,7 +4601,7 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
     // Investment + bid recommendation (current month only)
     let recCell='<span style="color:#475569;font-size:10px">—</span>';
     if(isCurrentMonth){
-      const bidOpt=cpcDeliverooBidOpt(ag,brand,t.outlet,t.liveRow);
+      const bidOpt=cpcDeliverooBidOpt(ag,brand,t.outlet,t.liveRow,t.calcBid);
       const parts=[];
       if(isPooled){
         // Pooled row: show POOL-level status, identical for every pooled outlet in this brand.
@@ -4648,8 +4654,13 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
       // Bid recommendation (Deliveroo only) — applies to BOTH pooled and separate rows.
       if(bidOpt&&bidOpt.suggestedBid&&ag==="Deliveroo"&&bidOpt.direction!=='hold'){
         const bClr=bidOpt.direction==='raise'?'#22C55E':'#EF4444';
-        const arrow=bidOpt.direction==='raise'?'↑':'↓';
-        parts.push(`<div style="font-size:10px;color:${bClr}" title="Best balance of ROAS & volume was ${cpcMonthLabel(bidOpt.bestMonth)} at this bid.">bid ${arrow} AED ${bidOpt.suggestedBid.toFixed(2)}</div>`);
+        const action=bidOpt.direction==='raise'?'Raise':'Lower';
+        // Show BOTH the target AND the current bid so the direction can't be misread. Previously
+        // we just showed "bid ↓ AED 2.70" which was ambiguous — users saw a lower number they
+        // were "supposed to move to" but couldn't tell whether the arrow meant "your current bid
+        // is going down" or "we suggest a lower bid than what you have now".
+        const fromTxt=bidOpt.curBid!=null?` <span style="color:#94a3b8;font-weight:400">(from ${bidOpt.curBid.toFixed(2)})</span>`:'';
+        parts.push(`<div style="font-size:10px;color:${bClr}" title="Best balance of ROAS & volume was ${cpcMonthLabel(bidOpt.bestMonth)} at this bid.">${action} bid to AED ${bidOpt.suggestedBid.toFixed(2)}${fromTxt}</div>`);
       }
       if(parts.length)recCell=parts.join('');
     }
@@ -4686,7 +4697,7 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
       budget:Math.round(t.disp.alloc||0),spent:Math.round(t.disp.spent||0),leftover:Math.round(t.disp.leftover||0),
       roas:t.disp.roi?t.disp.roi.toFixed(2):"",mom:t.momChg!=null?t.momChg.toFixed(1):"",vsYear:t.yoyChg!=null?t.yoyChg.toFixed(1):"",
       bid:t.calcBid!=null?t.calcBid.toFixed(2):"",ftu:t.disp.ftu||0,
-      rec:(()=>{if(!isCurrentMonth)return"";const bidOpt=cpcDeliverooBidOpt(ag,brand,t.outlet,t.liveRow);const isPooled=(t.liveRow&&t.liveRow.budgetType==="combined");const bits=[];if(isPooled){if(poolRec){if(poolRec.mode==='active'&&poolRec.additional>0&&poolHasSomeGoodVerdict)bits.push(`Pool dry in ${poolRec.daysUntilDry}d — top up +AED ${poolRec.additional} at brand level`);else if(poolRec.mode==='restart'&&poolHasSomeGoodVerdict)bits.push(`Pool exhausted — restart +AED ${poolRec.additional} at brand level`);else if(poolRec.mode==='active'&&poolRec.additional<=0)bits.push("Pool covers month");else if(poolRec.mode==='restart'&&!poolHasSomeGoodVerdict)bits.push("Pool below BE — don't restart");}}else{const inv=cpcInvestRec(ag,brand,t.outlet,t.liveRow,bidOpt);if(inv){if(inv.mode==="active"&&inv.additional>0&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST"))bits.push(`Top up AED ${inv.additional}`);else if(inv.mode==="restart"&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST")&&inv.additional>0)bits.push(`Restart AED ${inv.additional}`);else if(t.disp.verdict==="WITHDRAW")bits.push("Below BE — don't add");}}if(bidOpt&&bidOpt.suggestedBid&&ag==="Deliveroo"&&bidOpt.direction!=='hold')bits.push(`Bid ${bidOpt.direction} to AED ${bidOpt.suggestedBid.toFixed(2)}`);return bits.join("; ");})()
+      rec:(()=>{if(!isCurrentMonth)return"";const bidOpt=cpcDeliverooBidOpt(ag,brand,t.outlet,t.liveRow,t.calcBid);const isPooled=(t.liveRow&&t.liveRow.budgetType==="combined");const bits=[];if(isPooled){if(poolRec){if(poolRec.mode==='active'&&poolRec.additional>0&&poolHasSomeGoodVerdict)bits.push(`Pool dry in ${poolRec.daysUntilDry}d — top up +AED ${poolRec.additional} at brand level`);else if(poolRec.mode==='restart'&&poolHasSomeGoodVerdict)bits.push(`Pool exhausted — restart +AED ${poolRec.additional} at brand level`);else if(poolRec.mode==='active'&&poolRec.additional<=0)bits.push("Pool covers month");else if(poolRec.mode==='restart'&&!poolHasSomeGoodVerdict)bits.push("Pool below BE — don't restart");}}else{const inv=cpcInvestRec(ag,brand,t.outlet,t.liveRow,bidOpt);if(inv){if(inv.mode==="active"&&inv.additional>0&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST"))bits.push(`Top up AED ${inv.additional}`);else if(inv.mode==="restart"&&(t.disp.verdict==="SCALE"||t.disp.verdict==="INVEST")&&inv.additional>0)bits.push(`Restart AED ${inv.additional}`);else if(t.disp.verdict==="WITHDRAW")bits.push("Below BE — don't add");}}if(bidOpt&&bidOpt.suggestedBid&&ag==="Deliveroo"&&bidOpt.direction!=='hold')bits.push(`Bid ${bidOpt.direction} to AED ${bidOpt.suggestedBid.toFixed(2)}`);return bits.join("; ");})()
     })),
     totals:null // filled after totals computed below
   };
