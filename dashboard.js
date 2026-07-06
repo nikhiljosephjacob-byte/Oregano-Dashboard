@@ -13,9 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-051";
+const BUILD_VERSION="2026-07-06-052";
 const BUILD_NOTES=[
-  "🎯 Fixed \"Lower bid to AED 1.93 (from 1.93)\" nonsense recommendations — the direction was being computed from the unrounded current bid (e.g. 1.934) while both values display rounded to 2 decimals (1.93). Now direction is computed after rounding, so displayed-equal bids correctly resolve to \"hold\" and hide the row entirely."
+  "✨ Campaigns page revamp — removed the 4 duplicate stat cards (Running/Upcoming/Completed/Total) and the 5 big data-source cards. Replaced with a compact freshness strip (one row of aggregator chips with green/amber/red dots for data age).",
+  "⚠️ New \"Needs Attention\" panel at the top of the Campaigns page — surfaces campaigns ending in ≤48h, running campaigns with sub-1× ROI, and aggregator data older than 72h. Hides itself entirely when there's nothing to attend to.",
+  "🚨 End-soon toast popups (non-blocking, bottom-right) for campaigns ending in 48h and 24h. Session-scoped dismissal per campaign per threshold, auto-hide after 15s, [×] close button.",
+  "🔢 Active campaigns now sorted by end date ascending — the one ending soonest sits at the top of the list where it needs your attention.",
+  "💎 Loyalty programs (Deliveroo Rewards, Noon Rewards, etc.) are now segregated into their own \"Loyalty programs\" sub-section within Active and History — so their unusual ROI doesn't distort visual comparison of regular campaigns. Detected by \"Rewards\" keyword in campaign name/comment."
 ];
 
 let _updateDialogShown=false;
@@ -698,6 +702,57 @@ async function parseKeetaXlsx(file){
 // Each button shows aggregator logo, last upload status, and key figures. If data is older
 // than 72 hours, the button blinks to remind the user to upload a fresh file. Noon is shown
 // as a placeholder since its parser is pending — clicking it shows a "coming soon" message.
+// Compact single-row data-freshness strip for the Campaigns page. Preserves click-to-upload
+// behaviour but shrinks from ~180px tall (5 big cards) to ~48px (1 row of chips). Removes the
+// order-count/date-range noise that isn't decision-relevant on the Campaigns page — the only
+// question here is "is my data fresh enough to trust the profitability numbers?".
+function campDataFreshnessStrip(){
+  const STALE_HOURS=48, VERY_STALE_HOURS=72;
+  const fmtAgo=(iso)=>{
+    if(!iso)return"never";
+    const h=(Date.now()-new Date(iso).getTime())/3600000;
+    if(h<1)return"just now";
+    if(h<24)return`${Math.floor(h)}h ago`;
+    const d=Math.floor(h/24);
+    return d===1?"1d ago":`${d}d ago`;
+  };
+  const chip=(label,logoKey,data,handler,placeholder)=>{
+    const md=data&&data.metadata?data.metadata:null;
+    const uploadDate=md?md.uploadDate:null;
+    const hoursOld=uploadDate?(Date.now()-new Date(uploadDate).getTime())/3600000:null;
+    let dotClr='#94a3b8', ageClr='#94a3b8', title='Click to upload';
+    if(placeholder){dotClr='#94a3b8';title='Parser coming soon';}
+    else if(!uploadDate){dotClr='#F59E0B';title='Never uploaded — click to add data';}
+    else if(hoursOld>VERY_STALE_HOURS){dotClr='#EF4444';ageClr='#EF4444';title=`Very stale (${Math.round(hoursOld)}h old). Click to upload fresh data.`;}
+    else if(hoursOld>STALE_HOURS){dotClr='#F59E0B';ageClr='#F59E0B';title=`Stale (${Math.round(hoursOld)}h old). Click to upload fresh data.`;}
+    else{dotClr='#22C55E';title=`Fresh (${Math.round(hoursOld)}h old). Click to upload additional data.`;}
+    const onclick=placeholder?`alert('${label} parser coming soon.')`:handler;
+    return `<div onclick="${onclick}" title="${title}" style="display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid #E2E8F0;border-radius:8px;background:#FFFFFF;cursor:pointer;transition:all .12s;font-size:11px" onmouseover="this.style.borderColor='${dotClr}';this.style.transform='translateY(-1px)'" onmouseout="this.style.borderColor='#E2E8F0';this.style.transform='none'">
+      <span style="width:8px;height:8px;border-radius:50%;background:${dotClr};box-shadow:0 0 0 2px ${dotClr}22;flex-shrink:0"></span>
+      <span style="height:16px;display:inline-flex;align-items:center">${logoImg(logoKey,16)}</span>
+      <span style="font-weight:700;color:#0F172A">${label}</span>
+      <span style="color:${ageClr};font-weight:600;font-size:10px">${fmtAgo(uploadDate)}</span>
+    </div>`;
+  };
+  const chips=[
+    chip("Deliveroo","Deliveroo",deliverooOrdersData,"document.getElementById('orders-file-deliveroo').click()",false),
+    chip("Talabat","Talabat",talabatOrdersData,"document.getElementById('orders-file-talabat').click()",false),
+    chip("Careem","Careem",careemOrdersData,"document.getElementById('orders-file-careem').click()",false),
+    chip("Noon","Noon",noonOrdersData,"document.getElementById('orders-file-noon').click()",false),
+    chip("Keeta","Keeta",keetaOrdersData,"document.getElementById('orders-file-keeta').click()",false)
+  ].join("");
+  const inputs=`<input type="file" id="orders-file-deliveroo" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
+                <input type="file" id="orders-file-talabat" accept=".xlsx,.xls" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
+                <input type="file" id="orders-file-careem" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
+                <input type="file" id="orders-file-noon" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
+                <input type="file" id="orders-file-keeta" accept=".xlsx,.xls" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">`;
+  return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:8px 12px;background:rgba(148,163,184,.05);border:1px solid rgba(148,163,184,.15);border-radius:10px">
+    <span style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.9px">Data</span>
+    ${chips}
+    ${inputs}
+  </div>`;
+}
+
 function keetaUploadBarHTML(){
   const STALE_HOURS=72;
   const fmtAgo=(iso)=>{
@@ -774,6 +829,10 @@ const AGG_UPLOAD_CSS=`
 @keyframes aggBlink {
   0%, 100% { box-shadow: 0 0 0 0 rgba(245,158,11,0); border-color: rgba(245,158,11,.3); }
   50% { box-shadow: 0 0 12px 2px rgba(245,158,11,.5); border-color: rgba(245,158,11,.9); }
+}
+@keyframes endsoonSlideIn {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
 }
 .agg-btn-blink { animation: aggBlink 2s ease-in-out infinite; }
 @media (max-width:760px) {
@@ -1604,6 +1663,18 @@ function classifyDeliverooCampaign(c){
   const txt=((c.name||"")+" "+(c.comments||"")).toLowerCase();
   if(/\brewards?\b/.test(txt)&&/deliveroo/.test(txt))return"rewards";
   return"marketer_offer";
+}
+
+// Generalised "is this campaign a loyalty/rewards program?" detector.
+// Loyalty rewards programs (Deliveroo Rewards, Noon Rewards etc.) are structurally different from
+// regular campaigns: they're always-on per-customer discounts, not time-boxed offers, so their ROI
+// is either wildly high (few customers redeem large vouchers) or wildly low (heavy redemption on
+// otherwise-normal orders). Mixing them into aggregate campaign profitability distorts the numbers
+// for regular campaigns, so callers can use this flag to segregate them.
+function isRewardsCampaign(c){
+  if(!c)return false;
+  const txt=((c.name||"")+" "+(c.comments||"")).toLowerCase();
+  return /\brewards?\b/.test(txt);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -6568,6 +6639,136 @@ function bundleDetailHTML(bundle){
   }
   return header+segmentsCard+kpiCards+chart+profitSection;
 }
+// Compute the "Needs Attention" items for the Campaigns page. Returns an array of items —
+// each has {icon, txt, action, priority}. Callers render them as a compact bulleted list.
+// Priority: 1=critical (ending today, negative ROI), 2=warn (48h end, stale data), 3=info.
+function campNeedsAttentionItems(active,upcoming){
+  const items=[];
+  const now=new Date();
+  const today=dk(now);
+  const hoursUntil=(dateStr)=>{
+    // dateStr is YYYY-MM-DD — treat "end of day" as 23:59 local for consistency with campStatus
+    const end=new Date(dateStr+"T23:59:59");
+    return (end-now)/3600000;
+  };
+  // 1) Running campaigns ending soon
+  active.forEach(c=>{
+    if(isRewardsCampaign(c))return; // rewards are always-on — no "ending soon" meaning
+    const h=hoursUntil(c.endDate);
+    if(h<=24&&h>0){
+      const idx=campaignData.indexOf(c);
+      items.push({priority:1,icon:'⏰',txt:`<strong>${c.name||c.brand+" on "+c.aggregator}</strong> ends in ${Math.max(1,Math.round(h))}h`,action:`selectCamp(${idx})`});
+    }else if(h<=48&&h>24){
+      const idx=campaignData.indexOf(c);
+      items.push({priority:2,icon:'⏰',txt:`<strong>${c.name||c.brand+" on "+c.aggregator}</strong> ends in ${Math.round(h)}h`,action:`selectCamp(${idx})`});
+    }
+  });
+  // 2) Running campaigns with negative or poor ROI (excludes rewards — see comment above)
+  active.forEach(c=>{
+    if(isRewardsCampaign(c))return;
+    try{
+      const a=campAnalysisCached(c);
+      if(a&&a.discountROI!=null&&a.days>=2){ // need ≥2 days of data to make a call
+        if(a.discountROI<0){
+          const idx=campaignData.indexOf(c);
+          items.push({priority:1,icon:'📉',txt:`<strong>${c.name||c.brand+" on "+c.aggregator}</strong> ROI ${a.discountROI.toFixed(2)}× — losing money`,action:`selectCamp(${idx})`});
+        }else if(a.discountROI<1){
+          const idx=campaignData.indexOf(c);
+          items.push({priority:2,icon:'📉',txt:`<strong>${c.name||c.brand+" on "+c.aggregator}</strong> ROI ${a.discountROI.toFixed(2)}× — below break-even`,action:`selectCamp(${idx})`});
+        }
+      }
+    }catch(e){/* skip campaigns whose analysis errors */}
+  });
+  // 3) Aggregator data staleness (>72h since last upload)
+  const stale=(label,data)=>{
+    const md=data&&data.metadata;if(!md||!md.uploadDate)return null;
+    const h=(Date.now()-new Date(md.uploadDate).getTime())/3600000;
+    if(h>72)return {priority:2,icon:'📊',txt:`${label} data is ${Math.round(h/24)}d stale — upload fresh export for accurate profitability`,action:null};
+    return null;
+  };
+  [['Deliveroo',deliverooOrdersData],['Talabat',talabatOrdersData],['Careem',careemOrdersData],['Noon',noonOrdersData],['Keeta',keetaOrdersData]].forEach(([l,d])=>{
+    const s=stale(l,d);if(s)items.push(s);
+  });
+  // Sort: critical (1) first, then warnings (2), then info (3). Within a bucket, keep insertion order.
+  items.sort((a,b)=>a.priority-b.priority);
+  return items;
+}
+function campNeedsAttentionPanel(active,upcoming){
+  const items=campNeedsAttentionItems(active,upcoming);
+  if(items.length===0)return ''; // hide entirely when clean — this is the point
+  const shown=items.slice(0,6); // cap at 6 rows to keep panel compact; user can scroll list otherwise
+  const more=items.length>shown.length?`<div style="font-size:10px;color:#94a3b8;padding:4px 0 0 26px">+ ${items.length-shown.length} more</div>`:'';
+  const rows=shown.map(it=>{
+    const clr=it.priority===1?'#EF4444':it.priority===2?'#F59E0B':'#64748b';
+    const cursor=it.action?'cursor:pointer':'';
+    const onclick=it.action?`onclick="${it.action}"`:'';
+    return `<div ${onclick} style="display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:6px;font-size:12px;line-height:1.4;color:#0F172A;${cursor};transition:background .12s" ${it.action?`onmouseover="this.style.background='rgba(148,163,184,.08)'" onmouseout="this.style.background='transparent'"`:''}>
+      <span style="font-size:13px;flex-shrink:0">${it.icon}</span>
+      <span style="flex:1">${it.txt}</span>
+      ${it.action?`<span style="font-size:10px;color:${clr};font-weight:700">Review →</span>`:''}
+    </div>`;
+  }).join('');
+  return `<div style="background:#FFFFFF;border:1px solid rgba(239,68,68,.25);border-left:4px solid #EF4444;border-radius:10px;padding:12px 14px;margin-bottom:14px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06)">
+    <div style="font-size:10px;font-weight:800;color:#EF4444;text-transform:uppercase;letter-spacing:.9px;margin-bottom:8px">⚠️ Needs Attention · ${items.length}</div>
+    <div>${rows}${more}</div>
+  </div>`;
+}
+
+// Non-blocking end-soon toasts. Called from renderCampaigns() on load. Fires at most one toast
+// per (campaign, threshold) per browser session — user can dismiss with X, or the toast auto-hides
+// after 15s if untouched. Threshold values: "48h" (>24h and ≤48h remaining), "24h" (≤24h remaining).
+// The 24h warning fires even if the 48h was already dismissed — different severity, worth notifying.
+function campEndSoonPopups(active){
+  if(typeof window==='undefined')return;
+  const now=new Date();
+  const hoursUntil=(dateStr)=>{const end=new Date(dateStr+"T23:59:59");return (end-now)/3600000;};
+  const toShow=[];
+  active.forEach(c=>{
+    if(isRewardsCampaign(c))return;
+    const h=hoursUntil(c.endDate);
+    const idx=campaignData.indexOf(c);
+    const id=`${idx}:${c.startDate}:${c.endDate}`;
+    if(h>0&&h<=24){
+      const key=`endsoon:${id}:24h`;
+      try{if(!sessionStorage.getItem(key))toShow.push({c,idx,threshold:'24h',key,hoursLeft:Math.max(1,Math.round(h))});}catch(e){}
+    }else if(h>24&&h<=48){
+      const key=`endsoon:${id}:48h`;
+      try{if(!sessionStorage.getItem(key))toShow.push({c,idx,threshold:'48h',key,hoursLeft:Math.round(h)});}catch(e){}
+    }
+  });
+  if(toShow.length===0)return;
+  let container=document.getElementById('endsoon-toasts');
+  if(!container){
+    container=document.createElement('div');
+    container.id='endsoon-toasts';
+    container.style.cssText='position:fixed;bottom:16px;right:16px;z-index:9998;display:flex;flex-direction:column;gap:8px;max-width:340px';
+    document.body.appendChild(container);
+  }
+  toShow.slice(0,3).forEach(({c,idx,threshold,key,hoursLeft})=>{ // cap at 3 stacked toasts
+    try{sessionStorage.setItem(key,'shown');}catch(e){}
+    const isCritical=threshold==='24h';
+    const accent=isCritical?'#EF4444':'#F59E0B';
+    const bg=isCritical?'rgba(239,68,68,.05)':'rgba(245,158,11,.05)';
+    const toast=document.createElement('div');
+    toast.style.cssText=`background:#FFFFFF;border:1px solid ${accent}55;border-left:4px solid ${accent};border-radius:10px;padding:12px 14px;box-shadow:0 12px 30px rgba(15,23,42,.18);animation:endsoonSlideIn .28s ease-out`;
+    toast.innerHTML=`<div style="display:flex;align-items:flex-start;gap:10px">
+      <span style="font-size:18px;flex-shrink:0">${isCritical?'🚨':'⏰'}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:800;color:${accent};text-transform:uppercase;letter-spacing:.7px;margin-bottom:3px">${isCritical?'Ends within 24h':'Ends within 48h'}</div>
+        <div style="font-size:12px;color:#0F172A;font-weight:700;line-height:1.35;margin-bottom:2px">${c.name||c.brand+" on "+c.aggregator}</div>
+        <div style="font-size:11px;color:#475569">${hoursLeft}h remaining · ${fmtDisp(c.endDate)}</div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button onclick="selectCamp(${idx});this.closest('#endsoon-toasts>div').remove()" style="background:${accent};border:none;color:#fff;padding:5px 11px;font-size:10px;font-weight:700;border-radius:5px;cursor:pointer">Open campaign</button>
+          <button onclick="this.closest('#endsoon-toasts>div').remove()" style="background:transparent;border:1px solid #E2E8F0;color:#64748b;padding:5px 11px;font-size:10px;border-radius:5px;cursor:pointer">Dismiss</button>
+        </div>
+      </div>
+      <button onclick="this.closest('#endsoon-toasts>div').remove()" style="background:transparent;border:none;color:#94a3b8;font-size:16px;line-height:1;cursor:pointer;padding:0 2px;flex-shrink:0" title="Close">×</button>
+    </div>`;
+    container.appendChild(toast);
+    setTimeout(()=>{if(toast.parentNode)toast.style.opacity='0';setTimeout(()=>toast.remove(),300);},15000);
+  });
+}
+
 async function renderCampaigns(){
   const pg=document.getElementById('page-campaigns');if(!pg)return;
   if(!campLoaded){
@@ -6578,9 +6779,10 @@ async function renderCampaigns(){
   if(campaignData.length===0){pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Sheet loaded but no valid campaigns found</div></div>`;return;}
   try{
     const active=campaignData.filter(c=>campStatus(c)==='Running'),upcoming=campaignData.filter(c=>campStatus(c)==='Upcoming'),completed=campaignData.filter(c=>campStatus(c)==='Completed');
-    // ── Premium stat tiles ──
-    const tile=(emoji,label,n,clr)=>`<div style="flex:1;min-width:150px;background:#FFFFFF;border:1px solid #E2E8F0;border-left:4px solid ${clr};border-radius:12px;padding:14px 18px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04);transition:all .2s ease" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 10px 20px -5px rgba(15,23,42,.1)'" onmouseout="this.style.transform='none';this.style.boxShadow='0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04)'"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:20px">${emoji}</span><div style="font-size:11px;color:#64748B;font-weight:800;letter-spacing:1px;text-transform:uppercase">${label}</div></div><div style="font-size:32px;font-weight:800;color:${clr};font-variant-numeric:tabular-nums;line-height:1">${n}</div></div>`;
-    const statBar=`<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px">${tile('🟢','Running Now',active.length,'#22C55E')}${tile('⏰','Upcoming',upcoming.length,'#F59E0B')}${tile('✅','Completed',completed.length,'#64748B')}${tile('📊','Total Tracked',campaignData.length,'#f59e0b')}</div>`;
+    // Sort Active by end date ASCENDING (earliest-ending first, so campaigns about to end sit
+    // at the top where they're most likely to need a decision). Rewards get segregated separately
+    // below since their "ending" concept doesn't apply.
+    const activeSorted=[...active].sort((a,b)=>(a.endDate||'9999').localeCompare(b.endDate||'9999'));
     // ── Tab pills ──
     const tabs=[
       ['active',`🟢 Active`,active.length],
@@ -6591,16 +6793,40 @@ async function renderCampaigns(){
     if(selCamp)tabs.push(['detail','🔍 Campaign Detail',null]);
     else if(selBundle)tabs.push(['detail','🎯 Bundle Detail',null]);
     const tabH=tabs.map(([k,l,n])=>{const act=campTab===k;const cnt=n!=null?` <span style="background:${act?'rgba(245,158,11,.25)':'rgba(100,116,139,.2)'};color:${act?'#FBBF24':'#94a3b8'};font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;margin-left:3px">${n}</span>`:'';return `<button onclick="campTab='${k}';renderCampaigns()" style="padding:7px 14px;border-radius:7px;border:1px solid ${act?'#f59e0b':'rgba(15,23,42,.6)'};background:${act?'linear-gradient(180deg,rgba(245,158,11,.18),rgba(245,158,11,.08))':'transparent'};color:${act?'#f59e0b':'#94a3b8'};font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:3px;transition:all .15s">${l}${cnt}</button>`;}).join('');
+    // Rewards segregation renderer: on Active/History, split the filtered list into "regular" and
+    // "rewards" campaigns. Regular go first as the main grid. Rewards appear below in a labelled
+    // sub-section so their unusual ROI (very high or very low from ambient loyalty redemption)
+    // doesn't distort the visual comparison of regular campaigns.
+    const renderCampListWithRewardsSplit=(f,showProfit,emptyLabel)=>{
+      const regular=f.filter(c=>!isRewardsCampaign(c));
+      const rewards=f.filter(c=>isRewardsCampaign(c));
+      let html='';
+      html+=`<div style="font-size:11px;color:#475569;font-weight:700;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px">${emptyLabel} (${regular.length})</div>`;
+      html+=campCardGrid(regular,showProfit);
+      if(rewards.length>0){
+        html+=`<div style="margin-top:22px"><div style="font-size:11px;color:#94a3b8;font-weight:700;margin:0 0 8px 2px;text-transform:uppercase;letter-spacing:.6px;display:flex;align-items:center;gap:8px">💎 Loyalty programs (${rewards.length}) <span style="font-size:9px;color:#64748b;text-transform:none;letter-spacing:0;font-weight:500">— shown separately, excluded from regular-campaign profitability comparisons</span></div>`;
+        html+=campCardGrid(rewards,showProfit);
+        html+=`</div>`;
+      }
+      return html;
+    };
     let main='';
     if(campTab==='calendar')main=`<div class="card">${renderCampCalendar()}</div>`;
-    else if(campTab==='active'){const f=applyCampFilters(active);main=campFilterBar()+`<div style="font-size:11px;color:#475569;font-weight:600;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px;font-weight:700">🟢 Active Campaigns (${f.length})</div>`+campCardGrid(f,true);}
-    else if(campTab==='upcoming'){const f=applyCampFilters(upcoming);main=campFilterBar()+`<div style="font-size:11px;color:#475569;font-weight:600;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px;font-weight:700">⏰ Upcoming Campaigns (${f.length})</div>`+campCardGrid(f,false);}
-    else if(campTab==='history'){const fc=applyCampFilters(completed).slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));const shown=fc.slice(0,120);main=campFilterBar()+`<div style="font-size:11px;color:#475569;font-weight:600;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px;font-weight:700">📋 Completed Campaigns (${fc.length}${fc.length>120?' · showing 120 most recent':''})</div>`+campCardGrid(shown,true);}
+    else if(campTab==='active'){const f=applyCampFilters(activeSorted);main=campFilterBar()+renderCampListWithRewardsSplit(f,true,'🟢 Active Campaigns');}
+    else if(campTab==='upcoming'){const f=applyCampFilters(upcoming).slice().sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||''));main=campFilterBar()+`<div style="font-size:11px;color:#475569;font-weight:700;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px">⏰ Upcoming Campaigns (${f.length})</div>`+campCardGrid(f,false);}
+    else if(campTab==='history'){const fc=applyCampFilters(completed).slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));const shown=fc.slice(0,120);main=campFilterBar()+renderCampListWithRewardsSplit(shown,true,`📋 Completed Campaigns${fc.length>120?' · showing 120 most recent of '+fc.length:''}`);}
     else if(campTab==='detail'&&selBundle){main=bundleDetailHTML(selBundle);}
     else if(campTab==='detail'&&selCamp){main=campDetailV2HTML(selCamp,campaignData.indexOf(selCamp));}
     // Header
     const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(15,23,42,.12)"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">⚡</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Campaign Manager</div></div><div style="font-size:10px;color:#64748b;margin-top:2px;letter-spacing:.4px">Performance · Profitability · Coordination</div></div><button onclick="campLoaded=false;selCamp=null;selBundle=null;campTab='active';renderCampaigns()" style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600">↻ Refresh Data</button></div>`;
-    pg.innerHTML=`${header}${keetaUploadBarHTML()}${statBar}<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
+    // NEW LAYOUT (v052): compact freshness strip → Needs Attention panel → tabs → main content.
+    // Removed: 4 big stat cards (Running Now / Upcoming / Completed / Total Tracked — pure duplicates
+    // of the tab pill counts) and the 5 big data-source cards (replaced by the freshness strip).
+    // These changes save ~300px of vertical chrome at the top of the page.
+    const attention=(campTab==='active'||campTab==='upcoming'||campTab==='history')?campNeedsAttentionPanel(active,upcoming):'';
+    pg.innerHTML=`${header}${campDataFreshnessStrip()}${attention}<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
+    // Fire non-blocking end-soon toasts on entry to Active tab (once per campaign+threshold per session)
+    if(campTab==='active')setTimeout(()=>campEndSoonPopups(active),150);
     if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
     if(campTab==='detail'&&selCamp){const c=selCamp;const imp=campImpact(c);if(campStatus(c)!=='Upcoming'&&imp.hasData){const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&(c.brand==='All Brands'||r.brand===c.brand)&&(c.aggregator==='All'||r.aggregator===c.aggregator)));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-camp',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}}
   }catch(err){pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Render error</div><div style="color:#64748b;font-size:12px">${err.message}</div></div>`;}
