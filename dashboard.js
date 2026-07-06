@@ -15,6 +15,7 @@
 // against localStorage.oregano_last_seen_version to decide whether to show.
 const BUILD_VERSION="2026-07-06-048";
 const BUILD_NOTES=[
+  "🛟 Fixed \"Dashboard updates ready\" popup trap — the instruction text \"hard refresh\" was white-on-white and invisible, \"Refresh now\" sometimes loaded the same stale JS, and \"Remind me in 5 min\" made it come back forever. Now: visible text, [×] close button, session-long dismissal keyed by version, and a real URL cache-bust reload that bypasses HTTP cache.",
   "🛠️ Fixed Careem CSV upload — some Careem exports omit the PARTNER_FUNDED_CATALOG_DISCOUNT column when no catalog-funded promos ran in the window. Detection + parser now handle that variant (catalog discount treated as 0)."
 ];
 
@@ -26,6 +27,13 @@ async function checkForUpdate(){
     if(!res.ok)return;
     const remote=(await res.text()).trim();
     if(!remote||remote===BUILD_VERSION)return;
+    // Honor session-scoped dismissal: if user already said "Not now" for THIS remote version,
+    // stay silent until either (a) a newer remote version appears, or (b) they open a new tab.
+    try{
+      const dismissed=sessionStorage.getItem("update_dismissed_version")||"";
+      if(dismissed===remote)return;
+      sessionStorage.setItem("update_remote_version",remote);
+    }catch(e){}
     showUpdateAvailableModal(remote);
   }catch(e){/* network blip — try again next tick */}
 }
@@ -40,12 +48,13 @@ function showUpdateAvailableModal(remoteVersion){
   overlay.style.cssText="position:fixed;inset:0;background:rgba(15,23,42,.78);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:99999;padding:20px";
   overlay.innerHTML=`
     <div style="background:#FFFFFF;border:1px solid #f59e0b80;border-radius:12px;padding:24px 28px;max-width:460px;width:100%;box-shadow:0 20px 60px rgba(15,23,42,.6);animation:fadeInUp .3s ease">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;position:relative">
         <div style="font-size:24px">✨</div>
         <div style="font-size:18px;font-weight:800;color:#f59e0b">Dashboard updates ready</div>
+        <button onclick="dismissUpdateModal(true)" title="Dismiss for this session" style="position:absolute;top:-8px;right:-8px;background:transparent;border:none;color:#94a3b8;font-size:20px;line-height:1;cursor:pointer;padding:4px 8px;font-weight:400">×</button>
       </div>
       <div style="font-size:13px;color:#475569;line-height:1.6;margin-bottom:18px">
-        New features and improvements have been deployed. To load them, do a <strong style="color:#fff">hard refresh</strong>:
+        New features and improvements have been deployed. To load them, do a <strong style="color:#f59e0b">hard refresh</strong>:
       </div>
       <div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);border-radius:8px;padding:14px 16px;margin-bottom:18px;text-align:center">
         <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;font-weight:600">Press</div>
@@ -53,7 +62,7 @@ function showUpdateAvailableModal(remoteVersion){
         <div style="font-size:10px;color:#64748b;margin-top:8px">Your session is preserved — you won't need to log in again.</div>
       </div>
       <div style="display:flex;gap:10px;justify-content:flex-end">
-        <button onclick="dismissUpdateModal(true)" style="background:transparent;border:1px solid #E2E8F0;color:#94a3b8;padding:7px 14px;font-size:11px;border-radius:6px;cursor:pointer">Remind me in 5 min</button>
+        <button onclick="dismissUpdateModal(true)" style="background:transparent;border:1px solid #E2E8F0;color:#94a3b8;padding:7px 14px;font-size:11px;border-radius:6px;cursor:pointer">Not now</button>
         <button onclick="hardRefreshNow()" style="background:#f59e0b;border:none;color:#000;padding:7px 16px;font-size:11px;font-weight:700;border-radius:6px;cursor:pointer">Refresh now</button>
       </div>
     </div>
@@ -65,9 +74,14 @@ function dismissUpdateModal(snooze){
   const m=document.getElementById("update-modal");if(m)m.remove();
   _updateDialogShown=false;
   if(snooze){
-    // Suppress checks for 5 minutes
-    const until=Date.now()+5*60*1000;
-    try{sessionStorage.setItem("update_snooze_until",String(until));}catch(e){}
+    // Snooze for the rest of the session, but keyed by remote version so a NEXT deployment
+    // still prompts. Previously this was a 5-minute time-based snooze that trapped users:
+    // if location.reload(true) didn't bypass HTTP cache (common on Chrome), the modal would
+    // re-appear 5 min later on the same stale JS. Session-scoped keyed dismissal fixes that.
+    try{
+      const v=sessionStorage.getItem("update_remote_version")||"";
+      if(v)sessionStorage.setItem("update_dismissed_version",v);
+    }catch(e){}
   }
 }
 function hardRefreshNow(){
@@ -77,14 +91,24 @@ function hardRefreshNow(){
   // script can't survive the reload. Without this, the browser might serve a cached
   // dashboard.js even after reload — causing the update popup to re-appear (the
   // "refresh 3 times" bug).
+  const doReload=()=>{
+    // URL cache-bust: appending a query string forces a fresh fetch chain from origin,
+    // bypassing HTTP cache even when Cache API + location.reload(true) don't. This is the
+    // only reliable way out of a stale-JS trap on some Chromium versions.
+    try{
+      const url=new URL(location.href);
+      url.searchParams.set("_v",String(Date.now()));
+      location.replace(url.toString());
+    }catch(e){
+      location.reload(true);
+    }
+  };
   if(typeof caches!=="undefined"&&caches.keys){
     caches.keys().then(names=>Promise.all(names.map(n=>caches.open(n).then(c=>{
       c.delete("/dashboard.js");c.delete("/version.txt");
-    })))).catch(()=>{}).finally(()=>{
-      location.reload(true); // forceReload hint (deprecated but still respected by most browsers)
-    });
+    })))).catch(()=>{}).finally(doReload);
   }else{
-    location.reload(true);
+    doReload();
   }
 }
 
@@ -144,22 +168,13 @@ function dismissWhatsNew(){
 // Kick off the update check after the page has had a chance to load
 window.addEventListener("load",()=>{
   // Wait 10s after first load (avoid colliding with initial data fetch)
-  setTimeout(()=>{
-    // Respect snooze
-    let snoozeUntil=0;try{snoozeUntil=parseInt(sessionStorage.getItem("update_snooze_until")||"0",10);}catch(e){}
-    if(Date.now()>=snoozeUntil)checkForUpdate();
-  },10000);
-  // Then every 60s, respecting snooze
-  setInterval(()=>{
-    let snoozeUntil=0;try{snoozeUntil=parseInt(sessionStorage.getItem("update_snooze_until")||"0",10);}catch(e){}
-    if(Date.now()>=snoozeUntil)checkForUpdate();
-  },60000);
+  setTimeout(checkForUpdate,10000);
+  // Then every 5 min. Was 60s — but if the user is on a stale JS bundle and dismissed
+  // the modal, the version-keyed dismissal already keeps them silent. 5 min is plenty.
+  setInterval(checkForUpdate,5*60*1000);
   // And on tab refocus
   document.addEventListener("visibilitychange",()=>{
-    if(document.visibilityState==="visible"){
-      let snoozeUntil=0;try{snoozeUntil=parseInt(sessionStorage.getItem("update_snooze_until")||"0",10);}catch(e){}
-      if(Date.now()>=snoozeUntil)checkForUpdate();
-    }
+    if(document.visibilityState==="visible")checkForUpdate();
   });
 });
 
