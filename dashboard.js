@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-058";
+const BUILD_VERSION="2026-07-06-059";
 const BUILD_NOTES=[
-  "🔧 Corrected v057's misdiagnosis of the AED-20 discount problem on Noon's \"50% OFF Oregano\" campaign. Root cause was NOT platform-subsidy — it was that the Noon export uploaded to the dashboard was stale (made before 24 Jun) and simply didn't include the campaign's dates. The v057 \"platform-subsidised\" heuristic (which compared headline % to observed depth) is replaced with a direct cross-source comparison: whenever the aggregator's exact upload shows less than a third of the discount the Google Sheet daily aggregates suggest for the same window, we flag it as a data mismatch. The banner tells you both numbers, the likely cause, and the fix (re-upload a fresh export). Discount ROI is suppressed until resolved. Chip on card list changes from 🎁 \"platform-subsidised\" to ⚠️ \"data mismatch\"."
+  "🧮 Fixed co-fund math on the Discount Burn Analysis + campaign detail views. Aggregator statements (Careem/Keeta/Deliveroo/Noon) only show the MERCHANT-funded portion of a discount — the platform's co-fund share is settled off-statement (e.g. Deliveroo BOGO 35% co-fund invoiced separately). Previous code assumed the merchant portion was the total customer discount, mis-attributing shares. Now: whenever a campaign declares a co-fund % in the sheet comment (like \"50:50 co-funded\" or \"BOGO 35% co-funded\"), the platform's share is inferred from `merchant × pct / (1 − pct)`. Campaign detail's co-fund banner + breakdown table + Total Discount Given card now correctly show: merchant portion (from statement) + inferred aggregator portion (invoiced separately) = total customer discount. Discount Burn Analysis \"Aggregator Co-Fund\" tile is now the sum of (all campaigns' inferred co-funds) + (Talabat ambient talabat_disc)."
 ];
 
 let _updateDialogShown=false;
@@ -6082,9 +6082,25 @@ function campAnalysisV2(c){
     campC.contribution=correctedContrib;
   }
   const hasOverlap=alloc.hadOverlap;
-  // Our discount cost (what we funded). Net sales already includes the platform's co-funded share,
-  // so this is purely for the discount-ROI ratio, not subtracted from contribution again.
-  const ourDiscCost=allocatedDisc*(1-coFundedPct);
+  // ── Discount cost interpretation ──
+  // `allocatedDisc` from exact-upload sources (Deliveroo/Careem/Keeta/Noon statements) is the
+  // MERCHANT-funded portion only. Their exports don't include the platform's co-fund share
+  // (which is settled off-statement — e.g. Deliveroo BOGO 35% co-fund is paid separately at
+  // statement end). Talabat is similar: menu_disc is merchant, talabat_disc is a separate column
+  // for the platform's ambient vouchers. The Google Sheet daily `disc` values also track only
+  // the merchant's cost. So `allocatedDisc` = what the merchant actually paid = ourDiscCost.
+  //
+  // When the campaign declares co-funding (e.g. "50:50 co-fund" → coFundedPct = 0.5 = platform's
+  // share), the aggregator's contribution isn't in the statement — we INFER it from the merchant
+  // portion:  agg_share = merchant × pct / (1 − pct).  Example: 50/50 split, merchant paid AED 15
+  // per statement → agg_share = 15 × 0.5 / 0.5 = AED 15 → total customer discount = AED 30.
+  //
+  // Previous bug (pre-v059): ourDiscCost = allocatedDisc × (1 − coFundedPct) treated allocatedDisc
+  // as the TOTAL customer discount, effectively under-reporting merchant cost by (1 − pct)× when
+  // co-funding was declared. That was wrong for every co-funded campaign.
+  const ourDiscCost=allocatedDisc;
+  const aggInferredCoFund=coFundedPct>0&&coFundedPct<1?(allocatedDisc*coFundedPct/(1-coFundedPct)):0;
+  const totalCustomerDisc=allocatedDisc+aggInferredCoFund;
   const ourDiscPerDay=ourDiscCost/cDays;
 
   // Incremental contribution (per day, then total over the elapsed window)
@@ -6202,6 +6218,7 @@ function campAnalysisV2(c){
     effStart,effEnd,bStart,bEnd,cDays,bDays,
     cs,bs,campGross:campC.gross,baseGross:baseC.gross,
     coFundedPct,needsCoFundClarity,ourDiscCost,ourDiscPerDay,
+    aggInferredCoFund,totalCustomerDisc,
     campContribTotal:campC.contribution,baseContribTotal:baseC.contribution,
     campContribPerDay,baseContribPerDay,incrContribPerDay,incrContribTotal,profitabilityPct,
     ordersLift,salesLift,aovChange,incrOrdersPerDay,incrSalesPerDay,
@@ -6436,9 +6453,9 @@ function campDetailV2HTML(c,idx){
       <tr><td>Orders</td><td style="text-align:right">${a.cs.orders.toLocaleString()}</td><td style="text-align:right">${a.bs.orders.toLocaleString()}</td><td style="text-align:right;color:${a.incrOrdersPerDay>=0?'#22C55E':'#EF4444'}">${a.incrOrdersPerDay>=0?'+':''}${a.incrOrdersPerDay.toFixed(0)}</td></tr>
       <tr><td>Net Sales</td><td style="text-align:right">${fmtAEDx(a.cs.sales)}</td><td style="text-align:right">${fmtAEDx(a.bs.sales)}</td><td style="text-align:right;color:${a.incrSalesPerDay>=0?'#22C55E':'#EF4444'}">${a.incrSalesPerDay>=0?'+':''}${fmtAEDx(a.incrSalesPerDay)}</td></tr>
       <tr><td>Gross Sales</td><td style="text-align:right">${fmtAEDx(a.campGross)}</td><td style="text-align:right">${fmtAEDx(a.baseGross)}</td><td style="text-align:right;color:#94a3b8">—</td></tr>
-      <tr><td>${(a.coFundedDisc>0&&a.coFundedPct>0)?'Merchant Discount Cost':'Discount Given'}</td><td style="text-align:right">${fmtAEDx(a.campDisc)}</td><td style="text-align:right">${fmtAEDx(a.bs.disc||0)}</td><td style="text-align:right;color:#94a3b8">—</td></tr>
-      ${(a.coFundedDisc>0&&a.coFundedPct>0)?`<tr style="color:#60A5FA"><td>＋ ${c.aggregator}-funded co-pay <span style="font-size:9px;color:#94a3b8;font-weight:400">(platform's share of the discount)</span></td><td style="text-align:right">${fmtAEDx(a.coFundedDisc)}</td><td style="text-align:right;color:#475569">—</td><td style="text-align:right;color:#94a3b8">—</td></tr>
-      <tr style="color:#475569;font-style:italic;font-size:11px"><td>= Total discount to customer</td><td style="text-align:right">${fmtAEDx(a.campDisc+a.coFundedDisc)}</td><td style="text-align:right;color:#475569">—</td><td style="text-align:right;color:#94a3b8">—</td></tr>`:''}
+      <tr><td>${a.coFundedPct>0?'Merchant Discount Cost <span style="font-size:9px;color:#94a3b8;font-weight:400">(from statement)</span>':'Discount Given'}</td><td style="text-align:right">${fmtAEDx(a.ourDiscCost)}</td><td style="text-align:right">${fmtAEDx(a.bs.disc||0)}</td><td style="text-align:right;color:#94a3b8">—</td></tr>
+      ${a.coFundedPct>0?`<tr style="color:#60A5FA"><td>＋ ${c.aggregator}-funded co-pay <span style="font-size:9px;color:#94a3b8;font-weight:400">(inferred from ${Math.round(a.coFundedPct*100)}% split · off-statement)</span></td><td style="text-align:right">${fmtAEDx(a.aggInferredCoFund)}</td><td style="text-align:right;color:#475569">—</td><td style="text-align:right;color:#94a3b8">—</td></tr>
+      <tr style="color:#475569;font-style:italic;font-size:11px"><td>= Total discount to customer</td><td style="text-align:right">${fmtAEDx(a.totalCustomerDisc)}</td><td style="text-align:right;color:#475569">—</td><td style="text-align:right;color:#94a3b8">—</td></tr>`:''}
       <tr style="border-top:2px solid rgba(245,158,11,.3);font-weight:800"><td style="color:#f59e0b">Contribution</td><td style="text-align:right;color:#0F172A">${fmtAEDx(a.campContribTotal)}</td><td style="text-align:right;color:#0F172A">${fmtAEDx(a.baseContribTotal)}</td><td style="text-align:right;color:${incrClr}">${a.incrContribPerDay>=0?'+':''}${fmtAEDx(a.incrContribPerDay)}</td></tr>
     </tbody></table></div></div>`;
   let scenarioBox='';
@@ -6527,7 +6544,7 @@ function campDetailHTML(c,idx){
   if(a.discAvailable){
     const roiClr=a.discountROI==null?'#64748b':a.discountROI>=1?'#22C55E':a.discountROI<0?'#EF4444':'#FBBF24';
     const profClr=a.profitabilityPct==null?'#64748b':pctClr(a.profitabilityPct);
-    const cfBanner=a.coFundedPct>0?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(168,85,247,.08);border-left:3px solid #A855F7;border-radius:4px">🤝 <strong style="color:#C084FC">Co-funded ${Math.round(a.coFundedPct*100)}% by ${c.aggregator}</strong> — of the AED ${fmtAED(a.campDisc).replace('AED ','')} total discount, ${c.aggregator} absorbs <strong style="color:#A855F7">${fmtAED(a.campDisc*a.coFundedPct)}</strong> and ${c.brand} carries <strong style="color:#0F172A">${fmtAED(a.ourDiscCost)}</strong>. Profitability and ROI below use the brand's actual cost.</div>`:'';
+    const cfBanner=a.coFundedPct>0?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(168,85,247,.08);border-left:3px solid #A855F7;border-radius:4px">🤝 <strong style="color:#C084FC">Co-funded ${Math.round(a.coFundedPct*100)}% by ${c.aggregator}</strong> — statements only show the merchant portion, so we infer the platform's share from the split. ${c.brand} paid <strong style="color:#0F172A">${fmtAED(a.ourDiscCost)}</strong> (as shown in the ${c.aggregator} export), ${c.aggregator} absorbed <strong style="color:#A855F7">${fmtAED(a.aggInferredCoFund)}</strong> (inferred, invoiced separately), total customer discount was <strong style="color:#0F172A">${fmtAED(a.totalCustomerDisc)}</strong>. ROI below is against ${c.brand}'s actual cost only.</div>`:'';
     const subsidyBanner=a.dataMismatchSuspected?`<div style="font-size:12px;color:#0F172A;margin-bottom:12px;line-height:1.55;padding:10px 14px;background:rgba(239,68,68,.08);border-left:4px solid #EF4444;border-radius:6px">
       ⚠️ <strong style="color:#EF4444">Discount data mismatch detected — the exact ${c.aggregator} upload may be stale or incomplete for this window.</strong>
       <div style="margin-top:6px;color:#475569;font-size:11px;line-height:1.6">Two independent sources disagree for this campaign's ${a.cDays}-day window:</div>
@@ -6540,7 +6557,7 @@ function campDetailHTML(c,idx){
     </div>`:'';
     profitSection=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#f59e0b">💰 Profitability Analysis <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· real discount data + commission${a.coFundedPct>0?' + co-funding':''}</span></div>
       <div style="display:flex;align-items:stretch;gap:14px;flex-wrap:wrap;margin-bottom:14px;padding:12px 14px;background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.18);border-radius:8px">
-        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Total Discount Given</div><div style="font-size:22px;font-weight:800;color:#EF4444;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.campDisc)}</div>${a.coFundedPct>0?`<div style="font-size:10px;color:#94a3b8;margin-top:2px"><strong style="color:#0F172A">${c.brand}'s share:</strong> ${fmtAED(a.ourDiscCost)}</div>`:''}</div>
+        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">${a.coFundedPct>0?'Total Customer Discount':'Total Discount Given'}</div><div style="font-size:22px;font-weight:800;color:#EF4444;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.coFundedPct>0?a.totalCustomerDisc:a.ourDiscCost)}</div>${a.coFundedPct>0?`<div style="font-size:10px;color:#94a3b8;margin-top:2px"><strong style="color:#0F172A">${c.brand}'s share:</strong> ${fmtAED(a.ourDiscCost)} · <strong style="color:#A855F7">${c.aggregator}:</strong> ${fmtAED(a.aggInferredCoFund)}</div>`:''}</div>
         <div style="width:1px;background:rgba(245,158,11,.2)"></div>
         <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Net Sales Generated</div><div style="font-size:22px;font-weight:800;color:#22C55E;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.cs.sales)}</div></div>
         <div style="width:1px;background:rgba(245,158,11,.2)"></div>
@@ -6981,11 +6998,22 @@ function computeDiscountBurn(){
       const alloc=allocateCampaignDiscount(c,cStart,cEnd);
       if(!alloc)return;
       const burnInWindow=alloc.allocatedDisc||0;
-      // Co-fund derivation: use declared % from campaign comment (same logic as v049 fix)
+      // ── Co-fund inference (correct as of v059) ──
+      // Aggregator statements track merchant-funded discount only. The platform's share is
+      // settled off-statement. When the campaign declares a co-fund %, we infer the platform's
+      // portion from the merchant portion using the split ratio:
+      //     agg_share = merchant × pct / (1 − pct)
+      // Where pct is the platform's fraction of the customer-facing discount (0-1). Example:
+      // 50:50 co-fund and merchant paid AED 15 → agg = 15 × 0.5/0.5 = AED 15 → customer discount
+      // = AED 30. For Deliveroo BOGO with pct=0.35: agg = merchant × 0.35/0.65 = merchant × 0.538.
+      // Previous formula (pre-v059) was `merchant × pct / 100` which was wrong twice: (1) treated
+      // the 0-1 pct as if it were 0-100, and (2) used the wrong ratio structure entirely.
       const parsed=parseCampComment(c.comments||"");
-      const declaredCoFundPct=parsed.coFundedPctOfDiscount||0;
-      const coFundInWindow=declaredCoFundPct>0?(burnInWindow*declaredCoFundPct/100):0;
-      const merchantBurn=burnInWindow-coFundInWindow;
+      const declaredCoFundPct=parsed.coFundedPctOfDiscount||0; // 0-1 fraction, platform's share
+      const coFundInWindow=declaredCoFundPct>0&&declaredCoFundPct<1
+        ? (burnInWindow*declaredCoFundPct/(1-declaredCoFundPct))
+        : 0;
+      const merchantBurn=burnInWindow; // burnInWindow IS the merchant portion already
       campaignBreakdown.push({
         campaign:c,cStart,cEnd,
         days:daysBetweenInclusive(cStart,cEnd),
@@ -6993,10 +7021,10 @@ function computeDiscountBurn(){
         source:alloc.source||"estimated",
         partialCoverage:alloc.partialCoverage||false,
         isRewards:isRewardsCampaign(c),
-        coFundPct:declaredCoFundPct
+        coFundPct:declaredCoFundPct*100 // store as 0-100 for display
       });
-      attributedBurn+=merchantBurn; // count merchant-funded portion only against uncategorized calc
-      coFundTotal+=coFundInWindow;
+      attributedBurn+=merchantBurn; // sum of merchant portions across campaigns
+      coFundTotal+=coFundInWindow; // sum of inferred aggregator portions
     }catch(e){/* skip malformed campaigns */}
   });
   campaignBreakdown.sort((a,b)=>b.burnInWindow-a.burnInWindow);
@@ -7017,9 +7045,12 @@ function computeDiscountBurn(){
       ambientPlatformFund+=(rec.talabat_disc||0);
     }
   }
-  // "Aggregator Co-Fund" is now the max of (declared co-fund from sheet, exact ambient platform-funded amount).
-  // We report both so users can see what's declared vs what actually happened.
-  const totalCoFund=Math.max(coFundTotal,ambientPlatformFund);
+  // "Aggregator Co-Fund" = campaign-inferred (Careem/Keeta/Deliveroo/Noon/Talabat declared) plus
+  // Talabat ambient (from talabat_disc column — Talabat Pro, first-order codes, not campaign coupons).
+  // These are conceptually distinct pools and are additive. If a specific Talabat campaign was
+  // co-funded AND some of that co-fund happened to be reflected in talabat_disc, there's a small
+  // double-count risk — user can verify against their Talabat co-fund invoice if needed.
+  const totalCoFund=coFundTotal+ambientPlatformFund;
   // Daily burn series for the trend chart
   const dailyBurn={};
   matches.forEach(r=>{dailyBurn[r.date]=(dailyBurn[r.date]||0)+(r.disc||0);});
@@ -7107,7 +7138,13 @@ function discountKpiRowHTML(d){
     ${tile('💸','Total Discount Burn',fmt(d.totalBurn),`${depth.toFixed(1)}% of gross · ${fmt(dailyBurn)}/day avg`,'#EF4444')}
     ${tile('🎯','Attributed to Campaigns',fmt(d.attributedBurn)+pctOf(d.attributedBurn,d.totalBurn),`${d.activeCampaignCount} campaign${d.activeCampaignCount===1?'':'s'} ran in this window`,'#22C55E')}
     ${tile('❓','Uncategorized Burn',fmt(d.uncategorizedBurn)+pctOf(d.uncategorizedBurn,d.totalBurn),'ambient discounts not tied to a tracked campaign','#F59E0B')}
-    ${tile('🤝','Aggregator Co-Fund',fmt(d.coFundTotalDisplay),d.coFundAmbient>d.coFundDeclared?`AED ${Math.round(d.coFundAmbient).toLocaleString()} platform-funded on Talabat orders (from exact upload) · AED ${Math.round(d.coFundDeclared).toLocaleString()} declared in sheet`:(d.coFundDeclared>0?'from declared co-funded campaigns':'no declared co-funding · no exact platform data available'),'#3B82F6')}
+    ${(()=>{
+      const parts=[];
+      if(d.coFundDeclared>0)parts.push(`AED ${Math.round(d.coFundDeclared).toLocaleString()} inferred from declared co-fund %s`);
+      if(d.coFundAmbient>0)parts.push(`AED ${Math.round(d.coFundAmbient).toLocaleString()} ambient (Talabat-funded vouchers)`);
+      const subText=parts.length>0?parts.join(' · '):'no declared co-fund % on any campaign in window · no ambient platform-funded amounts in exact uploads';
+      return tile('🤝','Aggregator Co-Fund',fmt(d.coFundTotalDisplay),subText,'#3B82F6');
+    })()}
     ${tile('📆','Days in Window',d.daysInWindow,`${fmtDisp(d.dateStart)} → ${fmtDisp(d.dateEnd)}`,'#8B5CF6')}
   </div>`;
 }
@@ -7189,7 +7226,7 @@ function discountExportCSV(){
   rows.push(["Total Orders",d.totalOrders,""]);
   rows.push([]);
   rows.push(["CAMPAIGN BREAKDOWN"]);
-  rows.push(["Campaign","Brand","Aggregator","Window Start","Window End","Days in Window","Burn in Window (AED)","Co-Fund in Window (AED)","Co-Fund %","Data Source","Depth of Gross (%)","Loyalty Program"]);
+  rows.push(["Campaign","Brand","Aggregator","Window Start","Window End","Days in Window","Merchant Burn in Window (AED)","Aggregator Co-Fund Inferred (AED)","Co-Fund % (platform's share of customer discount)","Data Source","Merchant Depth of Gross (%)","Loyalty Program"]);
   d.campaignBreakdown.forEach(x=>{
     const c=x.campaign;
     const depth=d.grossSales>0?(x.burnInWindow/d.grossSales*100).toFixed(2):"0";
