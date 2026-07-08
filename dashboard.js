@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-053";
+const BUILD_VERSION="2026-07-06-054";
 const BUILD_NOTES=[
-  "🎨 Warm paper theme — page backgrounds and cards shifted from cool clinical white/slate to a warm off-white/cream palette that harmonizes with the amber Oregano brand accent. Same layout, softer feel."
+  "💸 New Discount Burn Analysis page (top nav, between Campaigns and KPI Tracker). Filter by aggregator × brand × region × date range and see: total discount burn, portion attributed to tracked campaigns, uncategorized/ambient burn (Talabat Pro vouchers, first-order codes, etc.), aggregator co-funding, and a per-campaign breakdown table. Daily burn trend chart included. Loyalty programs are segregated so their unusual ROI doesn't distort attribution."
 ];
 
 let _updateDialogShown=false;
@@ -2553,7 +2553,7 @@ function barChart(id,labels,values,colors,extra,mode){const ctx=document.getElem
 function multiLineChart(id,labels,series){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);charts[id]=new Chart(ctx,{type:"line",data:{labels,datasets:series.map(s=>({label:s.name,data:s.data,borderColor:s.color,backgroundColor:s.color,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false,spanGaps:true}))},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#475569",font:{size:10},boxWidth:12,padding:8}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label}: ${c.raw==null?'—':'AED '+Number(c.raw).toFixed(1)}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"#F1F5F9"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#F1F5F9"},border:{display:false}}}}});}
 
 // NAVIGATION
-function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>t.classList.remove("act"));const idx={overview:0,brands:1,outlets:2,platforms:3,cpc:4,campaigns:5,kpi:6,compare:7}[page]||0;document.querySelectorAll(".tab")[idx]?.classList.add("act");document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
+function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>t.classList.remove("act"));const idx={overview:0,brands:1,outlets:2,platforms:3,cpc:4,campaigns:5,discounts:6,kpi:7,compare:8}[page]||0;document.querySelectorAll(".tab")[idx]?.classList.add("act");document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
 
 // ── MOBILE NAV DRAWER ──
 // Slides in from the left on tap of hamburger. Overlay dims the page. Any tap on a nav item or
@@ -2585,7 +2585,7 @@ function mNavGo(page){
   toggleMobileNav();
   window.scrollTo({top:0,behavior:"smooth"});
 }
-function renderPage(p){if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();}
+function renderPage(p){if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();}
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 // AOV drilldown state
@@ -6842,6 +6842,260 @@ const KPI_OUTLET_NAME={"TSQR":"Town Square","Motor City":"Motorcity","Mirdif":"M
 const KPI_OUTLET_GID={
   "FYOOZHEN-DIP":"11930781",
 };
+// ═══════════════════════════════════════════════════════════════
+// DISCOUNT BURN ANALYSIS PAGE
+// ═══════════════════════════════════════════════════════════════
+// Answers: "How much discount did I burn on brand X, aggregator Y, branch Z, in date range D — and
+// which campaigns account for that spend?" Uses allData (Google Sheet daily aggregates) as ground
+// truth for total burn, then attributes portions to overlapping campaigns via allocateCampaignDiscount.
+// Anything unattributed shows as ambient/uncategorized (Talabat Pro vouchers, first-order codes, etc.)
+
+let discountFilters={aggregators:[],brands:[],branch:"All",preset:"thisMonth",dateStart:null,dateEnd:null,dropdownOpen:null};
+
+function discountPresetRange(preset){
+  const today=new Date();
+  const y=today.getFullYear(),m=today.getMonth(),d=today.getDate();
+  if(preset==="thisMonth")return[dk(new Date(y,m,1)),dk(new Date(y,m+1,0))];
+  if(preset==="lastMonth")return[dk(new Date(y,m-1,1)),dk(new Date(y,m,0))];
+  if(preset==="last7d")return[dk(new Date(y,m,d-6)),dk(today)];
+  if(preset==="last30d")return[dk(new Date(y,m,d-29)),dk(today)];
+  if(preset==="last90d")return[dk(new Date(y,m,d-89)),dk(today)];
+  return[null,null]; // custom — user picks manually
+}
+function discountEnsureDates(){
+  if(discountFilters.preset!=="custom"){
+    const[s,e]=discountPresetRange(discountFilters.preset);
+    discountFilters.dateStart=s;discountFilters.dateEnd=e;
+  }
+}
+function daysBetweenInclusive(startYmd,endYmd){
+  const s=new Date(startYmd+"T12:00:00"),e=new Date(endYmd+"T12:00:00");
+  return Math.round((e-s)/(24*3600000))+1;
+}
+function computeDiscountBurn(){
+  discountEnsureDates();
+  const{aggregators,brands,branch,dateStart,dateEnd}=discountFilters;
+  if(!dateStart||!dateEnd||dateStart>dateEnd)return null;
+  const aggSet=new Set(aggregators),brandSet=new Set(brands);
+  // Filter allData records that match the current filters + date window
+  const matches=allData.filter(r=>{
+    if(r.date<dateStart||r.date>dateEnd)return false;
+    if(aggregators.length>0&&!aggSet.has(r.aggregator))return false;
+    if(brands.length>0&&!brandSet.has(r.brand))return false;
+    if(branch==="DXB"){if(AUH_OUTLETS.has(r.branch))return false;}
+    else if(branch==="AUH"){if(!AUH_OUTLETS.has(r.branch))return false;}
+    else if(branch!=="All"&&r.branch!==branch)return false;
+    return true;
+  });
+  const totals=sumR(matches);
+  // Overlapping campaigns during the window
+  const overlapping=campaignData.filter(c=>{
+    if(!c.startDate||!c.endDate)return false;
+    if(c.endDate<dateStart||c.startDate>dateEnd)return false;
+    if(aggregators.length>0&&!aggSet.has(c.aggregator))return false;
+    if(brands.length>0&&c.brand!=="All Brands"&&!brandSet.has(c.brand))return false;
+    if(campStatus(c)==="Cancelled")return false;
+    return true;
+  });
+  // For each overlapping campaign, compute its burn during the intersection window
+  const campaignBreakdown=[];
+  let attributedBurn=0,coFundTotal=0;
+  overlapping.forEach(c=>{
+    const cStart=c.startDate>dateStart?c.startDate:dateStart;
+    const cEnd=c.endDate<dateEnd?c.endDate:dateEnd;
+    if(cStart>cEnd)return;
+    try{
+      const alloc=allocateCampaignDiscount(c,cStart,cEnd);
+      if(!alloc)return;
+      const burnInWindow=alloc.allocatedDisc||0;
+      // Co-fund derivation: use declared % from campaign comment (same logic as v049 fix)
+      const parsed=parseCampComment(c.comments||"");
+      const declaredCoFundPct=parsed.coFundedPctOfDiscount||0;
+      const coFundInWindow=declaredCoFundPct>0?(burnInWindow*declaredCoFundPct/100):0;
+      const merchantBurn=burnInWindow-coFundInWindow;
+      campaignBreakdown.push({
+        campaign:c,cStart,cEnd,
+        days:daysBetweenInclusive(cStart,cEnd),
+        burnInWindow,merchantBurn,coFundInWindow,
+        source:alloc.source||"estimated",
+        partialCoverage:alloc.partialCoverage||false,
+        isRewards:isRewardsCampaign(c),
+        coFundPct:declaredCoFundPct
+      });
+      attributedBurn+=merchantBurn; // count merchant-funded portion only against uncategorized calc
+      coFundTotal+=coFundInWindow;
+    }catch(e){/* skip malformed campaigns */}
+  });
+  campaignBreakdown.sort((a,b)=>b.burnInWindow-a.burnInWindow);
+  // Daily burn series for the trend chart
+  const dailyBurn={};
+  matches.forEach(r=>{dailyBurn[r.date]=(dailyBurn[r.date]||0)+(r.disc||0);});
+  const trend=[];
+  const dStart=new Date(dateStart+"T12:00:00"),dEnd=new Date(dateEnd+"T12:00:00");
+  for(let d=new Date(dStart);d<=dEnd;d.setDate(d.getDate()+1)){
+    const k=dk(d);trend.push({d:k.slice(5),burn:dailyBurn[k]||0});
+  }
+  return{
+    dateStart,dateEnd,daysInWindow:daysBetweenInclusive(dateStart,dateEnd),
+    totalBurn:totals.disc,totalSales:totals.sales,totalOrders:totals.orders,
+    grossSales:totals.sales+totals.disc, // gross = net + discount (customer-facing revenue before discount)
+    attributedBurn,coFundTotal,
+    uncategorizedBurn:Math.max(0,totals.disc-attributedBurn-coFundTotal),
+    activeCampaignCount:overlapping.length,
+    campaignBreakdown,trend,matchesCount:matches.length
+  };
+}
+
+// ── Filter interactions ──
+function discountToggleAggregator(agg){
+  const i=discountFilters.aggregators.indexOf(agg);
+  if(i>=0)discountFilters.aggregators.splice(i,1);else discountFilters.aggregators.push(agg);
+  renderDiscounts();
+}
+function discountToggleBrand(brand){
+  const i=discountFilters.brands.indexOf(brand);
+  if(i>=0)discountFilters.brands.splice(i,1);else discountFilters.brands.push(brand);
+  renderDiscounts();
+}
+function discountSetBranch(b){discountFilters.branch=b;renderDiscounts();}
+function discountSetPreset(p){discountFilters.preset=p;discountFilters.dropdownOpen=null;renderDiscounts();}
+function discountSetCustom(which,val){
+  discountFilters.preset="custom";
+  if(which==="start")discountFilters.dateStart=val;else discountFilters.dateEnd=val;
+  renderDiscounts();
+}
+function discountClearFilters(){
+  discountFilters.aggregators=[];discountFilters.brands=[];discountFilters.branch="All";discountFilters.preset="thisMonth";discountFilters.dropdownOpen=null;
+  renderDiscounts();
+}
+function discountOpenCampaign(idx){
+  selCamp=campaignData[idx];campTab="detail";gp("campaigns");
+}
+
+// ── UI rendering ──
+function discountFilterBarHTML(){
+  const{aggregators,brands,branch,preset,dateStart,dateEnd}=discountFilters;
+  const allAggs=["Deliveroo","Talabat","Careem","Noon","Keeta"];
+  const allBrands=[...new Set(campaignData.map(c=>c.brand).filter(b=>b&&b!=="All Brands"))].sort();
+  const presetChip=(k,l)=>`<button onclick="discountSetPreset('${k}')" class="preset ${preset===k?'act':''}" style="padding:5px 10px;border-radius:6px;border:1px solid ${preset===k?'#f59e0b':'#EDE7D9'};background:${preset===k?'rgba(245,158,11,.12)':'transparent'};color:${preset===k?'#f59e0b':'#64748b'};font-size:11px;font-weight:600;cursor:pointer">${l}</button>`;
+  const aggChip=a=>{const on=aggregators.includes(a);return `<button onclick="discountToggleAggregator('${a}')" class="fpill ${on?'on':''}" style="padding:4px 10px;border-radius:14px;border:1px solid ${on?'#f59e0b':'#EDE7D9'};background:${on?'rgba(245,158,11,.14)':'#FEFDFA'};color:${on?'#f59e0b':'#64748b'};font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:5px">${logoImg(a,14)} ${a}</button>`;};
+  const brandChip=b=>{const on=brands.includes(b);const clr=BMAP[b]?.c||'#94a3b8';return `<button onclick="discountToggleBrand('${b}')" class="fpill ${on?'on':''}" style="padding:4px 10px;border-radius:14px;border:1px solid ${on?clr:'#EDE7D9'};background:${on?clr+'22':'#FEFDFA'};color:${on?clr:'#64748b'};font-size:11px;font-weight:600;cursor:pointer">${b}</button>`;};
+  const branchOpts=["All","DXB","AUH"].map(b=>`<button onclick="discountSetBranch('${b}')" style="padding:4px 10px;border-radius:6px;border:1px solid ${branch===b?'#f59e0b':'#EDE7D9'};background:${branch===b?'rgba(245,158,11,.12)':'transparent'};color:${branch===b?'#f59e0b':'#64748b'};font-size:11px;font-weight:600;cursor:pointer">${b==='All'?'🌐 All':b==='DXB'?'🏙️ Dubai':'🏛️ Abu Dhabi'}</button>`).join("");
+  const hasFilters=aggregators.length>0||brands.length>0||branch!=="All"||preset!=="thisMonth";
+  return `<div class="card" style="padding:14px 16px;margin-bottom:14px">
+    <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">
+      <div style="min-width:120px"><div style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.9px;margin-bottom:6px">Aggregator</div><div style="display:flex;flex-wrap:wrap;gap:5px">${allAggs.map(aggChip).join("")}</div></div>
+      <div style="min-width:120px"><div style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.9px;margin-bottom:6px">Brand</div><div style="display:flex;flex-wrap:wrap;gap:5px">${allBrands.map(brandChip).join("")}</div></div>
+      <div><div style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.9px;margin-bottom:6px">Region</div><div style="display:flex;gap:5px">${branchOpts}</div></div>
+      <div><div style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.9px;margin-bottom:6px">Period</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center">
+          ${presetChip('thisMonth','This Month')}${presetChip('lastMonth','Last Month')}${presetChip('last7d','Last 7d')}${presetChip('last30d','Last 30d')}${presetChip('last90d','Last 90d')}
+          <span style="color:#94a3b8;font-size:11px;margin:0 4px">|</span>
+          <input type="date" value="${dateStart||''}" onchange="discountSetCustom('start',this.value)" style="border:1px solid #EDE7D9;border-radius:5px;padding:3px 6px;font-size:11px;color:#0F172A;background:#FEFDFA" title="Custom start date">
+          <span style="color:#94a3b8;font-size:11px">→</span>
+          <input type="date" value="${dateEnd||''}" onchange="discountSetCustom('end',this.value)" style="border:1px solid #EDE7D9;border-radius:5px;padding:3px 6px;font-size:11px;color:#0F172A;background:#FEFDFA" title="Custom end date">
+        </div>
+      </div>
+      ${hasFilters?`<button onclick="discountClearFilters()" style="align-self:center;background:transparent;border:1px solid #EDE7D9;color:#64748b;padding:5px 10px;font-size:11px;border-radius:6px;cursor:pointer">✕ Clear</button>`:''}
+    </div>
+  </div>`;
+}
+
+function discountKpiRowHTML(d){
+  const fmt=n=>`AED ${Math.round(n||0).toLocaleString()}`;
+  const pctOf=(a,b)=>b>0?` <span style="font-size:11px;color:#94a3b8;font-weight:600">(${(a/b*100).toFixed(0)}%)</span>`:'';
+  const depth=d.grossSales>0?(d.totalBurn/d.grossSales*100):0;
+  const dailyBurn=d.daysInWindow>0?d.totalBurn/d.daysInWindow:0;
+  const tile=(icon,label,val,sub,clr)=>`<div style="flex:1;min-width:170px;background:#FEFDFA;border:1px solid #EDE7D9;border-left:4px solid ${clr};border-radius:12px;padding:14px 16px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06)"><div style="display:flex;align-items:center;gap:7px;margin-bottom:6px"><span style="font-size:18px">${icon}</span><div style="font-size:10px;color:#64748b;font-weight:800;letter-spacing:.8px;text-transform:uppercase">${label}</div></div><div style="font-size:22px;font-weight:800;color:${clr};font-variant-numeric:tabular-nums;line-height:1.1">${val}</div><div style="font-size:10px;color:#64748b;margin-top:4px;line-height:1.35">${sub}</div></div>`;
+  return `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+    ${tile('💸','Total Discount Burn',fmt(d.totalBurn),`${depth.toFixed(1)}% of gross · ${fmt(dailyBurn)}/day avg`,'#EF4444')}
+    ${tile('🎯','Attributed to Campaigns',fmt(d.attributedBurn)+pctOf(d.attributedBurn,d.totalBurn),`${d.activeCampaignCount} campaign${d.activeCampaignCount===1?'':'s'} ran in this window`,'#22C55E')}
+    ${tile('❓','Uncategorized Burn',fmt(d.uncategorizedBurn)+pctOf(d.uncategorizedBurn,d.totalBurn),'ambient discounts not tied to a tracked campaign','#F59E0B')}
+    ${tile('🤝','Aggregator Co-Fund',fmt(d.coFundTotal),d.coFundTotal>0?'from declared co-funded campaigns':'no declared co-funded campaigns in window','#3B82F6')}
+    ${tile('📆','Days in Window',d.daysInWindow,`${fmtDisp(d.dateStart)} → ${fmtDisp(d.dateEnd)}`,'#8B5CF6')}
+  </div>`;
+}
+
+function discountTrendChartHTML(d){
+  if(!d.trend||d.trend.length===0)return '';
+  return `<div class="card" style="margin-bottom:14px">
+    <div class="ct" style="margin-bottom:12px">Daily Discount Burn Trend</div>
+    <div style="height:180px;position:relative"><canvas id="ch-discount-trend"></canvas></div>
+  </div>`;
+}
+
+function discountCampaignTableHTML(d){
+  const fmt=n=>`AED ${Math.round(n||0).toLocaleString()}`;
+  if(d.campaignBreakdown.length===0){
+    return `<div class="card"><div style="text-align:center;color:#64748b;padding:24px;font-size:13px">No tracked campaigns ran in this window. All ${fmt(d.totalBurn)} of burn was ambient (loyalty programs, aggregator-driven promos, first-order codes, etc.).</div></div>`;
+  }
+  const regular=d.campaignBreakdown.filter(x=>!x.isRewards);
+  const rewards=d.campaignBreakdown.filter(x=>x.isRewards);
+  const rowHTML=x=>{
+    const c=x.campaign,idx=campaignData.indexOf(c);
+    const b=BMAP[c.brand]?.c||'#94a3b8';
+    const depth=d.grossSales>0?(x.burnInWindow/d.grossSales*100).toFixed(1):'—';
+    const srcTag=x.source==='keeta_exact'||x.source==='careem_exact'||x.source==='deliveroo_exact'||x.source==='talabat_exact'||x.source==='noon_exact'
+      ? `<span style="font-size:9px;background:rgba(34,197,94,.12);color:#22C55E;padding:1px 6px;border-radius:8px;font-weight:700;margin-left:4px" title="Exact per-order data">✓ Exact</span>`
+      : `<span style="font-size:9px;background:rgba(148,163,184,.12);color:#94a3b8;padding:1px 6px;border-radius:8px;font-weight:700;margin-left:4px" title="Sales-weighted allocation from Google Sheet daily aggregates">≈ Est</span>`;
+    const cfCell=x.coFundInWindow>0?`<div style="color:#3B82F6;font-weight:700">${fmt(x.coFundInWindow)}</div><div style="font-size:9px;color:#94a3b8">${x.coFundPct}% declared</div>`:`<span style="color:#94a3b8">—</span>`;
+    return `<tr onclick="discountOpenCampaign(${idx})" style="cursor:pointer" onmouseover="this.style.background='rgba(148,163,184,.06)'" onmouseout="this.style.background=''">
+      <td style="padding:9px 8px"><div style="font-weight:700;color:#0F172A">${c.name||'(untitled)'}</div><div style="font-size:10px;color:#64748b;display:flex;align-items:center;gap:5px;margin-top:2px"><span style="width:8px;height:8px;background:${b};border-radius:50%;flex-shrink:0"></span>${c.brand} · ${c.aggregator} ${srcTag}</div></td>
+      <td style="padding:9px 8px;font-size:11px;color:#64748b;white-space:nowrap">${fmtDisp(x.cStart).replace(/, \d{4}/,'')} → ${fmtDisp(x.cEnd).replace(/, \d{4}/,'')}<div style="font-size:9px;color:#94a3b8">${x.days} day${x.days===1?'':'s'} in window</div></td>
+      <td style="padding:9px 8px;text-align:right;font-weight:800;color:#EF4444">${fmt(x.burnInWindow)}<div style="font-size:9px;color:#94a3b8;font-weight:500">${depth}% of gross</div></td>
+      <td style="padding:9px 8px;text-align:right">${cfCell}</td>
+      <td style="padding:9px 8px;text-align:right;color:#94a3b8;font-size:16px">→</td>
+    </tr>`;
+  };
+  const tableHead=`<thead><tr style="border-bottom:2px solid #EDE7D9"><th style="text-align:left;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Campaign</th><th style="text-align:left;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Overlap Window</th><th style="text-align:right;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Burn in Window</th><th style="text-align:right;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Co-Fund</th><th></th></tr></thead>`;
+  let html=`<div class="card" style="padding:14px 16px;margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="ct" style="margin-bottom:0">Campaign Breakdown (${regular.length})</div>${regular.length>0?`<div style="font-size:10px;color:#94a3b8">Click any row for full campaign detail</div>`:''}</div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">${tableHead}<tbody>${regular.map(rowHTML).join('')}</tbody></table></div>
+  </div>`;
+  if(rewards.length>0){
+    html+=`<div class="card" style="padding:14px 16px;margin-bottom:14px;border-left:4px solid #8B5CF6">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><div class="ct" style="margin-bottom:0">💎 Loyalty Programs (${rewards.length})</div><span style="font-size:10px;color:#94a3b8;text-transform:none;letter-spacing:0;font-weight:500">— excluded from campaign profitability comparisons</span></div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">${tableHead}<tbody>${rewards.map(rowHTML).join('')}</tbody></table></div>
+    </div>`;
+  }
+  return html;
+}
+
+async function renderDiscounts(){
+  const pg=document.getElementById("page-discounts");
+  if(!pg)return;
+  if(!campLoaded){
+    pg.innerHTML=`<div style="padding:30px;text-align:center;color:#64748b;font-size:13px">⏳ Loading campaign data…</div>`;
+    await loadCampaigns();
+    return renderDiscounts();
+  }
+  const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(15,23,42,.12)"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">💸</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Discount Burn Analysis</div></div><div style="font-size:10px;color:#64748b;margin-top:2px;letter-spacing:.4px">Total burn · Campaign attribution · Ambient discount tracking</div></div></div>`;
+  const filterBar=discountFilterBarHTML();
+  const data=computeDiscountBurn();
+  if(!data){
+    pg.innerHTML=`${header}${filterBar}<div class="card" style="text-align:center;padding:30px;color:#64748b">Please select a valid date range to view results.</div>`;
+    return;
+  }
+  if(data.matchesCount===0){
+    pg.innerHTML=`${header}${filterBar}<div class="card" style="text-align:center;padding:30px;color:#64748b">No sales data matches these filters. Try widening the aggregator/brand/region selection or picking a different date range.</div>`;
+    return;
+  }
+  pg.innerHTML=`${header}${filterBar}${discountKpiRowHTML(data)}${discountTrendChartHTML(data)}${discountCampaignTableHTML(data)}`;
+  // Render trend chart after DOM is in place
+  if(data.trend&&data.trend.length>0){
+    setTimeout(()=>{
+      const ctx=document.getElementById("ch-discount-trend");
+      if(!ctx)return;
+      if(charts["ch-discount-trend"])charts["ch-discount-trend"].destroy();
+      charts["ch-discount-trend"]=new Chart(ctx,{
+        type:"line",
+        data:{labels:data.trend.map(x=>x.d),datasets:[{label:"Daily Burn",data:data.trend.map(x=>x.burn),borderColor:"#EF4444",backgroundColor:"rgba(239,68,68,.12)",borderWidth:2,pointRadius:2,pointHoverRadius:5,fill:true,tension:.25}]},
+        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`AED ${Math.round(c.parsed.y).toLocaleString()}`}}},scales:{y:{beginAtZero:true,ticks:{callback:v=>`AED ${(v/1000).toFixed(1)}k`,font:{size:10},color:"#64748b"},grid:{color:"rgba(148,163,184,.15)"}},x:{ticks:{font:{size:9},color:"#64748b",maxRotation:0,autoSkip:true,maxTicksLimit:12},grid:{display:false}}}}
+      });
+    },50);
+  }
+}
+
 function kpiOutletName(tab){return KPI_OUTLET_NAME[tab]||tab;}
 const KPI_BRANDS=["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"];
 // Expected number of listings (outlets) per brand on the "big 3" aggregators (Talabat, Deliveroo, Careem).
