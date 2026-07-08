@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-056";
+const BUILD_VERSION="2026-07-06-058";
 const BUILD_NOTES=[
-  "📅 Campaigns page data strip now shows the date range covered by each aggregator's uploaded data (e.g. \"Deliveroo · 1-28 Jun\") instead of just \"2d ago\". Upload freshness is still visible via the coloured dot (green/amber/red) and full details in the hover tooltip. Now you can tell at a glance which dates you've already ingested and when to upload the next batch."
+  "🔧 Corrected v057's misdiagnosis of the AED-20 discount problem on Noon's \"50% OFF Oregano\" campaign. Root cause was NOT platform-subsidy — it was that the Noon export uploaded to the dashboard was stale (made before 24 Jun) and simply didn't include the campaign's dates. The v057 \"platform-subsidised\" heuristic (which compared headline % to observed depth) is replaced with a direct cross-source comparison: whenever the aggregator's exact upload shows less than a third of the discount the Google Sheet daily aggregates suggest for the same window, we flag it as a data mismatch. The banner tells you both numbers, the likely cause, and the fix (re-upload a fresh export). Discount ROI is suppressed until resolved. Chip on card list changes from 🎁 \"platform-subsidised\" to ⚠️ \"data mismatch\"."
 ];
 
 let _updateDialogShown=false;
@@ -5702,6 +5702,10 @@ function campCardGrid(camps,showProfit){
       const a=campAnalysisCached(c);
       return(a.discSource==='keeta_exact'||a.discSource==='careem_exact'||a.discSource==='talabat_exact'||a.discSource==='deliveroo_exact'||a.discSource==='noon_exact')?`<span style="font-size:8px;background:rgba(34,197,94,.12);color:#22C55E;font-weight:700;padding:1px 6px;border-radius:6px" title="Discount sourced from uploaded ${c.aggregator} orders file (exact per-order data, not estimated)">📊 Exact</span>`:'';
     })():'';
+    const subsidyChip=showProfit?(()=>{
+      try{const a=campAnalysisCached(c);return a.dataMismatchSuspected?`<span style="font-size:8px;background:rgba(239,68,68,.14);color:#EF4444;font-weight:700;padding:1px 6px;border-radius:6px" title="Exact ${c.aggregator} upload found much less discount than the Google Sheet daily aggregates — the export is likely stale/incomplete. Open the campaign to see the mismatch details and fix.">⚠️ data mismatch</span>`:'';}
+      catch(e){return '';}
+    })():'';
     return `<div onclick="selectCamp(${idx})" style="cursor:pointer;background:linear-gradient(135deg,${accent}0d,rgba(255,255,255,.5));border:1px solid ${accent}33;border-left:3px solid ${accent};border-radius:12px;padding:14px;transition:transform .12s,border-color .12s" onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${accent}77'" onmouseout="this.style.transform='none';this.style.borderColor='${accent}33'">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
         <div style="min-width:0;flex:1">
@@ -5714,6 +5718,7 @@ function campCardGrid(camps,showProfit){
         <span style="font-size:9px;color:#475569;background:rgba(255,255,255,.05);padding:1px 7px;border-radius:6px">${offer}</span>
         ${coFundChip}
         ${exactChip}
+        ${subsidyChip}
       </div>
       <div style="font-size:9px;color:#64748b;margin-top:4px">📅 ${dateStr}</div>
       ${headlineHTML}
@@ -6098,8 +6103,27 @@ function campAnalysisV2(c){
 
   // Discount ROI = incremental contribution per AED we discounted. If there's a genuine overlap we
   // can't trust the discount split, so suppress discount-based metrics (order comparison still shown).
-  const discountROI=(!hasOverlap&&ourDiscPerDay>0)?(incrContribPerDay/ourDiscPerDay):null;
+  let discountROI=(!hasOverlap&&ourDiscPerDay>0)?(incrContribPerDay/ourDiscPerDay):null;
   const discPctOfGross=(!hasOverlap&&campC.gross>0)?((allocatedDisc)/campC.gross)*100:null;
+
+  // ── Exact-vs-sheet discount mismatch detection ──
+  // Two independent sources of truth for discount in the campaign window:
+  //   1. allocatedDisc — from the aggregator's exact per-order upload (getXxxExactDisc)
+  //   2. cs.disc      — sum from the Google Sheet daily brand aggregates (allData)
+  // If the exact source is DRAMATICALLY smaller than the sheet source, the exact upload is
+  // likely incomplete (uploaded before the campaign ended, or missing days). Show a warning
+  // rather than surface the misleading tiny denominator through the ROI. Previously (v057) we
+  // used a "headline-vs-actual" heuristic which mislabeled incomplete-data cases as "platform-
+  // subsidised" — replaced with this direct cross-source comparison which is unambiguous.
+  const _isExactSource=alloc.source&&alloc.source.endsWith('_exact');
+  const _sheetDisc=cs.disc||0;
+  const dataMismatchSuspected=(
+    _isExactSource &&
+    _sheetDisc > 100 &&                       // sheet says there was meaningful discount
+    allocatedDisc < _sheetDisc / 3 &&          // but exact source found less than a third of it
+    cDays >= 2
+  );
+  if(dataMismatchSuspected)discountROI=null;
 
   // Were we running OTHER campaigns on this brand+aggregator during the BASELINE window?
   const myIdx=campaignData.indexOf(c);
@@ -6182,6 +6206,7 @@ function campAnalysisV2(c){
     campContribPerDay,baseContribPerDay,incrContribPerDay,incrContribTotal,profitabilityPct,
     ordersLift,salesLift,aovChange,incrOrdersPerDay,incrSalesPerDay,
     discountROI,discPctOfGross,campDisc:allocatedDisc,coFundedDisc:alloc.coFundedDisc||0,rawBrandDisc:cs.disc||0,allocatedDisc,hasOverlap,overlapDays:alloc.overlapDays,branchN:alloc.myN,branchM:alloc.M,
+    dataMismatchSuspected,sheetDisc:_sheetDisc,
     discSource:alloc.source||"estimated",
     discPartialCoverage:!!alloc.partialCoverage,discCoveredDays:alloc.coveredDays,discTotalDays:alloc.totalDays,discUncoveredStart:alloc.uncoveredStart,discUncoveredEnd:alloc.uncoveredEnd,
     baselineCampaigns,concurrent,sameBrandPlatConcurrent,
@@ -6393,7 +6418,11 @@ function campDetailV2HTML(c,idx){
     ${campKpiCard('Discount ROI',a.discountROI!=null?`${a.discountROI.toFixed(2)}×`:'—','contribution per AED discounted',roiClr)}
   </div>`;
   let verdict='',verdictClr='#94a3b8',verdictIcon='';
-  if(a.discountROI!=null){
+  if(a.dataMismatchSuspected){
+    verdict=`Discount ROI can't be computed reliably — the exact ${c.aggregator} upload found only ${fmtAED(a.allocatedDisc)} in merchant discount for this window, but the Google Sheet daily aggregates suggest ${fmtAED(a.sheetDisc)}. The ${c.aggregator} export is likely stale. Re-upload a fresh export covering this campaign's dates to fix. Incremental contribution and orders lift shown below are still valid.`;
+    verdictClr='#EF4444';verdictIcon='⚠️';
+  }
+  else if(a.discountROI!=null){
     if(a.discountROI>=1){verdict=`This campaign paid for itself — every AED 1 discounted returned AED ${a.discountROI.toFixed(2)} in incremental contribution.`;verdictClr='#22C55E';verdictIcon='✅';}
     else if(a.discountROI>=0.4){verdict=`Marginal — the discount returned only AED ${a.discountROI.toFixed(2)} per AED spent. It drove volume but ate into profit.`;verdictClr='#FBBF24';verdictIcon='⚠️';}
     else{verdict=`The discount lost money on a contribution basis — only AED ${a.discountROI.toFixed(2)} returned per AED discounted. A shallower discount would likely have been more profitable.`;verdictClr='#EF4444';verdictIcon='🔻';}
@@ -6499,6 +6528,16 @@ function campDetailHTML(c,idx){
     const roiClr=a.discountROI==null?'#64748b':a.discountROI>=1?'#22C55E':a.discountROI<0?'#EF4444':'#FBBF24';
     const profClr=a.profitabilityPct==null?'#64748b':pctClr(a.profitabilityPct);
     const cfBanner=a.coFundedPct>0?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(168,85,247,.08);border-left:3px solid #A855F7;border-radius:4px">🤝 <strong style="color:#C084FC">Co-funded ${Math.round(a.coFundedPct*100)}% by ${c.aggregator}</strong> — of the AED ${fmtAED(a.campDisc).replace('AED ','')} total discount, ${c.aggregator} absorbs <strong style="color:#A855F7">${fmtAED(a.campDisc*a.coFundedPct)}</strong> and ${c.brand} carries <strong style="color:#0F172A">${fmtAED(a.ourDiscCost)}</strong>. Profitability and ROI below use the brand's actual cost.</div>`:'';
+    const subsidyBanner=a.dataMismatchSuspected?`<div style="font-size:12px;color:#0F172A;margin-bottom:12px;line-height:1.55;padding:10px 14px;background:rgba(239,68,68,.08);border-left:4px solid #EF4444;border-radius:6px">
+      ⚠️ <strong style="color:#EF4444">Discount data mismatch detected — the exact ${c.aggregator} upload may be stale or incomplete for this window.</strong>
+      <div style="margin-top:6px;color:#475569;font-size:11px;line-height:1.6">Two independent sources disagree for this campaign's ${a.cDays}-day window:</div>
+      <ul style="margin:4px 0 4px 18px;padding:0;color:#475569;font-size:11px;line-height:1.6">
+        <li>Exact ${c.aggregator} upload → <strong style="color:#EF4444">${fmtAED(a.allocatedDisc)}</strong></li>
+        <li>Google Sheet daily aggregates → <strong style="color:#0F172A">${fmtAED(a.sheetDisc)}</strong></li>
+      </ul>
+      <div style="margin-top:6px;color:#64748b;font-size:11px;line-height:1.6"><strong>Most likely cause:</strong> the ${c.aggregator} export uploaded to the dashboard was made before this campaign ended, so it doesn't include all the days. Discount ROI is <strong>suppressed</strong> to avoid a misleading number.</div>
+      <div style="margin-top:6px;color:#64748b;font-size:11px;line-height:1.6"><strong>Fix:</strong> re-export ${c.aggregator} orders covering ${fmtShort(a.effStart)}–${fmtShort(a.effEnd)} and upload it via the data strip on the Campaigns page. The mismatch will resolve on next render.</div>
+    </div>`:'';
     profitSection=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#f59e0b">💰 Profitability Analysis <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· real discount data + commission${a.coFundedPct>0?' + co-funding':''}</span></div>
       <div style="display:flex;align-items:stretch;gap:14px;flex-wrap:wrap;margin-bottom:14px;padding:12px 14px;background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.18);border-radius:8px">
         <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Total Discount Given</div><div style="font-size:22px;font-weight:800;color:#EF4444;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.campDisc)}</div>${a.coFundedPct>0?`<div style="font-size:10px;color:#94a3b8;margin-top:2px"><strong style="color:#0F172A">${c.brand}'s share:</strong> ${fmtAED(a.ourDiscCost)}</div>`:''}</div>
@@ -6508,6 +6547,7 @@ function campDetailHTML(c,idx){
         <div style="flex:1;min-width:150px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Actual Discount Depth</div><div style="font-size:22px;font-weight:800;color:#FBBF24;font-variant-numeric:tabular-nums;line-height:1.2">${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'%':'—'}</div><div style="font-size:10px;color:#64748b;margin-top:2px">of net sales went back as discount</div></div>
       </div>
       ${cfBanner}
+      ${subsidyBanner}
       ${(()=>{const m=(c.comments||'').match(/(\d{1,2})\s*%/);if(m&&a.discPctOfSales!=null){const headline=parseInt(m[1]);if(a.discPctOfSales<headline-3)return `<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(34,197,94,.06);border-left:3px solid #22C55E;border-radius:4px">ℹ️ The headline offer is <strong>${headline}% off</strong>, but because it only applies to selected items (not every order), the <strong>actual blended discount was just ${a.discPctOfSales.toFixed(1)}% of net sales</strong> — far less costly than ${headline}% on everything. This is the real figure used in the profitability math below.</div>`;}return '';})()}
       <div class="g4">
         ${kpiCard(a.coFundedPct>0?`${c.brand}'s Discount Cost`:'Discount Given',fmtAED(a.ourDiscCost),`AED ${Math.round(a.ourDiscPerDay)}/day · ${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'% of sales':'—'}${a.coFundedPct>0?` · after ${Math.round(a.coFundedPct*100)}% co-fund`:''}`,null)}
