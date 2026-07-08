@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-054";
+const BUILD_VERSION="2026-07-06-056";
 const BUILD_NOTES=[
-  "💸 New Discount Burn Analysis page (top nav, between Campaigns and KPI Tracker). Filter by aggregator × brand × region × date range and see: total discount burn, portion attributed to tracked campaigns, uncategorized/ambient burn (Talabat Pro vouchers, first-order codes, etc.), aggregator co-funding, and a per-campaign breakdown table. Daily burn trend chart included. Loyalty programs are segregated so their unusual ROI doesn't distort attribution."
+  "📅 Campaigns page data strip now shows the date range covered by each aggregator's uploaded data (e.g. \"Deliveroo · 1-28 Jun\") instead of just \"2d ago\". Upload freshness is still visible via the coloured dot (green/amber/red) and full details in the hover tooltip. Now you can tell at a glance which dates you've already ingested and when to upload the next batch."
 ];
 
 let _updateDialogShown=false;
@@ -712,22 +712,44 @@ function campDataFreshnessStrip(){
     const d=Math.floor(h/24);
     return d===1?"1d ago":`${d}d ago`;
   };
+  // Compact date range formatter. Same-month: "3-28 Jun". Different months: "28 May-5 Jul".
+  // Different years: "28 Dec 2025-5 Jan 2026" (rare). Returns empty string if range is invalid.
+  const fmtRange=(dr)=>{
+    if(!dr||!dr[0]||!dr[1])return "";
+    const s=new Date(dr[0]+"T12:00:00"),e=new Date(dr[1]+"T12:00:00");
+    const sameYear=s.getFullYear()===e.getFullYear();
+    const sameMonth=sameYear&&s.getMonth()===e.getMonth();
+    const opts={day:"numeric",month:"short"};
+    if(sameMonth){
+      const month=e.toLocaleDateString("en-AE",{month:"short"});
+      return `${s.getDate()}-${e.getDate()} ${month}`;
+    }
+    if(sameYear){
+      return `${s.toLocaleDateString("en-AE",opts)}-${e.toLocaleDateString("en-AE",opts)}`;
+    }
+    return `${s.toLocaleDateString("en-AE",{...opts,year:"numeric"})}-${e.toLocaleDateString("en-AE",{...opts,year:"numeric"})}`;
+  };
   const chip=(label,logoKey,data,handler,placeholder)=>{
     const md=data&&data.metadata?data.metadata:null;
     const uploadDate=md?md.uploadDate:null;
+    const dateRange=md?md.date_range:null;
     const hoursOld=uploadDate?(Date.now()-new Date(uploadDate).getTime())/3600000:null;
-    let dotClr='#94a3b8', ageClr='#94a3b8', title='Click to upload';
+    let dotClr='#94a3b8', title='Click to upload';
     if(placeholder){dotClr='#94a3b8';title='Parser coming soon';}
     else if(!uploadDate){dotClr='#F59E0B';title='Never uploaded — click to add data';}
-    else if(hoursOld>VERY_STALE_HOURS){dotClr='#EF4444';ageClr='#EF4444';title=`Very stale (${Math.round(hoursOld)}h old). Click to upload fresh data.`;}
-    else if(hoursOld>STALE_HOURS){dotClr='#F59E0B';ageClr='#F59E0B';title=`Stale (${Math.round(hoursOld)}h old). Click to upload fresh data.`;}
-    else{dotClr='#22C55E';title=`Fresh (${Math.round(hoursOld)}h old). Click to upload additional data.`;}
+    else if(hoursOld>VERY_STALE_HOURS){dotClr='#EF4444';title=`Very stale — ${fmtAgo(uploadDate)}. Data covers ${dateRange?dateRange[0]+' → '+dateRange[1]:'?'}. Click to upload fresh export.`;}
+    else if(hoursOld>STALE_HOURS){dotClr='#F59E0B';title=`Stale — ${fmtAgo(uploadDate)}. Data covers ${dateRange?dateRange[0]+' → '+dateRange[1]:'?'}. Click to upload fresh export.`;}
+    else{dotClr='#22C55E';title=`Fresh — ${fmtAgo(uploadDate)}. Data covers ${dateRange?dateRange[0]+' → '+dateRange[1]:'?'}. Click to add more.`;}
+    // Secondary text: date range if data uploaded, else "not uploaded" hint.
+    // Showing the covered range (e.g. "1-28 Jun") lets the user see at a glance which dates
+    // they've already ingested, so they know to upload from 29 Jun forward without overlapping.
+    const secondaryText=placeholder?'coming soon':(dateRange&&dateRange[0]?fmtRange(dateRange):'not uploaded');
     const onclick=placeholder?`alert('${label} parser coming soon.')`:handler;
-    return `<div onclick="${onclick}" title="${title}" style="display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid #E2E8F0;border-radius:8px;background:#FFFFFF;cursor:pointer;transition:all .12s;font-size:11px" onmouseover="this.style.borderColor='${dotClr}';this.style.transform='translateY(-1px)'" onmouseout="this.style.borderColor='#E2E8F0';this.style.transform='none'">
+    return `<div onclick="${onclick}" title="${title}" style="display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid #EDE7D9;border-radius:8px;background:#FEFDFA;cursor:pointer;transition:all .12s;font-size:11px" onmouseover="this.style.borderColor='${dotClr}';this.style.transform='translateY(-1px)'" onmouseout="this.style.borderColor='#EDE7D9';this.style.transform='none'">
       <span style="width:8px;height:8px;border-radius:50%;background:${dotClr};box-shadow:0 0 0 2px ${dotClr}22;flex-shrink:0"></span>
       <span style="height:16px;display:inline-flex;align-items:center">${logoImg(logoKey,16)}</span>
       <span style="font-weight:700;color:#0F172A">${label}</span>
-      <span style="color:${ageClr};font-weight:600;font-size:10px">${fmtAgo(uploadDate)}</span>
+      <span style="color:#64748b;font-weight:600;font-size:10px">${secondaryText}</span>
     </div>`;
   };
   const chips=[
@@ -2494,7 +2516,7 @@ function ddHTML(id,label,activeSet,items,type){
 // ANALYTICS
 const sumR=recs=>recs.reduce((a,r)=>({sales:a.sales+r.sales,orders:a.orders+r.orders,disc:a.disc+(r.disc||0)}),{sales:0,orders:0,disc:0});
 function mkMap(recs,kFn){const m={};recs.forEach(r=>{const k=kFn(r);if(!m[k])m[k]={k,...r,sales:0,orders:0};m[k].sales+=r.sales;m[k].orders+=r.orders;});return m;}
-function trend30(filterFn,start,end){const s=start||subDays(latest,30),e=end||latest;const m={};allData.filter(r=>filterFn(r)&&r.date>=s&&r.date<=e).forEach(r=>{if(!m[r.date])m[r.date]={d:r.date.slice(5),s:0,o:0};m[r.date].s+=r.sales;m[r.date].o+=r.orders;});return Object.values(m).sort((a,b)=>a.d.localeCompare(b.d));}
+function trend30(filterFn,start,end){const s=start||subDays(latest,30),e=end||latest;const m={};allData.filter(r=>filterFn(r)&&r.date>=s&&r.date<=e).forEach(r=>{if(!m[r.date])m[r.date]={d:r.date.slice(5),date:r.date,s:0,o:0};m[r.date].s+=r.sales;m[r.date].o+=r.orders;});return Object.values(m).sort((a,b)=>a.d.localeCompare(b.d));}
 
 // RENDER HELPERS
 function kpiCard(label,value,sub,chg,onclick,perDay){const hasChg=typeof chg==="number"&&!isNaN(chg);const cc=hasChg?pctClr(chg):"#64748b";const click=onclick?`onclick="${onclick}" style="cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='#E2E8F0'"`:"";let pdLine="";if(perDay){const pc=typeof perDay.chg==="number"&&!isNaN(perDay.chg)?pctClr(perDay.chg):"#64748b";pdLine=`<div style="margin-top:7px;padding-top:6px;border-top:1px solid rgba(15,23,42,.6)"><div style="font-size:8px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.7px">Avg / day</div><div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;margin-top:1px"><span style="font-size:14px;font-weight:800;font-variant-numeric:tabular-nums">${perDay.cur}</span>${perDay.prev?`<span style="font-size:10px;color:#64748b">${perDay.prevLabel||"prev"}: ${perDay.prev}</span>`:""}${typeof perDay.chg==="number"&&!isNaN(perDay.chg)?`<span style="font-size:10px;color:${pc};font-weight:700">${fmtPct(perDay.chg)}</span>`:""}</div></div>`;}return`<div class="sm" ${click}><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">${label}${onclick?' <span style=\"color:#f59e0b\">&#9656;</span>':''}</div><div style="font-size:21px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1">${value}</div>${sub?`<div style="font-size:11px;color:#475569;font-weight:600;margin-top:3px">${sub}</div>`:""}${hasChg?`<div style="font-size:11px;color:${cc};font-weight:700;margin-top:3px">${fmtPct(chg)}</div>`:""}${pdLine}</div>`;}
@@ -2543,7 +2565,18 @@ function mkTable(heads,rows){return`<div style="overflow-x:auto"><table class="t
 
 // CHARTS — tooltips show the exact date + value on hover
 function destroyChart(id){if(charts[id]){charts[id].destroy();delete charts[id];}}
-function trendChart(id,data,color){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);charts[id]=new Chart(ctx,{type:"line",data:{labels:data.map(d=>d.d),datasets:[{data:data.map(d=>d.s),borderColor:color,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false,label:"Net Sales"}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:false},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{title:t=>t[0].label,label:c=>{const o=data[c.dataIndex]?.o;return [`AED ${Math.round(c.raw).toLocaleString()} Net Sales`,o!=null?`${Math.round(o).toLocaleString()} orders`:""].filter(Boolean);}}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"#F1F5F9"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#F1F5F9"},border:{display:false}}}}});}
+function trendChart(id,data,color){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);
+  // Multi-line x-axis labels: ["07-02","Thu"] renders MM-DD on top and day-of-week below. Falls back to
+  // single-line labels for callers that don't pass a full ISO date (e.g. campaign detail trend graphs).
+  const DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const buildLabel=d=>{
+    if(d.date){
+      const dt=new Date(d.date+"T12:00:00");
+      return [d.d,DOW[dt.getDay()]];
+    }
+    return d.d;
+  };
+  charts[id]=new Chart(ctx,{type:"line",data:{labels:data.map(buildLabel),datasets:[{data:data.map(d=>d.s),borderColor:color,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false,label:"Net Sales"}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:false},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{title:t=>Array.isArray(t[0].label)?t[0].label.join(" · "):t[0].label,label:c=>{const o=data[c.dataIndex]?.o;return [`AED ${Math.round(c.raw).toLocaleString()} Net Sales`,o!=null?`${Math.round(o).toLocaleString()} orders`:""].filter(Boolean);}}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"#F1F5F9"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#F1F5F9"},border:{display:false}}}}});}
 function barChart(id,labels,values,colors,extra,mode){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);const idx=[...Array(labels.length).keys()].sort((a,b)=>values[b]-values[a]);const sl=idx.map(i=>labels[i]),sv=idx.map(i=>values[i]),sc=idx.map(i=>colors[i]),se=extra?idx.map(i=>extra[i]):null;
   const showOrdersOnTop=mode==="salesWithOrdersOnTop";
   // Custom plugin to render order counts on top of each bar
@@ -6927,6 +6960,26 @@ function computeDiscountBurn(){
     }catch(e){/* skip malformed campaigns */}
   });
   campaignBreakdown.sort((a,b)=>b.burnInWindow-a.burnInWindow);
+  // Ambient platform-funded amount from EXACT upload data. Talabat is currently the only
+  // aggregator whose per-order data separates the platform's contribution (talabat_disc) from
+  // the merchant's (menu_disc). This picks up co-funding that WASN'T declared in the sheet —
+  // Talabat Pro vouchers, ambient promos, or actual campaign co-funding the user forgot to log.
+  // We surface this alongside the declared co-fund so nothing is invisibly missed.
+  let ambientPlatformFund=0;
+  const includeTalabat=aggregators.length===0||aggSet.has("Talabat");
+  if(includeTalabat&&talabatOrdersData&&talabatOrdersData.records){
+    for(const rec of talabatOrdersData.records){
+      if(rec.date<dateStart||rec.date>dateEnd)continue;
+      if(brands.length>0&&!brandSet.has(rec.brand))continue;
+      if(branch==="DXB"){if(AUH_OUTLETS.has(rec.outlet))continue;}
+      else if(branch==="AUH"){if(!AUH_OUTLETS.has(rec.outlet))continue;}
+      else if(branch!=="All"&&rec.outlet!==branch)continue;
+      ambientPlatformFund+=(rec.talabat_disc||0);
+    }
+  }
+  // "Aggregator Co-Fund" is now the max of (declared co-fund from sheet, exact ambient platform-funded amount).
+  // We report both so users can see what's declared vs what actually happened.
+  const totalCoFund=Math.max(coFundTotal,ambientPlatformFund);
   // Daily burn series for the trend chart
   const dailyBurn={};
   matches.forEach(r=>{dailyBurn[r.date]=(dailyBurn[r.date]||0)+(r.disc||0);});
@@ -6940,6 +6993,9 @@ function computeDiscountBurn(){
     totalBurn:totals.disc,totalSales:totals.sales,totalOrders:totals.orders,
     grossSales:totals.sales+totals.disc, // gross = net + discount (customer-facing revenue before discount)
     attributedBurn,coFundTotal,
+    coFundDeclared:coFundTotal,
+    coFundAmbient:ambientPlatformFund,
+    coFundTotalDisplay:totalCoFund,
     uncategorizedBurn:Math.max(0,totals.disc-attributedBurn-coFundTotal),
     activeCampaignCount:overlapping.length,
     campaignBreakdown,trend,matchesCount:matches.length
@@ -7011,7 +7067,7 @@ function discountKpiRowHTML(d){
     ${tile('💸','Total Discount Burn',fmt(d.totalBurn),`${depth.toFixed(1)}% of gross · ${fmt(dailyBurn)}/day avg`,'#EF4444')}
     ${tile('🎯','Attributed to Campaigns',fmt(d.attributedBurn)+pctOf(d.attributedBurn,d.totalBurn),`${d.activeCampaignCount} campaign${d.activeCampaignCount===1?'':'s'} ran in this window`,'#22C55E')}
     ${tile('❓','Uncategorized Burn',fmt(d.uncategorizedBurn)+pctOf(d.uncategorizedBurn,d.totalBurn),'ambient discounts not tied to a tracked campaign','#F59E0B')}
-    ${tile('🤝','Aggregator Co-Fund',fmt(d.coFundTotal),d.coFundTotal>0?'from declared co-funded campaigns':'no declared co-funded campaigns in window','#3B82F6')}
+    ${tile('🤝','Aggregator Co-Fund',fmt(d.coFundTotalDisplay),d.coFundAmbient>d.coFundDeclared?`AED ${Math.round(d.coFundAmbient).toLocaleString()} platform-funded on Talabat orders (from exact upload) · AED ${Math.round(d.coFundDeclared).toLocaleString()} declared in sheet`:(d.coFundDeclared>0?'from declared co-funded campaigns':'no declared co-funding · no exact platform data available'),'#3B82F6')}
     ${tile('📆','Days in Window',d.daysInWindow,`${fmtDisp(d.dateStart)} → ${fmtDisp(d.dateEnd)}`,'#8B5CF6')}
   </div>`;
 }
@@ -7061,6 +7117,56 @@ function discountCampaignTableHTML(d){
   return html;
 }
 
+// CSV export of current Discount Burn view. Downloads a file with the summary metrics
+// and the full campaign breakdown table. Values are already in the report — we just
+// serialize what the user sees.
+function discountExportCSV(){
+  const d=computeDiscountBurn();
+  if(!d){alert("Please select a valid date range first.");return;}
+  const{aggregators,brands,branch}=discountFilters;
+  const esc=v=>{
+    const s=String(v==null?'':v);
+    return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;
+  };
+  const rows=[];
+  rows.push(["Discount Burn Analysis — Oregano Group"]);
+  rows.push(["Generated",new Date().toLocaleString("en-AE",{dateStyle:"medium",timeStyle:"short"})]);
+  rows.push(["Date Range",`${d.dateStart} to ${d.dateEnd} (${d.daysInWindow} days)`]);
+  rows.push(["Aggregators",aggregators.length?aggregators.join(", "):"All"]);
+  rows.push(["Brands",brands.length?brands.join(", "):"All"]);
+  rows.push(["Region",branch]);
+  rows.push([]);
+  rows.push(["SUMMARY"]);
+  rows.push(["Metric","AED","Notes"]);
+  rows.push(["Total Discount Burn",Math.round(d.totalBurn),`${d.grossSales>0?(d.totalBurn/d.grossSales*100).toFixed(1):0}% of gross · ${Math.round(d.totalBurn/Math.max(1,d.daysInWindow))}/day avg`]);
+  rows.push(["Attributed to Campaigns",Math.round(d.attributedBurn),`${d.activeCampaignCount} campaigns ran in this window`]);
+  rows.push(["Uncategorized / Ambient Burn",Math.round(d.uncategorizedBurn),"discounts not tied to a tracked campaign"]);
+  rows.push(["Aggregator Co-Fund (displayed)",Math.round(d.coFundTotalDisplay),"maximum of declared vs ambient (below)"]);
+  rows.push(["  — Declared in sheet",Math.round(d.coFundDeclared),"from campaigns with co-funding % in comment"]);
+  rows.push(["  — Ambient from exact data",Math.round(d.coFundAmbient),"Talabat-Funded Voucher amounts on all orders in window"]);
+  rows.push(["Total Gross Sales",Math.round(d.grossSales),"net + discount"]);
+  rows.push(["Total Net Sales",Math.round(d.totalSales),""]);
+  rows.push(["Total Orders",d.totalOrders,""]);
+  rows.push([]);
+  rows.push(["CAMPAIGN BREAKDOWN"]);
+  rows.push(["Campaign","Brand","Aggregator","Window Start","Window End","Days in Window","Burn in Window (AED)","Co-Fund in Window (AED)","Co-Fund %","Data Source","Depth of Gross (%)","Loyalty Program"]);
+  d.campaignBreakdown.forEach(x=>{
+    const c=x.campaign;
+    const depth=d.grossSales>0?(x.burnInWindow/d.grossSales*100).toFixed(2):"0";
+    rows.push([c.name||"(untitled)",c.brand,c.aggregator,x.cStart,x.cEnd,x.days,Math.round(x.burnInWindow),Math.round(x.coFundInWindow),x.coFundPct||0,x.source,depth,x.isRewards?"Yes":"No"]);
+  });
+  const csv=rows.map(r=>r.map(esc).join(",")).join("\n");
+  const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  const dateTag=new Date().toISOString().slice(0,10);
+  const filterTag=aggregators.length===1?"-"+aggregators[0]:brands.length===1?"-"+brands[0]:"";
+  a.download=`discount-burn-${d.dateStart}_to_${d.dateEnd}${filterTag}.csv`;
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
 async function renderDiscounts(){
   const pg=document.getElementById("page-discounts");
   if(!pg)return;
@@ -7069,7 +7175,12 @@ async function renderDiscounts(){
     await loadCampaigns();
     return renderDiscounts();
   }
-  const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(15,23,42,.12)"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">💸</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Discount Burn Analysis</div></div><div style="font-size:10px;color:#64748b;margin-top:2px;letter-spacing:.4px">Total burn · Campaign attribution · Ambient discount tracking</div></div></div>`;
+  // CRITICAL: normalize dates BEFORE rendering the filter bar. Otherwise the date inputs
+  // read stale dateStart/dateEnd (from a previous preset or custom range) while the KPI
+  // cards below show the newly-computed range — user sees a mismatch and it looks like
+  // filters aren't working.
+  discountEnsureDates();
+  const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(15,23,42,.12)"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">💸</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Discount Burn Analysis</div></div><div style="font-size:10px;color:#64748b;margin-top:2px;letter-spacing:.4px">Total burn · Campaign attribution · Ambient discount tracking</div></div><button onclick="discountExportCSV()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:5px">⬇ Download CSV</button></div>`;
   const filterBar=discountFilterBarHTML();
   const data=computeDiscountBurn();
   if(!data){
