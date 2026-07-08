@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-059";
+const BUILD_VERSION="2026-07-06-060";
 const BUILD_NOTES=[
-  "🧮 Fixed co-fund math on the Discount Burn Analysis + campaign detail views. Aggregator statements (Careem/Keeta/Deliveroo/Noon) only show the MERCHANT-funded portion of a discount — the platform's co-fund share is settled off-statement (e.g. Deliveroo BOGO 35% co-fund invoiced separately). Previous code assumed the merchant portion was the total customer discount, mis-attributing shares. Now: whenever a campaign declares a co-fund % in the sheet comment (like \"50:50 co-funded\" or \"BOGO 35% co-funded\"), the platform's share is inferred from `merchant × pct / (1 − pct)`. Campaign detail's co-fund banner + breakdown table + Total Discount Given card now correctly show: merchant portion (from statement) + inferred aggregator portion (invoiced separately) = total customer discount. Discount Burn Analysis \"Aggregator Co-Fund\" tile is now the sum of (all campaigns' inferred co-funds) + (Talabat ambient talabat_disc)."
+  "🐛 Fixed silent bug in Discount Burn Analysis: parseCampComment was being called with a string (c.comments) instead of the campaign object (c). Because that function reads `.comments` off its argument, passing a string meant it always saw undefined → empty result → zero co-fund inferred, no matter what the sheet said. That's why after v059 the Aggregator Co-Fund tile still only reflected Talabat's ambient talabat_disc column — every Careem, Keeta, Deliveroo, Noon co-funded campaign silently returned AED 0. Bug was present since v054 (initial page build). Now all sheet-declared co-fund %s flow correctly into the inferred aggregator co-fund sum."
 ];
 
 let _updateDialogShown=false;
@@ -7008,7 +7008,12 @@ function computeDiscountBurn(){
       // = AED 30. For Deliveroo BOGO with pct=0.35: agg = merchant × 0.35/0.65 = merchant × 0.538.
       // Previous formula (pre-v059) was `merchant × pct / 100` which was wrong twice: (1) treated
       // the 0-1 pct as if it were 0-100, and (2) used the wrong ratio structure entirely.
-      const parsed=parseCampComment(c.comments||"");
+      // parseCampComment expects the campaign OBJECT (it reads c.comments internally + needs
+      // c.brand for branch resolution). Passing c.comments as a string here made it read
+      // ("").comments → undefined → empty result → coFundedPct always 0 for every campaign in
+      // the Discount Burn tile. Bug present since v054 — silently zeroed every Careem/Keeta/
+      // Deliveroo/Noon inferred co-fund. The v059 math fix was correct; the input just wasn't.
+      const parsed=parseCampComment(c);
       const declaredCoFundPct=parsed.coFundedPctOfDiscount||0; // 0-1 fraction, platform's share
       const coFundInWindow=declaredCoFundPct>0&&declaredCoFundPct<1
         ? (burnInWindow*declaredCoFundPct/(1-declaredCoFundPct))
