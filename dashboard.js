@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-060";
+const BUILD_VERSION="2026-07-06-061";
 const BUILD_NOTES=[
-  "🐛 Fixed silent bug in Discount Burn Analysis: parseCampComment was being called with a string (c.comments) instead of the campaign object (c). Because that function reads `.comments` off its argument, passing a string meant it always saw undefined → empty result → zero co-fund inferred, no matter what the sheet said. That's why after v059 the Aggregator Co-Fund tile still only reflected Talabat's ambient talabat_disc column — every Careem, Keeta, Deliveroo, Noon co-funded campaign silently returned AED 0. Bug was present since v054 (initial page build). Now all sheet-declared co-fund %s flow correctly into the inferred aggregator co-fund sum."
+  "🔍 New Co-Fund Audit table on the Discount Burn Analysis page — shows every co-funded campaign grouped by aggregator, with declared %, merchant portion (from statement), inferred aggregator share, and total customer discount. Aggregator subtotals + Talabat ambient line + grand total that matches the Aggregator Co-Fund tile. Use it to cross-check the derived numbers against your aggregator co-fund invoices."
 ];
 
 let _updateDialogShown=false;
@@ -7249,6 +7249,114 @@ function discountExportCSV(){
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
+// Co-Fund Audit table for the Discount Burn Analysis page. Purpose: transparency.
+// The "Aggregator Co-Fund" tile is a derived number (inferred from declared % + Talabat ambient).
+// This table lists every campaign that contributed, grouped by aggregator, with running
+// subtotals so the user can cross-check that the pieces add up to the tile total. Includes:
+//   - Campaign name + brand
+//   - Overlap window (dates + days)
+//   - Merchant burn from statement
+//   - Declared co-fund % (from sheet comment)
+//   - Inferred aggregator share (merchant × pct / (1 − pct))
+//   - Total customer discount (merchant + agg)
+// Talabat ambient (from talabat_disc column, if any) is shown as a separate line at bottom.
+function discountCoFundAuditTableHTML(d){
+  const fmt=n=>`AED ${Math.round(n||0).toLocaleString()}`;
+  const coFunded=d.campaignBreakdown.filter(x=>x.coFundInWindow>0);
+  const hasCoFunded=coFunded.length>0;
+  const hasAmbient=(d.coFundAmbient||0)>0;
+  if(!hasCoFunded&&!hasAmbient){
+    return `<div class="card" style="padding:14px 16px;margin-bottom:14px">
+      <div class="ct" style="margin-bottom:6px">🔍 Co-Fund Audit</div>
+      <div style="font-size:11px;color:#94a3b8">No co-funded campaigns detected in this window and no ambient platform-funded amounts in exact uploads. If you expected co-fund here, check that the campaign comment in the sheet uses one of the recognised phrasings: "50-50 co-funded" / "50:50 co-funded" / "35% co-funded" / "co-funded 60-40".</div>
+    </div>`;
+  }
+  // Group by aggregator
+  const byAgg={};
+  coFunded.forEach(x=>{
+    const a=x.campaign.aggregator||"Other";
+    if(!byAgg[a])byAgg[a]={items:[],subtotalMerchant:0,subtotalCoFund:0};
+    byAgg[a].items.push(x);
+    byAgg[a].subtotalMerchant+=x.merchantBurn;
+    byAgg[a].subtotalCoFund+=x.coFundInWindow;
+  });
+  const AGG_CLR={Deliveroo:'#00CCBC',Talabat:'#EF4136',Careem:'#00A651',Noon:'#FEEE00',Keeta:'#FFC72C'};
+  const aggRow=(agg,group)=>{
+    const clr=AGG_CLR[agg]||'#94a3b8';
+    const rows=group.items.map(x=>{
+      const c=x.campaign,idx=campaignData.indexOf(c);
+      const b=BMAP[c.brand]?.c||'#94a3b8';
+      const totalCustDisc=x.merchantBurn+x.coFundInWindow;
+      // Truncate long campaign names for the audit view
+      const cName=(c.name||'(untitled)').length>52?(c.name||'').slice(0,50)+'…':(c.name||'(untitled)');
+      return `<tr onclick="discountOpenCampaign(${idx})" style="cursor:pointer;border-bottom:1px solid #F5F0E5" onmouseover="this.style.background='rgba(148,163,184,.05)'" onmouseout="this.style.background=''">
+        <td style="padding:7px 8px 7px 22px;font-size:11px" title="${(c.name||'').replace(/"/g,'&quot;')}">${cName}</td>
+        <td style="padding:7px 8px;font-size:10px;color:#64748b"><span style="width:7px;height:7px;background:${b};border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle"></span>${c.brand}</td>
+        <td style="padding:7px 8px;font-size:10px;color:#64748b;white-space:nowrap">${fmtShort(x.cStart)}–${fmtShort(x.cEnd)}<div style="font-size:9px;color:#94a3b8">${x.days}d</div></td>
+        <td style="padding:7px 8px;text-align:right;font-size:11px;color:#0F172A;font-weight:600">${fmt(x.merchantBurn)}</td>
+        <td style="padding:7px 8px;text-align:center;font-size:10px;color:#64748b">${Math.round(x.coFundPct)}%</td>
+        <td style="padding:7px 8px;text-align:right;font-size:11px;color:#3B82F6;font-weight:800">${fmt(x.coFundInWindow)}</td>
+        <td style="padding:7px 8px;text-align:right;font-size:10px;color:#64748b">${fmt(totalCustDisc)}</td>
+      </tr>`;
+    }).join('');
+    const subtotalTotal=group.subtotalMerchant+group.subtotalCoFund;
+    return `<tr style="background:${clr}12;border-top:2px solid ${clr}88;border-bottom:1px solid ${clr}44">
+      <td colspan="7" style="padding:8px 12px;font-size:11px;font-weight:800;color:${clr};text-transform:uppercase;letter-spacing:.6px">${agg}</td>
+    </tr>
+    ${rows}
+    <tr style="background:${clr}08;border-bottom:2px solid ${clr}44">
+      <td colspan="3" style="padding:8px 12px;font-size:10px;font-weight:700;color:#64748b;text-align:right">Subtotal · ${agg} (${group.items.length} campaign${group.items.length===1?'':'s'})</td>
+      <td style="padding:8px 8px;text-align:right;font-size:11px;color:#0F172A;font-weight:800">${fmt(group.subtotalMerchant)}</td>
+      <td></td>
+      <td style="padding:8px 8px;text-align:right;font-size:12px;color:#3B82F6;font-weight:800">${fmt(group.subtotalCoFund)}</td>
+      <td style="padding:8px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700">${fmt(subtotalTotal)}</td>
+    </tr>`;
+  };
+  const aggregatorOrder=["Deliveroo","Talabat","Careem","Noon","Keeta"].filter(a=>byAgg[a]);
+  Object.keys(byAgg).forEach(a=>{if(!aggregatorOrder.includes(a))aggregatorOrder.push(a);});
+  const head=`<thead><tr style="background:#F5F0E5;border-bottom:2px solid #EDE7D9">
+    <th style="text-align:left;padding:8px 8px 8px 22px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Campaign</th>
+    <th style="text-align:left;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Brand</th>
+    <th style="text-align:left;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Window</th>
+    <th style="text-align:right;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Merchant portion — from aggregator statement">Merchant</th>
+    <th style="text-align:center;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Platform's declared share of the customer-facing discount">CF %</th>
+    <th style="text-align:right;padding:8px;font-size:10px;color:#3B82F6;font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Inferred: merchant × pct / (1 − pct)">Agg Co-Fund</th>
+    <th style="text-align:right;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Merchant + Agg Co-Fund">Total to Customer</th>
+  </tr></thead>`;
+  // Ambient Talabat row + grand total footer
+  let ambientRow='';
+  if(hasAmbient){
+    ambientRow=`<tr style="background:rgba(239,65,54,.08);border-top:2px solid rgba(239,65,54,.5)">
+      <td colspan="5" style="padding:8px 12px;font-size:11px;color:#64748b"><strong style="color:#EF4136">🍔 Talabat ambient</strong> — from <code style="font-size:10px">talabat_disc</code> column (Talabat Pro vouchers, first-order codes, ambient promos not tied to a tracked campaign)</td>
+      <td style="padding:8px 8px;text-align:right;font-size:12px;color:#3B82F6;font-weight:800">${fmt(d.coFundAmbient)}</td>
+      <td></td>
+    </tr>`;
+  }
+  const grand=d.coFundTotalDisplay||0;
+  const grandRow=`<tr style="background:linear-gradient(90deg,rgba(59,130,246,.15),rgba(59,130,246,.05));border-top:3px solid #3B82F6">
+    <td colspan="5" style="padding:11px 12px;font-size:12px;color:#0F172A;font-weight:800;text-transform:uppercase;letter-spacing:.8px">Grand Total · Aggregator Co-Fund</td>
+    <td style="padding:11px 8px;text-align:right;font-size:16px;color:#3B82F6;font-weight:800">${fmt(grand)}</td>
+    <td style="padding:11px 8px;text-align:right;font-size:10px;color:#94a3b8">← should match tile above</td>
+  </tr>`;
+  return `<div class="card" style="padding:14px 16px;margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div class="ct" style="margin-bottom:0">🔍 Co-Fund Audit — inferred aggregator contributions by campaign</div>
+      <div style="font-size:10px;color:#94a3b8">Click any row to open the campaign</div>
+    </div>
+    <div style="font-size:11px;color:#64748b;line-height:1.5;margin-bottom:12px;padding:8px 10px;background:rgba(59,130,246,.06);border-left:3px solid #3B82F6;border-radius:4px">
+      For each co-funded campaign, the platform's contribution isn't in your statement — we infer it as <code style="color:#0F172A">merchant × pct / (1 − pct)</code>. Example: on a 50:50 co-fund campaign where the statement shows AED 15 in merchant discount, the platform's share is AED 15 too, so the customer saw AED 30 off. Verify against your aggregator co-fund invoices.
+    </div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      ${head}
+      <tbody>
+        ${aggregatorOrder.map(a=>aggRow(a,byAgg[a])).join('')}
+        ${ambientRow}
+        ${grandRow}
+      </tbody>
+    </table></div>
+  </div>`;
+}
+
 async function renderDiscounts(){
   const pg=document.getElementById("page-discounts");
   if(!pg)return;
@@ -7273,7 +7381,7 @@ async function renderDiscounts(){
     pg.innerHTML=`${header}${filterBar}<div class="card" style="text-align:center;padding:30px;color:#64748b">No sales data matches these filters. Try widening the aggregator/brand/region selection or picking a different date range.</div>`;
     return;
   }
-  pg.innerHTML=`${header}${filterBar}${discountKpiRowHTML(data)}${discountTrendChartHTML(data)}${discountCampaignTableHTML(data)}`;
+  pg.innerHTML=`${header}${filterBar}${discountKpiRowHTML(data)}${discountTrendChartHTML(data)}${discountCoFundAuditTableHTML(data)}${discountCampaignTableHTML(data)}`;
   // Render trend chart after DOM is in place
   if(data.trend&&data.trend.length>0){
     setTimeout(()=>{
