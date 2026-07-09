@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-064";
+const BUILD_VERSION="2026-07-06-065";
 const BUILD_NOTES=[
-  "🎯 Tightened the Keeta unmapped-items warning further. Previously flagged any unmatched item in an order with merchant discount + no residual campaign — but that meant Garlic Bread sitting in an Alfredo cart got flagged even though Garlic Bread wasn't actually discounted. Now the flag only fires when the matched item rules can't fully account for the discount (leftover > AED 2), meaning something ELSE in the cart was genuinely discounted and the culprit is likely among the unmatched items. Should now only surface items that are actually causing attribution problems, not innocent bystanders in mixed carts."
+  "🍔 Fixed Talabat CSV upload silently failing. The parser was written for the OLD two-header-row XLSX format (row 0 = category groups, row 1 = column names). Talabat's newer CSV export uses a single header row at row 0, so my code was treating the first order as if it were the header → \"missing columns\" error → upload rejected. Alert may have shown briefly but was easy to miss. Now the parser auto-detects which format the file uses (checks whether row 0 or row 1 has \"Restaurant name\") and starts reading data from the right row. Talabat file picker now also accepts .csv extension."
 ];
 
 let _updateDialogShown=false;
@@ -839,7 +839,7 @@ function campDataFreshnessStrip(){
     chip("Keeta","Keeta",keetaOrdersData,"document.getElementById('orders-file-keeta').click()",false)
   ].join("");
   const inputs=`<input type="file" id="orders-file-deliveroo" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
-                <input type="file" id="orders-file-talabat" accept=".xlsx,.xls" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
+                <input type="file" id="orders-file-talabat" accept=".xlsx,.xls,.csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
                 <input type="file" id="orders-file-careem" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
                 <input type="file" id="orders-file-noon" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
                 <input type="file" id="orders-file-keeta" accept=".xlsx,.xls" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">`;
@@ -910,7 +910,7 @@ function keetaUploadBarHTML(){
     aggButton("Keeta","Keeta",keetaOrdersData,"clearKeetaData",false)
   ].join("");
   const inputs=`<input type="file" id="orders-file-deliveroo" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
-                <input type="file" id="orders-file-talabat" accept=".xlsx,.xls" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
+                <input type="file" id="orders-file-talabat" accept=".xlsx,.xls,.csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
                 <input type="file" id="orders-file-careem" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
                 <input type="file" id="orders-file-noon" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
                 <input type="file" id="orders-file-keeta" accept=".xlsx,.xls" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">`;
@@ -1411,23 +1411,32 @@ function parseTalabatDate(v){
   return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
 
-// Parse a Talabat orderDetails.xlsx into the same aggregated shape as the Python parser.
-// Two-row header: row 0 = category groups (Order Metadata, Operations, ...), row 1 = column
-// names (Restaurant name, Subtotal, Voucher Funded by you, ...). Data starts at row 2.
+// Parse a Talabat orderDetails export. Historically Talabat provided a two-row-header XLSX
+// (row 0 = category groups "Order Metadata / Operations / …", row 1 = column names). Their newer
+// CSV export has a SINGLE header row at row 0. We auto-detect which shape the file uses so both
+// work — otherwise a CSV upload silently fails at the "missing columns" check because row 1 is
+// the first order rather than the header.
 async function parseTalabatXlsx(file){
   await loadSheetJS();
   const ab=await file.arrayBuffer();
   const wb=XLSX.read(ab,{type:"array",raw:true,cellDates:false});
   const ws=wb.Sheets[wb.SheetNames[0]];
   const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
-  if(rows.length<3)throw new Error("File looks empty (<3 rows)");
-  const header=rows[1].map(h=>String(h).trim()); // level-2 column names
+  if(rows.length<2)throw new Error("File looks empty (<2 rows)");
+  // Header-row detection: whichever of rows[0]/rows[1] contains "Restaurant name" is the true header.
+  // Data rows start immediately after. Handles both formats without user intervention.
+  const row0=(rows[0]||[]).map(h=>String(h).replace(/^\uFEFF/,"").trim());
+  const row1=(rows[1]||[]).map(h=>String(h).replace(/^\uFEFF/,"").trim());
+  let header,dataStart;
+  if(row0.includes("Restaurant name")){header=row0;dataStart=1;}
+  else if(row1.includes("Restaurant name")){header=row1;dataStart=2;}
+  else throw new Error("Talabat parser: couldn't find 'Restaurant name' column in row 0 or row 1 — is this really a Talabat orderDetails export?");
   const colIdx={};header.forEach((h,i)=>{if(h)colIdx[h]=i;});
   const required=["Restaurant name","Order status","Order received at","Subtotal","Voucher Funded by you","Commission","Operational Charges","Payout Amount"];
   const missing=required.filter(c=>!(c in colIdx));
   if(missing.length)throw new Error("Talabat parser: missing columns — "+missing.join(", "));
 
-  const data=rows.slice(2);
+  const data=rows.slice(dataStart);
   const agg={}; // key "brand|outlet|date" → {orders,gross,net_payout,menu_disc,commission,ops_charges}
   const skipped={cancelled:0,no_brand:0,no_outlet:0,no_date:0};
   const unmappedOutlets={}; // raw name → count
