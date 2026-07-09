@@ -13,9 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-061";
+const BUILD_VERSION="2026-07-06-062";
 const BUILD_NOTES=[
-  "🔍 New Co-Fund Audit table on the Discount Burn Analysis page — shows every co-funded campaign grouped by aggregator, with declared %, merchant portion (from statement), inferred aggregator share, and total customer discount. Aggregator subtotals + Talabat ambient line + grand total that matches the Aggregator Co-Fund tile. Use it to cross-check the derived numbers against your aggregator co-fund invoices."
+  "🍜 Refactored Keeta item→campaign mapping to be brand-generic. Previously only Oregano had item-level attribution; other brands routed the full merchant discount to a single default campaign. Now all four Keeta brands (Oregano, Lollorosso, Smokeys, Wicked Wings) do proper item-level splitting, so orders with mixed campaigns (e.g. a Match Day combo + an incidental Sour Cream Dip) get their discount correctly split between the campaigns.",
+  "📅 Added July rotation to KEETA_ITEM_RULES for all four brands: Oregano's Alfredo (OFU Item Keeta), 4 selected items (25% OFF Select Items), Match Day Solo + Pizza Party (Keeta World Cup); Lollorosso's Grilled Chicken with Roasted Potato (OFU Item Keeta); Smokeys' Match Day Combo 1+2 (Keeta World Cup); Wicked Wings' Match Day Solo + Trio (Keeta World Cup). Residual (menu-wide) campaigns per brand also configured, including Smokeys' switch from CAP 20 to CAP 30 on Jul 8. Alfredo 60:40 co-fund inference should now populate the audit table correctly for July.",
+  "⚠️ New warning banner on Discount Burn page: surfaces Keeta items that appear in the upload but have no matching item rule (3+ occurrences). Helps catch renamed items or new campaigns that need a matching item rule. Grouped by brand. Once you re-upload your Keeta July file, any unrecognised items will list themselves here."
 ];
 
 let _updateDialogShown=false;
@@ -340,29 +342,75 @@ const KEETA_OUTLET_CODE={
 // Items are only matched on dates within their active range. Multi-promo-item orders split the
 // actual merchant discount in proportion to these weights. When monthly campaigns rotate, update
 // both this table AND parser.py's OREGANO_ITEMS to match.
-const KEETA_OREGANO_ITEMS={
-  "Alfredo Pasta":         {campaign:"Offers for You 50% OFF 1 Item",expected:15.30,startDate:"2026-06-12",endDate:"2026-06-30"},
-  "Milanese":              {campaign:"25% OFF Select Items",         expected:13.25,startDate:"2026-06-12",endDate:"2026-06-23"},
-  "Risotto Funghi":        {campaign:"25% OFF Select Items",         expected:14.25,startDate:"2026-06-12",endDate:"2026-06-23"},
-  "Tuscan Pasta":          {campaign:"25% OFF Select Items",         expected:15.25,startDate:"2026-06-12",endDate:"2026-06-23"},
-  "Pepperoni Pizza (R)":   {campaign:"25% OFF Select Items",         expected:12.75,startDate:"2026-06-12",endDate:"2026-06-23"},
-  "Match Day Pizza Party": {campaign:"25% OFF Select Items",         expected:89.00,startDate:"2026-06-12",endDate:"2026-06-23"},
-  "Match Day Solo Meal":   {campaign:"25% OFF Select Items",         expected:84.00,startDate:"2026-06-12",endDate:"2026-06-23"}
-};
-// "Residual" campaigns receive any merchant_disc not attributable to specific promo items on a given
-// date. Used when a broad menu-wide campaign (e.g. "30% OFF CAP 20" Keeta Week) runs on top of
-// item-specific promos. List multiple if rotating; the first matching date range wins.
-const KEETA_OREGANO_RESIDUAL_CAMPAIGNS=[
-  {campaign:"30% OFF CAP 20",startDate:"2026-06-24",endDate:"2026-06-30"}
+// ══ Keeta item→campaign mapping rules ══
+// Each rule attributes a specific menu item to a specific sheet-campaign for a given date range.
+// (brand, item, date) → campaign + expected merchant-disc per unit.
+// - Ordered by insertion; the first matching rule wins for a given (brand, item, date) tuple.
+// - Item name matches EXACT (case-insensitive) on the trimmed item string from Keeta's Items column.
+//   Item names sometimes duplicate across brands (e.g. "Match Day Solo Meal" exists on both Oregano
+//   and Wicked Wings menus), so the brand filter is critical.
+// - endDate=null means open-ended (rule applies from startDate onwards).
+// - Multiple rules for the same item name are allowed if dated distinctly (e.g. an item that was in
+//   different campaigns across rotations).
+const KEETA_ITEM_RULES=[
+  // ── Oregano · June rotation (Jun 12-30) ──
+  {brand:"Oregano",item:"Alfredo Pasta",         campaign:"Offers for You 50% OFF 1 Item",expected:15.30,startDate:"2026-06-12",endDate:"2026-06-30"},
+  {brand:"Oregano",item:"Milanese",              campaign:"25% OFF Select Items",         expected:13.25,startDate:"2026-06-12",endDate:"2026-06-23"},
+  {brand:"Oregano",item:"Risotto Funghi",        campaign:"25% OFF Select Items",         expected:14.25,startDate:"2026-06-12",endDate:"2026-06-23"},
+  {brand:"Oregano",item:"Tuscan Pasta",          campaign:"25% OFF Select Items",         expected:15.25,startDate:"2026-06-12",endDate:"2026-06-23"},
+  {brand:"Oregano",item:"Pepperoni Pizza (R)",   campaign:"25% OFF Select Items",         expected:12.75,startDate:"2026-06-12",endDate:"2026-06-23"},
+  {brand:"Oregano",item:"Match Day Pizza Party", campaign:"25% OFF Select Items",         expected:89.00,startDate:"2026-06-12",endDate:"2026-06-23"},
+  {brand:"Oregano",item:"Match Day Solo Meal",   campaign:"25% OFF Select Items",         expected:84.00,startDate:"2026-06-12",endDate:"2026-06-23"},
+  // ── Oregano · July rotation (Jul 1 →) ──
+  //   OFU Item Keeta            = single Alfredo, 60:40 co-funded by Keeta
+  //   25% OFF Select Items      = 4 select pastas / pepperoni pizza
+  //   Keeta World Cup           = 2 Match Day combos (Solo + Pizza Party)
+  {brand:"Oregano",item:"Alfredo Pasta",         campaign:"OFU Item Keeta",       expected:15.30,startDate:"2026-07-01",endDate:null},
+  {brand:"Oregano",item:"Milanese Pasta",        campaign:"25% OFF Select Items", expected:13.25,startDate:"2026-07-01",endDate:null},
+  {brand:"Oregano",item:"Bolognese Pasta",       campaign:"25% OFF Select Items", expected:13.75,startDate:"2026-07-01",endDate:null},
+  {brand:"Oregano",item:"Lasagna di Carne",      campaign:"25% OFF Select Items", expected:15.50,startDate:"2026-07-01",endDate:null},
+  {brand:"Oregano",item:"Pepperoni Pizza (R)",   campaign:"25% OFF Select Items", expected:12.75,startDate:"2026-07-01",endDate:null},
+  {brand:"Oregano",item:"Match Day Solo Meal",   campaign:"Keeta World Cup",      expected:84.50,startDate:"2026-07-01",endDate:null},
+  {brand:"Oregano",item:"Match Day Pizza Party", campaign:"Keeta World Cup",      expected:89.00,startDate:"2026-07-01",endDate:null},
+  // ── Lollorosso · July (Jul 1 →) ──
+  //   OFU Item Keeta            = 2 Grilled Chicken with Roasted Potato (single dish)
+  {brand:"Lollorosso",item:"2 Grilled Chicken with Roasted Potato - 550 Calories",campaign:"OFU Item Keeta",expected:27.50,startDate:"2026-07-01",endDate:null},
+  // ── Smokeys · July (Jul 1 →) ──
+  //   Keeta World Cup           = 2 Match Day combos
+  {brand:"Smokeys",item:"Match Day Combo for 1", campaign:"Keeta World Cup",expected:50.00,startDate:"2026-07-01",endDate:null},
+  {brand:"Smokeys",item:"Match Day Combo for 2", campaign:"Keeta World Cup",expected:89.00,startDate:"2026-07-01",endDate:null},
+  // ── Wicked Wings · July (Jul 1 →) ──
+  //   Keeta World Cup           = 2 Match Day combos (Solo + Trio)
+  {brand:"Wicked Wings",item:"Match Day Solo Meal",campaign:"Keeta World Cup",expected:84.50,startDate:"2026-07-01",endDate:null},
+  {brand:"Wicked Wings",item:"Match Day Trio Meal",campaign:"Keeta World Cup",expected:87.50,startDate:"2026-07-01",endDate:null}
 ];
-function keetaOreganoResidualCampaignForDate(date){
-  for(const r of KEETA_OREGANO_RESIDUAL_CAMPAIGNS){
-    if(date>=r.startDate&&date<=r.endDate)return r.campaign;
+
+// ══ Keeta residual campaign rules ══
+// The "residual" is the menu-wide sheet campaign that catches all merchant discount NOT attributable
+// to a specific item rule above. For a brand+date, at most one residual is active — used when the
+// order's other items didn't hit any item rule, or their expected total < actual burn (the overflow
+// gets pushed into the residual).
+const KEETA_RESIDUAL_RULES=[
+  // ── June: Keeta Week overlay on Oregano ──
+  {brand:"Oregano",     campaign:"30% OFF CAP 20", startDate:"2026-06-24",endDate:"2026-06-30"},
+  // ── July: menu-wide caps per brand ──
+  {brand:"Lollorosso",  campaign:"50% OFF CAP 30", startDate:"2026-07-01",endDate:null},
+  // Smokeys switched CAP 20 → CAP 30 on Jul 8
+  {brand:"Smokeys",     campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:"2026-07-07"},
+  {brand:"Smokeys",     campaign:"50% OFF CAP 30", startDate:"2026-07-08",endDate:null},
+  {brand:"Wicked Wings",campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:null},
+  {brand:"Fyoozhen",    campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:null}
+];
+
+function keetaResidualCampaignFor(brand,date){
+  for(const r of KEETA_RESIDUAL_RULES){
+    if(r.brand!==brand)continue;
+    if(date<r.startDate)continue;
+    if(r.endDate&&date>r.endDate)continue;
+    return r.campaign;
   }
   return null;
 }
-// Single Keeta campaign per non-Oregano brand — no item-level split needed.
-const KEETA_CAMPAIGN_DEFAULT={Lollorosso:"50% OFF",Smokeys:"50% OFF",Fyoozhen:"50% OFF","Wicked Wings":"50% OFF"};
 const KEETA_FD_COST=2.0; // AED per order — Keeta free-delivery share embedded in merchant-funded column
 const KEETA_STORAGE_KEY="keeta_orders_data_v1";
 
@@ -531,21 +579,33 @@ function parseKeetaItems(s){
   return String(s).replace(/;+$/,"").split(";").map(i=>i.trim()).filter(i=>i);
 }
 // Items in cart that match an Oregano promo item (case-insensitive substring).
-function matchKeetaOreganoPromos(items,date){
+// Brand-generic Keeta item→campaign matching. Returns:
+//   hits:      [{item, campaign, expected}]  — items matched to a rule
+//   unmatched: [item]                         — items with no rule for (brand, date)
+// The unmatched list is aggregated across the whole upload into metadata.unmapped_items so the
+// dashboard can flag it — helps catch cases where an item was renamed by Keeta or a promo was
+// added to the sheet without a matching item rule.
+function matchKeetaBrandPromos(brand,items,date){
   const hits=[];
+  const unmatched=[];
   for(const item of items){
-    const itemLower=item.toLowerCase();
-    for(const[promoItem,info]of Object.entries(KEETA_OREGANO_ITEMS)){
-      // Only match if order date falls within the item's promo window. Prevents e.g. matching
-      // Milanese on Jun 25 to "25% OFF Select Items" which ended Jun 23.
-      if(date&&info.startDate&&info.endDate&&(date<info.startDate||date>info.endDate))continue;
-      if(itemLower.includes(promoItem.toLowerCase())){
-        hits.push({item:promoItem,campaign:info.campaign,expected:info.expected});
-        break; // 1 promo match per cart line max
+    const itemLower=(item||"").toLowerCase().trim();
+    if(!itemLower)continue;
+    let matched=false;
+    for(const rule of KEETA_ITEM_RULES){
+      if(rule.brand!==brand)continue;
+      if(date&&(date<rule.startDate||(rule.endDate&&date>rule.endDate)))continue;
+      // Substring match — the item column can prefix like "1×" or suffix like ";" so substring
+      // is more robust than exact. First rule to match wins.
+      if(itemLower.includes(rule.item.toLowerCase())){
+        hits.push({item:rule.item,campaign:rule.campaign,expected:rule.expected});
+        matched=true;
+        break;
       }
     }
+    if(!matched)unmatched.push(item);
   }
-  return hits;
+  return{hits,unmatched};
 }
 
 // ── SheetJS dynamic loader ───────────────────────────────────────────────
@@ -581,6 +641,7 @@ async function parseKeetaXlsx(file){
   const ordersSeen={};            // key → Set<orderNo>  (to count each order once per campaign)
   const skipped={cancelled:0,no_brand:0,no_outlet:0,no_date:0};
   const unmapped=new Set();
+  const unmappedItems={};        // {brand: {itemName: count}} — for surfacing in dashboard warning
   let totalGross=0,totalNet=0,totalMenuDisc=0;
   const datesSeen=new Set();
 
@@ -598,55 +659,53 @@ async function parseKeetaXlsx(file){
     const menuDisc=Math.max(0,merch-KEETA_FD_COST);
     const orderNo=r[headerIdx["Order no."]];
 
-    // Attribute menu_disc to one or more campaigns. For Oregano this involves:
-    //   1. Matching items to known promo-item campaigns (Alfredo → Offers for You, 25% items → 25% OFF Select)
-    //   2. Computing each campaign's "expected" contribution from item prices
-    //   3. Any remaining merchant_disc (i.e. extra discount that DIDN'T come from those specific items)
-    //      is the residual — attributable to a broad menu-wide campaign for that date (Keeta Week
-    //      "30% OFF CAP 20" Jun 24-30). Without this, a Jun 24 order with Alfredo + Bolognese gets
-    //      its full discount (15.30 + 16.50 from the Keeta Week 30% off) attributed entirely to
-    //      "Offers for You", which is wrong — half belongs to Keeta Week.
+    // Attribute menu_disc across one or more campaigns using brand-generic item rules:
+    //   1. Match cart items against KEETA_ITEM_RULES filtered by brand + date.
+    //   2. Each matched campaign gets its "expected" share of the merchant discount, scaled if the
+    //      actual discount is smaller than the sum of expecteds (edge case: overlapping platform
+    //      promos that under-apply).
+    //   3. Any residual discount (beyond the sum of expecteds) — OR the entire discount if no items
+    //      matched — is attributed to the brand's residual campaign for that date (menu-wide CAP
+    //      promo, e.g. "50% OFF CAP 20"). If there's no residual either, we route to a synthetic
+    //      "(Unattributed)" bucket rather than a wrong campaign.
     const attributions=[]; // [campaign, share]
-    if(brand==="Oregano"){
-      const items=parseKeetaItems(r[headerIdx["Items"]]);
-      const hits=matchKeetaOreganoPromos(items,date);
-      const expectedByCampaign={};
-      for(const h of hits)expectedByCampaign[h.campaign]=(expectedByCampaign[h.campaign]||0)+h.expected;
-      const campKeys=Object.keys(expectedByCampaign);
-      const residualCamp=keetaOreganoResidualCampaignForDate(date); // e.g. "30% OFF CAP 20" on Jun 24-30
-      const totalExpected=Object.values(expectedByCampaign).reduce((s,v)=>s+v,0);
+    const items=parseKeetaItems(r[headerIdx["Items"]]);
+    const{hits,unmatched}=matchKeetaBrandPromos(brand,items,date);
+    for(const it of unmatched){
+      unmappedItems[brand]=unmappedItems[brand]||{};
+      unmappedItems[brand][it]=(unmappedItems[brand][it]||0)+1;
+    }
+    const expectedByCampaign={};
+    for(const h of hits)expectedByCampaign[h.campaign]=(expectedByCampaign[h.campaign]||0)+h.expected;
+    const campKeys=Object.keys(expectedByCampaign);
+    const residualCamp=keetaResidualCampaignFor(brand,date);
+    const totalExpected=Object.values(expectedByCampaign).reduce((s,v)=>s+v,0);
 
-      if(!campKeys.length){
-        // No recognized promo items in cart. If a residual campaign is active (e.g. Keeta Week
-        // Jun 24-30), the whole menu_disc belongs to it. Otherwise fall back to Offers for You
-        // (catch-all for the prior rotation).
-        attributions.push([residualCamp||"Offers for You 50% OFF 1 Item",menuDisc]);
-      }else if(residualCamp){
-        // Promo items matched AND a residual campaign is active. Each promo item's expected portion
-        // goes to its own campaign; anything beyond the sum of expecteds goes to the residual.
-        // Cap each expected at the actual menu_disc available (defensive — small orders can have
-        // less actual disc than expected if the platform applied edge cases).
-        const scale=totalExpected>0?Math.min(1,menuDisc/totalExpected):1;
-        let assigned=0;
-        for(const[camp,exp]of Object.entries(expectedByCampaign)){
-          const portion=exp*scale;assigned+=portion;
-          attributions.push([camp,portion]);
-        }
-        const residual=Math.max(0,menuDisc-assigned);
-        if(residual>0.01)attributions.push([residualCamp,residual]);
-      }else if(campKeys.length===1){
-        // Single matched campaign and no residual to fall back on (e.g. Jun 12-23 single-campaign days)
-        attributions.push([campKeys[0],menuDisc]);
-      }else{
-        // Multi-campaign matches with no residual: proportional split
-        if(totalExpected>0){
-          for(const[camp,exp]of Object.entries(expectedByCampaign))attributions.push([camp,menuDisc*(exp/totalExpected)]);
-        }else{
-          for(const camp of campKeys)attributions.push([camp,menuDisc/campKeys.length]);
-        }
+    if(!campKeys.length){
+      // No recognised promo items. Route full menu_disc to residual (menu-wide CAP campaign).
+      // If no residual either, route to the unattributed bucket for surfacing in the audit.
+      attributions.push([residualCamp||"(Unattributed)",menuDisc]);
+    }else if(residualCamp){
+      // Matched item rules + a residual is active. Each matched campaign gets its expected share,
+      // capped at the actual menu_disc; anything left flows to residual.
+      const scale=totalExpected>0?Math.min(1,menuDisc/totalExpected):1;
+      let assigned=0;
+      for(const[camp,exp]of Object.entries(expectedByCampaign)){
+        const portion=exp*scale;assigned+=portion;
+        attributions.push([camp,portion]);
       }
+      const residual=Math.max(0,menuDisc-assigned);
+      if(residual>0.01)attributions.push([residualCamp,residual]);
+    }else if(campKeys.length===1){
+      // Single campaign, no residual — full discount to that campaign
+      attributions.push([campKeys[0],menuDisc]);
     }else{
-      attributions.push([KEETA_CAMPAIGN_DEFAULT[brand],menuDisc]);
+      // Multiple campaigns, no residual — proportional split
+      if(totalExpected>0){
+        for(const[camp,exp]of Object.entries(expectedByCampaign))attributions.push([camp,menuDisc*(exp/totalExpected)]);
+      }else{
+        for(const camp of campKeys)attributions.push([camp,menuDisc/campKeys.length]);
+      }
     }
 
     for(let i=0;i<attributions.length;i++){
@@ -683,6 +742,18 @@ async function parseKeetaXlsx(file){
       rows_in_file:data.length,
       rows_skipped:skipped,
       unmapped_restaurants:Array.from(unmapped).sort(),
+      // Top unmapped items per brand — surfaced in the UI so the user can catch item-name
+      // mismatches between Keeta statements and their sheet campaigns. Kept as flat objects
+      // to survive JSON serialization if this metadata is ever persisted.
+      unmapped_items:(()=>{
+        const summary={};
+        for(const brand of Object.keys(unmappedItems)){
+          const sorted=Object.entries(unmappedItems[brand]).sort((a,b)=>b[1]-a[1]);
+          if(sorted.length===0)continue;
+          summary[brand]=sorted.slice(0,10).map(([item,count])=>({item,count}));
+        }
+        return summary;
+      })(),
       totals:{
         orders:data.length-skipped.cancelled-skipped.no_brand-skipped.no_outlet-skipped.no_date,
         gross:Math.round(totalGross*100)/100,
@@ -7357,6 +7428,39 @@ function discountCoFundAuditTableHTML(d){
   </div>`;
 }
 
+// Warning banner surfacing Keeta items that have no matching item rule (in KEETA_ITEM_RULES) for
+// their brand. Populated during parseKeetaXLSX. Helps catch cases where an item was renamed by
+// Keeta or a promo was added to the sheet without a corresponding item rule. Hidden if empty.
+function discountUnmappedKeetaItemsWarning(){
+  if(!keetaOrdersData||!keetaOrdersData.metadata||!keetaOrdersData.metadata.unmapped_items)return '';
+  const summary=keetaOrdersData.metadata.unmapped_items;
+  const brands=Object.keys(summary);
+  if(brands.length===0)return '';
+  // Filter — only surface items appearing in 3+ orders (avoids one-off custom items or noise)
+  const filtered={};
+  let anyFlagged=false;
+  for(const brand of brands){
+    const items=(summary[brand]||[]).filter(x=>x.count>=3);
+    if(items.length>0){filtered[brand]=items;anyFlagged=true;}
+  }
+  if(!anyFlagged)return '';
+  const rows=Object.entries(filtered).map(([brand,items])=>{
+    const clr=BMAP[brand]?.c||'#94a3b8';
+    return `<div style="margin:8px 0">
+      <div style="font-size:11px;font-weight:800;color:${clr};text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">${brand}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">${items.map(x=>`<span style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);color:#0F172A;padding:3px 8px;border-radius:6px;font-size:11px" title="Appears in ${x.count} order${x.count===1?'':'s'} — no matching item rule found">${x.item.replace(/;$/,'')} <span style="color:#94a3b8;font-size:9px">×${x.count}</span></span>`).join('')}</div>
+    </div>`;
+  }).join('');
+  return `<div class="card" style="padding:12px 14px;margin-bottom:14px;border-left:4px solid #F59E0B">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <span style="font-size:16px">⚠️</span>
+      <div style="font-size:12px;font-weight:800;color:#F59E0B">Keeta items with no matching campaign rule</div>
+    </div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:8px;line-height:1.5">These items appear in the Keeta upload but aren't in <code style="color:#0F172A">KEETA_ITEM_RULES</code>. Their discount is being routed to the brand's residual (menu-wide) campaign, which may not be correct. If any of these items should be attributed to a specific sheet campaign, tell me the item name + expected discount and I'll add it.</div>
+    ${rows}
+  </div>`;
+}
+
 async function renderDiscounts(){
   const pg=document.getElementById("page-discounts");
   if(!pg)return;
@@ -7381,7 +7485,7 @@ async function renderDiscounts(){
     pg.innerHTML=`${header}${filterBar}<div class="card" style="text-align:center;padding:30px;color:#64748b">No sales data matches these filters. Try widening the aggregator/brand/region selection or picking a different date range.</div>`;
     return;
   }
-  pg.innerHTML=`${header}${filterBar}${discountKpiRowHTML(data)}${discountTrendChartHTML(data)}${discountCoFundAuditTableHTML(data)}${discountCampaignTableHTML(data)}`;
+  pg.innerHTML=`${header}${filterBar}${discountKpiRowHTML(data)}${discountUnmappedKeetaItemsWarning()}${discountTrendChartHTML(data)}${discountCoFundAuditTableHTML(data)}${discountCampaignTableHTML(data)}`;
   // Render trend chart after DOM is in place
   if(data.trend&&data.trend.length>0){
     setTimeout(()=>{
