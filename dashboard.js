@@ -13,9 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-065";
+const BUILD_VERSION="2026-07-06-066";
 const BUILD_NOTES=[
-  "🍔 Fixed Talabat CSV upload silently failing. The parser was written for the OLD two-header-row XLSX format (row 0 = category groups, row 1 = column names). Talabat's newer CSV export uses a single header row at row 0, so my code was treating the first order as if it were the header → \"missing columns\" error → upload rejected. Alert may have shown briefly but was easy to miss. Now the parser auto-detects which format the file uses (checks whether row 0 or row 1 has \"Restaurant name\") and starts reading data from the right row. Talabat file picker now also accepts .csv extension."
+  "🔧 Fixed a v059-era bug in the Uncategorized Burn formula. It was `totals.disc − attributedBurn − coFundTotal`, but coFundTotal is the inferred AGGREGATOR share (invoiced separately), not part of the merchant discount in totals.disc. Subtracting it understated Uncategorized. Correct: `totals.disc − attributedBurn`. Your uncategorized figure may go up after this fix — that's the true unattributed merchant discount.",
+  "❓ New Uncategorized Burn breakdown table on the Discount Burn Analysis page — lists every brand × aggregator combo with unattributed merchant discount, sorted by size, with total / attributed / uncategorized columns. Points you directly at where to investigate: campaigns not in the sheet, wrong dates, ambient platform promos, restaurant-offer side items, or manual sheet entries that don't match statement uploads."
 ];
 
 let _updateDialogShown=false;
@@ -7167,7 +7168,35 @@ function computeDiscountBurn(){
     coFundDeclared:coFundTotal,
     coFundAmbient:ambientPlatformFund,
     coFundTotalDisplay:totalCoFund,
-    uncategorizedBurn:Math.max(0,totals.disc-attributedBurn-coFundTotal),
+    // Uncategorized = merchant discount from allData (Google Sheet daily) that wasn't attributed
+    // to any tracked campaign. Pre-v066 this incorrectly also subtracted coFundTotal (the inferred
+    // AGGREGATOR share, which isn't in totals.disc to begin with) — leading to understated numbers.
+    uncategorizedBurn:Math.max(0,totals.disc-attributedBurn),
+    // Breakdown of uncategorized by (brand, aggregator) so the user can see which combos have the
+    // largest unattributed merchant discount and investigate — usually points to a running campaign
+    // that isn't in the sheet, or ambient platform promos, or manual sheet entries not backed by
+    // exact upload data.
+    uncategorizedByBrandAgg:(()=>{
+      const totalByBA={},attribByBA={};
+      for(const r of matches){
+        const k=`${r.brand}|${r.aggregator}`;
+        totalByBA[k]=(totalByBA[k]||0)+(r.disc||0);
+      }
+      for(const x of campaignBreakdown){
+        const k=`${x.campaign.brand}|${x.campaign.aggregator}`;
+        attribByBA[k]=(attribByBA[k]||0)+x.merchantBurn;
+      }
+      const out=[];
+      for(const k of Object.keys(totalByBA)){
+        const total=totalByBA[k],attributed=attribByBA[k]||0,uncat=Math.max(0,total-attributed);
+        if(uncat>1){ // ignore rounding-noise
+          const[brand,aggregator]=k.split("|");
+          out.push({brand,aggregator,total,attributed,uncategorized:uncat});
+        }
+      }
+      out.sort((a,b)=>b.uncategorized-a.uncategorized);
+      return out;
+    })(),
     activeCampaignCount:overlapping.length,
     campaignBreakdown,trend,matchesCount:matches.length
   };
@@ -7237,7 +7266,7 @@ function discountKpiRowHTML(d){
   return `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
     ${tile('💸','Total Discount Burn',fmt(d.totalBurn),`${depth.toFixed(1)}% of gross · ${fmt(dailyBurn)}/day avg`,'#EF4444')}
     ${tile('🎯','Attributed to Campaigns',fmt(d.attributedBurn)+pctOf(d.attributedBurn,d.totalBurn),`${d.activeCampaignCount} campaign${d.activeCampaignCount===1?'':'s'} ran in this window`,'#22C55E')}
-    ${tile('❓','Uncategorized Burn',fmt(d.uncategorizedBurn)+pctOf(d.uncategorizedBurn,d.totalBurn),'ambient discounts not tied to a tracked campaign','#F59E0B')}
+    ${tile('❓','Uncategorized Burn',fmt(d.uncategorizedBurn)+pctOf(d.uncategorizedBurn,d.totalBurn),d.uncategorizedByBrandAgg.length>0?`largest: ${d.uncategorizedByBrandAgg[0].brand} × ${d.uncategorizedByBrandAgg[0].aggregator} (${fmt(d.uncategorizedByBrandAgg[0].uncategorized)}) · see breakdown ↓`:'no unattributed burn in this window','#F59E0B')}
     ${(()=>{
       const parts=[];
       if(d.coFundDeclared>0)parts.push(`AED ${Math.round(d.coFundDeclared).toLocaleString()} inferred from declared co-fund %s`);
@@ -7485,6 +7514,59 @@ function discountUnmappedKeetaItemsWarning(){
   </div>`;
 }
 
+// Uncategorized burn breakdown by (brand × aggregator). Highlights which combos have merchant
+// discount that couldn't be attributed to any tracked campaign — the actionable question is "why".
+// Common causes surfaced by the sub-text below:
+//   - A campaign is running but isn't in the sheet
+//   - The campaign IS in the sheet but its dates don't overlap the burn dates (sheet lag)
+//   - Ambient platform promos (Talabat Pro, first-order codes) reflected in the merchant column
+//   - Item-level "Restaurant offers" on side items not declared as their own campaigns
+//   - Manual sheet entries for disc that don't match what exact upload data shows
+function discountUncategorizedBreakdownHTML(d){
+  if(!d.uncategorizedByBrandAgg||d.uncategorizedByBrandAgg.length===0)return '';
+  const fmt=n=>`AED ${Math.round(n||0).toLocaleString()}`;
+  const AGG_CLR={Deliveroo:'#00CCBC',Talabat:'#EF4136',Careem:'#00A651',Noon:'#FEEE00',Keeta:'#FFC72C'};
+  const rows=d.uncategorizedByBrandAgg.map(x=>{
+    const brandClr=BMAP[x.brand]?.c||'#94a3b8';
+    const aggClr=AGG_CLR[x.aggregator]||'#94a3b8';
+    const attribPct=x.total>0?(x.attributed/x.total*100):0;
+    const uncatPct=x.total>0?(x.uncategorized/x.total*100):0;
+    return `<tr style="border-bottom:1px solid #F5F0E5">
+      <td style="padding:8px 12px;font-size:11px"><span style="width:8px;height:8px;background:${brandClr};border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle"></span><strong style="color:#0F172A">${x.brand}</strong></td>
+      <td style="padding:8px 8px;font-size:11px"><span style="width:8px;height:8px;background:${aggClr};border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle"></span>${x.aggregator}</td>
+      <td style="padding:8px 8px;text-align:right;font-size:11px;color:#0F172A;font-weight:600">${fmt(x.total)}</td>
+      <td style="padding:8px 8px;text-align:right;font-size:11px;color:#22C55E">${fmt(x.attributed)}<div style="font-size:9px;color:#94a3b8;font-weight:400">${attribPct.toFixed(0)}%</div></td>
+      <td style="padding:8px 8px;text-align:right;font-size:12px;color:#F59E0B;font-weight:800">${fmt(x.uncategorized)}<div style="font-size:9px;color:#94a3b8;font-weight:400">${uncatPct.toFixed(0)}%</div></td>
+    </tr>`;
+  }).join('');
+  const grandUnc=d.uncategorizedByBrandAgg.reduce((s,x)=>s+x.uncategorized,0);
+  return `<div class="card" style="padding:14px 16px;margin-bottom:14px;border-left:4px solid #F59E0B">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div class="ct" style="margin-bottom:0">❓ Uncategorized burn — where the ${fmt(grandUnc)} is coming from</div>
+    </div>
+    <div style="font-size:11px;color:#64748b;line-height:1.6;margin-bottom:12px;padding:8px 10px;background:rgba(245,158,11,.06);border-left:3px solid #F59E0B;border-radius:4px">
+      Merchant discount from the Google Sheet daily data that couldn't be attributed to any tracked campaign in this window. Common causes to check for the top rows below:
+      <ul style="margin:6px 0 0 18px;padding:0;color:#64748b">
+        <li>A campaign is running but isn't in the sheet — check the aggregator portal for that brand+aggregator</li>
+        <li>The campaign IS in the sheet but its start/end dates don't cover the actual burn dates</li>
+        <li>Ambient platform promos (Talabat Pro, first-order codes) reflected in merchant column</li>
+        <li>Item-level "Restaurant offers" on side items not declared as separate campaigns</li>
+        <li>Manual sheet discount entries that don't match statement uploads (reconciliation gap)</li>
+      </ul>
+    </div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="background:#F5F0E5;border-bottom:2px solid #EDE7D9">
+        <th style="text-align:left;padding:8px 12px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Brand</th>
+        <th style="text-align:left;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Aggregator</th>
+        <th style="text-align:right;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Merchant discount from Google Sheet daily data">Total Burn</th>
+        <th style="text-align:right;padding:8px;font-size:10px;color:#22C55E;font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Sum of allocated merchant burn to overlapping campaigns">Attributed</th>
+        <th style="text-align:right;padding:8px;font-size:10px;color:#F59E0B;font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Total − Attributed (this is what to investigate)">Uncategorized</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  </div>`;
+}
+
 async function renderDiscounts(){
   const pg=document.getElementById("page-discounts");
   if(!pg)return;
@@ -7509,7 +7591,7 @@ async function renderDiscounts(){
     pg.innerHTML=`${header}${filterBar}<div class="card" style="text-align:center;padding:30px;color:#64748b">No sales data matches these filters. Try widening the aggregator/brand/region selection or picking a different date range.</div>`;
     return;
   }
-  pg.innerHTML=`${header}${filterBar}${discountKpiRowHTML(data)}${discountUnmappedKeetaItemsWarning()}${discountTrendChartHTML(data)}${discountCoFundAuditTableHTML(data)}${discountCampaignTableHTML(data)}`;
+  pg.innerHTML=`${header}${filterBar}${discountKpiRowHTML(data)}${discountUnmappedKeetaItemsWarning()}${discountTrendChartHTML(data)}${discountUncategorizedBreakdownHTML(data)}${discountCoFundAuditTableHTML(data)}${discountCampaignTableHTML(data)}`;
   // Render trend chart after DOM is in place
   if(data.trend&&data.trend.length>0){
     setTimeout(()=>{
