@@ -13,11 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-062";
+const BUILD_VERSION="2026-07-06-063";
 const BUILD_NOTES=[
-  "🍜 Refactored Keeta item→campaign mapping to be brand-generic. Previously only Oregano had item-level attribution; other brands routed the full merchant discount to a single default campaign. Now all four Keeta brands (Oregano, Lollorosso, Smokeys, Wicked Wings) do proper item-level splitting, so orders with mixed campaigns (e.g. a Match Day combo + an incidental Sour Cream Dip) get their discount correctly split between the campaigns.",
-  "📅 Added July rotation to KEETA_ITEM_RULES for all four brands: Oregano's Alfredo (OFU Item Keeta), 4 selected items (25% OFF Select Items), Match Day Solo + Pizza Party (Keeta World Cup); Lollorosso's Grilled Chicken with Roasted Potato (OFU Item Keeta); Smokeys' Match Day Combo 1+2 (Keeta World Cup); Wicked Wings' Match Day Solo + Trio (Keeta World Cup). Residual (menu-wide) campaigns per brand also configured, including Smokeys' switch from CAP 20 to CAP 30 on Jul 8. Alfredo 60:40 co-fund inference should now populate the audit table correctly for July.",
-  "⚠️ New warning banner on Discount Burn page: surfaces Keeta items that appear in the upload but have no matching item rule (3+ occurrences). Helps catch renamed items or new campaigns that need a matching item rule. Grouped by brand. Once you re-upload your Keeta July file, any unrecognised items will list themselves here."
+  "🗓️ Fixed reversed campaign-window display on future-dated / just-started campaigns. The 8 Jul Smokeys campaign was showing \"Wed, 8 Jul → Tue, 7 Jul\" because effEnd was capped at yesterday's data date, becoming earlier than the campaign start. Now shows the actual sheet dates and a clearer message explaining that data will populate as orders flow in.",
+  "🎯 Tightened the Keeta unmapped-items warning. Previously flagged EVERY item that wasn't in KEETA_ITEM_RULES — which meant every item on menu-wide-discounted brands (Fyoozhen, Lollorosso, Smokeys, Wicked Wings) triggered the warning, even though those items were correctly attributed to the residual 50% OFF campaign. Now the warning only fires when an item both (a) has no matching item rule AND (b) has no residual campaign to catch it — meaning discount is genuinely going nowhere sensible. Should now only surface real problems on brands without a menu-wide residual (currently just Oregano)."
 ];
 
 let _updateDialogShown=false;
@@ -671,15 +670,21 @@ async function parseKeetaXlsx(file){
     const attributions=[]; // [campaign, share]
     const items=parseKeetaItems(r[headerIdx["Items"]]);
     const{hits,unmatched}=matchKeetaBrandPromos(brand,items,date);
-    for(const it of unmatched){
-      unmappedItems[brand]=unmappedItems[brand]||{};
-      unmappedItems[brand][it]=(unmappedItems[brand][it]||0)+1;
-    }
     const expectedByCampaign={};
     for(const h of hits)expectedByCampaign[h.campaign]=(expectedByCampaign[h.campaign]||0)+h.expected;
     const campKeys=Object.keys(expectedByCampaign);
     const residualCamp=keetaResidualCampaignFor(brand,date);
     const totalExpected=Object.values(expectedByCampaign).reduce((s,v)=>s+v,0);
+    // Only flag unmapped items when there's a REAL problem: the order has merchant discount AND
+    // there's no residual to catch the leftover AND some items didn't match a specific rule.
+    // Otherwise items falling into a menu-wide "50% OFF entire menu" residual are correctly
+    // attributed and shouldn't trigger a warning — that was noise, not signal.
+    if(menuDisc>0&&!residualCamp&&unmatched.length>0){
+      for(const it of unmatched){
+        unmappedItems[brand]=unmappedItems[brand]||{};
+        unmappedItems[brand][it]=(unmappedItems[brand][it]||0)+1;
+      }
+    }
 
     if(!campKeys.length){
       // No recognised promo items. Route full menu_disc to residual (menu-wide CAP campaign).
@@ -6490,7 +6495,14 @@ function campDetailV2HTML(c,idx){
     return header+`<div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);border-radius:12px;padding:20px"><div style="font-size:14px;font-weight:700;color:#F59E0B;margin-bottom:6px">⚠ Needs clarification before analysis</div><div style="font-size:13px;color:#475569;line-height:1.6">This campaign's comment contains terms we couldn't confidently interpret: <strong style="color:#0F172A">${unres}</strong>. To avoid showing inaccurate profitability, the analysis is paused. Please confirm the scope or co-funding split.</div><div style="font-size:12px;color:#94a3b8;margin-top:10px">Raw comment: "${(c.comments||'').replace(/"/g,'&quot;')}"</div></div>`;
   }
   if(!a.hasData){
-    return header+`<div class="card"><div style="text-align:center;padding:30px;color:#64748b">No sales data in the campaign window yet (${fmtDisp(a.effStart)} → ${fmtDisp(a.effEnd)}).</div></div>`;
+    // For future-dated or just-started campaigns, effEnd = latest (yesterday's data) can be
+    // BEFORE effStart (campaign's start = today), giving the reversed "8 Jul → 7 Jul" display.
+    // Use the campaign's actual sheet dates in the message instead of the effective window.
+    const futureCampaign=c.startDate>(latest||'0000-00-00');
+    const msg=futureCampaign
+      ? `Campaign runs ${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)}. No sales data yet — data becomes available as orders flow in and the daily sheet is updated.`
+      : `No sales data in the campaign window yet (${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)}). Latest data available: ${fmtDisp(latest)}.`;
+    return header+`<div class="card"><div style="text-align:center;padding:30px;color:#64748b">${msg}</div></div>`;
   }
   const baselineCampNote=a.baselineCampaigns.length
     ? `<div style="margin-top:8px;padding:8px 12px;background:rgba(245,158,11,.08);border-left:3px solid #F59E0B;border-radius:4px;font-size:11px;color:#fbbf24">⚠ During the comparison week, ${a.baselineCampaigns.length} other ${c.aggregator} campaign(s) ran on this brand: ${a.baselineCampaigns.map(x=>`"${x.name}" (${fmtDisp(x.startDate)}–${fmtDisp(x.endDate)})`).join('; ')}. The baseline may itself be elevated, so the incremental figures are conservative.</div>`
@@ -7454,9 +7466,9 @@ function discountUnmappedKeetaItemsWarning(){
   return `<div class="card" style="padding:12px 14px;margin-bottom:14px;border-left:4px solid #F59E0B">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
       <span style="font-size:16px">⚠️</span>
-      <div style="font-size:12px;font-weight:800;color:#F59E0B">Keeta items with no matching campaign rule</div>
+      <div style="font-size:12px;font-weight:800;color:#F59E0B">Keeta discount routed to (Unattributed) — items with no matching rule and no menu-wide campaign</div>
     </div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:8px;line-height:1.5">These items appear in the Keeta upload but aren't in <code style="color:#0F172A">KEETA_ITEM_RULES</code>. Their discount is being routed to the brand's residual (menu-wide) campaign, which may not be correct. If any of these items should be attributed to a specific sheet campaign, tell me the item name + expected discount and I'll add it.</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:8px;line-height:1.5">These items appeared in Keeta orders that had merchant discount, but the brand has no <code style="color:#0F172A">50% OFF entire menu</code>-style residual campaign for that date, AND no <code style="color:#0F172A">KEETA_ITEM_RULES</code> entry matched them. The discount landed in an "(Unattributed)" bucket — should belong to a specific campaign. Tell me the item name + expected discount + which sheet campaign it should feed and I'll add a rule.</div>
     ${rows}
   </div>`;
 }
