@@ -13,10 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-063";
+const BUILD_VERSION="2026-07-06-064";
 const BUILD_NOTES=[
-  "🗓️ Fixed reversed campaign-window display on future-dated / just-started campaigns. The 8 Jul Smokeys campaign was showing \"Wed, 8 Jul → Tue, 7 Jul\" because effEnd was capped at yesterday's data date, becoming earlier than the campaign start. Now shows the actual sheet dates and a clearer message explaining that data will populate as orders flow in.",
-  "🎯 Tightened the Keeta unmapped-items warning. Previously flagged EVERY item that wasn't in KEETA_ITEM_RULES — which meant every item on menu-wide-discounted brands (Fyoozhen, Lollorosso, Smokeys, Wicked Wings) triggered the warning, even though those items were correctly attributed to the residual 50% OFF campaign. Now the warning only fires when an item both (a) has no matching item rule AND (b) has no residual campaign to catch it — meaning discount is genuinely going nowhere sensible. Should now only surface real problems on brands without a menu-wide residual (currently just Oregano)."
+  "🎯 Tightened the Keeta unmapped-items warning further. Previously flagged any unmatched item in an order with merchant discount + no residual campaign — but that meant Garlic Bread sitting in an Alfredo cart got flagged even though Garlic Bread wasn't actually discounted. Now the flag only fires when the matched item rules can't fully account for the discount (leftover > AED 2), meaning something ELSE in the cart was genuinely discounted and the culprit is likely among the unmatched items. Should now only surface items that are actually causing attribution problems, not innocent bystanders in mixed carts."
 ];
 
 let _updateDialogShown=false;
@@ -675,11 +674,15 @@ async function parseKeetaXlsx(file){
     const campKeys=Object.keys(expectedByCampaign);
     const residualCamp=keetaResidualCampaignFor(brand,date);
     const totalExpected=Object.values(expectedByCampaign).reduce((s,v)=>s+v,0);
-    // Only flag unmapped items when there's a REAL problem: the order has merchant discount AND
-    // there's no residual to catch the leftover AND some items didn't match a specific rule.
-    // Otherwise items falling into a menu-wide "50% OFF entire menu" residual are correctly
-    // attributed and shouldn't trigger a warning — that was noise, not signal.
-    if(menuDisc>0&&!residualCamp&&unmatched.length>0){
+    // Only flag unmapped items when matched items don't fully account for the discount — meaning
+    // something ELSE in the cart was genuinely discounted. Example: an Alfredo Pasta (expected 15.30)
+    // + Garlic Bread order with menuDisc = 15.30. Alfredo's expected fully explains the discount →
+    // Garlic Bread wasn't discounted, just sitting in the cart → don't flag. If the same order had
+    // menuDisc = 22 (Garlic Bread was ALSO discounted for some reason), leftover = 6.70 > threshold
+    // → flag Garlic Bread as the likely culprit. Threshold of 2.0 AED absorbs rounding + edge cases.
+    const LEFTOVER_THRESHOLD=2.0;
+    const leftoverDisc=menuDisc-totalExpected;
+    if(leftoverDisc>LEFTOVER_THRESHOLD&&!residualCamp&&unmatched.length>0){
       for(const it of unmatched){
         unmappedItems[brand]=unmappedItems[brand]||{};
         unmappedItems[brand][it]=(unmappedItems[brand][it]||0)+1;
@@ -7466,9 +7469,9 @@ function discountUnmappedKeetaItemsWarning(){
   return `<div class="card" style="padding:12px 14px;margin-bottom:14px;border-left:4px solid #F59E0B">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
       <span style="font-size:16px">⚠️</span>
-      <div style="font-size:12px;font-weight:800;color:#F59E0B">Keeta discount routed to (Unattributed) — items with no matching rule and no menu-wide campaign</div>
+      <div style="font-size:12px;font-weight:800;color:#F59E0B">Keeta orders had unexplained discount — likely from items not in <code style="color:#0F172A">KEETA_ITEM_RULES</code></div>
     </div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:8px;line-height:1.5">These items appeared in Keeta orders that had merchant discount, but the brand has no <code style="color:#0F172A">50% OFF entire menu</code>-style residual campaign for that date, AND no <code style="color:#0F172A">KEETA_ITEM_RULES</code> entry matched them. The discount landed in an "(Unattributed)" bucket — should belong to a specific campaign. Tell me the item name + expected discount + which sheet campaign it should feed and I'll add a rule.</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:8px;line-height:1.5">In these orders, the merchant discount was <strong>larger</strong> than what the matched item rules can explain — and there's no menu-wide residual campaign for this brand+date to catch the leftover. That leftover is landing in "(Unattributed)". These items were in the same cart and may be the actual culprits. Tell me the item + expected discount + which sheet campaign it should feed, and I'll add a rule.</div>
     ${rows}
   </div>`;
 }
