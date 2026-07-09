@@ -13,10 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-066";
+const BUILD_VERSION="2026-07-06-067";
 const BUILD_NOTES=[
-  "🔧 Fixed a v059-era bug in the Uncategorized Burn formula. It was `totals.disc − attributedBurn − coFundTotal`, but coFundTotal is the inferred AGGREGATOR share (invoiced separately), not part of the merchant discount in totals.disc. Subtracting it understated Uncategorized. Correct: `totals.disc − attributedBurn`. Your uncategorized figure may go up after this fix — that's the true unattributed merchant discount.",
-  "❓ New Uncategorized Burn breakdown table on the Discount Burn Analysis page — lists every brand × aggregator combo with unattributed merchant discount, sorted by size, with total / attributed / uncategorized columns. Points you directly at where to investigate: campaigns not in the sheet, wrong dates, ambient platform promos, restaurant-offer side items, or manual sheet entries that don't match statement uploads."
+  "🔮 Hybrid attribution — when an aggregator's exact upload only covers PART of a campaign's window (e.g. Keeta upload covers Jul 1-7 but the campaign runs Jul 1-31, or Noon/Deliveroo weekly-lag scenario), the dashboard now uses exact for covered days AND runs sales-weighted estimation for uncovered days. Combined into a single attributed amount. Previously the uncovered portion silently leaked to uncategorized — that was the AED 16,105 Lollorosso × Keeta July gap. Once you re-upload the aggregator's file covering the missing dates, the assumption portion converts to exact automatically on next render.",
+  "🎯 Item-informed overlap split — when two same-brand-aggregator campaigns run concurrently (e.g. Keeta Lollorosso has \"50% OFF CAP 30\" entire menu + \"OFU Item Keeta\" running simultaneously), instead of both getting 0 attribution and leaking to uncategorized, we now split the daily discount using the observed campaign-ratio from exact-covered days. If exact data doesn't exist, fall back to weighting by declared discount % from sheet comments.",
+  "🎁 Rewards campaigns (Noon Rewards, Deliveroo Rewards) are now excluded from Discount Burn Analysis attribution entirely. Their small always-on discount amount stays in Total Burn but doesn't clog the campaign attribution.",
+  "🏷️ New source badges: ✓ Exact (fully covered by exact upload), 🟢🔮 Hybrid (partial exact + assumption for uncovered days), 🔮 Assumption (pure sales-weighted estimation). Visible on campaign card chips, Discount Burn breakdown table, and Co-Fund audit table."
 ];
 
 let _updateDialogShown=false;
@@ -5789,7 +5791,10 @@ function campCardGrid(camps,showProfit){
       (c.aggregator==='Noon'&&noonOrdersData)
     ))?(()=>{
       const a=campAnalysisCached(c);
-      return(a.discSource==='keeta_exact'||a.discSource==='careem_exact'||a.discSource==='talabat_exact'||a.discSource==='deliveroo_exact'||a.discSource==='noon_exact')?`<span style="font-size:8px;background:rgba(34,197,94,.12);color:#22C55E;font-weight:700;padding:1px 6px;border-radius:6px" title="Discount sourced from uploaded ${c.aggregator} orders file (exact per-order data, not estimated)">📊 Exact</span>`:'';
+      const s=a.discSource||'';
+      if(s.endsWith('_hybrid'))return `<span style="font-size:8px;background:rgba(59,130,246,.14);color:#3B82F6;font-weight:700;padding:1px 6px;border-radius:6px" title="Partial exact upload from ${c.aggregator} + estimation for uncovered days. Upload fresh ${c.aggregator} data to convert the assumption portion to exact.">🟢🔮 Hybrid</span>`;
+      if(s.endsWith('_exact'))return `<span style="font-size:8px;background:rgba(34,197,94,.12);color:#22C55E;font-weight:700;padding:1px 6px;border-radius:6px" title="Discount sourced from uploaded ${c.aggregator} orders file (exact per-order data)">📊 Exact</span>`;
+      return '';
     })():'';
     const subsidyChip=showProfit?(()=>{
       try{const a=campAnalysisCached(c);return a.dataMismatchSuspected?`<span style="font-size:8px;background:rgba(239,68,68,.14);color:#EF4444;font-weight:700;padding:1px 6px;border-radius:6px" title="Exact ${c.aggregator} upload found much less discount than the Google Sheet daily aggregates — the export is likely stale/incomplete. Open the campaign to see the mismatch details and fix.">⚠️ data mismatch</span>`:'';}
@@ -6005,108 +6010,190 @@ function brandDailySalesByBranch(brand,aggregator){
 // the "no untracked campaigns → all brand discount comes from tracked campaigns" assumption).
 // Returns {allocatedDisc, overlapDays:[...], hadOverlap, dailyAlloc:{date:amount}, M, myN}.
 function allocateCampaignDiscount(c,start,end){
+  // ── Utility helpers used below (defined inline for locality; see v067 hybrid attribution) ──
+  const dateAfter=ymd=>{const d=new Date(ymd+'T12:00:00');d.setDate(d.getDate()+1);return dk(d);};
+  const dateBefore=ymd=>{const d=new Date(ymd+'T12:00:00');d.setDate(d.getDate()-1);return dk(d);};
+  const getExactData=agg=>({Keeta:keetaOrdersData,Careem:careemOrdersData,Talabat:talabatOrdersData,Deliveroo:deliverooOrdersData,Noon:noonOrdersData}[agg]||null);
+  // Compute the uncovered date ranges within [start,end] that the aggregator's exact upload
+  // doesn't include. Returns array of [uStart, uEnd] tuples. Empty = fully covered by exact.
+  const computeUncoveredRanges=(campaignStart,campaignEnd)=>{
+    const data=getExactData(c.aggregator);
+    if(!data||!data.metadata||!data.metadata.date_range||!data.metadata.date_range[0])return[[campaignStart,campaignEnd]];
+    const dr=data.metadata.date_range;
+    if(campaignEnd<dr[0]||campaignStart>dr[1])return[[campaignStart,campaignEnd]]; // no overlap at all
+    const covStart=campaignStart>dr[0]?campaignStart:dr[0];
+    const covEnd=campaignEnd<dr[1]?campaignEnd:dr[1];
+    const uncovered=[];
+    if(campaignStart<covStart)uncovered.push([campaignStart,dateBefore(covStart)]);
+    if(campaignEnd>covEnd)uncovered.push([dateAfter(covEnd),campaignEnd]);
+    return uncovered;
+  };
+  // Observed campaign ratio from exact records — used to split concurrent overlaps on uncovered
+  // days. For Keeta (where the parser tags each order with a specific campaign via item matching)
+  // this reflects the actual customer purchasing behaviour we've already seen. Returns
+  // {campaignName: fraction, ...} or null if no exact records exist for this brand+aggregator.
+  const observedCampaignRatio=(coveredStart,coveredEnd)=>{
+    const data=getExactData(c.aggregator);
+    if(!data||!data.records||data.records.length===0)return null;
+    const byCampaign={};
+    for(const rec of data.records){
+      if(rec.brand!==c.brand)continue;
+      if(!rec.campaign)continue; // records without per-campaign tag can't inform ratio
+      if(rec.date<coveredStart||rec.date>coveredEnd)continue;
+      byCampaign[rec.campaign]=(byCampaign[rec.campaign]||0)+(rec.menu_disc||0);
+    }
+    const total=Object.values(byCampaign).reduce((s,v)=>s+v,0);
+    if(total<=0)return null;
+    const ratios={};
+    for(const[name,sum]of Object.entries(byCampaign))ratios[name]=sum/total;
+    return ratios;
+  };
+  // Declared-discount % fallback ratio. Extracts headline % from each campaign's comment/name and
+  // weights the split by relative intensity. If one campaign says 50% OFF and another says 30% OFF,
+  // 50%/(50%+30%) = 62.5% of the day's burn goes to the 50% one. If nothing declared, equal split.
+  const declaredDiscountRatio=(concurrentCamps)=>{
+    const pcts=concurrentCamps.map(cc=>{
+      const m=((cc.comments||'')+' '+(cc.name||'')).match(/(\d{1,3})\s*%/);
+      return{c:cc,pct:m?parseInt(m[1]):0};
+    });
+    const totalPct=pcts.reduce((s,x)=>s+x.pct,0);
+    const ratios={};
+    if(totalPct<=0){for(const cc of concurrentCamps)ratios[cc.name]=1/concurrentCamps.length;}
+    else{for(const x of pcts)ratios[x.c.name]=x.pct/totalPct;}
+    return ratios;
+  };
+  // Extracted estimation routine — computes sales-weighted allocation for a date range.
+  // Overlap behaviour (v067): when concurrent same-brand-aggregator campaigns share a branch on
+  // a given day, split the discount using either the observed exact-data ratio (highest quality)
+  // or the declared-discount-% ratio from sheet comments (fallback). Never leaks to uncategorized.
+  const estimateCampaignDiscountRange=(rangeStart,rangeEnd,observedRatios)=>{
+    const dailyDisc=brandDailyDiscount(c.brand,c.aggregator);
+    const dailySales=brandDailySalesByBranch(c.brand,c.aggregator);
+    const allBrandBranches=dataIndex.brandBranches.get(`${c.brand}|${c.aggregator}`)||new Set();
+    const _myScope=campOutlets(c);
+    const myBranches=_myScope||allBrandBranches;
+    const _myIdx=campaignData.indexOf(c);
+    const others=campaignData.filter((x,i)=>i!==_myIdx&&x.brand===c.brand&&x.aggregator===c.aggregator&&!(x.endDate<rangeStart||x.startDate>rangeEnd)&&campStatus(x)!=='Cancelled'&&!isRewardsCampaign(x));
+    let allocatedDisc=0;const dailyAlloc={};const overlapDays=[];
+    let d=new Date(rangeStart+'T12:00:00'),e=new Date(rangeEnd+'T12:00:00');
+    for(;d<=e;d.setDate(d.getDate()+1)){
+      const key=dk(d);const dayTotal=dailyDisc[key]||0;
+      if(dayTotal<=0)continue;
+      const liveOthers=others.filter(x=>x.startDate<=key&&x.endDate>=key);
+      let overlap=false;
+      const overlappingConcurrent=[];
+      for(const o of liveOthers){
+        const oScope=campOutlets(o)||allBrandBranches;
+        for(const b of myBranches){if(oScope.has(b)){overlap=true;overlappingConcurrent.push(o);break;}}
+      }
+      let share;
+      if(!overlap){
+        // Non-overlap case — sales-weighted share (existing behaviour)
+        const daySales=dailySales[key]||{};
+        let mySales=0,brandTotalSales=0;
+        for(const b of myBranches)mySales+=daySales[b]||0;
+        for(const v of Object.values(daySales))brandTotalSales+=v;
+        if(brandTotalSales>0)share=dayTotal*(mySales/brandTotalSales);
+        else{const _M=brandTotalBranches(c.brand,c.aggregator)||1;const _myN=myBranches.size||_M;share=(_myN/_M)*dayTotal;}
+      }else{
+        overlapDays.push(key);
+        // Overlap: use observed ratio if available; else declared %; else equal split
+        let myRatio;
+        if(observedRatios&&observedRatios[c.name]!=null){
+          myRatio=observedRatios[c.name];
+        }else{
+          const concurrent=[c,...overlappingConcurrent];
+          const declared=declaredDiscountRatio(concurrent);
+          myRatio=declared[c.name]||(1/concurrent.length);
+        }
+        share=dayTotal*myRatio;
+      }
+      dailyAlloc[key]=share;allocatedDisc+=share;
+    }
+    return{allocatedDisc,dailyAlloc,overlapDays};
+  };
+
   // ── Keeta exact-data short-circuit ─────────────────────────────────────
   // If the user has uploaded a Keeta orders file and the campaign window is fully covered
   // by it, use the EXACT per-order menu discount summed over the campaign's outlet scope
   // (not the sales-weighted brand-level estimation). Falls through to the estimate below
   // if no upload, no match, or window extends outside the uploaded date range.
+  // Wrap an exact result with hybrid extension for uncovered dates. This is the core of v067:
+  // instead of returning ONLY the exact-covered portion (which caused Lollorosso × Keeta July to
+  // report 5% attribution because the upload covered Jul 1-7 only), we now ALSO run estimation
+  // for the uncovered range and combine. The observed ratio from exact records informs how to
+  // split concurrent overlaps on uncovered days.
+  const wrapHybrid=(exactResult,exactSourceName)=>{
+    const _M=brandTotalBranches(c.brand,c.aggregator)||1;
+    const _myN=(campOutlets(c)||new Set()).size||_M;
+    const uncoveredRanges=computeUncoveredRanges(start,end);
+    let extraEstimated=0;const extraDailyAlloc={};const extraOverlapDays=[];
+    if(uncoveredRanges.length>0){
+      // Compute observed ratio for the covered portion of the campaign window
+      const data=getExactData(c.aggregator);
+      const dr=data&&data.metadata&&data.metadata.date_range||[start,end];
+      const covStart=start>dr[0]?start:dr[0];
+      const covEnd=end<dr[1]?end:dr[1];
+      const observedRatios=observedCampaignRatio(covStart,covEnd);
+      for(const[uStart,uEnd]of uncoveredRanges){
+        const est=estimateCampaignDiscountRange(uStart,uEnd,observedRatios);
+        extraEstimated+=est.allocatedDisc;
+        Object.assign(extraDailyAlloc,est.dailyAlloc);
+        extraOverlapDays.push(...est.overlapDays);
+      }
+    }
+    const isHybrid=extraEstimated>0;
+    return{
+      allocatedDisc:exactResult.menuDisc+extraEstimated,
+      coFundedDisc:exactResult.coFundedDisc||0,
+      overlapDays:extraOverlapDays,hadOverlap:extraOverlapDays.length>0,
+      dailyAlloc:{...exactResult.dailyAlloc,...extraDailyAlloc},
+      M:_M,myN:_myN,
+      source:isHybrid?`${exactSourceName}_hybrid`:`${exactSourceName}_exact`,
+      exactDisc:exactResult.menuDisc,estimatedDisc:extraEstimated,
+      partialCoverage:exactResult.partialCoverage,coveredDays:exactResult.coveredDays,totalDays:exactResult.totalDays,
+      uncoveredStart:exactResult.uncoveredStart,uncoveredEnd:exactResult.uncoveredEnd
+    };
+  };
+
   if(c.aggregator==="Keeta"){
     const exact=getKeetaExactDisc(c,start,end);
-    if(exact){
-      const M=brandTotalBranches(c.brand,c.aggregator)||1;
-      const myN=(campOutlets(c)||new Set()).size||M;
-      return{allocatedDisc:exact.menuDisc,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"keeta_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
-    }
+    if(exact)return wrapHybrid(exact,"keeta");
   }
-  // Same short-circuit for Careem — exact per-order data from uploaded FOOD_ORDER CSV.
-  // Campaign type is auto-classified (catalog vs promo) from name/comment; lookup matches by type.
   if(c.aggregator==="Careem"){
     const exact=getCareemExactDisc(c,start,end);
-    if(exact){
-      const M=brandTotalBranches(c.brand,c.aggregator)||1;
-      const myN=(campOutlets(c)||new Set()).size||M;
-      return{allocatedDisc:exact.menuDisc,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"careem_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
-    }
+    if(exact)return wrapHybrid(exact,"careem");
   }
-  // Talabat: same pattern. Exact data is at (brand, outlet, date) — no per-record campaign tag,
-  // so the lookup returns the brand+outlet+window total. If multiple Talabat campaigns overlap
-  // on the same brand+outlets, each will see the same exact total; the dashboard's campaign-
-  // overlap UI flags those cases for the user.
   if(c.aggregator==="Talabat"){
     const exact=getTalabatExactDisc(c,start,end);
     if(exact){
-      const M=brandTotalBranches(c.brand,c.aggregator)||1;
-      const myN=(campOutlets(c)||new Set()).size||M;
-      return{allocatedDisc:exact.menuDisc,coFundedDisc:exact.talabatDisc||0,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"talabat_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
+      // Talabat exact records don't have per-campaign tagging (no rec.campaign field),
+      // so observed-ratio-based split doesn't help. The declared-% fallback in estimation
+      // handles overlaps for Talabat's uncovered range.
+      const withCoFund={...exact,coFundedDisc:exact.talabatDisc||0};
+      return wrapHybrid(withCoFund,"talabat");
     }
   }
   if(c.aggregator==="Deliveroo"){
-    // classify the campaign so we read the right bucket of records — Rewards records for "Deliveroo
-    // Rewards" campaigns (Lollorosso / Wicked Wings AED 20-30 vouchers), marketer_offer otherwise.
     const discType=classifyDeliverooCampaign(c);
     const exact=getDeliverooExactDisc(c,start,end,discType);
     if(exact){
-      const M=brandTotalBranches(c.brand,c.aggregator)||1;
-      const myN=(campOutlets(c)||new Set()).size||M;
-      // For BOGO co-funded campaigns, the merchant-funded discount we summed represents the 65%
-      // merchant share. Deliveroo's 35% co-fund is computed from the merchant cost: co_fund = merchant × 35/65.
-      // Detect BOGO by the campaign comment containing "BOGO" or "Buy One Get One".
       const txt=((c.name||"")+" "+(c.comments||"")).toLowerCase();
       const isBOGO=/\b(bogo|buy\s*one\s*get\s*one|buy\s*1\s*get\s*1)\b/.test(txt);
-      const coFundedDisc=isBOGO?+(exact.menuDisc*35/65).toFixed(2):0;
-      return{allocatedDisc:exact.menuDisc,coFundedDisc,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"deliveroo_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
+      const withCoFund={...exact,coFundedDisc:isBOGO?exact.menuDisc*35/65:0};
+      return wrapHybrid(withCoFund,"deliveroo");
     }
   }
   if(c.aggregator==="Noon"){
     const exact=getNoonExactDisc(c,start,end);
-    if(exact){
-      const M=brandTotalBranches(c.brand,c.aggregator)||1;
-      const myN=(campOutlets(c)||new Set()).size||M;
-      return{allocatedDisc:exact.menuDisc,coFundedDisc:0,overlapDays:[],hadOverlap:false,dailyAlloc:exact.dailyAlloc,M,myN,source:"noon_exact",partialCoverage:exact.partialCoverage,coveredDays:exact.coveredDays,totalDays:exact.totalDays,uncoveredStart:exact.uncoveredStart,uncoveredEnd:exact.uncoveredEnd};
-    }
+    if(exact)return wrapHybrid(exact,"noon");
   }
-  const M=brandTotalBranches(c.brand,c.aggregator)||1;
-  const myScope=campOutlets(c); // null = all branches
-  const myN=myScope?myScope.size:M;
-  const dailyDisc=brandDailyDiscount(c.brand,c.aggregator);
-  const dailySales=brandDailySalesByBranch(c.brand,c.aggregator); // {date:{branch:netSales}}
-  const allBrandBranches=dataIndex.brandBranches.get(`${c.brand}|${c.aggregator}`)||new Set();
-  // myBranches as a Set of branch names (resolve null scope to ALL the brand's branches on this platform)
-  const myBranches=myScope||allBrandBranches;
-  // Other campaigns of the same brand+platform that could run on any day in this window
-  const myIdx=campaignData.indexOf(c);
-  const others=campaignData.filter((x,i)=>i!==myIdx&&x.brand===c.brand&&x.aggregator===c.aggregator&&!(x.endDate<start||x.startDate>end)&&campStatus(x)!=='Cancelled');
-  let allocatedDisc=0;const dailyAlloc={};const overlapDays=[];
-  // Iterate each day in the window
-  let d=new Date(start+'T12:00:00'),e=new Date(end+'T12:00:00');
-  for(;d<=e;d.setDate(d.getDate()+1)){
-    const key=dk(d);const dayTotal=dailyDisc[key]||0;
-    if(dayTotal<=0)continue;
-    // Which other campaigns are live this day?
-    const liveOthers=others.filter(x=>x.startDate<=key&&x.endDate>=key);
-    // Overlap detection: does any live other share a branch with me?
-    let overlap=false;
-    for(const o of liveOthers){
-      const oScope=campOutlets(o)||allBrandBranches;
-      for(const b of myBranches){if(oScope.has(b)){overlap=true;break;}}
-      if(overlap)break;
-    }
-    if(overlap){overlapDays.push(key);continue;} // skip discount this day; flag it
-    // Build the union of branches covered by me + all live others (the "campaign-covered scope")
-    const unionBranches=new Set(myBranches);
-    for(const o of liveOthers){const oScope=campOutlets(o)||allBrandBranches;for(const b of oScope)unionBranches.add(b);}
-    // Sum net sales for my branches and for the union on this day
-    const daySales=dailySales[key]||{};
-    let mySales=0,unionSales=0;
-    for(const b of myBranches)mySales+=daySales[b]||0;
-    for(const b of unionBranches)unionSales+=daySales[b]||0;
-    // Allocate sales-weighted. If no sales data at all (edge case), fall back to N/M.
-    let share;
-    if(unionSales>0)share=dayTotal*(mySales/unionSales);
-    else share=(myN/M)*dayTotal;
-    dailyAlloc[key]=share;allocatedDisc+=share;
-  }
-  return{allocatedDisc,overlapDays,hadOverlap:overlapDays.length>0,dailyAlloc,M,myN};
+
+  // No exact data for this aggregator at all — pure sales-weighted estimation
+  const _Mest=brandTotalBranches(c.brand,c.aggregator)||1;
+  const _myNest=(campOutlets(c)||new Set()).size||_Mest;
+  const est=estimateCampaignDiscountRange(start,end,null);
+  return{allocatedDisc:est.allocatedDisc,overlapDays:est.overlapDays,hadOverlap:est.overlapDays.length>0,dailyAlloc:est.dailyAlloc,M:_Mest,myN:_myNest,source:"estimated",estimatedDisc:est.allocatedDisc,exactDisc:0};
 }
 
 function campAnalysisV2(c){
@@ -7081,6 +7168,12 @@ function computeDiscountBurn(){
     if(aggregators.length>0&&!aggSet.has(c.aggregator))return false;
     if(brands.length>0&&c.brand!=="All Brands"&&!brandSet.has(c.brand))return false;
     if(campStatus(c)==="Cancelled")return false;
+    // v067: Skip Rewards campaigns (Noon Rewards, Deliveroo Rewards, etc.) from Discount Burn
+    // attribution. They're always-on loyalty programs whose sheet daily aggregate doesn't split
+    // cleanly against the campaign's estimation window. Their discount stays in totalBurn (from
+    // allData) but lands in a small uncategorized bucket — per the user's request, these amounts
+    // are small enough to accept as noise rather than distort other campaigns' attribution.
+    if(isRewardsCampaign(c))return false;
     return true;
   });
   // For each overlapping campaign, compute its burn during the intersection window
@@ -7297,9 +7390,18 @@ function discountCampaignTableHTML(d){
     const c=x.campaign,idx=campaignData.indexOf(c);
     const b=BMAP[c.brand]?.c||'#94a3b8';
     const depth=d.grossSales>0?(x.burnInWindow/d.grossSales*100).toFixed(1):'—';
-    const srcTag=x.source==='keeta_exact'||x.source==='careem_exact'||x.source==='deliveroo_exact'||x.source==='talabat_exact'||x.source==='noon_exact'
-      ? `<span style="font-size:9px;background:rgba(34,197,94,.12);color:#22C55E;padding:1px 6px;border-radius:8px;font-weight:700;margin-left:4px" title="Exact per-order data">✓ Exact</span>`
-      : `<span style="font-size:9px;background:rgba(148,163,184,.12);color:#94a3b8;padding:1px 6px;border-radius:8px;font-weight:700;margin-left:4px" title="Sales-weighted allocation from Google Sheet daily aggregates">≈ Est</span>`;
+    // Source badge: exact / hybrid / assumption. Reflects the v067 hybrid attribution — when the
+    // exact upload only partially covers the campaign window, we use exact for covered days and
+    // sales-weighted estimation (with observed campaign-ratio splitting) for uncovered days.
+    const s=x.source||'';
+    let srcTag;
+    if(s.endsWith('_hybrid')){
+      srcTag=`<span style="font-size:9px;background:rgba(59,130,246,.12);color:#3B82F6;padding:1px 6px;border-radius:8px;font-weight:700;margin-left:4px" title="Partial exact upload + estimation for uncovered days. Reload after uploading fresh exact data to convert the assumption portion to exact.">🟢🔮 Hybrid</span>`;
+    }else if(s.endsWith('_exact')){
+      srcTag=`<span style="font-size:9px;background:rgba(34,197,94,.12);color:#22C55E;padding:1px 6px;border-radius:8px;font-weight:700;margin-left:4px" title="Exact per-order data covers the whole campaign window">✓ Exact</span>`;
+    }else{
+      srcTag=`<span style="font-size:9px;background:rgba(245,158,11,.12);color:#F59E0B;padding:1px 6px;border-radius:8px;font-weight:700;margin-left:4px" title="Sales-weighted estimation from Google Sheet daily aggregates. Will convert to exact/hybrid when the aggregator's per-order upload lands.">🔮 Assumption</span>`;
+    }
     const cfCell=x.coFundInWindow>0?`<div style="color:#3B82F6;font-weight:700">${fmt(x.coFundInWindow)}</div><div style="font-size:9px;color:#94a3b8">${x.coFundPct}% declared</div>`:`<span style="color:#94a3b8">—</span>`;
     return `<tr onclick="discountOpenCampaign(${idx})" style="cursor:pointer" onmouseover="this.style.background='rgba(148,163,184,.06)'" onmouseout="this.style.background=''">
       <td style="padding:9px 8px"><div style="font-weight:700;color:#0F172A">${c.name||'(untitled)'}</div><div style="font-size:10px;color:#64748b;display:flex;align-items:center;gap:5px;margin-top:2px"><span style="width:8px;height:8px;background:${b};border-radius:50%;flex-shrink:0"></span>${c.brand} · ${c.aggregator} ${srcTag}</div></td>
