@@ -13,9 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-069";
+const BUILD_VERSION="2026-07-06-070";
 const BUILD_NOTES=[
-  "🕳️ Fixed settlement-hole gap in hybrid attribution. When an aggregator's upload covers a date range (e.g. Jun 1 – Jul 5) but specific days within that range have NO records (e.g. Jul 5 not yet settled), v067's hybrid only estimated for dates OUTSIDE the envelope (Jul 6+). Days inside the envelope with zero records but non-zero sheet data silently leaked to uncategorized. Now wrapHybrid scans every day inside the covered range and adds any empty-but-sheet-present days to the estimation pool. Fixes the remaining ~27% uncategorized on Talabat × Lollorosso and similar settlement-lag gaps on other brand×aggregator combos."
+  "🎨 Campaign Manager filter bar redesigned per user feedback. Scope pills (All/Dubai/Abu Dhabi/Specific Branch) removed. Filters row now single-line: Brand ▾ · Platform ▾ · Branch ▾ (NEW) · Status ▾ · Start Date → End Date · Clear. Branch is now a proper multi-select dropdown with all outlets (colour-coded by emirate). Applies to campaigns via their outlet scope (campOutlets).",
+  "🔍 Campaign cards enlarged. Brand + aggregator logos went from 20px to 32px, offer text from 9px to 12px (now dark on light chip), dates from 9px to 12px with weight boost. Should be much more readable at a glance.",
+  "📈 Overview Net Sales Trend chart height matched to the Platform bar chart alongside it (was 150px, now 220px). Fixes the empty gap at the bottom of the left chart in the 2-column grid where the grid was stretching both columns to the taller one's height.",
+  "🛡️ Ads Performance export now checks that the CSV's month matches what's currently on screen before writing. If mismatch (usually from a multi-ad-type view overwriting cpcExportData with only the last section's data), you get a confirmation prompt naming both months so you can decide. Not a full fix — the underlying issue where cpcExportData gets clobbered inside cpcRenderOutletLevel needs a proper rewrite of that view — but at least you won't silently export wrong data anymore."
 ];
 
 let _updateDialogShown=false;
@@ -2822,7 +2825,7 @@ function renderOverview(){
 
   document.getElementById("page-overview").innerHTML=makeFilterBar()+
     `<div class="g4">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders),null,ordPerDay)}${kpiCard("Total Net Sales",fmtAED(ls.sales),`${compShort}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales),null,salesPerDay)}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
-    <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:150px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
+    <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:220px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="card" style="padding:14px">
       <div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span>Outlet Highlights by Platform</span><span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0;font-size:10px">click a platform to see its top movers</span></div>
       <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">${verdTabs}</div>
@@ -3796,7 +3799,18 @@ function cpcInvestRec(ag,brand,outlet,curRow,bidOpt){
 // what's on screen (respecting the active aggregator, brand, ad-type and month filters).
 let cpcExportData=null;
 function cpcExportTable(){
-  if(!cpcExportData||!cpcExportData.rows.length){alert("No table data to export.");return;}
+  if(!cpcExportData||!cpcExportData.rows.length){alert("No table data to export. Make sure you're viewing an outlet-level breakdown, then click Export.");return;}
+  // Defensive check — the export data is populated during render (line ~4880). If the user changed
+  // the month filter but the render didn't refresh cpcExportData (e.g. multi-ad-type view has a loop
+  // that overwrites cpcExportData on each iteration), the exported month may not match what's on
+  // screen. Force a mismatch alert rather than silently exporting wrong data. Bug from a prior
+  // version: viewing June but exporting July because cpcExportData was stale.
+  const currentMonth=cpcMonthLabel(cpcMonthFilter);
+  if(cpcExportData.month!==currentMonth&&cpcMonthFilter!=='all'){
+    if(!confirm(`⚠️ Export month mismatch detected.\n\nCurrently viewing: ${currentMonth}\nExport data has: ${cpcExportData.month}\n\nThis usually means the page rendered before the month switch completed. Click OK to export the data currently in memory (${cpcExportData.month}), or Cancel to click the month button again first.`)){
+      return;
+    }
+  }
   const {ag,brand,month,rows,totals}=cpcExportData;
   const headers=["Outlet","Verdict","Clicks","Orders","Sales (AED)","AOV (AED)","CTO %","Budget (AED)","Spent (AED)","Leftover (AED)","ROAS","MoM %","vs Year %","Avg Bid (AED)","FTU","Recommendation"];
   const esc=(v)=>{const s=String(v==null?"":v);return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;};
@@ -5059,7 +5073,7 @@ let campReturnTab='active'; // which tab to return to when leaving the deep-dive
 // ── CPC INVESTMENTS STATE ──
 const CPC_GID="2056065310";
 let cpcData=[],cpcLoaded=false;
-let campFBrands=new Set(),campFPlatforms=new Set(),campFStatuses=new Set();
+let campFBrands=new Set(),campFPlatforms=new Set(),campFStatuses=new Set(),campFBranches=new Set();
 // Date and outlet-scope filters for the campaign list
 let campFStartFrom="",campFStartTo="",campFOutletScope="all"; // outlet scope: all/dxb/auh/specific
 let campSort={col:'startDate',dir:-1};
@@ -5482,7 +5496,7 @@ function campImpactExtended(c){
   return{...base,wowOrdersLift,wowSalesLift,momOrdersLift,momSalesLift,contributionDiff,profitability,discountRate,commRate,campCMRate,baseDailyContribution,campDailyContribution};
 }
 function campSortBy(col){if(campSort.col===col)campSort.dir*=-1;else{campSort.col=col;campSort.dir=-1;}renderCampaigns();}
-function campToggleFilter(type,val){const sets={brand:campFBrands,platform:campFPlatforms,status:campFStatuses};const s=sets[type];if(s.has(val))s.delete(val);else s.add(val);rememberOpenDD();renderCampaigns();restoreOpenDD();}
+function campToggleFilter(type,val){const sets={brand:campFBrands,platform:campFPlatforms,status:campFStatuses,branch:campFBranches};const s=sets[type];if(s.has(val))s.delete(val);else s.add(val);rememberOpenDD();renderCampaigns();restoreOpenDD();}
 // Select-all / clear-all for a filter group (e.g. "All Brands"). Adds every available value.
 function campSelectAll(type){
   const sets={brand:campFBrands,platform:campFPlatforms,status:campFStatuses};
@@ -5500,7 +5514,7 @@ function campSelectAll(type){
 let campOpenDDId=null;
 function rememberOpenDD(){const open=document.querySelector('.dd-menu[data-open="1"]');campOpenDDId=open?open.id:null;}
 function restoreOpenDD(){if(!campOpenDDId)return;const el=document.getElementById(campOpenDDId);if(el){el.classList.add("open");el.style.display="block";el.setAttribute("data-open","1");}}
-function campClearFilters(){campFBrands.clear();campFPlatforms.clear();campFStatuses.clear();renderCampaigns();}
+function campClearFilters(){campFBrands.clear();campFPlatforms.clear();campFStatuses.clear();campFBranches.clear();renderCampaigns();}
 function applyCampFilters(camps){
   return camps.filter(c=>{
     if(campFBrands.size&&!campFBrands.has(c.brand))return false;
@@ -5508,21 +5522,20 @@ function applyCampFilters(camps){
     if(campFStatuses.size&&!campFStatuses.has(campStatus(c)))return false;
     if(campFStartFrom&&c.startDate<campFStartFrom)return false;
     if(campFStartTo&&c.startDate>campFStartTo)return false;
-    if(campFOutletScope&&campFOutletScope!=="all"){
-      const o=(c.outlet||"").toLowerCase();
-      if(campFOutletScope==="dxb"&&!o.includes("dxb")&&!o.includes("dubai"))return false;
-      if(campFOutletScope==="auh"&&!o.includes("auh")&&!o.includes("abu dhabi")&&!o.includes("abudhabi"))return false;
-      if(campFOutletScope==="specific"){
-        // "Specific" = a single named branch (not All/DXB/AUH/blank)
-        const cleaned=o.trim();
-        if(!cleaned||cleaned==="all"||cleaned.includes("dxb")||cleaned.includes("auh")||cleaned.includes("dubai")||cleaned.includes("abu dhabi"))return false;
+    // Branch filter: campaign must include at least one selected branch (via campOutlets),
+    // OR have "All outlets" scope (null from campOutlets = matches everything).
+    if(campFBranches&&campFBranches.size){
+      const scope=campOutlets(c); // null = all
+      if(scope!==null){
+        let hit=false;
+        for(const b of campFBranches){if(scope.has(b)){hit=true;break;}}
+        if(!hit)return false;
       }
     }
     return true;
   });
 }
 function campSetDate(which,val){if(which==="from")campFStartFrom=val;else campFStartTo=val;renderCampaigns();}
-function campSetScope(v){campFOutletScope=v;renderCampaigns();}
 function campClearDates(){campFStartFrom="";campFStartTo="";renderCampaigns();}
 function sortCampaigns(camps){
   const{col,dir}=campSort;
@@ -5546,19 +5559,36 @@ function campFilterBar(){
   const brands=[...new Set(campaignData.map(c=>c.brand))].filter(b=>b!=='All Brands').sort();
   const platforms=[...new Set(campaignData.map(c=>c.aggregator))].sort();
   const statuses=['Running','Upcoming','Completed'];
+  // Branch options — deduped list of all branches across all campaigns' data, grouped by emirate.
+  const branchSet=new Set();
+  allData.forEach(r=>{if(r.branch)branchSet.add(r.branch);});
+  const allBranches=[...branchSet].sort();
   const brDD=ddHTMLCamp('cdd-br','Brand',campFBrands,brands.map(b=>({val:b,lbl:b,clr:BMAP[b]?.c||'#94a3b8'})),'brand');
   const plDD=ddHTMLCamp('cdd-pl','Platform',campFPlatforms,platforms.map(p=>({val:p,lbl:p,clr:AC[p]||'#94a3b8'})),'platform');
+  const branchDD=ddHTMLCamp('cdd-branch','Branch',campFBranches||new Set(),allBranches.map(b=>({val:b,lbl:b,clr:AUH_OUTLETS&&AUH_OUTLETS.has(b)?'#8B5CF6':'#3B82F6'})),'branch');
   const stDD=ddHTMLCamp('cdd-st','Status',campFStatuses,statuses.map(s=>({val:s,lbl:s,clr:s==='Running'?'#22C55E':s==='Upcoming'?'#F59E0B':'#64748b'})),'status');
-  const chips=[...[...campFBrands].map(b=>`<span class="fchip" style="background:${BMAP[b]?.c||'#888'}22;color:${BMAP[b]?.c||'#888'};border:1px solid ${BMAP[b]?.c||'#888'}55" onclick="campToggleFilter('brand','${b}')">✕ ${b}</span>`),...[...campFPlatforms].map(p=>`<span class="fchip" style="background:${AC[p]||'#888'}22;color:${AC[p]||'#888'};border:1px solid ${AC[p]||'#888'}55" onclick="campToggleFilter('platform','${p}')">✕ ${p}</span>`),...[...campFStatuses].map(s=>{const sClr=s==='Running'?'#22C55E':s==='Upcoming'?'#F59E0B':'#64748B';return `<span class="fchip" style="background:${sClr}18;color:${sClr};border:1px solid ${sClr}44" onclick="campToggleFilter('status','${s}')">✕ ${s}</span>`;})].join('');
-  const hasFilters=campFBrands.size||campFPlatforms.size||campFStatuses.size||campFStartFrom||campFStartTo||campFOutletScope!=="all";
-  const clearBtn=hasFilters?`<button class="fpill" onclick="campClearFilters();campClearDates();campSetScope('all')" style="color:#ef4444;border-color:#ef444444">✕ Clear All</button>`:'';
-  // Outlet-scope pills (DXB / AUH / single branch)
-  const scopePill=(v,lbl,icon)=>`<button onclick="campSetScope('${v}')" style="padding:6px 12px;border-radius:8px;border:1px solid ${campFOutletScope===v?'#f59e0b':'#E2E8F0'};background:${campFOutletScope===v?'rgba(245,158,11,.12)':'#FFFFFF'};color:${campFOutletScope===v?'#f59e0b':'#475569'};font-size:11px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all .15s">${icon} ${lbl}</button>`;
-  const scopeRow=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:11px;color:#64748B;font-weight:800;text-transform:uppercase;letter-spacing:.9px;margin-right:2px">Scope</span>${scopePill('all','All','🌐')}${scopePill('dxb','Dubai (DXB)','🏙️')}${scopePill('auh','Abu Dhabi (AUH)','🏛️')}${scopePill('specific','Specific Branch','📍')}</div>`;
-  // Date filter row
-  const inp=(id,val,ph)=>`<input type="date" value="${val||''}" id="${id}" onchange="campSetDate('${id==='cf-from'?'from':'to'}',this.value)" style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:6px 10px;font-size:12px;font-family:inherit;color-scheme:light;font-weight:600" title="${ph}">`;
-  const dateRow=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:11px;color:#64748B;font-weight:800;text-transform:uppercase;letter-spacing:.9px;margin-right:2px">Start Date</span>${inp('cf-from',campFStartFrom,'From')}<span style="color:#94A3B8;font-size:12px">→</span>${inp('cf-to',campFStartTo,'To')}${(campFStartFrom||campFStartTo)?`<button onclick="campClearDates()" style="background:#F1F5F9;border:1px solid #E2E8F0;border-radius:6px;color:#64748B;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600">clear dates</button>`:''}</div>`;
-  return `<div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;padding:14px 16px;margin-bottom:14px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04)"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px"><span style="font-size:11px;color:#64748B;font-weight:800;text-transform:uppercase;letter-spacing:.9px;margin-right:4px">Filters</span>${brDD}${plDD}${stDD}${clearBtn}</div><div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:${chips?'12px':'0'}">${scopeRow}<div style="width:1px;height:22px;background:#E2E8F0"></div>${dateRow}</div>${chips?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid #F1F5F9">${chips}</div>`:''}</div>`;
+  const chips=[
+    ...[...campFBrands].map(b=>`<span class="fchip" style="background:${BMAP[b]?.c||'#888'}22;color:${BMAP[b]?.c||'#888'};border:1px solid ${BMAP[b]?.c||'#888'}55" onclick="campToggleFilter('brand','${b}')">✕ ${b}</span>`),
+    ...[...campFPlatforms].map(p=>`<span class="fchip" style="background:${AC[p]||'#888'}22;color:${AC[p]||'#888'};border:1px solid ${AC[p]||'#888'}55" onclick="campToggleFilter('platform','${p}')">✕ ${p}</span>`),
+    ...(campFBranches?[...campFBranches].map(b=>`<span class="fchip" style="background:rgba(59,130,246,.14);color:#3B82F6;border:1px solid rgba(59,130,246,.35)" onclick="campToggleFilter('branch','${b}')">✕ ${b}</span>`):[]),
+    ...[...campFStatuses].map(s=>{const sClr=s==='Running'?'#22C55E':s==='Upcoming'?'#F59E0B':'#64748B';return `<span class="fchip" style="background:${sClr}18;color:${sClr};border:1px solid ${sClr}44" onclick="campToggleFilter('status','${s}')">✕ ${s}</span>`;})
+  ].join('');
+  const hasFilters=campFBrands.size||campFPlatforms.size||(campFBranches&&campFBranches.size)||campFStatuses.size||campFStartFrom||campFStartTo;
+  const clearBtn=hasFilters?`<button class="fpill" onclick="campClearFilters();campClearDates()" style="color:#ef4444;border-color:#ef444444">✕ Clear</button>`:'';
+  // Inline date inputs (was on a separate Scope row in the old layout — v070 consolidates
+  // everything into a single-row filter bar per user request. Scope pills removed; branch
+  // selection is now a proper multi-select dropdown alongside Brand/Platform/Status.)
+  const inp=(id,val,ph)=>`<input type="date" value="${val||''}" id="${id}" onchange="campSetDate('${id==='cf-from'?'from':'to'}',this.value)" style="background:#FEFDFA;border:1px solid #EDE7D9;border-radius:6px;color:#0F172A;padding:5px 8px;font-size:11px;font-family:inherit;color-scheme:light;font-weight:600;height:30px" title="${ph}">`;
+  const dateBits=`<span style="font-size:10px;color:#64748B;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-left:6px">Dates</span>${inp('cf-from',campFStartFrom,'Start From')}<span style="color:#94A3B8;font-size:12px">→</span>${inp('cf-to',campFStartTo,'Start To')}`;
+  return `<div style="background:#FEFDFA;border:1px solid #EDE7D9;border-radius:12px;padding:12px 14px;margin-bottom:14px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06)">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:11px;color:#64748B;font-weight:800;text-transform:uppercase;letter-spacing:.9px;margin-right:2px">Filters</span>
+      ${brDD}${plDD}${branchDD}${stDD}
+      ${dateBits}
+      ${clearBtn}
+    </div>
+    ${chips?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid #F5F0E5">${chips}</div>`:''}
+  </div>`;
 }
 let calFilter='all',calView='month';
 function setCalFilter(f){calFilter=f;renderCampaigns();}
@@ -5819,18 +5849,18 @@ function campCardGrid(camps,showProfit){
     return `<div onclick="selectCamp(${idx})" style="cursor:pointer;background:linear-gradient(135deg,${accent}0d,rgba(255,255,255,.5));border:1px solid ${accent}33;border-left:3px solid ${accent};border-radius:12px;padding:14px;transition:transform .12s,border-color .12s" onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${accent}77'" onmouseout="this.style.transform='none';this.style.borderColor='${accent}33'">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
         <div style="min-width:0;flex:1">
-          <div style="font-size:13px;font-weight:800;color:#0F172A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.name||'Campaign'}</div>
-          <div style="display:flex;align-items:center;gap:6px;margin-top:5px" title="${c.brand} · ${c.aggregator}">${logoImg(c.brand,20)}<span style="color:#64748b;font-size:11px">×</span>${logoImg(c.aggregator,20)}</div>
+          <div style="font-size:14px;font-weight:800;color:#0F172A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.name||'Campaign'}</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:8px" title="${c.brand} · ${c.aggregator}">${logoImg(c.brand,32)}<span style="color:#94a3b8;font-size:14px;font-weight:600">×</span>${logoImg(c.aggregator,32)}</div>
         </div>
-        <span style="padding:2px 7px;border-radius:6px;background:${stClr}22;color:${stClr};font-size:8px;font-weight:800;border:1px solid ${stClr}44;white-space:nowrap">${st.toUpperCase()}</span>
+        <span style="padding:3px 8px;border-radius:6px;background:${stClr}22;color:${stClr};font-size:9px;font-weight:800;border:1px solid ${stClr}44;white-space:nowrap">${st.toUpperCase()}</span>
       </div>
-      <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
-        <span style="font-size:9px;color:#475569;background:rgba(255,255,255,.05);padding:1px 7px;border-radius:6px">${offer}</span>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:10px;flex-wrap:wrap">
+        <span style="font-size:12px;color:#0F172A;background:rgba(15,23,42,.05);padding:3px 9px;border-radius:6px;font-weight:700">${offer}</span>
         ${coFundChip}
         ${exactChip}
         ${subsidyChip}
       </div>
-      <div style="font-size:9px;color:#64748b;margin-top:4px">📅 ${dateStr}</div>
+      <div style="font-size:12px;color:#475569;margin-top:8px;font-weight:600">📅 ${dateStr}</div>
       ${headlineHTML}
     </div>`;
   }).join('');
@@ -9137,7 +9167,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     cpcGoAgg,cpcGoBrands,cpcGoOutlets,cpcSetSort,cpcSetAdType,cpcSetMonth,cpcOpenOutletDetail,cpcCloseOutletDetail,cpcExportTable,cpcSetView,
     cpcHistSetFilter,cpcHistToggleCompare,cpcCompSet,cpcSetAggMonth,cpcResetAggMonth,
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
-    sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campSetScope,campClearDates,campSetElasticity,
+    sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campClearDates,campSetElasticity,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,cmpToggleExpand,
     injectCompareTab,loadKPIData,doLoad,
     dismissUpdateModal,hardRefreshNow,dismissWhatsNew,showWhatsNewIfNeeded,
