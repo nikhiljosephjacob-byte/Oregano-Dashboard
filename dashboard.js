@@ -13,9 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-071";
+const BUILD_VERSION="2026-07-06-072";
 const BUILD_NOTES=[
-  "🗓️ Fixed Talabat DD-MM-YYYY date parsing. Previous code fell through to JavaScript's `new Date(s)` on unrecognised formats, which defaults to US MM-DD-YYYY interpretation — so a source date of `01-06-2026` (June 1 in UAE convention) landed as January 6, 2026. This caused the freshness strip to show \"6 Jan-6 Dec\" with 56 unique dates scattered across the year instead of a clean Jun 1-Jul 8 range. Parser now explicitly matches DD-MM-YYYY / DD/MM/YYYY format BEFORE the fallback: if the day component is >12 (unambiguously the day) values are swapped correctly; if both ≤12 (ambiguous) we default to DD-MM per UAE convention. To wipe the currently-stored corrupt data, open DevTools console and run: `clearTalabatData()` — then re-upload your Talabat file. Same fix pattern may need to be applied to the Deliveroo parser if you see similar date anomalies there."
+  "🎯 Fixed discount allocation for branch-scoped Talabat campaigns with 'All Locations Except X' outlet fields. Previous code matched the leading 'all' via /^all\\b/ and treated 'All Locations Except Jumeirah' as covering ALL branches — including Jumeirah — which caused false-positive overlap detection with concurrent Jumeirah-only campaigns (e.g. Smokeys × Talabat Super Saver on Jumeirah vs World Cup Deals on everywhere-else). Both got 0 attribution, no ROI shown. Parser now checks 'all ... except X, Y' pattern BEFORE the isAllField check, subtracts the excluded branches from the brand's full set, and returns the correctly-scoped result. Supports comma/and-separated lists, DXB/AUH region tokens, and single branch names.",
+  "📊 Added Discount Burn as a 5th KPI tile on the Overview page. Shows total merchant discount for the current filter (brand × platform × branch × date range), comparison-period value, and depth-of-gross % ('e.g. 15.2% of gross'). Layout auto-collapses to 2×3 on mobile.",
+  "⚡ Major performance fix for Campaign Manager warm-up. observedCampaignRatio was scanning ~2,700 Talabat records for every one of ~1,270 campaigns during the initial warm-up pass — millions of ops on each page load. Added memoization keyed on (aggregator, brand, coveredStart, coveredEnd) so campaigns sharing the same brand+aggregator hit the cache. Warm-up should be dramatically faster (~10-50× depending on record volumes). Cache is invalidated at every clearXxxData / upload merge point."
 ];
 
 let _updateDialogShown=false;
@@ -490,7 +492,7 @@ function saveKeetaToStorage(){
 function clearKeetaData(){
   keetaOrdersData=null;
   try{localStorage.removeItem(KEETA_STORAGE_KEY);}catch(e){}
-  if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
+  if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
   renderCampaigns();
 }
 
@@ -1011,7 +1013,7 @@ async function handleOrdersUpload(filesOrFile){
     }
   }
 
-  if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
+  if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
   renderCampaigns();
 
   // Summary alert — one message even when multiple files are processed.
@@ -1092,7 +1094,7 @@ function saveCareemToStorage(){
 function clearCareemData(){
   careemOrdersData=null;
   try{localStorage.removeItem(CAREEM_STORAGE_KEY);}catch(e){}
-  if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
+  if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
   renderCampaigns();
 }
 
@@ -1322,7 +1324,7 @@ function saveTalabatToStorage(){
 function clearTalabatData(){
   talabatOrdersData=null;
   try{localStorage.removeItem(TALABAT_STORAGE_KEY);}catch(e){}
-  if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
+  if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
   renderCampaigns();
 }
 
@@ -1574,7 +1576,7 @@ function saveDeliverooToStorage(){
 function clearDeliverooData(){
   deliverooOrdersData=null;
   try{localStorage.removeItem(DELIVEROO_STORAGE_KEY);}catch(e){}
-  if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
+  if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
   renderCampaigns();
 }
 
@@ -1858,7 +1860,7 @@ function saveNoonToStorage(){
 function clearNoonData(){
   noonOrdersData=null;
   try{localStorage.removeItem(NOON_STORAGE_KEY);}catch(e){}
-  if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
+  if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
   renderCampaigns();
 }
 
@@ -2834,7 +2836,16 @@ function renderOverview(){
   const heads=["","Orders","Net Sales","AOV",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
 
   document.getElementById("page-overview").innerHTML=makeFilterBar()+
-    `<div class="g4">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders),null,ordPerDay)}${kpiCard("Total Net Sales",fmtAED(ls.sales),`${compShort}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales),null,salesPerDay)}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
+    `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders),null,ordPerDay)}${kpiCard("Total Net Sales",fmtAED(ls.sales),`${compShort}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales),null,salesPerDay)}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${(()=>{
+      // Discount Burn KPI (v072) — merchant discount from allData for the filtered period.
+      // Uses same filters (brand/platform/branch/date) as the other KPIs above via `ld`/`ps`.
+      // Depth-of-gross % helps benchmark burn vs gross sales at a glance.
+      const gross=ls.sales+(ls.disc||0);
+      const depth=gross>0?((ls.disc||0)/gross*100):0;
+      const priorGross=ps.sales+(ps.disc||0);
+      const priorDepth=priorGross>0?((ps.disc||0)/priorGross*100):0;
+      return kpiCard("Discount Burn",fmtAED(ls.disc||0),`${compShort}: ${fmtAED(ps.disc||0)} · ${depth.toFixed(1)}% of gross`,pctOf(ls.disc||0,ps.disc||0));
+    })()}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
     <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:220px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="card" style="padding:14px">
       <div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span>Outlet Highlights by Platform</span><span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0;font-size:10px">click a platform to see its top movers</span></div>
@@ -5078,6 +5089,10 @@ let selDay=null;let campaignData=[],campLoaded=false,campTab='active',calMonth=n
 // Campaign analysis cache — campAnalysisV2 scans allData repeatedly, so memoize per campaign.
 // Keyed by campaign index + elasticity + latest date. Cleared when data reloads.
 let campAnalysisCache=new Map();
+// Memoization for observedCampaignRatio (v072) — significant campaign-page speed-up.
+// Invalidated whenever an exact upload changes (each clearXxxData / merge already resets
+// campAnalysisCache; we hook the same points to clear this cache too).
+let _observedRatioCache=new Map();
 let campModelBuilt=false,campModelBuilding=false;
 let campReturnTab='active'; // which tab to return to when leaving the deep-dive
 // ── CPC INVESTMENTS STATE ──
@@ -5381,6 +5396,30 @@ function campOutlets(c){
   const raw=(c.outlet||"").trim();
   const rawLower=raw.toLowerCase();
   const brandBranches=[...new Set(allData.filter(r=>c.brand==="All Brands"||r.brand===c.brand).map(r=>r.branch))].filter(b=>b!=="(brand-level)");
+  // Detect exclusion pattern in the outlet field itself: "All Locations Except Jumeirah",
+  // "All branches except Al Reef", "All except AUH", etc. Previously the leading "all" made
+  // this match isAllField and Jumeirah-only campaigns were never actually excluded, causing
+  // false-positive overlap detection with the true Jumeirah-only campaign on the same brand+
+  // aggregator (e.g. Smokeys × Talabat July had "Super Saver" on Jumeirah + "World Cup Deals"
+  // on "All Locations Except Jumeirah" — both were treated as covering Jumeirah, both got 0
+  // attribution, no ROI shown).
+  const exceptMatch=rawLower.match(/^all[\s\w]*?\bexcept\b\s+(.+)$/i);
+  if(exceptMatch){
+    const exclusionText=exceptMatch[1].replace(/\b(only|outlets?|locations?|branches?|stores?)\b/gi,"").trim();
+    const exclusionTokens=exclusionText.split(/[,;+/&]+|\s+and\s+|\s+\+\s+/i).map(t=>t.trim()).filter(Boolean);
+    const excluded=new Set();
+    exclusionTokens.forEach(tok=>{
+      const tl=tok.toLowerCase().trim();
+      if(tl==="dxb"||tl==="dubai"){brandBranches.forEach(b=>{if(!AUH_OUTLETS.has(b))excluded.add(b);});return;}
+      if(tl==="auh"||tl==="abudhabi"||tl==="abu dhabi"){brandBranches.forEach(b=>{if(AUH_OUTLETS.has(b))excluded.add(b);});return;}
+      const r=resolveBranchName(tok,brandBranches);
+      if(r)excluded.add(r);
+    });
+    if(excluded.size){
+      const result=new Set(brandBranches.filter(b=>!excluded.has(b)));
+      return result.size?result:null;
+    }
+  }
   // Step 1: resolve the outlet field into an initial set (or null = all)
   let base=null;
   const isAllField=!raw||/^all\b/i.test(raw)||raw==="—"||raw==="-"||/^select\s+locations?/i.test(raw)||/^specific\s+locations?/i.test(raw)||/^selected\s+(branches?|outlets?)/i.test(raw);
@@ -6088,9 +6127,15 @@ function allocateCampaignDiscount(c,start,end){
   // days. For Keeta (where the parser tags each order with a specific campaign via item matching)
   // this reflects the actual customer purchasing behaviour we've already seen. Returns
   // {campaignName: fraction, ...} or null if no exact records exist for this brand+aggregator.
+  // Memoized (v072): pre-v072 this scanned ALL exact records (up to ~2700 for Talabat) for every
+  // single campaign in the analysis warm-up pass. With ~1270 campaigns that's millions of ops per
+  // page load. Cache keys on (aggregator, brand, coveredStart, coveredEnd) so many campaigns on
+  // the same brand share the same result.
   const observedCampaignRatio=(coveredStart,coveredEnd)=>{
+    const ck=`${c.aggregator}|${c.brand}|${coveredStart}|${coveredEnd}`;
+    if(_observedRatioCache.has(ck))return _observedRatioCache.get(ck);
     const data=getExactData(c.aggregator);
-    if(!data||!data.records||data.records.length===0)return null;
+    if(!data||!data.records||data.records.length===0){_observedRatioCache.set(ck,null);return null;}
     const byCampaign={};
     for(const rec of data.records){
       if(rec.brand!==c.brand)continue;
@@ -6099,9 +6144,10 @@ function allocateCampaignDiscount(c,start,end){
       byCampaign[rec.campaign]=(byCampaign[rec.campaign]||0)+(rec.menu_disc||0);
     }
     const total=Object.values(byCampaign).reduce((s,v)=>s+v,0);
-    if(total<=0)return null;
+    if(total<=0){_observedRatioCache.set(ck,null);return null;}
     const ratios={};
     for(const[name,sum]of Object.entries(byCampaign))ratios[name]=sum/total;
+    _observedRatioCache.set(ck,ratios);
     return ratios;
   };
   // Declared-discount % fallback ratio. Extracts headline % from each campaign's comment/name and
