@@ -13,12 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-067";
+const BUILD_VERSION="2026-07-06-068";
 const BUILD_NOTES=[
-  "🔮 Hybrid attribution — when an aggregator's exact upload only covers PART of a campaign's window (e.g. Keeta upload covers Jul 1-7 but the campaign runs Jul 1-31, or Noon/Deliveroo weekly-lag scenario), the dashboard now uses exact for covered days AND runs sales-weighted estimation for uncovered days. Combined into a single attributed amount. Previously the uncovered portion silently leaked to uncategorized — that was the AED 16,105 Lollorosso × Keeta July gap. Once you re-upload the aggregator's file covering the missing dates, the assumption portion converts to exact automatically on next render.",
-  "🎯 Item-informed overlap split — when two same-brand-aggregator campaigns run concurrently (e.g. Keeta Lollorosso has \"50% OFF CAP 30\" entire menu + \"OFU Item Keeta\" running simultaneously), instead of both getting 0 attribution and leaking to uncategorized, we now split the daily discount using the observed campaign-ratio from exact-covered days. If exact data doesn't exist, fall back to weighting by declared discount % from sheet comments.",
-  "🎁 Rewards campaigns (Noon Rewards, Deliveroo Rewards) are now excluded from Discount Burn Analysis attribution entirely. Their small always-on discount amount stays in Total Burn but doesn't clog the campaign attribution.",
-  "🏷️ New source badges: ✓ Exact (fully covered by exact upload), 🟢🔮 Hybrid (partial exact + assumption for uncovered days), 🔮 Assumption (pure sales-weighted estimation). Visible on campaign card chips, Discount Burn breakdown table, and Co-Fund audit table."
+  "🐛 Critical fix: mergeKeetaFDAddons was silently deleting 6 of 11 Keeta campaigns from the dashboard. The regex `\\bFD\\b` matched the footnote \"+ FD (AED 2)\" in campaign comments, treating 50% OFF CAP 30, 25% OFF Select Items, and other real discount campaigns as if they were Free Delivery addon rows. These got merged into the first available parent campaign and removed from campaignData entirely — causing massive uncategorized burn across ALL Keeta brands. Fix: the FD classifier now only checks the campaign NAME (not comment), and only matches names that are purely about free delivery (\"FD\", \"Free Delivery\", \"Keeta FD\"). Comment footnotes about FD cost-sharing are no longer misinterpreted."
 ];
 
 let _updateDialogShown=false;
@@ -5102,7 +5099,26 @@ function parseCampaigns(csv){
   return mergeKeetaFDAddons(recs);
 }
 function mergeKeetaFDAddons(recs){
-  const isFD=c=>c.aggregator==='Keeta'&&/(\bfd\b|free\s*delivery)/i.test(c.comments+' '+c.name);
+  // Detect Keeta "Free Delivery" campaigns that should be merged as addons to a parent
+  // discount campaign. These are rows whose ENTIRE PURPOSE is the FD subsidy — NOT regular
+  // discount campaigns that happen to mention "+ FD (AED 2)" as a cost-sharing footnote.
+  //
+  // Pre-v068 bug: the regex `\bFD\b` matched "50% OFF CAP 30 + FD (AED 2)" → silently
+  // deleted 6 of 11 Keeta campaigns from campaignData. The comment footnote "FD (AED 2)"
+  // means "this campaign also includes a free-delivery cost share of AED 2 per order" — it's
+  // NOT a free-delivery campaign. Real FD-only campaigns have names like "Free Delivery" or
+  // "FD" with nothing else substantive.
+  //
+  // New rule: a campaign is FD-only if its NAME (not comment) is essentially just "FD" or
+  // "Free Delivery" — possibly with a brand suffix. Comment text is ignored for classification.
+  const isFD=c=>{
+    if(c.aggregator!=='Keeta')return false;
+    const name=(c.name||'').trim().toLowerCase();
+    // Match names that are purely about free delivery:
+    //   "FD", "FD AED 2", "Free Delivery", "Keeta FD", etc.
+    // Do NOT match: "50% OFF CAP 30", "25% OFF Select Items", "OFU Item Keeta", etc.
+    return /^(keeta\s+)?f\.?d\.?(\s|$)/i.test(name) || /^free\s*delivery/i.test(name);
+  };
   const fdRows=recs.filter(isFD),nonFD=recs.filter(c=>!isFD(c));
   fdRows.forEach(fd=>{const parent=nonFD.find(p=>p.aggregator==='Keeta'&&p.brand===fd.brand&&p.startDate<=fd.endDate&&p.endDate>=fd.startDate);if(parent){parent.addons=parent.addons||[];parent.addons.push({name:'FD AED 2',comments:fd.comments,startDate:fd.startDate,endDate:fd.endDate});}else{nonFD.push(fd);}});
   return nonFD;
