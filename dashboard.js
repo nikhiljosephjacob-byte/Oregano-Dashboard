@@ -13,12 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-070";
+const BUILD_VERSION="2026-07-06-071";
 const BUILD_NOTES=[
-  "🎨 Campaign Manager filter bar redesigned per user feedback. Scope pills (All/Dubai/Abu Dhabi/Specific Branch) removed. Filters row now single-line: Brand ▾ · Platform ▾ · Branch ▾ (NEW) · Status ▾ · Start Date → End Date · Clear. Branch is now a proper multi-select dropdown with all outlets (colour-coded by emirate). Applies to campaigns via their outlet scope (campOutlets).",
-  "🔍 Campaign cards enlarged. Brand + aggregator logos went from 20px to 32px, offer text from 9px to 12px (now dark on light chip), dates from 9px to 12px with weight boost. Should be much more readable at a glance.",
-  "📈 Overview Net Sales Trend chart height matched to the Platform bar chart alongside it (was 150px, now 220px). Fixes the empty gap at the bottom of the left chart in the 2-column grid where the grid was stretching both columns to the taller one's height.",
-  "🛡️ Ads Performance export now checks that the CSV's month matches what's currently on screen before writing. If mismatch (usually from a multi-ad-type view overwriting cpcExportData with only the last section's data), you get a confirmation prompt naming both months so you can decide. Not a full fix — the underlying issue where cpcExportData gets clobbered inside cpcRenderOutletLevel needs a proper rewrite of that view — but at least you won't silently export wrong data anymore."
+  "🗓️ Fixed Talabat DD-MM-YYYY date parsing. Previous code fell through to JavaScript's `new Date(s)` on unrecognised formats, which defaults to US MM-DD-YYYY interpretation — so a source date of `01-06-2026` (June 1 in UAE convention) landed as January 6, 2026. This caused the freshness strip to show \"6 Jan-6 Dec\" with 56 unique dates scattered across the year instead of a clean Jun 1-Jul 8 range. Parser now explicitly matches DD-MM-YYYY / DD/MM/YYYY format BEFORE the fallback: if the day component is >12 (unambiguously the day) values are swapped correctly; if both ≤12 (ambiguous) we default to DD-MM per UAE convention. To wipe the currently-stored corrupt data, open DevTools console and run: `clearTalabatData()` — then re-upload your Talabat file. Same fix pattern may need to be applied to the Deliveroo parser if you see similar date anomalies there."
 ];
 
 let _updateDialogShown=false;
@@ -1407,8 +1404,21 @@ function parseTalabatDate(v){
     if(dt)return`${dt.y}-${String(dt.m).padStart(2,"0")}-${String(dt.d).padStart(2,"0")}`;
   }
   const s=String(v).trim();
+  // ISO YYYY-MM-DD — unambiguous, use as-is
   if(/^\d{4}-\d{2}-\d{2}/.test(s))return s.slice(0,10);
-  // Fallback: best-effort Date parse
+  // DD-MM-YYYY / DD/MM/YYYY (UAE convention) — check BEFORE new Date() which defaults to
+  // US MM-DD-YYYY interpretation and would flip "01-06-2026" (June 1) into January 6.
+  // Bug that made 56 records land on 2026-01-06..2026-12-06 instead of Jun-Jul.
+  const ddmm=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:\s|$)/);
+  if(ddmm){
+    let d=parseInt(ddmm[1],10),m=parseInt(ddmm[2],10);const y=parseInt(ddmm[3],10);
+    if(d>12&&m>12)return null; // both > 12: not a valid DD-MM or MM-DD, skip
+    if(m>12){const t=d;d=m;m=t;} // m > 12 must actually be the day → swap
+    // Otherwise both ≤ 12: default to DD-MM (UAE / most-of-world convention)
+    if(d<1||d>31||m<1||m>12)return null;
+    return`${y}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  }
+  // Fallback: best-effort Date parse (for formats like "1 Jul 2026 at 11:36" etc.)
   const d=new Date(s);
   if(isNaN(d.getTime()))return null;
   return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
