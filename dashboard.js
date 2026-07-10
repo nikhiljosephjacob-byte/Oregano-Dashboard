@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-068";
+const BUILD_VERSION="2026-07-06-069";
 const BUILD_NOTES=[
-  "🐛 Critical fix: mergeKeetaFDAddons was silently deleting 6 of 11 Keeta campaigns from the dashboard. The regex `\\bFD\\b` matched the footnote \"+ FD (AED 2)\" in campaign comments, treating 50% OFF CAP 30, 25% OFF Select Items, and other real discount campaigns as if they were Free Delivery addon rows. These got merged into the first available parent campaign and removed from campaignData entirely — causing massive uncategorized burn across ALL Keeta brands. Fix: the FD classifier now only checks the campaign NAME (not comment), and only matches names that are purely about free delivery (\"FD\", \"Free Delivery\", \"Keeta FD\"). Comment footnotes about FD cost-sharing are no longer misinterpreted."
+  "🕳️ Fixed settlement-hole gap in hybrid attribution. When an aggregator's upload covers a date range (e.g. Jun 1 – Jul 5) but specific days within that range have NO records (e.g. Jul 5 not yet settled), v067's hybrid only estimated for dates OUTSIDE the envelope (Jul 6+). Days inside the envelope with zero records but non-zero sheet data silently leaked to uncategorized. Now wrapHybrid scans every day inside the covered range and adds any empty-but-sheet-present days to the estimation pool. Fixes the remaining ~27% uncategorized on Talabat × Lollorosso and similar settlement-lag gaps on other brand×aggregator combos."
 ];
 
 let _updateDialogShown=false;
@@ -6142,14 +6142,50 @@ function allocateCampaignDiscount(c,start,end){
   const wrapHybrid=(exactResult,exactSourceName)=>{
     const _M=brandTotalBranches(c.brand,c.aggregator)||1;
     const _myN=(campOutlets(c)||new Set()).size||_M;
+    // Uncovered ranges from the OUTER envelope (dates fully outside the upload range)
     const uncoveredRanges=computeUncoveredRanges(start,end);
+    // Settlement holes: days WITHIN the upload range that have zero exact records but DO have
+    // sheet data. Common on Talabat where settlement lags 1-3 days behind order date — the upload
+    // date_range says "I cover through Jul 5" but Jul 5 actually has no settled records yet.
+    // These holes silently leaked to uncategorized in v067 because the hybrid only estimated for
+    // dates outside the envelope, not for empty days inside it.
+    const dailyDisc=brandDailyDiscount(c.brand,c.aggregator);
+    const exactDaily=exactResult.dailyAlloc||{};
+    const data=getExactData(c.aggregator);
+    const dr=data&&data.metadata&&data.metadata.date_range;
+    if(dr&&dr[0]&&dr[1]){
+      const holeStart=start>dr[0]?start:dr[0];
+      const holeEnd=end<dr[1]?end:dr[1];
+      let d=new Date(holeStart+'T12:00:00');const e=new Date(holeEnd+'T12:00:00');
+      let holeRangeStart=null;
+      const flushHole=(beforeDate)=>{
+        if(holeRangeStart){
+          const hEnd=dateBefore(dk(beforeDate));
+          if(hEnd>=holeRangeStart)uncoveredRanges.push([holeRangeStart,hEnd]);
+          holeRangeStart=null;
+        }
+      };
+      for(;d<=e;d.setDate(d.getDate()+1)){
+        const key=dk(d);
+        const hasExact=(exactDaily[key]||0)>0.01;
+        const hasSheet=(dailyDisc[key]||0)>0.01;
+        if(!hasExact&&hasSheet){
+          if(!holeRangeStart)holeRangeStart=key;
+        }else{
+          flushHole(d);
+        }
+      }
+      // Flush any trailing hole
+      if(holeRangeStart){
+        uncoveredRanges.push([holeRangeStart,dk(e)]);
+      }
+    }
     let extraEstimated=0;const extraDailyAlloc={};const extraOverlapDays=[];
     if(uncoveredRanges.length>0){
       // Compute observed ratio for the covered portion of the campaign window
-      const data=getExactData(c.aggregator);
-      const dr=data&&data.metadata&&data.metadata.date_range||[start,end];
-      const covStart=start>dr[0]?start:dr[0];
-      const covEnd=end<dr[1]?end:dr[1];
+      const drr=data&&data.metadata&&data.metadata.date_range||[start,end];
+      const covStart=start>drr[0]?start:drr[0];
+      const covEnd=end<drr[1]?end:drr[1];
       const observedRatios=observedCampaignRatio(covStart,covEnd);
       for(const[uStart,uEnd]of uncoveredRanges){
         const est=estimateCampaignDiscountRange(uStart,uEnd,observedRatios);
