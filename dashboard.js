@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-075";
+const BUILD_VERSION="2026-07-06-077";
 const BUILD_NOTES=[
-  "💸 Discount Burn + Depth % now visible on all main dashboard pages. Brands page: new KPI tile (with inverted colour — lower = green) + two new table columns in the Outlet × Platform breakdown. Outlets page: new KPI tile in the outlet detail view + two new columns in both the Brand Performance and Brand × Platform tables + a discount burn line on each outlet grid card (shows amount + depth %). Platforms page: new KPI tile + two new columns in the Brand Performance table. All colour-coded: green (<10% depth), amber (10-20%), red (>20%). Also fixed mkMap() to accumulate the disc field — without this, per-outlet and per-brand×platform rows in the Brands page would show '—' for discount."
+  "📊 Outlet discount burn now reads directly from the Google Sheet's per-outlet Disc column — not proportionally estimated from brand-level totals. Pre-v077 the parser assumed the Sheet's Disc column was a brand-level total repeated on each row, so it took Math.max and spread it by sales ratio. In reality the Sheet has actual per-outlet discount data (different amounts per outlet per aggregator per date). Now each outlet record carries its own Sheet discount. When you later upload the aggregator's exact order file, the exact per-order data takes priority for campaign attribution — the Sheet values serve as the initial baseline that gets corrected."
 ];
 
 let _updateDialogShown=false;
@@ -315,6 +315,27 @@ function fmtAED(n){if(n>=1e6)return`AED ${(n/1e6).toFixed(2)}M`;if(n>=1000)retur
 function fmtAEDExact(n){return`AED ${Math.round(n||0).toLocaleString()}`;}
 function pctOf(a,b){if(!b||b===0)return null;return((a-b)/b)*100;}
 function fmtPct(n,d="—"){if(n==null||typeof n!=="number"||isNaN(n))return d;return`${n>=0?"+":""}${n.toFixed(1)}%`;}
+// Format a change cell showing both absolute difference and percentage. Used in tables where
+// just showing "+15.2%" leaves the user wondering whether that's AED 200 or AED 20,000.
+function fmtChgCell(cur,prev,isMoney){
+  const pct=pctOf(cur,prev);
+  const diff=cur-(prev||0);
+  const clr=pctClr(pct);
+  const absFmt=isMoney?fmtAED(Math.abs(diff)):Math.abs(Math.round(diff)).toLocaleString();
+  if(pct==null||isNaN(pct))return'<span style="color:#94a3b8">—</span>';
+  const sign=diff>=0?'+':'−';
+  return`<span style="color:${clr};font-weight:700">${fmtPct(pct)}</span><div style="font-size:10px;color:#94a3b8;font-weight:500;margin-top:1px">${sign}${absFmt}</div>`;
+}
+// Inverted version for discount burn — decrease is green
+function fmtChgCellInv(cur,prev,isMoney){
+  const pct=pctOf(cur,prev);
+  const diff=cur-(prev||0);
+  const clr=pctClr(pct!=null?-pct:null);
+  const absFmt=isMoney?fmtAED(Math.abs(diff)):Math.abs(Math.round(diff)).toLocaleString();
+  if(pct==null||isNaN(pct))return'<span style="color:#94a3b8">—</span>';
+  const sign=diff>=0?'+':'−';
+  return`<span style="color:${clr};font-weight:700">${fmtPct(pct)}</span><div style="font-size:10px;color:#94a3b8;font-weight:500;margin-top:1px">${sign}${absFmt}</div>`;
+}
 function pctClr(n){if(n==null)return"#64748b";if(n>=15)return"#22C55E";if(n>=3)return"#86EFAC";if(n>=0)return"#A3E635";if(n>=-15)return"#FBBF24";return"#EF4444";}
 
 // ═══════════════════════════════════════════════════════════════
@@ -2076,34 +2097,46 @@ function parseBrand(csv,brand){
     }
   }catch(e){}
   const recs=[];
-  // Discount is a BRAND-level total per aggregator per day (not per branch). It may appear
-  // repeated on each branch row, only on one row, or on a summary row with no sales. So we
-  // capture it separately per brand|aggregator|date, taking the single representative value
-  // (the max non-zero seen for that day) rather than summing across branch rows.
-  const discMap={}; // `${agg}|${date}` -> discount AED for this brand
-  for(let i=ai+2;i<rows.length;i++){
-    const row=rows[i];const date=parseDate(row[1]);if(!date)continue;const key=dk(date);
-    cols.forEach(({i:idx,agg,m})=>{if(m!=="Disc")return;const v=toN(row[idx]);if(v>0){const dk2=`${agg}|${key}`;discMap[dk2]=Math.max(discMap[dk2]||0,v);}});
-  }
   for(let i=ai+2;i<rows.length;i++){
     const row=rows[i];let br=normB(row[0]?.trim()||"");
     if(!br||SKIP_BR.has(br.toLowerCase().trim()))continue;
     if(brand==='Fyoozhen'&&br==='DIP')br='DIP (Fyoozhen)';
     const date=parseDate(row[1]);if(!date)continue;const key=dk(date);
     const branchFinal=(brand==='Fyoozhen'&&br==='DIP')?'Fyoozhen DIP':br;
-    const am={};cols.forEach(({i:idx,agg,m})=>{if(m==="Disc")return;if(!am[agg])am[agg]={Sales:0,Orders:0};am[agg][m]=toN(row[idx]);});
-    Object.entries(am).forEach(([agg,d])=>{if(d.Sales>0||d.Orders>0)recs.push({brand,branch:branchFinal,date:key,aggregator:agg,sales:d.Sales,orders:d.Orders,disc:0,aov:d.Orders>0?d.Sales/d.Orders:0});});
+    // Read ALL metrics including Disc directly per outlet. Pre-v077 the parser skipped Disc
+    // here and attached it later as a brand-level total (via discMap taking Math.max across
+    // branch rows). That assumed the Sheet's Disc column was a brand-level total duplicated
+    // on each row. User confirmed the Sheet actually has per-outlet discount data — different
+    // amounts per outlet. So we read it directly, and the outlet-level views show the real
+    // per-outlet discount from the Sheet. When exact order-level data is uploaded later, it
+    // replaces/corrects these sheet-sourced figures.
+    const am={};
+    cols.forEach(({i:idx,agg,m})=>{
+      if(!am[agg])am[agg]={Sales:0,Orders:0,Disc:0};
+      am[agg][m]=toN(row[idx]);
+    });
+    Object.entries(am).forEach(([agg,d])=>{
+      if(d.Sales>0||d.Orders>0||d.Disc>0)
+        recs.push({brand,branch:branchFinal,date:key,aggregator:agg,sales:d.Sales,orders:d.Orders,disc:d.Disc||0,aov:d.Orders>0?d.Sales/d.Orders:0});
+    });
   }
-  // Attach the brand-level discount to ONE record per brand/aggregator/date (so summing across
-  // branches gives the true brand-level discount, not a per-branch multiple). Remaining branch
-  // records for that day keep disc:0.
-  const discAttached={};
-  recs.forEach(r=>{const dk2=`${r.aggregator}|${r.date}`;if(discMap[dk2]&&!discAttached[dk2]){r.disc=discMap[dk2];discAttached[dk2]=true;}});
-  // If a discount exists for a day but NO sales record matched (e.g. discount on a summary row
-  // and sales recorded under a branch we already used), it's still attached above. If there was
-  // literally no sales record for that agg/day, surface a synthetic disc-only record so the
-  // campaign discount total stays accurate.
-  Object.keys(discMap).forEach(dk2=>{if(!discAttached[dk2]){const [agg,date]=dk2.split("|");recs.push({brand,branch:"(brand-level)",date,aggregator:agg,sales:0,orders:0,disc:discMap[dk2],aov:0});discAttached[dk2]=true;}});
+  // Fallback: if the Sheet has discount on a summary row with no matching outlet row (rare),
+  // capture it as a synthetic brand-level record so it's not silently lost.
+  const discMap={}; // rebuild from recs to check for gaps
+  const discFromRecs={};
+  recs.forEach(r=>{const k=`${r.aggregator}|${r.date}`;discFromRecs[k]=(discFromRecs[k]||0)+r.disc;});
+  // Re-scan for any disc values in the Sheet that didn't attach to an outlet record
+  for(let i=ai+2;i<rows.length;i++){
+    const row=rows[i];const date=parseDate(row[1]);if(!date)continue;const key=dk(date);
+    cols.forEach(({i:idx,agg,m})=>{if(m!=="Disc")return;const v=toN(row[idx]);if(v>0){const dk2=`${agg}|${key}`;discMap[dk2]=Math.max(discMap[dk2]||0,v);}});
+  }
+  Object.entries(discMap).forEach(([dk2,sheetMax])=>{
+    if(!discFromRecs[dk2]||discFromRecs[dk2]<1){
+      // Disc exists in sheet but no outlet record captured it — add synthetic
+      const [agg,date]=dk2.split("|");
+      recs.push({brand,branch:"(brand-level)",date,aggregator:agg,sales:0,orders:0,disc:sheetMax,aov:0});
+    }
+  });
   return recs;
 }
 
@@ -2821,26 +2854,28 @@ function renderOverview(){
     const disc=b.cv.disc||0;
     const gross=b.cv.sales+disc;
     const depth=gross>0?(disc/gross*100):0;
+    const pv=BR.find(x=>x.n===b.n)?sumR(pd.filter(r=>r.brand===b.n)):{sales:0,orders:0,disc:0};
     return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.n,22)}<strong style="color:${b.c}">${b.n}</strong></span>`,
       b.cv.orders.toLocaleString(),fmtAED(b.cv.sales),b.cv.orders>0?`AED ${aov.toFixed(1)}`:'—',
       disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAED(disc)}</span>`:'—',
       disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
-      `<span style="color:${pctClr(b.oc)};font-weight:700">${fmtPct(b.oc)}</span>`,
-      `<span style="color:${pctClr(b.sc)};font-weight:700">${fmtPct(b.sc)}</span>`
+      fmtChgCell(b.cv.orders,pv.orders,false),
+      fmtChgCell(b.cv.sales,pv.sales,true)
     ],sortVals:[b.n,b.cv.orders,b.cv.sales,aov,disc,depth,b.oc,b.sc]};
   });
   const aggTableRows=aggRows.map(a=>{
     const disc=a.disc||0;
     const gross=a.sales+disc;
     const depth=gross>0?(disc/gross*100):0;
+    const pv=sumR(pd.filter(r=>r.aggregator===a.ag));
     return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(a.ag,22)}<strong style="color:${a.clr}">${a.ag}</strong></span>`,
       a.orders.toLocaleString(),fmtAED(a.sales),a.orders>0?`AED ${(a.sales/a.orders).toFixed(1)}`:'—',
       disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAED(disc)}</span>`:'—',
       disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
-      `<span style="color:${pctClr(a.oc)};font-weight:700">${fmtPct(a.oc)}</span>`,
-      `<span style="color:${pctClr(a.sc)};font-weight:700">${fmtPct(a.sc)}</span>`
+      fmtChgCell(a.orders,pv.orders,false),
+      fmtChgCell(a.sales,pv.sales,true)
     ],sortVals:[a.ag,a.orders,a.sales,a.aov,disc,depth,a.oc,a.sc]};
   });
   const heads=["","Orders","Net Sales","AOV","Discount Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
@@ -2895,14 +2930,15 @@ function renderBrands(){
   const btnH=BR.map(br=>{const act=selBrand===br.n;return`<button onclick="selBrand='${br.n}';renderBrands()" style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:12px;cursor:pointer;border:2px solid ${act?br.c:'#E2E8F0'};background:${act?`linear-gradient(135deg,${br.c}22,${br.c}0a)`:'#FFFFFF'};color:${act?br.c:'#475569'};box-shadow:${act?`0 8px 20px ${br.c}30`:'0 4px 6px -1px rgba(15,23,42,.08),0 2px 4px -2px rgba(15,23,42,.04)'};transition:all .2s ease;font-weight:800" onmouseover="if(!${act}){this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 16px rgba(15,23,42,.1)';this.style.borderColor='${br.c}88'}" onmouseout="if(!${act}){this.style.transform='none';this.style.boxShadow='0 4px 6px -1px rgba(15,23,42,.08),0 2px 4px -2px rgba(15,23,42,.04)';this.style.borderColor='#E2E8F0'}">${logoImg(br.n,42)}<span style="font-size:13px;font-weight:800;white-space:nowrap">${br.n}</span></button>`;}).join("");
   const tRows=rows.map(r=>{
     const disc=r.disc||0;const gross=r.sales+disc;const depth=gross>0?(disc/gross*100):0;
+    const pm2=pm[`${r.branch}|${r.aggregator}`];
     return{cells:[
     `<strong>${r.branch}</strong>`,
     `<span style="color:${AC[r.aggregator]||"#888"};font-weight:700">${r.aggregator}</span>`,
     r.orders,fmtAED(r.sales),r.orders>0?`AED ${r.aov.toFixed(1)}`:"—",
     disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAED(disc)}</span>`:'—',
     disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
-    `<span style="color:${pctClr(r.oc)};font-weight:700">${fmtPct(r.oc)}</span>`,
-    `<span style="color:${pctClr(r.sc)};font-weight:700">${fmtPct(r.sc)}</span>`
+    fmtChgCell(r.orders,pm2?.orders,false),
+    fmtChgCell(r.sales,pm2?.sales,true)
   ],sortVals:[r.branch,r.aggregator,r.orders,r.sales,r.aov,disc,depth,r.oc,r.sc]};
   });
   const heads=["Outlet","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
@@ -2937,26 +2973,28 @@ function renderOutlets(){
     const brHeads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
     const brTRows=brandRows.map(b=>{
       const disc=b.disc||0;const gross=b.sales+disc;const depth=gross>0?(disc/gross*100):0;
+      const pv=sumR(outletPrev.filter(r=>r.brand===b.brand));
       return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.brand,22)}<strong style="color:${BMAP[b.brand]?.c||'#888'}">${b.brand}</strong></span>`,
       b.orders.toLocaleString(),fmtAED(b.sales),b.orders>0?`AED ${b.aov.toFixed(1)}`:"—",
       disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAED(disc)}</span>`:'—',
       disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
-      `<span style="color:${pctClr(b.oc)};font-weight:700">${fmtPct(b.oc)}</span>`,
-      `<span style="color:${pctClr(b.sc)};font-weight:700">${fmtPct(b.sc)}</span>`
+      fmtChgCell(b.orders,pv.orders,false),
+      fmtChgCell(b.sales,pv.sales,true)
     ],sortVals:[b.brand,b.orders,b.sales,b.aov,disc,depth,b.oc,b.sc]};
     });
     const bpHeads=["Brand","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
     const bpTRows=rows.map(r=>{
       const disc=r.disc||0;const gross=r.sales+disc;const depth=gross>0?(disc/gross*100):0;
+      const pv=pmM[`${r.brand}|${r.aggregator}`];
       return{cells:[
       `<span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span>`,
       `<span style="color:${AC[r.aggregator]||'#888'};font-weight:700;font-size:11px">${r.aggregator}</span>`,
       r.orders,fmtAED(r.sales),r.orders>0?`AED ${r.aov.toFixed(1)}`:"—",
       disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAED(disc)}</span>`:'—',
       disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
-      `<span style="color:${pctClr(r.oc)};font-weight:700">${fmtPct(r.oc)}</span>`,
-      `<span style="color:${pctClr(r.sc)};font-weight:700">${fmtPct(r.sc)}</span>`
+      fmtChgCell(r.orders,pv?.orders,false),
+      fmtChgCell(r.sales,pv?.sales,true)
     ],sortVals:[r.brand,r.aggregator,r.orders,r.sales,r.aov,disc,depth,r.oc,r.sc]};
     });
     const outDisc=tot.disc||0;const outGross=tot.sales+outDisc;const outDepth=outGross>0?(outDisc/outGross*100):0;
@@ -3024,7 +3062,7 @@ function renderOutlets(){
 // PLATFORMS
 function renderPlatforms(){
   const clr=AC[selPlatform]||"#888";const compShort=getCompShort();
-  const aggSums=AGGS.map(ag=>{const c=sumR(getLD().filter(r=>r.aggregator===ag));const p=sumR(getPD().filter(r=>r.aggregator===ag));return{ag,clr:AC[ag],...c,aov:c.orders>0?c.sales/c.orders:0,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};});
+  const aggSums=AGGS.map(ag=>{const c=sumR(getLD().filter(r=>r.aggregator===ag));const p=sumR(getPD().filter(r=>r.aggregator===ag));return{ag,clr:AC[ag],...c,aov:c.orders>0?c.sales/c.orders:0,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};}).sort((a,b)=>b.sales-a.sales);
   const ld=getLD().filter(r=>r.aggregator===selPlatform),pd=getPD().filter(r=>r.aggregator===selPlatform);
   const ls=sumR(ld),ps=sumR(pd);
   const brandRows=BR.map(({n,c})=>{const cv=sumR(ld.filter(r=>r.brand===n));const pv=sumR(pd.filter(r=>r.brand===n));return{n,c,cv,oc:pctOf(cv.orders,pv.orders),sc:pctOf(cv.sales,pv.sales)};}).filter(b=>b.cv.orders>0);
@@ -3033,13 +3071,14 @@ function renderPlatforms(){
   const heads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
   const tRows=brandRows.map(b=>{
     const disc=b.cv.disc||0;const gross=b.cv.sales+disc;const depth=gross>0?(disc/gross*100):0;
+    const pv=sumR(pd.filter(r=>r.brand===b.n));
     return{cells:[
     `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.n,22)}<strong style="color:${b.c}">${b.n}</strong></span>`,
     b.cv.orders,fmtAED(b.cv.sales),b.cv.orders>0?`AED ${(b.cv.sales/b.cv.orders).toFixed(1)}`:"—",
     disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAED(disc)}</span>`:'—',
     disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
-    `<span style="color:${pctClr(b.oc)};font-weight:700">${fmtPct(b.oc)}</span>`,
-    `<span style="color:${pctClr(b.sc)};font-weight:700">${fmtPct(b.sc)}</span>`
+    fmtChgCell(b.cv.orders,pv.orders,false),
+    fmtChgCell(b.cv.sales,pv.sales,true)
   ],sortVals:[b.n,b.cv.orders,b.cv.sales,b.cv.orders>0?b.cv.sales/b.cv.orders:0,disc,depth,b.oc,b.sc]};
   });
   const platDisc=ls.disc||0;const platGross=ls.sales+platDisc;const platDepth=platGross>0?(platDisc/platGross*100):0;
