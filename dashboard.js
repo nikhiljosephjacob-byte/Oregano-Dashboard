@@ -13,11 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-072";
+const BUILD_VERSION="2026-07-06-073";
 const BUILD_NOTES=[
-  "🎯 Fixed discount allocation for branch-scoped Talabat campaigns with 'All Locations Except X' outlet fields. Previous code matched the leading 'all' via /^all\\b/ and treated 'All Locations Except Jumeirah' as covering ALL branches — including Jumeirah — which caused false-positive overlap detection with concurrent Jumeirah-only campaigns (e.g. Smokeys × Talabat Super Saver on Jumeirah vs World Cup Deals on everywhere-else). Both got 0 attribution, no ROI shown. Parser now checks 'all ... except X, Y' pattern BEFORE the isAllField check, subtracts the excluded branches from the brand's full set, and returns the correctly-scoped result. Supports comma/and-separated lists, DXB/AUH region tokens, and single branch names.",
-  "📊 Added Discount Burn as a 5th KPI tile on the Overview page. Shows total merchant discount for the current filter (brand × platform × branch × date range), comparison-period value, and depth-of-gross % ('e.g. 15.2% of gross'). Layout auto-collapses to 2×3 on mobile.",
-  "⚡ Major performance fix for Campaign Manager warm-up. observedCampaignRatio was scanning ~2,700 Talabat records for every one of ~1,270 campaigns during the initial warm-up pass — millions of ops on each page load. Added memoization keyed on (aggregator, brand, coveredStart, coveredEnd) so campaigns sharing the same brand+aggregator hit the cache. Warm-up should be dramatically faster (~10-50× depending on record volumes). Cache is invalidated at every clearXxxData / upload merge point."
+  "📊 Added Discount Burn + Depth % columns to both the All Brands and All Platforms tables on the Overview page. Discount Burn shows total merchant discount for the filtered period; Depth % shows burn as a percentage of gross sales (net + discount). Colour-coded: green (<10%), amber (10-20%), red (>20%).",
+  "🔍 Enlarged text across the Overview page for better readability. KPI card values 21→26px, labels 9→11px, sub-text 11→13px, avg/day values 14→17px. Table body font 12→14px, headers 10→12px, cell padding 7→9px. Section titles (.ct) 11→13px. Brand/platform logos in tables remain 22px."
 ];
 
 let _updateDialogShown=false;
@@ -2622,7 +2621,7 @@ function mkMap(recs,kFn){const m={};recs.forEach(r=>{const k=kFn(r);if(!m[k])m[k
 function trend30(filterFn,start,end){const s=start||subDays(latest,30),e=end||latest;const m={};allData.filter(r=>filterFn(r)&&r.date>=s&&r.date<=e).forEach(r=>{if(!m[r.date])m[r.date]={d:r.date.slice(5),date:r.date,s:0,o:0};m[r.date].s+=r.sales;m[r.date].o+=r.orders;});return Object.values(m).sort((a,b)=>a.d.localeCompare(b.d));}
 
 // RENDER HELPERS
-function kpiCard(label,value,sub,chg,onclick,perDay){const hasChg=typeof chg==="number"&&!isNaN(chg);const cc=hasChg?pctClr(chg):"#64748b";const click=onclick?`onclick="${onclick}" style="cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='#E2E8F0'"`:"";let pdLine="";if(perDay){const pc=typeof perDay.chg==="number"&&!isNaN(perDay.chg)?pctClr(perDay.chg):"#64748b";pdLine=`<div style="margin-top:7px;padding-top:6px;border-top:1px solid rgba(15,23,42,.6)"><div style="font-size:8px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.7px">Avg / day</div><div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;margin-top:1px"><span style="font-size:14px;font-weight:800;font-variant-numeric:tabular-nums">${perDay.cur}</span>${perDay.prev?`<span style="font-size:10px;color:#64748b">${perDay.prevLabel||"prev"}: ${perDay.prev}</span>`:""}${typeof perDay.chg==="number"&&!isNaN(perDay.chg)?`<span style="font-size:10px;color:${pc};font-weight:700">${fmtPct(perDay.chg)}</span>`:""}</div></div>`;}return`<div class="sm" ${click}><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">${label}${onclick?' <span style=\"color:#f59e0b\">&#9656;</span>':''}</div><div style="font-size:21px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1">${value}</div>${sub?`<div style="font-size:11px;color:#475569;font-weight:600;margin-top:3px">${sub}</div>`:""}${hasChg?`<div style="font-size:11px;color:${cc};font-weight:700;margin-top:3px">${fmtPct(chg)}</div>`:""}${pdLine}</div>`;}
+function kpiCard(label,value,sub,chg,onclick,perDay){const hasChg=typeof chg==="number"&&!isNaN(chg);const cc=hasChg?pctClr(chg):"#64748b";const click=onclick?`onclick="${onclick}" style="cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='#E2E8F0'"`:"";let pdLine="";if(perDay){const pc=typeof perDay.chg==="number"&&!isNaN(perDay.chg)?pctClr(perDay.chg):"#64748b";pdLine=`<div style="margin-top:7px;padding-top:6px;border-top:1px solid rgba(15,23,42,.6)"><div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.7px">Avg / day</div><div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;margin-top:1px"><span style="font-size:17px;font-weight:800;font-variant-numeric:tabular-nums">${perDay.cur}</span>${perDay.prev?`<span style="font-size:11px;color:#64748b">${perDay.prevLabel||"prev"}: ${perDay.prev}</span>`:""}${typeof perDay.chg==="number"&&!isNaN(perDay.chg)?`<span style="font-size:11px;color:${pc};font-weight:700">${fmtPct(perDay.chg)}</span>`:""}</div></div>`;}return`<div class="sm" ${click}><div style="font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">${label}${onclick?' <span style=\"color:#f59e0b\">&#9656;</span>':''}</div><div style="font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1">${value}</div>${sub?`<div style="font-size:13px;color:#475569;font-weight:600;margin-top:4px">${sub}</div>`:""}${hasChg?`<div style="font-size:13px;color:${cc};font-weight:700;margin-top:3px">${fmtPct(chg)}</div>`:""}${pdLine}</div>`;}
 // Built-in fallback logos (data URIs / emoji) used when index.html's LOGOS lacks an entry
 // or the image fails to load. Keeps Google Maps etc. always visible.
 const LOGO_FALLBACK={
@@ -2820,20 +2819,32 @@ function renderOverview(){
   // Sortable brand table
   const brandTableRows=brandRows.map(b=>{
     const aov=b.cv.orders>0?(b.cv.sales/b.cv.orders):0;
+    const disc=b.cv.disc||0;
+    const gross=b.cv.sales+disc;
+    const depth=gross>0?(disc/gross*100):0;
     return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.n,22)}<strong style="color:${b.c}">${b.n}</strong></span>`,
       b.cv.orders.toLocaleString(),fmtAED(b.cv.sales),b.cv.orders>0?`AED ${aov.toFixed(1)}`:'—',
+      disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAED(disc)}</span>`:'—',
+      disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
       `<span style="color:${pctClr(b.oc)};font-weight:700">${fmtPct(b.oc)}</span>`,
       `<span style="color:${pctClr(b.sc)};font-weight:700">${fmtPct(b.sc)}</span>`
-    ],sortVals:[b.n,b.cv.orders,b.cv.sales,aov,b.oc,b.sc]};
+    ],sortVals:[b.n,b.cv.orders,b.cv.sales,aov,disc,depth,b.oc,b.sc]};
   });
-  const aggTableRows=aggRows.map(a=>({cells:[
+  const aggTableRows=aggRows.map(a=>{
+    const disc=a.disc||0;
+    const gross=a.sales+disc;
+    const depth=gross>0?(disc/gross*100):0;
+    return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(a.ag,22)}<strong style="color:${a.clr}">${a.ag}</strong></span>`,
       a.orders.toLocaleString(),fmtAED(a.sales),a.orders>0?`AED ${(a.sales/a.orders).toFixed(1)}`:'—',
+      disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAED(disc)}</span>`:'—',
+      disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
       `<span style="color:${pctClr(a.oc)};font-weight:700">${fmtPct(a.oc)}</span>`,
       `<span style="color:${pctClr(a.sc)};font-weight:700">${fmtPct(a.sc)}</span>`
-    ],sortVals:[a.ag,a.orders,a.sales,a.aov,a.oc,a.sc]}));
-  const heads=["","Orders","Net Sales","AOV",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
+    ],sortVals:[a.ag,a.orders,a.sales,a.aov,disc,depth,a.oc,a.sc]};
+  });
+  const heads=["","Orders","Net Sales","AOV","Discount Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
 
   document.getElementById("page-overview").innerHTML=makeFilterBar()+
     `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders),null,ordPerDay)}${kpiCard("Total Net Sales",fmtAED(ls.sales),`${compShort}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales),null,salesPerDay)}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${(()=>{
