@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-077";
+const BUILD_VERSION="2026-07-06-078";
 const BUILD_NOTES=[
-  "📊 Outlet discount burn now reads directly from the Google Sheet's per-outlet Disc column — not proportionally estimated from brand-level totals. Pre-v077 the parser assumed the Sheet's Disc column was a brand-level total repeated on each row, so it took Math.max and spread it by sales ratio. In reality the Sheet has actual per-outlet discount data (different amounts per outlet per aggregator per date). Now each outlet record carries its own Sheet discount. When you later upload the aggregator's exact order file, the exact per-order data takes priority for campaign attribution — the Sheet values serve as the initial baseline that gets corrected."
+  "📈 Fixed absolute numbers not showing alongside change percentages in tables. Two bugs: (1) fmtChgCell used a <div> inside table cells which some browsers collapse — switched to <br> + <span> for reliable rendering. (2) Brands page and Outlets detail page rows were destructured without carrying the `disc` field from mkMap output — so `r.disc` was always undefined, causing Disc. Burn column to show '—' on every row. Both fixed. All tables now show e.g. '+15.2% / +AED 12.3K' on change columns, and Disc. Burn + Depth % show real per-outlet values from the Sheet."
 ];
 
 let _updateDialogShown=false;
@@ -324,7 +324,7 @@ function fmtChgCell(cur,prev,isMoney){
   const absFmt=isMoney?fmtAED(Math.abs(diff)):Math.abs(Math.round(diff)).toLocaleString();
   if(pct==null||isNaN(pct))return'<span style="color:#94a3b8">—</span>';
   const sign=diff>=0?'+':'−';
-  return`<span style="color:${clr};font-weight:700">${fmtPct(pct)}</span><div style="font-size:10px;color:#94a3b8;font-weight:500;margin-top:1px">${sign}${absFmt}</div>`;
+  return`<span style="color:${clr};font-weight:700">${fmtPct(pct)}</span><br><span style="font-size:11px;color:#94a3b8;font-weight:500">${sign}${absFmt}</span>`;
 }
 // Inverted version for discount burn — decrease is green
 function fmtChgCellInv(cur,prev,isMoney){
@@ -334,7 +334,7 @@ function fmtChgCellInv(cur,prev,isMoney){
   const absFmt=isMoney?fmtAED(Math.abs(diff)):Math.abs(Math.round(diff)).toLocaleString();
   if(pct==null||isNaN(pct))return'<span style="color:#94a3b8">—</span>';
   const sign=diff>=0?'+':'−';
-  return`<span style="color:${clr};font-weight:700">${fmtPct(pct)}</span><div style="font-size:10px;color:#94a3b8;font-weight:500;margin-top:1px">${sign}${absFmt}</div>`;
+  return`<span style="color:${clr};font-weight:700">${fmtPct(pct)}</span><br><span style="font-size:11px;color:#94a3b8;font-weight:500">${sign}${absFmt}</span>`;
 }
 function pctClr(n){if(n==null)return"#64748b";if(n>=15)return"#22C55E";if(n>=3)return"#86EFAC";if(n>=0)return"#A3E635";if(n>=-15)return"#FBBF24";return"#EF4444";}
 
@@ -2925,7 +2925,7 @@ function renderBrands(){
   const b=BMAP[selBrand];const ld=getLD().filter(r=>r.brand===selBrand),pd=getPD().filter(r=>r.brand===selBrand);
   const ls=sumR(ld),ps=sumR(pd);const compShort=getCompShort();
   const cm=mkMap(ld,r=>`${r.branch}|${r.aggregator}`),pm=mkMap(pd,r=>`${r.branch}|${r.aggregator}`);
-  const rows=Object.values(cm).map(c=>{const[branch,aggregator]=c.k.split("|");const pv=pm[c.k];return{branch,aggregator,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};});
+  const rows=Object.values(cm).map(c=>{const[branch,aggregator]=c.k.split("|");const pv=pm[c.k];return{branch,aggregator,orders:c.orders,sales:c.sales,disc:c.disc||0,aov:c.orders>0?c.sales/c.orders:0,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};});
   const aggBar=AGGS.map(ag=>{const c=sumR(ld.filter(r=>r.aggregator===ag));return{ag,sales:c.sales,orders:c.orders,clr:AC[ag]};}).filter(a=>a.orders>0).sort((a,b)=>b.sales-a.sales);
   const btnH=BR.map(br=>{const act=selBrand===br.n;return`<button onclick="selBrand='${br.n}';renderBrands()" style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:12px;cursor:pointer;border:2px solid ${act?br.c:'#E2E8F0'};background:${act?`linear-gradient(135deg,${br.c}22,${br.c}0a)`:'#FFFFFF'};color:${act?br.c:'#475569'};box-shadow:${act?`0 8px 20px ${br.c}30`:'0 4px 6px -1px rgba(15,23,42,.08),0 2px 4px -2px rgba(15,23,42,.04)'};transition:all .2s ease;font-weight:800" onmouseover="if(!${act}){this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 16px rgba(15,23,42,.1)';this.style.borderColor='${br.c}88'}" onmouseout="if(!${act}){this.style.transform='none';this.style.boxShadow='0 4px 6px -1px rgba(15,23,42,.08),0 2px 4px -2px rgba(15,23,42,.04)';this.style.borderColor='#E2E8F0'}">${logoImg(br.n,42)}<span style="font-size:13px;font-weight:800;white-space:nowrap">${br.n}</span></button>`;}).join("");
   const tRows=rows.map(r=>{
@@ -2967,7 +2967,7 @@ function renderOutlets(){
     const tot=sumR(outletData),prev=sumR(outletPrev);
     const brandsHere=[...new Set(outletData.map(r=>r.brand))];
     const cm=mkMap(outletData,r=>`${r.brand}|${r.aggregator}`),pmM=mkMap(outletPrev,r=>`${r.brand}|${r.aggregator}`);
-    const rows=Object.values(cm).map(c=>{const[brand,aggregator]=c.k.split("|");const pv=pmM[c.k];return{brand,aggregator,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};});
+    const rows=Object.values(cm).map(c=>{const[brand,aggregator]=c.k.split("|");const pv=pmM[c.k];return{brand,aggregator,orders:c.orders,sales:c.sales,disc:c.disc||0,aov:c.orders>0?c.sales/c.orders:0,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};});
     const brandRows=brandsHere.map(brand=>{const c=sumR(outletData.filter(r=>r.brand===brand));const p=sumR(outletPrev.filter(r=>r.brand===brand));return{brand,...c,aov:c.orders>0?c.sales/c.orders:0,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};});
     const region=AUH.has(selOutlet)?'🇦🇪 Abu Dhabi':'🇦🇪 Dubai';
     const brHeads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
