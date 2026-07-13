@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-082";
+const BUILD_VERSION="2026-07-06-084";
 const BUILD_NOTES=[
-  "📭 Ads Performance now defaults to the current month instead of falling back to the most recent month with data. Previously, opening Talabat CPC with no July investment would silently show June's numbers — misleading because you'd think you were looking at current-month performance. Now shows a clear empty state: '📭 No CPC investment data for Jul 2026' with a note about historical months available. Prior-month buttons remain clickable for explicit historical comparison."
+  "🔄 Hybrid discount model upgraded: when the Sheet has brand-level discount (Format A — one total on one row), the parser now checks if an exact aggregator upload exists for that (brand, date). If yes → uses the actual per-outlet menu_disc from the exact records (Keeta/Talabat/Careem/Deliveroo/Noon all have outlet-level data). If no exact upload → falls back to proportional spread by sales. When the Sheet has per-outlet data (Format B — Nicole's POS entries with different values per outlet), those are used directly as before. Removed the identical-values safety net since Nicole's POS software is tested and accurate."
 ];
 
 let _updateDialogShown=false;
@@ -2097,44 +2097,116 @@ function parseBrand(csv,brand){
     }
   }catch(e){}
   const recs=[];
+  // ── Hybrid discount model (v083) ──
+  // The Sheet's Disc column can be in two formats depending on the data entry:
+  //   A) BRAND-LEVEL: one total per brand×aggregator×date, placed on one outlet row (or repeated
+  //      identically on every row). This is the legacy format and how June data works.
+  //   B) PER-OUTLET: different discount values per outlet per aggregator per date. This is the
+  //      new format Nicole is entering from July onwards.
+  //
+  // Detection per (aggregator, date): collect all non-zero Disc values across outlet rows.
+  //   - If 2+ outlets have DIFFERENT non-zero values → per-outlet data (format B), use directly.
+  //   - If only 1 outlet has non-zero, or all non-zero values are identical → brand-level total
+  //     (format A), take max and spread proportionally by sales.
+  //
+  // This way the system works correctly whether Nicole has updated per-outlet data yet or not,
+  // and transitions seamlessly as she fills in the data over several days.
+
+  // PASS 1: Read all outlet records WITHOUT disc (same as pre-v077)
   for(let i=ai+2;i<rows.length;i++){
     const row=rows[i];let br=normB(row[0]?.trim()||"");
     if(!br||SKIP_BR.has(br.toLowerCase().trim()))continue;
     if(brand==='Fyoozhen'&&br==='DIP')br='DIP (Fyoozhen)';
     const date=parseDate(row[1]);if(!date)continue;const key=dk(date);
     const branchFinal=(brand==='Fyoozhen'&&br==='DIP')?'Fyoozhen DIP':br;
-    // Read ALL metrics including Disc directly per outlet. Pre-v077 the parser skipped Disc
-    // here and attached it later as a brand-level total (via discMap taking Math.max across
-    // branch rows). That assumed the Sheet's Disc column was a brand-level total duplicated
-    // on each row. User confirmed the Sheet actually has per-outlet discount data — different
-    // amounts per outlet. So we read it directly, and the outlet-level views show the real
-    // per-outlet discount from the Sheet. When exact order-level data is uploaded later, it
-    // replaces/corrects these sheet-sourced figures.
-    const am={};
-    cols.forEach(({i:idx,agg,m})=>{
-      if(!am[agg])am[agg]={Sales:0,Orders:0,Disc:0};
-      am[agg][m]=toN(row[idx]);
-    });
-    Object.entries(am).forEach(([agg,d])=>{
-      if(d.Sales>0||d.Orders>0||d.Disc>0)
-        recs.push({brand,branch:branchFinal,date:key,aggregator:agg,sales:d.Sales,orders:d.Orders,disc:d.Disc||0,aov:d.Orders>0?d.Sales/d.Orders:0});
-    });
+    const am={};cols.forEach(({i:idx,agg,m})=>{if(m==="Disc")return;if(!am[agg])am[agg]={Sales:0,Orders:0};am[agg][m]=toN(row[idx]);});
+    Object.entries(am).forEach(([agg,d])=>{if(d.Sales>0||d.Orders>0)recs.push({brand,branch:branchFinal,date:key,aggregator:agg,sales:d.Sales,orders:d.Orders,disc:0,aov:d.Orders>0?d.Sales/d.Orders:0});});
   }
-  // Fallback: if the Sheet has discount on a summary row with no matching outlet row (rare),
-  // capture it as a synthetic brand-level record so it's not silently lost.
-  const discMap={}; // rebuild from recs to check for gaps
-  const discFromRecs={};
-  recs.forEach(r=>{const k=`${r.aggregator}|${r.date}`;discFromRecs[k]=(discFromRecs[k]||0)+r.disc;});
-  // Re-scan for any disc values in the Sheet that didn't attach to an outlet record
+
+  // PASS 2: Read Disc values per outlet and detect format per (aggregator, date)
+  const discRaw={}; // `${agg}|${date}` → [{branch, disc}]
   for(let i=ai+2;i<rows.length;i++){
-    const row=rows[i];const date=parseDate(row[1]);if(!date)continue;const key=dk(date);
-    cols.forEach(({i:idx,agg,m})=>{if(m!=="Disc")return;const v=toN(row[idx]);if(v>0){const dk2=`${agg}|${key}`;discMap[dk2]=Math.max(discMap[dk2]||0,v);}});
+    const row=rows[i];let br=normB(row[0]?.trim()||"");
+    if(!br||SKIP_BR.has(br.toLowerCase().trim()))continue;
+    if(brand==='Fyoozhen'&&br==='DIP')br='DIP (Fyoozhen)';
+    const date=parseDate(row[1]);if(!date)continue;const key=dk(date);
+    const branchFinal=(brand==='Fyoozhen'&&br==='DIP')?'Fyoozhen DIP':br;
+    cols.forEach(({i:idx,agg,m})=>{
+      if(m!=="Disc")return;
+      const v=toN(row[idx]);
+      const dk2=`${agg}|${key}`;
+      if(!discRaw[dk2])discRaw[dk2]=[];
+      discRaw[dk2].push({branch:branchFinal,disc:v});
+    });
   }
-  Object.entries(discMap).forEach(([dk2,sheetMax])=>{
-    if(!discFromRecs[dk2]||discFromRecs[dk2]<1){
-      // Disc exists in sheet but no outlet record captured it — add synthetic
+
+  // PASS 3: For each (agg, date), decide format and apply
+  const recsByKey={};
+  recs.forEach(r=>{
+    const dk2=`${r.aggregator}|${r.date}`;
+    if(!recsByKey[dk2])recsByKey[dk2]={recs:[],totalSales:0};
+    recsByKey[dk2].recs.push(r);
+    recsByKey[dk2].totalSales+=r.sales;
+  });
+
+  // Helper: get per-outlet discount from exact upload for a given (brand, aggregator, date).
+  // Returns {outletName: menuDisc, ...} or null if no exact data.
+  const getExactOutletDisc=(aggregator,date)=>{
+    const sources={
+      Keeta:keetaOrdersData, Talabat:talabatOrdersData, Careem:careemOrdersData,
+      Deliveroo:deliverooOrdersData, Noon:noonOrdersData
+    };
+    const data=sources[aggregator];
+    if(!data||!data.records)return null;
+    const byOutlet={};
+    let found=false;
+    for(const rec of data.records){
+      if(rec.brand!==brand||rec.date!==date)continue;
+      const o=rec.outlet;if(!o)continue;
+      byOutlet[o]=(byOutlet[o]||0)+(rec.menu_disc||0);
+      found=true;
+    }
+    return found?byOutlet:null;
+  };
+
+  Object.entries(discRaw).forEach(([dk2,entries])=>{
+    const nonZero=entries.filter(e=>e.disc>0);
+    if(nonZero.length===0)return; // no discount this day
+
+    const uniqueValues=new Set(nonZero.map(e=>e.disc));
+    const isPerOutlet=nonZero.length>=2&&uniqueValues.size>=2;
+
+    const group=recsByKey[dk2];
+    if(isPerOutlet){
+      // FORMAT B: per-outlet (Nicole's POS data) — assign each outlet's own Disc value directly
+      const discByBranch={};
+      nonZero.forEach(e=>{discByBranch[e.branch]=(discByBranch[e.branch]||0)+e.disc;});
+      if(group){
+        group.recs.forEach(r=>{r.disc=discByBranch[r.branch]||0;});
+        Object.entries(discByBranch).forEach(([br,d])=>{
+          if(!group.recs.find(r=>r.branch===br)){
+            const [agg,date]=dk2.split("|");
+            recs.push({brand,branch:br,date,aggregator:agg,sales:0,orders:0,disc:d,aov:0});
+          }
+        });
+      }
+    }else{
+      // FORMAT A: brand-level total — try exact upload for per-outlet breakdown first
+      const brandTotal=Math.max(...entries.map(e=>e.disc));
       const [agg,date]=dk2.split("|");
-      recs.push({brand,branch:"(brand-level)",date,aggregator:agg,sales:0,orders:0,disc:sheetMax,aov:0});
+      const exactOutletDisc=getExactOutletDisc(agg,date);
+      if(exactOutletDisc&&group){
+        // Use exact per-outlet amounts as-is (Q1 answer: exact wins over Sheet total)
+        group.recs.forEach(r=>{r.disc=exactOutletDisc[r.branch]||0;});
+      }else if(group&&group.totalSales>0){
+        // No exact data — fall back to proportional spread by sales
+        group.recs.forEach(r=>{r.disc=brandTotal*(r.sales/group.totalSales);});
+      }else if(group&&group.recs.length>0){
+        const share=brandTotal/group.recs.length;
+        group.recs.forEach(r=>{r.disc=share;});
+      }else{
+        recs.push({brand,branch:"(brand-level)",date,aggregator:agg,sales:0,orders:0,disc:brandTotal,aov:0});
+      }
     }
   });
   return recs;
@@ -2917,7 +2989,7 @@ function renderOverview(){
       const depth=gross>0?((ls.disc||0)/gross*100):0;
       const priorGross=ps.sales+(ps.disc||0);
       const priorDepth=priorGross>0?((ps.disc||0)/priorGross*100):0;
-      return kpiCard("Discount Burn",fmtAED(ls.disc||0),`${compShort}: ${fmtAED(ps.disc||0)} · ${depth.toFixed(1)}% of gross`,pctOf(ls.disc||0,ps.disc||0),null,null,true);
+      return kpiCard("Discount Burn",fmtAED(ls.disc||0),`${depth.toFixed(1)}% of gross<br>${compShort}: ${fmtAED(ps.disc||0)}`,pctOf(ls.disc||0,ps.disc||0),null,null,true);
     })()}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
     <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:220px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="card" style="padding:14px">
@@ -2973,7 +3045,7 @@ function renderBrands(){
   const brandDisc=ls.disc||0;const brandGross=ls.sales+brandDisc;const brandDepth=brandGross>0?(brandDisc/brandGross*100):0;
   document.getElementById("page-brands").innerHTML=makeFilterBar({hideBrand:true})+
     `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
-    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAED(ls.sales),compShort+": "+fmtAED(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAED(brandDisc),`${brandDepth.toFixed(1)}% of gross · ${compShort}: ${fmtAED(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAED(ls.sales),compShort+": "+fmtAED(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAED(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAED(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="g2"><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — Net Sales Trend</div><div style="position:relative;height:180px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748B;font-weight:600;text-transform:none;letter-spacing:0;font-size:10px">sales bars · order count on top</span></div><div style="position:relative;height:180px"><canvas id="ch-b-agg"></canvas></div></div></div>
     <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>`;
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.brand===selBrand&&(!f.platforms.size||f.platforms.has(r.aggregator))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-b-trend",trend30(mf,f.start,f.end),b?.c||"#888");
@@ -3037,7 +3109,7 @@ function renderOutlets(){
         ${kpiCard("Orders",tot.orders.toLocaleString(),compShort+": "+prev.orders,pctOf(tot.orders,prev.orders))}
         ${kpiCard("Net Sales",fmtAED(tot.sales),compShort+": "+fmtAED(prev.sales),pctOf(tot.sales,prev.sales))}
         ${kpiCard("AOV",`AED ${tot.orders>0?(tot.sales/tot.orders).toFixed(1):0}`,"per order",null)}
-        ${kpiCard("Discount Burn",fmtAED(outDisc),`${outDepth.toFixed(1)}% of gross · ${compShort}: ${fmtAED(prev.disc||0)}`,pctOf(outDisc,prev.disc||0),null,null,true)}
+        ${kpiCard("Discount Burn",fmtAED(outDisc),`${outDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAED(prev.disc||0)}`,pctOf(outDisc,prev.disc||0),null,null,true)}
         ${kpiCard("Brands",brandsHere.length,brandsHere.join(", "),null)}
       </div>
       <div class="card"><div class="ct">${selOutlet} — Brand Performance (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("ou-brands",brHeads,brTRows,2)}</div>
@@ -3587,7 +3659,7 @@ function cpcHistToggleCompare(){cpcHistCompare=!cpcHistCompare;renderCPC();}
 
 function cpcGoAgg(){cpcDrill={level:"agg",agg:null,brand:null};cpcAdTypeFilter="all";cpcMonthFilter="all";cpcOutletDetail=null;renderCPC();}
 function cpcGoBrands(ag){cpcDrill={level:"brand",agg:ag,brand:null};cpcAdTypeFilter="all";cpcMonthFilter="all";cpcOutletDetail=null;renderCPC();}
-function cpcGoOutlets(ag,brand){cpcDrill={level:"outlet",agg:ag,brand:brand};cpcMonthFilter="all";cpcOutletDetail=null;renderCPC();}
+function cpcGoOutlets(ag,brand){cpcDrill={level:"outlet",agg:ag,brand:brand};cpcAdTypeFilter="all";cpcMonthFilter="all";cpcOutletDetail=null;renderCPC();}
 function cpcSetSort(col){if(cpcSort.col===col)cpcSort.dir*=-1;else{cpcSort.col=col;cpcSort.dir=-1;}renderCPC();}
 function cpcSetAdType(t){cpcAdTypeFilter=t;renderCPC();}
 function cpcSetMonth(m){cpcMonthFilter=m;renderCPC();}
