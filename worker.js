@@ -302,4 +302,5 @@ export default {
     // Anything else: serve static assets (index.html, dashboard.js, version.txt, _headers, etc.)
     return env.ASSETS.fetch(request);
   }
+  // redeploy trigger
 };
