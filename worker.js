@@ -287,14 +287,24 @@ export default {
       });
     }
 
+    // CRITICAL FIX: every handler call below now has `await` in front of it.
+    // Without `await`, `return handleLogin(request, env)` returns the unfinished
+    // Promise immediately, and the try block is considered "complete" before the
+    // async function has actually run. Any error thrown LATER inside handleLogin
+    // (e.g. a KV read/write failure) then becomes an uncaught rejection that
+    // completely bypasses this catch block. Cloudflare's runtime then returns its
+    // own raw error response instead of clean JSON — which is exactly what broke
+    // login for every browser/device that didn't already have a saved session
+    // (res.json() in the frontend fails to parse the malformed response, showing
+    // "Network error — try again" instead of the real error).
     try {
-      if (path === "/api/login"           && method === "POST") return handleLogin(request, env);
-      if (path === "/api/heartbeat"       && method === "POST") return handleHeartbeat(request, env);
-      if (path === "/api/logout"          && method === "POST") return handleLogout(request, env);
-      if (path === "/api/admin/sessions"  && method === "GET")  return handleAdminSessions(request, env);
-      if (path === "/api/admin/kick"      && method === "POST") return handleAdminKick(request, env);
-      if (path === "/api/admin/ban"       && method === "POST") return handleAdminBan(request, env);
-      if (path === "/api/admin/unban"     && method === "POST") return handleAdminUnban(request, env);
+      if (path === "/api/login"           && method === "POST") return await handleLogin(request, env);
+      if (path === "/api/heartbeat"       && method === "POST") return await handleHeartbeat(request, env);
+      if (path === "/api/logout"          && method === "POST") return await handleLogout(request, env);
+      if (path === "/api/admin/sessions"  && method === "GET")  return await handleAdminSessions(request, env);
+      if (path === "/api/admin/kick"      && method === "POST") return await handleAdminKick(request, env);
+      if (path === "/api/admin/ban"       && method === "POST") return await handleAdminBan(request, env);
+      if (path === "/api/admin/unban"     && method === "POST") return await handleAdminUnban(request, env);
     } catch (e) {
       return json({ error: "server_error", detail: String(e.message || e) }, 500);
     }
@@ -302,5 +312,4 @@ export default {
     // Anything else: serve static assets (index.html, dashboard.js, version.txt, _headers, etc.)
     return env.ASSETS.fetch(request);
   }
-  // redeploy trigger
 };
