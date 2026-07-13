@@ -13,7 +13,7 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-085";
+const BUILD_VERSION="2026-07-06-086";
 const BUILD_NOTES=[
   "🐛 Fixed June discount showing AED 188 instead of ~AED 800K. Root cause: PASS 2 of the hybrid disc model was skipping 'Total' rows via SKIP_BR — but the Sheet puts the brand-level discount ONLY on the Total row (all outlet rows have Disc=0). So brand-level disc never entered discRaw → never got applied to any outlet → entire month's discount vanished. Fix: PASS 2 now reads Disc from ALL rows including Total/summary rows, using a synthetic '(brand-total)' branch name. The per-outlet detection (Format B) ignores this synthetic entry when counting unique values, so Nicole's per-outlet data is still detected correctly. The brand-level total from the summary row is used for Format A's proportional spread or exact-upload lookup."
 ];
