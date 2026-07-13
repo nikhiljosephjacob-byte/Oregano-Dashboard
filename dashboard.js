@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-081";
+const BUILD_VERSION="2026-07-06-082";
 const BUILD_NOTES=[
-  "🎨 Redesigned KPI card layout across all pages. Current value is now more prominent (28px, black), with the comparison data separated below a subtle divider line in its own section (muted grey text + coloured % change). Avg/day section also gets its own divider. Eliminates the cramped single-line look where 'vs 1 Jun-13 Jun (prior mo.): AED 365.5K · 13.5% of gross' was hard to parse at a glance. Each piece of info now has breathing room."
+  "📭 Ads Performance now defaults to the current month instead of falling back to the most recent month with data. Previously, opening Talabat CPC with no July investment would silently show June's numbers — misleading because you'd think you were looking at current-month performance. Now shows a clear empty state: '📭 No CPC investment data for Jul 2026' with a note about historical months available. Prior-month buttons remain clickable for explicit historical comparison."
 ];
 
 let _updateDialogShown=false;
@@ -4801,8 +4801,14 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
   const monthsAvail=[...new Set(rows.map(r=>r.month).filter(Boolean))].sort().reverse().slice(0,7);
   // Default selected month = current month (if it has ads) else most recent available
   let selMonth=cpcMonthFilter;
-  if(selMonth==='all'||!selMonth){selMonth=monthsAvail.includes(curMonthStr)?curMonthStr:(monthsAvail[0]||curMonthStr);}
-  if(!monthsAvail.includes(selMonth))selMonth=monthsAvail[0]||curMonthStr;
+  // Default to current month. Pre-v082 this fell back to the most recent month WITH data when
+  // the current month had none — showing June's numbers when July had no CPC investment. That's
+  // misleading because the user thinks they're seeing current-month performance. Now we always
+  // default to current month; if there's no data, we show a clear empty state ("No CPC data for
+  // July 2026") rather than silently presenting stale figures. Users can still click a prior-
+  // month button to see historical data explicitly.
+  if(selMonth==='all'||!selMonth){selMonth=curMonthStr;}
+  const hasDataForSelected=monthsAvail.includes(selMonth);
   const isCurrentMonth=selMonth===curMonthStr;
 
   // Month/Year picker on the RIGHT
@@ -4811,6 +4817,15 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
   const controlBar=`<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">${adToggle||'<div></div>'}<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Month</span>${monthBtns}</div></div>`;
 
   // Build per-outlet rows for the selected month
+  if(!hasDataForSelected){
+    // No data for selected month — show clear empty state with month buttons to navigate to prior months
+    const emptyMonthLabel=cpcMonthLabel(selMonth);
+    // Add current month button even if it has no data (so it shows as selected)
+    const allMonthBtns=[selMonth,...monthsAvail.filter(m=>m!==selMonth)].map(m=>{const isCur=m===curMonthStr;const act=selMonth===m;return `<button onclick="cpcSetMonth('${m}')" style="padding:4px 11px;border-radius:6px;border:1px solid ${act?'#f59e0b':'rgba(15,23,42,.6)'};background:${act?'rgba(245,158,11,.12)':'transparent'};color:${act?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${cpcMonthLabel(m)}${isCur?' •':''}</button>`;}).join('');
+    const emptyControlBar=`<div style="display:flex;justify-content:flex-end;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:12px"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Month</span>${allMonthBtns}</div>`;
+    tgt.innerHTML=`${emptyControlBar}<div class="card" style="text-align:center;padding:40px 20px"><div style="font-size:40px;margin-bottom:12px">📭</div><div style="font-size:16px;font-weight:700;color:#0F172A;margin-bottom:6px">No CPC investment data for ${emptyMonthLabel}</div><div style="font-size:13px;color:#64748b;line-height:1.6">No ad spend has been recorded for ${brand} on ${ag} in ${emptyMonthLabel}.<br>If ads are running this month, they'll appear here once the CPC data sheet is updated.${monthsAvail.length>0?`<br><br>Historical data available for: <strong>${monthsAvail.map(cpcMonthLabel).join(', ')}</strong> — click a month button above to view.`:''}</div></div>`;
+    return;
+  }
   const outlets={};rows.forEach(r=>{if(!outlets[r.branch])outlets[r.branch]=[];outlets[r.branch].push(r);});
   const adTypeOf=effAdType==='all'?'CPC':effAdType;
   let tableRows=Object.entries(outlets).map(([outlet,orows])=>{
