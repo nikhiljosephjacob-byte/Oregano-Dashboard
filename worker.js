@@ -128,7 +128,33 @@ async function handleHeartbeat(request, env) {
     return json({ error: "banned" }, 403);
   }
 
-  session.lastSeen = new Date().toISOString();
+  // ── KV write throttling ──
+  // The client pings this endpoint every 60s. Writing to KV on every single ping
+  // burns through Cloudflare's free-tier daily write quota (1,000/day) extremely
+  // fast — with several users active for hours at a time, 60s heartbeats alone can
+  // hit 4,000-5,000 writes/day, blowing the quota and causing EVERY KV write
+  // (including brand new logins trying to create a session) to fail with
+  // "KV put() limit exceeded for the day" for the rest of that day.
+  //
+  // Since the session TTL is 24 hours, we don't need to refresh it every 60
+  // seconds — refreshing every 5 minutes is more than enough headroom. This cuts
+  // heartbeat-driven KV writes by ~5x without changing the 60s client-side ping
+  // interval (still checks for kick/ban promptly), and still updates lastSeen
+  // in the RESPONSE for the client even on ticks where we skip the KV write.
+  const HEARTBEAT_WRITE_THROTTLE_SECONDS = 300; // 5 minutes
+  const now = new Date();
+  const lastSeenDate = new Date(session.lastSeen);
+  const secondsSinceLastWrite = (now - lastSeenDate) / 1000;
+
+  if (secondsSinceLastWrite < HEARTBEAT_WRITE_THROTTLE_SECONDS) {
+    // Too soon since the last KV write — skip it, just confirm the session is
+    // still valid (kick/ban checks above already ran). Report the CURRENT time
+    // as lastSeen in the response so the client UI still looks live, without
+    // actually writing to KV.
+    return json({ ok: true, lastSeen: now.toISOString(), throttled: true });
+  }
+
+  session.lastSeen = now.toISOString();
   // IP may have changed during the session (mobile networks etc.); refresh it too
   const newIp = clientIP(request);
   if (newIp !== session.ip) session.ip = newIp;
