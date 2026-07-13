@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-079";
+const BUILD_VERSION="2026-07-06-080";
 const BUILD_NOTES=[
-  "🏢 Fixed outlet count inflated by 1 per brand. Synthetic '(brand-level)' records (created for discount-only days with no outlet sales data) were being counted as real outlets. Now filtered out at the source in getLD() so no downstream code (outlet counts, tile grids, branch dropdowns) ever sees them. Overview, Brands, Platforms, Outlets pages all affected — each was overcounting by 1 per brand."
+  "📝 Campaign cards now show a detail line from the Google Sheet's Comments field — items discounted, MOV, co-fund terms, or any other context you typed. Truncated to 80 chars on the card; full text on hover. Shows below the offer chip (e.g. '30% off · cap AED 20') so you can tell at a glance that a '30% OFF' campaign is actually '30% OFF on 5 Items : Chicken Caesar Salad, Margherita Pizza (L), ...' without clicking into the detail view."
 ];
 
 let _updateDialogShown=false;
@@ -5983,6 +5983,15 @@ function campCardGrid(camps,showProfit){
         ${exactChip}
         ${subsidyChip}
       </div>
+      ${(()=>{
+        // Show a truncated campaign detail line from the comments field — surfaces item names,
+        // MOV, co-fund info, or any other context the user typed in the Sheet. Only shown when
+        // the comments have meaningful content beyond what the offer chip already says.
+        const raw=(c.comments||'').trim();
+        if(!raw||raw.length<8)return '';
+        const detail=raw.length>80?raw.slice(0,78)+'…':raw;
+        return `<div style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.4;font-weight:500" title="${raw.replace(/"/g,'&quot;')}">${detail}</div>`;
+      })()}
       <div style="font-size:12px;color:#475569;margin-top:8px;font-weight:600">📅 ${dateStr}</div>
       ${headlineHTML}
     </div>`;
