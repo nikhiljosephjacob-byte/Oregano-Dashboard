@@ -1,0 +1,25 @@
+name: Deploy to Cloudflare Workers
+
+# Runs automatically on every push to main. Uses `wrangler deploy` (via the official
+# Cloudflare action) which reads wrangler.toml and correctly bundles BOTH the Worker
+# script (worker.js) AND the static assets (dashboard.js, index.html, version.txt, etc.
+# — everything in the `directory = "./"` path declared in [assets]) into a single
+# deployment. This is the ONLY reliable way to deploy this project — the Cloudflare
+# Dashboard's inline "Quick Edit" editor does NOT upload assets and will break the
+# ASSETS binding (env.ASSETS becomes undefined), causing the whole site to fail.
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy via Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
