@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-080";
+const BUILD_VERSION="2026-07-06-081";
 const BUILD_NOTES=[
-  "📝 Campaign cards now show a detail line from the Google Sheet's Comments field — items discounted, MOV, co-fund terms, or any other context you typed. Truncated to 80 chars on the card; full text on hover. Shows below the offer chip (e.g. '30% off · cap AED 20') so you can tell at a glance that a '30% OFF' campaign is actually '30% OFF on 5 Items : Chicken Caesar Salad, Margherita Pizza (L), ...' without clicking into the detail view."
+  "🎨 Redesigned KPI card layout across all pages. Current value is now more prominent (28px, black), with the comparison data separated below a subtle divider line in its own section (muted grey text + coloured % change). Avg/day section also gets its own divider. Eliminates the cramped single-line look where 'vs 1 Jun-13 Jun (prior mo.): AED 365.5K · 13.5% of gross' was hard to parse at a glance. Each piece of info now has breathing room."
 ];
 
 let _updateDialogShown=false;
@@ -2653,7 +2653,35 @@ function mkMap(recs,kFn){const m={};recs.forEach(r=>{const k=kFn(r);if(!m[k])m[k
 function trend30(filterFn,start,end){const s=start||subDays(latest,30),e=end||latest;const m={};allData.filter(r=>filterFn(r)&&r.date>=s&&r.date<=e).forEach(r=>{if(!m[r.date])m[r.date]={d:r.date.slice(5),date:r.date,s:0,o:0};m[r.date].s+=r.sales;m[r.date].o+=r.orders;});return Object.values(m).sort((a,b)=>a.d.localeCompare(b.d));}
 
 // RENDER HELPERS
-function kpiCard(label,value,sub,chg,onclick,perDay,invertChg){const hasChg=typeof chg==="number"&&!isNaN(chg);const cc=hasChg?pctClr(invertChg?-chg:chg):"#64748b";const click=onclick?`onclick="${onclick}" style="cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='#E2E8F0'"`:"";let pdLine="";if(perDay){const pc=typeof perDay.chg==="number"&&!isNaN(perDay.chg)?pctClr(perDay.chg):"#64748b";pdLine=`<div style="margin-top:7px;padding-top:6px;border-top:1px solid rgba(15,23,42,.6)"><div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.7px">Avg / day</div><div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;margin-top:1px"><span style="font-size:17px;font-weight:800;font-variant-numeric:tabular-nums">${perDay.cur}</span>${perDay.prev?`<span style="font-size:11px;color:#64748b">${perDay.prevLabel||"prev"}: ${perDay.prev}</span>`:""}${typeof perDay.chg==="number"&&!isNaN(perDay.chg)?`<span style="font-size:11px;color:${pc};font-weight:700">${fmtPct(perDay.chg)}</span>`:""}</div></div>`;}return`<div class="sm" ${click}><div style="font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">${label}${onclick?' <span style=\"color:#f59e0b\">&#9656;</span>':''}</div><div style="font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1">${value}</div>${sub?`<div style="font-size:13px;color:#475569;font-weight:600;margin-top:4px">${sub}</div>`:""}${hasChg?`<div style="font-size:13px;color:${cc};font-weight:700;margin-top:3px">${fmtPct(chg)}</div>`:""}${pdLine}</div>`;}
+function kpiCard(label,value,sub,chg,onclick,perDay,invertChg){
+  const hasChg=typeof chg==="number"&&!isNaN(chg);
+  const cc=hasChg?pctClr(invertChg?-chg:chg):"#64748b";
+  const click=onclick?`onclick="${onclick}" style="cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='#EDE7D9'"`:""  ;
+  // Per-day section (Orders + Net Sales tiles on Overview)
+  let pdLine="";
+  if(perDay){
+    const pc=typeof perDay.chg==="number"&&!isNaN(perDay.chg)?pctClr(perDay.chg):"#64748b";
+    pdLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #EDE7D9">
+      <div style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:3px">Avg / day</div>
+      <div style="font-size:18px;font-weight:800;font-variant-numeric:tabular-nums;color:#0F172A">${perDay.cur}</div>
+      ${perDay.prev?`<div style="font-size:11px;color:#94a3b8;margin-top:2px">${perDay.prevLabel||"prev"}: ${perDay.prev}${typeof perDay.chg==="number"?` <span style="color:${pc};font-weight:700">${fmtPct(perDay.chg)}</span>`:""}</div>`:""}
+    </div>`;
+  }
+  // Comparison section — separated visually so current and prior values are distinct
+  let compSection="";
+  if(sub||hasChg){
+    compSection=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #EDE7D9">
+      ${sub?`<div style="font-size:11px;color:#94a3b8;line-height:1.5">${sub}</div>`:""}
+      ${hasChg?`<div style="font-size:14px;color:${cc};font-weight:800;margin-top:2px">${fmtPct(chg)}</div>`:""}
+    </div>`;
+  }
+  return`<div class="sm" ${click}>
+    <div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}${onclick?' <span style="color:#f59e0b">&#9656;</span>':''}</div>
+    <div style="font-size:28px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:#0F172A">${value}</div>
+    ${compSection}
+    ${pdLine}
+  </div>`;
+}
 // Built-in fallback logos (data URIs / emoji) used when index.html's LOGOS lacks an entry
 // or the image fails to load. Keeps Google Maps etc. always visible.
 const LOGO_FALLBACK={
