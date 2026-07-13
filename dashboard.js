@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-084";
+const BUILD_VERSION="2026-07-06-085";
 const BUILD_NOTES=[
-  "🔄 Hybrid discount model upgraded: when the Sheet has brand-level discount (Format A — one total on one row), the parser now checks if an exact aggregator upload exists for that (brand, date). If yes → uses the actual per-outlet menu_disc from the exact records (Keeta/Talabat/Careem/Deliveroo/Noon all have outlet-level data). If no exact upload → falls back to proportional spread by sales. When the Sheet has per-outlet data (Format B — Nicole's POS entries with different values per outlet), those are used directly as before. Removed the identical-values safety net since Nicole's POS software is tested and accurate."
+  "🐛 Fixed June discount showing AED 188 instead of ~AED 800K. Root cause: PASS 2 of the hybrid disc model was skipping 'Total' rows via SKIP_BR — but the Sheet puts the brand-level discount ONLY on the Total row (all outlet rows have Disc=0). So brand-level disc never entered discRaw → never got applied to any outlet → entire month's discount vanished. Fix: PASS 2 now reads Disc from ALL rows including Total/summary rows, using a synthetic '(brand-total)' branch name. The per-outlet detection (Format B) ignores this synthetic entry when counting unique values, so Nicole's per-outlet data is still detected correctly. The brand-level total from the summary row is used for Format A's proportional spread or exact-upload lookup."
 ];
 
 let _updateDialogShown=false;
@@ -2124,12 +2124,21 @@ function parseBrand(csv,brand){
   }
 
   // PASS 2: Read Disc values per outlet and detect format per (aggregator, date)
+  // CRITICAL: do NOT skip Total/summary rows here — the brand-level discount is often ONLY
+  // on the Total row (all outlet rows have Disc=0). Pre-v084 this skipped "Total" rows via
+  // SKIP_BR → brand-level disc never entered discRaw → June showed AED 188 instead of ~AED 800K.
+  // We use the branch name for per-outlet detection (Format B), but for Format A detection
+  // and the brand-level total, the Total row's Disc value is essential.
   const discRaw={}; // `${agg}|${date}` → [{branch, disc}]
   for(let i=ai+2;i<rows.length;i++){
-    const row=rows[i];let br=normB(row[0]?.trim()||"");
-    if(!br||SKIP_BR.has(br.toLowerCase().trim()))continue;
-    if(brand==='Fyoozhen'&&br==='DIP')br='DIP (Fyoozhen)';
+    const row=rows[i];
+    const rawBr=(row[0]||"").trim();
+    let br=normB(rawBr);
+    const isSummaryRow=!br||SKIP_BR.has((br||"").toLowerCase().trim());
+    // For summary rows, use a synthetic branch name so the disc value is captured
+    if(isSummaryRow)br="(brand-total)";
     const date=parseDate(row[1]);if(!date)continue;const key=dk(date);
+    if(brand==='Fyoozhen'&&br==='DIP')br='DIP (Fyoozhen)';
     const branchFinal=(brand==='Fyoozhen'&&br==='DIP')?'Fyoozhen DIP':br;
     cols.forEach(({i:idx,agg,m})=>{
       if(m!=="Disc")return;
@@ -2170,17 +2179,23 @@ function parseBrand(csv,brand){
   };
 
   Object.entries(discRaw).forEach(([dk2,entries])=>{
-    const nonZero=entries.filter(e=>e.disc>0);
-    if(nonZero.length===0)return; // no discount this day
+    // Separate outlet-level entries from summary-row entries
+    const outletEntries=entries.filter(e=>e.branch!=='(brand-total)');
+    const summaryEntries=entries.filter(e=>e.branch==='(brand-total)');
+    const nonZeroOutlet=outletEntries.filter(e=>e.disc>0);
+    const nonZeroSummary=summaryEntries.filter(e=>e.disc>0);
+    // If no discount anywhere this day, skip
+    if(nonZeroOutlet.length===0&&nonZeroSummary.length===0)return;
 
-    const uniqueValues=new Set(nonZero.map(e=>e.disc));
-    const isPerOutlet=nonZero.length>=2&&uniqueValues.size>=2;
+    const uniqueOutletValues=new Set(nonZeroOutlet.map(e=>e.disc));
+    // Per-outlet detection: 2+ outlets with DIFFERENT non-zero values (ignoring summary row)
+    const isPerOutlet=nonZeroOutlet.length>=2&&uniqueOutletValues.size>=2;
 
     const group=recsByKey[dk2];
     if(isPerOutlet){
       // FORMAT B: per-outlet (Nicole's POS data) — assign each outlet's own Disc value directly
       const discByBranch={};
-      nonZero.forEach(e=>{discByBranch[e.branch]=(discByBranch[e.branch]||0)+e.disc;});
+      nonZeroOutlet.forEach(e=>{discByBranch[e.branch]=(discByBranch[e.branch]||0)+e.disc;});
       if(group){
         group.recs.forEach(r=>{r.disc=discByBranch[r.branch]||0;});
         Object.entries(discByBranch).forEach(([br,d])=>{
@@ -2191,8 +2206,10 @@ function parseBrand(csv,brand){
         });
       }
     }else{
-      // FORMAT A: brand-level total — try exact upload for per-outlet breakdown first
-      const brandTotal=Math.max(...entries.map(e=>e.disc));
+      // FORMAT A: brand-level total — use max from ALL entries (including summary row)
+      const allNonZero=[...nonZeroOutlet,...nonZeroSummary];
+      const brandTotal=allNonZero.length>0?Math.max(...allNonZero.map(e=>e.disc)):0;
+      if(brandTotal<=0)return;
       const [agg,date]=dk2.split("|");
       const exactOutletDisc=getExactOutletDisc(agg,date);
       if(exactOutletDisc&&group){
