@@ -13,10 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-087";
+const BUILD_VERSION="2026-07-06-088";
 const BUILD_NOTES=[
-  "📊 Fixed Elasticity Scenarios table readability. Empty campaign comments no longer show a stray '· actual blended depth...' line with nothing before the separator. Scenario rows restructured — headline %, blended depth, and 'Most profitable' tag now sit on clean stacked lines with proper spacing instead of being crammed onto one wrapping line.",
-  "💸 Platforms page Discount Burn tile now uses the same line-break sub-text format as Overview/Brands/Outlets pages (was still using the older cramped single-line format)."
+  "🐛 Fixed the real cause of 'CPC brand cards not clickable.' cpcRenderOutletLevelSingle had a leftover code path doing `tgt.innerHTML = ...` where `tgt` was never defined anywhere in the function — every other branch RETURNS an HTML string, but this one specific 'no data for this month' branch threw a ReferenceError instead. This fires whenever a brand has no data for the current month+ad-type combo (e.g. a brand running only Keywords ads this month, no CPC) — the click technically navigated, but the destination page crashed silently while rendering, looking exactly like the card did nothing. Fixed to return the HTML string like every other branch.",
+  "📖 KPI card comparison text made bigger and darker across every page (Overview, Brands, Outlets, Platforms). 'vs 1 Jun-14 Jun (prior mo.): AED 72.8' sub-text was 11px light gray — bumped to 13px darker slate. Change % text bumped from 14px to 15px.",
+  "🎨 Individual aggregator tiles on the Platforms page (Deliveroo/Talabat/Noon/Careem/Keeta cards) redesigned to match the KPI card visual language used everywhere else — now shows 'vs {period}' comparison text before the % change, instead of just a bare % with no context."
 ];
 
 let _updateDialogShown=false;
@@ -2754,15 +2755,17 @@ function kpiCard(label,value,sub,chg,onclick,perDay,invertChg){
     pdLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #EDE7D9">
       <div style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:3px">Avg / day</div>
       <div style="font-size:18px;font-weight:800;font-variant-numeric:tabular-nums;color:#0F172A">${perDay.cur}</div>
-      ${perDay.prev?`<div style="font-size:11px;color:#94a3b8;margin-top:2px">${perDay.prevLabel||"prev"}: ${perDay.prev}${typeof perDay.chg==="number"?` <span style="color:${pc};font-weight:700">${fmtPct(perDay.chg)}</span>`:""}</div>`:""}
+      ${perDay.prev?`<div style="font-size:13px;color:#475569;font-weight:600;margin-top:2px">${perDay.prevLabel||"prev"}: ${perDay.prev}${typeof perDay.chg==="number"?` <span style="color:${pc};font-weight:800">${fmtPct(perDay.chg)}</span>`:""}</div>`:""}
     </div>`;
   }
-  // Comparison section — separated visually so current and prior values are distinct
+  // Comparison section — separated visually so current and prior values are distinct.
+  // v088: sub-text bumped from 11px/#94a3b8 (light gray, hard to read) to 13px/#475569
+  // (darker slate) per user request — "vs 1 Jun-14 Jun (prior mo.)" needed to be more legible.
   let compSection="";
   if(sub||hasChg){
     compSection=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #EDE7D9">
-      ${sub?`<div style="font-size:11px;color:#94a3b8;line-height:1.5">${sub}</div>`:""}
-      ${hasChg?`<div style="font-size:14px;color:${cc};font-weight:800;margin-top:2px">${fmtPct(chg)}</div>`:""}
+      ${sub?`<div style="font-size:13px;color:#475569;font-weight:600;line-height:1.5">${sub}</div>`:""}
+      ${hasChg?`<div style="font-size:15px;color:${cc};font-weight:800;margin-top:3px">${fmtPct(chg)}</div>`:""}
     </div>`;
   }
   return`<div class="sm" ${click}>
@@ -3185,7 +3188,25 @@ function renderPlatforms(){
   const ls=sumR(ld),ps=sumR(pd);
   const brandRows=BR.map(({n,c})=>{const cv=sumR(ld.filter(r=>r.brand===n));const pv=sumR(pd.filter(r=>r.brand===n));return{n,c,cv,oc:pctOf(cv.orders,pv.orders),sc:pctOf(cv.sales,pv.sales)};}).filter(b=>b.cv.orders>0);
   const note=ANOTES[selPlatform];
-  const cards=aggSums.map(a=>`<div style="cursor:pointer;background:linear-gradient(135deg,${a.clr}0d,#FFFFFF);border:2px solid ${selPlatform===a.ag?a.clr:'#E2E8F0'};border-radius:14px;padding:16px;box-shadow:${selPlatform===a.ag?`0 8px 25px ${a.clr}33`:'0 4px 6px -1px rgba(15,23,42,.08),0 2px 4px -2px rgba(15,23,42,.04)'};transition:all .2s ease" onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 12px 30px ${a.clr}30'" onmouseout="this.style.transform='none';this.style.boxShadow='${selPlatform===a.ag?`0 8px 25px ${a.clr}33`:'0 4px 6px -1px rgba(15,23,42,.08),0 2px 4px -2px rgba(15,23,42,.04)'}'" onclick="selPlatform='${a.ag}';renderPlatforms()"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">${logoImg(a.ag,28)}<span style="font-size:11px;color:${a.clr};font-weight:800;text-transform:uppercase;letter-spacing:.5px">${a.ag}</span></div><div style="font-size:22px;font-weight:800;font-variant-numeric:tabular-nums;color:#0F172A">${a.orders.toLocaleString()}</div><div style="font-size:12px;color:#475569;font-weight:700;margin-top:2px">${fmtAED(a.sales)}</div><div style="font-size:11px;color:${pctClr(a.oc)};font-weight:800;margin-top:4px">${fmtPct(a.oc)}</div></div>`).join("");
+  // Individual aggregator tiles (v088): redesigned to match the kpiCard visual language used
+  // everywhere else — prominent current value, divider, then "vs {period}: {prior}" in a
+  // readable darker size, followed by the % change. Previously these only showed the % change
+  // alone with no "vs X" context at all, inconsistent with every other tile on the dashboard.
+  const cards=aggSums.map(a=>{
+    const isSel=selPlatform===a.ag;
+    const border=isSel?a.clr:'#EDE7D9';
+    const shadow=isSel?`0 8px 25px ${a.clr}33`:'0 4px 6px -1px rgba(15,23,42,.08),0 2px 4px -2px rgba(15,23,42,.04)';
+    return `<div style="cursor:pointer;background:linear-gradient(135deg,${a.clr}0d,#FEFDFA);border:2px solid ${border};border-radius:14px;padding:16px;box-shadow:${shadow};transition:all .2s ease" onmouseover="this.style.transform='translateY(-3px)'" onmouseout="this.style.transform='none'" onclick="selPlatform='${a.ag}';renderPlatforms()">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">${logoImg(a.ag,28)}<span style="font-size:11px;color:${a.clr};font-weight:800;text-transform:uppercase;letter-spacing:.5px">${a.ag}</span></div>
+      <div style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Orders</div>
+      <div style="font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:#0F172A">${a.orders.toLocaleString()}</div>
+      <div style="font-size:13px;color:#475569;font-weight:700;margin-top:4px">${fmtAED(a.sales)}</div>
+      <div style="margin-top:9px;padding-top:8px;border-top:1px solid #EDE7D9">
+        <div style="font-size:12px;color:#475569;font-weight:600">${compShort}</div>
+        <div style="font-size:14px;color:${pctClr(a.oc)};font-weight:800;margin-top:2px">${fmtPct(a.oc)}</div>
+      </div>
+    </div>`;
+  }).join("");
   const heads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
   const tRows=brandRows.map(b=>{
     const disc=b.cv.disc||0;const gross=b.cv.sales+disc;const depth=gross>0?(disc/gross*100):0;
@@ -4908,13 +4929,19 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
 
   // Build per-outlet rows for the selected month
   if(!hasDataForSelected){
-    // No data for selected month — show clear empty state with month buttons to navigate to prior months
+    // No data for selected month — show clear empty state with month buttons to navigate to prior months.
+    // BUG FIX (found by tracing the "brand cards not clickable" report): this branch used to do
+    // `tgt.innerHTML = ...; return;` but `tgt` was never defined anywhere in this function — every
+    // other branch in cpcRenderOutletLevelSingle RETURNS an HTML string (that's how the caller
+    // consumes it), so this leftover DOM-write pattern threw "ReferenceError: tgt is not defined"
+    // the instant a brand had no data for the current month+ad-type (e.g. a brand that only runs
+    // Keywords ads this month, no CPC). The click into the brand card technically worked and
+    // navigated, but the destination page crashed silently while rendering — looking exactly like
+    // "nothing happened when I clicked." Fixed to return the HTML string like every other branch.
     const emptyMonthLabel=cpcMonthLabel(selMonth);
-    // Add current month button even if it has no data (so it shows as selected)
     const allMonthBtns=[selMonth,...monthsAvail.filter(m=>m!==selMonth)].map(m=>{const isCur=m===curMonthStr;const act=selMonth===m;return `<button onclick="cpcSetMonth('${m}')" style="padding:4px 11px;border-radius:6px;border:1px solid ${act?'#f59e0b':'rgba(15,23,42,.6)'};background:${act?'rgba(245,158,11,.12)':'transparent'};color:${act?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${cpcMonthLabel(m)}${isCur?' •':''}</button>`;}).join('');
     const emptyControlBar=`<div style="display:flex;justify-content:flex-end;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:12px"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Month</span>${allMonthBtns}</div>`;
-    tgt.innerHTML=`${emptyControlBar}<div class="card" style="text-align:center;padding:40px 20px"><div style="font-size:40px;margin-bottom:12px">📭</div><div style="font-size:16px;font-weight:700;color:#0F172A;margin-bottom:6px">No CPC investment data for ${emptyMonthLabel}</div><div style="font-size:13px;color:#64748b;line-height:1.6">No ad spend has been recorded for ${brand} on ${ag} in ${emptyMonthLabel}.<br>If ads are running this month, they'll appear here once the CPC data sheet is updated.${monthsAvail.length>0?`<br><br>Historical data available for: <strong>${monthsAvail.map(cpcMonthLabel).join(', ')}</strong> — click a month button above to view.`:''}</div></div>`;
-    return;
+    return `${emptyControlBar}<div class="card" style="text-align:center;padding:40px 20px"><div style="font-size:40px;margin-bottom:12px">📭</div><div style="font-size:16px;font-weight:700;color:#0F172A;margin-bottom:6px">No CPC investment data for ${emptyMonthLabel}</div><div style="font-size:13px;color:#64748b;line-height:1.6">No ad spend has been recorded for ${brand} on ${ag} in ${emptyMonthLabel}.<br>If ads are running this month, they'll appear here once the CPC data sheet is updated.${monthsAvail.length>0?`<br><br>Historical data available for: <strong>${monthsAvail.map(cpcMonthLabel).join(', ')}</strong> — click a month button above to view.`:''}</div></div>`;
   }
   const outlets={};rows.forEach(r=>{if(!outlets[r.branch])outlets[r.branch]=[];outlets[r.branch].push(r);});
   const adTypeOf=effAdType==='all'?'CPC':effAdType;
