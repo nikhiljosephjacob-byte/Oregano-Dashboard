@@ -13,11 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-088";
+const BUILD_VERSION="2026-07-06-089";
 const BUILD_NOTES=[
-  "🐛 Fixed the real cause of 'CPC brand cards not clickable.' cpcRenderOutletLevelSingle had a leftover code path doing `tgt.innerHTML = ...` where `tgt` was never defined anywhere in the function — every other branch RETURNS an HTML string, but this one specific 'no data for this month' branch threw a ReferenceError instead. This fires whenever a brand has no data for the current month+ad-type combo (e.g. a brand running only Keywords ads this month, no CPC) — the click technically navigated, but the destination page crashed silently while rendering, looking exactly like the card did nothing. Fixed to return the HTML string like every other branch.",
-  "📖 KPI card comparison text made bigger and darker across every page (Overview, Brands, Outlets, Platforms). 'vs 1 Jun-14 Jun (prior mo.): AED 72.8' sub-text was 11px light gray — bumped to 13px darker slate. Change % text bumped from 14px to 15px.",
-  "🎨 Individual aggregator tiles on the Platforms page (Deliveroo/Talabat/Noon/Careem/Keeta cards) redesigned to match the KPI card visual language used everywhere else — now shows 'vs {period}' comparison text before the % change, instead of just a bare % with no context."
+  "👁️ Fixed invisible text in the Elasticity Scenarios 'Campaign:' line. The background was a semi-transparent dark navy (rgba(15,23,42,.4)) designed for a dark theme, but this page is light-themed — over a light background that renders as medium grey, and the light-slate comment text (#94a3b8) had almost no contrast against it, making the words next to 'Campaign:' effectively invisible. Replaced with solid light-theme colors (dark text on light grey) matching the rest of the page.",
+  "🔢 Platforms page tiles now show the actual prior-period number alongside the % change, not just the percentage. This was already correct on AOV/Discount Burn tiles but missing on Orders/Net Sales (both the top KPI row and the individual aggregator cards like Talabat/Deliveroo/Careem) — now consistent with Overview and Brands pages."
 ];
 
 let _updateDialogShown=false;
@@ -3183,7 +3182,7 @@ function renderOutlets(){
 // PLATFORMS
 function renderPlatforms(){
   const clr=AC[selPlatform]||"#888";const compShort=getCompShort();
-  const aggSums=AGGS.map(ag=>{const c=sumR(getLD().filter(r=>r.aggregator===ag));const p=sumR(getPD().filter(r=>r.aggregator===ag));return{ag,clr:AC[ag],...c,aov:c.orders>0?c.sales/c.orders:0,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};}).sort((a,b)=>b.sales-a.sales);
+  const aggSums=AGGS.map(ag=>{const c=sumR(getLD().filter(r=>r.aggregator===ag));const p=sumR(getPD().filter(r=>r.aggregator===ag));return{ag,clr:AC[ag],...c,orders_prev:p.orders,aov:c.orders>0?c.sales/c.orders:0,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};}).sort((a,b)=>b.sales-a.sales);
   const ld=getLD().filter(r=>r.aggregator===selPlatform),pd=getPD().filter(r=>r.aggregator===selPlatform);
   const ls=sumR(ld),ps=sumR(pd);
   const brandRows=BR.map(({n,c})=>{const cv=sumR(ld.filter(r=>r.brand===n));const pv=sumR(pd.filter(r=>r.brand===n));return{n,c,cv,oc:pctOf(cv.orders,pv.orders),sc:pctOf(cv.sales,pv.sales)};}).filter(b=>b.cv.orders>0);
@@ -3202,7 +3201,7 @@ function renderPlatforms(){
       <div style="font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:#0F172A">${a.orders.toLocaleString()}</div>
       <div style="font-size:13px;color:#475569;font-weight:700;margin-top:4px">${fmtAED(a.sales)}</div>
       <div style="margin-top:9px;padding-top:8px;border-top:1px solid #EDE7D9">
-        <div style="font-size:12px;color:#475569;font-weight:600">${compShort}</div>
+        <div style="font-size:12px;color:#475569;font-weight:600">${compShort}: ${a.orders_prev!=null?a.orders_prev.toLocaleString():'—'}</div>
         <div style="font-size:14px;color:${pctClr(a.oc)};font-weight:800;margin-top:2px">${fmtPct(a.oc)}</div>
       </div>
     </div>`;
@@ -3224,7 +3223,7 @@ function renderPlatforms(){
   document.getElementById("page-platforms").innerHTML=makeFilterBar({hidePlatform:true})+
     `<div class="g4" style="margin-bottom:12px">${cards}</div>
     ${note?`<div class="card" style="background:rgba(245,158,11,.05);border-color:rgba(245,158,11,.2);margin-bottom:12px"><div style="font-size:12px;color:#FDE68A;line-height:1.7">💡 ${note}</div></div>`:""}
-    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAED(ls.sales),compShort,pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAED(platDisc),`${platDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAED(ps.disc||0)}`,pctOf(platDisc,ps.disc||0),null,null,true)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAED(ls.sales),`${compShort}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAED(platDisc),`${platDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAED(ps.disc||0)}`,pctOf(platDisc,ps.disc||0),null,null,true)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="sm" style="margin-bottom:12px"><div class="ct" style="color:${clr}">${selPlatform} — Net Sales Trend</div><div style="position:relative;height:130px"><canvas id="ch-p-trend"></canvas></div></div>
     <div class="card"><div class="ct" style="color:${clr}">Brand Performance on ${selPlatform} — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("pl-tbl",heads,tRows,2)}</div>`;
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.aggregator===selPlatform&&(!f.brands.size||f.brands.has(r.brand))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-p-trend",trend30(mf,f.start,f.end),clr);},50);
@@ -7046,7 +7045,12 @@ function campDetailV2HTML(c,idx){
     // short c.comments produced a line reading just "📋 Campaign: · actual blended depth..."
     // with nothing before the separator, which looked broken rather than simply "no comment".
     const hasComment=c.comments&&c.comments.trim().length>=8;
-    const commentNote=hasComment?`<div style="font-size:11px;color:#475569;font-weight:600;margin-bottom:8px;padding:6px 10px;background:rgba(15,23,42,.4);border-radius:6px;border-left:2px solid #334155">📋 Campaign: <em style="color:#94a3b8">"${c.comments}"</em>${a.discPctOfGross!=null?` · <strong style="color:#0F172A">actual blended depth: ${a.discPctOfGross.toFixed(1)}%</strong> of gross (vs ${a.headlinePct!=null?a.headlinePct+'% headline':'stated headline'})`:''}</div>`:(a.discPctOfGross!=null?`<div style="font-size:11px;color:#475569;font-weight:600;margin-bottom:8px;padding:6px 10px;background:rgba(15,23,42,.4);border-radius:6px;border-left:2px solid #334155">📋 <strong style="color:#0F172A">Actual blended depth: ${a.discPctOfGross.toFixed(1)}%</strong> of gross (vs ${a.headlinePct!=null?a.headlinePct+'% headline':'stated headline'})</div>`:'');
+    // v089: the previous background rgba(15,23,42,.4) was designed as a dark-theme overlay, but
+    // this page uses a LIGHT "warm paper" theme. A semi-transparent dark navy over a light page
+    // renders as medium grey — and the light-slate comment text (#94a3b8) then has almost no
+    // contrast against that grey, making the words next to "Campaign:" effectively invisible.
+    // Replaced with a solid light background + dark text, consistent with the rest of the page.
+    const commentNote=hasComment?`<div style="font-size:12px;color:#1E293B;font-weight:600;margin-bottom:8px;padding:8px 12px;background:#F1F5F9;border-radius:6px;border-left:3px solid #64748B">📋 Campaign: <em style="color:#334155">"${c.comments}"</em>${a.discPctOfGross!=null?` — <strong style="color:#0F172A">actual blended depth: ${a.discPctOfGross.toFixed(1)}%</strong> of gross (vs ${a.headlinePct!=null?a.headlinePct+'% headline':'stated headline'})`:''}</div>`:(a.discPctOfGross!=null?`<div style="font-size:12px;color:#1E293B;font-weight:600;margin-bottom:8px;padding:8px 12px;background:#F1F5F9;border-radius:6px;border-left:3px solid #64748B">📋 <strong style="color:#0F172A">Actual blended depth: ${a.discPctOfGross.toFixed(1)}%</strong> of gross (vs ${a.headlinePct!=null?a.headlinePct+'% headline':'stated headline'})</div>`:'');
     scenarioBox=`<div class="card"><div class="ct">💡 Was a different discount better? — Elasticity Scenarios</div>
       <div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Models what shallower discounts might have produced, assuming order lift scales with discount depth (elasticity <strong>${campElasticity.toFixed(1)}</strong> = ${campElasticity===1?'linear':'curved'}). Headline % = what you'd set on the platform. Blended depth = actual realized discount as % of gross. These are <em>estimates</em>, not measured outcomes.</div>
       ${commentNote}<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><span style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:700;font-weight:700">Elasticity</span>${[0.7,1.0,1.3].map(e=>`<button onclick="campSetElasticity(${e})" style="padding:3px 10px;border-radius:6px;border:1px solid ${campElasticity===e?'#f59e0b':'rgba(15,23,42,.6)'};background:${campElasticity===e?'rgba(245,158,11,.12)':'transparent'};color:${campElasticity===e?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${e===0.7?'Low (0.7)':e===1?'Linear (1.0)':'High (1.3)'}</button>`).join('')}</div>
