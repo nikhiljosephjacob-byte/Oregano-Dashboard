@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-090";
+const BUILD_VERSION="2026-07-06-091";
 const BUILD_NOTES=[
-  "📏 KPI card comparison lines combined onto one line. Every tile (Orders, Net Sales, AOV, Discount Burn, and the individual aggregator tiles on the Platforms page) previously split the comparison value and % change onto two separate lines — e.g. 'vs 13 Jul: 1,557' then '-5.5%' below it. This forced an unnecessary 3rd line on single-day views and broke consistency with the Avg/Day sub-section, which already combined them ('vs 2 Jul-8 Jul: 1,593 -17.3%' on one line). Now the main comparison line matches that same pattern everywhere: 'vs 13 Jul: 1,557  -5.5%' on one line. Applies automatically across Overview, Brands, Outlets, and Platforms pages since they share the same kpiCard component, plus a matching fix to the Platforms page's individual aggregator cards (Talabat/Deliveroo/Careem/etc.), which use a separate custom template."
+  "📋 Needs Attention panel (Campaigns page) now shows brand, aggregator, and the campaign's date range on every item — not just the campaign name. e.g. 'Got Your Back · Smokeys · Careem · 1 Jul – 15 Jul, 2026 — ends in 10h' instead of just 'Got Your Back ends in 10h'. Applies to all item types in the panel (ending-soon, negative ROI, below break-even) via a shared label helper, so you can tell at a glance which specific brand+aggregator+window needs a look without clicking through first."
 ];
 
 let _updateDialogShown=false;
@@ -7314,16 +7314,23 @@ function campNeedsAttentionItems(active,upcoming){
     const end=new Date(dateStr+"T23:59:59");
     return (end-now)/3600000;
   };
+  // Enriched campaign label: name + brand + aggregator + date range, so each attention item
+  // is self-contained (no need to click through just to see which campaign/brand/window this
+  // refers to). Date range uses the same compact "1 Jul – 15 Jul 2026" style as campaign cards.
+  const campLabel=c=>{
+    const dateRange=(c.startDate&&c.endDate)?`${fmtShort(c.startDate)} – ${fmtShort(c.endDate)}, ${c.endDate.slice(0,4)}`:'';
+    return `<strong>${c.name||c.brand+" on "+c.aggregator}</strong> <span style="color:#94a3b8;font-weight:600">· ${c.brand} · ${c.aggregator}${dateRange?` · ${dateRange}`:''}</span>`;
+  };
   // 1) Running campaigns ending soon
   active.forEach(c=>{
     if(isRewardsCampaign(c))return; // rewards are always-on — no "ending soon" meaning
     const h=hoursUntil(c.endDate);
     if(h<=24&&h>0){
       const idx=campaignData.indexOf(c);
-      items.push({priority:1,icon:'⏰',txt:`<strong>${c.name||c.brand+" on "+c.aggregator}</strong> ends in ${Math.max(1,Math.round(h))}h`,action:`selectCamp(${idx})`});
+      items.push({priority:1,icon:'⏰',txt:`${campLabel(c)} — ends in ${Math.max(1,Math.round(h))}h`,action:`selectCamp(${idx})`});
     }else if(h<=48&&h>24){
       const idx=campaignData.indexOf(c);
-      items.push({priority:2,icon:'⏰',txt:`<strong>${c.name||c.brand+" on "+c.aggregator}</strong> ends in ${Math.round(h)}h`,action:`selectCamp(${idx})`});
+      items.push({priority:2,icon:'⏰',txt:`${campLabel(c)} — ends in ${Math.round(h)}h`,action:`selectCamp(${idx})`});
     }
   });
   // 2) Running campaigns with negative or poor ROI (excludes rewards — see comment above)
@@ -7334,10 +7341,10 @@ function campNeedsAttentionItems(active,upcoming){
       if(a&&a.discountROI!=null&&a.days>=2){ // need ≥2 days of data to make a call
         if(a.discountROI<0){
           const idx=campaignData.indexOf(c);
-          items.push({priority:1,icon:'📉',txt:`<strong>${c.name||c.brand+" on "+c.aggregator}</strong> ROI ${a.discountROI.toFixed(2)}× — losing money`,action:`selectCamp(${idx})`});
+          items.push({priority:1,icon:'📉',txt:`${campLabel(c)} — ROI ${a.discountROI.toFixed(2)}× — losing money`,action:`selectCamp(${idx})`});
         }else if(a.discountROI<1){
           const idx=campaignData.indexOf(c);
-          items.push({priority:2,icon:'📉',txt:`<strong>${c.name||c.brand+" on "+c.aggregator}</strong> ROI ${a.discountROI.toFixed(2)}× — below break-even`,action:`selectCamp(${idx})`});
+          items.push({priority:2,icon:'📉',txt:`${campLabel(c)} — ROI ${a.discountROI.toFixed(2)}× — below break-even`,action:`selectCamp(${idx})`});
         }
       }
     }catch(e){/* skip campaigns whose analysis errors */}
