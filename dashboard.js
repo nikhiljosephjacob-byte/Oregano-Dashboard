@@ -13,10 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-089";
+const BUILD_VERSION="2026-07-06-090";
 const BUILD_NOTES=[
-  "👁️ Fixed invisible text in the Elasticity Scenarios 'Campaign:' line. The background was a semi-transparent dark navy (rgba(15,23,42,.4)) designed for a dark theme, but this page is light-themed — over a light background that renders as medium grey, and the light-slate comment text (#94a3b8) had almost no contrast against it, making the words next to 'Campaign:' effectively invisible. Replaced with solid light-theme colors (dark text on light grey) matching the rest of the page.",
-  "🔢 Platforms page tiles now show the actual prior-period number alongside the % change, not just the percentage. This was already correct on AOV/Discount Burn tiles but missing on Orders/Net Sales (both the top KPI row and the individual aggregator cards like Talabat/Deliveroo/Careem) — now consistent with Overview and Brands pages."
+  "📏 KPI card comparison lines combined onto one line. Every tile (Orders, Net Sales, AOV, Discount Burn, and the individual aggregator tiles on the Platforms page) previously split the comparison value and % change onto two separate lines — e.g. 'vs 13 Jul: 1,557' then '-5.5%' below it. This forced an unnecessary 3rd line on single-day views and broke consistency with the Avg/Day sub-section, which already combined them ('vs 2 Jul-8 Jul: 1,593 -17.3%' on one line). Now the main comparison line matches that same pattern everywhere: 'vs 13 Jul: 1,557  -5.5%' on one line. Applies automatically across Overview, Brands, Outlets, and Platforms pages since they share the same kpiCard component, plus a matching fix to the Platforms page's individual aggregator cards (Talabat/Deliveroo/Careem/etc.), which use a separate custom template."
 ];
 
 let _updateDialogShown=false;
@@ -2758,13 +2757,14 @@ function kpiCard(label,value,sub,chg,onclick,perDay,invertChg){
     </div>`;
   }
   // Comparison section — separated visually so current and prior values are distinct.
-  // v088: sub-text bumped from 11px/#94a3b8 (light gray, hard to read) to 13px/#475569
-  // (darker slate) per user request — "vs 1 Jun-14 Jun (prior mo.)" needed to be more legible.
+  // v090: combined the comparison value and % change onto ONE line (was two separate divs,
+  // forcing an extra 3rd line on every card). The Avg/Day section below already did this
+  // correctly ("vs 2 Jul-8 Jul: 1,593 -17.3%" on one line) — this brings the main comparison
+  // row in line with that same pattern so every card is internally consistent.
   let compSection="";
   if(sub||hasChg){
     compSection=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #EDE7D9">
-      ${sub?`<div style="font-size:13px;color:#475569;font-weight:600;line-height:1.5">${sub}</div>`:""}
-      ${hasChg?`<div style="font-size:15px;color:${cc};font-weight:800;margin-top:3px">${fmtPct(chg)}</div>`:""}
+      <div style="font-size:13px;color:#475569;font-weight:600;line-height:1.5">${sub||""}${hasChg?` &nbsp;<span style="font-size:13px;color:${cc};font-weight:800">${fmtPct(chg)}</span>`:""}</div>
     </div>`;
   }
   return`<div class="sm" ${click}>
@@ -3201,8 +3201,7 @@ function renderPlatforms(){
       <div style="font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:#0F172A">${a.orders.toLocaleString()}</div>
       <div style="font-size:13px;color:#475569;font-weight:700;margin-top:4px">${fmtAED(a.sales)}</div>
       <div style="margin-top:9px;padding-top:8px;border-top:1px solid #EDE7D9">
-        <div style="font-size:12px;color:#475569;font-weight:600">${compShort}: ${a.orders_prev!=null?a.orders_prev.toLocaleString():'—'}</div>
-        <div style="font-size:14px;color:${pctClr(a.oc)};font-weight:800;margin-top:2px">${fmtPct(a.oc)}</div>
+        <div style="font-size:12px;color:#475569;font-weight:600">${compShort}: ${a.orders_prev!=null?a.orders_prev.toLocaleString():'—'} &nbsp;<span style="font-size:13px;color:${pctClr(a.oc)};font-weight:800">${fmtPct(a.oc)}</span></div>
       </div>
     </div>`;
   }).join("");
