@@ -13,11 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-094";
+const BUILD_VERSION="2026-07-06-095";
 const BUILD_NOTES=[
-  "🔧 Fixed Discount ROI disappearing on most campaigns. v093's 'baseline contaminated' check fired whenever ANY other campaign existed 4 weeks prior — but this business runs continuous overlapping promotions across 5 brands × 5 aggregators, so that was true for nearly every campaign, not a rare edge case. Replaced with a targeted signal: only suppress when the baseline period's OWN discount depth was at least 2× heavier than this campaign's (the actual mechanism that unfairly inflates a comparison) — mere overlap with a comparably-sized promo no longer triggers it. Also removed the flat AED 500/day-or-3%-of-gross cutoff entirely — it was hiding exactly the disciplined, well-run shallow-discount campaigns worth seeing ROI for.",
-  "📊 New 'Compare vs Similar Campaigns' section on every campaign detail page — shows this campaign directly against up to 6 recent campaigns on the same brand+aggregator (orders, discount %, discount given, total contribution, contribution per order), ranked by contribution per order. A complementary lens to the baseline-vs-self ROI above it: instead of asking 'did this beat a historical baseline,' it asks 'of the discount depths we've actually tried, which produced the best economics' — sidesteps the baseline-contamination problem entirely. Six caveats are stated plainly below the table (doesn't prove discounting beats no discount; different weeks/seasons; volume has value beyond one campaign's contribution; co-funding differences; AOV composition differences; small-sample noise).",
-  "🔍 Readability pass on campaign KPI tiles and the verdict banner — labels, values, and captions were sized for a screenshot, not for reading. Verdict banner text 13px→15px, campaign KPI tile captions 10px light-grey→13px darker slate, tile values 22px→26px. Matches the sizing standard already applied to the main dashboard's KPI cards."
+  "💰 Per-Outlet Order Uplift table now shows baseline SALES alongside baseline orders in each of the three comparison columns (Previous Week / Previous Month / 2 Months Ago) — was orders-only before, requiring a separate lookup to see revenue for each window. The totals row at the bottom (which already existed) is extended to match: each baseline column now shows total orders, total sales, and the average % uplift for that column, not just the average % alone."
 ];
 
 let _updateDialogShown=false;
@@ -6944,12 +6942,21 @@ function campOutletBreakdownHTML(c,a){
     const chg=pctOf(campPerDay,basePerDay);
     const dirtyMark=dirty?`<span title="another campaign ran here during this baseline" style="color:#FBBF24;cursor:help">⚠</span> `:'';
     const chgClr=chg==null?'#64748b':pctClr(chg);
-    return `<td style="text-align:right;font-variant-numeric:tabular-nums">${dirtyMark}<span style="color:#94a3b8;font-size:11px">${Math.round(bs.orders).toLocaleString()}</span><div style="font-size:10px;color:${chgClr};font-weight:700">${chg!=null?fmtPct(chg):'—'}</div></td>`;
+    // v095: baseline sales shown alongside orders (was orders-only) so the reader can see both
+    // volume and revenue for each comparison window without cross-referencing another table.
+    return `<td style="text-align:right;font-variant-numeric:tabular-nums;padding:10px 12px">
+      <div>${dirtyMark}<span style="color:#334155;font-size:13px;font-weight:700">${Math.round(bs.orders).toLocaleString()}</span><span style="color:#94a3b8;font-size:11px;font-weight:600"> orders</span></div>
+      <div style="font-size:12px;color:#64748b;font-weight:600;margin-top:2px">${fmtAEDx(bs.sales)}</div>
+      <div style="font-size:13px;color:${chgClr};font-weight:800;margin-top:3px">${chg!=null?fmtPct(chg):'—'}</div>
+    </td>`;
   };
 
   let tClickOrders=0,tClickSales=0;
-  // Totals accumulators for the three baseline comparisons (for simple-average uplift)
+  // Totals accumulators for the three baseline comparisons (for simple-average uplift AND
+  // baseline sales totals — v095 extends this to also sum baseline sales per column, matching
+  // the new per-outlet cells).
   let tPwUplifts=[],tPmUplifts=[],tP2Uplifts=[];
+  let tPwSales=0,tPmSales=0,tP2Sales=0,tPwOrders=0,tPmOrders=0,tP2Orders=0;
   const rows=branchesInScope.map(br=>{
     const cR=flt(br,effStart,effEnd);const cs=sumR(cR);const cDays=new Set(cR.map(r=>r.date)).size||1;
     if(!cs.orders&&!cs.sales)return null; // skip outlets with no campaign activity
@@ -6962,20 +6969,30 @@ function campOutletBreakdownHTML(c,a){
     if(pwU!=null)tPwUplifts.push(pwU);
     if(pmU!=null)tPmUplifts.push(pmU);
     if(p2U!=null)tP2Uplifts.push(p2U);
-    const pwCell=cellUplift(cs.orders,cDays,flt(br,pw_s,pw_e),pw_s,pw_e,branchHasCamp(pwCamps,br));
-    const pmCell=cellUplift(cs.orders,cDays,flt(br,pm_s,pm_e),pm_s,pm_e,branchHasCamp(pmCamps,br));
-    const p2Cell=cellUplift(cs.orders,cDays,flt(br,p2_s,p2_e),p2_s,p2_e,branchHasCamp(p2Camps,br));
+    const pwRecs=flt(br,pw_s,pw_e),pmRecs=flt(br,pm_s,pm_e),p2Recs=flt(br,p2_s,p2_e);
+    const pwBs=sumR(pwRecs),pmBs=sumR(pmRecs),p2Bs=sumR(p2Recs);
+    tPwSales+=pwBs.sales;tPmSales+=pmBs.sales;tP2Sales+=p2Bs.sales;
+    tPwOrders+=pwBs.orders;tPmOrders+=pmBs.orders;tP2Orders+=p2Bs.orders;
+    const pwCell=cellUplift(cs.orders,cDays,pwRecs,pw_s,pw_e,branchHasCamp(pwCamps,br));
+    const pmCell=cellUplift(cs.orders,cDays,pmRecs,pm_s,pm_e,branchHasCamp(pmCamps,br));
+    const p2Cell=cellUplift(cs.orders,cDays,p2Recs,p2_s,p2_e,branchHasCamp(p2Camps,br));
     return `<tr><td style="font-weight:700;color:#0F172A">${br}</td><td style="text-align:right;font-weight:700;color:#0F172A;font-variant-numeric:tabular-nums">${Math.round(cs.orders).toLocaleString()}</td><td style="text-align:right;color:#94a3b8;font-variant-numeric:tabular-nums">${fmtAEDx(cs.sales)}</td>${pwCell}${pmCell}${p2Cell}</tr>`;
   }).filter(Boolean).join('');
   if(!rows)return '';
-  // Totals row: sum of orders/sales, simple average uplift across all outlets that had data
+  // Totals row: sum of orders/sales, simple average uplift across all outlets that had data.
+  // v095: each baseline column now also shows the summed baseline orders + sales for that
+  // column (previously only the average % uplift was shown), matching the richer per-outlet cells.
   const avgUplift=(arr)=>arr.length?arr.reduce((s,v)=>s+v,0)/arr.length:null;
   const avgPw=avgUplift(tPwUplifts),avgPm=avgUplift(tPmUplifts),avgP2=avgUplift(tP2Uplifts);
-  const totUpliftCell=(avg)=>avg!=null?`<span style="color:${pctClr(avg)};font-weight:700">${fmtPct(avg)}</span><div style="font-size:9px;color:#64748b">avg across ${avg!=null?(avg===avgPw?tPwUplifts.length:avg===avgPm?tPmUplifts.length:tP2Uplifts.length):0} outlets</div>`:`<span style="color:#64748b">—</span>`;
-  const totalsRow=`<tr style="border-top:2px solid rgba(245,158,11,.3);background:rgba(245,158,11,.04)"><td style="font-weight:800;color:#f59e0b">TOTAL / AVG</td><td style="text-align:right;font-weight:800;color:#0F172A;font-variant-numeric:tabular-nums">${Math.round(tClickOrders).toLocaleString()}</td><td style="text-align:right;font-weight:800;color:#0F172A;font-variant-numeric:tabular-nums">${fmtAEDx(tClickSales)}</td><td style="text-align:right;font-variant-numeric:tabular-nums">${totUpliftCell(avgPw)}</td><td style="text-align:right;font-variant-numeric:tabular-nums">${totUpliftCell(avgPm)}</td><td style="text-align:right;font-variant-numeric:tabular-nums">${totUpliftCell(avgP2)}</td></tr>`;
+  const totBaselineCell=(totOrders,totSales,avg,n)=>`<td style="text-align:right;font-variant-numeric:tabular-nums;padding:10px 12px">
+    <div><span style="color:#0F172A;font-size:13px;font-weight:800">${Math.round(totOrders).toLocaleString()}</span><span style="color:#94a3b8;font-size:11px;font-weight:600"> orders</span></div>
+    <div style="font-size:12px;color:#64748b;font-weight:700;margin-top:2px">${fmtAEDx(totSales)}</div>
+    <div style="font-size:13px;font-weight:800;margin-top:3px">${avg!=null?`<span style="color:${pctClr(avg)}">${fmtPct(avg)}</span><span style="font-size:10px;color:#64748b;font-weight:600"> avg/${n}</span>`:'<span style="color:#64748b">—</span>'}</div>
+  </td>`;
+  const totalsRow=`<tr style="border-top:2px solid rgba(245,158,11,.3);background:rgba(245,158,11,.04)"><td style="font-weight:800;color:#f59e0b">TOTAL</td><td style="text-align:right;font-weight:800;color:#0F172A;font-variant-numeric:tabular-nums">${Math.round(tClickOrders).toLocaleString()}</td><td style="text-align:right;font-weight:800;color:#0F172A;font-variant-numeric:tabular-nums">${fmtAEDx(tClickSales)}</td>${totBaselineCell(tPwOrders,tPwSales,avgPw,tPwUplifts.length)}${totBaselineCell(tPmOrders,tPmSales,avgPm,tPmUplifts.length)}${totBaselineCell(tP2Orders,tP2Sales,avgP2,tP2Uplifts.length)}</tr>`;
   const fmtRange=(s,e)=>`${fmtShort(s)}–${fmtShort(e)}`;
   return `<div class="card"><div class="ct">📍 Per-Outlet Order Uplift — vs 3 baselines</div>
-    <div style="font-size:11px;color:#94a3b8;margin-bottom:6px;line-height:1.6">Each outlet's orders during the campaign vs the same outlet in three earlier windows. Figures shown are baseline orders with the % change in campaign orders/day above baseline. <span style="color:#FBBF24">⚠</span> = another ${c.aggregator} campaign ran in that outlet during that baseline (read with caution).</div>
+    <div style="font-size:11px;color:#94a3b8;margin-bottom:6px;line-height:1.6">Each outlet's orders during the campaign vs the same outlet in three earlier windows. Figures shown are baseline orders, baseline sales, and the % change in campaign orders/day above baseline. <span style="color:#FBBF24">⚠</span> = another ${c.aggregator} campaign ran in that outlet during that baseline (read with caution).</div>
     <div style="overflow-x:auto"><table class="tbl"><thead>
       <tr><th rowspan="2" style="vertical-align:bottom">Outlet</th><th rowspan="2" style="text-align:right;vertical-align:bottom">Campaign<br>Orders</th><th rowspan="2" style="text-align:right;vertical-align:bottom">Campaign<br>Sales</th><th style="text-align:center">Previous Week</th><th style="text-align:center">Previous Month</th><th style="text-align:center">2 Months Ago</th></tr>
       <tr><th style="text-align:right;font-size:9px;color:#64748b;font-weight:500">${fmtRange(pw_s,pw_e)}</th><th style="text-align:right;font-size:9px;color:#64748b;font-weight:500">${fmtRange(pm_s,pm_e)}</th><th style="text-align:right;font-size:9px;color:#64748b;font-weight:500">${fmtRange(p2_s,p2_e)}</th></tr>
