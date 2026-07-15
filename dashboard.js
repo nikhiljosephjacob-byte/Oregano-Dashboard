@@ -13,9 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-091";
+const BUILD_VERSION="2026-07-06-093";
 const BUILD_NOTES=[
-  "📋 Needs Attention panel (Campaigns page) now shows brand, aggregator, and the campaign's date range on every item — not just the campaign name. e.g. 'Got Your Back · Smokeys · Careem · 1 Jul – 15 Jul, 2026 — ends in 10h' instead of just 'Got Your Back ends in 10h'. Applies to all item types in the panel (ending-soon, negative ROI, below break-even) via a shared label helper, so you can tell at a glance which specific brand+aggregator+window needs a look without clicking through first."
+  "🧮 Discount ROI is now suppressed in two cases that were producing misleading extreme ratios (e.g. a real campaign showed -16.60× when it was actually a reasonably-run shallow discount). (A) Baseline contaminated: if other campaigns ran on the same brand+aggregator during the comparison window, that baseline isn't a fair 'normal' period to divide against — ROI is hidden and the verdict banner names which campaigns ran and points to the incremental contribution figure instead (still valid, not divided by anything). (B) Discount too small: below 3% of gross or AED 500/day, the discount is too small a denominator to divide by meaningfully — the ratio mostly reflects its own instability, not campaign quality. Both conditions can trigger together, as they did in the flagged case. Rewards campaigns are excluded from the baseline-contamination check (they're always-on, so including them would flag nearly every campaign's baseline as 'contaminated').",
+  "👁️ Fixed unreadable amber-on-amber text in the campaign detail's baseline-note box (color:#fbbf24 bright amber text on a near-transparent amber-tinted background — essentially invisible). Now dark amber text (#78350F) on a solid light-amber fill. Also shortened the note since the new verdict banner above it now carries the main explanation — this note is just a compact list of which campaigns ran."
 ];
 
 let _updateDialogShown=false;
@@ -6700,8 +6701,32 @@ function campAnalysisV2(c){
   if(dataMismatchSuspected)discountROI=null;
 
   // Were we running OTHER campaigns on this brand+aggregator during the BASELINE window?
+  // Rewards campaigns are excluded from this check — they run essentially always-on, so
+  // including them would falsely flag nearly every campaign's baseline as "contaminated"
+  // just because a Noon/Deliveroo Rewards program happened to also be active.
   const myIdx=campaignData.indexOf(c);
-  const baselineCampaigns=campaignData.filter((x,i)=>i!==myIdx&&x.aggregator===c.aggregator&&(c.brand==='All Brands'||x.brand===c.brand)&&x.startDate<=bEnd&&x.endDate>=bStart);
+  const baselineCampaigns=campaignData.filter((x,i)=>i!==myIdx&&x.aggregator===c.aggregator&&(c.brand==='All Brands'||x.brand===c.brand)&&x.startDate<=bEnd&&x.endDate>=bStart&&!isRewardsCampaign(x));
+
+  // ── Discount ROI reliability guards (v093) ──
+  // Two independent conditions can each make the ROI ratio actively misleading rather than just
+  // imprecise. Real example that prompted this: a 4-day, AED 1,115-discount campaign showed
+  // -16.60× ROI — not because the campaign was badly run, but because (a) the baseline period
+  // itself had FOUR other promotions stacked on it, so it wasn't a fair "normal" comparison
+  // point, and (b) dividing a real but modest incremental-contribution swing by a tiny AED 1,115
+  // discount amplifies ordinary noise into an extreme-looking multiple. The same dollar swing
+  // against a AED 10,000 discount would read -1.85× — same underlying result, very different
+  // optics. Rather than show a confident-looking number with just a caveat attached, suppress
+  // the ratio outright in both cases and let the verdict banner explain why — the incremental
+  // contribution figure itself (not divided by anything) remains fully valid and shown either way.
+  //
+  // Option A — baseline contaminated: other campaigns ran on this brand+aggregator during the
+  // comparison window, so the baseline itself was elevated by promotional activity.
+  const baselineContaminated=baselineCampaigns.length>0;
+  // Option B — discount too small to divide by meaningfully: below ~3% of gross OR AED 500/day,
+  // the denominator is small enough that the ratio mostly reflects its own instability rather
+  // than campaign quality. discPctOfGross can be null (overlap cases) — only gate on it when known.
+  const discountTooSmallForROI=(discPctOfGross!=null&&discPctOfGross<3)||ourDiscPerDay<500;
+  if(baselineContaminated||discountTooSmallForROI)discountROI=null;
 
   // Concurrent campaigns during THIS campaign (same brand+platform)
   const concurrent=campaignData.filter((x,i)=>i!==myIdx&&x.startDate<=c.endDate&&x.endDate>=c.startDate);
@@ -6784,7 +6809,7 @@ function campAnalysisV2(c){
     dataMismatchSuspected,sheetDisc:_sheetDisc,
     discSource:alloc.source||"estimated",
     discPartialCoverage:!!alloc.partialCoverage,discCoveredDays:alloc.coveredDays,discTotalDays:alloc.totalDays,discUncoveredStart:alloc.uncoveredStart,discUncoveredEnd:alloc.uncoveredEnd,
-    baselineCampaigns,concurrent,sameBrandPlatConcurrent,
+    baselineCampaigns,concurrent,sameBrandPlatConcurrent,baselineContaminated,discountTooSmallForROI,
     scenarios,breakEvenDepth,headlinePct,actualDiscDepth,
     hasData:cs.orders>0||cs.sales>0,
     hasBaseline:bs.orders>0||bs.sales>0
@@ -6987,7 +7012,7 @@ function campDetailV2HTML(c,idx){
     return header+`<div class="card"><div style="text-align:center;padding:30px;color:#64748b">${msg}</div></div>`;
   }
   const baselineCampNote=a.baselineCampaigns.length
-    ? `<div style="margin-top:8px;padding:8px 12px;background:rgba(245,158,11,.08);border-left:3px solid #F59E0B;border-radius:4px;font-size:11px;color:#fbbf24">⚠ During the comparison week, ${a.baselineCampaigns.length} other ${c.aggregator} campaign(s) ran on this brand: ${a.baselineCampaigns.map(x=>`"${x.name}" (${fmtDisp(x.startDate)}–${fmtDisp(x.endDate)})`).join('; ')}. The baseline may itself be elevated, so the incremental figures are conservative.</div>`
+    ? `<div style="margin-top:8px;padding:8px 12px;background:#FEF3E0;border-left:3px solid #F59E0B;border-radius:4px;font-size:11px;color:#78350F;line-height:1.6">⚠ Baseline period also ran: ${a.baselineCampaigns.map(x=>`<strong>${x.name}</strong> (${fmtShort(x.startDate)}–${fmtShort(x.endDate)})`).join(', ')} — see note above.</div>`
     : `<div style="margin-top:8px;font-size:11px;color:#22C55E">✓ No campaigns ran on this brand+platform during the comparison week — a clean baseline.</div>`;
   const overlapBanner=a.hasOverlap?`<div class="card" style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.4)"><div style="font-size:13px;font-weight:800;color:#EF4444;margin-bottom:6px">⚠ Overlapping campaign detected — discount figures hidden</div><div style="font-size:12px;color:#475569;line-height:1.6">On ${a.overlapDays.length} day(s) (${a.overlapDays.map(d=>fmtShort(d)).join(', ')}), another ${c.aggregator} campaign for ${c.brand} ran in the <strong>same branches</strong> as this one. Because the sheet only reports discount at the brand level (not per branch), we can't reliably split the discount between the two — so discount-based metrics (burn, ROI, depth) are hidden to avoid showing wrong numbers. Order-count comparisons below are still valid. <strong>Please verify whether this overlap is real or a data-entry issue.</strong></div></div>`:'';
   const cmpBanner=`<div class="card" style="background:linear-gradient(135deg,rgba(96,165,250,.06),rgba(255,255,255,.3))"><div style="font-size:11px;color:#60A5FA;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">📅 Comparison Basis</div><div style="font-size:13px;color:#0F172A;line-height:1.6">Campaign <strong>${fmtDisp(a.effStart)} → ${fmtDisp(a.effEnd)}</strong> (${a.cDays} day${a.cDays>1?'s':''}) compared against the same weekdays 4 weeks earlier: <strong style="color:#93c5fd">${fmtDisp(a.bStart)} → ${fmtDisp(a.bEnd)}</strong>.</div>${baselineCampNote}</div>`;
@@ -7003,6 +7028,15 @@ function campDetailV2HTML(c,idx){
   if(a.dataMismatchSuspected){
     verdict=`Discount ROI can't be computed reliably — the exact ${c.aggregator} upload found only ${fmtAED(a.allocatedDisc)} in merchant discount for this window, but the Google Sheet daily aggregates suggest ${fmtAED(a.sheetDisc)}. The ${c.aggregator} export is likely stale. Re-upload a fresh export covering this campaign's dates to fix. Incremental contribution and orders lift shown below are still valid.`;
     verdictClr='#EF4444';verdictIcon='⚠️';
+  }
+  else if(a.baselineContaminated){
+    const names=a.baselineCampaigns.map(x=>`"${x.name}"`).join(', ');
+    verdict=`Discount ROI hidden — the comparison baseline (${fmtShort(a.bStart)}–${fmtShort(a.bEnd)}) had ${a.baselineCampaigns.length} other ${c.aggregator} campaign${a.baselineCampaigns.length===1?'':'s'} running on ${c.brand} (${names}), so it isn't a fair "normal" period to divide against — the ratio would mostly reflect how promoted the baseline was, not how this campaign performed. Incremental contribution below (${a.incrContribTotal>=0?'+':''}${fmtAED(a.incrContribTotal)} over ${a.cDays} days) is still valid and is the number worth reading here.`;
+    verdictClr='#3B82F6';verdictIcon='📊';
+  }
+  else if(a.discountTooSmallForROI){
+    verdict=`Discount ROI hidden — at ${fmtAED(a.ourDiscCost)} over ${a.cDays} days${a.discPctOfGross!=null?` (${a.discPctOfGross.toFixed(1)}% of gross)`:''}, the discount is too small to divide by meaningfully — the ratio would mostly reflect noise in a tiny denominator rather than campaign quality. Incremental contribution (${a.incrContribTotal>=0?'+':''}${fmtAED(a.incrContribTotal)} over ${a.cDays} days) is still valid and is the number worth reading here.`;
+    verdictClr='#3B82F6';verdictIcon='📊';
   }
   else if(a.discountROI!=null){
     if(a.discountROI>=1){verdict=`This campaign paid for itself — every AED 1 discounted returned AED ${a.discountROI.toFixed(2)} in incremental contribution.`;verdictClr='#22C55E';verdictIcon='✅';}
@@ -7654,43 +7688,90 @@ function computeDiscountBurn(){
   for(let d=new Date(dStart);d<=dEnd;d.setDate(d.getDate()+1)){
     const k=dk(d);trend.push({d:k.slice(5),burn:dailyBurn[k]||0});
   }
+  // Uncategorized breakdown computed FIRST (per brand×aggregator, each independently clamped at
+  // 0) — this is the source of truth. Both top-tile totals (Attributed AND Uncategorized) are
+  // then DERIVED from this same per-row breakdown, rather than either using a separate global
+  // calculation. Pre-v092, TWO different bugs stemmed from the same root cause:
+  //   1. uncategorizedBurn used `Math.max(0, totals.disc - attributedBurn)` — one global
+  //      subtraction, clamped once at the very end. If any single brand×aggregator combo was
+  //      OVER-attributed (estimation/hybrid math assigning slightly more merchant burn than the
+  //      sheet shows for that window), that row's negative gap silently cancelled out real
+  //      positive uncategorized amounts from OTHER rows in the global sum. Symptom: tile showed
+  //      AED 0 while the breakdown table below it correctly summed to a real, non-zero total.
+  //   2. attributedBurn was a raw running sum with NO cap against each row's actual total — so
+  //      an over-attributed row could push the "Attributed to Campaigns" tile ABOVE 100% of
+  //      Total Burn (your screenshot: Attributed AED 317,924 > Total Burn AED 317,462). Adding
+  //      the (buggy, ≈0) Uncategorized on top made the three tiles not reconcile at all.
+  // Fix: per row, cap attributed at min(rawAttributed, total) before summing for the tile, and
+  // compute uncategorized as max(0, total - rawAttributed) as before. Now Attributed (capped,
+  // summed) + Uncategorized (summed) always equals Total Burn exactly, by construction — the
+  // three tiles can never contradict each other again. The discarded over-attribution excess
+  // (rawAttributed - total, when positive) is preserved as `overAttributed` per row — a genuine
+  // data-quality signal worth investigating separately (which campaign's estimation math is
+  // over-counting for that brand+aggregator) rather than silently absorbed into either tile.
+  const uncategorizedByBrandAgg=(()=>{
+    const totalByBA={},attribByBA={};
+    for(const r of matches){
+      const k=`${r.brand}|${r.aggregator}`;
+      totalByBA[k]=(totalByBA[k]||0)+(r.disc||0);
+    }
+    for(const x of campaignBreakdown){
+      const k=`${x.campaign.brand}|${x.campaign.aggregator}`;
+      attribByBA[k]=(attribByBA[k]||0)+x.merchantBurn;
+    }
+    const out=[];
+    for(const k of Object.keys(totalByBA)){
+      const total=totalByBA[k],rawAttributed=attribByBA[k]||0;
+      const uncat=Math.max(0,total-rawAttributed);
+      const overAttributed=Math.max(0,rawAttributed-total);
+      if(uncat>1||overAttributed>1){ // ignore rounding-noise
+        const[brand,aggregator]=k.split("|");
+        out.push({brand,aggregator,total,attributed:Math.min(rawAttributed,total),rawAttributed,uncategorized:uncat,overAttributed});
+      }
+    }
+    out.sort((a,b)=>b.uncategorized-a.uncategorized);
+    return out;
+  })();
+  // Attributed (capped) for every row, including rows with zero uncategorized/overAttributed
+  // (those weren't pushed into uncategorizedByBrandAgg above since it only lists rows with a
+  // gap worth showing) — recompute the full capped-attributed sum across ALL brand×aggregator
+  // combos so the tile total is complete, not just the subset with visible gaps.
+  const attributedBurnCapped=(()=>{
+    const totalByBA={},attribByBA={};
+    for(const r of matches){
+      const k=`${r.brand}|${r.aggregator}`;
+      totalByBA[k]=(totalByBA[k]||0)+(r.disc||0);
+    }
+    for(const x of campaignBreakdown){
+      const k=`${x.campaign.brand}|${x.campaign.aggregator}`;
+      attribByBA[k]=(attribByBA[k]||0)+x.merchantBurn;
+    }
+    let sum=0;
+    for(const k of Object.keys(totalByBA)){
+      sum+=Math.min(attribByBA[k]||0,totalByBA[k]);
+    }
+    return sum;
+  })();
+  const uncategorizedBurnTotal=uncategorizedByBrandAgg.reduce((s,x)=>s+x.uncategorized,0);
+  const overAttributedTotal=uncategorizedByBrandAgg.reduce((s,x)=>s+(x.overAttributed||0),0);
+
   return{
     dateStart,dateEnd,daysInWindow:daysBetweenInclusive(dateStart,dateEnd),
     totalBurn:totals.disc,totalSales:totals.sales,totalOrders:totals.orders,
     grossSales:totals.sales+totals.disc, // gross = net + discount (customer-facing revenue before discount)
-    attributedBurn,coFundTotal,
+    attributedBurn:attributedBurnCapped,
+    attributedBurnRaw:attributedBurn, // kept for diagnostics — the uncapped sum, pre-v092 tile value
+    overAttributedTotal,
+    coFundTotal,
     coFundDeclared:coFundTotal,
     coFundAmbient:ambientPlatformFund,
     coFundTotalDisplay:totalCoFund,
-    // Uncategorized = merchant discount from allData (Google Sheet daily) that wasn't attributed
-    // to any tracked campaign. Pre-v066 this incorrectly also subtracted coFundTotal (the inferred
-    // AGGREGATOR share, which isn't in totals.disc to begin with) — leading to understated numbers.
-    uncategorizedBurn:Math.max(0,totals.disc-attributedBurn),
+    uncategorizedBurn:uncategorizedBurnTotal,
     // Breakdown of uncategorized by (brand, aggregator) so the user can see which combos have the
     // largest unattributed merchant discount and investigate — usually points to a running campaign
     // that isn't in the sheet, or ambient platform promos, or manual sheet entries not backed by
     // exact upload data.
-    uncategorizedByBrandAgg:(()=>{
-      const totalByBA={},attribByBA={};
-      for(const r of matches){
-        const k=`${r.brand}|${r.aggregator}`;
-        totalByBA[k]=(totalByBA[k]||0)+(r.disc||0);
-      }
-      for(const x of campaignBreakdown){
-        const k=`${x.campaign.brand}|${x.campaign.aggregator}`;
-        attribByBA[k]=(attribByBA[k]||0)+x.merchantBurn;
-      }
-      const out=[];
-      for(const k of Object.keys(totalByBA)){
-        const total=totalByBA[k],attributed=attribByBA[k]||0,uncat=Math.max(0,total-attributed);
-        if(uncat>1){ // ignore rounding-noise
-          const[brand,aggregator]=k.split("|");
-          out.push({brand,aggregator,total,attributed,uncategorized:uncat});
-        }
-      }
-      out.sort((a,b)=>b.uncategorized-a.uncategorized);
-      return out;
-    })(),
+    uncategorizedByBrandAgg,
     activeCampaignCount:overlapping.length,
     campaignBreakdown,trend,matchesCount:matches.length
   };
@@ -8034,11 +8115,12 @@ function discountUncategorizedBreakdownHTML(d){
     const aggClr=AGG_CLR[x.aggregator]||'#94a3b8';
     const attribPct=x.total>0?(x.attributed/x.total*100):0;
     const uncatPct=x.total>0?(x.uncategorized/x.total*100):0;
+    const overAttrBadge=x.overAttributed>1?`<span style="display:block;font-size:9px;color:#DC2626;font-weight:700;margin-top:2px" title="Campaign math assigned ${fmt(x.overAttributed)} more merchant discount than the Sheet shows for this brand+aggregator+window — likely an estimation/overlap-splitting issue on one of the campaigns below. Worth checking which specific campaign is over-counting.">⚠ +${fmt(x.overAttributed)} over-attributed</span>`:'';
     return `<tr style="border-bottom:1px solid #F5F0E5">
       <td style="padding:8px 12px;font-size:11px"><span style="width:8px;height:8px;background:${brandClr};border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle"></span><strong style="color:#0F172A">${x.brand}</strong></td>
       <td style="padding:8px 8px;font-size:11px"><span style="width:8px;height:8px;background:${aggClr};border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle"></span>${x.aggregator}</td>
       <td style="padding:8px 8px;text-align:right;font-size:11px;color:#0F172A;font-weight:600">${fmt(x.total)}</td>
-      <td style="padding:8px 8px;text-align:right;font-size:11px;color:#22C55E">${fmt(x.attributed)}<div style="font-size:9px;color:#94a3b8;font-weight:400">${attribPct.toFixed(0)}%</div></td>
+      <td style="padding:8px 8px;text-align:right;font-size:11px;color:#22C55E">${fmt(x.attributed)}<div style="font-size:9px;color:#94a3b8;font-weight:400">${attribPct.toFixed(0)}%</div>${overAttrBadge}</td>
       <td style="padding:8px 8px;text-align:right;font-size:12px;color:#F59E0B;font-weight:800">${fmt(x.uncategorized)}<div style="font-size:9px;color:#94a3b8;font-weight:400">${uncatPct.toFixed(0)}%</div></td>
     </tr>`;
   }).join('');
