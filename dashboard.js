@@ -13,10 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-093";
+const BUILD_VERSION="2026-07-06-094";
 const BUILD_NOTES=[
-  "🧮 Discount ROI is now suppressed in two cases that were producing misleading extreme ratios (e.g. a real campaign showed -16.60× when it was actually a reasonably-run shallow discount). (A) Baseline contaminated: if other campaigns ran on the same brand+aggregator during the comparison window, that baseline isn't a fair 'normal' period to divide against — ROI is hidden and the verdict banner names which campaigns ran and points to the incremental contribution figure instead (still valid, not divided by anything). (B) Discount too small: below 3% of gross or AED 500/day, the discount is too small a denominator to divide by meaningfully — the ratio mostly reflects its own instability, not campaign quality. Both conditions can trigger together, as they did in the flagged case. Rewards campaigns are excluded from the baseline-contamination check (they're always-on, so including them would flag nearly every campaign's baseline as 'contaminated').",
-  "👁️ Fixed unreadable amber-on-amber text in the campaign detail's baseline-note box (color:#fbbf24 bright amber text on a near-transparent amber-tinted background — essentially invisible). Now dark amber text (#78350F) on a solid light-amber fill. Also shortened the note since the new verdict banner above it now carries the main explanation — this note is just a compact list of which campaigns ran."
+  "🔧 Fixed Discount ROI disappearing on most campaigns. v093's 'baseline contaminated' check fired whenever ANY other campaign existed 4 weeks prior — but this business runs continuous overlapping promotions across 5 brands × 5 aggregators, so that was true for nearly every campaign, not a rare edge case. Replaced with a targeted signal: only suppress when the baseline period's OWN discount depth was at least 2× heavier than this campaign's (the actual mechanism that unfairly inflates a comparison) — mere overlap with a comparably-sized promo no longer triggers it. Also removed the flat AED 500/day-or-3%-of-gross cutoff entirely — it was hiding exactly the disciplined, well-run shallow-discount campaigns worth seeing ROI for.",
+  "📊 New 'Compare vs Similar Campaigns' section on every campaign detail page — shows this campaign directly against up to 6 recent campaigns on the same brand+aggregator (orders, discount %, discount given, total contribution, contribution per order), ranked by contribution per order. A complementary lens to the baseline-vs-self ROI above it: instead of asking 'did this beat a historical baseline,' it asks 'of the discount depths we've actually tried, which produced the best economics' — sidesteps the baseline-contamination problem entirely. Six caveats are stated plainly below the table (doesn't prove discounting beats no discount; different weeks/seasons; volume has value beyond one campaign's contribution; co-funding differences; AOV composition differences; small-sample noise).",
+  "🔍 Readability pass on campaign KPI tiles and the verdict banner — labels, values, and captions were sized for a screenshot, not for reading. Verdict banner text 13px→15px, campaign KPI tile captions 10px light-grey→13px darker slate, tile values 22px→26px. Matches the sizing standard already applied to the main dashboard's KPI cards."
 ];
 
 let _updateDialogShown=false;
@@ -6707,26 +6708,32 @@ function campAnalysisV2(c){
   const myIdx=campaignData.indexOf(c);
   const baselineCampaigns=campaignData.filter((x,i)=>i!==myIdx&&x.aggregator===c.aggregator&&(c.brand==='All Brands'||x.brand===c.brand)&&x.startDate<=bEnd&&x.endDate>=bStart&&!isRewardsCampaign(x));
 
-  // ── Discount ROI reliability guards (v093) ──
-  // Two independent conditions can each make the ROI ratio actively misleading rather than just
-  // imprecise. Real example that prompted this: a 4-day, AED 1,115-discount campaign showed
-  // -16.60× ROI — not because the campaign was badly run, but because (a) the baseline period
-  // itself had FOUR other promotions stacked on it, so it wasn't a fair "normal" comparison
-  // point, and (b) dividing a real but modest incremental-contribution swing by a tiny AED 1,115
-  // discount amplifies ordinary noise into an extreme-looking multiple. The same dollar swing
-  // against a AED 10,000 discount would read -1.85× — same underlying result, very different
-  // optics. Rather than show a confident-looking number with just a caveat attached, suppress
-  // the ratio outright in both cases and let the verdict banner explain why — the incremental
-  // contribution figure itself (not divided by anything) remains fully valid and shown either way.
-  //
-  // Option A — baseline contaminated: other campaigns ran on this brand+aggregator during the
-  // comparison window, so the baseline itself was elevated by promotional activity.
-  const baselineContaminated=baselineCampaigns.length>0;
-  // Option B — discount too small to divide by meaningfully: below ~3% of gross OR AED 500/day,
-  // the denominator is small enough that the ratio mostly reflects its own instability rather
-  // than campaign quality. discPctOfGross can be null (overlap cases) — only gate on it when known.
-  const discountTooSmallForROI=(discPctOfGross!=null&&discPctOfGross<3)||ourDiscPerDay<500;
-  if(baselineContaminated||discountTooSmallForROI)discountROI=null;
+  // ── Discount ROI reliability guard (v094 — revised) ──
+  // v093 suppressed ROI whenever ANY other campaign overlapped the baseline window, or whenever
+  // the discount was below a flat AED/percent cutoff. In practice this business runs continuous,
+  // overlapping promotions across 5 brands × 5 aggregators essentially all the time — "some other
+  // campaign existed 4 weeks ago" turned out to be true for almost every campaign, not a rare
+  // edge case, so v093 ended up hiding ROI on most campaigns instead of just the genuinely
+  // misleading ones. Replaced with a single, more targeted signal: only suppress when the
+  // BASELINE period's own discount depth was meaningfully HEAVIER than this campaign's — that's
+  // the actual mechanism that inflates the baseline and makes the comparison unfair, not mere
+  // overlap. A baseline with a comparably small side-promo running doesn't distort the read.
+  const baselineDiscPerDay=bDays>0?(bs.disc||0)/bDays:0;
+  const baselineGrossTotal=(bs.sales||0)+(bs.disc||0);
+  const baselineDepth=baselineGrossTotal>0?((bs.disc||0)/baselineGrossTotal*100):0;
+  const campaignDepth=discPctOfGross!=null?discPctOfGross:0;
+  // Only flag when baseline itself had more than trivial discounting (>2% depth) AND that
+  // depth is at least double this campaign's own — a clear, meaningful imbalance rather than
+  // "something else happened to exist."
+  const BASELINE_DEPTH_RATIO=2;
+  const baselineContaminated=baselineCampaigns.length>0&&baselineDepth>2&&(campaignDepth<=0?true:baselineDepth>=campaignDepth*BASELINE_DEPTH_RATIO);
+  if(baselineContaminated)discountROI=null;
+  // Small-discount hard cutoff (v093's Option B) removed entirely — it was suppressing exactly
+  // the disciplined, well-run shallow-discount campaigns this business wants visibility into.
+  // The new "Compare vs Similar Campaigns" section (rendered separately) is the better tool for
+  // judging whether a given discount depth was a smart choice; ROI here now shows whenever the
+  // baseline itself wasn't the problem.
+  const discountTooSmallForROI=false;
 
   // Concurrent campaigns during THIS campaign (same brand+platform)
   const concurrent=campaignData.filter((x,i)=>i!==myIdx&&x.startDate<=c.endDate&&x.endDate>=c.startDate);
@@ -6809,7 +6816,7 @@ function campAnalysisV2(c){
     dataMismatchSuspected,sheetDisc:_sheetDisc,
     discSource:alloc.source||"estimated",
     discPartialCoverage:!!alloc.partialCoverage,discCoveredDays:alloc.coveredDays,discTotalDays:alloc.totalDays,discUncoveredStart:alloc.uncoveredStart,discUncoveredEnd:alloc.uncoveredEnd,
-    baselineCampaigns,concurrent,sameBrandPlatConcurrent,baselineContaminated,discountTooSmallForROI,
+    baselineCampaigns,concurrent,sameBrandPlatConcurrent,baselineContaminated,discountTooSmallForROI,baselineDepth,campaignDepth,
     scenarios,breakEvenDepth,headlinePct,actualDiscDepth,
     hasData:cs.orders>0||cs.sales>0,
     hasBaseline:bs.orders>0||bs.sales>0
@@ -6900,10 +6907,10 @@ function campProsCons(a){
 // ════════════════════════════════════════════════════════════════════════════
 function fmtAEDx(n){return`AED ${Math.round(n||0).toLocaleString()}`;}
 function campKpiCard(label,value,sub,clr){
-  return `<div style="background:linear-gradient(135deg,${clr}0d,rgba(255,255,255,.4));border:1px solid ${clr}33;border-radius:14px;padding:14px 16px">
-    <div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.7px;margin-bottom:6px">${label}</div>
-    <div style="font-size:22px;font-weight:800;color:${clr};line-height:1.1">${value}</div>
-    <div style="font-size:10px;color:#94a3b8;margin-top:5px">${sub}</div>
+  return `<div style="background:linear-gradient(135deg,${clr}0d,rgba(255,255,255,.4));border:1px solid ${clr}33;border-radius:14px;padding:16px 18px">
+    <div style="font-size:11px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.7px;margin-bottom:8px">${label}</div>
+    <div style="font-size:26px;font-weight:800;color:${clr};line-height:1.1">${value}</div>
+    <div style="font-size:13px;color:#475569;font-weight:600;margin-top:7px">${sub}</div>
   </div>`;
 }
 function campSetElasticity(e){campElasticity=e;renderCampaigns();}
@@ -7031,11 +7038,7 @@ function campDetailV2HTML(c,idx){
   }
   else if(a.baselineContaminated){
     const names=a.baselineCampaigns.map(x=>`"${x.name}"`).join(', ');
-    verdict=`Discount ROI hidden — the comparison baseline (${fmtShort(a.bStart)}–${fmtShort(a.bEnd)}) had ${a.baselineCampaigns.length} other ${c.aggregator} campaign${a.baselineCampaigns.length===1?'':'s'} running on ${c.brand} (${names}), so it isn't a fair "normal" period to divide against — the ratio would mostly reflect how promoted the baseline was, not how this campaign performed. Incremental contribution below (${a.incrContribTotal>=0?'+':''}${fmtAED(a.incrContribTotal)} over ${a.cDays} days) is still valid and is the number worth reading here.`;
-    verdictClr='#3B82F6';verdictIcon='📊';
-  }
-  else if(a.discountTooSmallForROI){
-    verdict=`Discount ROI hidden — at ${fmtAED(a.ourDiscCost)} over ${a.cDays} days${a.discPctOfGross!=null?` (${a.discPctOfGross.toFixed(1)}% of gross)`:''}, the discount is too small to divide by meaningfully — the ratio would mostly reflect noise in a tiny denominator rather than campaign quality. Incremental contribution (${a.incrContribTotal>=0?'+':''}${fmtAED(a.incrContribTotal)} over ${a.cDays} days) is still valid and is the number worth reading here.`;
+    verdict=`Discount ROI hidden — the comparison baseline (${fmtShort(a.bStart)}–${fmtShort(a.bEnd)}) ran meaningfully deeper discounting than this campaign (baseline ≈${a.baselineDepth.toFixed(0)}% of gross vs this campaign's ${a.campaignDepth.toFixed(0)}%), from: ${names}. That makes it an unfair "normal" period to divide against. Incremental contribution below (${a.incrContribTotal>=0?'+':''}${fmtAED(a.incrContribTotal)} over ${a.cDays} days) is still valid and is the number worth reading here.`;
     verdictClr='#3B82F6';verdictIcon='📊';
   }
   else if(a.discountROI!=null){
@@ -7043,7 +7046,7 @@ function campDetailV2HTML(c,idx){
     else if(a.discountROI>=0.4){verdict=`Marginal — the discount returned only AED ${a.discountROI.toFixed(2)} per AED spent. It drove volume but ate into profit.`;verdictClr='#FBBF24';verdictIcon='⚠️';}
     else{verdict=`The discount lost money on a contribution basis — only AED ${a.discountROI.toFixed(2)} returned per AED discounted. A shallower discount would likely have been more profitable.`;verdictClr='#EF4444';verdictIcon='🔻';}
   }
-  const verdictBox=verdict?`<div style="background:${verdictClr}15;border:1px solid ${verdictClr}40;border-radius:12px;padding:14px 16px;margin-bottom:14px;display:flex;gap:12px;align-items:flex-start"><div style="font-size:20px">${verdictIcon}</div><div style="font-size:13px;color:#0F172A;line-height:1.6;font-weight:500">${verdict}</div></div>`:'';
+  const verdictBox=verdict?`<div style="background:${verdictClr}15;border:1px solid ${verdictClr}40;border-radius:12px;padding:16px 18px;margin-bottom:14px;display:flex;gap:14px;align-items:flex-start"><div style="font-size:24px">${verdictIcon}</div><div style="font-size:15px;color:#0F172A;line-height:1.7;font-weight:600">${verdict}</div></div>`:'';
   const fc=foodPkgPct(c.brand)*100;
   const cc=commissionRateFor(c.aggregator,c.brand,c.startDate)*100;
   const breakdownBox=`<div class="card"><div class="ct">Contribution Breakdown · ${c.brand} on ${c.aggregator}</div>
@@ -7104,7 +7107,76 @@ function campDetailV2HTML(c,idx){
       exactBanner=`<div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.25);border-radius:7px;margin:0 0 14px 0"><span style="font-size:14px">📊</span><span style="font-size:11px;color:#475569"><strong style="color:#22C55E">Exact ${srcLabel} data:</strong> discount figures below come from the uploaded ${srcFile} file (per-order, per-outlet truth), not sales-weighted estimation.</span></div>`;
     }
   }
-  return header+overlapBanner+cmpBanner+exactBanner+verdictBox+kpiCards+breakdownBox+campOutletBreakdownHTML(c,a)+scenarioBox;
+  // ── Compare vs Similar Campaigns (v094) ──
+  // A different, complementary lens to the baseline-vs-self ROI above: instead of comparing THIS
+  // campaign against a historical baseline (which can be distorted by what else was running),
+  // compare it DIRECTLY against other real campaigns on the same brand+aggregator — same orders/
+  // discount/contribution numbers, just campaign vs campaign instead of campaign vs baseline.
+  // Answers a genuinely different question: "of the discount depths we've actually tried here,
+  // which produced the best economics" — useful for calibrating future discount depth. Has its
+  // own caveats, stated plainly below the table rather than buried in small print.
+  const similarCampaignsBox=(()=>{
+    const candidates=campaignData.filter(x=>
+      x!==c&&x.brand===c.brand&&x.aggregator===c.aggregator&&!isRewardsCampaign(x)&&
+      (campStatus(x)==='Completed'||campStatus(x)==='Running')
+    ).sort((x,y)=>y.startDate.localeCompare(x.startDate)).slice(0,6);
+
+    const rows=[{campaign:c,isCurrent:true,orders:a.cs.orders,discPct:a.discPctOfGross,discCost:a.ourDiscCost,contribution:a.campContribTotal,hasData:a.hasData}];
+    candidates.forEach(x=>{
+      try{
+        const xa=campAnalysisCached(x);
+        if(!xa.hasData)return;
+        rows.push({campaign:x,isCurrent:false,orders:xa.cs.orders,discPct:xa.discPctOfGross,discCost:xa.ourDiscCost,contribution:xa.campContribTotal,hasData:xa.hasData});
+      }catch(e){/* skip campaigns whose analysis errors */}
+    });
+    if(rows.length<2||!a.hasData)return ''; // nothing to compare against, or current campaign has no data yet
+
+    const withPerOrder=rows.map(r=>({...r,contribPerOrder:r.orders>0?r.contribution/r.orders:0}));
+    withPerOrder.sort((x,y)=>y.contribPerOrder-x.contribPerOrder);
+
+    const tableRows=withPerOrder.map(r=>{
+      const isCur=r.isCurrent;
+      const rowBg=isCur?'background:rgba(96,165,250,.10);':'';
+      const nameClr=isCur?'#3B82F6':'#0F172A';
+      return `<tr style="${rowBg}border-bottom:1px solid #EDE7D9">
+        <td style="padding:14px;font-size:14px;font-weight:700;color:${nameClr}">${isCur?'▶ ':''}${r.campaign.name||'Campaign'}${isCur?' <span style="font-size:12px;color:#3B82F6;font-weight:700">(this campaign)</span>':''}<div style="font-size:12px;color:#64748b;font-weight:600;margin-top:3px">${fmtShort(r.campaign.startDate)} – ${fmtShort(r.campaign.endDate)}</div></td>
+        <td style="padding:14px;text-align:right;font-size:16px;font-weight:700;color:#0F172A">${r.orders.toLocaleString()}</td>
+        <td style="padding:14px;text-align:right;font-size:16px;font-weight:700;color:#0F172A">${r.discPct!=null?r.discPct.toFixed(0)+'%':'—'}</td>
+        <td style="padding:14px;text-align:right;font-size:16px;font-weight:700;color:#EF4444">${fmtAEDx(r.discCost)}</td>
+        <td style="padding:14px;text-align:right;font-size:16px;font-weight:800;color:${r.contribution>=0?'#22C55E':'#EF4444'}">${r.contribution>=0?'+':''}${fmtAEDx(r.contribution)}</td>
+        <td style="padding:14px;text-align:right;font-size:18px;font-weight:800;color:${r.contribPerOrder>=0?'#22C55E':'#EF4444'}">${r.contribPerOrder>=0?'+':''}${fmtAEDx(r.contribPerOrder)}</td>
+      </tr>`;
+    }).join('');
+
+    return `<div class="card" style="margin-bottom:14px">
+      <div class="ct" style="font-size:16px;margin-bottom:6px">📊 Compare vs Similar Campaigns</div>
+      <div style="font-size:14px;color:#475569;font-weight:500;line-height:1.7;margin-bottom:16px">Same brand, same aggregator — real campaigns compared directly against each other, ranked by contribution per order. This sidesteps the baseline-comparison problem entirely, but has its own caveats below the table.</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:#F5F0E5;border-bottom:2px solid #EDE7D9">
+          <th style="text-align:left;padding:12px 14px;font-size:13px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.5px">Campaign</th>
+          <th style="text-align:right;padding:12px 14px;font-size:13px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.5px">Orders</th>
+          <th style="text-align:right;padding:12px 14px;font-size:13px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.5px">Discount %</th>
+          <th style="text-align:right;padding:12px 14px;font-size:13px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.5px">Discount Given</th>
+          <th style="text-align:right;padding:12px 14px;font-size:13px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.5px">Total Contribution</th>
+          <th style="text-align:right;padding:12px 14px;font-size:13px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.5px">Contribution / Order</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table></div>
+      <div style="margin-top:16px;padding:16px 18px;background:#F5F0E5;border-radius:10px;border-left:4px solid #94A3B8">
+        <div style="font-size:15px;font-weight:800;color:#334155;margin-bottom:10px">Read this with caution — six things it doesn't account for:</div>
+        <div style="font-size:14px;color:#475569;line-height:1.9">
+          <strong style="color:#334155">1.</strong> Doesn't show whether discounting helped at all versus running no promotion.<br>
+          <strong style="color:#334155">2.</strong> These campaigns ran in different weeks — demand, weather, and season differ.<br>
+          <strong style="color:#334155">3.</strong> Higher-volume campaigns can build ranking, repeat customers, and reach that this table can't see.<br>
+          <strong style="color:#334155">4.</strong> Different co-funding levels make "our contribution" look better for whichever campaign got the bigger aggregator subsidy.<br>
+          <strong style="color:#334155">5.</strong> Average order size can differ between campaigns, so contribution-per-order isn't perfectly apples-to-apples.<br>
+          <strong style="color:#334155">6.</strong> Short campaigns are small samples — one big order or a slow day can swing the numbers.
+        </div>
+      </div>
+    </div>`;
+  })();
+
+  return header+overlapBanner+cmpBanner+exactBanner+verdictBox+kpiCards+similarCampaignsBox+breakdownBox+campOutletBreakdownHTML(c,a)+scenarioBox;
 }
 
 function campDetailHTML(c,idx){
