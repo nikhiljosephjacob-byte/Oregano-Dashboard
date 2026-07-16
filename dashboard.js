@@ -9642,6 +9642,88 @@ function cmpOutletCard(dA,dB){
   </div>`;
 }
 
+// ── Compare page v099 helpers ─────────────────────────────────────────────
+// Build weekday+date axis labels (e.g. 'Mon 7/7') for one comparison window.
+// The chart x-axis is anchored to A's real dates; B's dates appear in the
+// tooltip title callback so users can orient in time without 'Day 1' abstraction.
+function cmpDayLabels(start,n){
+  if(!start)return Array.from({length:n},(_,i)=>`Day ${i+1}`);
+  const DAYS=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const out=[];const d=new Date(start+'T12:00:00');
+  for(let i=0;i<n;i++){out.push(DAYS[d.getDay()]+' '+d.getDate()+'/'+(d.getMonth()+1));d.setDate(d.getDate()+1);}
+  return out;
+}
+
+// Smart insight banner — converts the A/B comparison into 2-4 plain-language
+// observations. Covers: overall sales direction, biggest platform mover,
+// volume-vs-AOV attribution, and discount burn shift (only when >0.5pp change).
+function cmpInsightBanner(sA,sB,discA,discB,movers){
+  if(!sA.orders&&!sB.orders)return'';
+  const salesDiff=pctOf(sB.sales,sA.sales);
+  const ordDiff=pctOf(sB.orders,sA.orders);
+  const aovA=sA.orders>0?sA.sales/sA.orders:0,aovB=sB.orders>0?sB.sales/sB.orders:0;
+  const aovDiff=pctOf(aovB,aovA);
+  const burnA=sA.sales>0?discA/sA.sales*100:null,burnB=sB.sales>0?discB/sB.sales*100:null;
+  const parts=[];
+  if(salesDiff!==null){
+    const verb=salesDiff>5?'outperformed':salesDiff<-5?'underperformed':'nearly matched';
+    const dir=salesDiff>0?'▲':salesDiff<0?'▼':'→';
+    parts.push(`B ${verb} A on net sales <strong style="color:${pctClr(salesDiff)}">${dir} ${Math.abs(salesDiff).toFixed(1)}%</strong>`);
+  }
+  const sorted=[...movers].filter(p=>p.sDiff!=null).sort((a,b)=>Math.abs(b.sDiff)-Math.abs(a.sDiff));
+  if(sorted.length){
+    const top=sorted[0];
+    parts.push(`biggest mover: <strong style="color:${AC[top.ag]||'#888'}">${top.ag}</strong> <span style="color:${pctClr(top.sDiff)};font-weight:700">${fmtPct(top.sDiff)}</span>`);
+  }
+  if(ordDiff!==null&&aovDiff!==null&&(sA.orders>0||sB.orders>0)){
+    const volDriven=Math.abs(ordDiff)>=Math.abs(aovDiff);
+    parts.push(volDriven
+      ?`growth is <strong>volume-driven</strong> (orders ${fmtPct(ordDiff)}, AOV ${fmtPct(aovDiff)})`
+      :`growth is <strong>AOV-driven</strong> (AOV ${fmtPct(aovDiff)}, orders ${fmtPct(ordDiff)})`);
+  }
+  if(burnA!==null&&burnB!==null&&Math.abs(burnB-burnA)>0.5){
+    const sh=burnB-burnA,clr=sh>0?'#EF4444':'#22C55E',word=sh>0?'up':'down';
+    parts.push(`discount burn <span style="color:${clr};font-weight:700">${word} ${Math.abs(sh).toFixed(1)}pp</span> (${burnA.toFixed(1)}% → ${burnB.toFixed(1)}% of net sales)`);
+  }
+  if(!parts.length)return'';
+  const oc=salesDiff==null?'#64748b':salesDiff>0?'#22C55E':salesDiff<0?'#EF4444':'#64748b';
+  const ic=salesDiff==null?'📊':salesDiff>0?'📈':salesDiff<0?'📉':'➡️';
+  return`<div style="background:${oc}0a;border:1px solid ${oc}33;border-left:3px solid ${oc};border-radius:8px;padding:12px 16px;margin-bottom:14px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">${ic} Snapshot</div><div style="font-size:12px;color:#1E293B;line-height:1.8">${parts.map((p,i)=>i===0?p:' · '+p).join('')}</div></div>`;
+}
+
+// Brand mix contribution card — dual horizontal bars showing each brand's %
+// share of net sales for A (blue) and B (orange). Surfaces mix shifts that
+// aggregate totals hide: e.g. +10% total but driven entirely by one brand.
+function cmpContributionCard(dA,dB){
+  const totA=sumR(dA),totB=sumR(dB);
+  if(!totA.sales&&!totB.sales)return'';
+  const brandKeys=[...new Set([...dA,...dB].map(r=>r.brand))];
+  const rows=brandKeys.map(b=>{
+    const bA=sumR(dA.filter(r=>r.brand===b)),bB=sumR(dB.filter(r=>r.brand===b));
+    const pA=totA.sales>0?bA.sales/totA.sales*100:0,pB=totB.sales>0?bB.sales/totB.sales*100:0;
+    return{b,pA,pB,clr:BMAP[b]?.c||'#888',sum:pA+pB};
+  }).filter(x=>x.sum>0).sort((a,b)=>b.sum-a.sum);
+  if(!rows.length)return'';
+  const barRow=(name,clr,pA,pB)=>'<div style="margin-bottom:9px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">'
+    +'<span style="font-size:11px;font-weight:700;color:'+clr+'">'+name+'</span>'
+    +'<span style="font-size:10px;color:#64748b">'+pA.toFixed(0)+'% → '+pB.toFixed(0)+'%</span></div>'
+    +'<div style="display:flex;flex-direction:column;gap:2px">'
+    +'<div style="height:5px;background:#F1F5F9;border-radius:3px;overflow:hidden">'
+    +'<div style="height:100%;width:'+Math.min(pA,100).toFixed(1)+'%;background:linear-gradient(90deg,#60A5FA44,#60A5FA);border-radius:3px"></div></div>'
+    +'<div style="height:5px;background:#F1F5F9;border-radius:3px;overflow:hidden">'
+    +'<div style="height:100%;width:'+Math.min(pB,100).toFixed(1)+'%;background:linear-gradient(90deg,#F59E0B44,#F59E0B);border-radius:3px"></div></div>'
+    +'</div></div>';
+  return'<div class="sm">'
+    +'<div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">'
+    +'Brand Mix <span style="font-size:8px;font-weight:400;text-transform:none">% of net sales</span></div>'
+    +rows.map(r=>barRow(r.b,r.clr,r.pA,r.pB)).join('')
+    +'<div style="display:flex;gap:12px;margin-top:4px">'
+    +'<span style="font-size:9px;color:#60A5FA;font-weight:600">▬ A</span>'
+    +'<span style="font-size:9px;color:#F59E0B;font-weight:600">▬ B</span></div></div>';
+}
+
+
 function renderCompare(){
   let pg=document.getElementById("page-compare");
   if(!pg){injectCompareTab();pg=document.getElementById("page-compare");}
@@ -9755,6 +9837,34 @@ function renderCompare(){
   const yA=yearOf(cmpA.start)||yearOf(cmpA.end);
   const yB=yearOf(cmpB.start)||yearOf(cmpB.end);
   const yearBanner=(yA&&yB&&yA!==yB)?`<div style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.4);border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px"><span style="font-size:18px">⚠️</span><div style="font-size:12px;color:#FBBF24;line-height:1.5"><strong>Year-over-year comparison detected:</strong> Group A is in <strong>${yA}</strong> but Group B is in <strong>${yB}</strong>. If this isn't intentional, fix the year in the date pickers below — easy to misread because month/day look identical.</div></div>`:'';
+  const insightBanner=cmpInsightBanner(sA,sB,discA,discB,movers);
+  // Unified platform movers tile — centred-zero delta bar replacing the
+  // old two-card risers/fallers grid. Built as a string here (before the
+  // pg.innerHTML template literal) to avoid nested backtick complexity.
+  const moversTile=(()=>{
+    const sorted=[...platMove].filter(p=>p.sDiff!=null).sort((a,b)=>b.sDiff-a.sDiff);
+    const rows=sorted.map(p=>{
+      const bw=Math.min(Math.abs(p.sDiff)/40*80,80).toFixed(1);
+      const isPos=p.sDiff>=0;const clr=pctClr(p.sDiff);
+      return'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #F8FAFC">'
+        +'<div style="width:70px;flex-shrink:0;font-size:11px;font-weight:700;color:'+(AC[p.ag]||'#888')+'">'+p.ag+'</div>'
+        +'<div style="flex:1;display:flex;align-items:center">'
+        +'<div style="width:50%;display:flex;justify-content:flex-end;padding-right:4px">'+(!isPos?'<div style="height:6px;width:'+bw+'%;background:'+clr+';border-radius:3px 0 0 3px;opacity:.75"></div>':'')+'</div>'
+        +'<div style="width:1px;height:14px;background:#E2E8F0;flex-shrink:0"></div>'
+        +'<div style="width:50%;display:flex;align-items:center;padding-left:4px">'+(isPos?'<div style="height:6px;width:'+bw+'%;background:'+clr+';border-radius:0 3px 3px 0;opacity:.75"></div>':'')+'</div>'
+        +'</div>'
+        +'<div style="width:56px;flex-shrink:0;text-align:right;font-size:11px;font-weight:700;color:'+clr+'">'+(p.sDiff>=0?'+':'')+p.sDiff.toFixed(1)+'%</div>'
+        +'<div style="width:72px;flex-shrink:0;text-align:right;font-size:10px;color:#94a3b8">'+fmtAED(p.b.sales)+'</div>'
+        +'</div>';
+    }).join('');
+    return'<div class="card" style="margin-bottom:14px">'
+      +'<div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+      +'<span>Platform Movement · B vs A</span>'
+      +'<span style="font-size:10px;color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">by net sales Δ</span></div>'
+      +'<div style="font-size:9px;color:#94a3b8;display:flex;justify-content:space-between;margin-bottom:10px;padding:0 2px">'
+      +'<span>← declined</span><span>grew →</span></div>'
+      +(rows||'<div style="color:#64748b;font-size:12px">No platform data.</div>')+'</div>';
+  })();
 
   pg.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div style="font-size:18px;font-weight:800;color:#0F172A">⚖️ Comparison</div>
@@ -9762,6 +9872,7 @@ function renderCompare(){
     </div>
     <div style="font-size:11px;color:#475569;font-weight:600;margin-bottom:12px">Pick any combination on each side — brands, platforms, outlets, and dates are fully independent. Example: Oregano+Lollorosso 11–13 May 2026 (A) vs the same 11–13 May 2025 (B).</div>
     ${yearBanner}
+    ${insightBanner}
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">${cmpPanel("A")}${cmpPanel("B")}</div>
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:14px">
@@ -9770,14 +9881,12 @@ function renderCompare(){
       ${cmpStatCard("AOV",aovA,aovB,v=>"AED "+v.toFixed(1))}
       ${cmpDiscCard(discA,discB,sA.sales,sB.sales,discAObj.source,discBObj.source,{nA,nB})}
       ${cmpOutletCard(dA,dB)}
+      ${cmpContributionCard(dA,dB)}
     </div>
 
     <div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>Trend — <span style="color:#60A5FA">A</span> vs <span style="color:#F59E0B">B</span> (aligned by day index)</span><div style="display:flex;gap:5px">${metricBtns}</div></div><div style="position:relative;height:220px"><canvas id="cmp-chart"></canvas></div><div style="font-size:10px;color:#64748b;margin-top:6px">Day 1 = first day of each window. This lets you compare windows of different years/lengths on the same axis.</div></div>
 
-    <div class="g2">
-      <div class="sm"><div class="ct" style="color:#22C55E">📈 Platforms that grew (B vs A)</div>${risers.length?risers.map(p=>moverChip(p,p.sDiff)).join(""):`<div style="color:#64748b;font-size:12px">None grew.</div>`}</div>
-      <div class="sm"><div class="ct" style="color:#EF4444">📉 Platforms that dropped (B vs A)</div>${fallers.length?fallers.map(p=>moverChip(p,p.sDiff)).join(""):`<div style="color:#64748b;font-size:12px">None dropped.</div>`}</div>
-    </div>
+    ${moversTile}
 
     <div class="card"><div class="ct">Per-Platform Breakdown</div>${mkTable(["Platform","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A AOV","B AOV","Δ AOV"],platMove.map(p=>[
       `<span style="color:${p.clr};font-weight:700">${p.ag}</span>`,
@@ -9808,12 +9917,14 @@ function cmpDrawChart(dA,dB){
   const va=cmpDayValues(dA,cmpA.start,cmpA.end,cmpMetric);
   const vb=cmpDayValues(dB,cmpB.start,cmpB.end,cmpMetric);
   const n=Math.max(va.length,vb.length,1);
-  const labels=Array.from({length:n},(_,i)=>`Day ${i+1}`);
+  // x-axis anchored to A's real dates (weekday+DD/MM); B's dates in tooltip title.
+  const labelsA=cmpDayLabels(cmpA.start,n);
+  const labelsB=cmpDayLabels(cmpB.start,n);
   const fmtV=v=>cmpMetric==="orders"?Math.round(v).toLocaleString():cmpMetric==="aov"?"AED "+v.toFixed(1):"AED "+Math.round(v).toLocaleString();
-  charts["cmp-chart"]=new Chart(ctx,{type:"line",data:{labels,datasets:[
+  charts["cmp-chart"]=new Chart(ctx,{type:"line",data:{labels:labelsA,datasets:[
     {label:"A · "+cmpDateLabel(cmpA),data:va,borderColor:"#60A5FA",backgroundColor:"#60A5FA",borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false},
     {label:"B · "+cmpDateLabel(cmpB),data:vb,borderColor:"#F59E0B",backgroundColor:"#F59E0B",borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false}
-  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#475569",font:{size:10},boxWidth:12,padding:10}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label.split(" · ")[0]}: ${fmtV(c.raw)}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"#F1F5F9"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#F1F5F9"},border:{display:false}}}}});
+  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#475569",font:{size:10},boxWidth:12,padding:10}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{title:items=>{const i=items[0]?.dataIndex??0;const a=labelsA[i]||`Day ${i+1}`;const b=labelsB[i]||`Day ${i+1}`;return a===b?a:`A: ${a}  ·  B: ${b}`},label:c=>`${c.dataset.label.split(" · ")[0]}: ${fmtV(c.raw)}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:9},maxRotation:45},grid:{color:"#F1F5F9"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#F1F5F9"},border:{display:false}}}}});
 }
 
 // ═══════════════════════════════════════════════════════════════
