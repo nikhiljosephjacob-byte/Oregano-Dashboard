@@ -13,11 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-15-096";
+const BUILD_VERSION="2026-07-16-097";
 const BUILD_NOTES=[
-  "🎯 Campaign detail now leads with THE ANSWER: a hero card states in plain language how much money the campaign made or lost (AED), whether it was worth running (break-even order lift needed vs achieved at the actual discount depth), and whether to continue or stop (weekly trend of incremental contribution). The analysis tables are demoted to collapsible 'show the evidence' sections — Per-Outlet Uplift stays expanded.",
-  "📉 New trajectory analysis: campaigns 4+ days old are split into weekly segments, each compared against the cleanest pre-campaign baseline available (searches up to 8 weeks back for a window with no overlapping campaign; flags '⚠ baseline not clean' when none exists). Catches 'was working, now losing money — stop now' before the campaign total goes red.",
-  "📜 Ads Performance: the Quick View month bar now reaches EVERY month in the Ad Investments sheet (recent 3 as buttons + an 'Older…' dropdown for 2025 and beyond) on both the landing page and brand pages. The outlet-level month picker's 7-month cap is removed too."
+  "🎯 Keeta campaigns now get an exact per-campaign P&L cross-referenced from your uploaded Keeta statement: how many orders actually used the campaign, their gross value, the exact discount burned on them, and their contribution after discount, free-delivery cost, commission and food cost. This is fully separable per campaign — concurrent campaigns no longer show the same misleading brand-level figure.",
+  "⚭ Concurrent-campaign double counting fixed: when several campaigns share the same brand+platform window, the brand-level incremental figure is now labelled as SHARED context (shown once as context, never summable) instead of appearing as each campaign's own result. Cards for such campaigns headline their own-order economics instead.",
+  "📏 New 'worth it' framing for item promos: cannibalization bounds — worst case (every customer would have ordered anyway) = the discount cost; best case (all were new customers) = the contribution earned. If contribution is negative, the campaign loses money even in the best case.",
+  "⚠ Sanity guard: when brand orders swing more than ±40% vs baseline, the hero now says the movement is bigger than any plausible campaign effect and points at baseline promo mix / seasonality instead of issuing a false verdict."
 ];
 
 let _updateDialogShown=false;
@@ -506,12 +507,14 @@ function loadKeetaFromStorage(){
   catch(e){console.log("[Keeta] localStorage load failed:",e.message);keetaOrdersData=null;}
 }
 function saveKeetaToStorage(){
+  if(typeof _campPartCache!=="undefined")_campPartCache.clear(); // new upload → recompute participation
   if(!keetaOrdersData)return;
   try{localStorage.setItem(KEETA_STORAGE_KEY,JSON.stringify(keetaOrdersData));}
   catch(e){console.log("[Keeta] localStorage save failed (quota?):",e.message);}
 }
 function clearKeetaData(){
   keetaOrdersData=null;
+  if(typeof _campPartCache!=="undefined")_campPartCache.clear();
   try{localStorage.removeItem(KEETA_STORAGE_KEY);}catch(e){}
   if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
   renderCampaigns();
@@ -6082,6 +6085,24 @@ function campCardGrid(camps,showProfit){
       const a=campAnalysisCached(c);
       if(a.needsCoFundClarity){
         headlineHTML=`<div style="font-size:11px;color:#F59E0B;font-weight:700;margin-top:8px">⚠ Needs clarification</div>`;
+      }else if(a.hasData&&c.aggregator==='Keeta'&&((a.sameBrandPlatConcurrent&&a.sameBrandPlatConcurrent.length)||0)>0&&campParticipationV1(c)){
+        // v097: item campaign sharing its brand+platform window with concurrent campaigns. The
+        // brand-level incremental figure is not attributable to this campaign alone (each
+        // concurrent card would show the IDENTICAL number = double counting, e.g. two Keeta
+        // campaigns both showing −51K). Headline the exact own-order economics instead.
+        const part=campParticipationV1(c);
+        const shared=a.sameBrandPlatConcurrent.length;
+        const pClr=part.contrib>=0?'#22C55E':'#EF4444';
+        headlineHTML=`
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+            <div><div style="font-size:8px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Own-Orders Contribution 📊</div><div style="font-size:17px;font-weight:800;color:${pClr}">${part.contrib>=0?'+':'−'}${fmtAEDx(Math.abs(part.contrib))}</div></div>
+            <div><div style="font-size:8px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Disc. Burned (exact)</div><div style="font-size:17px;font-weight:800;color:#C084FC">${fmtAEDx(part.disc)}</div></div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+            <span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:700;color:${pClr}"><span style="width:7px;height:7px;border-radius:50%;background:${pClr};display:inline-block"></span>${part.contrib>=0?'Campaign orders profitable':'Campaign orders lose money'}</span>
+            <span style="font-size:10px;color:#94a3b8;font-weight:600">${part.orders.toLocaleString()} orders used it</span>
+          </div>
+          <div style="font-size:9px;color:#94a3b8;margin-top:6px">⚭ brand-level figure shared with ${shared} concurrent campaign${shared>1?'s':''} — open for detail</div>`;
       }else if(a.hasData){
         const incrClr=a.incrContribTotal>=0?'#22C55E':'#EF4444';
         const roi=a.discountROI;
@@ -7020,6 +7041,87 @@ function campOutletBreakdownHTML(c,a){
   </div>`;
 }
 // ════════════════════════════════════════════════════════════════════════════
+// v097 EXACT CAMPAIGN PARTICIPATION — per-campaign P&L from the Keeta statement
+// ════════════════════════════════════════════════════════════════════════════
+// The Keeta Recent Orders upload stores orders/gross/net/menu_disc PER CAMPAIGN (item-rule
+// attribution happens at parse time), but until v097 only menu_disc was consumed. This reads
+// the full record: exactly which orders used this campaign, what they were worth, what the
+// discount cost, and what they contributed after discount + AED2 FD + commission + food cost.
+// Unlike the brand-level incremental figure, this is fully SEPARABLE per campaign — two
+// concurrent campaigns get two different, non-overlapping numbers.
+const _campPartCache=new Map();
+function campParticipationV1(c){
+  if(c.aggregator!=='Keeta')return null; // exact per-campaign feed exists for Keeta only (for now)
+  if(!keetaOrdersData||!keetaOrdersData.records||!keetaOrdersData.metadata)return null;
+  const a=campAnalysisCached(c);
+  if(!a||!a.hasData)return null;
+  const dr=keetaOrdersData.metadata.date_range||[];
+  if(!dr[0]||!dr[1]||a.effEnd<dr[0]||a.effStart>dr[1])return null;
+  const key=`${campaignData.indexOf(c)}|${c.name}|${a.effStart}|${a.effEnd}|${keetaOrdersData.metadata.generated_at||keetaOrdersData.metadata.uploaded_at||''}`;
+  if(_campPartCache.has(key))return _campPartCache.get(key);
+  const myScope=campOutlets(c);
+  let orders=0,gross=0,disc=0;const daily={};
+  for(const rec of keetaOrdersData.records){
+    if(rec.brand!==c.brand)continue;
+    if(rec.campaign!==c.name)continue;
+    if(rec.date<a.effStart||rec.date>a.effEnd)continue;
+    if(myScope&&!myScope.has(rec.outlet))continue;
+    orders+=rec.orders;gross+=rec.gross;disc+=rec.menu_disc;
+    const d=daily[rec.date]||(daily[rec.date]={orders:0,gross:0,disc:0});
+    d.orders+=rec.orders;d.gross+=rec.gross;d.disc+=rec.menu_disc;
+  }
+  let out=null;
+  if(orders>0&&gross>0){
+    const brandForCost=c.brand==='All Brands'?'Oregano':c.brand;
+    const fd=orders*KEETA_FD_COST; // merchant's AED2/order free-delivery cost — real cost of these orders
+    const net=gross-disc-fd;       // merchant revenue on participating orders (co-fund inherent: statement discount is merchant share only)
+    const contrib=brandContribution('Keeta',brandForCost,net,gross,c.startDate);
+    const covStart=a.effStart>dr[0]?a.effStart:dr[0];
+    const covEnd=a.effEnd<dr[1]?a.effEnd:dr[1];
+    const partialCoverage=covStart>a.effStart||covEnd<a.effEnd;
+    // Share of brand's Keeta orders within the covered window (sheet daily data), same outlet scope
+    let brandOrders=0;
+    const recs=c.brand==='All Brands'?allData.filter(r=>r.aggregator==='Keeta'):indexedRecords(c.brand,'Keeta');
+    for(const r of recs){if(r.date>=covStart&&r.date<=covEnd&&(!myScope||myScope.has(r.branch)))brandOrders+=r.orders;}
+    const shareOfBrandOrders=brandOrders>0?orders/brandOrders*100:null;
+    out={orders,gross,disc,fd,net,contrib,depth:disc/gross,daily,covStart,covEnd,partialCoverage,shareOfBrandOrders,brandForCost};
+  }
+  _campPartCache.set(key,out);
+  return out;
+}
+// Weekly trend of the campaign's OWN orders — exact, unpolluted by baseline or concurrent
+// campaigns. Answers "should we continue?" for item promos: is per-order economics still
+// positive, and is volume holding?
+function campParticipationTrend(part){
+  const days=Object.keys(part.daily).sort();
+  if(!days.length)return null;
+  const span=daysBetweenInclusive(part.covStart,part.covEnd);
+  if(span<4)return null;
+  const segLen=span>=14?7:Math.ceil(span/2);
+  const segs=[];
+  let s=part.covStart;
+  while(s<=part.covEnd){
+    const e0=subDays(s,-(segLen-1));
+    const e=e0>part.covEnd?part.covEnd:e0;
+    const nDays=daysBetweenInclusive(s,e);
+    let o=0,g=0,dsc=0;
+    for(const d of days){if(d>=s&&d<=e){o+=part.daily[d].orders;g+=part.daily[d].gross;dsc+=part.daily[d].disc;}}
+    const fd=o*KEETA_FD_COST;
+    const net=g-dsc-fd;
+    const contrib=g>0?brandContribution('Keeta',part.brandForCost,net,g,part.covStart):0;
+    segs.push({start:s,end:e,days:nDays,orders:o,gross:g,disc:dsc,contrib,contribPerDay:contrib/nDays,ordersPerDay:o/nDays});
+    s=subDays(e,-1);
+  }
+  if(segs.length<2)return null;
+  const last=segs[segs.length-1];
+  const best=segs.reduce((m,x)=>x.contribPerDay>m.contribPerDay?x:m,segs[0]);
+  let verdict,clr,icon;
+  if(last.contribPerDay<0){verdict='Campaign orders are losing money — stop';clr='#EF4444';icon='🛑';}
+  else if(best.contribPerDay>0&&last.contribPerDay<best.contribPerDay*0.5){verdict='Orders still profitable but volume fading — plan the exit';clr='#FBBF24';icon='⚠️';}
+  else{verdict='Campaign orders profitable and holding — continue';clr='#22C55E';icon='✅';}
+  return{segs,verdict,clr,icon};
+}
+// ════════════════════════════════════════════════════════════════════════════
 // v096 DECISION LAYER — clean-baseline search, breakeven uplift, trajectory
 // ════════════════════════════════════════════════════════════════════════════
 // Find the cleanest weekday-aligned baseline window before the campaign. Tries offsets of
@@ -7178,41 +7280,72 @@ function campDetailV2HTML(c,idx){
   const incrClr=a.incrContribTotal>=0?'#22C55E':'#EF4444';
   const roiClr=a.discountROI==null?'#64748b':a.discountROI>=1?'#22C55E':a.discountROI>=0.5?'#FBBF24':'#EF4444';
   const kpiCards=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:14px 0">
-    ${campKpiCard('Incremental Contribution',`${a.incrContribTotal>=0?'+':''}${fmtAEDx(a.incrContribTotal)}`,`over ${a.cDays} days · ${a.incrContribPerDay>=0?'+':''}${fmtAEDx(a.incrContribPerDay)}/day`,incrClr)}
+    ${campKpiCard('Incremental Contribution'+((a.sameBrandPlatConcurrent&&a.sameBrandPlatConcurrent.length)?' <span style="font-size:8px;color:#FBBF24;font-weight:700">⚭ SHARED</span>':''),`${a.incrContribTotal>=0?'+':''}${fmtAEDx(a.incrContribTotal)}`,`over ${a.cDays} days · ${a.incrContribPerDay>=0?'+':''}${fmtAEDx(a.incrContribPerDay)}/day`,incrClr)}
     ${campKpiCard('Orders Lift',a.ordersLift!=null?`${a.ordersLift>=0?'+':''}${a.ordersLift.toFixed(0)}%`:'—',`+${a.incrOrdersPerDay.toFixed(0)} orders/day vs baseline`,a.ordersLift>=0?'#22C55E':'#EF4444')}
     ${campKpiCard('Discount Depth',a.discPctOfGross!=null?`${a.discPctOfGross.toFixed(0)}%`:'—',(a.discSource==='keeta_exact'||a.discSource==='careem_exact')?`📊 Exact (${a.discSource==='keeta_exact'?'Keeta':'Careem'} orders) · we funded ${fmtAEDx(a.ourDiscCost)}`:`of gross · we funded ${fmtAEDx(a.ourDiscCost)}`,'#C084FC')}
     ${campKpiCard('Discount ROI',a.discountROI!=null?`${a.discountROI.toFixed(2)}×`:'—','contribution per AED discounted',roiClr)}
   </div>`;
-  // ── v096 HERO: three questions, three answers ──
+  // ── v096/v097 HERO: three questions, three answers ──
   const traj=campTrajectory(c);
   const be=campBreakevenUplift(a,c);
+  const part=campParticipationV1(c);
+  const sharedN=(a.sameBrandPlatConcurrent&&a.sameBrandPlatConcurrent.length)||0;
+  // partLed: item-level campaign whose brand+platform window is shared with concurrent
+  // campaigns → the brand-level delta is NOT attributable to this campaign (every sibling
+  // would show the identical number = double counting). Lead with exact own-order economics.
+  const partLed=!!(part&&sharedN>0);
   const madeAED=a.incrContribTotal;
   const madeClr=madeAED>=0?'#22C55E':'#EF4444';
   const roiSuppressed=a.dataMismatchSuspected||a.baselineContaminated||a.discountROI==null;
-  const q1=`${madeAED>=0?'Made':'Lost'} <strong style="color:${madeClr};font-size:19px">${madeAED>=0?'+':'−'}${fmtAEDx(Math.abs(madeAED))}</strong> in incremental contribution over ${a.cDays} day${a.cDays>1?'s':''}${!roiSuppressed?` <span style="color:#64748b;font-weight:500">(${a.discountROI.toFixed(2)}× per AED discounted)</span>`:''}.`;
-  let q2;
-  if(be&&be.impossible){
-    q2=`At ${(a.actualDiscDepth*100).toFixed(0)}% blended depth, <strong style="color:#EF4444">no order lift could break even</strong> — the discount is deeper than the margin, so every order at this depth loses money.`;
-  }else if(be&&be.reqLiftPct!=null&&a.ordersLift!=null){
-    const won=a.ordersLift>=be.reqLiftPct;
-    q2=`Needed <strong>${be.reqLiftPct>=0?'+':''}${be.reqLiftPct.toFixed(0)}%</strong> orders/day to break even at this depth — got <strong style="color:${won?'#22C55E':'#EF4444'}">${a.ordersLift>=0?'+':''}${a.ordersLift.toFixed(0)}%</strong>. ${won?'<strong style="color:#22C55E">✅ Worth running.</strong>':'<strong style="color:#EF4444">❌ Not worth it at this depth</strong> — a shallower discount (or no promo) would likely have kept more profit.'}`;
+  let q1,q2,q3,segLine='',heroClr=madeClr;
+  if(partLed){
+    const pClr=part.contrib>=0?'#22C55E':'#EF4444';heroClr=pClr;
+    q1=`<strong style="font-size:17px">${part.orders.toLocaleString()}</strong> orders used this campaign${part.shareOfBrandOrders!=null?` <span style="color:#64748b;font-weight:500">(${part.shareOfBrandOrders.toFixed(0)}% of ${c.brand} Keeta orders)</span>`:''} — after the ${fmtAEDx(part.disc)} discount, free-delivery cost, commission and food cost, those orders contributed <strong style="color:${pClr};font-size:19px">${part.contrib>=0?'+':'−'}${fmtAEDx(Math.abs(part.contrib))}</strong> <span style="color:#64748b;font-weight:500">(exact, from the Keeta statement${part.partialCoverage?` · covers ${fmtShort(part.covStart)}–${fmtShort(part.covEnd)}`:''})</span>.`;
+    q2=part.contrib<0
+      ?`<strong style="color:#EF4444">Not worth running at this depth:</strong> even in the best case — every one of these customers brought in by the promo — the orders lose money. The ${(part.depth*100).toFixed(0)}% effective discount on them is deeper than the margin.`
+      :`Worth it? Depends on cannibalization: if all ${part.orders.toLocaleString()} customers would have ordered anyway, the promo <strong style="color:#EF4444">cost ${fmtAEDx(part.disc)}</strong>; if all were new customers, it <strong style="color:#22C55E">earned +${fmtAEDx(part.contrib)}</strong>. Reality sits between those bounds.`;
+    const pt=campParticipationTrend(part);
+    if(pt){
+      q3=`${pt.icon} <strong style="color:${pt.clr}">${pt.verdict}</strong> <span style="color:#94a3b8;font-size:11px">(from this campaign's own orders — unaffected by other campaigns)</span>`;
+      segLine=`<div style="font-size:12px;color:#64748b;margin-top:8px;font-variant-numeric:tabular-nums;display:flex;flex-wrap:wrap;gap:4px 14px">${pt.segs.map((s,i)=>`<span title="${fmtShort(s.start)}–${fmtShort(s.end)} · ${s.orders} orders · ${fmtAEDx(s.disc)} disc">Wk${i+1}: <strong>${s.ordersPerDay.toFixed(1)} ord/d</strong> · <strong style="color:${s.contribPerDay>=0?'#22C55E':'#EF4444'}">${s.contribPerDay>=0?'+':'−'}AED ${Math.round(Math.abs(s.contribPerDay)).toLocaleString()}/d</strong></span>`).join('')}</div>`;
+    }else{
+      q3=`⏳ <span style="color:#94a3b8">Too short to trend yet — needs 4+ covered days of exact data.</span>`;
+    }
   }else{
-    q2=`<span style="color:#94a3b8">Break-even lift can't be computed for this window (needs baseline orders and a measurable discount depth).</span>`;
+    q1=`${madeAED>=0?'Made':'Lost'} <strong style="color:${madeClr};font-size:19px">${madeAED>=0?'+':'−'}${fmtAEDx(Math.abs(madeAED))}</strong> in incremental contribution over ${a.cDays} day${a.cDays>1?'s':''}${!roiSuppressed?` <span style="color:#64748b;font-weight:500">(${a.discountROI.toFixed(2)}× per AED discounted)</span>`:''}.`;
+    if(be&&be.impossible){
+      q2=`At ${(a.actualDiscDepth*100).toFixed(0)}% blended depth, <strong style="color:#EF4444">no order lift could break even</strong> — the discount is deeper than the margin, so every order at this depth loses money.`;
+    }else if(be&&be.reqLiftPct!=null&&a.ordersLift!=null){
+      const won=a.ordersLift>=be.reqLiftPct;
+      q2=`Needed <strong>${be.reqLiftPct>=0?'+':''}${be.reqLiftPct.toFixed(0)}%</strong> orders/day to break even at this depth — got <strong style="color:${won?'#22C55E':'#EF4444'}">${a.ordersLift>=0?'+':''}${a.ordersLift.toFixed(0)}%</strong>. ${won?'<strong style="color:#22C55E">✅ Worth running.</strong>':'<strong style="color:#EF4444">❌ Not worth it at this depth</strong> — a shallower discount (or no promo) would likely have kept more profit.'}`;
+    }else{
+      q2=`<span style="color:#94a3b8">Break-even lift can't be computed for this window (needs baseline orders and a measurable discount depth).</span>`;
+    }
+    if(traj){
+      const dirty=traj.baselineClean?'':` <span style="color:#FBBF24;cursor:help" title="No campaign-free pre-window found within 8 weeks — the trend baseline overlaps: ${traj.pollutingCamps.map(x=>(x.name||'unnamed')).join(', ')}. Absolute AED per segment carries that caveat, but the rising/fading shape is still reliable.">⚠ baseline not clean</span>`;
+      q3=`${traj.icon} <strong style="color:${traj.verdictClr}">${traj.verdict}</strong>${dirty}`;
+      segLine=`<div style="font-size:12px;color:#64748b;margin-top:8px;font-variant-numeric:tabular-nums;display:flex;flex-wrap:wrap;gap:4px 14px">${traj.segs.map((s,i)=>{const cl=s.incrContribPerDay>=0?'#22C55E':'#EF4444';const lbl=traj.segs.length<=4?`Wk${i+1}`:fmtShort(s.segStart);return `<span title="${fmtShort(s.segStart)}–${fmtShort(s.segEnd)} · ${s.orders} orders">${lbl}: <strong style="color:${cl}">${s.incrContribPerDay>=0?'+':'−'}AED ${Math.round(Math.abs(s.incrContribPerDay)).toLocaleString()}/d</strong></span>`;}).join('')}</div>`;
+    }else{
+      q3=`⏳ <span style="color:#94a3b8">Too short to trend yet — the continue/stop read needs 4+ elapsed days.</span>`;
+    }
   }
-  let q3,segLine='';
-  if(traj){
-    const dirty=traj.baselineClean?'':` <span style="color:#FBBF24;cursor:help" title="No campaign-free pre-window found within 8 weeks — the trend baseline overlaps: ${traj.pollutingCamps.map(x=>(x.name||'unnamed')).join(', ')}. Absolute AED per segment carries that caveat, but the rising/fading shape is still reliable.">⚠ baseline not clean</span>`;
-    q3=`${traj.icon} <strong style="color:${traj.verdictClr}">${traj.verdict}</strong>${dirty}`;
-    segLine=`<div style="font-size:12px;color:#64748b;margin-top:8px;font-variant-numeric:tabular-nums;display:flex;flex-wrap:wrap;gap:4px 14px">${traj.segs.map((s,i)=>{const cl=s.incrContribPerDay>=0?'#22C55E':'#EF4444';const lbl=traj.segs.length<=4?`Wk${i+1}`:fmtShort(s.segStart);return `<span title="${fmtShort(s.segStart)}–${fmtShort(s.segEnd)} · ${s.orders} orders">${lbl}: <strong style="color:${cl}">${s.incrContribPerDay>=0?'+':'−'}AED ${Math.round(Math.abs(s.incrContribPerDay)).toLocaleString()}/d</strong></span>`;}).join('')}</div>`;
-  }else{
-    q3=`⏳ <span style="color:#94a3b8">Too short to trend yet — the continue/stop read needs 4+ elapsed days.</span>`;
+  // Brand context line: when the brand-level figure is shared across concurrent campaigns it is
+  // context, not this campaign's result. Also the >±40% sanity guard — a swing that size is
+  // bigger than any plausible single-campaign effect.
+  const bigSwing=a.ordersLift!=null&&Math.abs(a.ordersLift)>40;
+  let ctxLine='';
+  if(sharedN>0){
+    ctxLine=`<div style="font-size:12px;color:#64748b;margin-top:10px;padding-top:10px;border-top:1px dashed #E2E8F0">🏷 <strong>Brand context — shared, not this campaign's result:</strong> ${c.brand} × ${c.aggregator} as a whole moved <strong style="color:${madeClr}">${madeAED>=0?'+':'−'}${fmtAEDx(Math.abs(madeAED))}</strong> vs the 4-weeks-ago baseline${a.ordersLift!=null?` (${a.ordersLift>=0?'+':''}${a.ordersLift.toFixed(0)}% orders)`:''}. The identical figure appears on all ${sharedN+1} concurrent ${c.brand} × ${c.aggregator} campaigns — never sum it across them.${bigSwing?' A swing this size is far bigger than any plausible item-promo effect — it reflects the baseline promo mix or seasonality, not these campaigns.':''}</div>`;
+  }else if(bigSwing){
+    ctxLine=`<div style="font-size:12px;color:#FBBF24;margin-top:10px;padding-top:10px;border-top:1px dashed #E2E8F0">⚠ Orders moved ${a.ordersLift>=0?'+':''}${a.ordersLift.toFixed(0)}% vs baseline — larger than a typical campaign effect. Check whether the baseline period ran a different promo mix before crediting or blaming this campaign.</div>`;
   }
-  const heroBox=`<div style="background:linear-gradient(135deg,${madeClr}10,#FFFFFF);border:1px solid ${madeClr}44;border-left:5px solid ${madeClr};border-radius:14px;padding:18px 20px;margin-bottom:14px">
-    <div style="font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.9px;margin-bottom:10px">The Answer</div>
+  const heroBox=`<div style="background:linear-gradient(135deg,${heroClr}10,#FFFFFF);border:1px solid ${heroClr}44;border-left:5px solid ${heroClr};border-radius:14px;padding:18px 20px;margin-bottom:14px">
+    <div style="font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.9px;margin-bottom:10px">The Answer${partLed?' · exact per-campaign':''}</div>
     <div style="font-size:16px;color:#0F172A;font-weight:700;line-height:1.7;margin-bottom:7px">💰 ${q1}</div>
     <div style="font-size:14px;color:#334155;line-height:1.7;margin-bottom:7px">📐 ${q2}</div>
     <div style="font-size:14px;line-height:1.7">${q3}</div>
     ${segLine}
+    ${ctxLine}
   </div>`;
   // Warning banners survive when ROI is suppressed — they qualify the answer above.
   let warnBox='';
@@ -7221,6 +7354,24 @@ function campDetailV2HTML(c,idx){
   }else if(a.baselineContaminated){
     const names=a.baselineCampaigns.map(x=>`"${x.name}"`).join(', ');
     warnBox=`<div style="background:#3B82F615;border:1px solid #3B82F640;border-radius:12px;padding:14px 18px;margin-bottom:14px;display:flex;gap:12px;align-items:flex-start"><div style="font-size:22px">📊</div><div style="font-size:13px;color:#0F172A;line-height:1.7;font-weight:600">Discount ROI hidden — the comparison baseline (${fmtShort(a.bStart)}–${fmtShort(a.bEnd)}) ran meaningfully deeper discounting than this campaign (≈${a.baselineDepth.toFixed(0)}% vs ${a.campaignDepth.toFixed(0)}% of gross), from: ${names}. That makes it an unfair "normal" period to divide against. The AED headline above is still valid and is the number to read.</div></div>`;
+  }
+  // ── v097: exact own-orders evidence box (rendered whenever exact data covers this campaign) ──
+  let partBox='';
+  if(part){
+    const pClr=part.contrib>=0?'#22C55E':'#EF4444';
+    const pt=campParticipationTrend(part);
+    const wkRows=pt?pt.segs.map((s,i)=>`<tr><td>Wk${i+1} <span style="color:#64748b;font-size:9px">${fmtShort(s.start)}–${fmtShort(s.end)}</span></td><td style="text-align:right">${s.orders.toLocaleString()}</td><td style="text-align:right">${s.ordersPerDay.toFixed(1)}/d</td><td style="text-align:right">${fmtAEDx(s.disc)}</td><td style="text-align:right;color:${s.contribPerDay>=0?'#22C55E':'#EF4444'};font-weight:700">${s.contribPerDay>=0?'+':'−'}${fmtAEDx(Math.abs(s.contribPerDay))}/d</td></tr>`).join(''):'';
+    partBox=`<div class="card" style="border-left:4px solid ${pClr}">
+      <div class="ct">🎯 This Campaign's Own Orders <span style="font-size:9px;color:#94a3b8;font-weight:500">exact — cross-referenced from the Keeta statement${part.partialCoverage?` · covers ${fmtShort(part.covStart)}–${fmtShort(part.covEnd)} of the campaign window`:''}</span></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:10px 0">
+        ${campKpiCard('Orders Used It',part.orders.toLocaleString(),part.shareOfBrandOrders!=null?`${part.shareOfBrandOrders.toFixed(0)}% of brand Keeta orders`:'in covered window','#60A5FA')}
+        ${campKpiCard('Gross on Those',fmtAEDx(part.gross),'menu-price value','#94a3b8')}
+        ${campKpiCard('Discount Burned',fmtAEDx(part.disc),`${(part.depth*100).toFixed(0)}% of their gross · exact`,'#C084FC')}
+        ${campKpiCard('Their Contribution',`${part.contrib>=0?'+':'−'}${fmtAEDx(Math.abs(part.contrib))}`,'after disc, FD, comm, food',pClr)}
+      </div>
+      ${wkRows?`<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Week</th><th style="text-align:right">Orders</th><th style="text-align:right">Rate</th><th style="text-align:right">Disc Burned</th><th style="text-align:right">Contribution</th></tr></thead><tbody>${wkRows}</tbody></table></div>`:''}
+      <div style="font-size:11px;color:#64748b;line-height:1.6;margin-top:8px">Reading it: if every one of these customers would have ordered anyway, the promo cost <strong style="color:#EF4444">${fmtAEDx(part.disc)}</strong>. If all of them were brought in by the promo, it earned <strong style="color:${pClr}">${part.contrib>=0?'+':'−'}${fmtAEDx(Math.abs(part.contrib))}</strong>. The truth is between the two — and if the contribution figure is negative, the campaign loses money even in the best case.</div>
+    </div>`;
   }
   const fc=foodPkgPct(c.brand)*100;
   const cc=commissionRateFor(c.aggregator,c.brand,c.startDate)*100;
@@ -7351,7 +7502,7 @@ function campDetailV2HTML(c,idx){
     </div>`;
   })();
 
-  return header+overlapBanner+cmpBanner+exactBanner+heroBox+warnBox+kpiCards
+  return header+overlapBanner+cmpBanner+exactBanner+heroBox+warnBox+partBox+kpiCards
     +campOutletBreakdownHTML(c,a)
     +campCollapseSection('💰 Contribution Breakdown',breakdownBox)
     +campCollapseSection('📊 Compare vs Similar Campaigns',similarCampaignsBox)
@@ -9820,7 +9971,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     cpcHistSetFilter,cpcHistToggleCompare,cpcCompSet,cpcSetAggMonth,cpcResetAggMonth,
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
     sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campClearDates,campSetElasticity,
-    campTrajectory,campBreakevenUplift,campFindCleanBaseline,campCollapseSection,
+    campTrajectory,campBreakevenUplift,campFindCleanBaseline,campCollapseSection,campParticipationV1,campParticipationTrend,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,cmpToggleExpand,
     injectCompareTab,loadKPIData,doLoad,
     dismissUpdateModal,hardRefreshNow,dismissWhatsNew,showWhatsNewIfNeeded,
