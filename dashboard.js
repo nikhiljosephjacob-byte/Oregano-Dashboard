@@ -13,9 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-06-095";
+const BUILD_VERSION="2026-07-15-096";
 const BUILD_NOTES=[
-  "💰 Per-Outlet Order Uplift table now shows baseline SALES alongside baseline orders in each of the three comparison columns (Previous Week / Previous Month / 2 Months Ago) — was orders-only before, requiring a separate lookup to see revenue for each window. The totals row at the bottom (which already existed) is extended to match: each baseline column now shows total orders, total sales, and the average % uplift for that column, not just the average % alone."
+  "🎯 Campaign detail now leads with THE ANSWER: a hero card states in plain language how much money the campaign made or lost (AED), whether it was worth running (break-even order lift needed vs achieved at the actual discount depth), and whether to continue or stop (weekly trend of incremental contribution). The analysis tables are demoted to collapsible 'show the evidence' sections — Per-Outlet Uplift stays expanded.",
+  "📉 New trajectory analysis: campaigns 4+ days old are split into weekly segments, each compared against the cleanest pre-campaign baseline available (searches up to 8 weeks back for a window with no overlapping campaign; flags '⚠ baseline not clean' when none exists). Catches 'was working, now losing money — stop now' before the campaign total goes red.",
+  "📜 Ads Performance: the Quick View month bar now reaches EVERY month in the Ad Investments sheet (recent 3 as buttons + an 'Older…' dropdown for 2025 and beyond) on both the landing page and brand pages. The outlet-level month picker's 7-month cap is removed too."
 ];
 
 let _updateDialogShown=false;
@@ -3779,12 +3781,19 @@ function cpcRenderAggLevel(){
   const monthLbl=cpcMonthLabel(targetMonth);
 
   // ── Quick View month bar ──────────────────────────────────────────────────────────────────
-  const pastMonths=[1,2,3].map(n=>cpcShiftMonth(cpcModel.curMonth,-n));
+  // v096: Quick View now reaches EVERY month present in the Ad Investments sheet (was hardcoded
+  // to the 3 most recent calendar months, which made 2025 history unreachable from this page).
+  // Recent 3 stay as one-click buttons; everything older lives in the "Older…" dropdown.
+  const allDataMonths=[...new Set(cpcData.map(r=>r.month).filter(Boolean))].sort().reverse();
+  const recentMonths=allDataMonths.filter(m=>m!==cpcModel.curMonth).slice(0,3);
+  const olderMonths=allDataMonths.filter(m=>m!==cpcModel.curMonth&&!recentMonths.includes(m));
   const monthBtn=(m,label)=>{
     const isActive=targetMonth===m;
     return `<button onclick="cpcSetAggMonth('${m}')" style="padding:5px 13px;border-radius:7px;border:1px solid ${isActive?'#f59e0b':'rgba(15,23,42,.6)'};background:${isActive?'rgba(245,158,11,.14)':'transparent'};color:${isActive?'#f59e0b':'#94a3b8'};font-size:11.5px;font-weight:700;cursor:pointer">${label}</button>`;
   };
-  const quickViewBar=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Quick View</span>${monthBtn(cpcModel.curMonth,"This Month")}${pastMonths.map(m=>monthBtn(m,cpcMonthLabel(m))).join("")}</div>`;
+  const olderActive=olderMonths.includes(targetMonth);
+  const olderDD=olderMonths.length?`<select onchange="if(this.value)cpcSetAggMonth(this.value)" style="padding:5px 10px;border-radius:7px;border:1px solid ${olderActive?'#f59e0b':'rgba(15,23,42,.6)'};background:${olderActive?'rgba(245,158,11,.14)':'#FFFFFF'};color:${olderActive?'#f59e0b':'#94a3b8'};font-size:11.5px;font-weight:700;cursor:pointer"><option value="">Older… (${olderMonths.length})</option>${olderMonths.map(m=>`<option value="${m}" ${targetMonth===m?'selected':''}>${cpcMonthLabel(m)}</option>`).join('')}</select>`:'';
+  const quickViewBar=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Quick View</span>${monthBtn(cpcModel.curMonth,"This Month")}${recentMonths.map(m=>monthBtn(m,cpcMonthLabel(m))).join("")}${olderDD}</div>`;
 
   const cards=aggs.map(A=>{
     const clr=AGG_LOGO_CLR[A.name]||'#94a3b8';
@@ -3850,9 +3859,14 @@ function cpcRenderBrandLevel(ag){
   const isViewingCurrent=targetMonth===cpcModel.curMonth;
   const monthLbl=cpcMonthLabel(targetMonth);
   // Quick View month buttons (same as landing page — so user can switch months without going back)
-  const pastMonths=[1,2,3].map(n=>cpcShiftMonth(cpcModel.curMonth,-n));
+  // v096: full-history Quick View (same as landing page) — recent 3 buttons + Older… dropdown
+  const allDataMonths=[...new Set(cpcData.map(r=>r.month).filter(Boolean))].sort().reverse();
+  const recentMonths=allDataMonths.filter(m=>m!==cpcModel.curMonth).slice(0,3);
+  const olderMonths=allDataMonths.filter(m=>m!==cpcModel.curMonth&&!recentMonths.includes(m));
   const monthBtn=(m,label)=>{const isActive=targetMonth===m;return `<button onclick="cpcSetAggMonth('${m}')" style="padding:5px 13px;border-radius:7px;border:1px solid ${isActive?'#f59e0b':'rgba(15,23,42,.6)'};background:${isActive?'rgba(245,158,11,.14)':'transparent'};color:${isActive?'#f59e0b':'#94a3b8'};font-size:11.5px;font-weight:700;cursor:pointer">${label}</button>`;};
-  const quickViewBar=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Quick View</span>${monthBtn(cpcModel.curMonth,"This Month")}${pastMonths.map(m=>monthBtn(m,cpcMonthLabel(m))).join("")}</div>`;
+  const olderActive=olderMonths.includes(targetMonth);
+  const olderDD=olderMonths.length?`<select onchange="if(this.value)cpcSetAggMonth(this.value)" style="padding:5px 10px;border-radius:7px;border:1px solid ${olderActive?'#f59e0b':'rgba(15,23,42,.6)'};background:${olderActive?'rgba(245,158,11,.14)':'#FFFFFF'};color:${olderActive?'#f59e0b':'#94a3b8'};font-size:11.5px;font-weight:700;cursor:pointer"><option value="">Older… (${olderMonths.length})</option>${olderMonths.map(m=>`<option value="${m}" ${targetMonth===m?'selected':''}>${cpcMonthLabel(m)}</option>`).join('')}</select>`:'';
+  const quickViewBar=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Quick View</span>${monthBtn(cpcModel.curMonth,"This Month")}${recentMonths.map(m=>monthBtn(m,cpcMonthLabel(m))).join("")}${olderDD}</div>`;
   // Ad-type toggle (only if this aggregator has more than one)
   const adTypes=[...A.adTypes];
   const adToggle=adTypes.length>1?`<div style="display:flex;gap:6px;margin-bottom:14px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Ad Type</span>${['all',...adTypes].map(t=>`<button onclick="cpcSetAdType('${t}')" style="padding:4px 12px;border-radius:6px;border:1px solid ${cpcAdTypeFilter===t?clr:'rgba(15,23,42,.6)'};background:${cpcAdTypeFilter===t?clr+'22':'transparent'};color:${cpcAdTypeFilter===t?clr:'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${t==='all'?'All':t}</button>`).join('')}</div>`:'';
@@ -4907,7 +4921,7 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
   const today=cpcRealToday();
   const curMonthStr=cpcModel.curMonth;
   // Months that have ads for this aggregator+brand (current first, then previous up to 6)
-  const monthsAvail=[...new Set(rows.map(r=>r.month).filter(Boolean))].sort().reverse().slice(0,7);
+  const monthsAvail=[...new Set(rows.map(r=>r.month).filter(Boolean))].sort().reverse(); // v096: no cap — every month reachable
   // Default selected month = current month (if it has ads) else most recent available
   let selMonth=cpcMonthFilter;
   // Default to current month. Pre-v082 this fell back to the most recent month WITH data when
@@ -4921,7 +4935,12 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
   const isCurrentMonth=selMonth===curMonthStr;
 
   // Month/Year picker on the RIGHT
-  const monthBtns=monthsAvail.map(m=>{const isCur=m===curMonthStr;const act=selMonth===m;return `<button onclick="cpcSetMonth('${m}')" style="padding:4px 11px;border-radius:6px;border:1px solid ${act?'#f59e0b':'rgba(15,23,42,.6)'};background:${act?'rgba(245,158,11,.12)':'transparent'};color:${act?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${cpcMonthLabel(m)}${isCur?' •':''}</button>`;}).join('');
+  // v096: first 7 months as buttons, anything older in an "Older…" dropdown so long histories
+  // (2025+) don't turn the control bar into a wall of buttons.
+  const monthsBtnList=monthsAvail.slice(0,7);
+  const monthsOlder=monthsAvail.slice(7);
+  const monthBtns=monthsBtnList.map(m=>{const isCur=m===curMonthStr;const act=selMonth===m;return `<button onclick="cpcSetMonth('${m}')" style="padding:4px 11px;border-radius:6px;border:1px solid ${act?'#f59e0b':'rgba(15,23,42,.6)'};background:${act?'rgba(245,158,11,.12)':'transparent'};color:${act?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${cpcMonthLabel(m)}${isCur?' •':''}</button>`;}).join('')
+    +(monthsOlder.length?`<select onchange="if(this.value)cpcSetMonth(this.value)" style="padding:4px 9px;border-radius:6px;border:1px solid ${monthsOlder.includes(selMonth)?'#f59e0b':'rgba(15,23,42,.6)'};background:${monthsOlder.includes(selMonth)?'rgba(245,158,11,.12)':'#FFFFFF'};color:${monthsOlder.includes(selMonth)?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer"><option value="">Older… (${monthsOlder.length})</option>${monthsOlder.map(m=>`<option value="${m}" ${selMonth===m?'selected':''}>${cpcMonthLabel(m)}</option>`).join('')}</select>`:'');
   const adToggle=(!skipToggle&&aggAdTypes.length>1)?`<div style="display:flex;gap:6px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Ad Type</span>${['all',...aggAdTypes].map(tp=>`<button onclick="cpcSetAdType('${tp}')" style="padding:4px 12px;border-radius:6px;border:1px solid ${effAdType===tp?'#f59e0b':'rgba(15,23,42,.6)'};background:${effAdType===tp?'rgba(245,158,11,.12)':'transparent'};color:${effAdType===tp?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${tp==='all'?'All':tp}</button>`).join('')}</div>`:'';
   const controlBar=`<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">${adToggle||'<div></div>'}<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">Month</span>${monthBtns}</div></div>`;
 
@@ -7000,6 +7019,122 @@ function campOutletBreakdownHTML(c,a){
     <div style="font-size:10px;color:#64748b;margin-top:8px">Each comparison uses the same weekdays: Previous Week = 7 days earlier · Previous Month = 28 days earlier · 2 Months Ago = 56 days earlier. The % is the change in campaign orders/day vs that baseline.</div>
   </div>`;
 }
+// ════════════════════════════════════════════════════════════════════════════
+// v096 DECISION LAYER — clean-baseline search, breakeven uplift, trajectory
+// ════════════════════════════════════════════════════════════════════════════
+// Find the cleanest weekday-aligned baseline window before the campaign. Tries offsets of
+// 28/35/42/49/56 days back (all multiples of 7 → weekday alignment holds for the full window
+// AND for any aligned sub-window, which the trajectory segments rely on). A window is "clean"
+// when no other same-brand+aggregator campaign (rewards excluded) overlaps it. If none of the
+// five candidates is clean, falls back to −28d and flags it — in this business something is
+// almost always running, so callers must surface the flag rather than silently trust the AEDs.
+function campFindCleanBaseline(c,elapsedDays){
+  const myIdx=campaignData.indexOf(c);
+  const brandRecs=c.brand==='All Brands'?allData:indexedRecords(c.brand,c.aggregator);
+  const dataMin=brandRecs.length?brandRecs.reduce((m,r)=>r.date<m?r.date:m,brandRecs[0].date):null;
+  const tryOffsets=[28,35,42,49,56];
+  let fallback=null;
+  for(const off of tryOffsets){
+    const bStart=subDays(c.startDate,off);
+    const bEnd=subDays(bStart,-(elapsedDays-1));
+    if(dataMin&&bStart<dataMin)break; // window predates our data — stop searching further back
+    const polluting=campaignData.filter((x,i)=>i!==myIdx&&x.aggregator===c.aggregator&&(c.brand==='All Brands'||x.brand===c.brand)&&x.startDate<=bEnd&&x.endDate>=bStart&&campStatus(x)!=='Cancelled'&&!isRewardsCampaign(x));
+    if(!fallback)fallback={bStart,bEnd,offset:off,clean:polluting.length===0,pollutingCamps:polluting};
+    if(!polluting.length)return{bStart,bEnd,offset:off,clean:true,pollutingCamps:[]};
+  }
+  return fallback;
+}
+// Break-even order lift at the campaign's ACTUAL blended discount depth: the % increase in
+// orders/day (valued at baseline gross AOV) at which incremental contribution = 0. Closed-form:
+// contribution/day at lift L = baseOrders×(1+L)×AOVg×[(1−depth)(1−comm)−food]. Setting that
+// equal to baseline contribution/day and solving for L gives the required lift. If the bracket
+// is ≤ 0, the discount is deeper than the margin — NO amount of volume can break even.
+function campBreakevenUplift(a,c){
+  if(a.actualDiscDepth==null||a.actualDiscDepth<=0)return null;
+  if(!a.bDays||!a.bs||a.bs.orders<=0)return null;
+  const baseOrdPerDay=a.bs.orders/a.bDays;
+  const baseGrossAOV=a.baseGross/a.bs.orders;
+  if(baseOrdPerDay<=0||baseGrossAOV<=0)return null;
+  const brandForCost=c.brand==='All Brands'?'Oregano':c.brand;
+  const comm=commissionRateFor(c.aggregator,brandForCost,c.startDate);
+  const food=foodPkgPct(brandForCost);
+  const unitMargin=(1-a.actualDiscDepth)*(1-comm)-food; // contribution per AED of gross at this depth
+  if(unitMargin<=0)return{impossible:true};
+  const reqGrossPerDay=a.baseContribPerDay/unitMargin;
+  const reqOrdersPerDay=reqGrossPerDay/baseGrossAOV;
+  const reqLiftPct=(reqOrdersPerDay/baseOrdPerDay-1)*100;
+  return{reqLiftPct,actualLiftPct:a.ordersLift};
+}
+// Trajectory: split the elapsed campaign window into segments (weekly if ≥14 elapsed days,
+// halves otherwise; needs ≥4 days) and compute each segment's incremental contribution/day vs
+// the SAME clean pre-campaign baseline — the aligned sub-window (segment dates minus the
+// baseline offset; exact weekday match since the offset is a multiple of 7). The continue/stop
+// verdict reads the SHAPE (is the latest segment worse than earlier ones), which survives even
+// a polluted baseline: pollution shifts all segments equally, it can't fake a decay.
+function campTrajectory(c){
+  const a=campAnalysisCached(c);
+  if(!a.hasData)return null;
+  const elapsed=a.cDays;
+  if(elapsed<4)return null; // too short to trend
+  const base=campFindCleanBaseline(c,elapsed);
+  if(!base)return null;
+  const off=base.offset;
+  const outletSet=a.outletSet;
+  const flt=r=>{if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;if(outletSet&&!outletSet.has(r.branch))return false;return true;};
+  const brandRecs=c.brand==='All Brands'?allData:indexedRecords(c.brand,c.aggregator);
+  // Exact/hybrid per-day merchant discount for the campaign window
+  let dailyAlloc={};
+  try{const alloc=allocateCampaignDiscount(c,a.effStart,a.effEnd);dailyAlloc=alloc.dailyAlloc||{};}catch(e){}
+  const brandForCost=c.brand==='All Brands'?'Oregano':c.brand;
+  const segLen=elapsed>=14?7:Math.ceil(elapsed/2);
+  const segs=[];
+  let segStart=a.effStart;
+  while(segStart<=a.effEnd){
+    const segEnd0=subDays(segStart,-(segLen-1));
+    const segEnd=segEnd0>a.effEnd?a.effEnd:segEnd0;
+    const days=daysBetweenInclusive(segStart,segEnd);
+    const cR=brandRecs.filter(r=>r.date>=segStart&&r.date<=segEnd&&flt(r));
+    const cs=sumR(cR);
+    let segDisc=0;for(const dd in dailyAlloc){if(dd>=segStart&&dd<=segEnd)segDisc+=dailyAlloc[dd];}
+    const cGross=cs.sales+segDisc;
+    const cContrib=brandContribution(c.aggregator,brandForCost,cs.sales,cGross,c.startDate);
+    const bS=subDays(segStart,off),bE=subDays(segEnd,off);
+    const bR=brandRecs.filter(r=>r.date>=bS&&r.date<=bE&&flt(r));
+    const bsg=sumR(bR);
+    const bGross=bsg.sales+(bsg.disc||0);
+    const bContrib=brandContribution(c.aggregator,brandForCost,bsg.sales,bGross,c.startDate);
+    segs.push({segStart,segEnd,days,orders:cs.orders,sales:cs.sales,disc:segDisc,
+      incrContribPerDay:(cContrib/days)-(bContrib/days),
+      incrOrdersPerDay:(cs.orders/days)-(bsg.orders/days),
+      baseHasData:bsg.orders>0||bsg.sales>0});
+    segStart=subDays(segEnd,-1);
+  }
+  if(segs.length<2)return null;
+  const last=segs[segs.length-1];
+  const best=segs.reduce((m,s)=>s.incrContribPerDay>m.incrContribPerDay?s:m,segs[0]);
+  const anyPositive=segs.some(s=>s.incrContribPerDay>0);
+  const running=campStatus(c)==='Running';
+  let verdict,verdictClr,icon;
+  if(last.incrContribPerDay<0&&anyPositive&&best!==last){
+    verdict=running?'Was working, now losing money — stop now':'Faded before the end — should have stopped earlier';
+    verdictClr='#EF4444';icon='🛑';
+  }else if(last.incrContribPerDay<0){
+    verdict=running?'Never turned positive — stop':'Never turned positive';
+    verdictClr='#EF4444';icon='🛑';
+  }else if(best.incrContribPerDay>0&&last.incrContribPerDay<best.incrContribPerDay*0.5){
+    verdict=running?'Still profitable but decaying — plan the exit':'Profitable but was decaying at the end';
+    verdictClr='#FBBF24';icon='⚠️';
+  }else{
+    verdict=running?'Holding strong — continue':'Held strong to the end';
+    verdictClr='#22C55E';icon='✅';
+  }
+  return{segs,verdict,verdictClr,icon,baselineClean:base.clean,baselineOffset:off,pollutingCamps:base.pollutingCamps,running};
+}
+// Collapsible wrapper for demoted evidence sections on the campaign detail page.
+function campCollapseSection(title,inner){
+  if(!inner)return '';
+  return `<details style="margin-bottom:14px"><summary style="cursor:pointer;font-size:12px;font-weight:800;color:#64748b;padding:10px 14px;background:#FEFDFA;border:1px solid #EDE7D9;border-radius:10px;user-select:none">▸ ${title} <span style="font-weight:500;color:#94a3b8">— show the evidence</span></summary><div style="margin-top:10px">${inner}</div></details>`;
+}
 function campDetailV2HTML(c,idx){
   const st=campStatus(c);
   const stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#94a3b8',Cancelled:'#EF4444'}[st]||'#94a3b8';
@@ -7048,22 +7183,45 @@ function campDetailV2HTML(c,idx){
     ${campKpiCard('Discount Depth',a.discPctOfGross!=null?`${a.discPctOfGross.toFixed(0)}%`:'—',(a.discSource==='keeta_exact'||a.discSource==='careem_exact')?`📊 Exact (${a.discSource==='keeta_exact'?'Keeta':'Careem'} orders) · we funded ${fmtAEDx(a.ourDiscCost)}`:`of gross · we funded ${fmtAEDx(a.ourDiscCost)}`,'#C084FC')}
     ${campKpiCard('Discount ROI',a.discountROI!=null?`${a.discountROI.toFixed(2)}×`:'—','contribution per AED discounted',roiClr)}
   </div>`;
-  let verdict='',verdictClr='#94a3b8',verdictIcon='';
+  // ── v096 HERO: three questions, three answers ──
+  const traj=campTrajectory(c);
+  const be=campBreakevenUplift(a,c);
+  const madeAED=a.incrContribTotal;
+  const madeClr=madeAED>=0?'#22C55E':'#EF4444';
+  const roiSuppressed=a.dataMismatchSuspected||a.baselineContaminated||a.discountROI==null;
+  const q1=`${madeAED>=0?'Made':'Lost'} <strong style="color:${madeClr};font-size:19px">${madeAED>=0?'+':'−'}${fmtAEDx(Math.abs(madeAED))}</strong> in incremental contribution over ${a.cDays} day${a.cDays>1?'s':''}${!roiSuppressed?` <span style="color:#64748b;font-weight:500">(${a.discountROI.toFixed(2)}× per AED discounted)</span>`:''}.`;
+  let q2;
+  if(be&&be.impossible){
+    q2=`At ${(a.actualDiscDepth*100).toFixed(0)}% blended depth, <strong style="color:#EF4444">no order lift could break even</strong> — the discount is deeper than the margin, so every order at this depth loses money.`;
+  }else if(be&&be.reqLiftPct!=null&&a.ordersLift!=null){
+    const won=a.ordersLift>=be.reqLiftPct;
+    q2=`Needed <strong>${be.reqLiftPct>=0?'+':''}${be.reqLiftPct.toFixed(0)}%</strong> orders/day to break even at this depth — got <strong style="color:${won?'#22C55E':'#EF4444'}">${a.ordersLift>=0?'+':''}${a.ordersLift.toFixed(0)}%</strong>. ${won?'<strong style="color:#22C55E">✅ Worth running.</strong>':'<strong style="color:#EF4444">❌ Not worth it at this depth</strong> — a shallower discount (or no promo) would likely have kept more profit.'}`;
+  }else{
+    q2=`<span style="color:#94a3b8">Break-even lift can't be computed for this window (needs baseline orders and a measurable discount depth).</span>`;
+  }
+  let q3,segLine='';
+  if(traj){
+    const dirty=traj.baselineClean?'':` <span style="color:#FBBF24;cursor:help" title="No campaign-free pre-window found within 8 weeks — the trend baseline overlaps: ${traj.pollutingCamps.map(x=>(x.name||'unnamed')).join(', ')}. Absolute AED per segment carries that caveat, but the rising/fading shape is still reliable.">⚠ baseline not clean</span>`;
+    q3=`${traj.icon} <strong style="color:${traj.verdictClr}">${traj.verdict}</strong>${dirty}`;
+    segLine=`<div style="font-size:12px;color:#64748b;margin-top:8px;font-variant-numeric:tabular-nums;display:flex;flex-wrap:wrap;gap:4px 14px">${traj.segs.map((s,i)=>{const cl=s.incrContribPerDay>=0?'#22C55E':'#EF4444';const lbl=traj.segs.length<=4?`Wk${i+1}`:fmtShort(s.segStart);return `<span title="${fmtShort(s.segStart)}–${fmtShort(s.segEnd)} · ${s.orders} orders">${lbl}: <strong style="color:${cl}">${s.incrContribPerDay>=0?'+':'−'}AED ${Math.round(Math.abs(s.incrContribPerDay)).toLocaleString()}/d</strong></span>`;}).join('')}</div>`;
+  }else{
+    q3=`⏳ <span style="color:#94a3b8">Too short to trend yet — the continue/stop read needs 4+ elapsed days.</span>`;
+  }
+  const heroBox=`<div style="background:linear-gradient(135deg,${madeClr}10,#FFFFFF);border:1px solid ${madeClr}44;border-left:5px solid ${madeClr};border-radius:14px;padding:18px 20px;margin-bottom:14px">
+    <div style="font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.9px;margin-bottom:10px">The Answer</div>
+    <div style="font-size:16px;color:#0F172A;font-weight:700;line-height:1.7;margin-bottom:7px">💰 ${q1}</div>
+    <div style="font-size:14px;color:#334155;line-height:1.7;margin-bottom:7px">📐 ${q2}</div>
+    <div style="font-size:14px;line-height:1.7">${q3}</div>
+    ${segLine}
+  </div>`;
+  // Warning banners survive when ROI is suppressed — they qualify the answer above.
+  let warnBox='';
   if(a.dataMismatchSuspected){
-    verdict=`Discount ROI can't be computed reliably — the exact ${c.aggregator} upload found only ${fmtAED(a.allocatedDisc)} in merchant discount for this window, but the Google Sheet daily aggregates suggest ${fmtAED(a.sheetDisc)}. The ${c.aggregator} export is likely stale. Re-upload a fresh export covering this campaign's dates to fix. Incremental contribution and orders lift shown below are still valid.`;
-    verdictClr='#EF4444';verdictIcon='⚠️';
-  }
-  else if(a.baselineContaminated){
+    warnBox=`<div style="background:#EF444415;border:1px solid #EF444440;border-radius:12px;padding:14px 18px;margin-bottom:14px;display:flex;gap:12px;align-items:flex-start"><div style="font-size:22px">⚠️</div><div style="font-size:13px;color:#0F172A;line-height:1.7;font-weight:600">Discount ROI suppressed — the exact ${c.aggregator} upload found only ${fmtAED(a.allocatedDisc)} in merchant discount for this window, but the Google Sheet daily aggregates suggest ${fmtAED(a.sheetDisc)}. The ${c.aggregator} export is likely stale; re-upload a fresh one covering this campaign's dates. The AED headline above still uses the sheet-consistent contribution math and remains valid.</div></div>`;
+  }else if(a.baselineContaminated){
     const names=a.baselineCampaigns.map(x=>`"${x.name}"`).join(', ');
-    verdict=`Discount ROI hidden — the comparison baseline (${fmtShort(a.bStart)}–${fmtShort(a.bEnd)}) ran meaningfully deeper discounting than this campaign (baseline ≈${a.baselineDepth.toFixed(0)}% of gross vs this campaign's ${a.campaignDepth.toFixed(0)}%), from: ${names}. That makes it an unfair "normal" period to divide against. Incremental contribution below (${a.incrContribTotal>=0?'+':''}${fmtAED(a.incrContribTotal)} over ${a.cDays} days) is still valid and is the number worth reading here.`;
-    verdictClr='#3B82F6';verdictIcon='📊';
+    warnBox=`<div style="background:#3B82F615;border:1px solid #3B82F640;border-radius:12px;padding:14px 18px;margin-bottom:14px;display:flex;gap:12px;align-items:flex-start"><div style="font-size:22px">📊</div><div style="font-size:13px;color:#0F172A;line-height:1.7;font-weight:600">Discount ROI hidden — the comparison baseline (${fmtShort(a.bStart)}–${fmtShort(a.bEnd)}) ran meaningfully deeper discounting than this campaign (≈${a.baselineDepth.toFixed(0)}% vs ${a.campaignDepth.toFixed(0)}% of gross), from: ${names}. That makes it an unfair "normal" period to divide against. The AED headline above is still valid and is the number to read.</div></div>`;
   }
-  else if(a.discountROI!=null){
-    if(a.discountROI>=1){verdict=`This campaign paid for itself — every AED 1 discounted returned AED ${a.discountROI.toFixed(2)} in incremental contribution.`;verdictClr='#22C55E';verdictIcon='✅';}
-    else if(a.discountROI>=0.4){verdict=`Marginal — the discount returned only AED ${a.discountROI.toFixed(2)} per AED spent. It drove volume but ate into profit.`;verdictClr='#FBBF24';verdictIcon='⚠️';}
-    else{verdict=`The discount lost money on a contribution basis — only AED ${a.discountROI.toFixed(2)} returned per AED discounted. A shallower discount would likely have been more profitable.`;verdictClr='#EF4444';verdictIcon='🔻';}
-  }
-  const verdictBox=verdict?`<div style="background:${verdictClr}15;border:1px solid ${verdictClr}40;border-radius:12px;padding:16px 18px;margin-bottom:14px;display:flex;gap:14px;align-items:flex-start"><div style="font-size:24px">${verdictIcon}</div><div style="font-size:15px;color:#0F172A;line-height:1.7;font-weight:600">${verdict}</div></div>`:'';
   const fc=foodPkgPct(c.brand)*100;
   const cc=commissionRateFor(c.aggregator,c.brand,c.startDate)*100;
   const breakdownBox=`<div class="card"><div class="ct">Contribution Breakdown · ${c.brand} on ${c.aggregator}</div>
@@ -7193,7 +7351,11 @@ function campDetailV2HTML(c,idx){
     </div>`;
   })();
 
-  return header+overlapBanner+cmpBanner+exactBanner+verdictBox+kpiCards+similarCampaignsBox+breakdownBox+campOutletBreakdownHTML(c,a)+scenarioBox;
+  return header+overlapBanner+cmpBanner+exactBanner+heroBox+warnBox+kpiCards
+    +campOutletBreakdownHTML(c,a)
+    +campCollapseSection('💰 Contribution Breakdown',breakdownBox)
+    +campCollapseSection('📊 Compare vs Similar Campaigns',similarCampaignsBox)
+    +campCollapseSection('💡 Elasticity Scenarios',scenarioBox);
 }
 
 function campDetailHTML(c,idx){
@@ -9658,6 +9820,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     cpcHistSetFilter,cpcHistToggleCompare,cpcCompSet,cpcSetAggMonth,cpcResetAggMonth,
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
     sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campClearDates,campSetElasticity,
+    campTrajectory,campBreakevenUplift,campFindCleanBaseline,campCollapseSection,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,cmpToggleExpand,
     injectCompareTab,loadKPIData,doLoad,
     dismissUpdateModal,hardRefreshNow,dismissWhatsNew,showWhatsNewIfNeeded,
