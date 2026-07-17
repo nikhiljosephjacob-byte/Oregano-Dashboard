@@ -8235,18 +8235,18 @@ function campFcHTML(){
       const roiC=sc.roi==null?'#64748b':sc.roi>=0.5?'#22C55E':sc.roi>=0?'#FBBF24':'#EF4444';
       const roiTxt=sc.roi!=null?sc.roi.toFixed(2)+'×':'—';
       const mainBorder=isMain?`border:1.5px solid ${accent}`:`border:0.5px solid #E2E8F0`;
-      return`<div style="background:#FFFFFF;border-radius:10px;${mainBorder};padding:12px;flex:1;min-width:0">`
-      +(isMain?`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${accent}">${label}</span><span style="font-size:9px;background:${accent}22;color:${accent};padding:2px 7px;border-radius:999px;font-weight:600">Most likely</span></div>`
-      :`<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#64748b;margin-bottom:8px">${label}</div>`)
-      +`<div style="font-size:12px;color:#64748b;margin-bottom:3px">Uplift vs baseline</div><div style="font-size:24px;font-weight:700;color:${isMain?accent:'#0F172A'};margin-bottom:10px">${fP(sc.upliftPct)}</div>`
-      +`<div style="display:flex;gap:6px;margin-bottom:8px"><div style="flex:1"><div style="font-size:9px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Incr. orders</div><div style="font-size:17px;font-weight:700;color:#0F172A">${sc.incrOrders.toLocaleString()}</div><div style="font-size:10px;color:#94a3b8">+${Math.round(sc.incrOrdersPerDay)}/day</div></div>`
-      +`<div style="flex:1"><div style="font-size:9px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Merchant disc.</div><div style="font-size:17px;font-weight:700;color:#F59E0B">${fA(sc.merchantDisc)}</div><div style="font-size:10px;color:#94a3b8">${fA(sc.merchantDiscPerDay)}/day</div></div></div>`
-      +`<div style="border-top:0.5px solid #E2E8F0;padding-top:8px;cursor:help" data-ctip="${tipId}">`
-      +`<div style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Incr. contribution <span style="font-size:9px;opacity:.5">ⓘ hover</span></div>`
-      +`<div style="font-size:20px;font-weight:700;color:${ic}">${sc.incrContrib>=0?'+':''}${fA(sc.incrContrib)}</div>`
-      +`<div style="font-size:12px;color:#94a3b8">${fA(sc.incrContribPerDay)}/day</div>`
-      +`<div style="margin-top:8px;font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">ROI on discount</div>`
-      +`<div style="font-size:20px;font-weight:700;color:${roiC}">${roiTxt}</div>`
+      return`<div style="background:#FFFFFF;border-radius:10px;${mainBorder};padding:20px 22px;flex:1;min-width:0">`
+      +(isMain?`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><span style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${accent}">${label}</span><span style="font-size:9px;background:${accent}22;color:${accent};padding:2px 7px;border-radius:999px;font-weight:600">Most likely</span></div>`
+      :`<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#64748b;margin-bottom:14px">${label}</div>`)
+      +`<div style="font-size:13px;color:#64748b;margin-bottom:6px">Uplift vs baseline</div><div style="font-size:44px;font-weight:800;color:${isMain?accent:'#0F172A'};margin-bottom:20px;line-height:1">${fP(sc.upliftPct)}</div>`
+      +`<div style="display:flex;gap:12px;margin-bottom:18px"><div style="flex:1"><div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Incr. orders</div><div style="font-size:26px;font-weight:700;color:#0F172A">${sc.incrOrders.toLocaleString()}</div><div style="font-size:14px;color:#94a3b8">+${Math.round(sc.incrOrdersPerDay)}/day</div></div>`
+      +`<div style="flex:1"><div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Merchant disc.</div><div style="font-size:26px;font-weight:700;color:#F59E0B">${fA(sc.merchantDisc)}</div><div style="font-size:14px;color:#94a3b8">${fA(sc.merchantDiscPerDay)}/day</div></div></div>`
+      +`<div style="border-top:0.5px solid #E2E8F0;padding-top:16px;cursor:help" data-ctip="${tipId}">`
+      +`<div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Incr. contribution <span style="font-size:9px;opacity:.5">ⓘ hover</span></div>`
+      +`<div style="font-size:36px;font-weight:800;color:${ic};line-height:1">${sc.incrContrib>=0?'+':''}${fA(sc.incrContrib)}</div>`
+      +`<div style="font-size:15px;color:#94a3b8;margin-top:3px">${fA(sc.incrContribPerDay)}/day</div>`
+      +`<div style="margin-top:16px;font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">ROI on discount</div>`
+      +`<div style="font-size:32px;font-weight:800;color:${roiC};line-height:1">${roiTxt}</div>`
       +'</div></div>';
     };
 
@@ -8290,7 +8290,7 @@ function campFcHTML(){
       +`<div style="color:${(m.upliftPct||0)>=0?'#16a34a':'#dc2626'};font-weight:600">${m.upliftPct!=null?fP(m.upliftPct):'—'}</div>`
       +`<div style="color:#0F172A">${m.campOrdersPerDay!=null?Math.round(m.campOrdersPerDay).toLocaleString():'—'}</div>`
       +`<div style="color:#0F172A">${m.campSalesPerDay!=null?fA(m.campSalesPerDay):'—'}</div>`
-      +`<div style="color:#F59E0B">${m.ourDiscPerDay!=null?fA(m.ourDiscPerDay):'—'}</div>`
+      +`<div style="color:#F59E0B">${m.ourDiscPerDay!=null&&m.ourDiscPerDay>0?fA(m.ourDiscPerDay):'—'}</div>`
       +`<div><span style="font-size:10px;font-weight:600;color:${ic}">${m.discountROI!=null?m.discountROI.toFixed(2)+'×':'—'}</span></div>`
       +'</div>';}).join('');
 
