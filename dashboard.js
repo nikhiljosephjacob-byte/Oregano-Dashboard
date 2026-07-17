@@ -8233,11 +8233,11 @@ function campFcHTML(){
       +`<div style="display:flex;gap:6px;margin-bottom:8px"><div style="flex:1"><div style="font-size:9px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Incr. orders</div><div style="font-size:13px;font-weight:700;color:#0F172A">${sc.incrOrders.toLocaleString()}</div><div style="font-size:10px;color:#94a3b8">+${Math.round(sc.incrOrdersPerDay)}/day</div></div>`
       +`<div style="flex:1"><div style="font-size:9px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Merchant disc.</div><div style="font-size:13px;font-weight:700;color:#F59E0B">${fA(sc.merchantDisc)}</div><div style="font-size:10px;color:#94a3b8">${fA(sc.merchantDiscPerDay)}/day</div></div></div>`
       +`<div style="border-top:0.5px solid #E2E8F0;padding-top:8px;cursor:help" data-ctip="${tipId}">`
-      +`<div style="font-size:9px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Incr. contribution <span style="font-size:9px;opacity:.5">ⓘ hover</span></div>`
-      +`<div style="font-size:16px;font-weight:700;color:${ic}">${sc.incrContrib>=0?'+':''}${fA(sc.incrContrib)}</div>`
-      +`<div style="font-size:10px;color:#94a3b8">${fA(sc.incrContribPerDay)}/day</div>`
-      +`<div style="margin-top:6px;font-size:9px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">ROI on discount</div>`
-      +`<div style="font-size:16px;font-weight:700;color:${roiC}">${roiTxt}</div>`
+      +`<div style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Incr. contribution <span style="font-size:9px;opacity:.5">ⓘ hover</span></div>`
+      +`<div style="font-size:20px;font-weight:700;color:${ic}">${sc.incrContrib>=0?'+':''}${fA(sc.incrContrib)}</div>`
+      +`<div style="font-size:12px;color:#94a3b8">${fA(sc.incrContribPerDay)}/day</div>`
+      +`<div style="margin-top:8px;font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">ROI on discount</div>`
+      +`<div style="font-size:20px;font-weight:700;color:${roiC}">${roiTxt}</div>`
       +'</div></div>';
     };
 
