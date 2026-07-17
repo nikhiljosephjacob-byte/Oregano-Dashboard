@@ -6148,10 +6148,11 @@ function campCardGrid(camps,showProfit){
         const roi=a.discountROI;
         const verdictClr=roi==null?'#64748b':roi>=1?'#22C55E':roi>=0.4?'#FBBF24':'#EF4444';
         const verdictTxt=roi==null?'—':roi>=1?'Paid for itself':roi>=0.4?'Marginal':'Lost money';
+        const _ctipId=storeTip(buildCampCalcTipHTML(a));
         headlineHTML=`
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
-            <div><div style="font-size:8px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Incr. Contribution</div><div style="font-size:17px;font-weight:800;color:${incrClr}">${a.incrContribTotal>=0?'+':''}${fmtAEDx(a.incrContribTotal)}</div></div>
-            <div><div style="font-size:8px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Discount ROI</div><div style="font-size:17px;font-weight:800;color:${verdictClr}">${roi!=null?roi.toFixed(2)+'×':'—'}</div></div>
+            <div data-ctip="${_ctipId}" style="cursor:help"><div style="font-size:8px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Incr. Contribution <span style="opacity:.45;font-size:7px">ⓘ</span></div><div style="font-size:17px;font-weight:800;color:${incrClr}">${a.incrContribTotal>=0?'+':''}${fmtAEDx(a.incrContribTotal)}</div></div>
+            <div data-ctip="${_ctipId}" style="cursor:help"><div style="font-size:8px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Discount ROI <span style="opacity:.45;font-size:7px">ⓘ</span></div><div style="font-size:17px;font-weight:800;color:${verdictClr}">${roi!=null?roi.toFixed(2)+'×':'—'}</div></div>
           </div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
             <span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:700;color:${verdictClr}"><span style="width:7px;height:7px;border-radius:50%;background:${verdictClr};display:inline-block"></span>${verdictTxt}</span>
@@ -7940,6 +7941,408 @@ function campEndSoonPopups(active){
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// CALCULATION TOOLTIP SYSTEM (v100)
+// Hover any [data-ctip] element to see the full contribution breakdown.
+// ═══════════════════════════════════════════════════════════════════
+const calcTipData={};let calcTipSeq=0;
+function storeTip(html){const id='ct'+(++calcTipSeq);calcTipData[id]=html;return id;}
+function initCalcTip(){
+  if(document.getElementById('_ctip'))return;
+  const el=document.createElement('div');el.id='_ctip';
+  el.style.cssText='position:fixed;z-index:9999;background:#0F172A;color:#E2E8F0;border-radius:8px;padding:10px 14px;pointer-events:none;display:none;max-width:320px;border:1px solid rgba(255,255,255,.15);font-family:system-ui,sans-serif;line-height:1.5';
+  document.body.appendChild(el);
+  const pos=(e)=>{const x=e.clientX+14,y=e.clientY-10,bw=window.innerWidth,bh=window.innerHeight;el.style.left=(x+330>bw?bw-340:x)+'px';el.style.top=(y+300>bh?Math.max(4,y-280):y)+'px';};
+  document.addEventListener('mouseover',e=>{const t=e.target.closest('[data-ctip]');if(!t)return;const h=calcTipData[t.dataset.ctip];if(!h)return;el.innerHTML=h;el.style.display='block';pos(e);});
+  document.addEventListener('mousemove',e=>{if(el.style.display==='none')return;if(!e.target.closest('[data-ctip]'))return;pos(e);});
+  document.addEventListener('mouseout',e=>{if(!e.target.closest('[data-ctip]'))return;el.style.display='none';});
+}
+// Build tooltip HTML for a completed/active campaign card (from campAnalysisV2 result).
+function buildCampCalcTipHTML(a){
+  const comm=commissionRateFor(a.aggregator,a.brand,a.effStart);
+  const food=foodPkgPct(a.brand);
+  const fA=v=>'AED '+Math.abs(Math.round(v)).toLocaleString();
+  const row=(l,v,extra='')=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:1px 0;font-size:11px"><span style="opacity:.72;white-space:nowrap">${l}</span><span style="text-align:right">${v}${extra?` <span style="opacity:.55;font-size:9px">${extra}</span>`:''}</span></div>`;
+  const sep='<div style="border-top:1px solid rgba(255,255,255,.18);margin:5px 0 3px"></div>';
+  const ic=a.incrContribTotal>=0?'#4ade80':'#f87171';
+  const rc=a.discountROI!=null?(a.discountROI>=0?'#4ade80':'#f87171'):'#94a3b8';
+  return`<div style="max-width:300px">`
+  +`<div style="font-size:12px;font-weight:600;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.2)">${a.brand} × ${a.aggregator} · ${a.cDays}d contribution</div>`
+  +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Campaign  ${fmtShort(a.effStart)} → ${fmtShort(a.effEnd)}</div>`
+  +row('Net sales',fA(a.cs.sales))
+  +row(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(a.cs.sales*comm))
+  +row(`Food/pkg ${+(food*100).toFixed(0)}% × gross`,'−'+fA(a.campGross*food))
+  +sep+row('<strong>Contribution</strong>','<strong>'+fA(a.campContribTotal)+'</strong>')
+  +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin:8px 0 4px">Baseline  ${fmtShort(a.bStart)} → ${fmtShort(a.bEnd)}</div>`
+  +row('Net sales',fA(a.bs.sales))
+  +row(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(a.bs.sales*comm))
+  +row(`Food/pkg ${+(food*100).toFixed(0)}% × gross`,'−'+fA(a.baseGross*food))
+  +sep+row('<strong>Contribution</strong>','<strong>'+fA(a.baseContribTotal)+'</strong>')
+  +`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:8px;padding-top:6px">`
+  +row('Incremental',`<strong style="color:${ic}">${a.incrContribTotal>=0?'+':''}${fA(a.incrContribTotal)}</strong>`,'('+fA(a.incrContribPerDay)+'/day)')
+  +(a.ourDiscCost>0?row('Merchant discount',fA(a.ourDiscCost)):'')
+  +(a.ourDiscCost>0&&a.coFundedPct>0?row(`${Math.round(a.coFundedPct*100)}% co-funded`,fA(a.aggInferredCoFund),'by '+a.aggregator):'')
+  +(a.ourDiscCost>0&&a.discountROI!=null?row('ROI',`<strong style="color:${rc}">${a.discountROI.toFixed(2)}×</strong>`,'('+fA(a.incrContribTotal)+' ÷ '+fA(a.ourDiscCost)+')'):'')
+  +(a.ourDiscCost>0&&a.discountROI==null?row('ROI','<span style="opacity:.55">—  baseline or data issue</span>'):'')
+  +'</div></div>';
+}
+// Build tooltip HTML for a forecaster scenario card.
+function buildFcCalcTipHTML(sc,brand,agg,discPct,cap,coFundPct,dateStr){
+  const comm=commissionRateFor(agg,brand,dateStr);const food=foodPkgPct(brand);
+  const fA=v=>'AED '+Math.abs(Math.round(v)).toLocaleString();
+  const row=(l,v,extra='')=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:1px 0;font-size:11px"><span style="opacity:.72;white-space:nowrap">${l}</span><span style="text-align:right">${v}${extra?` <span style="opacity:.55;font-size:9px">${extra}</span>`:''}</span></div>`;
+  const sep='<div style="border-top:1px solid rgba(255,255,255,.18);margin:5px 0 3px"></div>';
+  const ic=sc.incrContrib>=0?'#4ade80':'#f87171';
+  return`<div style="max-width:300px">`
+  +`<div style="font-size:12px;font-weight:600;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.2)">Forecast · ${brand} × ${agg}</div>`
+  +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">How discount affects each order</div>`
+  +row('Gross AOV (baseline)',fA(sc.grossAOV))
+  +row(`${discPct}% off  · cap AED ${cap}`,'−'+fA(sc.effDisc),'per order')
+  +row('Net AOV after discount',fA(sc.netAOV))
+  +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin:8px 0 4px">Contribution calculation</div>`
+  +row('Campaign net sales',fA(sc.campNet))
+  +row(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(sc.campNet*comm))
+  +row(`Food/pkg ${+(food*100).toFixed(0)}% × gross`,'−'+fA(sc.campGross*food))
+  +sep+row('<strong>Camp. contribution</strong>','<strong>'+fA(sc.campContrib)+'</strong>')
+  +row('Baseline contribution','−'+fA(Math.abs(sc.baseContrib)))
+  +sep+row('<strong>Incremental contribution</strong>',`<strong style="color:${ic}">${sc.incrContrib>=0?'+':''}${fA(sc.incrContrib)}</strong>`)
+  +`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:8px;padding-top:6px">`
+  +row('Total merchant discount',fA(sc.merchantDisc))
+  +(coFundPct>0?row(`${coFundPct}% co-funded by ${agg}`,fA(sc.aggCoDisc)):'')
+  +(sc.roi!=null?row('ROI',`<strong style="color:${ic}">${sc.roi.toFixed(2)}×</strong>`,'('+fA(sc.incrContrib)+' ÷ '+fA(sc.merchantDisc)+')'):'')
+  +'</div></div>';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CAMPAIGN FORECASTER  (v100)
+// ═══════════════════════════════════════════════════════════════════
+let campFcBrand='',campFcAgg='',campFcStart='',campFcEnd='';
+let campFcDiscPct=30,campFcCap=20,campFcCoFund=true,campFcCoFundPct=50;
+let campFcBranches=new Set(),campFcResult=null,campFcCollapsed=false;
+
+function campFcSet(k,v){
+  if(k==='brand'){campFcBrand=v;campFcBranches=new Set();}
+  else if(k==='agg'){campFcAgg=v;campFcBranches=new Set();}
+  else if(k==='start')campFcStart=v;
+  else if(k==='end')campFcEnd=v;
+  else if(k==='discPct')campFcDiscPct=+v;
+  else if(k==='cap')campFcCap=+v;
+  else if(k==='coFund')campFcCoFund=v==='true';
+  else if(k==='coFundPct')campFcCoFundPct=+v;
+  else if(k==='collapsed'){campFcCollapsed=(v==='true');renderCampaigns();}
+}
+function campFcToggleBranch(b){if(campFcBranches.has(b))campFcBranches.delete(b);else campFcBranches.add(b);}
+
+function campFcGetBranches(brand,agg){
+  return[...new Set(allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)').map(r=>r.branch))].sort();
+}
+
+function campFcBaseline(brand,agg,branches,days){
+  if(!latest)return null;
+  const endD=latest,startD=subDays(endD,29);
+  const recs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)'&&r.date>=startD&&r.date<=endD&&(branches.size===0||branches.has(r.branch)));
+  if(!recs.length)return null;
+  const nDays=[...new Set(recs.map(r=>r.date))].length||1;
+  const tNet=recs.reduce((s,r)=>s+r.sales,0);
+  const tOrd=recs.reduce((s,r)=>s+r.orders,0);
+  const tDisc=recs.reduce((s,r)=>s+(r.disc||0),0);
+  const tGross=tNet+tDisc;
+  return{dailyNet:tNet/nDays,dailyOrders:tOrd/nDays,dailyGross:tGross/nDays,grossAOV:tOrd>0?tGross/tOrd:0,netAOV:tOrd>0?tNet/tOrd:0,refDays:nDays};
+}
+
+function campFcFindMatches(brand,agg,discPct,cap){
+  if(!campLoaded)return[];
+  const done=campaignData.filter(c=>campStatus(c)==='Completed'&&c.brand===brand&&c.aggregator===agg);
+  const out=[];
+  for(const c of done){
+    const hp=parseInt(((c.comments||c.name||'').match(/(\d{1,3})\s*%/)||[])[1]||'0');
+    if(!hp||Math.abs(hp-discPct)>8)continue;
+    const capM=(c.comments||'').match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i);
+    const cCap=capM?parseInt(capM[1]):null;
+    if(cap&&cCap&&Math.abs(cCap-cap)>6)continue;
+    const a=campAnalysisV2(c);
+    if(!a.hasData||!a.hasBaseline||a.ordersLift==null)continue;
+    out.push({c,discPct:hp,cap:cCap,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales});
+  }
+  return out;
+}
+
+function campFcSeasonality(brand,agg,targetStart,matches){
+  if(!targetStart||!matches.length)return{factor:1,pct:0};
+  const tMo=targetStart.slice(0,7);
+  const tRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date.slice(0,7)===tMo&&r.branch!=='(brand-level)');
+  const tDays=[...new Set(tRecs.map(r=>r.date))].length||1;
+  const tDaily=tRecs.reduce((s,r)=>s+r.sales,0)/tDays;
+  const moAvgs={};
+  matches.forEach(m=>{
+    const mo=m.c.startDate.slice(0,7);
+    if(moAvgs[mo]!==undefined)return;
+    const recs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date.slice(0,7)===mo&&r.branch!=='(brand-level)');
+    const d=[...new Set(recs.map(r=>r.date))].length||1;
+    moAvgs[mo]=recs.reduce((s,r)=>s+r.sales,0)/d;
+  });
+  const matchAvg=Object.values(moAvgs).length?Object.values(moAvgs).reduce((s,v)=>s+v,0)/Object.values(moAvgs).length:0;
+  const factor=(tDaily>0&&matchAvg>0)?tDaily/matchAvg:1;
+  return{factor:Math.max(0.5,Math.min(2,factor)),pct:Math.round((Math.max(0.5,Math.min(2,factor))-1)*100)};
+}
+
+function campFcRunScenario(baseline,uplift,discPct,cap,coFundPct,agg,brand,nDays,dateStr){
+  if(!baseline)return null;
+  const grossAOV=baseline.grossAOV||60;
+  const effDisc=Math.min(grossAOV*discPct/100,cap);
+  const netAOV=grossAOV-effDisc;
+  const allOrd=(baseline.dailyOrders*(1+uplift))*nDays;
+  const campNet=allOrd*netAOV,campGross=allOrd*grossAOV;
+  const totalDisc=allOrd*effDisc;
+  const merchantDisc=totalDisc*(1-coFundPct/100);
+  const aggCoDisc=totalDisc*(coFundPct/100);
+  const campContrib=brandContribution(agg,brand,campNet,campGross,dateStr);
+  const baseNet=baseline.dailyNet*nDays,baseGross=baseline.dailyGross*nDays;
+  const baseContrib=brandContribution(agg,brand,baseNet,baseGross,dateStr);
+  const incrContrib=campContrib-baseContrib;
+  const roi=merchantDisc>0?incrContrib/merchantDisc:null;
+  const incrOrd=Math.round(baseline.dailyOrders*uplift*nDays);
+  return{upliftPct:uplift*100,totalOrders:Math.round(allOrd),incrOrders:incrOrd,incrOrdersPerDay:baseline.dailyOrders*uplift,
+    campNet,campGross,baseNet,baseGross,campContrib,baseContrib,
+    incrNet:campNet-baseNet,incrNetPerDay:(campNet-baseNet)/nDays,
+    merchantDisc,merchantDiscPerDay:merchantDisc/nDays,aggCoDisc,totalDisc,
+    incrContrib,incrContribPerDay:incrContrib/nDays,roi,effDisc,grossAOV,netAOV};
+}
+
+function campFcRun(){
+  const brand=campFcBrand,agg=campFcAgg;
+  if(!brand||!agg||!campFcStart||!campFcEnd){alert('Please fill in Brand, Aggregator, Start and End dates.');return;}
+  const nDays=Math.max(1,Math.round((new Date(campFcEnd+'T12:00:00')-new Date(campFcStart+'T12:00:00'))/86400000)+1);
+  const baseline=campFcBaseline(brand,agg,campFcBranches,nDays);
+  if(!baseline){alert('No sales data found for '+brand+' on '+agg+'. Upload data first.');return;}
+  const matches=campFcFindMatches(brand,agg,campFcDiscPct,campFcCap);
+  const seas=campFcSeasonality(brand,agg,campFcStart,matches);
+  let cU=0.10,eU=0.20,oU=0.35;
+  if(matches.length){
+    const up=matches.map(m=>m.upliftPct/100).filter(u=>u>0).sort((a,b)=>a-b);
+    if(up.length){cU=Math.max(0.05,up[0]*seas.factor);eU=Math.max(0.08,(up.reduce((s,u)=>s+u,0)/up.length)*seas.factor);oU=Math.max(0.12,up[up.length-1]*seas.factor);}
+  }else{cU*=seas.factor;eU*=seas.factor;oU*=seas.factor;}
+  const coFP=campFcCoFund?campFcCoFundPct:0;
+  const runSc=u=>campFcRunScenario(baseline,u,campFcDiscPct,campFcCap,coFP,agg,brand,nDays,campFcStart);
+  // Last year comparison
+  const lyStart=(parseInt(campFcStart.slice(0,4))-1)+campFcStart.slice(4);
+  const lyEnd=(parseInt(campFcEnd.slice(0,4))-1)+campFcEnd.slice(4);
+  const lyRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date>=lyStart&&r.date<=lyEnd&&r.branch!=='(brand-level)'&&(campFcBranches.size===0||campFcBranches.has(r.branch)));
+  const lyDays=[...new Set(lyRecs.map(r=>r.date))].length||1;
+  // Prior week
+  const pwEnd=subDays(campFcStart,1),pwStart=subDays(pwEnd,6);
+  const pwRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date>=pwStart&&r.date<=pwEnd&&r.branch!=='(brand-level)'&&(campFcBranches.size===0||campFcBranches.has(r.branch)));
+  const pwDays=[...new Set(pwRecs.map(r=>r.date))].length||1;
+  // Most recent campaign in history
+  const recCamp=campLoaded?[...campaignData].filter(c=>campStatus(c)==='Completed'&&c.brand===brand&&c.aggregator===agg).sort((a,b)=>b.endDate.localeCompare(a.endDate))[0]:null;
+  // Concurrent campaigns
+  const conc=campLoaded?campaignData.filter(c=>{const st=campStatus(c);if(st==='Cancelled')return false;if(c.brand!==brand||c.aggregator!==agg)return false;return c.startDate<=campFcEnd&&c.endDate>=campFcStart;}):[];
+  campFcResult={
+    baseline,matches,seasonality:seas,nDays,brand,agg,
+    conservative:runSc(cU),expected:runSc(eU),optimistic:runSc(oU),
+    cU,eU,oU,
+    lyOrders:lyRecs.length?lyRecs.reduce((s,r)=>s+r.orders,0)/lyDays:null,
+    lyNet:lyRecs.length?lyRecs.reduce((s,r)=>s+r.sales,0)/lyDays:null,
+    lyHasDisc:lyStart>='2026-05-01',
+    pwOrders:pwRecs.length?pwRecs.reduce((s,r)=>s+r.orders,0)/pwDays:null,
+    pwNet:pwRecs.length?pwRecs.reduce((s,r)=>s+r.sales,0)/pwDays:null,
+    recCamp,conc,
+    coFP,coFundPct:campFcCoFundPct,
+    generatedAt:new Date().toISOString()
+  };
+  renderCampaigns();
+}
+
+function campFcExport(){
+  if(!campFcResult)return;
+  const r=campFcResult;const fA=v=>Math.round(v);
+  const load=(src,cb)=>{if(window.XLSX){cb();return;}const s=document.createElement('script');s.src=src;s.onload=cb;document.head.appendChild(s);};
+  load('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',()=>{
+    const wb=XLSX.utils.book_new();
+    // Sheet 1: Forecast record
+    const f1=[
+      ['CAMPAIGN FORECAST RECORD','','','','Generated:',r.generatedAt],[''],
+      ['CONFIGURATION',''],
+      ['Brand',r.brand],['Aggregator',r.agg],['Start Date',campFcStart],['End Date',campFcEnd],
+      ['Duration (days)',r.nDays],['Discount %',campFcDiscPct],['Cap AED',campFcCap],
+      ['Co-funded',campFcCoFund?'Yes':'No'],['Co-fund %',campFcCoFundPct],
+      ['Branches',campFcBranches.size?[...campFcBranches].join(', '):'All'],[''],
+      ['BASELINE (last 30 days)',''],
+      ['Daily avg orders',r.baseline.dailyOrders.toFixed(1)],
+      ['Daily avg net sales','AED '+fA(r.baseline.dailyNet)],
+      ['Gross AOV','AED '+fA(r.baseline.grossAOV)],
+      ['Effective discount/order','AED '+fA(r.conservative.effDisc)],[''],
+      ['SEASONALITY',''],
+      ['Factor',r.seasonality.factor.toFixed(2)+'×'],
+      ['Adjustment',r.seasonality.pct>0?'+':''+(r.seasonality.pct)+'%'],[''],
+      ['FORECAST SCENARIOS','','Conservative','Expected','Optimistic'],
+      ['Uplift vs baseline','%',fA(r.conservative.upliftPct),fA(r.expected.upliftPct),fA(r.optimistic.upliftPct)],
+      ['Incremental orders','total',r.conservative.incrOrders,r.expected.incrOrders,r.optimistic.incrOrders],
+      ['Incremental orders','per day',fA(r.conservative.incrOrdersPerDay),fA(r.expected.incrOrdersPerDay),fA(r.optimistic.incrOrdersPerDay)],
+      ['Total merchant discount','AED',fA(r.conservative.merchantDisc),fA(r.expected.merchantDisc),fA(r.optimistic.merchantDisc)],
+      ['Merchant discount','AED/day',fA(r.conservative.merchantDiscPerDay),fA(r.expected.merchantDiscPerDay),fA(r.optimistic.merchantDiscPerDay)],
+      ['Incremental net revenue','AED',fA(r.conservative.incrNet),fA(r.expected.incrNet),fA(r.optimistic.incrNet)],
+      ['Incremental net revenue','AED/day',fA(r.conservative.incrNetPerDay),fA(r.expected.incrNetPerDay),fA(r.optimistic.incrNetPerDay)],
+      ['Incremental contribution','AED',fA(r.conservative.incrContrib),fA(r.expected.incrContrib),fA(r.optimistic.incrContrib)],
+      ['Incremental contribution','AED/day',fA(r.conservative.incrContribPerDay),fA(r.expected.incrContribPerDay),fA(r.optimistic.incrContribPerDay)],
+      ['ROI','×',r.conservative.roi!=null?r.conservative.roi.toFixed(2):'n/a',r.expected.roi!=null?r.expected.roi.toFixed(2):'n/a',r.optimistic.roi!=null?r.optimistic.roi.toFixed(2):'n/a'],[''],
+      ['POST-CAMPAIGN ACTUALS (fill in after campaign ends)','','Conservative','Expected','Optimistic','ACTUAL'],
+      ['Uplift vs baseline','%',fA(r.conservative.upliftPct),fA(r.expected.upliftPct),fA(r.optimistic.upliftPct),''],
+      ['Incremental orders','total',r.conservative.incrOrders,r.expected.incrOrders,r.optimistic.incrOrders,''],
+      ['Total merchant discount','AED',fA(r.conservative.merchantDisc),fA(r.expected.merchantDisc),fA(r.optimistic.merchantDisc),''],
+      ['Incremental contribution','AED',fA(r.conservative.incrContrib),fA(r.expected.incrContrib),fA(r.optimistic.incrContrib),''],
+      ['ROI','×',r.conservative.roi!=null?r.conservative.roi.toFixed(2):'n/a',r.expected.roi!=null?r.expected.roi.toFixed(2):'n/a',r.optimistic.roi!=null?r.optimistic.roi.toFixed(2):'n/a',''],
+      ['Closest scenario','','','','',''],
+    ];
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(f1),'Forecast');
+    // Sheet 2: Historical matches
+    const f2=[['Historical Matches Used','','','','',''],
+      ['Campaign Name','Dates','Days','Disc %','Cap','Uplift %','Contribution/day','ROI'],
+      ...r.matches.map(m=>[m.c.name||m.c.comments||'—',m.c.startDate+' – '+m.c.endDate,m.cDays,m.discPct,m.cap||'—',m.upliftPct!=null?fA(m.upliftPct):'n/a',m.incrContribPerDay!=null?fA(m.incrContribPerDay):'n/a',m.discountROI!=null?m.discountROI.toFixed(2)+'×':'n/a'])
+    ];
+    if(r.matches.length)XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(f2),'Historical Matches');
+    XLSX.writeFile(wb,`Forecast_${r.brand}_${r.agg}_${campFcStart}.xlsx`);
+  });
+}
+
+function campFcHTML(){
+  if(!campLoaded)return''; // don't render until campaigns are loaded
+  const fA=v=>'AED '+Math.round(Math.abs(v)).toLocaleString();
+  const fP=v=>(v>=0?'+':'')+Math.round(v)+'%';
+  const accent='#60A5FA';
+  const bOpts=BR.map(b=>`<option value="${b.n}"${b.n===campFcBrand?' selected':''}>${b.n}</option>`).join('');
+  const aOpts=AGGS.map(a=>`<option value="${a}"${a===campFcAgg?' selected':''}>${a}</option>`).join('');
+  const branches=campFcBrand&&campFcAgg?campFcGetBranches(campFcBrand,campFcAgg):[];
+  const allSelected=campFcBranches.size===0;
+  const branchChips=branches.map(b=>{const sel=allSelected||campFcBranches.has(b);return`<span onclick="campFcToggleBranch('${esc(b)}');renderCampaigns()" style="display:inline-flex;align-items:center;gap:3px;font-size:11px;padding:2px 8px;border-radius:999px;cursor:pointer;margin:2px;border:0.5px solid ${sel?accent:'#E2E8F0'};background:${sel?accent+'18':'transparent'};color:${sel?accent:'#94a3b8'}">${b}</span>`;}).join('');
+
+  let resultsHTML='';
+  if(campFcResult&&!campFcCollapsed){
+    const r=campFcResult;
+    const scCard=(label,sc,isMain)=>{
+      if(!sc)return'';
+      const ic=sc.incrContrib>=0?'#22C55E':'#EF4444';
+      const tipId=storeTip(buildFcCalcTipHTML(sc,r.brand,r.agg,campFcDiscPct,campFcCap,r.coFP,campFcStart));
+      const roiC=sc.roi==null?'#64748b':sc.roi>=0.5?'#22C55E':sc.roi>=0?'#FBBF24':'#EF4444';
+      const roiTxt=sc.roi!=null?sc.roi.toFixed(2)+'×':'—';
+      const mainBorder=isMain?`border:1.5px solid ${accent}`:`border:0.5px solid #E2E8F0`;
+      return`<div style="background:#FFFFFF;border-radius:10px;${mainBorder};padding:12px;flex:1;min-width:0">`
+      +(isMain?`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${accent}">${label}</span><span style="font-size:9px;background:${accent}22;color:${accent};padding:2px 7px;border-radius:999px;font-weight:600">Most likely</span></div>`
+      :`<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#64748b;margin-bottom:8px">${label}</div>`)
+      +`<div style="font-size:11px;color:#64748b;margin-bottom:2px">Uplift vs baseline</div><div style="font-size:16px;font-weight:700;color:${isMain?accent:'#0F172A'};margin-bottom:8px">${fP(sc.upliftPct)}</div>`
+      +`<div style="display:flex;gap:6px;margin-bottom:8px"><div style="flex:1"><div style="font-size:9px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Incr. orders</div><div style="font-size:13px;font-weight:700;color:#0F172A">${sc.incrOrders.toLocaleString()}</div><div style="font-size:10px;color:#94a3b8">+${Math.round(sc.incrOrdersPerDay)}/day</div></div>`
+      +`<div style="flex:1"><div style="font-size:9px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Merchant disc.</div><div style="font-size:13px;font-weight:700;color:#F59E0B">${fA(sc.merchantDisc)}</div><div style="font-size:10px;color:#94a3b8">${fA(sc.merchantDiscPerDay)}/day</div></div></div>`
+      +`<div style="border-top:0.5px solid #E2E8F0;padding-top:8px;cursor:help" data-ctip="${tipId}">`
+      +`<div style="font-size:9px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Incr. contribution <span style="font-size:9px;opacity:.5">ⓘ hover</span></div>`
+      +`<div style="font-size:16px;font-weight:700;color:${ic}">${sc.incrContrib>=0?'+':''}${fA(sc.incrContrib)}</div>`
+      +`<div style="font-size:10px;color:#94a3b8">${fA(sc.incrContribPerDay)}/day</div>`
+      +`<div style="margin-top:6px;font-size:9px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">ROI on discount</div>`
+      +`<div style="font-size:16px;font-weight:700;color:${roiC}">${roiTxt}</div>`
+      +'</div></div>';
+    };
+
+    // Comparison table data
+    const cmpRow=(label,ord,net,vs1Pct,vs1Label,vs2Pct,vs2Label,note='')=>{
+      const chip=(pct,lbl)=>pct!=null?`<span style="font-size:10px;background:${pct>=0?'rgba(34,197,94,.1)':'rgba(239,68,68,.1)'};color:${pct>=0?'#16a34a':'#dc2626'};padding:1px 6px;border-radius:999px;font-weight:600">${fP(pct)}</span><span style="font-size:9px;color:#94a3b8;margin-left:3px">${lbl}</span>`:'<span style="color:#94a3b8;font-size:10px">—</span>';
+      return`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:7px 0;border-bottom:0.5px solid #F1F5F9;font-size:11px;align-items:center">`
+      +`<div style="color:#475569;font-weight:600">${label}${note?`<div style="font-size:9px;color:#94a3b8;font-weight:400">${note}</div>`:''}</div>`
+      +`<div style="color:#0F172A">${ord!=null?Math.round(ord).toLocaleString():'—'}</div>`
+      +`<div style="color:#0F172A">${net!=null?fA(net):'—'}</div>`
+      +`<div>${chip(vs1Pct,vs1Label)}</div>`
+      +`<div>${chip(vs2Pct,vs2Label)}</div>`
+      +'</div>';
+    };
+    const pctOf2=(b,a)=>a>0?(b/a-1)*100:null;
+    const baseOrd=r.baseline.dailyOrders,baseNet=r.baseline.dailyNet;
+    const pwPct=r.pwOrders!=null?pctOf2(baseOrd,r.pwOrders):null;
+    const lyPct=r.lyOrders!=null?pctOf2(baseOrd,r.lyOrders):null;
+    const recA=r.recCamp?campAnalysisV2(r.recCamp):null;
+    const recOrd=recA?recA.cs.orders/recA.cDays:null;
+    const recNet=recA?recA.cs.sales/recA.cDays:null;
+    const recPct=recOrd!=null?pctOf2(baseOrd,recOrd):null;
+
+    // Flags
+    const flags=[];
+    if(r.conc.length){flags.push({lvl:'warn',msg:`<strong>Concurrent campaign:</strong> "${r.conc[0].name||r.conc[0].comments||'—'}" overlaps this window on ${r.brand} × ${r.agg}. Forecast does not adjust for campaign-on-campaign dilution.`});}
+    if(!r.lyHasDisc){flags.push({lvl:'info',msg:`Discount data before May 2026 not available. Year-over-year comparison shows sales only — no burn figures from last July to compare.`});}
+    if(r.seasonality.pct!==0){flags.push({lvl:'info',msg:`Seasonality correction applied: <strong>${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong> vs periods when historical matches ran (${r.matches.length} campaign${r.matches.length!==1?'s':''}).`});}
+    if(!r.matches.length){flags.push({lvl:'warn',msg:`No exact historical matches found for ${r.brand} × ${r.agg} at ${campFcDiscPct}% off (±8%) cap AED ${campFcCap} (±6). Fallback uplifts used: conservative 10%, expected 20%, optimistic 35%. Find and select a comparable past campaign for better accuracy.`});}
+
+    const flagsHTML=flags.map(f=>`<div style="display:flex;align-items:flex-start;gap:8px;font-size:12px;padding:8px 10px;border-radius:6px;margin-bottom:6px;background:${f.lvl==='warn'?'rgba(245,158,11,.08)':'#F8FAFC'};border:0.5px solid ${f.lvl==='warn'?'rgba(245,158,11,.4)':'#E2E8F0'}">`
+      +`<span style="font-size:14px;flex-shrink:0;margin-top:1px">${f.lvl==='warn'?'⚠️':'ℹ️'}</span><span style="color:${f.lvl==='warn'?'#92400e':'#475569'}">${f.msg}</span></div>`).join('');
+
+    // Match table
+    const matchRows=r.matches.slice(0,5).map(m=>{
+      const ic=m.discountROI!=null?(m.discountROI>=0?'#22C55E':'#EF4444'):'#64748b';
+      return`<div style="display:grid;grid-template-columns:2fr 0.7fr 0.8fr 1fr 0.8fr;gap:4px;padding:6px 0;border-bottom:0.5px solid #F1F5F9;font-size:11px;align-items:center">`
+      +`<div style="color:#475569">${m.c.name||m.c.comments||'—'}<div style="font-size:9px;color:#94a3b8">${m.c.startDate} – ${m.c.endDate}</div></div>`
+      +`<div style="color:#94a3b8">${m.cDays}d</div>`
+      +`<div style="color:${m.upliftPct>=0?'#16a34a':'#dc2626'};font-weight:600">${m.upliftPct!=null?fP(m.upliftPct):'—'}</div>`
+      +`<div style="color:#0F172A">${m.incrContribPerDay!=null?fA(m.incrContribPerDay)+'/day':'—'}</div>`
+      +`<div><span style="font-size:10px;font-weight:600;color:${ic}">${m.discountROI!=null?m.discountROI.toFixed(2)+'×':'—'}</span></div>`
+      +'</div>';}).join('');
+
+    resultsHTML=`<div style="border-top:0.5px solid #E2E8F0;margin-top:14px;padding-top:14px">`
+    // Match header
+    +(r.matches.length?`<div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:6px;display:flex;align-items:center;gap:8px">`
+    +`<span style="background:rgba(34,197,94,.1);color:#16a34a;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">${r.matches.length} historical match${r.matches.length!==1?'es':''}</span>`
+    +`<span style="font-size:10px;color:#94a3b8">· ${r.brand} × ${r.agg} · ${campFcDiscPct}% off ±8% · cap AED ${campFcCap} ±6</span></div>`
+    +`<div style="display:grid;grid-template-columns:2fr 0.7fr 0.8fr 1fr 0.8fr;gap:4px;padding:4px 0;border-bottom:0.5px solid #E2E8F0;font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Days</div><div>Uplift</div><div>Contribution</div><div>ROI</div></div>`
+    +matchRows
+    +`<div style="font-size:10px;color:#94a3b8;margin-top:6px">Avg uplift: <strong style="color:#0F172A">${fP(r.matches.reduce((s,m)=>s+(m.upliftPct||0),0)/r.matches.length)}</strong>  ·  Seasonality: <strong style="color:${r.seasonality.pct>=0?'#0F172A':'#dc2626'}">${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong></div>`
+    :`<div style="font-size:11px;color:#F59E0B;padding:8px;background:rgba(245,158,11,.08);border-radius:6px;margin-bottom:10px">No exact matches — using fallback estimates. Consider selecting a comparable past campaign.</div>`)
+    // Three scenarios
+    +`<div style="display:flex;gap:10px;margin:14px 0;flex-wrap:wrap">`
+    +scCard('Conservative',r.conservative,false)
+    +scCard('Expected',r.expected,true)
+    +scCard('Optimistic',r.optimistic,false)
+    +'</div>'
+    // Comparison table
+    +`<div style="margin-bottom:12px">`
+    +`<div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:8px">Orders comparison · ${campFcStart} – ${campFcEnd} baseline vs comparable periods</div>`
+    +`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:4px 0;border-bottom:0.5px solid #E2E8F0;font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px"><div>Period</div><div>Avg orders/day</div><div>Avg net/day</div><div>vs prior week</div><div>vs last year</div></div>`
+    +cmpRow('Current baseline (last 30d)',baseOrd,baseNet,pwPct,'vs prior wk',lyPct,'vs Jul 2025')
+    +(r.pwOrders!=null?cmpRow('Prior week ('+subDays(campFcStart,7)+' – '+subDays(campFcStart,1)+')',r.pwOrders,r.pwNet,null,'',null,''):'')
+    +(recA!=null?cmpRow('Last campaign: '+(r.recCamp.name||r.recCamp.comments||'—').slice(0,30),recOrd,recNet,recPct,'vs baseline',null,'',r.recCamp.startDate+' – '+r.recCamp.endDate):'')
+    +(r.lyOrders!=null?cmpRow('Same dates, last year',r.lyOrders,r.lyNet,null,'',null,'',r.lyHasDisc?'':'Sales only · no discount data'):'')
+    +'</div>'
+    // Flags
+    +(flagsHTML?`<div style="margin-bottom:10px">${flagsHTML}</div>`:'')
+    // Export
+    +`<div style="display:flex;gap:8px;justify-content:flex-end">`
+    +`<button onclick="campFcExport()" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#16a34a;padding:5px 14px;font-size:11px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px">⬇ Export forecast + post-campaign tracker</button>`
+    +'</div>'
+    +'</div>';
+  }
+
+  // Form
+  const today=dk(new Date());
+  const sel=(k,opts,cur)=>`<select onchange="campFcSet('${k}',this.value)" style="width:100%;background:#F1F5F9;border:0.5px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:6px 8px;font-size:12px;font-weight:600"><option value="">—</option>${opts}</select>`;
+  const inp=(k,type,cur,min,max)=>`<input type="${type}" value="${cur}" min="${min}" max="${max}" onchange="campFcSet('${k}',this.value)" style="width:100%;background:#F1F5F9;border:0.5px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:6px 8px;font-size:12px;font-weight:600;box-sizing:border-box">`;
+  const fld=(lbl,html)=>`<div><div style="font-size:10px;font-weight:600;color:#64748b;margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px">${lbl}</div>${html}</div>`;
+
+  return`<div style="background:#FFFFFF;border:0.5px solid #E2E8F0;border-radius:12px;padding:14px 16px;margin-bottom:14px;border-left:3px solid ${accent};border-top-left-radius:0;border-bottom-left-radius:0">`
+  +`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${campFcCollapsed?'0':'12px'}">`
+  +`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">📊</span><div style="font-size:15px;font-weight:800;color:#0F172A">Campaign Forecaster</div><div style="font-size:10px;color:#64748b;margin-left:4px">Estimate what a planned campaign will yield before you launch</div></div>`
+  +`<button onclick="campFcSet('collapsed','${(!campFcCollapsed).toString()}')" style="background:none;border:0.5px solid #E2E8F0;border-radius:6px;color:#94a3b8;padding:3px 10px;font-size:11px;cursor:pointer">${campFcCollapsed?'▼ Expand':'▲ Collapse'}</button></div>`
+  +(campFcCollapsed?'':
+    `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:10px">`
+    +fld('Brand',sel('brand',bOpts,campFcBrand))
+    +fld('Aggregator',sel('agg',aOpts,campFcAgg))
+    +fld('Start',inp('start','date',campFcStart,'2025-01-01','2030-12-31'))
+    +fld('End',inp('end','date',campFcEnd,'2025-01-01','2030-12-31'))
+    +fld('Discount %',inp('discPct','number',campFcDiscPct,1,90))
+    +fld('Cap AED',inp('cap','number',campFcCap,1,999))
+    +fld('Co-funded?',`<select onchange="campFcSet('coFund',this.value)" style="width:100%;background:#F1F5F9;border:0.5px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:6px 8px;font-size:12px;font-weight:600"><option value="true"${campFcCoFund?' selected':''}>Yes</option><option value="false"${!campFcCoFund?' selected':''}>No</option></select>`)
+    +(campFcCoFund?fld('Platform %',inp('coFundPct','number',campFcCoFundPct,1,99)):'')
+    +'</div>'
+    +(branches.length?`<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">Branches <span style="font-weight:400;text-transform:none">(all selected by default · tap to deselect)</span></div>${branchChips}</div>`:'')
+    +`<button onclick="campFcRun()" style="background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.4);border-radius:6px;color:${accent};padding:6px 18px;font-size:12px;cursor:pointer;font-weight:700">▶ Run Forecast</button>`
+    +resultsHTML
+  )
+  +'</div>';
+}
+
 async function renderCampaigns(){
   const pg=document.getElementById('page-campaigns');if(!pg)return;
   if(!campLoaded){
@@ -7958,8 +8361,7 @@ async function renderCampaigns(){
     const tabs=[
       ['active',`🟢 Active`,active.length],
       ['upcoming',`⏰ Upcoming`,upcoming.length],
-      ['history',`📋 History`,completed.length],
-      ['calendar',`📅 Calendar`,null]
+      ['history',`📋 History`,completed.length]
     ];
     if(selCamp)tabs.push(['detail','🔍 Campaign Detail',null]);
     else if(selBundle)tabs.push(['detail','🎯 Bundle Detail',null]);
@@ -7982,8 +8384,7 @@ async function renderCampaigns(){
       return html;
     };
     let main='';
-    if(campTab==='calendar')main=`<div class="card">${renderCampCalendar()}</div>`;
-    else if(campTab==='active'){const f=applyCampFilters(activeSorted);main=campFilterBar()+renderCampListWithRewardsSplit(f,true,'🟢 Active Campaigns');}
+    if(campTab==='active'){const f=applyCampFilters(activeSorted);main=campFilterBar()+renderCampListWithRewardsSplit(f,true,'🟢 Active Campaigns');}
     else if(campTab==='upcoming'){const f=applyCampFilters(upcoming).slice().sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||''));main=campFilterBar()+`<div style="font-size:11px;color:#475569;font-weight:700;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px">⏰ Upcoming Campaigns (${f.length})</div>`+campCardGrid(f,false);}
     else if(campTab==='history'){const fc=applyCampFilters(completed).slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));const shown=fc.slice(0,120);main=campFilterBar()+renderCampListWithRewardsSplit(shown,true,`📋 Completed Campaigns${fc.length>120?' · showing 120 most recent of '+fc.length:''}`);}
     else if(campTab==='detail'&&selBundle){main=bundleDetailHTML(selBundle);}
@@ -7994,8 +8395,8 @@ async function renderCampaigns(){
     // Removed: 4 big stat cards (Running Now / Upcoming / Completed / Total Tracked — pure duplicates
     // of the tab pill counts) and the 5 big data-source cards (replaced by the freshness strip).
     // These changes save ~300px of vertical chrome at the top of the page.
-    const attention=(campTab==='active'||campTab==='upcoming'||campTab==='history')?campNeedsAttentionPanel(active,upcoming):'';
-    pg.innerHTML=`${header}${campDataFreshnessStrip()}${attention}<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
+    const attention=(campTab==='active'||campTab==='upcoming'||campTab==='history')?campNeedsAttentionPanel(active,upcoming):'';initCalcTip();
+    pg.innerHTML=`${campFcHTML()}${header}${campDataFreshnessStrip()}${attention}<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
     // Fire non-blocking end-soon toasts on entry to Active tab (once per campaign+threshold per session)
     if(campTab==='active')setTimeout(()=>campEndSoonPopups(active),150);
     if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
