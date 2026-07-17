@@ -8613,6 +8613,9 @@ function computeDiscountBurn(){
       }
     }
     out.sort((a,b)=>b.uncategorized-a.uncategorized);
+    const _dDisc={};for(const r of matches){if(!(r.disc>0))continue;const bk=r.brand+'|'+r.aggregator;if(!_dDisc[bk])_dDisc[bk]={};_dDisc[bk][r.date]=(_dDisc[bk][r.date]||0)+r.disc;}
+    const _dAttr={};for(const cb of campaignBreakdown){if(!cb.days||!(cb.merchantBurn>0))continue;const ppd=cb.merchantBurn/cb.days;const bk=cb.campaign.brand+'|'+cb.campaign.aggregator;if(!_dAttr[bk])_dAttr[bk]={};let _d=new Date(cb.cStart+'T12:00:00'),_e=new Date(cb.cEnd+'T12:00:00');while(_d<=_e){const ds=dk(_d);_dAttr[bk][ds]=(_dAttr[bk][ds]||0)+ppd;_d.setDate(_d.getDate()+1);}}
+    for(const row of out){const bk=row.brand+'|'+row.aggregator;const dd=_dDisc[bk]||{},da=_dAttr[bk]||{};const pts=[];for(const[date,disc] of Object.entries(dd)){const unc=Math.max(0,disc-(da[date]||0));if(unc>0.5)pts.push({date,disc,unc});}pts.sort((a,b)=>b.unc-a.unc);row.topDates=pts.slice(0,12);row.uncatDays=pts.length;}
     return out;
   })();
   // Attributed (capped) for every row, including rows with zero uncategorized/overAttributed
@@ -9005,7 +9008,18 @@ function discountUncategorizedBreakdownHTML(d){
       <td style="padding:8px 8px;text-align:right;font-size:11px;color:#0F172A;font-weight:600">${fmt(x.total)}</td>
       <td style="padding:8px 8px;text-align:right;font-size:11px;color:#22C55E">${fmt(x.attributed)}<div style="font-size:9px;color:#94a3b8;font-weight:400">${attribPct.toFixed(0)}%</div>${overAttrBadge}</td>
       <td style="padding:8px 8px;text-align:right;font-size:12px;color:#F59E0B;font-weight:800">${fmt(x.uncategorized)}<div style="font-size:9px;color:#94a3b8;font-weight:400">${uncatPct.toFixed(0)}%</div></td>
-    </tr>`;
+    </tr>`
+    +(x.topDates&&x.topDates.length?'<tr style="border-bottom:1px solid #F5F0E5;background:#FFFCF0">'
+      +'<td colspan="5" style="padding:5px 12px 11px">'
+      +'<div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Dates with uncategorized burn ('+x.uncatDays+' day'+(x.uncatDays!==1?'s':'')+' · approx. from even daily split of campaign attribution)</div>'
+      +'<div style="display:flex;flex-wrap:wrap;gap:5px">'
+      +x.topDates.map(function(td){return '<span style="display:inline-flex;align-items:center;gap:5px;background:#FEF3C7;border:0.5px solid rgba(245,158,11,.45);border-radius:4px;padding:4px 9px;font-size:12px;color:#92400e;white-space:nowrap">'
+        +'<span style="font-weight:700">'+fmtShort(td.date)+'</span>'
+        +' <span style="color:#B45309">AED '+Math.round(td.unc).toLocaleString()+'</span>'
+        +(td.disc>td.unc+1?' <span style="opacity:.55;font-size:10px">(of '+Math.round(td.disc).toLocaleString()+' burn)</span>':'')
+        +'</span>';}).join('')
+      +'</div></td></tr>':'')
+    +'';
   }).join('');
   const grandUnc=d.uncategorizedByBrandAgg.reduce((s,x)=>s+x.uncategorized,0);
   return `<div class="card" style="padding:14px 16px;margin-bottom:14px;border-left:4px solid #F59E0B">
