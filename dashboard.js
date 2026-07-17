@@ -8062,7 +8062,7 @@ function campFcFindMatches(brand,agg,discPct,cap){
     if(cap&&cCap&&Math.abs(cCap-cap)>6)continue;
     const a=campAnalysisV2(c);
     if(!a.hasData||!a.hasBaseline||a.ordersLift==null)continue;
-    out.push({c,discPct:hp,cap:cCap,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales});
+    out.push({c,discPct:hp,cap:cCap,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales,campOrdersPerDay:a.cs.orders/a.cDays,campSalesPerDay:a.cs.sales/a.cDays});
   }
   return out;
 }
@@ -8119,8 +8119,15 @@ function campFcRun(){
   const seas=campFcSeasonality(brand,agg,campFcStart,matches);
   let cU=0.10,eU=0.20,oU=0.35;
   if(matches.length){
-    const up=matches.map(m=>m.upliftPct/100).filter(u=>u>0).sort((a,b)=>a-b);
-    if(up.length){cU=Math.max(0.05,up[0]*seas.factor);eU=Math.max(0.08,(up.reduce((s,u)=>s+u,0)/up.length)*seas.factor);oU=Math.max(0.12,up[up.length-1]*seas.factor);}
+    const cleanM=matches.filter(m=>m.cDays>=3&&m.upliftPct!=null&&Math.abs(m.upliftPct)<150);
+    const useM=cleanM.length?cleanM:matches.filter(m=>m.upliftPct!=null);
+    const up=[...useM.map(m=>m.upliftPct/100)].sort((a,b)=>a-b);
+    if(up.length){
+      const pct=(arr,p)=>{if(arr.length===1)return arr[0];const i=(p/100)*(arr.length-1);const lo=Math.floor(i),hi=Math.ceil(i);return arr[lo]+(i-lo)*(arr[hi]-arr[lo]);};
+      cU=Math.max(-0.20,pct(up,25)*seas.factor);
+      eU=Math.max(-0.10,pct(up,50)*seas.factor);
+      oU=Math.min(0.75,Math.max(0.05,pct(up,75)*seas.factor));
+    }
   }else{cU*=seas.factor;eU*=seas.factor;oU*=seas.factor;}
   const coFP=campFcCoFund?campFcCoFundPct:0;
   const runSc=u=>campFcRunScenario(baseline,u,campFcDiscPct,campFcCap,coFP,agg,brand,nDays,campFcStart);
@@ -8205,6 +8212,8 @@ function campFcExport(){
   });
 }
 
+function bPill(brand,sz=20){const clr=BMAP[brand]?.c||'#888';return`<span style="display:inline-flex;align-items:center;justify-content:center;width:${sz}px;height:${sz}px;border-radius:5px;background:${clr}22;border:1px solid ${clr}55;font-size:${Math.round(sz*.55)}px;font-weight:800;color:${clr};flex-shrink:0">${brand.slice(0,1)}</span>`;}
+function aPill(agg,sz=20){const clr=AC[agg]||'#888';return`<span style="display:inline-flex;align-items:center;justify-content:center;width:${sz}px;height:${sz}px;border-radius:5px;background:${clr}22;border:1px solid ${clr}55;font-size:${Math.round(sz*.55)}px;font-weight:800;color:${clr};flex-shrink:0">${agg.slice(0,1)}</span>`;}
 function campFcHTML(){
   if(!campLoaded)return''; // don't render until campaigns are loaded
   const fA=v=>'AED '+Math.round(Math.abs(v)).toLocaleString();
@@ -8229,9 +8238,9 @@ function campFcHTML(){
       return`<div style="background:#FFFFFF;border-radius:10px;${mainBorder};padding:12px;flex:1;min-width:0">`
       +(isMain?`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${accent}">${label}</span><span style="font-size:9px;background:${accent}22;color:${accent};padding:2px 7px;border-radius:999px;font-weight:600">Most likely</span></div>`
       :`<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#64748b;margin-bottom:8px">${label}</div>`)
-      +`<div style="font-size:11px;color:#64748b;margin-bottom:2px">Uplift vs baseline</div><div style="font-size:16px;font-weight:700;color:${isMain?accent:'#0F172A'};margin-bottom:8px">${fP(sc.upliftPct)}</div>`
-      +`<div style="display:flex;gap:6px;margin-bottom:8px"><div style="flex:1"><div style="font-size:9px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Incr. orders</div><div style="font-size:13px;font-weight:700;color:#0F172A">${sc.incrOrders.toLocaleString()}</div><div style="font-size:10px;color:#94a3b8">+${Math.round(sc.incrOrdersPerDay)}/day</div></div>`
-      +`<div style="flex:1"><div style="font-size:9px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Merchant disc.</div><div style="font-size:13px;font-weight:700;color:#F59E0B">${fA(sc.merchantDisc)}</div><div style="font-size:10px;color:#94a3b8">${fA(sc.merchantDiscPerDay)}/day</div></div></div>`
+      +`<div style="font-size:12px;color:#64748b;margin-bottom:3px">Uplift vs baseline</div><div style="font-size:24px;font-weight:700;color:${isMain?accent:'#0F172A'};margin-bottom:10px">${fP(sc.upliftPct)}</div>`
+      +`<div style="display:flex;gap:6px;margin-bottom:8px"><div style="flex:1"><div style="font-size:9px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Incr. orders</div><div style="font-size:17px;font-weight:700;color:#0F172A">${sc.incrOrders.toLocaleString()}</div><div style="font-size:10px;color:#94a3b8">+${Math.round(sc.incrOrdersPerDay)}/day</div></div>`
+      +`<div style="flex:1"><div style="font-size:9px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Merchant disc.</div><div style="font-size:17px;font-weight:700;color:#F59E0B">${fA(sc.merchantDisc)}</div><div style="font-size:10px;color:#94a3b8">${fA(sc.merchantDiscPerDay)}/day</div></div></div>`
       +`<div style="border-top:0.5px solid #E2E8F0;padding-top:8px;cursor:help" data-ctip="${tipId}">`
       +`<div style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Incr. contribution <span style="font-size:9px;opacity:.5">ⓘ hover</span></div>`
       +`<div style="font-size:20px;font-weight:700;color:${ic}">${sc.incrContrib>=0?'+':''}${fA(sc.incrContrib)}</div>`
@@ -8272,22 +8281,26 @@ function campFcHTML(){
       +`<span style="font-size:14px;flex-shrink:0;margin-top:1px">${f.lvl==='warn'?'⚠️':'ℹ️'}</span><span style="color:${f.lvl==='warn'?'#92400e':'#475569'}">${f.msg}</span></div>`).join('');
 
     // Match table
-    const matchRows=r.matches.slice(0,5).map(m=>{
+    const matchRows=r.matches.slice(0,8).map(m=>{
       const ic=m.discountROI!=null?(m.discountROI>=0?'#22C55E':'#EF4444'):'#64748b';
-      return`<div style="display:grid;grid-template-columns:2fr 0.7fr 0.8fr 1fr 0.8fr;gap:4px;padding:6px 0;border-bottom:0.5px solid #F1F5F9;font-size:11px;align-items:center">`
-      +`<div style="color:#475569">${m.c.name||m.c.comments||'—'}<div style="font-size:9px;color:#94a3b8">${m.c.startDate} – ${m.c.endDate}</div></div>`
+      const isExcluded=m.cDays<3||Math.abs(m.upliftPct||0)>=150;
+      return`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr;gap:4px;padding:6px 0;border-bottom:0.5px solid #F1F5F9;font-size:11px;align-items:center${isExcluded?';opacity:.45':''}">`
+      +`<div style="color:#475569">${m.c.name||m.c.comments||'—'}${isExcluded?'<span style="font-size:8px;color:#F59E0B;background:rgba(245,158,11,.1);padding:1px 5px;border-radius:4px;margin-left:4px">⚠ outlier · excluded</span>':''}<div style="font-size:9px;color:#94a3b8">${m.c.startDate} – ${m.c.endDate}</div></div>`
       +`<div style="color:#94a3b8">${m.cDays}d</div>`
-      +`<div style="color:${m.upliftPct>=0?'#16a34a':'#dc2626'};font-weight:600">${m.upliftPct!=null?fP(m.upliftPct):'—'}</div>`
-      +`<div style="color:#0F172A">${m.incrContribPerDay!=null?fA(m.incrContribPerDay)+'/day':'—'}</div>`
+      +`<div style="color:${(m.upliftPct||0)>=0?'#16a34a':'#dc2626'};font-weight:600">${m.upliftPct!=null?fP(m.upliftPct):'—'}</div>`
+      +`<div style="color:#0F172A">${m.campOrdersPerDay!=null?Math.round(m.campOrdersPerDay).toLocaleString():'—'}</div>`
+      +`<div style="color:#0F172A">${m.campSalesPerDay!=null?fA(m.campSalesPerDay):'—'}</div>`
+      +`<div style="color:#F59E0B">${m.ourDiscPerDay!=null?fA(m.ourDiscPerDay):'—'}</div>`
       +`<div><span style="font-size:10px;font-weight:600;color:${ic}">${m.discountROI!=null?m.discountROI.toFixed(2)+'×':'—'}</span></div>`
       +'</div>';}).join('');
 
     resultsHTML=`<div style="border-top:0.5px solid #E2E8F0;margin-top:14px;padding-top:14px">`
     // Match header
-    +(r.matches.length?`<div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:6px;display:flex;align-items:center;gap:8px">`
+    +(r.matches.length?`<div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">`
+    +bPill(r.brand,22)+aPill(r.agg,22)
     +`<span style="background:rgba(34,197,94,.1);color:#16a34a;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">${r.matches.length} historical match${r.matches.length!==1?'es':''}</span>`
-    +`<span style="font-size:10px;color:#94a3b8">· ${r.brand} × ${r.agg} · ${campFcDiscPct}% off ±8% · cap AED ${campFcCap} ±6</span></div>`
-    +`<div style="display:grid;grid-template-columns:2fr 0.7fr 0.8fr 1fr 0.8fr;gap:4px;padding:4px 0;border-bottom:0.5px solid #E2E8F0;font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Days</div><div>Uplift</div><div>Contribution</div><div>ROI</div></div>`
+    +`<span style="font-size:10px;color:#94a3b8">· ${campFcDiscPct}% off ±8% · cap AED ${campFcCap} ±6 · <em style="opacity:.7">dimmed = excluded outlier</em></span></div>`
+    +`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr;gap:4px;padding:4px 0;border-bottom:0.5px solid #E2E8F0;font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Days</div><div>Uplift</div><div>Orders/day</div><div>Sales/day</div><div>Disc/day</div><div>ROI</div></div>`
     +matchRows
     +`<div style="font-size:10px;color:#94a3b8;margin-top:6px">Avg uplift: <strong style="color:#0F172A">${fP(r.matches.reduce((s,m)=>s+(m.upliftPct||0),0)/r.matches.length)}</strong>  ·  Seasonality: <strong style="color:${r.seasonality.pct>=0?'#0F172A':'#dc2626'}">${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong></div>`
     :`<div style="font-size:11px;color:#F59E0B;padding:8px;background:rgba(245,158,11,.08);border-radius:6px;margin-bottom:10px">No exact matches — using fallback estimates. Consider selecting a comparable past campaign.</div>`)
@@ -8302,6 +8315,7 @@ function campFcHTML(){
     +`<div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:8px">Orders comparison · ${campFcStart} – ${campFcEnd} baseline vs comparable periods</div>`
     +`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:4px 0;border-bottom:0.5px solid #E2E8F0;font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px"><div>Period</div><div>Avg orders/day</div><div>Avg net/day</div><div>vs prior week</div><div>vs last year</div></div>`
     +cmpRow('Current baseline (last 30d)',baseOrd,baseNet,pwPct,'vs prior wk',lyPct,'vs Jul 2025')
+    +(r.expected?(()=>{const xOrd=r.expected.totalOrders/r.nDays,xNet=r.expected.campNet/r.nDays,xPct=pctOf2(xOrd,baseOrd);return`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:8px 0 8px 10px;border-bottom:0.5px solid #BFD8F7;font-size:11px;align-items:center;background:rgba(96,165,250,.07);border-left:3px solid #60A5FA;margin-left:-2px"><div style="color:#0C447C;font-weight:700">Expected forecast · campaign on<div style="font-size:9px;color:#185FA5;font-weight:400">Projected · ${campFcStart} – ${campFcEnd}</div></div><div style="font-size:13px;font-weight:700;color:#0C447C">${Math.round(xOrd).toLocaleString()}</div><div style="font-size:13px;font-weight:700;color:#0C447C">${fA(xNet)}</div><div>${xPct!=null?`<span style="font-size:10px;background:${xPct>=0?'rgba(34,197,94,.1)':'rgba(239,68,68,.1)'};color:${xPct>=0?'#16a34a':'#dc2626'};padding:1px 6px;border-radius:999px;font-weight:600">${fP(xPct)}</span> <span style="font-size:9px;color:#94a3b8">vs baseline</span>`:'—'}</div><div><span style="color:#94a3b8;font-size:10px">—</span></div></div>`;})():'')
     +(r.pwOrders!=null?cmpRow('Prior week ('+subDays(campFcStart,7)+' – '+subDays(campFcStart,1)+')',r.pwOrders,r.pwNet,null,'',null,''):'')
     +(recA!=null?cmpRow('Last campaign: '+(r.recCamp.name||r.recCamp.comments||'—').slice(0,30),recOrd,recNet,recPct,'vs baseline',null,'',r.recCamp.startDate+' – '+r.recCamp.endDate):'')
     +(r.lyOrders!=null?cmpRow('Same dates, last year',r.lyOrders,r.lyNet,null,'',null,'',r.lyHasDisc?'':'Sales only · no discount data'):'')
@@ -8336,6 +8350,7 @@ function campFcHTML(){
     +fld('Co-funded?',`<select onchange="campFcSet('coFund',this.value)" style="width:100%;background:#F1F5F9;border:0.5px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:6px 8px;font-size:12px;font-weight:600"><option value="true"${campFcCoFund?' selected':''}>Yes</option><option value="false"${!campFcCoFund?' selected':''}>No</option></select>`)
     +(campFcCoFund?fld('Platform %',inp('coFundPct','number',campFcCoFundPct,1,99)):'')
     +'</div>'
+    +(campFcBrand&&campFcAgg?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:#F8FAFC;border-radius:6px;border:0.5px solid #E2E8F0">`+bPill(campFcBrand,24)+`<span style="font-size:13px;font-weight:700;color:#0F172A">${campFcBrand}</span>`+`<span style="color:#94a3b8;font-size:13px">×</span>`+aPill(campFcAgg,24)+`<span style="font-size:13px;font-weight:700;color:#0F172A">${campFcAgg}</span>`+`<span style="font-size:11px;color:#64748b;margin-left:4px">${campFcDiscPct}% off · cap AED ${campFcCap}${campFcCoFund?' · '+campFcCoFundPct+'% co-funded':''}</span></div>`:'')
     +(branches.length?`<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">Branches <span style="font-weight:400;text-transform:none">(all selected by default · tap to deselect)</span></div>${branchChips}</div>`:'')
     +`<button onclick="campFcRun()" style="background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.4);border-radius:6px;color:${accent};padding:6px 18px;font-size:12px;cursor:pointer;font-weight:700">▶ Run Forecast</button>`
     +resultsHTML
