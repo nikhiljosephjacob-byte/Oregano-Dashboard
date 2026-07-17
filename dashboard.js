@@ -8671,8 +8671,56 @@ function computeDiscountBurn(){
     // exact upload data.
     uncategorizedByBrandAgg,
     activeCampaignCount:overlapping.length,
-    campaignBreakdown,trend,matchesCount:matches.length
+    campaignBreakdown,trend,matchesCount:matches.length,matches
   };
+}
+
+let _lastDiscBurnData=null;
+let discAuditExpanded=new Set(); // keys like 'Oregano|Noon|2026-07-07' — which date chips are expanded
+function discAuditToggle(brand,aggregator,date){
+  const key=brand+'|'+aggregator+'|'+date;
+  if(discAuditExpanded.has(key))discAuditExpanded.delete(key);else discAuditExpanded.add(key);
+  renderDiscounts();
+}
+// Per-date drill-down: lists EVERY campaign (including cancelled/rewards-excluded ones) whose
+// date range covers this specific date for this brand+aggregator, showing whether each was
+// included in the attribution math and, if so, exactly how much it was allocated for that day.
+// This turns 'why is this date uncategorized' from a guessing game into a direct answer.
+function discAuditDateHTML(brand,aggregator,date){
+  if(!_lastDiscBurnData)return'<div style="padding:10px;font-size:11px;color:#94a3b8">No cached data — refresh the page and try again.</div>';
+  const d=_lastDiscBurnData;
+  const sheetTotal=(d.matches||[]).filter(r=>r.brand===brand&&r.aggregator===aggregator&&r.date===date).reduce((s,r)=>s+(r.disc||0),0);
+  const allCovering=campaignData.filter(c=>c.brand===brand&&c.aggregator===aggregator&&c.startDate<=date&&c.endDate>=date);
+  const includedNames=new Set((d.campaignBreakdown||[]).filter(cb=>cb.campaign.brand===brand&&cb.campaign.aggregator===aggregator).map(cb=>cb.campaign));
+  const rows=allCovering.map(c=>{
+    const cb=(d.campaignBreakdown||[]).find(x=>x.campaign===c);
+    const isCancelled=campStatus(c)==='Cancelled';
+    const isRewards=isRewardsCampaign(c);
+    let statusTag,statusClr,dayAmt=null,src=null;
+    if(isCancelled){statusTag='Excluded · Cancelled';statusClr='#94a3b8';}
+    else if(isRewards){statusTag='Excluded · Rewards/always-on';statusClr='#F59E0B';}
+    else if(cb){
+      dayAmt=(cb.dailyAlloc||{})[date]||0;
+      src=cb.source||'estimated';
+      statusTag='Included · '+src;statusClr='#22C55E';
+    }else{statusTag='Not matched to burn (0 allocated)';statusClr='#EF4444';}
+    return '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 10px;border-bottom:1px solid #F1F5F9;font-size:11px">'
+      +'<div style="flex:1;min-width:0"><div style="font-weight:700;color:#0F172A">'+(c.name||c.comments||'—')+'</div>'
+      +'<div style="font-size:10px;color:#94a3b8">'+c.startDate+' – '+c.endDate+' · '+(c.outlet||'All')+'</div></div>'
+      +'<div style="text-align:right;flex-shrink:0"><div style="font-size:10px;font-weight:700;color:'+statusClr+'">'+statusTag+'</div>'
+      +(dayAmt!=null?'<div style="font-size:12px;font-weight:700;color:#0F172A">AED '+Math.round(dayAmt).toLocaleString()+'</div>':'')+'</div>'
+      +'</div>';
+  }).join('');
+  const totalAllocated=allCovering.reduce((s,c)=>{const cb=(d.campaignBreakdown||[]).find(x=>x.campaign===c);return s+(cb?((cb.dailyAlloc||{})[date]||0):0);},0);
+  const gap=sheetTotal-totalAllocated;
+  return '<div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:10px;margin-top:6px">'
+    +'<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid #F1F5F9">'
+    +'<span style="color:#64748b">Sheet burn on '+fmtShort(date)+'</span><strong style="color:#0F172A">AED '+Math.round(sheetTotal).toLocaleString()+'</strong></div>'
+    +(rows||'<div style="padding:8px;font-size:11px;color:#94a3b8">No campaign in the sheet covers this date for '+brand+' × '+aggregator+'.</div>')
+    +'<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid #F1F5F9">'
+    +'<span style="color:#64748b">Allocated total</span><strong style="color:#0F172A">AED '+Math.round(totalAllocated).toLocaleString()+'</strong></div>'
+    +(gap>1?'<div style="margin-top:4px;font-size:11px;color:#DC2626;font-weight:700">Gap: AED '+Math.round(gap).toLocaleString()+' — '+(rows?'a campaign above is not receiving its expected share (check overlap/outlet-scope logic)':'no campaign in the sheet covers this date at all — check the aggregator portal')+'</div>':'')
+    +'</div>';
 }
 
 // ── Filter interactions ──
@@ -9023,13 +9071,18 @@ function discountUncategorizedBreakdownHTML(d){
     </tr>`
     +(x.topDates&&x.topDates.length?'<tr style="border-bottom:1px solid #F5F0E5;background:#FFFCF0">'
       +'<td colspan="5" style="padding:5px 12px 11px">'
-      +'<div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Dates with uncategorized burn ('+x.uncatDays+' day'+(x.uncatDays!==1?'s':'')+' · approx. from even daily split of campaign attribution)</div>'
+      +'<div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Dates with uncategorized burn ('+x.uncatDays+' day'+(x.uncatDays!==1?'s':'')+' · real per-day allocation · click a date to see why)</div>'
       +'<div style="display:flex;flex-wrap:wrap;gap:5px">'
-      +x.topDates.map(function(td){return '<span style="display:inline-flex;align-items:center;gap:5px;background:#FEF3C7;border:0.5px solid rgba(245,158,11,.45);border-radius:4px;padding:4px 9px;font-size:12px;color:#92400e;white-space:nowrap">'
+      +x.topDates.map(function(td){
+        const _key=x.brand+'|'+x.aggregator+'|'+td.date;
+        const _open=discAuditExpanded.has(_key);
+        return '<span onclick="discAuditToggle(\''+x.brand.replace(/'/g,"\\'")+'\',\''+x.aggregator+'\',\''+td.date+'\')" style="display:inline-flex;align-items:center;gap:5px;background:'+(_open?'#FDE68A':'#FEF3C7')+';border:0.5px solid rgba(245,158,11,.45);border-radius:4px;padding:4px 9px;font-size:12px;color:#92400e;white-space:nowrap;cursor:pointer">'
         +'<span style="font-weight:700">'+fmtShort(td.date)+'</span>'
         +' <span style="color:#B45309">AED '+Math.round(td.unc).toLocaleString()+'</span>'
         +(td.disc>td.unc+1?' <span style="opacity:.55;font-size:10px">(of '+Math.round(td.disc).toLocaleString()+' burn)</span>':'')
-        +'</span>';}).join('')
+        +' <span style="opacity:.6;font-size:9px">'+(_open?'▲':'▼')+'</span>'
+        +'</span>'
+        +(_open?discAuditDateHTML(x.brand,x.aggregator,td.date):'');}).join('')
       +'</div></td></tr>':'')
     +'';
   }).join('');
@@ -9077,6 +9130,7 @@ async function renderDiscounts(){
   const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(15,23,42,.12)"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">💸</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Discount Burn Analysis</div></div><div style="font-size:10px;color:#64748b;margin-top:2px;letter-spacing:.4px">Total burn · Campaign attribution · Ambient discount tracking</div></div><button onclick="discountExportCSV()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:5px">⬇ Download CSV</button></div>`;
   const filterBar=discountFilterBarHTML();
   const data=computeDiscountBurn();
+  _lastDiscBurnData=data; // cached for discAuditDateHTML — the per-date drill-down tool
   if(!data){
     pg.innerHTML=`${header}${filterBar}<div class="card" style="text-align:center;padding:30px;color:#64748b">Please select a valid date range to view results.</div>`;
     return;
