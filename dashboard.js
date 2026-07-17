@@ -8064,6 +8064,10 @@ function campFcFindMatches(brand,agg,discPct,cap){
     if(!a.hasData||!a.hasBaseline||a.ordersLift==null)continue;
     out.push({c,discPct:hp,cap:cCap,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales,campOrdersPerDay:a.cs.orders/a.cDays,campSalesPerDay:a.cs.sales/a.cDays});
   }
+  // Most recent campaigns first — the display only shows the top 8, and recent campaigns
+  // are more relevant for a forecast than old ones. All matches are still used in the
+  // percentile calculation regardless of this order; this only affects display priority.
+  out.sort((a,b)=>b.c.startDate.localeCompare(a.c.startDate));
   return out;
 }
 
@@ -8533,7 +8537,10 @@ function computeDiscountBurn(){
         source:alloc.source||"estimated",
         partialCoverage:alloc.partialCoverage||false,
         isRewards:isRewardsCampaign(c),
-        coFundPct:declaredCoFundPct*100 // store as 0-100 for display
+        coFundPct:declaredCoFundPct*100, // store as 0-100 for display
+        dailyAlloc:alloc.dailyAlloc||{} // real per-day allocated merchant burn (v106) — used for
+        // the uncategorized-burn date breakdown instead of an even-split approximation, which
+        // created false daily noise on weekday/weekend-skewed campaigns (v104 bug).
       });
       attributedBurn+=merchantBurn; // sum of merchant portions across campaigns
       coFundTotal+=coFundInWindow; // sum of inferred aggregator portions
@@ -8613,9 +8620,14 @@ function computeDiscountBurn(){
       }
     }
     out.sort((a,b)=>b.uncategorized-a.uncategorized);
+    // Real per-day attributed burn (v106) — pulled directly from each campaign's actual
+    // dailyAlloc (sales-weighted / exact-data allocation), NOT an even split of the total
+    // across campaign days. An even split creates false 'uncategorized' noise on almost every
+    // day whenever real daily burn isn't flat (e.g. weekends run higher than weekdays) — this
+    // was the root cause of the v104 diagnostic showing small gaps smeared across every date.
     const _dDisc={};for(const r of matches){if(!(r.disc>0))continue;const bk=r.brand+'|'+r.aggregator;if(!_dDisc[bk])_dDisc[bk]={};_dDisc[bk][r.date]=(_dDisc[bk][r.date]||0)+r.disc;}
-    const _dAttr={};for(const cb of campaignBreakdown){if(!cb.days||!(cb.merchantBurn>0))continue;const ppd=cb.merchantBurn/cb.days;const bk=cb.campaign.brand+'|'+cb.campaign.aggregator;if(!_dAttr[bk])_dAttr[bk]={};let _d=new Date(cb.cStart+'T12:00:00'),_e=new Date(cb.cEnd+'T12:00:00');while(_d<=_e){const ds=dk(_d);_dAttr[bk][ds]=(_dAttr[bk][ds]||0)+ppd;_d.setDate(_d.getDate()+1);}}
-    for(const row of out){const bk=row.brand+'|'+row.aggregator;const dd=_dDisc[bk]||{},da=_dAttr[bk]||{};const pts=[];for(const[date,disc] of Object.entries(dd)){const unc=Math.max(0,disc-(da[date]||0));if(unc>0.5)pts.push({date,disc,unc});}pts.sort((a,b)=>b.unc-a.unc);row.topDates=pts.slice(0,12);row.uncatDays=pts.length;}
+    const _dAttr={};for(const cb of campaignBreakdown){const bk=cb.campaign.brand+'|'+cb.campaign.aggregator;if(!_dAttr[bk])_dAttr[bk]={};for(const[ds,amt] of Object.entries(cb.dailyAlloc||{})){_dAttr[bk][ds]=(_dAttr[bk][ds]||0)+amt;}}
+    for(const row of out){const bk=row.brand+'|'+row.aggregator;const dd=_dDisc[bk]||{},da=_dAttr[bk]||{};const pts=[];for(const[date,disc] of Object.entries(dd)){const unc=Math.max(0,disc-(da[date]||0));if(unc>1)pts.push({date,disc,unc});}pts.sort((a,b)=>b.unc-a.unc);row.topDates=pts.slice(0,12);row.uncatDays=pts.length;}
     return out;
   })();
   // Attributed (capped) for every row, including rows with zero uncategorized/overAttributed
