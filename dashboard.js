@@ -13,13 +13,16 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-16-098";
+const BUILD_VERSION="2026-07-16-099";
 const BUILD_NOTES=[
-  "🎨 Campaign detail page reorganized: one clean verdict card (headline P&L left; Made / Worth it? / Continue? rows right, weekly trend as pill chips) replaces the wall of stacked colored banners. All caveats — comparison basis, baseline promos, overlaps, exact-data source, shared brand context — now live in a single slim 'Data notes' strip with severity dots that auto-expands only when something critical needs attention.",
-  "🔢 'Worth it?' now speaks in real numbers: actual orders/day and AOV vs baseline, and the break-even orders/day needed at this discount depth — no more cryptic percentages like 'needed -11%, got -32%'.",
-  "⚡ Ads Performance: bid suggestions are now PACING-AWARE. An outlet projected to leave a big chunk of budget unspent by month-end with strong ROAS and CTO now gets 'underpacing — raise bid to AED X' (sized to actually spend the budget, capped at 2× as a step) instead of a misleading '✓ covers month'. Weak-ROI underpacers get a reallocation hint instead.",
-  "📏 Short-campaign trend segments are now labelled H1/H2 (halves) instead of fake 'weeks', and a campaign that recovers late but is still down overall now says so instead of claiming it 'held strong'."
+  "⚖️ Compare page redesigned: muted slate-blue/amber palette (was saturated blue/orange), larger readable text throughout, a new Contribution (margin) card next to Net Sales, an auto-insight banner naming the biggest driver of the change plus a campaign-overlap flag, a ranked Platform Growth/Degrowth tile with share-of-change, and weekday+date labels on the trend chart.",
+  "🎴 Campaign cards rebuilt per the exec-usability spec: profitability-colored left border (green/amber/red/grey) replaces brand-colored border, symbol-only verdict (✅/⚠️/❌) replaces text labels, no more duplicated offer text between the chip and the comment line, a thin progress bar shows how far through the window each campaign is, and the calendar date row is gone — a compact date range now sits inline with the offer chips.",
+  "📊 New KPI strip above the campaign tabs: Active / Ending in 3d / Winning / Losing / Campaign Contribution / Discount Burn / Blended ROI — all computed from the existing per-campaign analysis, no new data required.",
+  "💡 Needs Attention became Recommendations: same underlying signals (ending soon, negative ROI, stale uploads) plus a new Opportunity category (profitable campaign ending soon — worth extending), shown as a collapsible panel with icon + title + reason, auto-expanded only when something critical is present.",
+  "🔎 Campaign toolbar: search box (matches name/brand/comments), quick filter chips (Winning/Losing/Ending soon), and a sort dropdown (Contribution/ROI/End date/Order lift) — client-side, no new API calls.",
+  "🗑️ Removed the Calendar tab — traffic-light heatmap wasn't earning its space vs the new KPI strip + filters; the day-level campaign lookup it provided is fully covered by search + date filters."
 ];
+
 
 let _updateDialogShown=false;
 async function checkForUpdate(){
@@ -5379,7 +5382,7 @@ async function runAskAI(){
 
 // ── CAMPAIGN MANAGER ──────────────────────────────────────────────────────
 const CAMPAIGN_GID="1647275459";
-let selDay=null;let campaignData=[],campLoaded=false,campTab='active',calMonth=null,selCamp=null;
+let campaignData=[],campLoaded=false,campTab='active',selCamp=null;
 // Campaign analysis cache — campAnalysisV2 scans allData repeatedly, so memoize per campaign.
 // Keyed by campaign index + elasticity + latest date. Cleared when data reloads.
 let campAnalysisCache=new Map();
@@ -5393,6 +5396,8 @@ let campReturnTab='active'; // which tab to return to when leaving the deep-dive
 const CPC_GID="2056065310";
 let cpcData=[],cpcLoaded=false;
 let campFBrands=new Set(),campFPlatforms=new Set(),campFStatuses=new Set(),campFBranches=new Set();
+// v099: search box, quick filter chip ('all'|'winning'|'losing'|'ending'), card sort key
+let campSearchQ='',campQuickFilter='all',campCardSort='contribution';
 // Date and outlet-scope filters for the campaign list
 let campFStartFrom="",campFStartTo="",campFOutletScope="all"; // outlet scope: all/dxb/auh/specific
 let campSort={col:'startDate',dir:-1};
@@ -5859,6 +5864,7 @@ function rememberOpenDD(){const open=document.querySelector('.dd-menu[data-open=
 function restoreOpenDD(){if(!campOpenDDId)return;const el=document.getElementById(campOpenDDId);if(el){el.classList.add("open");el.style.display="block";el.setAttribute("data-open","1");}}
 function campClearFilters(){campFBrands.clear();campFPlatforms.clear();campFStatuses.clear();campFBranches.clear();renderCampaigns();}
 function applyCampFilters(camps){
+  const q=campSearchQ.trim().toLowerCase();
   return camps.filter(c=>{
     if(campFBrands.size&&!campFBrands.has(c.brand))return false;
     if(campFPlatforms.size&&!campFPlatforms.has(c.aggregator))return false;
@@ -5875,8 +5881,54 @@ function applyCampFilters(camps){
         if(!hit)return false;
       }
     }
+    // v099: free-text search across name, brand, aggregator, comments
+    if(q){
+      const hay=`${c.name||''} ${c.brand||''} ${c.aggregator||''} ${c.comments||''}`.toLowerCase();
+      if(!hay.includes(q))return false;
+    }
+    // v099: quick filter chips (Winning / Losing / Ending soon). Only meaningful where
+    // profitability analysis applies — silently no-ops for tabs that don't show it since
+    // campAnalysisCached still returns hasData:false gracefully for upcoming campaigns.
+    if(campQuickFilter!=='all'){
+      if(campQuickFilter==='ending'){
+        if(campStatus(c)!=='Running')return false;
+        const h=(new Date(c.endDate+"T23:59:59")-new Date())/3600000;
+        if(!(h>0&&h<=72))return false;
+      }else{
+        try{
+          const a=campAnalysisCached(c);
+          if(!a.hasData)return false;
+          const roi=a.discountROI;
+          if(campQuickFilter==='winning'&&!(roi!=null&&roi>=1))return false;
+          if(campQuickFilter==='losing'&&!(roi!=null&&roi<1))return false;
+        }catch(e){return false;}
+      }
+    }
     return true;
   });
+}
+function campSetSearch(v){campSearchQ=v;renderCampaigns();}
+function campSetQuickFilter(f){campQuickFilter=campQuickFilter===f?'all':f;renderCampaigns();}
+function campSetCardSort(v){campCardSort=v;renderCampaigns();}
+// v099: sort a list of campaigns for card display (separate from the table sortCampaigns,
+// which sorts by column/dir state used elsewhere). Campaigns without analysis data sink to
+// the bottom regardless of sort key, since there's nothing meaningful to rank them by.
+function sortCampCards(camps){
+  const withData=[],noData=[];
+  for(const c of camps){
+    try{const a=campAnalysisCached(c);(a&&a.hasData?withData:noData).push(c);}
+    catch(e){noData.push(c);}
+  }
+  const key=campCardSort;
+  withData.sort((x,y)=>{
+    const ax=campAnalysisCached(x),ay=campAnalysisCached(y);
+    if(key==='contribution')return (ay.incrContribTotal||0)-(ax.incrContribTotal||0);
+    if(key==='roi')return (ay.discountROI??-999)-(ax.discountROI??-999);
+    if(key==='end')return (x.endDate||'').localeCompare(y.endDate||'');
+    if(key==='lift')return (ay.ordersLift??-999)-(ax.ordersLift??-999);
+    return 0;
+  });
+  return [...withData,...noData];
 }
 function campSetDate(which,val){if(which==="from")campFStartFrom=val;else campFStartTo=val;renderCampaigns();}
 function campClearDates(){campFStartFrom="";campFStartTo="";renderCampaigns();}
@@ -5932,77 +5984,6 @@ function campFilterBar(){
     </div>
     ${chips?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid #F5F0E5">${chips}</div>`:''}
   </div>`;
-}
-let calFilter='all',calView='month';
-function setCalFilter(f){calFilter=f;renderCampaigns();}
-function setCalView(v){calView=v;renderCampaigns();}
-
-function renderCampCalendar(){
-  if(!calMonth){const d=latest?new Date(latest+'T12:00:00'):new Date();calMonth=new Date(d.getFullYear(),d.getMonth(),1);}
-  const yr=calMonth.getFullYear(),mo=calMonth.getMonth();
-  const firstDow=new Date(yr,mo,1).getDay(),dim=new Date(yr,mo+1,0).getDate();
-  const mNames=['January','February','March','April','May','June','July','August','September','October','November','December'];
-  const dNames=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  const allBrands=[...new Set(campaignData.map(c=>c.brand))].sort();
-  const allPlats=[...new Set(campaignData.map(c=>c.aggregator))].sort();
-  // Use the SHARED multi-filter state so Brand AND Platform AND Status can combine (was single-select).
-  let filtered=applyCampFilters(campaignData);
-  const dayStats={};
-  for(let d=1;d<=dim;d++){
-    const key=dk(new Date(yr,mo,d));
-    const todays=filtered.filter(c=>c.startDate<=key&&c.endDate>=key);
-    const newStart=todays.filter(c=>c.startDate===key),newEnd=todays.filter(c=>c.endDate===key);
-    // Net sales for the day respecting the same brand/platform filters
-    const gmv=allData.filter(r=>r.date===key&&(!campFBrands.size||campFBrands.has(r.brand))&&(!campFPlatforms.size||campFPlatforms.has(r.aggregator))).reduce((s,r)=>s+r.sales,0);
-    dayStats[d]={count:todays.length,newStart:newStart.length,newEnd:newEnd.length,gmv,campaigns:todays};
-  }
-  const maxGmv=Math.max(...Object.values(dayStats).map(s=>s.gmv),1);
-  const heatmap=g=>g<=0?0:Math.min(1,g/maxGmv);
-  const knownBrands=BR.map(b=>b.n).filter(b=>allBrands.includes(b));
-  const knownPlats=AGGS.filter(p=>allPlats.includes(p));
-  // Multi-select filter chips (shared state) — clicking toggles, multiple can be active together.
-  const mfBtn=(active,clr,label,onclick)=>`<button onclick="${onclick}" style="padding:4px 11px;border-radius:6px;border:1px solid ${active?clr:'#E2E8F0'};background:${active?clr+'22':'transparent'};color:${active?clr:'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px">${label}</button>`;
-  const filterRow=`<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
-    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;min-width:64px">Brands:</span>${knownBrands.map(b=>mfBtn(campFBrands.has(b),BMAP[b]?.c||'#94a3b8',`${logoImg(b,16)}${b}`,`campToggleFilter('brand','${b}')`)).join('')}</div>
-    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"><span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;min-width:64px">Platforms:</span>${knownPlats.map(p=>mfBtn(campFPlatforms.has(p),AC[p]||'#94a3b8',`${logoImg(p,16)}${p}`,`campToggleFilter('platform','${p}')`)).join('')}</div>
-    ${(campFBrands.size||campFPlatforms.size||campFStatuses.size)?`<div><button onclick="campClearFilters()" style="font-size:10px;color:#EF4444;background:none;border:1px solid rgba(239,68,68,.3);border-radius:6px;padding:3px 10px;cursor:pointer;font-weight:600">✕ Clear filters</button></div>`:''}
-  </div>`;
-  let calH=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px">
-    <div style="display:flex;align-items:center;gap:6px">
-      <button onclick="calMonth=new Date(calMonth.getFullYear(),calMonth.getMonth()-1,1);renderCampaigns()" style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:6px;color:#94a3b8;padding:5px 12px;cursor:pointer;font-size:12px">←</button>
-      <div style="font-size:14px;font-weight:700;min-width:120px;text-align:center">${mNames[mo]} ${yr}</div>
-      <button onclick="calMonth=new Date(calMonth.getFullYear(),calMonth.getMonth()+1,1);renderCampaigns()" style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:6px;color:#94a3b8;padding:5px 12px;cursor:pointer;font-size:12px">→</button>
-      <button onclick="calMonth=new Date(new Date(latest+'T12:00:00').getFullYear(),new Date(latest+'T12:00:00').getMonth(),1);renderCampaigns()" style="background:none;border:1px solid #E2E8F0;border-radius:6px;color:#64748b;padding:5px 10px;cursor:pointer;font-size:11px;margin-left:6px">Today</button>
-    </div>
-    <div style="font-size:10px;color:#64748b;display:flex;align-items:center;gap:10px"><span>Low</span><div style="display:flex;gap:1px">${[.1,.3,.5,.7,1].map(v=>`<div style="width:18px;height:8px;background:rgba(34,197,94,${v})"></div>`).join('')}</div><span>High Net Sales</span></div>
-  </div>`;
-  calH+=`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:5px">${dNames.map(d=>`<div style="text-align:center;font-size:11px;color:#475569;font-weight:600;font-weight:700;padding:5px 0">${d}</div>`).join('')}</div>`;
-  calH+=`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px">`;
-  for(let i=0;i<firstDow;i++)calH+=`<div style="min-height:130px;background:rgba(10,17,32,.5);border-radius:8px"></div>`;
-  for(let d=1;d<=dim;d++){
-    const key=dk(new Date(yr,mo,d));const todayKey=dk(new Date());
-    const isToday=key===todayKey,isPast=key<todayKey,isFuture=key>todayKey;
-    const s=dayStats[d];const heat=heatmap(s.gmv);
-    const heatBg=heat>0?`background:linear-gradient(180deg, rgba(34,197,94,${heat*0.18}) 0%, rgba(255,255,255,1) 60%);`:`background:#FFFFFF;`;
-    const dotClr=s.count>0?(isFuture?'#F59E0B':isPast?'#64748b':'#22C55E'):'#E2E8F0';
-    let info='';
-    if(s.count>0)info=`<div style="display:flex;align-items:center;gap:5px;margin-top:5px;flex-wrap:wrap"><span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;color:#0F172A;font-weight:800;background:rgba(255,255,255,.07);padding:2px 8px;border-radius:8px">${s.count} <span style="color:#64748b;font-weight:500;font-size:9px">live</span></span>${s.newStart>0?`<span style="color:#22C55E;font-size:10px;font-weight:700" title="${s.newStart} starting">▶${s.newStart}</span>`:''}${s.newEnd>0?`<span style="color:#EF4444;font-size:10px;font-weight:700" title="${s.newEnd} ending">◀${s.newEnd}</span>`:''}</div>`;
-    const gmvLine=s.gmv>0?`<div style="font-size:10px;color:#86EFAC;margin-top:3px;font-weight:600">${fmtAED(s.gmv)}</div>`:'';
-    const uniqueNames=[...new Set(s.campaigns.map(c=>c.name))].slice(0,3);
-    const namesPreview=uniqueNames.map(n=>{const c=s.campaigns.find(x=>x.name===n);const clr=BMAP[c.brand]?.c||AC[c.aggregator]||'#94a3b8';return `<div onclick="event.stopPropagation();selectCamp(${campaignData.indexOf(c)})" style="background:${clr}1a;border-left:2px solid ${clr};color:${clr};font-size:9px;padding:2px 5px;border-radius:3px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px;font-weight:600" title="${n} — ${c.brand}/${c.aggregator}">${n}</div>`;}).join('');
-    const moreLine=uniqueNames.length<[...new Set(s.campaigns.map(c=>c.name))].length?`<div style="font-size:9px;color:#64748b;margin-top:2px">+${[...new Set(s.campaigns.map(c=>c.name))].length-uniqueNames.length} more</div>`:'';
-    calH+=`<div onclick="if(${s.count}>0){selDay='${key}';renderCampaigns()}" style="min-height:130px;${heatBg}border:1px solid ${isToday?'#f59e0b':'#E2E8F0'};border-radius:8px;padding:7px;cursor:${s.count>0?'pointer':'default'};transition:all .12s" ${s.count>0?`onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${isToday?'#f59e0b':'#E2E8F0'}'"`:''}>
-      <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:13px;font-weight:800;color:${isToday?'#f59e0b':isPast?'#94a3b8':'#e2e8f0'}">${d}</span>${s.count>0?`<span style="width:7px;height:7px;border-radius:50%;background:${dotClr}"></span>`:''}</div>${gmvLine}${info}${namesPreview}${moreLine}</div>`;
-  }
-  calH+=`</div>`;
-  let dayDetail='';
-  if(selDay){
-    const dayCamps=filtered.filter(c=>c.startDate<=selDay&&c.endDate>=selDay);
-    const starting=dayCamps.filter(c=>c.startDate===selDay),ending=dayCamps.filter(c=>c.endDate===selDay),ongoing=dayCamps.filter(c=>c.startDate<selDay&&c.endDate>selDay);
-    const renderCampLink=c=>{const clr=BMAP[c.brand]?.c||'#888';const addonTag=(c.addons&&c.addons.length)?` <span style="background:rgba(232,214,20,0.15);color:#E8D614;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:5px">+ ${c.addons.map(a=>a.name).join(', ')}</span>`:'';return `<div onclick="selectCamp(${campaignData.indexOf(c)})" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:#F1F5F9;border-left:3px solid ${clr};border-radius:5px;cursor:pointer;margin-bottom:5px" onmouseover="this.style.background='#E2E8F0'" onmouseout="this.style.background='#F1F5F9'">${logoImg(c.brand,22)}<div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:700;color:#0F172A">${c.name}${addonTag}</div><div style="font-size:10px;color:#94a3b8;margin-top:1px"><span style="color:${clr}">${c.brand}</span> · <span style="color:${AC[c.aggregator]||'#888'}">${c.aggregator}</span> · ${c.outlet||'All'} · ${fmtCampDateRange(c.startDate,c.endDate)}</div></div><button style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:4px 10px;font-size:10px;font-weight:600;cursor:pointer">View →</button></div>`;};
-    dayDetail=`<div class="card" style="margin-top:14px;border-color:#f59e0b44"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px"><div><div style="font-size:14px;font-weight:800;color:#f59e0b">${fmtDisp(selDay)}</div><div style="font-size:11px;color:#475569;font-weight:600;margin-top:2px">${dayCamps.length} campaign${dayCamps.length!==1?'s':''} live</div></div><button onclick="selDay=null;renderCampaigns()" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:4px 12px;font-size:11px;cursor:pointer">✕ Close</button></div>${starting.length>0?`<div style="margin-bottom:14px"><div style="font-size:10px;color:#22C55E;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">▶ Starting (${starting.length})</div>${starting.map(renderCampLink).join('')}</div>`:''}${ending.length>0?`<div style="margin-bottom:14px"><div style="font-size:10px;color:#EF4444;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">◀ Ending (${ending.length})</div>${ending.map(renderCampLink).join('')}</div>`:''}${ongoing.length>0?`<div><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">⏵ Ongoing (${ongoing.length})</div>${ongoing.slice(0,8).map(renderCampLink).join('')}${ongoing.length>8?`<div style="text-align:center;color:#64748b;font-size:11px;padding:6px">+${ongoing.length-8} more</div>`:''}</div>`:''}${dayCamps.length===0?`<div style="color:#64748b;font-size:12px;padding:10px;text-align:center">No campaigns active.</div>`:''}</div>`;
-  }
-  return filterRow+calH+dayDetail;
 }
 // Detect whether a campaign declares mutual exclusion with other concurrent campaigns.
 // Looks at the comments AND name for natural-language clues like "co-funded" (which by convention
@@ -6112,85 +6093,118 @@ function bundleAnalysis(bundle){
 
 // ── Campaign CARD GRID (replaces the wide table for Active/Upcoming/History) ──
 // Each card reads from the cached analysis, so rendering many cards is fast.
+// v099: campCardGrid rebuilt per the exec-usability spec. Key changes from the old version:
+//  - Left border colored by PROFITABILITY (green/amber/red/grey), not brand color — a stack of
+//    28 cards now reads as a heatmap at a glance instead of requiring you to read every number.
+//  - Verdict line is SYMBOLS ONLY (✅/⚠️/❌/🛑) — no more "Marginal" / "Lost money" text.
+//  - No calendar-style date line; a compact date range sits inline with the offer chips instead.
+//  - The comment/detail line is suppressed whenever it's redundant with the offer chip (i.e. it's
+//    just restating "X% off" — campCardExtraDetail() strips that out and returns '' if nothing's left).
+//  - A thin progress bar shows how far through the campaign's date window "today" sits.
+//  - Contribution number is bigger (22px) — the spec's "increase font size of Contribution".
+function campProfitColor(c,showProfit){
+  // Returns the LEFT BORDER color bucket for a card: green (winning), amber (marginal),
+  // red (losing), grey (no data / upcoming / needs clarification).
+  if(!showProfit)return '#94a3b8';
+  try{
+    const a=campAnalysisCached(c);
+    if(a.needsCoFundClarity)return '#94a3b8';
+    if(a.hasData&&c.aggregator==='Keeta'&&((a.sameBrandPlatConcurrent&&a.sameBrandPlatConcurrent.length)||0)>0){
+      const part=campParticipationV1(c);
+      if(part)return part.contrib>=0?'#22C55E':'#EF4444';
+    }
+    if(a.hasData){
+      const roi=a.discountROI;
+      if(roi==null)return a.incrContribTotal>=0?'#22C55E':'#EF4444';
+      return roi>=1?'#22C55E':roi>=0.4?'#F59E0B':'#EF4444';
+    }
+  }catch(e){/* fall through to grey */}
+  return '#94a3b8';
+}
+// Extract a compact, DEDUPED detail line from the comments field. If the comment is just
+// restating the offer (e.g. offer chip already says "25% off · cap AED 20" and the comment is
+// "25% OFF CAP 20"), suppress it entirely — showing it twice wastes the card's best real estate.
+function campCardExtraDetail(raw,offerText){
+  const trimmed=(raw||'').trim();
+  if(!trimmed||trimmed.length<8)return '';
+  // Strip filler words ("off","cap","aed","discount"...) before comparing, so "25% OFF CAP 20"
+  // and "25% off · cap AED 20" normalize to the same "2520" and get correctly recognized as
+  // the same information — the raw word-for-word comparison missed this because "AED" sits
+  // between "cap" and "20" in the chip text but not in the comment.
+  const strip=s=>s.toLowerCase().replace(/\b(off|cap|capped|aed|discount|disc|at)\b/g,'').replace(/[^a-z0-9]+/g,'');
+  const rawNorm=strip(trimmed),offerNorm=strip(offerText||'');
+  if(offerNorm&&rawNorm===offerNorm)return '';
+  const detail=trimmed.length>90?trimmed.slice(0,88)+'…':trimmed;
+  return detail;
+}
 function campCardGrid(camps,showProfit){
   if(!camps.length)return `<div class="card"><div style="text-align:center;padding:30px;color:#64748b">No campaigns match your filters.</div></div>`;
+  const todayKey=dk(new Date());
   const cards=camps.map(c=>{
     const idx=campaignData.indexOf(c);
     const b=BMAP[c.brand];const accent=b?.c||'#94a3b8';
-    const aggClr=(typeof AGG_LOGO_CLR!=='undefined'&&AGG_LOGO_CLR[c.aggregator])||'#94a3b8';
     const st=campStatus(c);
     const stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#94a3b8',Cancelled:'#EF4444'}[st]||'#94a3b8';
-    let headlineHTML='';
+    const borderClr=campProfitColor(c,showProfit);
+    let metricsHTML='';
     if(showProfit){
       const a=campAnalysisCached(c);
       if(a.needsCoFundClarity){
-        headlineHTML=`<div style="font-size:11px;color:#F59E0B;font-weight:700;margin-top:8px">⚠ Needs clarification</div>`;
+        metricsHTML=`<div style="font-size:11.5px;color:#F59E0B;font-weight:700;margin-top:8px">⚠ Needs clarification</div>`;
       }else if(a.hasData&&c.aggregator==='Keeta'&&((a.sameBrandPlatConcurrent&&a.sameBrandPlatConcurrent.length)||0)>0&&campParticipationV1(c)){
-        // v097: item campaign sharing its brand+platform window with concurrent campaigns. The
-        // brand-level incremental figure is not attributable to this campaign alone (each
-        // concurrent card would show the IDENTICAL number = double counting, e.g. two Keeta
-        // campaigns both showing −51K). Headline the exact own-order economics instead.
+        // Item campaign sharing its brand+platform window with concurrent campaigns — the
+        // brand-level figure is unattributable (every sibling would show the identical number).
+        // Headline exact own-order economics instead.
         const part=campParticipationV1(c);
-        const shared=a.sameBrandPlatConcurrent.length;
         const pClr=part.contrib>=0?'#22C55E':'#EF4444';
-        headlineHTML=`
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
-            <div><div style="font-size:8px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Own-Orders Contribution 📊</div><div style="font-size:17px;font-weight:800;color:${pClr}">${part.contrib>=0?'+':'−'}${fmtAEDx(Math.abs(part.contrib))}</div></div>
-            <div><div style="font-size:8px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Disc. Burned (exact)</div><div style="font-size:17px;font-weight:800;color:#C084FC">${fmtAEDx(part.disc)}</div></div>
-          </div>
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
-            <span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:700;color:${pClr}"><span style="width:7px;height:7px;border-radius:50%;background:${pClr};display:inline-block"></span>${part.contrib>=0?'Campaign orders profitable':'Campaign orders lose money'}</span>
-            <span style="font-size:10px;color:#94a3b8;font-weight:600">${part.orders.toLocaleString()} orders used it</span>
-          </div>
-          <div style="font-size:9px;color:#94a3b8;margin-top:6px">⚭ brand-level figure shared with ${shared} concurrent campaign${shared>1?'s':''} — open for detail</div>`;
+        const verdictSym=part.contrib>=0?'✅':'❌';
+        metricsHTML=`
+          <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-top:10px">
+            <div><div style="font-size:9px;color:#8A8578;text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Own-Orders Contrib. 📊</div><div style="font-size:22px;font-weight:800;color:${pClr}">${part.contrib>=0?'+':'−'}${fmtAEDx(Math.abs(part.contrib))}</div></div>
+            <div style="text-align:right"><div style="font-size:9px;color:#8A8578;text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Orders</div><div style="font-size:15px;font-weight:700;color:${pClr}">${part.orders.toLocaleString()}</div><div style="font-size:11px;font-weight:700;color:${pClr};margin-top:2px" title="${part.contrib>=0?'Campaign orders profitable':'Campaign orders lose money'} · ⚭ brand-level figure shared with ${a.sameBrandPlatConcurrent.length} concurrent campaign(s)">${verdictSym} ${part.shareOfBrandOrders!=null?part.shareOfBrandOrders.toFixed(0)+'% of brand':''}</div></div>
+          </div>`;
       }else if(a.hasData){
         const incrClr=a.incrContribTotal>=0?'#22C55E':'#EF4444';
         const roi=a.discountROI;
-        const verdictClr=roi==null?'#64748b':roi>=1?'#22C55E':roi>=0.4?'#FBBF24':'#EF4444';
-        const verdictTxt=roi==null?'—':roi>=1?'Paid for itself':roi>=0.4?'Marginal':'Lost money';
-        const _ctipId=storeTip(buildCampCalcTipHTML(a));
-        headlineHTML=`
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
-            <div data-ctip="${_ctipId}" style="cursor:help"><div style="font-size:8px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Incr. Contribution <span style="opacity:.45;font-size:7px">ⓘ</span></div><div style="font-size:17px;font-weight:800;color:${incrClr}">${a.incrContribTotal>=0?'+':''}${fmtAEDx(a.incrContribTotal)}</div></div>
-            <div data-ctip="${_ctipId}" style="cursor:help"><div style="font-size:8px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Discount ROI <span style="opacity:.45;font-size:7px">ⓘ</span></div><div style="font-size:17px;font-weight:800;color:${verdictClr}">${roi!=null?roi.toFixed(2)+'×':'—'}</div></div>
-          </div>
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
-            <span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:700;color:${verdictClr}"><span style="width:7px;height:7px;border-radius:50%;background:${verdictClr};display:inline-block"></span>${verdictTxt}</span>
-            <span style="font-size:10px;color:${a.ordersLift>=0?'#22C55E':'#EF4444'};font-weight:600">${a.ordersLift!=null?(a.ordersLift>=0?'▲':'▼')+' '+Math.abs(a.ordersLift).toFixed(0)+'% orders':''}</span>
+        const roiClr=roi==null?'#64748b':roi>=1?'#22C55E':roi>=0.4?'#F59E0B':'#EF4444';
+        // v099: symbols only — ✅ paid for itself, ⚠️ marginal, ❌ lost money, 🛑 lost money badly
+        const verdictSym=roi==null?'—':roi>=1?'✅':roi>=0.4?'⚠️':roi>=0?'❌':'🛑';
+        const liftClr=a.ordersLift>=0?'#22C55E':'#EF4444';
+        metricsHTML=`
+          <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-top:10px">
+            <div><div style="font-size:9px;color:#8A8578;text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Incr. Contribution</div><div style="font-size:22px;font-weight:800;color:${incrClr}">${a.incrContribTotal>=0?'+':''}${fmtAEDx(a.incrContribTotal)}</div></div>
+            <div style="text-align:right"><div style="font-size:9px;color:#8A8578;text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">ROI</div><div style="font-size:15px;font-weight:700;color:${roiClr}">${roi!=null?roi.toFixed(2)+'×':'—'}</div><div style="font-size:11px;font-weight:700;color:${liftClr};margin-top:2px" title="${roi==null?'No ROI data':roi>=1?'Paid for itself':roi>=0.4?'Marginal':'Lost money'} · ${a.ordersLift!=null?(a.ordersLift>=0?'+':'')+a.ordersLift.toFixed(0)+'% orders':'no order-lift data'}">${verdictSym} ${a.ordersLift!=null?(a.ordersLift>=0?'▲':'▼')+' '+Math.abs(a.ordersLift).toFixed(0)+'%':''}</div></div>
           </div>`;
       }else{
-        headlineHTML=`<div style="font-size:11px;color:#475569;font-weight:600;margin-top:8px">No sales data in window yet</div>`;
+        metricsHTML=`<div style="display:flex;align-items:center;gap:6px;padding:8px 0;color:#8A8578;font-size:12px"><span>⏳</span><span>No sales data yet</span></div>`;
       }
     }else{
       const daysToStart=Math.ceil((new Date(c.startDate+'T12:00:00')-new Date())/86400000);
-      headlineHTML=`<div style="font-size:11px;color:#F59E0B;margin-top:10px;font-weight:600">Starts in ${daysToStart} day${daysToStart!==1?'s':''} · ${fmtDisp(c.startDate)}</div>`;
+      metricsHTML=`<div style="font-size:11.5px;color:#F59E0B;margin-top:10px;font-weight:600">Starts in ${daysToStart} day${daysToStart!==1?'s':''}</div>`;
     }
-    const coFundChip=(()=>{const p=parseCampComment(c).coFundedPctOfDiscount;return p>0?`<span style="font-size:8px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:1px 6px;border-radius:6px">🤝 ${Math.round(p*100)}%</span>`:'';})();
+    const coFundChip=(()=>{const p=parseCampComment(c).coFundedPctOfDiscount;return p>0?`<span style="font-size:10px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:2px 7px;border-radius:6px">🤝 ${Math.round(p*100)}%</span>`:'';})();
     // Offer text: detect BOGO first (Buy One Get One — discount isn't a flat %), then a real
     // "X% off" / "X% discount" pattern, ignoring co-funding mentions like "35% co-funded by
     // Deliveroo" (which is the platform's share, not the discount the customer sees).
     const offer=(()=>{
       const txt=(c.comments||c.name||'').trim();
-      const txtLower=txt.toLowerCase();
-      // BOGO detection — covers "BOGO", "Buy One Get One", "Buy 1 Get 1", "BOGOF"
       const isBOGO=/\b(bogo(?:f)?|buy\s*one\s*get\s*one|buy\s*1\s*get\s*1)\b/i.test(txt);
       if(isBOGO){
-        // Try to extract whether it applies to select items vs all items
         const onSelect=/select\s+(items?|menu)/i.test(txt);
         return onSelect?'BOGO · select items':'BOGO';
       }
-      // Strip out co-funding mentions before extracting the headline %, so "35% Co-funded" doesn't get
-      // confused for the headline discount.
       const cleanedTxt=txt.replace(/\d{1,2}\s*%\s*(co[\s-]?fund(?:ed|ing)?|funded\s+by|deliveroo\s+share|platform\s+share)/gi,'');
       const pm=cleanedTxt.match(/(\d{1,2})\s*%\s*(?:off|discount|disc)\b/i)||cleanedTxt.match(/(\d{1,2})\s*%/);
       const capM=txt.match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i)||txt.match(/(?:aed\s*)?(\d{1,4})\s*cap/i);
       const pct=pm?`${pm[1]}% off`:(c.name||'');
       return capM?`${pct} · cap AED ${capM[1]}`:pct;
     })();
-    // Full dates (e.g. "5 Jun – 11 Jun 2026")
-    const dateStr=(()=>{const s=fmtDisp(c.startDate).replace(/^\w+,\s*/,'');const e=fmtDisp(c.endDate).replace(/^\w+,\s*/,'');return `${s} – ${e}`;})();
+    // Compact date range — inline with the chips instead of its own calendar-style row
+    const dateStrCompact=(()=>{
+      const s=fmtShort(c.startDate),e=fmtShort(c.endDate);
+      return s===e?s:`${s}–${e}`;
+    })();
     // "📊 Exact" badge when this campaign's discount came from uploaded order data
-    // (Keeta XLSX, Careem CSV, or Talabat XLSX). Shown only for matching aggregator + data present.
     const exactChip=(showProfit&&(
       (c.aggregator==='Keeta'&&keetaOrdersData)||
       (c.aggregator==='Careem'&&careemOrdersData)||
@@ -6200,42 +6214,43 @@ function campCardGrid(camps,showProfit){
     ))?(()=>{
       const a=campAnalysisCached(c);
       const s=a.discSource||'';
-      if(s.endsWith('_hybrid'))return `<span style="font-size:8px;background:rgba(59,130,246,.14);color:#3B82F6;font-weight:700;padding:1px 6px;border-radius:6px" title="Partial exact upload from ${c.aggregator} + estimation for uncovered days. Upload fresh ${c.aggregator} data to convert the assumption portion to exact.">🟢🔮 Hybrid</span>`;
-      if(s.endsWith('_exact'))return `<span style="font-size:8px;background:rgba(34,197,94,.12);color:#22C55E;font-weight:700;padding:1px 6px;border-radius:6px" title="Discount sourced from uploaded ${c.aggregator} orders file (exact per-order data)">📊 Exact</span>`;
+      if(s.endsWith('_hybrid'))return `<span style="font-size:10px;background:rgba(59,130,246,.14);color:#3B82F6;font-weight:700;padding:2px 7px;border-radius:6px" title="Partial exact upload from ${c.aggregator} + estimation for uncovered days. Upload fresh ${c.aggregator} data to convert the assumption portion to exact.">🟢🔮 Hybrid</span>`;
+      if(s.endsWith('_exact'))return `<span style="font-size:10px;background:rgba(34,197,94,.12);color:#22C55E;font-weight:700;padding:2px 7px;border-radius:6px" title="Discount sourced from uploaded ${c.aggregator} orders file (exact per-order data)">📊 Exact</span>`;
       return '';
     })():'';
     const subsidyChip=showProfit?(()=>{
-      try{const a=campAnalysisCached(c);return a.dataMismatchSuspected?`<span style="font-size:8px;background:rgba(239,68,68,.14);color:#EF4444;font-weight:700;padding:1px 6px;border-radius:6px" title="Exact ${c.aggregator} upload found much less discount than the Google Sheet daily aggregates — the export is likely stale/incomplete. Open the campaign to see the mismatch details and fix.">⚠️ data mismatch</span>`:'';}
+      try{const a=campAnalysisCached(c);return a.dataMismatchSuspected?`<span style="font-size:10px;background:rgba(239,68,68,.14);color:#EF4444;font-weight:700;padding:2px 7px;border-radius:6px" title="Exact ${c.aggregator} upload found much less discount than the Google Sheet daily aggregates — the export is likely stale/incomplete. Open the campaign to see the mismatch details and fix.">⚠️ data mismatch</span>`:'';}
       catch(e){return '';}
     })():'';
-    return `<div onclick="selectCamp(${idx})" style="cursor:pointer;background:linear-gradient(135deg,${accent}0d,rgba(255,255,255,.5));border:1px solid ${accent}33;border-left:3px solid ${accent};border-radius:12px;padding:14px;transition:transform .12s,border-color .12s" onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${accent}77'" onmouseout="this.style.transform='none';this.style.borderColor='${accent}33'">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
-        <div style="min-width:0;flex:1">
-          <div style="font-size:14px;font-weight:800;color:#0F172A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.name||'Campaign'}</div>
-          <div style="display:flex;align-items:center;gap:8px;margin-top:8px" title="${c.brand} · ${c.aggregator}">${logoImg(c.brand,32)}<span style="color:#94a3b8;font-size:14px;font-weight:600">×</span>${logoImg(c.aggregator,32)}</div>
+    // Progress bar: how far through the campaign's date window "today" sits (0-100%). Colored
+    // to match the profitability border so it doubles as a mini status indicator.
+    const totalDays=Math.max(1,daysBetweenInclusive(c.startDate,c.endDate));
+    const elapsedDays=todayKey<c.startDate?0:todayKey>c.endDate?totalDays:daysBetweenInclusive(c.startDate,todayKey);
+    const progressPct=Math.max(0,Math.min(100,Math.round(elapsedDays/totalDays*100)));
+    const progressBar=`<div style="background:#F0EBDC;border-radius:4px;height:3px;margin:11px 0 3px"><div style="background:${borderClr};height:3px;border-radius:4px;width:${progressPct}%"></div></div>`;
+    const extraDetail=campCardExtraDetail(c.comments,offer);
+    return `<div onclick="selectCamp(${idx})" style="cursor:pointer;background:#FFFFFF;border:1px solid ${borderClr}33;border-left:4px solid ${borderClr};border-radius:12px;padding:15px;transition:transform .12s,border-color .12s" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:6px" title="${c.brand} · ${c.aggregator}">${logoImg(c.brand,28)}<span style="color:#94a3b8;font-size:12px">×</span>${logoImg(c.aggregator,28)}</div>
+        <div style="display:flex;align-items:center;gap:7px">
+          ${st==='Running'?`<span style="font-size:10px;color:#64748b;font-weight:600">${totalDays-elapsedDays}d left</span>`:''}
+          <span style="padding:3px 8px;border-radius:6px;background:${stClr}22;color:${stClr};font-size:9px;font-weight:800;border:1px solid ${stClr}44;white-space:nowrap">${st.toUpperCase()}</span>
         </div>
-        <span style="padding:3px 8px;border-radius:6px;background:${stClr}22;color:${stClr};font-size:9px;font-weight:800;border:1px solid ${stClr}44;white-space:nowrap">${st.toUpperCase()}</span>
       </div>
-      <div style="display:flex;align-items:center;gap:6px;margin-top:10px;flex-wrap:wrap">
+      <div style="font-size:14px;font-weight:800;color:#0F172A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:7px">${c.name||'Campaign'}</div>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:2px;flex-wrap:wrap">
         <span style="font-size:12px;color:#0F172A;background:rgba(15,23,42,.05);padding:3px 9px;border-radius:6px;font-weight:700">${offer}</span>
         ${coFundChip}
         ${exactChip}
         ${subsidyChip}
+        <span style="font-size:10.5px;color:#8A8578;font-weight:600">${dateStrCompact}</span>
       </div>
-      ${(()=>{
-        // Show a truncated campaign detail line from the comments field — surfaces item names,
-        // MOV, co-fund info, or any other context the user typed in the Sheet. Only shown when
-        // the comments have meaningful content beyond what the offer chip already says.
-        const raw=(c.comments||'').trim();
-        if(!raw||raw.length<8)return '';
-        const detail=raw.length>80?raw.slice(0,78)+'…':raw;
-        return `<div style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.4;font-weight:500" title="${raw.replace(/"/g,'&quot;')}">${detail}</div>`;
-      })()}
-      <div style="font-size:12px;color:#475569;margin-top:8px;font-weight:600">📅 ${dateStr}</div>
-      ${headlineHTML}
+      ${extraDetail?`<div style="font-size:11px;color:#64748b;margin-top:7px;line-height:1.5;font-weight:500" title="${(c.comments||'').replace(/"/g,'&quot;')}">${extraDetail}</div>`:''}
+      ${progressBar}
+      ${metricsHTML}
     </div>`;
   }).join('');
-  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">${cards}</div>`;
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px">${cards}</div>`;
 }
 
 function campTableHTML(title,camps,showImpact){
@@ -7807,6 +7822,38 @@ function bundleDetailHTML(bundle){
 // Compute the "Needs Attention" items for the Campaigns page. Returns an array of items —
 // each has {icon, txt, action, priority}. Callers render them as a compact bulleted list.
 // Priority: 1=critical (ending today, negative ROI), 2=warn (48h end, stale data), 3=info.
+// v099: Executive KPI strip — Active / Ending in 3d / Winning / Losing / Campaign Contribution /
+// Discount Burn / Blended ROI. Purely derived from campAnalysisCached on the active list, so it
+// costs nothing new to compute (same cache the cards themselves already warm).
+function campKPIStrip(active){
+  let winning=0,losing=0,contribTotal=0,discTotal=0,endingIn3d=0;
+  const now=new Date();
+  for(const c of active){
+    if(isRewardsCampaign(c))continue;
+    const h=(new Date(c.endDate+"T23:59:59")-now)/3600000;
+    if(h>0&&h<=72)endingIn3d++;
+    try{
+      const a=campAnalysisCached(c);
+      if(a&&a.hasData){
+        if(a.discountROI!=null){if(a.discountROI>=1)winning++;else losing++;}
+        contribTotal+=a.incrContribTotal||0;
+        discTotal+=a.allocatedDisc||a.sheetDisc||0;
+      }
+    }catch(e){/* skip */}
+  }
+  const blendedROI=discTotal>0?contribTotal/discTotal+1:null; // ROI convention: contribution recovered per AED discounted, +1 baseline
+  const roiDisplay=discTotal>0?((contribTotal+discTotal)/discTotal):null;
+  const kpi=(lbl,val,clr,sub)=>`<div class="sm" style="padding:12px 13px"><div style="font-size:9px;color:#8A8578;text-transform:uppercase;letter-spacing:.6px;font-weight:700;margin-bottom:5px">${lbl}</div><div style="font-size:20px;font-weight:800;color:${clr}">${val}</div>${sub?`<div style="font-size:10px;color:#8A8578;margin-top:2px">${sub}</div>`:''}</div>`;
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:14px">
+    ${kpi('Active',active.filter(c=>!isRewardsCampaign(c)).length,'#0F172A')}
+    ${kpi('Ending in 3d',endingIn3d,endingIn3d>0?'#F59E0B':'#0F172A')}
+    ${kpi('✅ Winning',winning,'#22C55E')}
+    ${kpi('❌ Losing',losing,'#EF4444')}
+    ${kpi('Campaign Contribution',`${contribTotal>=0?'+':''}${fmtAEDx(contribTotal)}`,contribTotal>=0?'#22C55E':'#EF4444')}
+    ${kpi('Disc. Burn',fmtAEDx(discTotal),'#C084FC')}
+    ${kpi('Blended ROI',roiDisplay!=null?roiDisplay.toFixed(2)+'×':'—',roiDisplay==null?'#64748b':roiDisplay>=1?'#22C55E':'#F59E0B')}
+  </div>`;
+}
 function campNeedsAttentionItems(active,upcoming){
   const items=[];
   const now=new Date();
@@ -7821,32 +7868,40 @@ function campNeedsAttentionItems(active,upcoming){
   // refers to). Date range uses the same compact "1 Jul – 15 Jul 2026" style as campaign cards.
   const campLabel=c=>{
     const dateRange=(c.startDate&&c.endDate)?`${fmtShort(c.startDate)} – ${fmtShort(c.endDate)}, ${c.endDate.slice(0,4)}`:'';
-    return `<strong>${c.name||c.brand+" on "+c.aggregator}</strong> <span style="color:#94a3b8;font-weight:600">· ${c.brand} · ${c.aggregator}${dateRange?` · ${dateRange}`:''}</span>`;
+    return `${c.name||c.brand+" on "+c.aggregator} <span style="color:#94a3b8;font-weight:600">· ${c.brand} · ${c.aggregator}${dateRange?` · ${dateRange}`:''}</span>`;
   };
+  // v099: items now carry {priority, kind, icon, title, reason, action} — kind drives the
+  // Recommendations panel's icon/color bucket (critical/warning/opportunity), title is the
+  // headline, reason is the one-line "why", matching the spec's icon+title+reason+action shape.
   // 1) Running campaigns ending soon
   active.forEach(c=>{
     if(isRewardsCampaign(c))return; // rewards are always-on — no "ending soon" meaning
     const h=hoursUntil(c.endDate);
+    const idx=campaignData.indexOf(c);
     if(h<=24&&h>0){
-      const idx=campaignData.indexOf(c);
-      items.push({priority:1,icon:'⏰',txt:`${campLabel(c)} — ends in ${Math.max(1,Math.round(h))}h`,action:`selectCamp(${idx})`});
+      items.push({priority:1,kind:'critical',icon:'⏰',title:`Ends in ${Math.max(1,Math.round(h))}h`,reason:campLabel(c),action:`selectCamp(${idx})`});
     }else if(h<=48&&h>24){
-      const idx=campaignData.indexOf(c);
-      items.push({priority:2,icon:'⏰',txt:`${campLabel(c)} — ends in ${Math.round(h)}h`,action:`selectCamp(${idx})`});
+      items.push({priority:2,kind:'warning',icon:'⏰',title:`Ends in ${Math.round(h)}h`,reason:campLabel(c),action:`selectCamp(${idx})`});
     }
   });
-  // 2) Running campaigns with negative or poor ROI (excludes rewards — see comment above)
+  // 2) Running campaigns with negative, poor, or (new) strong ROI
   active.forEach(c=>{
     if(isRewardsCampaign(c))return;
     try{
       const a=campAnalysisCached(c);
       if(a&&a.discountROI!=null&&a.days>=2){ // need ≥2 days of data to make a call
+        const idx=campaignData.indexOf(c);
         if(a.discountROI<0){
-          const idx=campaignData.indexOf(c);
-          items.push({priority:1,icon:'📉',txt:`${campLabel(c)} — ROI ${a.discountROI.toFixed(2)}× — losing money`,action:`selectCamp(${idx})`});
+          items.push({priority:1,kind:'critical',icon:'📉',title:`Losing money — ROI ${a.discountROI.toFixed(2)}×`,reason:campLabel(c),action:`selectCamp(${idx})`});
         }else if(a.discountROI<1){
-          const idx=campaignData.indexOf(c);
-          items.push({priority:2,icon:'📉',txt:`${campLabel(c)} — ROI ${a.discountROI.toFixed(2)}× — below break-even`,action:`selectCamp(${idx})`});
+          items.push({priority:2,kind:'warning',icon:'📉',title:`Below break-even — ROI ${a.discountROI.toFixed(2)}×`,reason:campLabel(c),action:`selectCamp(${idx})`});
+        }else{
+          // v099 Opportunity: profitable AND ending within 5 days — worth a decision either way
+          // (extend, or replace with something similar) rather than letting it lapse silently.
+          const h=hoursUntil(c.endDate);
+          if(h>0&&h<=120){
+            items.push({priority:3,kind:'opportunity',icon:'💡',title:`Profitable and ending in ${Math.round(h/24)}d — consider extending`,reason:campLabel(c),action:`selectCamp(${idx})`});
+          }
         }
       }
     }catch(e){/* skip campaigns whose analysis errors */}
@@ -7855,35 +7910,49 @@ function campNeedsAttentionItems(active,upcoming){
   const stale=(label,data)=>{
     const md=data&&data.metadata;if(!md||!md.uploadDate)return null;
     const h=(Date.now()-new Date(md.uploadDate).getTime())/3600000;
-    if(h>72)return {priority:2,icon:'📊',txt:`${label} data is ${Math.round(h/24)}d stale — upload fresh export for accurate profitability`,action:null};
+    if(h>72)return {priority:2,kind:'warning',icon:'📊',title:`${label} data is ${Math.round(h/24)}d stale`,reason:'Upload a fresh export for accurate profitability figures.',action:null};
     return null;
   };
   [['Deliveroo',deliverooOrdersData],['Talabat',talabatOrdersData],['Careem',careemOrdersData],['Noon',noonOrdersData],['Keeta',keetaOrdersData]].forEach(([l,d])=>{
     const s=stale(l,d);if(s)items.push(s);
   });
-  // Sort: critical (1) first, then warnings (2), then info (3). Within a bucket, keep insertion order.
+  // Sort: critical (1) first, then warnings (2), then opportunities (3). Within a bucket, keep insertion order.
   items.sort((a,b)=>a.priority-b.priority);
   return items;
 }
 function campNeedsAttentionPanel(active,upcoming){
   const items=campNeedsAttentionItems(active,upcoming);
   if(items.length===0)return ''; // hide entirely when clean — this is the point
-  const shown=items.slice(0,6); // cap at 6 rows to keep panel compact; user can scroll list otherwise
-  const more=items.length>shown.length?`<div style="font-size:10px;color:#94a3b8;padding:4px 0 0 26px">+ ${items.length-shown.length} more</div>`:'';
+  const shown=items.slice(0,8);
+  const more=items.length>shown.length?`<div style="font-size:10.5px;color:#94a3b8;padding:4px 0 0 30px">+ ${items.length-shown.length} more</div>`:'';
+  const kindStyle={
+    critical:{bg:'#FEF2F2',border:'#FECACA'},
+    warning:{bg:'#FFFBEB',border:'#FDE68A'},
+    opportunity:{bg:'#F0FDF4',border:'#BBF7D0'}
+  };
   const rows=shown.map(it=>{
-    const clr=it.priority===1?'#EF4444':it.priority===2?'#F59E0B':'#64748b';
+    const s=kindStyle[it.kind]||kindStyle.warning;
     const cursor=it.action?'cursor:pointer':'';
     const onclick=it.action?`onclick="${it.action}"`:'';
-    return `<div ${onclick} style="display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:6px;font-size:12px;line-height:1.4;color:#0F172A;${cursor};transition:background .12s" ${it.action?`onmouseover="this.style.background='rgba(148,163,184,.08)'" onmouseout="this.style.background='transparent'"`:''}>
-      <span style="font-size:13px;flex-shrink:0">${it.icon}</span>
-      <span style="flex:1">${it.txt}</span>
-      ${it.action?`<span style="font-size:10px;color:${clr};font-weight:700">Review →</span>`:''}
+    return `<div ${onclick} style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border-radius:8px;background:${s.bg};border:1px solid ${s.border};${cursor}">
+      <span style="font-size:16px;flex-shrink:0;margin-top:1px">${it.icon}</span>
+      <div style="min-width:0;flex:1">
+        <div style="font-size:12px;font-weight:700;color:#0F172A">${it.title}</div>
+        <div style="font-size:11px;color:#64748b;margin-top:2px;line-height:1.5">${it.reason}</div>
+      </div>
+      ${it.action?`<span style="font-size:10px;color:#94a3b8;font-weight:700;white-space:nowrap;margin-top:2px">View →</span>`:''}
     </div>`;
   }).join('');
-  return `<div style="background:#FFFFFF;border:1px solid rgba(239,68,68,.25);border-left:4px solid #EF4444;border-radius:10px;padding:12px 14px;margin-bottom:14px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06)">
-    <div style="font-size:10px;font-weight:800;color:#EF4444;text-transform:uppercase;letter-spacing:.9px;margin-bottom:8px">⚠️ Needs Attention · ${items.length}</div>
-    <div>${rows}${more}</div>
-  </div>`;
+  const nCrit=items.filter(i=>i.kind==='critical').length;
+  const dots=`<span style="display:flex;gap:4px"><span style="width:7px;height:7px;border-radius:50%;background:#EF4444;display:inline-block"></span><span style="width:7px;height:7px;border-radius:50%;background:#F59E0B;display:inline-block"></span><span style="width:7px;height:7px;border-radius:50%;background:#22C55E;display:inline-block"></span></span>`;
+  return `<details ${nCrit>0?'open':''} style="background:#FFFFFF;border:1px solid #EDE7D9;border-radius:10px;margin-bottom:14px;overflow:hidden;box-shadow:0 4px 6px -1px rgba(15,23,42,.06)">
+    <summary style="cursor:pointer;list-style:none;user-select:none;padding:10px 14px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:10px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.9px">Recommendations (${items.length})</span>
+      ${dots}
+      <span style="margin-left:auto;font-size:10px;color:#94a3b8">▾</span>
+    </summary>
+    <div style="border-top:1px solid #EDE7D9;padding:10px 14px;display:flex;flex-direction:column;gap:8px">${rows}${more}</div>
+  </details>`;
 }
 
 // Non-blocking end-soon toasts. Called from renderCampaigns() on load. Fires at most one toast
@@ -7941,427 +8010,6 @@ function campEndSoonPopups(active){
   });
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// CALCULATION TOOLTIP SYSTEM (v100)
-// Hover any [data-ctip] element to see the full contribution breakdown.
-// ═══════════════════════════════════════════════════════════════════
-const calcTipData={};let calcTipSeq=0;
-function storeTip(html){const id='ct'+(++calcTipSeq);calcTipData[id]=html;return id;}
-function initCalcTip(){
-  if(document.getElementById('_ctip'))return;
-  const el=document.createElement('div');el.id='_ctip';
-  el.style.cssText='position:fixed;z-index:9999;background:#0F172A;color:#E2E8F0;border-radius:8px;padding:10px 14px;pointer-events:none;display:none;max-width:320px;border:1px solid rgba(255,255,255,.15);font-family:system-ui,sans-serif;line-height:1.5';
-  document.body.appendChild(el);
-  const pos=(e)=>{const x=e.clientX+14,y=e.clientY-10,bw=window.innerWidth,bh=window.innerHeight;el.style.left=(x+330>bw?bw-340:x)+'px';el.style.top=(y+300>bh?Math.max(4,y-280):y)+'px';};
-  document.addEventListener('mouseover',e=>{const t=e.target.closest('[data-ctip]');if(!t)return;const h=calcTipData[t.dataset.ctip];if(!h)return;el.innerHTML=h;el.style.display='block';pos(e);});
-  document.addEventListener('mousemove',e=>{if(el.style.display==='none')return;if(!e.target.closest('[data-ctip]'))return;pos(e);});
-  document.addEventListener('mouseout',e=>{if(!e.target.closest('[data-ctip]'))return;el.style.display='none';});
-}
-// Build tooltip HTML for a completed/active campaign card (from campAnalysisV2 result).
-function buildCampCalcTipHTML(a){
-  const comm=commissionRateFor(a.aggregator,a.brand,a.effStart);
-  const food=foodPkgPct(a.brand);
-  const fA=v=>'AED '+Math.abs(Math.round(v)).toLocaleString();
-  const row=(l,v,extra='')=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:1px 0;font-size:11px"><span style="opacity:.72;white-space:nowrap">${l}</span><span style="text-align:right">${v}${extra?` <span style="opacity:.55;font-size:9px">${extra}</span>`:''}</span></div>`;
-  const sep='<div style="border-top:1px solid rgba(255,255,255,.18);margin:5px 0 3px"></div>';
-  const ic=a.incrContribTotal>=0?'#4ade80':'#f87171';
-  const rc=a.discountROI!=null?(a.discountROI>=0?'#4ade80':'#f87171'):'#94a3b8';
-  return`<div style="max-width:300px">`
-  +`<div style="font-size:12px;font-weight:600;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.2)">${a.brand} × ${a.aggregator} · ${a.cDays}d contribution</div>`
-  +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Campaign  ${fmtShort(a.effStart)} → ${fmtShort(a.effEnd)}</div>`
-  +row('Net sales',fA(a.cs.sales))
-  +row(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(a.cs.sales*comm))
-  +row(`Food/pkg ${+(food*100).toFixed(0)}% × gross`,'−'+fA(a.campGross*food))
-  +sep+row('<strong>Contribution</strong>','<strong>'+fA(a.campContribTotal)+'</strong>')
-  +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin:8px 0 4px">Baseline  ${fmtShort(a.bStart)} → ${fmtShort(a.bEnd)}</div>`
-  +row('Net sales',fA(a.bs.sales))
-  +row(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(a.bs.sales*comm))
-  +row(`Food/pkg ${+(food*100).toFixed(0)}% × gross`,'−'+fA(a.baseGross*food))
-  +sep+row('<strong>Contribution</strong>','<strong>'+fA(a.baseContribTotal)+'</strong>')
-  +`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:8px;padding-top:6px">`
-  +row('Incremental',`<strong style="color:${ic}">${a.incrContribTotal>=0?'+':''}${fA(a.incrContribTotal)}</strong>`,'('+fA(a.incrContribPerDay)+'/day)')
-  +(a.ourDiscCost>0?row('Merchant discount',fA(a.ourDiscCost)):'')
-  +(a.ourDiscCost>0&&a.coFundedPct>0?row(`${Math.round(a.coFundedPct*100)}% co-funded`,fA(a.aggInferredCoFund),'by '+a.aggregator):'')
-  +(a.ourDiscCost>0&&a.discountROI!=null?row('ROI',`<strong style="color:${rc}">${a.discountROI.toFixed(2)}×</strong>`,'('+fA(a.incrContribTotal)+' ÷ '+fA(a.ourDiscCost)+')'):'')
-  +(a.ourDiscCost>0&&a.discountROI==null?row('ROI','<span style="opacity:.55">—  baseline or data issue</span>'):'')
-  +'</div></div>';
-}
-// Build tooltip HTML for a forecaster scenario card.
-function buildFcCalcTipHTML(sc,brand,agg,discPct,cap,coFundPct,dateStr){
-  const comm=commissionRateFor(agg,brand,dateStr);const food=foodPkgPct(brand);
-  const fA=v=>'AED '+Math.abs(Math.round(v)).toLocaleString();
-  const row=(l,v,extra='')=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:1px 0;font-size:11px"><span style="opacity:.72;white-space:nowrap">${l}</span><span style="text-align:right">${v}${extra?` <span style="opacity:.55;font-size:9px">${extra}</span>`:''}</span></div>`;
-  const sep='<div style="border-top:1px solid rgba(255,255,255,.18);margin:5px 0 3px"></div>';
-  const ic=sc.incrContrib>=0?'#4ade80':'#f87171';
-  return`<div style="max-width:300px">`
-  +`<div style="font-size:12px;font-weight:600;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.2)">Forecast · ${brand} × ${agg}</div>`
-  +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">How discount affects each order</div>`
-  +row('Gross AOV (baseline)',fA(sc.grossAOV))
-  +row(`${discPct}% off  · cap AED ${cap}`,'−'+fA(sc.effDisc),'per order')
-  +row('Net AOV after discount',fA(sc.netAOV))
-  +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin:8px 0 4px">Contribution calculation</div>`
-  +row('Campaign net sales',fA(sc.campNet))
-  +row(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(sc.campNet*comm))
-  +row(`Food/pkg ${+(food*100).toFixed(0)}% × gross`,'−'+fA(sc.campGross*food))
-  +sep+row('<strong>Camp. contribution</strong>','<strong>'+fA(sc.campContrib)+'</strong>')
-  +row('Baseline contribution','−'+fA(Math.abs(sc.baseContrib)))
-  +sep+row('<strong>Incremental contribution</strong>',`<strong style="color:${ic}">${sc.incrContrib>=0?'+':''}${fA(sc.incrContrib)}</strong>`)
-  +`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:8px;padding-top:6px">`
-  +row('Total merchant discount',fA(sc.merchantDisc))
-  +(coFundPct>0?row(`${coFundPct}% co-funded by ${agg}`,fA(sc.aggCoDisc)):'')
-  +(sc.roi!=null?row('ROI',`<strong style="color:${ic}">${sc.roi.toFixed(2)}×</strong>`,'('+fA(sc.incrContrib)+' ÷ '+fA(sc.merchantDisc)+')'):'')
-  +'</div></div>';
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// CAMPAIGN FORECASTER  (v100)
-// ═══════════════════════════════════════════════════════════════════
-let campFcBrand='',campFcAgg='',campFcStart='',campFcEnd='';
-let campFcDiscPct=30,campFcCap=20,campFcCoFund=true,campFcCoFundPct=50;
-let campFcBranches=new Set(),campFcResult=null,campFcCollapsed=false;
-
-function campFcSet(k,v){
-  if(k==='brand'){campFcBrand=v;campFcBranches=new Set();}
-  else if(k==='agg'){campFcAgg=v;campFcBranches=new Set();}
-  else if(k==='start')campFcStart=v;
-  else if(k==='end')campFcEnd=v;
-  else if(k==='discPct')campFcDiscPct=+v;
-  else if(k==='cap')campFcCap=+v;
-  else if(k==='coFund')campFcCoFund=v==='true';
-  else if(k==='coFundPct')campFcCoFundPct=+v;
-  else if(k==='collapsed'){campFcCollapsed=(v==='true');renderCampaigns();}
-}
-function campFcToggleBranch(b){if(campFcBranches.has(b))campFcBranches.delete(b);else campFcBranches.add(b);}
-
-function campFcGetBranches(brand,agg){
-  return[...new Set(allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)').map(r=>r.branch))].sort();
-}
-
-function campFcBaseline(brand,agg,branches,days){
-  if(!latest)return null;
-  const endD=latest,startD=subDays(endD,29);
-  const recs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)'&&r.date>=startD&&r.date<=endD&&(branches.size===0||branches.has(r.branch)));
-  if(!recs.length)return null;
-  const nDays=[...new Set(recs.map(r=>r.date))].length||1;
-  const tNet=recs.reduce((s,r)=>s+r.sales,0);
-  const tOrd=recs.reduce((s,r)=>s+r.orders,0);
-  const tDisc=recs.reduce((s,r)=>s+(r.disc||0),0);
-  const tGross=tNet+tDisc;
-  return{dailyNet:tNet/nDays,dailyOrders:tOrd/nDays,dailyGross:tGross/nDays,grossAOV:tOrd>0?tGross/tOrd:0,netAOV:tOrd>0?tNet/tOrd:0,refDays:nDays};
-}
-
-function campFcFindMatches(brand,agg,discPct,cap){
-  if(!campLoaded)return[];
-  const done=campaignData.filter(c=>campStatus(c)==='Completed'&&c.brand===brand&&c.aggregator===agg);
-  const out=[];
-  for(const c of done){
-    const hp=parseInt(((c.comments||c.name||'').match(/(\d{1,3})\s*%/)||[])[1]||'0');
-    if(!hp||Math.abs(hp-discPct)>8)continue;
-    const capM=(c.comments||'').match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i);
-    const cCap=capM?parseInt(capM[1]):null;
-    if(cap&&cCap&&Math.abs(cCap-cap)>6)continue;
-    const a=campAnalysisV2(c);
-    if(!a.hasData||!a.hasBaseline||a.ordersLift==null)continue;
-    out.push({c,discPct:hp,cap:cCap,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales,campOrdersPerDay:a.cs.orders/a.cDays,campSalesPerDay:a.cs.sales/a.cDays});
-  }
-  // Most recent campaigns first — the display only shows the top 8, and recent campaigns
-  // are more relevant for a forecast than old ones. All matches are still used in the
-  // percentile calculation regardless of this order; this only affects display priority.
-  out.sort((a,b)=>b.c.startDate.localeCompare(a.c.startDate));
-  return out;
-}
-
-function campFcSeasonality(brand,agg,targetStart,matches){
-  if(!targetStart||!matches.length)return{factor:1,pct:0};
-  const tMo=targetStart.slice(0,7);
-  const tRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date.slice(0,7)===tMo&&r.branch!=='(brand-level)');
-  const tDays=[...new Set(tRecs.map(r=>r.date))].length||1;
-  const tDaily=tRecs.reduce((s,r)=>s+r.sales,0)/tDays;
-  const moAvgs={};
-  matches.forEach(m=>{
-    const mo=m.c.startDate.slice(0,7);
-    if(moAvgs[mo]!==undefined)return;
-    const recs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date.slice(0,7)===mo&&r.branch!=='(brand-level)');
-    const d=[...new Set(recs.map(r=>r.date))].length||1;
-    moAvgs[mo]=recs.reduce((s,r)=>s+r.sales,0)/d;
-  });
-  const matchAvg=Object.values(moAvgs).length?Object.values(moAvgs).reduce((s,v)=>s+v,0)/Object.values(moAvgs).length:0;
-  const factor=(tDaily>0&&matchAvg>0)?tDaily/matchAvg:1;
-  return{factor:Math.max(0.5,Math.min(2,factor)),pct:Math.round((Math.max(0.5,Math.min(2,factor))-1)*100)};
-}
-
-function campFcRunScenario(baseline,uplift,discPct,cap,coFundPct,agg,brand,nDays,dateStr){
-  if(!baseline)return null;
-  const grossAOV=baseline.grossAOV||60;
-  const effDisc=Math.min(grossAOV*discPct/100,cap);
-  const netAOV=grossAOV-effDisc;
-  const allOrd=(baseline.dailyOrders*(1+uplift))*nDays;
-  const campNet=allOrd*netAOV,campGross=allOrd*grossAOV;
-  const totalDisc=allOrd*effDisc;
-  const merchantDisc=totalDisc*(1-coFundPct/100);
-  const aggCoDisc=totalDisc*(coFundPct/100);
-  const campContrib=brandContribution(agg,brand,campNet,campGross,dateStr);
-  const baseNet=baseline.dailyNet*nDays,baseGross=baseline.dailyGross*nDays;
-  const baseContrib=brandContribution(agg,brand,baseNet,baseGross,dateStr);
-  const incrContrib=campContrib-baseContrib;
-  const roi=merchantDisc>0?incrContrib/merchantDisc:null;
-  const incrOrd=Math.round(baseline.dailyOrders*uplift*nDays);
-  return{upliftPct:uplift*100,totalOrders:Math.round(allOrd),incrOrders:incrOrd,incrOrdersPerDay:baseline.dailyOrders*uplift,
-    campNet,campGross,baseNet,baseGross,campContrib,baseContrib,
-    incrNet:campNet-baseNet,incrNetPerDay:(campNet-baseNet)/nDays,
-    merchantDisc,merchantDiscPerDay:merchantDisc/nDays,aggCoDisc,totalDisc,
-    incrContrib,incrContribPerDay:incrContrib/nDays,roi,effDisc,grossAOV,netAOV};
-}
-
-function campFcRun(){
-  const brand=campFcBrand,agg=campFcAgg;
-  if(!brand||!agg||!campFcStart||!campFcEnd){alert('Please fill in Brand, Aggregator, Start and End dates.');return;}
-  const nDays=Math.max(1,Math.round((new Date(campFcEnd+'T12:00:00')-new Date(campFcStart+'T12:00:00'))/86400000)+1);
-  const baseline=campFcBaseline(brand,agg,campFcBranches,nDays);
-  if(!baseline){alert('No sales data found for '+brand+' on '+agg+'. Upload data first.');return;}
-  const matches=campFcFindMatches(brand,agg,campFcDiscPct,campFcCap);
-  const seas=campFcSeasonality(brand,agg,campFcStart,matches);
-  let cU=0.10,eU=0.20,oU=0.35;
-  if(matches.length){
-    const cleanM=matches.filter(m=>m.cDays>=3&&m.upliftPct!=null&&Math.abs(m.upliftPct)<150);
-    const useM=cleanM.length?cleanM:matches.filter(m=>m.upliftPct!=null);
-    const up=[...useM.map(m=>m.upliftPct/100)].sort((a,b)=>a-b);
-    if(up.length){
-      const pct=(arr,p)=>{if(arr.length===1)return arr[0];const i=(p/100)*(arr.length-1);const lo=Math.floor(i),hi=Math.ceil(i);return arr[lo]+(i-lo)*(arr[hi]-arr[lo]);};
-      cU=Math.max(-0.20,pct(up,25)*seas.factor);
-      eU=Math.max(-0.10,pct(up,50)*seas.factor);
-      oU=Math.min(0.75,Math.max(0.05,pct(up,75)*seas.factor));
-    }
-  }else{cU*=seas.factor;eU*=seas.factor;oU*=seas.factor;}
-  const coFP=campFcCoFund?campFcCoFundPct:0;
-  const runSc=u=>campFcRunScenario(baseline,u,campFcDiscPct,campFcCap,coFP,agg,brand,nDays,campFcStart);
-  // Last year comparison
-  const lyStart=(parseInt(campFcStart.slice(0,4))-1)+campFcStart.slice(4);
-  const lyEnd=(parseInt(campFcEnd.slice(0,4))-1)+campFcEnd.slice(4);
-  const lyRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date>=lyStart&&r.date<=lyEnd&&r.branch!=='(brand-level)'&&(campFcBranches.size===0||campFcBranches.has(r.branch)));
-  const lyDays=[...new Set(lyRecs.map(r=>r.date))].length||1;
-  // Prior week
-  const pwEnd=subDays(campFcStart,1),pwStart=subDays(pwEnd,6);
-  const pwRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date>=pwStart&&r.date<=pwEnd&&r.branch!=='(brand-level)'&&(campFcBranches.size===0||campFcBranches.has(r.branch)));
-  const pwDays=[...new Set(pwRecs.map(r=>r.date))].length||1;
-  // Most recent campaign in history
-  const recCamp=campLoaded?[...campaignData].filter(c=>campStatus(c)==='Completed'&&c.brand===brand&&c.aggregator===agg).sort((a,b)=>b.endDate.localeCompare(a.endDate))[0]:null;
-  // Concurrent campaigns
-  const conc=campLoaded?campaignData.filter(c=>{const st=campStatus(c);if(st==='Cancelled')return false;if(c.brand!==brand||c.aggregator!==agg)return false;return c.startDate<=campFcEnd&&c.endDate>=campFcStart;}):[];
-  campFcResult={
-    baseline,matches,seasonality:seas,nDays,brand,agg,
-    conservative:runSc(cU),expected:runSc(eU),optimistic:runSc(oU),
-    cU,eU,oU,
-    lyOrders:lyRecs.length?lyRecs.reduce((s,r)=>s+r.orders,0)/lyDays:null,
-    lyNet:lyRecs.length?lyRecs.reduce((s,r)=>s+r.sales,0)/lyDays:null,
-    lyHasDisc:lyStart>='2026-05-01',
-    pwOrders:pwRecs.length?pwRecs.reduce((s,r)=>s+r.orders,0)/pwDays:null,
-    pwNet:pwRecs.length?pwRecs.reduce((s,r)=>s+r.sales,0)/pwDays:null,
-    recCamp,conc,
-    coFP,coFundPct:campFcCoFundPct,
-    generatedAt:new Date().toISOString()
-  };
-  renderCampaigns();
-}
-
-function campFcExport(){
-  if(!campFcResult)return;
-  const r=campFcResult;const fA=v=>Math.round(v);
-  const load=(src,cb)=>{if(window.XLSX){cb();return;}const s=document.createElement('script');s.src=src;s.onload=cb;document.head.appendChild(s);};
-  load('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',()=>{
-    const wb=XLSX.utils.book_new();
-    // Sheet 1: Forecast record
-    const f1=[
-      ['CAMPAIGN FORECAST RECORD','','','','Generated:',r.generatedAt],[''],
-      ['CONFIGURATION',''],
-      ['Brand',r.brand],['Aggregator',r.agg],['Start Date',campFcStart],['End Date',campFcEnd],
-      ['Duration (days)',r.nDays],['Discount %',campFcDiscPct],['Cap AED',campFcCap],
-      ['Co-funded',campFcCoFund?'Yes':'No'],['Co-fund %',campFcCoFundPct],
-      ['Branches',campFcBranches.size?[...campFcBranches].join(', '):'All'],[''],
-      ['BASELINE (last 30 days)',''],
-      ['Daily avg orders',r.baseline.dailyOrders.toFixed(1)],
-      ['Daily avg net sales','AED '+fA(r.baseline.dailyNet)],
-      ['Gross AOV','AED '+fA(r.baseline.grossAOV)],
-      ['Effective discount/order','AED '+fA(r.conservative.effDisc)],[''],
-      ['SEASONALITY',''],
-      ['Factor',r.seasonality.factor.toFixed(2)+'×'],
-      ['Adjustment',r.seasonality.pct>0?'+':''+(r.seasonality.pct)+'%'],[''],
-      ['FORECAST SCENARIOS','','Conservative','Expected','Optimistic'],
-      ['Uplift vs baseline','%',fA(r.conservative.upliftPct),fA(r.expected.upliftPct),fA(r.optimistic.upliftPct)],
-      ['Incremental orders','total',r.conservative.incrOrders,r.expected.incrOrders,r.optimistic.incrOrders],
-      ['Incremental orders','per day',fA(r.conservative.incrOrdersPerDay),fA(r.expected.incrOrdersPerDay),fA(r.optimistic.incrOrdersPerDay)],
-      ['Total merchant discount','AED',fA(r.conservative.merchantDisc),fA(r.expected.merchantDisc),fA(r.optimistic.merchantDisc)],
-      ['Merchant discount','AED/day',fA(r.conservative.merchantDiscPerDay),fA(r.expected.merchantDiscPerDay),fA(r.optimistic.merchantDiscPerDay)],
-      ['Incremental net revenue','AED',fA(r.conservative.incrNet),fA(r.expected.incrNet),fA(r.optimistic.incrNet)],
-      ['Incremental net revenue','AED/day',fA(r.conservative.incrNetPerDay),fA(r.expected.incrNetPerDay),fA(r.optimistic.incrNetPerDay)],
-      ['Incremental contribution','AED',fA(r.conservative.incrContrib),fA(r.expected.incrContrib),fA(r.optimistic.incrContrib)],
-      ['Incremental contribution','AED/day',fA(r.conservative.incrContribPerDay),fA(r.expected.incrContribPerDay),fA(r.optimistic.incrContribPerDay)],
-      ['ROI','×',r.conservative.roi!=null?r.conservative.roi.toFixed(2):'n/a',r.expected.roi!=null?r.expected.roi.toFixed(2):'n/a',r.optimistic.roi!=null?r.optimistic.roi.toFixed(2):'n/a'],[''],
-      ['POST-CAMPAIGN ACTUALS (fill in after campaign ends)','','Conservative','Expected','Optimistic','ACTUAL'],
-      ['Uplift vs baseline','%',fA(r.conservative.upliftPct),fA(r.expected.upliftPct),fA(r.optimistic.upliftPct),''],
-      ['Incremental orders','total',r.conservative.incrOrders,r.expected.incrOrders,r.optimistic.incrOrders,''],
-      ['Total merchant discount','AED',fA(r.conservative.merchantDisc),fA(r.expected.merchantDisc),fA(r.optimistic.merchantDisc),''],
-      ['Incremental contribution','AED',fA(r.conservative.incrContrib),fA(r.expected.incrContrib),fA(r.optimistic.incrContrib),''],
-      ['ROI','×',r.conservative.roi!=null?r.conservative.roi.toFixed(2):'n/a',r.expected.roi!=null?r.expected.roi.toFixed(2):'n/a',r.optimistic.roi!=null?r.optimistic.roi.toFixed(2):'n/a',''],
-      ['Closest scenario','','','','',''],
-    ];
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(f1),'Forecast');
-    // Sheet 2: Historical matches
-    const f2=[['Historical Matches Used','','','','',''],
-      ['Campaign Name','Dates','Days','Disc %','Cap','Uplift %','Contribution/day','ROI'],
-      ...r.matches.map(m=>[m.c.name||m.c.comments||'—',m.c.startDate+' – '+m.c.endDate,m.cDays,m.discPct,m.cap||'—',m.upliftPct!=null?fA(m.upliftPct):'n/a',m.incrContribPerDay!=null?fA(m.incrContribPerDay):'n/a',m.discountROI!=null?m.discountROI.toFixed(2)+'×':'n/a'])
-    ];
-    if(r.matches.length)XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(f2),'Historical Matches');
-    XLSX.writeFile(wb,`Forecast_${r.brand}_${r.agg}_${campFcStart}.xlsx`);
-  });
-}
-
-function bPill(brand,sz=20){const clr=BMAP[brand]?.c||'#888';return`<span style="display:inline-flex;align-items:center;justify-content:center;width:${sz}px;height:${sz}px;border-radius:5px;background:${clr}22;border:1px solid ${clr}55;font-size:${Math.round(sz*.55)}px;font-weight:800;color:${clr};flex-shrink:0">${brand.slice(0,1)}</span>`;}
-function aPill(agg,sz=20){const clr=AC[agg]||'#888';return`<span style="display:inline-flex;align-items:center;justify-content:center;width:${sz}px;height:${sz}px;border-radius:5px;background:${clr}22;border:1px solid ${clr}55;font-size:${Math.round(sz*.55)}px;font-weight:800;color:${clr};flex-shrink:0">${agg.slice(0,1)}</span>`;}
-function campFcHTML(){
-  if(!campLoaded)return''; // don't render until campaigns are loaded
-  const fA=v=>'AED '+Math.round(Math.abs(v)).toLocaleString();
-  const fP=v=>(v>=0?'+':'')+Math.round(v)+'%';
-  const accent='#60A5FA';
-  const bOpts=BR.map(b=>`<option value="${b.n}"${b.n===campFcBrand?' selected':''}>${b.n}</option>`).join('');
-  const aOpts=AGGS.map(a=>`<option value="${a}"${a===campFcAgg?' selected':''}>${a}</option>`).join('');
-  const branches=campFcBrand&&campFcAgg?campFcGetBranches(campFcBrand,campFcAgg):[];
-  const allSelected=campFcBranches.size===0;
-  const branchChips=branches.map(b=>{const sel=allSelected||campFcBranches.has(b);return`<span onclick="campFcToggleBranch('${esc(b)}');renderCampaigns()" style="display:inline-flex;align-items:center;gap:3px;font-size:11px;padding:2px 8px;border-radius:999px;cursor:pointer;margin:2px;border:0.5px solid ${sel?accent:'#E2E8F0'};background:${sel?accent+'18':'transparent'};color:${sel?accent:'#94a3b8'}">${b}</span>`;}).join('');
-
-  let resultsHTML='';
-  if(campFcResult&&!campFcCollapsed){
-    const r=campFcResult;
-    const scCard=(label,sc,isMain)=>{
-      if(!sc)return'';
-      const ic=sc.incrContrib>=0?'#22C55E':'#EF4444';
-      const tipId=storeTip(buildFcCalcTipHTML(sc,r.brand,r.agg,campFcDiscPct,campFcCap,r.coFP,campFcStart));
-      const roiC=sc.roi==null?'#64748b':sc.roi>=0.5?'#22C55E':sc.roi>=0?'#FBBF24':'#EF4444';
-      const roiTxt=sc.roi!=null?sc.roi.toFixed(2)+'×':'—';
-      const mainBorder=isMain?`border:1.5px solid ${accent}`:`border:0.5px solid #E2E8F0`;
-      return`<div style="background:#FFFFFF;border-radius:10px;${mainBorder};padding:20px 22px;flex:1;min-width:0">`
-      +(isMain?`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><span style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${accent}">${label}</span><span style="font-size:9px;background:${accent}22;color:${accent};padding:2px 7px;border-radius:999px;font-weight:600">Most likely</span></div>`
-      :`<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#64748b;margin-bottom:14px">${label}</div>`)
-      +`<div style="font-size:13px;color:#64748b;margin-bottom:6px">Uplift vs baseline</div><div style="font-size:30px;font-weight:800;color:${isMain?accent:'#0F172A'};margin-bottom:14px;line-height:1">${fP(sc.upliftPct)}</div>`
-      +`<div style="display:flex;gap:12px;margin-bottom:18px"><div style="flex:1"><div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Incr. orders</div><div style="font-size:20px;font-weight:700;color:#0F172A">${sc.incrOrders.toLocaleString()}</div><div style="font-size:14px;color:#94a3b8">+${Math.round(sc.incrOrdersPerDay)}/day</div></div>`
-      +`<div style="flex:1"><div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Merchant disc.</div><div style="font-size:20px;font-weight:700;color:#F59E0B">${fA(sc.merchantDisc)}</div><div style="font-size:14px;color:#94a3b8">${fA(sc.merchantDiscPerDay)}/day</div></div></div>`
-      +`<div style="border-top:0.5px solid #E2E8F0;padding-top:16px;cursor:help" data-ctip="${tipId}">`
-      +`<div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Incr. contribution <span style="font-size:9px;opacity:.5">ⓘ hover</span></div>`
-      +`<div style="font-size:26px;font-weight:800;color:${ic};line-height:1">${sc.incrContrib>=0?'+':''}${fA(sc.incrContrib)}</div>`
-      +`<div style="font-size:15px;color:#94a3b8;margin-top:3px">${fA(sc.incrContribPerDay)}/day</div>`
-      +`<div style="margin-top:16px;font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">ROI on discount</div>`
-      +`<div style="font-size:22px;font-weight:800;color:${roiC};line-height:1">${roiTxt}</div>`
-      +'</div></div>';
-    };
-
-    // Comparison table data
-    const cmpRow=(label,ord,net,vs1Pct,vs1Label,vs2Pct,vs2Label,note='')=>{
-      const chip=(pct,lbl)=>pct!=null?`<span style="font-size:10px;background:${pct>=0?'rgba(34,197,94,.1)':'rgba(239,68,68,.1)'};color:${pct>=0?'#16a34a':'#dc2626'};padding:2px 8px;border-radius:999px;font-weight:600">${fP(pct)}</span><span style="font-size:11px;color:#94a3b8;margin-left:4px">${lbl}</span>`:'<span style="color:#94a3b8;font-size:10px">—</span>';
-      return`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:9px 0;border-bottom:0.5px solid #F1F5F9;font-size:13px;align-items:center">`
-      +`<div style="color:#475569;font-weight:600">${label}${note?`<div style="font-size:9px;color:#94a3b8;font-weight:400">${note}</div>`:''}</div>`
-      +`<div style="color:#0F172A">${ord!=null?Math.round(ord).toLocaleString():'—'}</div>`
-      +`<div style="color:#0F172A">${net!=null?fA(net):'—'}</div>`
-      +`<div>${chip(vs1Pct,vs1Label)}</div>`
-      +`<div>${chip(vs2Pct,vs2Label)}</div>`
-      +'</div>';
-    };
-    const pctOf2=(b,a)=>a>0?(b/a-1)*100:null;
-    const baseOrd=r.baseline.dailyOrders,baseNet=r.baseline.dailyNet;
-    const pwPct=r.pwOrders!=null?pctOf2(baseOrd,r.pwOrders):null;
-    const lyPct=r.lyOrders!=null?pctOf2(baseOrd,r.lyOrders):null;
-    const recA=r.recCamp?campAnalysisV2(r.recCamp):null;
-    const recOrd=recA?recA.cs.orders/recA.cDays:null;
-    const recNet=recA?recA.cs.sales/recA.cDays:null;
-    const recPct=recOrd!=null?pctOf2(baseOrd,recOrd):null;
-
-    // Flags
-    const flags=[];
-    if(r.conc.length){flags.push({lvl:'warn',msg:`<strong>Concurrent campaign:</strong> "${r.conc[0].name||r.conc[0].comments||'—'}" overlaps this window on ${r.brand} × ${r.agg}. Forecast does not adjust for campaign-on-campaign dilution.`});}
-    if(!r.lyHasDisc){flags.push({lvl:'info',msg:`Discount data before May 2026 not available. Year-over-year comparison shows sales only — no burn figures from last July to compare.`});}
-    if(r.seasonality.pct!==0){flags.push({lvl:'info',msg:`Seasonality correction applied: <strong>${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong> vs periods when historical matches ran (${r.matches.length} campaign${r.matches.length!==1?'s':''}).`});}
-    if(!r.matches.length){flags.push({lvl:'warn',msg:`No exact historical matches found for ${r.brand} × ${r.agg} at ${campFcDiscPct}% off (±8%) cap AED ${campFcCap} (±6). Fallback uplifts used: conservative 10%, expected 20%, optimistic 35%. Find and select a comparable past campaign for better accuracy.`});}
-
-    const flagsHTML=flags.map(f=>`<div style="display:flex;align-items:flex-start;gap:8px;font-size:12px;padding:8px 10px;border-radius:6px;margin-bottom:6px;background:${f.lvl==='warn'?'rgba(245,158,11,.08)':'#F8FAFC'};border:0.5px solid ${f.lvl==='warn'?'rgba(245,158,11,.4)':'#E2E8F0'}">`
-      +`<span style="font-size:14px;flex-shrink:0;margin-top:1px">${f.lvl==='warn'?'⚠️':'ℹ️'}</span><span style="color:${f.lvl==='warn'?'#92400e':'#475569'}">${f.msg}</span></div>`).join('');
-
-    // Match table
-    const matchRows=r.matches.slice(0,8).map(m=>{
-      const ic=m.discountROI!=null?(m.discountROI>=0?'#22C55E':'#EF4444'):'#64748b';
-      const isExcluded=m.cDays<3||Math.abs(m.upliftPct||0)>=150;
-      return`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr;gap:4px;padding:8px 0;border-bottom:0.5px solid #F1F5F9;font-size:13px;align-items:center${isExcluded?';opacity:.45':''}">`
-      +`<div style="color:#475569">${m.c.name||m.c.comments||'—'}${isExcluded?'<span style="font-size:8px;color:#F59E0B;background:rgba(245,158,11,.1);padding:1px 5px;border-radius:4px;margin-left:4px">⚠ outlier · excluded</span>':''}<div style="font-size:11px;color:#94a3b8">${m.c.startDate} – ${m.c.endDate}</div></div>`
-      +`<div style="color:#94a3b8">${m.cDays}d</div>`
-      +`<div style="color:${(m.upliftPct||0)>=0?'#16a34a':'#dc2626'};font-weight:600">${m.upliftPct!=null?fP(m.upliftPct):'—'}</div>`
-      +`<div style="color:#0F172A">${m.campOrdersPerDay!=null?Math.round(m.campOrdersPerDay).toLocaleString():'—'}</div>`
-      +`<div style="color:#0F172A">${m.campSalesPerDay!=null?fA(m.campSalesPerDay):'—'}</div>`
-      +`<div style="color:#F59E0B">${m.ourDiscPerDay!=null&&m.ourDiscPerDay>0?fA(m.ourDiscPerDay):'—'}</div>`
-      +`<div><span style="font-size:10px;font-weight:600;color:${ic}">${m.discountROI!=null?m.discountROI.toFixed(2)+'×':'—'}</span></div>`
-      +'</div>';}).join('');
-
-    resultsHTML=`<div style="border-top:0.5px solid #E2E8F0;margin-top:14px;padding-top:14px">`
-    // Match header
-    +(r.matches.length?`<div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">`
-    +bPill(r.brand,22)+aPill(r.agg,22)
-    +`<span style="background:rgba(34,197,94,.1);color:#16a34a;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">${r.matches.length} historical match${r.matches.length!==1?'es':''}</span>`
-    +`<span style="font-size:10px;color:#94a3b8">· ${campFcDiscPct}% off ±8% · cap AED ${campFcCap} ±6 · <em style="opacity:.7">dimmed = excluded outlier</em></span></div>`
-    +`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr;gap:4px;padding:5px 0;border-bottom:0.5px solid #E2E8F0;font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Days</div><div>Uplift</div><div>Orders/day</div><div>Sales/day</div><div>Disc/day</div><div>ROI</div></div>`
-    +matchRows
-    +`<div style="font-size:12px;color:#94a3b8;margin-top:8px">Avg uplift: <strong style="color:#0F172A">${fP(r.matches.reduce((s,m)=>s+(m.upliftPct||0),0)/r.matches.length)}</strong>  ·  Seasonality: <strong style="color:${r.seasonality.pct>=0?'#0F172A':'#dc2626'}">${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong></div>`
-    :`<div style="font-size:11px;color:#F59E0B;padding:8px;background:rgba(245,158,11,.08);border-radius:6px;margin-bottom:10px">No exact matches — using fallback estimates. Consider selecting a comparable past campaign.</div>`)
-    // Three scenarios
-    +`<div style="display:flex;gap:10px;margin:14px 0;flex-wrap:wrap">`
-    +scCard('Conservative',r.conservative,false)
-    +scCard('Expected',r.expected,true)
-    +scCard('Optimistic',r.optimistic,false)
-    +'</div>'
-    // Comparison table
-    +`<div style="margin-bottom:12px">`
-    +`<div style="font-size:13px;font-weight:700;color:#475569;margin-bottom:10px">Orders comparison · ${campFcStart} – ${campFcEnd} baseline vs comparable periods</div>`
-    +`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:5px 0;border-bottom:0.5px solid #E2E8F0;font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px"><div>Period</div><div>Avg orders/day</div><div>Avg net/day</div><div>vs prior week</div><div>vs last year</div></div>`
-    +cmpRow('Current baseline (last 30d)',baseOrd,baseNet,pwPct,'vs prior wk',lyPct,'vs Jul 2025')
-    +(r.expected?(()=>{const xOrd=r.expected.totalOrders/r.nDays,xNet=r.expected.campNet/r.nDays,xPct=pctOf2(xOrd,baseOrd);return`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:8px 0 8px 10px;border-bottom:0.5px solid #BFD8F7;font-size:11px;align-items:center;background:rgba(96,165,250,.07);border-left:3px solid #60A5FA;margin-left:-2px"><div style="color:#0C447C;font-weight:700">Expected forecast · campaign on<div style="font-size:11px;color:#185FA5;font-weight:400">Projected · ${campFcStart} – ${campFcEnd}</div></div><div style="font-size:13px;font-weight:700;color:#0C447C">${Math.round(xOrd).toLocaleString()}</div><div style="font-size:13px;font-weight:700;color:#0C447C">${fA(xNet)}</div><div>${xPct!=null?`<span style="font-size:10px;background:${xPct>=0?'rgba(34,197,94,.1)':'rgba(239,68,68,.1)'};color:${xPct>=0?'#16a34a':'#dc2626'};padding:1px 6px;border-radius:999px;font-weight:600">${fP(xPct)}</span> <span style="font-size:9px;color:#94a3b8">vs baseline</span>`:'—'}</div><div><span style="color:#94a3b8;font-size:10px">—</span></div></div>`;})():'')
-    +(r.pwOrders!=null?cmpRow('Prior week ('+subDays(campFcStart,7)+' – '+subDays(campFcStart,1)+')',r.pwOrders,r.pwNet,null,'',null,''):'')
-    +(recA!=null?cmpRow('Last campaign: '+(r.recCamp.name||r.recCamp.comments||'—').slice(0,30),recOrd,recNet,recPct,'vs baseline',null,'',r.recCamp.startDate+' – '+r.recCamp.endDate):'')
-    +(r.lyOrders!=null?cmpRow('Same dates, last year',r.lyOrders,r.lyNet,null,'',null,'',r.lyHasDisc?'':'Sales only · no discount data'):'')
-    +'</div>'
-    // Flags
-    +(flagsHTML?`<div style="margin-bottom:10px">${flagsHTML}</div>`:'')
-    // Export
-    +`<div style="display:flex;gap:8px;justify-content:flex-end">`
-    +`<button onclick="campFcExport()" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#16a34a;padding:5px 14px;font-size:11px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px">⬇ Export forecast + post-campaign tracker</button>`
-    +'</div>'
-    +'</div>';
-  }
-
-  // Form
-  const today=dk(new Date());
-  const sel=(k,opts,cur)=>`<select onchange="campFcSet('${k}',this.value)" style="width:100%;background:#F1F5F9;border:0.5px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:6px 8px;font-size:12px;font-weight:600"><option value="">—</option>${opts}</select>`;
-  const inp=(k,type,cur,min,max)=>`<input type="${type}" value="${cur}" min="${min}" max="${max}" onchange="campFcSet('${k}',this.value)" style="width:100%;background:#F1F5F9;border:0.5px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:6px 8px;font-size:12px;font-weight:600;box-sizing:border-box">`;
-  const fld=(lbl,html)=>`<div><div style="font-size:10px;font-weight:600;color:#64748b;margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px">${lbl}</div>${html}</div>`;
-
-  return`<div style="background:#FFFFFF;border:0.5px solid #E2E8F0;border-radius:12px;padding:14px 16px;margin-bottom:14px;border-left:3px solid ${accent};border-top-left-radius:0;border-bottom-left-radius:0">`
-  +`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${campFcCollapsed?'0':'12px'}">`
-  +`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">📊</span><div style="font-size:15px;font-weight:800;color:#0F172A">Campaign Forecaster</div><div style="font-size:10px;color:#64748b;margin-left:4px">Estimate what a planned campaign will yield before you launch</div></div>`
-  +`<button onclick="campFcSet('collapsed','${(!campFcCollapsed).toString()}')" style="background:none;border:0.5px solid #E2E8F0;border-radius:6px;color:#94a3b8;padding:3px 10px;font-size:11px;cursor:pointer">${campFcCollapsed?'▼ Expand':'▲ Collapse'}</button></div>`
-  +(campFcCollapsed?'':
-    `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:10px">`
-    +fld('Brand',sel('brand',bOpts,campFcBrand))
-    +fld('Aggregator',sel('agg',aOpts,campFcAgg))
-    +fld('Start',inp('start','date',campFcStart,'2025-01-01','2030-12-31'))
-    +fld('End',inp('end','date',campFcEnd,'2025-01-01','2030-12-31'))
-    +fld('Discount %',inp('discPct','number',campFcDiscPct,1,90))
-    +fld('Cap AED',inp('cap','number',campFcCap,1,999))
-    +fld('Co-funded?',`<select onchange="campFcSet('coFund',this.value)" style="width:100%;background:#F1F5F9;border:0.5px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:6px 8px;font-size:12px;font-weight:600"><option value="true"${campFcCoFund?' selected':''}>Yes</option><option value="false"${!campFcCoFund?' selected':''}>No</option></select>`)
-    +(campFcCoFund?fld('Platform %',inp('coFundPct','number',campFcCoFundPct,1,99)):'')
-    +'</div>'
-    +(campFcBrand&&campFcAgg?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:#F8FAFC;border-radius:6px;border:0.5px solid #E2E8F0">`+bPill(campFcBrand,24)+`<span style="font-size:13px;font-weight:700;color:#0F172A">${campFcBrand}</span>`+`<span style="color:#94a3b8;font-size:13px">×</span>`+aPill(campFcAgg,24)+`<span style="font-size:13px;font-weight:700;color:#0F172A">${campFcAgg}</span>`+`<span style="font-size:11px;color:#64748b;margin-left:4px">${campFcDiscPct}% off · cap AED ${campFcCap}${campFcCoFund?' · '+campFcCoFundPct+'% co-funded':''}</span></div>`:'')
-    +(branches.length?`<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">Branches <span style="font-weight:400;text-transform:none">(all selected by default · tap to deselect)</span></div>${branchChips}</div>`:'')
-    +`<button onclick="campFcRun()" style="background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.4);border-radius:6px;color:${accent};padding:6px 18px;font-size:12px;cursor:pointer;font-weight:700">▶ Run Forecast</button>`
-    +resultsHTML
-  )
-  +'</div>';
-}
-
 async function renderCampaigns(){
   const pg=document.getElementById('page-campaigns');if(!pg)return;
   if(!campLoaded){
@@ -8380,8 +8028,8 @@ async function renderCampaigns(){
     const tabs=[
       ['active',`🟢 Active`,active.length],
       ['upcoming',`⏰ Upcoming`,upcoming.length],
-      ['history',`📋 History`,completed.length]
-    ];
+      ['history',`📋 History`,completed.length],
+      ];
     if(selCamp)tabs.push(['detail','🔍 Campaign Detail',null]);
     else if(selBundle)tabs.push(['detail','🎯 Bundle Detail',null]);
     const tabH=tabs.map(([k,l,n])=>{const act=campTab===k;const cnt=n!=null?` <span style="background:${act?'rgba(245,158,11,.25)':'rgba(100,116,139,.2)'};color:${act?'#FBBF24':'#94a3b8'};font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;margin-left:3px">${n}</span>`:'';return `<button onclick="campTab='${k}';renderCampaigns()" style="padding:7px 14px;border-radius:7px;border:1px solid ${act?'#f59e0b':'rgba(15,23,42,.6)'};background:${act?'linear-gradient(180deg,rgba(245,158,11,.18),rgba(245,158,11,.08))':'transparent'};color:${act?'#f59e0b':'#94a3b8'};font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:3px;transition:all .15s">${l}${cnt}</button>`;}).join('');
@@ -8403,9 +8051,9 @@ async function renderCampaigns(){
       return html;
     };
     let main='';
-    if(campTab==='active'){const f=applyCampFilters(activeSorted);main=campFilterBar()+renderCampListWithRewardsSplit(f,true,'🟢 Active Campaigns');}
+    if(campTab==='active'){const f=sortCampCards(applyCampFilters(activeSorted));main=campFilterBar()+renderCampListWithRewardsSplit(f,true,'🟢 Active Campaigns');}
     else if(campTab==='upcoming'){const f=applyCampFilters(upcoming).slice().sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||''));main=campFilterBar()+`<div style="font-size:11px;color:#475569;font-weight:700;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px">⏰ Upcoming Campaigns (${f.length})</div>`+campCardGrid(f,false);}
-    else if(campTab==='history'){const fc=applyCampFilters(completed).slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));const shown=fc.slice(0,120);main=campFilterBar()+renderCampListWithRewardsSplit(shown,true,`📋 Completed Campaigns${fc.length>120?' · showing 120 most recent of '+fc.length:''}`);}
+    else if(campTab==='history'){const fcRaw=applyCampFilters(completed);const fc=campQuickFilter!=='all'?sortCampCards(fcRaw):fcRaw.slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));const shown=fc.slice(0,120);main=campFilterBar()+renderCampListWithRewardsSplit(shown,true,`📋 Completed Campaigns${fc.length>120?' · showing 120 most recent of '+fc.length:''}`);}
     else if(campTab==='detail'&&selBundle){main=bundleDetailHTML(selBundle);}
     else if(campTab==='detail'&&selCamp){main=campDetailV2HTML(selCamp,campaignData.indexOf(selCamp));}
     // Header
@@ -8414,8 +8062,9 @@ async function renderCampaigns(){
     // Removed: 4 big stat cards (Running Now / Upcoming / Completed / Total Tracked — pure duplicates
     // of the tab pill counts) and the 5 big data-source cards (replaced by the freshness strip).
     // These changes save ~300px of vertical chrome at the top of the page.
-    const attention=(campTab==='active'||campTab==='upcoming'||campTab==='history')?campNeedsAttentionPanel(active,upcoming):'';initCalcTip();
-    pg.innerHTML=`${campFcHTML()}${header}${campDataFreshnessStrip()}${attention}<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
+    const attention=(campTab==='active'||campTab==='upcoming'||campTab==='history')?campNeedsAttentionPanel(active,upcoming):'';
+    const kpiStrip=(campTab==='active')?campKPIStrip(active):'';
+    pg.innerHTML=`${header}${campDataFreshnessStrip()}${kpiStrip}${attention}<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
     // Fire non-blocking end-soon toasts on entry to Active tab (once per campaign+threshold per session)
     if(campTab==='active')setTimeout(()=>campEndSoonPopups(active),150);
     if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
@@ -8537,10 +8186,7 @@ function computeDiscountBurn(){
         source:alloc.source||"estimated",
         partialCoverage:alloc.partialCoverage||false,
         isRewards:isRewardsCampaign(c),
-        coFundPct:declaredCoFundPct*100, // store as 0-100 for display
-        dailyAlloc:alloc.dailyAlloc||{} // real per-day allocated merchant burn (v106) — used for
-        // the uncategorized-burn date breakdown instead of an even-split approximation, which
-        // created false daily noise on weekday/weekend-skewed campaigns (v104 bug).
+        coFundPct:declaredCoFundPct*100 // store as 0-100 for display
       });
       attributedBurn+=merchantBurn; // sum of merchant portions across campaigns
       coFundTotal+=coFundInWindow; // sum of inferred aggregator portions
@@ -8620,14 +8266,6 @@ function computeDiscountBurn(){
       }
     }
     out.sort((a,b)=>b.uncategorized-a.uncategorized);
-    // Real per-day attributed burn (v106) — pulled directly from each campaign's actual
-    // dailyAlloc (sales-weighted / exact-data allocation), NOT an even split of the total
-    // across campaign days. An even split creates false 'uncategorized' noise on almost every
-    // day whenever real daily burn isn't flat (e.g. weekends run higher than weekdays) — this
-    // was the root cause of the v104 diagnostic showing small gaps smeared across every date.
-    const _dDisc={};for(const r of matches){if(!(r.disc>0))continue;const bk=r.brand+'|'+r.aggregator;if(!_dDisc[bk])_dDisc[bk]={};_dDisc[bk][r.date]=(_dDisc[bk][r.date]||0)+r.disc;}
-    const _dAttr={};for(const cb of campaignBreakdown){const bk=cb.campaign.brand+'|'+cb.campaign.aggregator;if(!_dAttr[bk])_dAttr[bk]={};for(const[ds,amt] of Object.entries(cb.dailyAlloc||{})){_dAttr[bk][ds]=(_dAttr[bk][ds]||0)+amt;}}
-    for(const row of out){const bk=row.brand+'|'+row.aggregator;const dd=_dDisc[bk]||{},da=_dAttr[bk]||{};const pts=[];for(const[date,disc] of Object.entries(dd)){const unc=Math.max(0,disc-(da[date]||0));if(unc>1)pts.push({date,disc,unc});}pts.sort((a,b)=>b.unc-a.unc);row.topDates=pts.slice(0,12);row.uncatDays=pts.length;}
     return out;
   })();
   // Attributed (capped) for every row, including rows with zero uncategorized/overAttributed
@@ -8671,56 +8309,8 @@ function computeDiscountBurn(){
     // exact upload data.
     uncategorizedByBrandAgg,
     activeCampaignCount:overlapping.length,
-    campaignBreakdown,trend,matchesCount:matches.length,matches
+    campaignBreakdown,trend,matchesCount:matches.length
   };
-}
-
-let _lastDiscBurnData=null;
-let discAuditExpanded=new Set(); // keys like 'Oregano|Noon|2026-07-07' — which date chips are expanded
-function discAuditToggle(brand,aggregator,date){
-  const key=brand+'|'+aggregator+'|'+date;
-  if(discAuditExpanded.has(key))discAuditExpanded.delete(key);else discAuditExpanded.add(key);
-  renderDiscounts();
-}
-// Per-date drill-down: lists EVERY campaign (including cancelled/rewards-excluded ones) whose
-// date range covers this specific date for this brand+aggregator, showing whether each was
-// included in the attribution math and, if so, exactly how much it was allocated for that day.
-// This turns 'why is this date uncategorized' from a guessing game into a direct answer.
-function discAuditDateHTML(brand,aggregator,date){
-  if(!_lastDiscBurnData)return'<div style="padding:10px;font-size:11px;color:#94a3b8">No cached data — refresh the page and try again.</div>';
-  const d=_lastDiscBurnData;
-  const sheetTotal=(d.matches||[]).filter(r=>r.brand===brand&&r.aggregator===aggregator&&r.date===date).reduce((s,r)=>s+(r.disc||0),0);
-  const allCovering=campaignData.filter(c=>c.brand===brand&&c.aggregator===aggregator&&c.startDate<=date&&c.endDate>=date);
-  const includedNames=new Set((d.campaignBreakdown||[]).filter(cb=>cb.campaign.brand===brand&&cb.campaign.aggregator===aggregator).map(cb=>cb.campaign));
-  const rows=allCovering.map(c=>{
-    const cb=(d.campaignBreakdown||[]).find(x=>x.campaign===c);
-    const isCancelled=campStatus(c)==='Cancelled';
-    const isRewards=isRewardsCampaign(c);
-    let statusTag,statusClr,dayAmt=null,src=null;
-    if(isCancelled){statusTag='Excluded · Cancelled';statusClr='#94a3b8';}
-    else if(isRewards){statusTag='Excluded · Rewards/always-on';statusClr='#F59E0B';}
-    else if(cb){
-      dayAmt=(cb.dailyAlloc||{})[date]||0;
-      src=cb.source||'estimated';
-      statusTag='Included · '+src;statusClr='#22C55E';
-    }else{statusTag='Not matched to burn (0 allocated)';statusClr='#EF4444';}
-    return '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 10px;border-bottom:1px solid #F1F5F9;font-size:11px">'
-      +'<div style="flex:1;min-width:0"><div style="font-weight:700;color:#0F172A">'+(c.name||c.comments||'—')+'</div>'
-      +'<div style="font-size:10px;color:#94a3b8">'+c.startDate+' – '+c.endDate+' · '+(c.outlet||'All')+'</div></div>'
-      +'<div style="text-align:right;flex-shrink:0"><div style="font-size:10px;font-weight:700;color:'+statusClr+'">'+statusTag+'</div>'
-      +(dayAmt!=null?'<div style="font-size:12px;font-weight:700;color:#0F172A">AED '+Math.round(dayAmt).toLocaleString()+'</div>':'')+'</div>'
-      +'</div>';
-  }).join('');
-  const totalAllocated=allCovering.reduce((s,c)=>{const cb=(d.campaignBreakdown||[]).find(x=>x.campaign===c);return s+(cb?((cb.dailyAlloc||{})[date]||0):0);},0);
-  const gap=sheetTotal-totalAllocated;
-  return '<div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:10px;margin-top:6px">'
-    +'<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid #F1F5F9">'
-    +'<span style="color:#64748b">Sheet burn on '+fmtShort(date)+'</span><strong style="color:#0F172A">AED '+Math.round(sheetTotal).toLocaleString()+'</strong></div>'
-    +(rows||'<div style="padding:8px;font-size:11px;color:#94a3b8">No campaign in the sheet covers this date for '+brand+' × '+aggregator+'.</div>')
-    +'<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid #F1F5F9">'
-    +'<span style="color:#64748b">Allocated total</span><strong style="color:#0F172A">AED '+Math.round(totalAllocated).toLocaleString()+'</strong></div>'
-    +(gap>1?'<div style="margin-top:4px;font-size:11px;color:#DC2626;font-weight:700">Gap: AED '+Math.round(gap).toLocaleString()+' — '+(rows?'a campaign above is not receiving its expected share (check overlap/outlet-scope logic)':'no campaign in the sheet covers this date at all — check the aggregator portal')+'</div>':'')
-    +'</div>';
 }
 
 // ── Filter interactions ──
@@ -9068,23 +8658,7 @@ function discountUncategorizedBreakdownHTML(d){
       <td style="padding:8px 8px;text-align:right;font-size:11px;color:#0F172A;font-weight:600">${fmt(x.total)}</td>
       <td style="padding:8px 8px;text-align:right;font-size:11px;color:#22C55E">${fmt(x.attributed)}<div style="font-size:9px;color:#94a3b8;font-weight:400">${attribPct.toFixed(0)}%</div>${overAttrBadge}</td>
       <td style="padding:8px 8px;text-align:right;font-size:12px;color:#F59E0B;font-weight:800">${fmt(x.uncategorized)}<div style="font-size:9px;color:#94a3b8;font-weight:400">${uncatPct.toFixed(0)}%</div></td>
-    </tr>`
-    +(x.topDates&&x.topDates.length?'<tr style="border-bottom:1px solid #F5F0E5;background:#FFFCF0">'
-      +'<td colspan="5" style="padding:5px 12px 11px">'
-      +'<div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Dates with uncategorized burn ('+x.uncatDays+' day'+(x.uncatDays!==1?'s':'')+' · real per-day allocation · click a date to see why)</div>'
-      +'<div style="display:flex;flex-wrap:wrap;gap:5px">'
-      +x.topDates.map(function(td){
-        const _key=x.brand+'|'+x.aggregator+'|'+td.date;
-        const _open=discAuditExpanded.has(_key);
-        return '<span onclick="discAuditToggle(\''+x.brand.replace(/'/g,"\\'")+'\',\''+x.aggregator+'\',\''+td.date+'\')" style="display:inline-flex;align-items:center;gap:5px;background:'+(_open?'#FDE68A':'#FEF3C7')+';border:0.5px solid rgba(245,158,11,.45);border-radius:4px;padding:4px 9px;font-size:12px;color:#92400e;white-space:nowrap;cursor:pointer">'
-        +'<span style="font-weight:700">'+fmtShort(td.date)+'</span>'
-        +' <span style="color:#B45309">AED '+Math.round(td.unc).toLocaleString()+'</span>'
-        +(td.disc>td.unc+1?' <span style="opacity:.55;font-size:10px">(of '+Math.round(td.disc).toLocaleString()+' burn)</span>':'')
-        +' <span style="opacity:.6;font-size:9px">'+(_open?'▲':'▼')+'</span>'
-        +'</span>'
-        +(_open?discAuditDateHTML(x.brand,x.aggregator,td.date):'');}).join('')
-      +'</div></td></tr>':'')
-    +'';
+    </tr>`;
   }).join('');
   const grandUnc=d.uncategorizedByBrandAgg.reduce((s,x)=>s+x.uncategorized,0);
   return `<div class="card" style="padding:14px 16px;margin-bottom:14px;border-left:4px solid #F59E0B">
@@ -9130,7 +8704,6 @@ async function renderDiscounts(){
   const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(15,23,42,.12)"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">💸</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Discount Burn Analysis</div></div><div style="font-size:10px;color:#64748b;margin-top:2px;letter-spacing:.4px">Total burn · Campaign attribution · Ambient discount tracking</div></div><button onclick="discountExportCSV()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:5px">⬇ Download CSV</button></div>`;
   const filterBar=discountFilterBarHTML();
   const data=computeDiscountBurn();
-  _lastDiscBurnData=data; // cached for discAuditDateHTML — the per-date drill-down tool
   if(!data){
     pg.innerHTML=`${header}${filterBar}<div class="card" style="text-align:center;padding:30px;color:#64748b">Please select a valid date range to view results.</div>`;
     return;
@@ -9860,6 +9433,13 @@ let cmpA=cmpDefault(),cmpB=cmpDefault();
 let cmpMetric="sales"; // which metric the trend chart plots: sales | orders | aov
 let cmpExpandedRow=null; // "<brand>|<aggregator>" when user clicked a row in the Brand × Platform Breakdown to see per-outlet drill-down. null = nothing expanded.
 
+// v099 palette: the Compare page previously reused the same saturated #60A5FA / #F59E0B pair
+// used for status colors elsewhere in the dashboard. On a page whose whole job is showing two
+// large blocks of blue and orange side by side, that read as too bright. These are muted,
+// desaturated versions used ONLY on this page — every other page's #F59E0B (amber accent) is
+// untouched.
+const CMP_A_CLR="#5B7FA6",CMP_B_CLR="#C98A3E";
+
 function cmpToggleExpand(brand,ag){
   const k=`${brand}|${ag}`;
   cmpExpandedRow=(cmpExpandedRow===k)?null:k;
@@ -9968,6 +9548,48 @@ function cmpComputeDisc(cfg){
   const source=cfg.branches.size===0?"brand_level":(anyExact&&!anyEstimated?"exact":(anyEstimated&&anyExact?"mixed":"estimated"));
   return{total,source};
 }
+
+// v099: Contribution for the comparison scope — same brand×aggregator pairing and sales-weighted
+// outlet allocation as cmpComputeDisc (Path 3), but running the discount through
+// brandContribution() instead of just summing it. This is the margin lens: Net Sales going up
+// doesn't mean profit went up by the same amount if the growth was discount-funded — this card
+// makes that visible instead of leaving it implicit.
+function cmpComputeContribution(cfg){
+  const inWindow=d=>(!cfg.start||d>=cfg.start)&&(!cfg.end||d<=cfg.end);
+  const allowedBrands=cfg.brands.size?cfg.brands:null;
+  const allowedAggs=cfg.platforms.size?cfg.platforms:null;
+  const pairs=new Set();
+  for(const r of allData){
+    if(!inWindow(r.date))continue;
+    if(r.branch==="(brand-level)")continue;
+    if(allowedBrands&&!allowedBrands.has(r.brand))continue;
+    if(allowedAggs&&!allowedAggs.has(r.aggregator))continue;
+    if(cfg.branches.size&&!cfg.branches.has(r.branch))continue;
+    pairs.add(`${r.brand}|${r.aggregator}`);
+  }
+  let total=0;
+  const dref=cfg.end||cfg.start;
+  for(const key of pairs){
+    const [brand,agg]=key.split("|");
+    let brandDisc=0,brandSales=0,outletSales=0;
+    for(const r of allData){
+      if(r.brand!==brand||r.aggregator!==agg)continue;
+      if(!inWindow(r.date))continue;
+      brandDisc+=r.disc||0;
+      if(r.branch!=="(brand-level)"){
+        brandSales+=r.sales||0;
+        if(!cfg.branches.size||cfg.branches.has(r.branch))outletSales+=r.sales||0;
+      }
+    }
+    if(brandSales<=0)continue;
+    const scopedSales=outletSales;
+    const scopedDisc=brandDisc*(outletSales/brandSales);
+    const gross=scopedSales+scopedDisc;
+    total+=brandContribution(agg,brand,scopedSales,gross,dref);
+  }
+  return total;
+}
+
 function cmpLabel(cfg){
   const parts=[];
   parts.push(cfg.brands.size?[...cfg.brands].join("+"):"All brands");
@@ -9993,7 +9615,7 @@ function cmpSetMetric(m){cmpMetric=m;renderCompare();}
 // Build a side's config panel
 function cmpPanel(side){
   const cfg=side==="A"?cmpA:cmpB;
-  const accent=side==="A"?"#60A5FA":"#F59E0B";
+  const accent=side==="A"?CMP_A_CLR:CMP_B_CLR;
   const allBr=[...new Set(allData.map(r=>r.branch))].filter(b=>b!=="(brand-level)").sort();
   const dd=(type,label,activeSet,items)=>{
     const id=`cmp-${side}-${type}`;
@@ -10004,23 +9626,23 @@ function cmpPanel(side){
   };
   const presets=[["yesterday","Latest day"],["7d","7d"],["30d","30d"],["month","This month"]];
   const presetsH=presets.map(([k,l])=>`<button class="preset ${cfg.preset===k?"act":""}" data-act="cmpPreset" data-v1="${side}" data-v2="${k}">${l}</button>`).join("");
-  return `<div style="flex:1;min-width:300px;background:#FFFFFF;border:1px solid ${accent}55;border-radius:12px;padding:14px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-      <div style="font-size:13px;font-weight:800;color:${accent}">${side==="A"?"🔵 Group A":"🟠 Group B"}</div>
+  return `<div style="flex:1;min-width:300px;background:#FFFFFF;border:1px solid ${accent}55;border-radius:12px;padding:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px">
+      <div style="display:flex;align-items:center;gap:7px"><span style="width:9px;height:9px;border-radius:50%;background:${accent};display:inline-block"></span><span style="font-size:12px;font-weight:700;color:${accent};text-transform:uppercase;letter-spacing:.5px">Group ${side}</span></div>
       ${(cfg.brands.size||cfg.platforms.size||cfg.branches.size)?`<button data-act="cmpClear" data-v1="${side}" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:2px 8px;font-size:10px;cursor:pointer">✕ clear</button>`:""}
     </div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">
       ${dd("brand","Brands",cfg.brands,BR.map(b=>({val:b.n,lbl:b.n,clr:b.c})))}
       ${dd("platform","Platforms",cfg.platforms,AGGS.map(a=>({val:a,lbl:a,clr:AC[a]||"#888"})))}
       ${dd("branch","Outlets",cfg.branches,allBr.map(b=>({val:b,lbl:b,clr:"#94a3b8"})))}
     </div>
-    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">${presetsH}</div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:9px">${presetsH}</div>
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
       <input type="date" value="${cfg.start||""}" data-act="cmpDate" data-v1="${side}" data-v2="start" style="background:#F1F5F9;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:7px 12px;font-size:13px;font-weight:600;color-scheme:light;min-width:135px">
       <span style="color:#64748b">→</span>
       <input type="date" value="${cfg.end||""}" data-act="cmpDate" data-v1="${side}" data-v2="end" style="background:#F1F5F9;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:7px 12px;font-size:13px;font-weight:600;color-scheme:light;min-width:135px">
     </div>
-    <div style="margin-top:8px;font-size:11px;color:#94a3b8;line-height:1.5"><strong style="color:${accent}">${cmpLabel(cfg)}</strong><br>${cmpDateLabel(cfg)}</div>
+    <div style="margin-top:9px;font-size:11.5px;color:#8A8578;line-height:1.6"><strong style="color:${accent}">${cmpLabel(cfg)}</strong><br>${cmpDateLabel(cfg)}</div>
   </div>`;
 }
 
@@ -10036,25 +9658,25 @@ function cmpStatCard(label,a,b,fmt,unit,perDay){
   if(perDay&&(perDay.nA>1||perDay.nB>1)){
     const avgA=a/perDay.nA,avgB=b/perDay.nB;
     const avgDiff=pctOf(avgB,avgA);
-    perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #E2E8F0">
-      <div style="font-size:8px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
+    perDayLine=`<div style="margin-top:9px;padding-top:8px;border-top:1px solid #F0EBDC">
+      <div style="font-size:10px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Per day avg</div>
       <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
-        <span style="font-size:14px;font-weight:800;color:#60A5FA;font-variant-numeric:tabular-nums">${fmt(avgA)}</span>
-        <span style="font-size:9px;color:#64748b">vs</span>
-        <span style="font-size:14px;font-weight:800;color:#F59E0B;font-variant-numeric:tabular-nums">${fmt(avgB)}</span>
-        <span style="font-size:10px;color:${pctClr(avgDiff)};font-weight:700">${fmtPct(avgDiff)}</span>
+        <span style="font-size:14px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmt(avgA)}</span>
+        <span style="font-size:10px;color:#94a3b8">vs</span>
+        <span style="font-size:14px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmt(avgB)}</span>
+        <span style="font-size:10.5px;color:${pctClr(avgDiff)};font-weight:700">${fmtPct(avgDiff)}</span>
       </div>
-      <div style="font-size:8px;color:#64748b;margin-top:2px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
+      <div style="font-size:10px;color:#8A8578;margin-top:3px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
     </div>`;
   }
-  return `<div class="sm">
-    <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}</div>
+  return `<div class="sm" style="padding:15px 16px">
+    <div style="font-size:10px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.9px;margin-bottom:7px">${label}</div>
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
-      <span style="font-size:20px;font-weight:800;color:#60A5FA;font-variant-numeric:tabular-nums">${fa}</span>
-      <span style="font-size:11px;color:#475569;font-weight:600">vs</span>
-      <span style="font-size:20px;font-weight:800;color:#F59E0B;font-variant-numeric:tabular-nums">${fb}</span>
+      <span style="font-size:20px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fa}</span>
+      <span style="font-size:11.5px;color:#94a3b8;font-weight:600">vs</span>
+      <span style="font-size:20px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fb}</span>
     </div>
-    <div style="font-size:12px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:#64748b;font-weight:400">B vs A</span></div>
+    <div style="font-size:12.5px;color:${dc};font-weight:700;margin-top:5px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:#8A8578;font-weight:400">B vs A</span></div>
     ${perDayLine}
   </div>`;
 }
@@ -10071,7 +9693,7 @@ function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay){
   const dc=diff==null?"#64748b":(diff>0?"#EF4444":(diff<0?"#22C55E":"#94a3b8"));
   const arrow=diff==null?"":(diff>0?"▲":(diff<0?"▼":""));
   const burnA=netA>0?(a/netA*100):null,burnB=netB>0?(b/netB*100):null;
-  const burnLine=(burnA!=null||burnB!=null)?`<div style="font-size:10px;color:#64748b;margin-top:4px">Burn rate · <span style="color:#60A5FA">${burnA!=null?burnA.toFixed(1)+'%':'—'}</span> vs <span style="color:#F59E0B">${burnB!=null?burnB.toFixed(1)+'%':'—'}</span> of net</div>`:'';
+  const burnLine=(burnA!=null||burnB!=null)?`<div style="font-size:11px;color:#8A8578;margin-top:5px">Burn rate · <span style="color:${CMP_A_CLR}">${burnA!=null?burnA.toFixed(1)+'%':'—'}</span> vs <span style="color:${CMP_B_CLR}">${burnB!=null?burnB.toFixed(1)+'%':'—'}</span> of net</div>`:'';
   // Most informative source label between the two sides
   const srcLabel=(s)=>({exact:"📊 Exact",brand_level:"Brand-level",estimated:"≈ Estimated",mixed:"Mixed"}[s]||'—');
   const srcCombo=sourceA===sourceB?srcLabel(sourceA):`${srcLabel(sourceA)} / ${srcLabel(sourceB)}`;
@@ -10080,29 +9702,75 @@ function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay){
     const avgA=a/perDay.nA,avgB=b/perDay.nB;
     const avgDiff=pctOf(avgB,avgA);
     const avgClr=avgDiff==null?"#64748b":(avgDiff>0?"#EF4444":(avgDiff<0?"#22C55E":"#94a3b8"));
-    perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #E2E8F0">
-      <div style="font-size:8px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
+    perDayLine=`<div style="margin-top:9px;padding-top:8px;border-top:1px solid #F0EBDC">
+      <div style="font-size:10px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Per day avg</div>
       <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
-        <span style="font-size:14px;font-weight:800;color:#60A5FA;font-variant-numeric:tabular-nums">${fmtAED(avgA)}</span>
-        <span style="font-size:9px;color:#64748b">vs</span>
-        <span style="font-size:14px;font-weight:800;color:#F59E0B;font-variant-numeric:tabular-nums">${fmtAED(avgB)}</span>
-        <span style="font-size:10px;color:${avgClr};font-weight:700">${fmtPct(avgDiff)}</span>
+        <span style="font-size:14px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAED(avgA)}</span>
+        <span style="font-size:10px;color:#94a3b8">vs</span>
+        <span style="font-size:14px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAED(avgB)}</span>
+        <span style="font-size:10.5px;color:${avgClr};font-weight:700">${fmtPct(avgDiff)}</span>
       </div>
-      <div style="font-size:8px;color:#64748b;margin-top:2px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
+      <div style="font-size:10px;color:#8A8578;margin-top:3px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
     </div>`;
   }
-  return `<div class="sm">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-      <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px">Discount Burn</div>
-      <span style="font-size:8px;color:#64748b;background:rgba(100,116,139,.1);padding:1px 6px;border-radius:5px" title="Data source. 'Exact' = per-order uploaded data; 'Brand-level' = sheet's raw brand-level discount; 'Estimated' = sales-weighted allocation to selected outlets (less precise).">${srcCombo}</span>
+  return `<div class="sm" style="padding:15px 16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">
+      <div style="font-size:10px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.9px">Discount Burn</div>
+      <span style="font-size:9.5px;color:#8A8578;background:rgba(138,133,120,.12);padding:2px 7px;border-radius:5px" title="Data source. 'Exact' = per-order uploaded data; 'Brand-level' = sheet's raw brand-level discount; 'Estimated' = sales-weighted allocation to selected outlets (less precise).">${srcCombo}</span>
     </div>
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
-      <span style="font-size:20px;font-weight:800;color:#60A5FA;font-variant-numeric:tabular-nums">${fmtAED(a)}</span>
-      <span style="font-size:11px;color:#475569;font-weight:600">vs</span>
-      <span style="font-size:20px;font-weight:800;color:#F59E0B;font-variant-numeric:tabular-nums">${fmtAED(b)}</span>
+      <span style="font-size:20px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAED(a)}</span>
+      <span style="font-size:11.5px;color:#94a3b8;font-weight:600">vs</span>
+      <span style="font-size:20px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAED(b)}</span>
     </div>
-    <div style="font-size:12px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${arrow} <span style="color:#64748b;font-weight:400">B vs A · less is better</span></div>
+    <div style="font-size:12.5px;color:${dc};font-weight:700;margin-top:5px">${fmtPct(diff)} ${arrow} <span style="color:#8A8578;font-weight:400">B vs A · less is better</span></div>
     ${burnLine}
+    ${perDayLine}
+  </div>`;
+}
+
+// v099: Contribution card — the margin lens next to Net Sales and Discount Burn. Standard
+// (non-inverted) coloring: contribution going up is good. The context line calls out when
+// sales grew faster than contribution, meaning the extra sales were significantly discount-funded.
+function cmpContribCard(contribA,contribB,salesDiff,perDay){
+  const a=contribA||0,b=contribB||0;
+  const diff=pctOf(b,a);
+  const dc=pctClr(diff);
+  let ctxLine="";
+  if(diff!=null&&salesDiff!=null){
+    const gap=salesDiff-diff;
+    if(gap>4){
+      ctxLine=`<div style="font-size:11px;color:#B5762E;margin-top:5px">Sales ${fmtPct(salesDiff)} but margin ${fmtPct(diff)} — the gap is discount</div>`;
+    }else if(gap<-4){
+      ctxLine=`<div style="font-size:11px;color:#4E9A6E;margin-top:5px">Margin grew faster than sales — cleaner growth, less discount-funded</div>`;
+    }else{
+      ctxLine=`<div style="font-size:11px;color:#8A8578;margin-top:5px">Sales and margin moved together</div>`;
+    }
+  }
+  let perDayLine="";
+  if(perDay&&(perDay.nA>1||perDay.nB>1)){
+    const avgA=a/perDay.nA,avgB=b/perDay.nB;
+    const avgDiff=pctOf(avgB,avgA);
+    perDayLine=`<div style="margin-top:9px;padding-top:8px;border-top:1px solid #F0EBDC">
+      <div style="font-size:10px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Per day avg</div>
+      <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
+        <span style="font-size:14px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAED(avgA)}</span>
+        <span style="font-size:10px;color:#94a3b8">vs</span>
+        <span style="font-size:14px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAED(avgB)}</span>
+        <span style="font-size:10.5px;color:${pctClr(avgDiff)};font-weight:700">${fmtPct(avgDiff)}</span>
+      </div>
+      <div style="font-size:10px;color:#8A8578;margin-top:3px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
+    </div>`;
+  }
+  return `<div class="sm" style="padding:15px 16px">
+    <div style="font-size:10px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.9px;margin-bottom:7px">Contribution <span style="text-transform:none;font-weight:500;color:#B0AA98">· margin</span></div>
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+      <span style="font-size:20px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAED(a)}</span>
+      <span style="font-size:11.5px;color:#94a3b8;font-weight:600">vs</span>
+      <span style="font-size:20px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAED(b)}</span>
+    </div>
+    <div style="font-size:12.5px;color:${dc};font-weight:700;margin-top:5px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:#8A8578;font-weight:400">B vs A</span></div>
+    ${ctxLine}
     ${perDayLine}
   </div>`;
 }
@@ -10114,111 +9782,59 @@ function cmpOutletCard(dA,dB){
   const onlyB=[...setB].filter(b=>!setA.has(b)).sort();
   const both=[...setA].filter(b=>setB.has(b)).sort();
   const diff=setA.size-setB.size;
-  const diffClr=diff>0?"#60A5FA":diff<0?"#F59E0B":"#64748b";
-  const col=(title,clr,list)=>`<div style="flex:1;min-width:120px"><div style="font-size:9px;font-weight:700;color:${clr};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">${title} (${list.length})</div>${list.length?list.map(o=>`<div style="font-size:11px;color:#475569;padding:1px 0">${o}</div>`).join(""):`<div style="font-size:11px;color:#475569;font-weight:600">—</div>`}</div>`;
+  const diffClr=diff>0?CMP_A_CLR:diff<0?CMP_B_CLR:"#64748b";
+  const col=(title,clr,list)=>`<div style="flex:1;min-width:120px"><div style="font-size:10px;font-weight:700;color:${clr};text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">${title} (${list.length})</div>${list.length?list.map(o=>`<div style="font-size:11.5px;color:#475569;padding:2px 0">${o}</div>`).join(""):`<div style="font-size:11.5px;color:#475569;font-weight:600">—</div>`}</div>`;
   // The panel is hidden by default and shown on hover (CSS sibling, inline handlers as fallback)
   const panel=`<div class="cmp-outlet-panel" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:30;margin-top:6px;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:10px;padding:12px;box-shadow:0 12px 30px rgba(15,23,42,.12)">
-      <div style="font-size:10px;color:#64748b;margin-bottom:8px">${diff===0?"Both groups cover the same outlets.":`Group ${diff>0?"A":"B"} has ${Math.abs(diff)} more outlet${Math.abs(diff)!==1?"s":""}.`}</div>
+      <div style="font-size:11px;color:#8A8578;margin-bottom:9px">${diff===0?"Both groups cover the same outlets.":`Group ${diff>0?"A":"B"} has ${Math.abs(diff)} more outlet${Math.abs(diff)!==1?"s":""}.`}</div>
       <div style="display:flex;gap:14px;flex-wrap:wrap">
-        ${col("Only in A","#60A5FA",onlyA)}
-        ${col("Only in B","#F59E0B",onlyB)}
+        ${col("Only in A",CMP_A_CLR,onlyA)}
+        ${col("Only in B",CMP_B_CLR,onlyB)}
         ${col("In both","#22C55E",both)}
       </div>
     </div>`;
-  return `<div class="sm" style="position:relative;cursor:help" onmouseover="this.querySelector('.cmp-outlet-panel').style.display='block'" onmouseout="this.querySelector('.cmp-outlet-panel').style.display='none'">
-    <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Active Outlets <span style="color:#f59e0b">ⓘ</span></div>
+  return `<div class="sm" style="padding:15px 16px;position:relative;cursor:help" onmouseover="this.querySelector('.cmp-outlet-panel').style.display='block'" onmouseout="this.querySelector('.cmp-outlet-panel').style.display='none'">
+    <div style="font-size:10px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.9px;margin-bottom:7px">Active Outlets <span style="color:#C98A3E">ⓘ</span></div>
     <div style="display:flex;align-items:baseline;gap:8px">
-      <span style="font-size:20px;font-weight:800;color:#60A5FA">${setA.size}</span>
-      <span style="font-size:11px;color:#475569;font-weight:600">vs</span>
-      <span style="font-size:20px;font-weight:800;color:#F59E0B">${setB.size}</span>
-      ${diff!==0?`<span style="font-size:12px;color:${diffClr};font-weight:700">(${diff>0?"+":""}${diff})</span>`:""}
+      <span style="font-size:20px;font-weight:800;color:${CMP_A_CLR}">${setA.size}</span>
+      <span style="font-size:11.5px;color:#94a3b8;font-weight:600">vs</span>
+      <span style="font-size:20px;font-weight:800;color:${CMP_B_CLR}">${setB.size}</span>
+      ${diff!==0?`<span style="font-size:12.5px;color:${diffClr};font-weight:700">(${diff>0?"+":""}${diff})</span>`:""}
     </div>
-    <div style="font-size:10px;color:#64748b;margin-top:3px">${onlyA.length+onlyB.length>0?`${onlyA.length+onlyB.length} differ · hover for details`:"same outlets"}</div>
+    <div style="font-size:11px;color:#8A8578;margin-top:4px">${onlyA.length+onlyB.length>0?`${onlyA.length+onlyB.length} differ · hover for details`:"same outlets"}</div>
     ${panel}
   </div>`;
 }
 
-// ── Compare page v099 helpers ─────────────────────────────────────────────
-// Build weekday+date axis labels (e.g. 'Mon 7/7') for one comparison window.
-// The chart x-axis is anchored to A's real dates; B's dates appear in the
-// tooltip title callback so users can orient in time without 'Day 1' abstraction.
-function cmpDayLabels(start,n){
-  if(!start)return Array.from({length:n},(_,i)=>`Day ${i+1}`);
-  const DAYS=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  const out=[];const d=new Date(start+'T12:00:00');
-  for(let i=0;i<n;i++){out.push(DAYS[d.getDay()]+' '+d.getDate()+'/'+(d.getMonth()+1));d.setDate(d.getDate()+1);}
-  return out;
+// v099: campaign-overlap imbalance check for the comparison window — mirrors the same-day-of-week
+// baseline contamination logic used on the Campaigns page. Finds campaigns that ran inside one
+// group's window but had no counterpart running in the other group's window, scoped to whichever
+// brands/platforms either side has filtered to (or all, if neither side filtered).
+function cmpCampaignImbalance(){
+  if(!cmpA.start||!cmpB.start)return null;
+  const brandsAllowed=(cmpA.brands.size||cmpB.brands.size)?new Set([...cmpA.brands,...cmpB.brands]):null;
+  const aggsAllowed=(cmpA.platforms.size||cmpB.platforms.size)?new Set([...cmpA.platforms,...cmpB.platforms]):null;
+  const overlapDays=(s1,e1,s2,e2)=>{
+    if(!s1||!s2)return 0;
+    const lo=s1>s2?s1:s2,hi=e1<e2?e1:e2;
+    if(lo>hi)return 0;
+    return daysBetweenInclusive(lo,hi);
+  };
+  let daysInA=0,daysInB=0;
+  const namesA=new Set(),namesB=new Set();
+  for(const c of campaignData){
+    if(campStatus(c)==="Cancelled")continue;
+    if(isRewardsCampaign(c))continue;
+    if(brandsAllowed&&c.brand!=="All Brands"&&!brandsAllowed.has(c.brand))continue;
+    if(aggsAllowed&&!aggsAllowed.has(c.aggregator))continue;
+    const oA=overlapDays(c.startDate,c.endDate,cmpA.start,cmpA.end||cmpA.start);
+    const oB=overlapDays(c.startDate,c.endDate,cmpB.start,cmpB.end||cmpB.start);
+    if(oB>0&&oA===0){daysInB+=oB;namesB.add(c.name);}
+    else if(oA>0&&oB===0){daysInA+=oA;namesA.add(c.name);}
+  }
+  if(!daysInA&&!daysInB)return null;
+  return{daysInA,daysInB,namesA:[...namesA],namesB:[...namesB]};
 }
-
-// Smart insight banner — converts the A/B comparison into 2-4 plain-language
-// observations. Covers: overall sales direction, biggest platform mover,
-// volume-vs-AOV attribution, and discount burn shift (only when >0.5pp change).
-function cmpInsightBanner(sA,sB,discA,discB,movers){
-  if(!sA.orders&&!sB.orders)return'';
-  const salesDiff=pctOf(sB.sales,sA.sales);
-  const ordDiff=pctOf(sB.orders,sA.orders);
-  const aovA=sA.orders>0?sA.sales/sA.orders:0,aovB=sB.orders>0?sB.sales/sB.orders:0;
-  const aovDiff=pctOf(aovB,aovA);
-  const burnA=sA.sales>0?discA/sA.sales*100:null,burnB=sB.sales>0?discB/sB.sales*100:null;
-  const parts=[];
-  if(salesDiff!==null){
-    const verb=salesDiff>5?'outperformed':salesDiff<-5?'underperformed':'nearly matched';
-    const dir=salesDiff>0?'▲':salesDiff<0?'▼':'→';
-    parts.push(`B ${verb} A on net sales <strong style="color:${pctClr(salesDiff)}">${dir} ${Math.abs(salesDiff).toFixed(1)}%</strong>`);
-  }
-  const sorted=[...movers].filter(p=>p.sDiff!=null).sort((a,b)=>Math.abs(b.sDiff)-Math.abs(a.sDiff));
-  if(sorted.length){
-    const top=sorted[0];
-    parts.push(`biggest mover: <strong style="color:${AC[top.ag]||'#888'}">${top.ag}</strong> <span style="color:${pctClr(top.sDiff)};font-weight:700">${fmtPct(top.sDiff)}</span>`);
-  }
-  if(ordDiff!==null&&aovDiff!==null&&(sA.orders>0||sB.orders>0)){
-    const volDriven=Math.abs(ordDiff)>=Math.abs(aovDiff);
-    parts.push(volDriven
-      ?`growth is <strong>volume-driven</strong> (orders ${fmtPct(ordDiff)}, AOV ${fmtPct(aovDiff)})`
-      :`growth is <strong>AOV-driven</strong> (AOV ${fmtPct(aovDiff)}, orders ${fmtPct(ordDiff)})`);
-  }
-  if(burnA!==null&&burnB!==null&&Math.abs(burnB-burnA)>0.5){
-    const sh=burnB-burnA,clr=sh>0?'#EF4444':'#22C55E',word=sh>0?'up':'down';
-    parts.push(`discount burn <span style="color:${clr};font-weight:700">${word} ${Math.abs(sh).toFixed(1)}pp</span> (${burnA.toFixed(1)}% → ${burnB.toFixed(1)}% of net sales)`);
-  }
-  if(!parts.length)return'';
-  const oc=salesDiff==null?'#64748b':salesDiff>0?'#22C55E':salesDiff<0?'#EF4444':'#64748b';
-  const ic=salesDiff==null?'📊':salesDiff>0?'📈':salesDiff<0?'📉':'➡️';
-  return`<div style="background:${oc}0a;border:1px solid ${oc}33;border-left:3px solid ${oc};border-radius:8px;padding:12px 16px;margin-bottom:14px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">${ic} Snapshot</div><div style="font-size:12px;color:#1E293B;line-height:1.8">${parts.map((p,i)=>i===0?p:' · '+p).join('')}</div></div>`;
-}
-
-// Brand mix contribution card — dual horizontal bars showing each brand's %
-// share of net sales for A (blue) and B (orange). Surfaces mix shifts that
-// aggregate totals hide: e.g. +10% total but driven entirely by one brand.
-function cmpContributionCard(dA,dB){
-  const totA=sumR(dA),totB=sumR(dB);
-  if(!totA.sales&&!totB.sales)return'';
-  const brandKeys=[...new Set([...dA,...dB].map(r=>r.brand))];
-  const rows=brandKeys.map(b=>{
-    const bA=sumR(dA.filter(r=>r.brand===b)),bB=sumR(dB.filter(r=>r.brand===b));
-    const pA=totA.sales>0?bA.sales/totA.sales*100:0,pB=totB.sales>0?bB.sales/totB.sales*100:0;
-    return{b,pA,pB,clr:BMAP[b]?.c||'#888',sum:pA+pB};
-  }).filter(x=>x.sum>0).sort((a,b)=>b.sum-a.sum);
-  if(!rows.length)return'';
-  const barRow=(name,clr,pA,pB)=>'<div style="margin-bottom:9px">'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">'
-    +'<span style="font-size:11px;font-weight:700;color:'+clr+'">'+name+'</span>'
-    +'<span style="font-size:10px;color:#64748b">'+pA.toFixed(0)+'% → '+pB.toFixed(0)+'%</span></div>'
-    +'<div style="display:flex;flex-direction:column;gap:2px">'
-    +'<div style="height:5px;background:#F1F5F9;border-radius:3px;overflow:hidden">'
-    +'<div style="height:100%;width:'+Math.min(pA,100).toFixed(1)+'%;background:linear-gradient(90deg,#60A5FA44,#60A5FA);border-radius:3px"></div></div>'
-    +'<div style="height:5px;background:#F1F5F9;border-radius:3px;overflow:hidden">'
-    +'<div style="height:100%;width:'+Math.min(pB,100).toFixed(1)+'%;background:linear-gradient(90deg,#F59E0B44,#F59E0B);border-radius:3px"></div></div>'
-    +'</div></div>';
-  return'<div class="sm">'
-    +'<div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">'
-    +'Brand Mix <span style="font-size:8px;font-weight:400;text-transform:none">% of net sales</span></div>'
-    +rows.map(r=>barRow(r.b,r.clr,r.pA,r.pB)).join('')
-    +'<div style="display:flex;gap:12px;margin-top:4px">'
-    +'<span style="font-size:9px;color:#60A5FA;font-weight:600">▬ A</span>'
-    +'<span style="font-size:9px;color:#F59E0B;font-weight:600">▬ B</span></div></div>';
-}
-
 
 function renderCompare(){
   let pg=document.getElementById("page-compare");
@@ -10235,16 +9851,21 @@ function renderCompare(){
   // exact uploaded data (outlet filter + Keeta/Careem), or sales-weighted estimate (fallback).
   const discAObj=cmpComputeDisc(cmpA),discBObj=cmpComputeDisc(cmpB);
   const discA=discAObj.total,discB=discBObj.total;
+  const contribA=cmpComputeContribution(cmpA),contribB=cmpComputeContribution(cmpB);
 
   // Aggregator movement: per-platform totals for the chosen metric on each side
   const platMove=AGGS.map(ag=>{
     const a=sumR(dA.filter(r=>r.aggregator===ag));
     const b=sumR(dB.filter(r=>r.aggregator===ag));
     const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
-    return{ag,clr:AC[ag]||"#888",a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a)};
+    return{ag,clr:AC[ag]||"#888",a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a),delta:b.sales-a.sales};
   }).filter(p=>p.a.orders>0||p.b.orders>0);
-  const movers=[...platMove].filter(p=>p.sDiff!=null).sort((x,y)=>y.sDiff-x.sDiff);
-  const risers=movers.filter(p=>p.sDiff>0),fallers=movers.filter(p=>p.sDiff<0).reverse();
+  // v099: ranked by absolute sales delta (not %) — a platform with tiny volume can show a huge
+  // % swing that means nothing next to a platform moving real money. Also compute each
+  // platform's share of the TOTAL net sales change so the reader sees at a glance which
+  // platform actually drove the headline number.
+  const totalDelta=platMove.reduce((s,p)=>s+p.delta,0);
+  const platRanked=[...platMove].sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta));
 
   // Breakdown table: by brand × platform across the union of both sides
   const keys=new Set([...dA,...dB].map(r=>`${r.brand}|${r.aggregator}`));
@@ -10252,8 +9873,9 @@ function renderCompare(){
     const[brand,ag]=k.split("|");
     const a=sumR(dA.filter(r=>r.brand===brand&&r.aggregator===ag));
     const b=sumR(dB.filter(r=>r.brand===brand&&r.aggregator===ag));
-    return{brand,ag,a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales)};
-  }).filter(r=>r.a.orders>0||r.b.orders>0);
+    return{brand,ag,a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),delta:b.sales-a.sales};
+  }).filter(r=>r.a.orders>0||r.b.orders>0)
+    .sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta)); // v099: ranked by absolute delta, biggest movers first
   // Make each row clickable to expand into per-outlet drill-down (rendered as a separate card
   // below the table). A small chevron in the brand cell shows the state; the row gets a subtle
   // background highlight when expanded so the user sees which one drives the breakdown below.
@@ -10261,15 +9883,15 @@ function renderCompare(){
     const key=`${r.brand}|${r.ag}`;
     const isExpanded=cmpExpandedRow===key;
     const chev=isExpanded?'▾':'▸';
-    const rowBg=isExpanded?'background:rgba(245,158,11,.08);':'';
+    const rowBg=isExpanded?'background:rgba(201,138,62,.08);':'';
     return{
       cells:[
-        `<span data-act="cmpToggleExpand" data-v1="${r.brand}" data-v2="${r.ag}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;${rowBg}padding:2px 4px;border-radius:4px" title="Click to see per-outlet breakdown for ${r.brand} on ${r.ag}"><span style="color:${isExpanded?'#f59e0b':'#64748b'};font-size:10px;font-weight:700">${chev}</span><span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span><span style="color:${AC[r.ag]||'#888'};font-size:11px">${r.ag}</span></span>`,
-        `<span style="color:#60A5FA">${r.a.orders.toLocaleString()}</span>`,
-        `<span style="color:#F59E0B">${r.b.orders.toLocaleString()}</span>`,
+        `<span data-act="cmpToggleExpand" data-v1="${r.brand}" data-v2="${r.ag}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;${rowBg}padding:2px 4px;border-radius:4px" title="Click to see per-outlet breakdown for ${r.brand} on ${r.ag}"><span style="color:${isExpanded?'#C98A3E':'#64748b'};font-size:10px;font-weight:700">${chev}</span><span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11.5px">${r.brand}</span><span style="color:${AC[r.ag]||'#888'};font-size:11.5px">${r.ag}</span></span>`,
+        `<span style="color:${CMP_A_CLR}">${r.a.orders.toLocaleString()}</span>`,
+        `<span style="color:${CMP_B_CLR}">${r.b.orders.toLocaleString()}</span>`,
         `<span style="color:${pctClr(r.oDiff)};font-weight:700">${fmtPct(r.oDiff)}</span>`,
-        `<span style="color:#60A5FA">${fmtAED(r.a.sales)}</span>`,
-        `<span style="color:#F59E0B">${fmtAED(r.b.sales)}</span>`,
+        `<span style="color:${CMP_A_CLR}">${fmtAED(r.a.sales)}</span>`,
+        `<span style="color:${CMP_B_CLR}">${fmtAED(r.b.sales)}</span>`,
         `<span style="color:${pctClr(r.sDiff)};font-weight:700">${fmtPct(r.sDiff)}</span>`
       ],
       sortVals:[r.brand,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff]
@@ -10281,8 +9903,8 @@ function renderCompare(){
   let outletDrillCard='';
   if(cmpExpandedRow){
     const[xBrand,xAg]=cmpExpandedRow.split("|");
-    const xBrandColor=BMAP[xBrand]?.c||'#f59e0b';
-    const xAgColor=AC[xAg]||'#f59e0b';
+    const xBrandColor=BMAP[xBrand]?.c||'#C98A3E';
+    const xAgColor=AC[xAg]||'#C98A3E';
     // Build per-branch aggregates within this brand × platform on both sides
     const brSet=new Set([
       ...dA.filter(r=>r.brand===xBrand&&r.aggregator===xAg).map(r=>r.branch),
@@ -10299,14 +9921,14 @@ function renderCompare(){
     const oRows=branchRows.map(r=>({
       cells:[
         `<strong style="color:#0F172A;font-size:12px">${r.branch}</strong>`,
-        `<span style="color:#60A5FA">${r.a.orders.toLocaleString()}</span>`,
-        `<span style="color:#F59E0B">${r.b.orders.toLocaleString()}</span>`,
+        `<span style="color:${CMP_A_CLR}">${r.a.orders.toLocaleString()}</span>`,
+        `<span style="color:${CMP_B_CLR}">${r.b.orders.toLocaleString()}</span>`,
         `<span style="color:${pctClr(r.oDiff)};font-weight:700">${fmtPct(r.oDiff)}</span>`,
-        `<span style="color:#60A5FA">${fmtAED(r.a.sales)}</span>`,
-        `<span style="color:#F59E0B">${fmtAED(r.b.sales)}</span>`,
+        `<span style="color:${CMP_A_CLR}">${fmtAED(r.a.sales)}</span>`,
+        `<span style="color:${CMP_B_CLR}">${fmtAED(r.b.sales)}</span>`,
         `<span style="color:${pctClr(r.sDiff)};font-weight:700">${fmtPct(r.sDiff)}</span>`,
-        `<span style="color:#60A5FA">${r.a.orders>0?'AED '+r.aov_a.toFixed(1):'—'}</span>`,
-        `<span style="color:#F59E0B">${r.b.orders>0?'AED '+r.aov_b.toFixed(1):'—'}</span>`,
+        `<span style="color:${CMP_A_CLR}">${r.a.orders>0?'AED '+r.aov_a.toFixed(1):'—'}</span>`,
+        `<span style="color:${CMP_B_CLR}">${r.b.orders>0?'AED '+r.aov_b.toFixed(1):'—'}</span>`,
         `<span style="color:${pctClr(r.aDiff)};font-weight:700">${fmtPct(r.aDiff)}</span>`
       ],
       sortVals:[r.branch,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff,r.aov_a,r.aov_b,r.aDiff]
@@ -10315,16 +9937,14 @@ function renderCompare(){
     const totA=branchRows.reduce((s,r)=>({orders:s.orders+r.a.orders,sales:s.sales+r.a.sales}),{orders:0,sales:0});
     const totB=branchRows.reduce((s,r)=>({orders:s.orders+r.b.orders,sales:s.sales+r.b.sales}),{orders:0,sales:0});
     const totODiff=pctOf(totB.orders,totA.orders),totSDiff=pctOf(totB.sales,totA.sales);
-    const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:11px;color:#94a3b8;margin-bottom:10px;padding:8px 12px;background:rgba(245,158,11,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center"><span><span style="color:#60A5FA">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAED(totA.sales)}</span><span><span style="color:#F59E0B">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAED(totB.sales)}</span><span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span></div></div>`;
+    const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:11.5px;color:#8A8578;margin-bottom:10px;padding:8px 12px;background:rgba(201,138,62,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center"><span><span style="color:${CMP_A_CLR}">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAED(totA.sales)}</span><span><span style="color:${CMP_B_CLR}">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAED(totB.sales)}</span><span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span></div></div>`;
     outletDrillCard=branchRows.length
       ?`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid #E2E8F0;color:#94a3b8;padding:4px 10px;font-size:10px;border-radius:5px;cursor:pointer" title="Close drill-down">✕ close</button></div>${totsLine}${sortableTable("cmp-outlet-tbl",oHeads,oRows,4)}</div>`
       :`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown</span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid #E2E8F0;color:#94a3b8;padding:4px 10px;font-size:10px;border-radius:5px;cursor:pointer">✕ close</button></div><div style="color:#64748b;font-size:12px;padding:8px 0">No outlets with activity in either window for this combination.</div></div>`;
   }
 
   // Metric toggle for the trend chart
-  const metricBtns=[["sales","Net Sales"],["orders","Orders"],["aov","AOV"]].map(([k,l])=>`<button data-act="cmpMetric" data-v1="${k}" style="padding:4px 12px;border-radius:5px;border:1px solid ${cmpMetric===k?'#f59e0b':'#E2E8F0'};background:${cmpMetric===k?'#f59e0b22':'transparent'};color:${cmpMetric===k?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${l}</button>`).join("");
-
-  const moverChip=(p,val)=>`<span style="display:inline-flex;align-items:center;gap:6px;background:${p.clr}18;border:1px solid ${p.clr}44;border-radius:6px;padding:3px 10px;font-size:11px;margin:2px"><span style="color:${p.clr};font-weight:700">${p.ag}</span><span style="color:${pctClr(val)};font-weight:700">${fmtPct(val)}</span></span>`;
+  const metricBtns=[["sales","Net Sales"],["orders","Orders"],["aov","AOV"]].map(([k,l])=>`<button data-act="cmpMetric" data-v1="${k}" style="padding:4px 12px;border-radius:5px;border:1px solid ${cmpMetric===k?'#C98A3E':'#E2E8F0'};background:${cmpMetric===k?'#C98A3E1A':'transparent'};color:${cmpMetric===k?'#C98A3E':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${l}</button>`).join("");
 
   // Year-mismatch safety banner — fires when A and B's date ranges fall in different calendar
   // years. Easy to mis-read otherwise (e.g. "Jun 2026" vs "Jun 2025" both look like "Jun" at
@@ -10332,69 +9952,77 @@ function renderCompare(){
   const yearOf=s=>s?String(s).slice(0,4):null;
   const yA=yearOf(cmpA.start)||yearOf(cmpA.end);
   const yB=yearOf(cmpB.start)||yearOf(cmpB.end);
-  const yearBanner=(yA&&yB&&yA!==yB)?`<div style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.4);border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px"><span style="font-size:18px">⚠️</span><div style="font-size:12px;color:#FBBF24;line-height:1.5"><strong>Year-over-year comparison detected:</strong> Group A is in <strong>${yA}</strong> but Group B is in <strong>${yB}</strong>. If this isn't intentional, fix the year in the date pickers below — easy to misread because month/day look identical.</div></div>`:'';
-  const insightBanner=cmpInsightBanner(sA,sB,discA,discB,movers);
-  // Unified platform movers tile — centred-zero delta bar replacing the
-  // old two-card risers/fallers grid. Built as a string here (before the
-  // pg.innerHTML template literal) to avoid nested backtick complexity.
-  const moversTile=(()=>{
-    const sorted=[...platMove].filter(p=>p.sDiff!=null).sort((a,b)=>b.sDiff-a.sDiff);
-    const rows=sorted.map(p=>{
-      const bw=Math.min(Math.abs(p.sDiff)/40*80,80).toFixed(1);
-      const isPos=p.sDiff>=0;const clr=pctClr(p.sDiff);
-      return'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #F8FAFC">'
-        +'<div style="width:70px;flex-shrink:0;font-size:11px;font-weight:700;color:'+(AC[p.ag]||'#888')+'">'+p.ag+'</div>'
-        +'<div style="flex:1;display:flex;align-items:center">'
-        +'<div style="width:50%;display:flex;justify-content:flex-end;padding-right:4px">'+(!isPos?'<div style="height:6px;width:'+bw+'%;background:'+clr+';border-radius:3px 0 0 3px;opacity:.75"></div>':'')+'</div>'
-        +'<div style="width:1px;height:14px;background:#E2E8F0;flex-shrink:0"></div>'
-        +'<div style="width:50%;display:flex;align-items:center;padding-left:4px">'+(isPos?'<div style="height:6px;width:'+bw+'%;background:'+clr+';border-radius:0 3px 3px 0;opacity:.75"></div>':'')+'</div>'
-        +'</div>'
-        +'<div style="width:56px;flex-shrink:0;text-align:right;font-size:11px;font-weight:700;color:'+clr+'">'+(p.sDiff>=0?'+':'')+p.sDiff.toFixed(1)+'%</div>'
-        +'<div style="width:72px;flex-shrink:0;text-align:right;font-size:10px;color:#94a3b8">'+fmtAED(p.b.sales)+'</div>'
-        +'</div>';
-    }).join('');
-    return'<div class="card" style="margin-bottom:14px">'
-      +'<div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
-      +'<span>Platform Movement · B vs A</span>'
-      +'<span style="font-size:10px;color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">by net sales Δ</span></div>'
-      +'<div style="font-size:9px;color:#94a3b8;display:flex;justify-content:space-between;margin-bottom:10px;padding:0 2px">'
-      +'<span>← declined</span><span>grew →</span></div>'
-      +(rows||'<div style="color:#64748b;font-size:12px">No platform data.</div>')+'</div>';
-  })();
+  const yearBanner=(yA&&yB&&yA!==yB)?`<div style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.4);border-radius:8px;padding:11px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px"><span style="font-size:18px">⚠️</span><div style="font-size:12.5px;color:#B5762E;line-height:1.6"><strong>Year-over-year comparison detected:</strong> Group A is in <strong>${yA}</strong> but Group B is in <strong>${yB}</strong>. If this isn't intentional, fix the year in the date pickers below — easy to misread because month/day look identical.</div></div>`:'';
+
+  // v099: auto-insight banner — one sentence naming the biggest driver of the net sales change,
+  // plus a campaign-overlap clause when one group's window had promo coverage the other lacked.
+  const salesDiff=pctOf(sB.sales,sA.sales);
+  const topMovers=tableRows.slice(0,2).filter(r=>Math.abs(r.delta)>=Math.abs(totalDelta)*0.15||tableRows.length<=2);
+  const imbalance=cmpCampaignImbalance();
+  let insightHTML='';
+  if(salesDiff!=null&&Math.abs(salesDiff)>=1&&topMovers.length){
+    const dir=salesDiff>=0?'up':'down';
+    const dc=salesDiff>=0?'#4E9A6E':'#C0554F';
+    const drivers=topMovers.map(r=>`${r.brand} ${r.ag}`).join(' and ');
+    let sentence=`<strong>Net sales ${dir} ${fmtPct(salesDiff)}, driven mainly by ${drivers}</strong>`;
+    if(imbalance){
+      const heavier=imbalance.daysInB>=imbalance.daysInA?'B':'A';
+      const days=heavier==='B'?imbalance.daysInB:imbalance.daysInA;
+      const names=(heavier==='B'?imbalance.namesB:imbalance.namesA).slice(0,2).join(', ');
+      sentence+=` — but a campaign ran in Group ${heavier} on ${days} day${days>1?'s':''} (${names}) with no matching campaign in Group ${heavier==='B'?'A':'B'}. Part of the difference may reflect that promo, not organic growth.`;
+    }else{
+      sentence+='.';
+    }
+    insightHTML=`<div style="background:#F3EFE3;border:1px solid #E4DCC8;border-left:3px solid ${dc};border-radius:8px;padding:11px 15px;margin-bottom:16px;display:flex;gap:10px;align-items:flex-start"><span style="color:${dc};font-size:14px">ⓘ</span><div style="font-size:12.5px;line-height:1.7;color:#374151">${sentence}</div></div>`;
+  }
+
+  // v099: Platform growth/degrowth tile — ranked by absolute net-sales delta with each
+  // platform's share of the TOTAL change, so it's clear at a glance which platform actually
+  // drove the headline number rather than just which had the biggest %.
+  const platMoversTile=`<div class="card" style="margin-bottom:16px">
+    <div class="ct" style="font-size:12.5px">Platform growth / degrowth <span style="color:#8A8578;font-weight:400;text-transform:none;letter-spacing:0">· net sales, ranked by delta</span></div>
+    <div style="overflow-x:auto;margin-top:6px"><table class="tbl" style="font-size:12px">
+      <thead><tr><th>Platform</th><th style="text-align:right">A</th><th style="text-align:right">B</th><th style="text-align:right">Delta</th><th style="text-align:right">Share of change</th></tr></thead>
+      <tbody>${platRanked.map(p=>{
+        const share=totalDelta!==0?(p.delta/totalDelta*100):null;
+        return `<tr><td><span style="color:${p.clr};font-weight:700">${p.ag}</span></td><td style="text-align:right;color:#6B7280">${fmtAED(p.a.sales)}</td><td style="text-align:right;color:#6B7280">${fmtAED(p.b.sales)}</td><td style="text-align:right;color:${p.delta>=0?'#4E9A6E':'#C0554F'};font-weight:700">${p.delta>=0?'+':'−'}${fmtAED(Math.abs(p.delta))}</td><td style="text-align:right;color:#8A8578">${share!=null?fmtPct(share):'—'}</td></tr>`;
+      }).join('')}</tbody>
+    </table></div>
+  </div>`;
 
   pg.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div style="font-size:18px;font-weight:800;color:#0F172A">⚖️ Comparison</div>
       <div style="display:flex;gap:8px"><button data-act="cmpCopy" style="background:none;border:1px solid #E2E8F0;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer" title="Copy A's brand/platform/outlet filters to B">⎘ A→B filters</button><button data-act="cmpSwap" style="background:none;border:1px solid #E2E8F0;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer">⇄ Swap A/B</button></div>
     </div>
-    <div style="font-size:11px;color:#475569;font-weight:600;margin-bottom:12px">Pick any combination on each side — brands, platforms, outlets, and dates are fully independent. Example: Oregano+Lollorosso 11–13 May 2026 (A) vs the same 11–13 May 2025 (B).</div>
+    <div style="font-size:11.5px;color:#8A8578;font-weight:500;margin-bottom:14px;line-height:1.6">Pick any combination on each side — brands, platforms, outlets, and dates are fully independent. Example: Oregano+Lollorosso 11–13 May 2026 (A) vs the same 11–13 May 2025 (B).</div>
     ${yearBanner}
-    ${insightBanner}
-    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">${cmpPanel("A")}${cmpPanel("B")}</div>
+    ${insightHTML}
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:18px">${cmpPanel("A")}${cmpPanel("B")}</div>
 
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:14px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:18px">
       ${cmpStatCard("Orders",sA.orders,sB.orders,v=>Math.round(v).toLocaleString(),"",{nA,nB})}
       ${cmpStatCard("Net Sales",sA.sales,sB.sales,v=>fmtAED(v),"",{nA,nB})}
       ${cmpStatCard("AOV",aovA,aovB,v=>"AED "+v.toFixed(1))}
+      ${cmpContribCard(contribA,contribB,salesDiff,{nA,nB})}
       ${cmpDiscCard(discA,discB,sA.sales,sB.sales,discAObj.source,discBObj.source,{nA,nB})}
       ${cmpOutletCard(dA,dB)}
-      ${cmpContributionCard(dA,dB)}
     </div>
 
-    <div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>Trend — <span style="color:#60A5FA">A</span> vs <span style="color:#F59E0B">B</span> (aligned by day index)</span><div style="display:flex;gap:5px">${metricBtns}</div></div><div style="position:relative;height:220px"><canvas id="cmp-chart"></canvas></div><div style="font-size:10px;color:#64748b;margin-top:6px">Day 1 = first day of each window. This lets you compare windows of different years/lengths on the same axis.</div></div>
+    <div class="card" style="margin-bottom:16px"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><span style="font-size:12.5px">Trend — <span style="color:${CMP_A_CLR}">A</span> vs <span style="color:${CMP_B_CLR}">B</span> <span style="color:#8A8578;font-weight:400;text-transform:none;letter-spacing:0">· aligned by weekday</span></span><div style="display:flex;gap:5px">${metricBtns}</div></div><div style="position:relative;height:230px;margin-top:8px"><canvas id="cmp-chart"></canvas></div><div style="font-size:11px;color:#8A8578;margin-top:8px">Day 1 = first day of each window, so windows of different lengths or years line up on the same axis. Top label is the weekday; bottom is each side's date.</div></div>
 
-    ${moversTile}
+    ${platMoversTile}
 
-    <div class="card"><div class="ct">Per-Platform Breakdown</div>${mkTable(["Platform","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A AOV","B AOV","Δ AOV"],platMove.map(p=>[
+    <div class="card" style="margin-bottom:16px"><div class="ct" style="font-size:12.5px">Per-platform breakdown <span style="color:#8A8578;font-weight:400;text-transform:none;letter-spacing:0">· full detail incl. AOV</span></div>${mkTable(["Platform","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A AOV","B AOV","Δ AOV"],platMove.map(p=>[
       `<span style="color:${p.clr};font-weight:700">${p.ag}</span>`,
-      `<span style="color:#60A5FA">${p.a.orders.toLocaleString()}</span>`,`<span style="color:#F59E0B">${p.b.orders.toLocaleString()}</span>`,
+      `<span style="color:${CMP_A_CLR}">${p.a.orders.toLocaleString()}</span>`,`<span style="color:${CMP_B_CLR}">${p.b.orders.toLocaleString()}</span>`,
       `<span style="color:${pctClr(p.oDiff)};font-weight:700">${fmtPct(p.oDiff)}</span>`,
-      `<span style="color:#60A5FA">${fmtAED(p.a.sales)}</span>`,`<span style="color:#F59E0B">${fmtAED(p.b.sales)}</span>`,
+      `<span style="color:${CMP_A_CLR}">${fmtAED(p.a.sales)}</span>`,`<span style="color:${CMP_B_CLR}">${fmtAED(p.b.sales)}</span>`,
       `<span style="color:${pctClr(p.sDiff)};font-weight:700">${fmtPct(p.sDiff)}</span>`,
-      `<span style="color:#60A5FA">${p.a.orders>0?'AED '+(p.a.sales/p.a.orders).toFixed(1):'—'}</span>`,`<span style="color:#F59E0B">${p.b.orders>0?'AED '+(p.b.sales/p.b.orders).toFixed(1):'—'}</span>`,
+      `<span style="color:${CMP_A_CLR}">${p.a.orders>0?'AED '+(p.a.sales/p.a.orders).toFixed(1):'—'}</span>`,`<span style="color:${CMP_B_CLR}">${p.b.orders>0?'AED '+(p.b.sales/p.b.orders).toFixed(1):'—'}</span>`,
       `<span style="color:${pctClr(p.aDiff)};font-weight:700">${fmtPct(p.aDiff)}</span>`
     ]))}</div>
 
-    <div class="card"><div class="ct">Brand × Platform Breakdown <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click a row to drill down to outlets</span></div>${sortableTable("cmp-tbl",tHeads,tRows,4)}</div>
+    <div class="card"><div class="ct" style="font-size:12.5px">What's driving the change <span style="color:#8A8578;font-weight:400;text-transform:none;letter-spacing:0">· brand × platform, ranked by net sales delta · click a row to drill down to outlets</span></div>${sortableTable("cmp-tbl",tHeads,tRows,4)}</div>
     ${outletDrillCard}`;
 
   // Draw the overlaid trend chart (aligned by day index)
@@ -10413,14 +10041,36 @@ function cmpDrawChart(dA,dB){
   const va=cmpDayValues(dA,cmpA.start,cmpA.end,cmpMetric);
   const vb=cmpDayValues(dB,cmpB.start,cmpB.end,cmpMetric);
   const n=Math.max(va.length,vb.length,1);
-  // x-axis anchored to A's real dates (weekday+DD/MM); B's dates in tooltip title.
-  const labelsA=cmpDayLabels(cmpA.start,n);
-  const labelsB=cmpDayLabels(cmpB.start,n);
+  // v099: two-line axis labels — top line is the weekday (Thu, Fri...), bottom line is each
+  // side's actual date. Weekday comes from whichever side has a date at this index (falls back
+  // to B if A's window is shorter). Month abbreviation is only shown the first time it appears
+  // or when it changes, so "9, 10, 11 Jul" doesn't repeat "Jul" on every tick.
+  const addDays=(dstr,n)=>{const d=new Date(dstr+"T12:00:00");d.setDate(d.getDate()+n);return dk(d);};
+  const wdShort=dstr=>new Date(dstr+"T12:00:00").toLocaleDateString("en-US",{weekday:"short"});
+  const moState={a:null,b:null};
+  const fmtOneDate=(dstr,side)=>{
+    if(!dstr)return null;
+    const d=new Date(dstr+"T12:00:00");
+    const day=d.getDate();
+    const mo=d.toLocaleDateString("en-US",{month:"short"});
+    const show=moState[side]!==mo;
+    moState[side]=mo;
+    return show?`${day} ${mo}`:`${day}`;
+  };
+  const nAdays=cmpA.start?daysBetweenInclusive(cmpA.start,cmpA.end||cmpA.start):0;
+  const nBdays=cmpB.start?daysBetweenInclusive(cmpB.start,cmpB.end||cmpB.start):0;
+  const labels=Array.from({length:n},(_,i)=>{
+    const dAi=(cmpA.start&&i<nAdays)?addDays(cmpA.start,i):null;
+    const dBi=(cmpB.start&&i<nBdays)?addDays(cmpB.start,i):null;
+    const wd=dAi?wdShort(dAi):(dBi?wdShort(dBi):`Day ${i+1}`);
+    const dateLine=[fmtOneDate(dAi,'a'),fmtOneDate(dBi,'b')].filter(Boolean).join(" · ")||'';
+    return dateLine?[wd,dateLine]:[wd];
+  });
   const fmtV=v=>cmpMetric==="orders"?Math.round(v).toLocaleString():cmpMetric==="aov"?"AED "+v.toFixed(1):"AED "+Math.round(v).toLocaleString();
-  charts["cmp-chart"]=new Chart(ctx,{type:"line",data:{labels:labelsA,datasets:[
-    {label:"A · "+cmpDateLabel(cmpA),data:va,borderColor:"#60A5FA",backgroundColor:"#60A5FA",borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false},
-    {label:"B · "+cmpDateLabel(cmpB),data:vb,borderColor:"#F59E0B",backgroundColor:"#F59E0B",borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false}
-  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#475569",font:{size:10},boxWidth:12,padding:10}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{title:items=>{const i=items[0]?.dataIndex??0;const a=labelsA[i]||`Day ${i+1}`;const b=labelsB[i]||`Day ${i+1}`;return a===b?a:`A: ${a}  ·  B: ${b}`},label:c=>`${c.dataset.label.split(" · ")[0]}: ${fmtV(c.raw)}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:9},maxRotation:45},grid:{color:"#F1F5F9"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#F1F5F9"},border:{display:false}}}}});
+  charts["cmp-chart"]=new Chart(ctx,{type:"line",data:{labels,datasets:[
+    {label:"A · "+cmpDateLabel(cmpA),data:va,borderColor:CMP_A_CLR,backgroundColor:CMP_A_CLR,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false},
+    {label:"B · "+cmpDateLabel(cmpB),data:vb,borderColor:CMP_B_CLR,backgroundColor:CMP_B_CLR,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false}
+  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#475569",font:{size:11},boxWidth:12,padding:10}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label.split(" · ")[0]}: ${fmtV(c.raw)}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:10}},grid:{color:"#F1F5F9"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:10},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#F1F5F9"},border:{display:false}}}}});
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -10642,7 +10292,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     cpcGoAgg,cpcGoBrands,cpcGoOutlets,cpcSetSort,cpcSetAdType,cpcSetMonth,cpcOpenOutletDetail,cpcCloseOutletDetail,cpcExportTable,cpcSetView,
     cpcHistSetFilter,cpcHistToggleCompare,cpcCompSet,cpcSetAggMonth,cpcResetAggMonth,
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
-    sortTableBy,setCalFilter,selectCamp,campToggleFilter,campClearFilters,campSortBy,campSetDate,campClearDates,campSetElasticity,
+    sortTableBy,selectCamp,campSetSearch,campSetQuickFilter,campSetCardSort,campToggleFilter,campClearFilters,campSortBy,campSetDate,campClearDates,campSetElasticity,
     campTrajectory,campBreakevenUplift,campFindCleanBaseline,campCollapseSection,campParticipationV1,campParticipationTrend,cpcPacingRec,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,cmpToggleExpand,
     injectCompareTab,loadKPIData,doLoad,
