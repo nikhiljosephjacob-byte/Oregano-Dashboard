@@ -9,6 +9,12 @@
 //   event:<ts>:<rand>     → JSON of historical event (login_success, login_failed,
 //                           logout, admin_kick, admin_ban, admin_unban)
 //   banned:<user>         → JSON of ban metadata (reason, who, when)
+//   forecast:<ts>:<rand>  → JSON of a SAVED Campaign Forecaster snapshot (only written when
+//                           the user explicitly clicks "Save this forecast" — never on every
+//                           Run Forecast click, to keep the log meaningful and quota-cheap).
+//                           Tagged with the dashboard's BUILD_VERSION at save time so a future
+//                           algorithm change never gets silently misread as "what the model
+//                           predicted" under different logic.
 // ═══════════════════════════════════════════════════════════════
 
 // User directory. Edit here to add/remove users — these passwords are NEVER
@@ -178,6 +184,63 @@ async function handleLogout(request, env) {
   return json({ ok: true });
 }
 
+// ─── forecast log endpoints ──────────────────────────────────────────────────
+// Saved manually (one click per campaign the user actually plans to launch), so
+// volume is naturally low — no throttling needed the way heartbeat writes required.
+async function handleForecastSave(request, env) {
+  const sessionId = request.headers.get("X-Session-Id");
+  const session = await getSession(env, sessionId);
+  if (!session) return json({ error: "no_session" }, 401);
+
+  const body = await readBody(request);
+  const required = ["brand", "agg", "discPct", "cap", "start", "end", "scenarios"];
+  for (const k of required) {
+    if (body[k] === undefined || body[k] === null) return json({ error: `missing_${k}` }, 400);
+  }
+
+  const ts = new Date().toISOString();
+  const id = `${ts}:${crypto.randomUUID().slice(0, 8)}`;
+  const record = {
+    id,
+    savedAt: ts,
+    savedBy: session.user,
+    savedByName: session.displayName,
+    algoVersion: body.algoVersion || null, // dashboard BUILD_VERSION at the time of saving
+    brand: body.brand, agg: body.agg,
+    discPct: body.discPct, cap: body.cap,
+    coFund: !!body.coFund, coFundPct: body.coFundPct || null,
+    start: body.start, end: body.end,
+    branches: Array.isArray(body.branches) ? body.branches : [],
+    baseline: body.baseline || null,
+    seasonality: body.seasonality || null,
+    scenarios: body.scenarios, // {conservative, expected, optimistic} — already-computed uplift/orders/contribution/roi
+    closestMatch: body.closestMatch || null, // the "reality check" match at save time, if any
+    matchCount: body.matchCount || 0
+  };
+
+  // Keep the forecast log for 2 years — these are meant to be looked back on, not ephemeral.
+  await env.SESSIONS.put(`forecast:${id}`, JSON.stringify(record), {
+    expirationTtl: 60 * 60 * 24 * 730
+  });
+
+  return json({ ok: true, id });
+}
+
+async function handleForecastList(request, env) {
+  const sessionId = request.headers.get("X-Session-Id");
+  const session = await getSession(env, sessionId);
+  if (!session) return json({ error: "no_session" }, 401);
+
+  const list = await env.SESSIONS.list({ prefix: "forecast:", limit: 500 });
+  const sorted = list.keys.sort((a, b) => b.name.localeCompare(a.name)); // most recent first
+  const records = [];
+  for (const k of sorted) {
+    const raw = await env.SESSIONS.get(k.name);
+    if (raw) records.push(JSON.parse(raw));
+  }
+  return json({ records, serverTime: new Date().toISOString() });
+}
+
 // ─── admin endpoints ─────────────────────────────────────────────────────────
 async function requireAdmin(request, env) {
   const sessionId = request.headers.get("X-Session-Id");
@@ -327,6 +390,8 @@ export default {
       if (path === "/api/login"           && method === "POST") return await handleLogin(request, env);
       if (path === "/api/heartbeat"       && method === "POST") return await handleHeartbeat(request, env);
       if (path === "/api/logout"          && method === "POST") return await handleLogout(request, env);
+      if (path === "/api/forecast/save"   && method === "POST") return await handleForecastSave(request, env);
+      if (path === "/api/forecast/list"   && method === "GET")  return await handleForecastList(request, env);
       if (path === "/api/admin/sessions"  && method === "GET")  return await handleAdminSessions(request, env);
       if (path === "/api/admin/kick"      && method === "POST") return await handleAdminKick(request, env);
       if (path === "/api/admin/ban"       && method === "POST") return await handleAdminBan(request, env);
