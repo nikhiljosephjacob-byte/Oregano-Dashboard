@@ -13,12 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-20-110";
+const BUILD_VERSION="2026-07-20-111";
 const BUILD_NOTES=[
-  "🔧 Campaign Forecaster logic fixed: the hard rule dropping any matched campaign under 3 days is gone — it was systematically excluding the MOST relevant evidence, since short flash promos are exactly what most % -off campaigns are. Matches are now weighted by recency (a repeat from last week counts far more than one from 5 months ago) and named one-off events (Fest, World Cup, Eid, etc.) are flagged and down-weighted instead of averaged in at full strength alongside routine discount promos.",
-  "📉 Seasonality recalculated: instead of comparing this month's sales to the average of whatever months the matched historical campaigns happened to run in (arbitrary, and easy to get backwards), it now compares the last 14 days to the preceding 14 days for that brand+platform — a real trailing-trend read, capped to a sane range so one noisy week can't swing the forecast wildly.",
-  "⚠️ New 'reality check' line on the Forecaster: if a near-identical campaign (same discount depth, same cap, run recently) exists, its actual result — uplift AND ROI — is surfaced prominently above the scenario cards, so a losing repeat can't get buried under rosier percentile math."
+  "📌 Forecasts can now be saved: a new 'Save this forecast' button on the Forecaster records the config + scenarios (not every run — only when you explicitly save) to a durable server-side log via the Worker, tagged with who saved it and the dashboard version at the time so a later algorithm fix never gets confused with an old prediction.",
+  "📜 New Forecast History panel inside the Forecaster tab — every saved forecast, with a live comparison against the real campaign once one matching those parameters actually runs.",
+  "📋 Campaign Detail pages now show a 'You forecasted this' callout when a saved forecast's brand/platform/discount/cap closely match that campaign and predate its start — expected vs. actual, right where you're already looking at the results."
 ];
+
 
 
 
@@ -7279,6 +7280,28 @@ function campCollapseSection(title,inner){
   if(!inner)return '';
   return `<details style="margin-bottom:14px"><summary style="cursor:pointer;font-size:12px;font-weight:800;color:#64748b;padding:10px 14px;background:#FEFDFA;border:1px solid #EDE7D9;border-radius:10px;user-select:none">▸ ${title} <span style="font-weight:500;color:#94a3b8">— show the evidence</span></summary><div style="margin-top:10px">${inner}</div></details>`;
 }
+// v111: reverse lookup — given a real campaign, find the most recent SAVED forecast (if any)
+// whose brand/platform/discount depth/cap match and which was saved BEFORE this campaign
+// started (a forecast can't be "for" something that already happened). Triggers a background
+// load of the forecast history the first time it's needed, same lazy pattern used elsewhere.
+function campFcMatchSaved(c){
+  if(campFcHistory===null){if(!campFcHistoryLoading)setTimeout(campFcLoadHistory,0);return null;}
+  if(!campFcHistory.length)return null;
+  const hp=parseInt(((c.comments||c.name||'').match(/(\d{1,3})\s*%/)||[])[1]||'0');
+  if(!hp)return null;
+  const capM=(c.comments||'').match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i);
+  const cCap=capM?parseInt(capM[1]):null;
+  const candidates=campFcHistory.filter(f=>{
+    if(f.brand!==c.brand||f.agg!==c.aggregator)return false;
+    if(Math.abs(f.discPct-hp)>8)return false;
+    if(f.cap&&cCap&&Math.abs(f.cap-cCap)>6)return false;
+    if(f.savedAt.slice(0,10)>c.startDate)return false;
+    return true;
+  });
+  if(!candidates.length)return null;
+  candidates.sort((a,b)=>b.savedAt.localeCompare(a.savedAt));
+  return candidates[0];
+}
 function campDetailV2HTML(c,idx){
   const st=campStatus(c);
   const stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#94a3b8',Cancelled:'#EF4444'}[st]||'#94a3b8';
@@ -7564,7 +7587,24 @@ function campDetailV2HTML(c,idx){
     </summary>
     <div style="border-top:1px solid #EDE7D9">${_notes.map(n=>`<div style="display:flex;gap:10px;padding:10px 14px;border-bottom:1px solid #F4EFE4"><span style="flex:0 0 7px;width:7px;height:7px;border-radius:50%;background:${_sevClr[n.sev]};margin-top:5px"></span><div style="min-width:0"><div style="font-size:12px;font-weight:700;color:#0F172A;margin-bottom:2px">${n.t}</div><div style="font-size:12px;color:#475569;line-height:1.6">${n.b}</div></div></div>`).join('')}</div>
   </details>`:'';
-  return header+heroBox+notesBar+partBox+kpiCards
+  // v111: "You forecasted this" callout — shows expected vs. actual right where the real
+  // result is already being reviewed, using whichever uplift figure this page already computed.
+  let fcBanner='';
+  const fcMatch=campFcMatchSaved(c);
+  if(fcMatch){
+    const exp=fcMatch.scenarios?.expected;
+    const actualUplift=a.ordersLift;
+    const expTxt=exp?`${exp.upliftPct>=0?'+':''}${Math.round(exp.upliftPct)}%`:'—';
+    const actTxt=actualUplift!=null?`${actualUplift>=0?'+':''}${actualUplift.toFixed(0)}%`:'—';
+    const bigMiss=exp&&actualUplift!=null&&Math.abs(exp.upliftPct-actualUplift)>25;
+    fcBanner=`<div style="background:#F3EFE3;border:1px solid #E4DCC8;border-left:3px solid #60A5FA;border-radius:8px;padding:11px 15px;margin-bottom:14px;display:flex;gap:10px;align-items:flex-start">
+      <span style="font-size:14px">📋</span>
+      <div style="font-size:12.5px;line-height:1.7;color:#374151">
+        <strong>You forecasted this on ${fmtShort(fcMatch.savedAt.slice(0,10))}</strong> (saved by ${fcMatch.savedByName||fcMatch.savedBy||'—'}): expected <strong style="color:#60A5FA">${expTxt}</strong> uplift — actual result <strong style="color:${actualUplift>=0?'#22C55E':'#EF4444'}">${actTxt}</strong>${bigMiss?' <span style="color:#F59E0B">— notably off from the forecast, worth a look at what changed</span>':''}.
+      </div>
+    </div>`;
+  }
+  return header+fcBanner+heroBox+notesBar+partBox+kpiCards
     +campOutletBreakdownHTML(c,a)
     +campCollapseSection('💰 Contribution Breakdown',breakdownBox)
     +campCollapseSection('📊 Compare vs Similar Campaigns',similarCampaignsBox)
@@ -8226,6 +8266,112 @@ function campFcRun(){
   renderCampaigns();
 }
 
+// ── v111: Forecast log — save, list, and match-to-actual ──
+let campFcHistory=null,campFcHistoryLoading=false,campFcHistoryError=null;
+let campFcSaving=false,campFcSaveMsg='';
+
+async function campFcSaveForecast(){
+  if(!campFcResult||campFcSaving)return;
+  const sess=getActiveSession();
+  if(!sess||!sess.sessionId){campFcSaveMsg='⚠ Not logged in — cannot save.';renderCampaigns();return;}
+  campFcSaving=true;campFcSaveMsg='';renderCampaigns();
+  const r=campFcResult;
+  const trim=sc=>sc?{upliftPct:sc.upliftPct,totalOrders:sc.totalOrders,incrOrders:sc.incrOrders,incrOrdersPerDay:sc.incrOrdersPerDay,campNet:sc.campNet,merchantDisc:sc.merchantDisc,merchantDiscPerDay:sc.merchantDiscPerDay,incrContrib:sc.incrContrib,incrContribPerDay:sc.incrContribPerDay,roi:sc.roi}:null;
+  const payload={
+    brand:r.brand,agg:r.agg,discPct:campFcDiscPct,cap:campFcCap,
+    coFund:campFcCoFund,coFundPct:campFcCoFund?campFcCoFundPct:null,
+    start:campFcStart,end:campFcEnd,branches:[...campFcBranches],
+    baseline:{dailyOrders:r.baseline.dailyOrders,dailyNet:r.baseline.dailyNet,grossAOV:r.baseline.grossAOV},
+    seasonality:{factor:r.seasonality.factor,pct:r.seasonality.pct,method:r.seasonality.method},
+    scenarios:{conservative:trim(r.conservative),expected:trim(r.expected),optimistic:trim(r.optimistic)},
+    closestMatch:r.closestMatch?{name:r.closestMatch.c.name||r.closestMatch.c.comments||null,startDate:r.closestMatch.c.startDate,endDate:r.closestMatch.c.endDate,upliftPct:r.closestMatch.upliftPct,discountROI:r.closestMatch.discountROI}:null,
+    matchCount:r.matches.length,
+    algoVersion:BUILD_VERSION
+  };
+  try{
+    const res=await fetch('/api/forecast/save',{method:'POST',headers:{'Content-Type':'application/json','X-Session-Id':sess.sessionId},body:JSON.stringify(payload)});
+    const data=await res.json();
+    campFcSaveMsg=res.ok?'✅ Saved':'⚠ '+(data.error||'Save failed');
+    if(res.ok)campFcHistory=null; // force refetch next time history is viewed
+  }catch(e){campFcSaveMsg='⚠ Network error — save failed';}
+  campFcSaving=false;renderCampaigns();
+}
+
+async function campFcLoadHistory(){
+  if(campFcHistoryLoading)return;
+  const sess=getActiveSession();
+  if(!sess||!sess.sessionId){campFcHistoryError='Not logged in.';renderCampaigns();return;}
+  campFcHistoryLoading=true;campFcHistoryError=null;renderCampaigns();
+  try{
+    const res=await fetch('/api/forecast/list',{headers:{'X-Session-Id':sess.sessionId}});
+    const data=await res.json();
+    if(!res.ok)throw new Error(data.error||'Failed to load');
+    campFcHistory=data.records;
+  }catch(e){campFcHistoryError=e.message;campFcHistory=[];}
+  campFcHistoryLoading=false;renderCampaigns();
+}
+
+// Find the ACTUAL completed campaign (if any) matching a saved forecast's parameters — same
+// brand+aggregator, discount depth within ±8, cap within ±6, and started ON OR AFTER the
+// forecast's save date (a forecast can't be "for" a campaign that already happened).
+function campFcMatchActual(fRec){
+  if(!campLoaded)return null;
+  const candidates=campaignData.filter(c=>{
+    if(campStatus(c)!=='Completed'&&campStatus(c)!=='Running')return false;
+    if(c.brand!==fRec.brand||c.aggregator!==fRec.agg)return false;
+    if(c.startDate<fRec.savedAt.slice(0,10))return false; // must be after the forecast was saved
+    const hp=parseInt(((c.comments||c.name||'').match(/(\d{1,3})\s*%/)||[])[1]||'0');
+    if(!hp||Math.abs(hp-fRec.discPct)>8)return false;
+    const capM=(c.comments||'').match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i);
+    const cCap=capM?parseInt(capM[1]):null;
+    if(fRec.cap&&cCap&&Math.abs(cCap-fRec.cap)>6)return false;
+    return true;
+  });
+  if(!candidates.length)return null;
+  // Closest-in-time match after the forecast date
+  candidates.sort((a,b)=>a.startDate.localeCompare(b.startDate));
+  const c=candidates[0];
+  const a=campAnalysisV2(c);
+  if(!a.hasData)return{c,actualUpliftPct:null,actualROI:null,status:campStatus(c)};
+  return{c,actualUpliftPct:a.ordersLift,actualROI:a.discountROI,status:campStatus(c)};
+}
+
+function campFcHistoryHTML(){
+  if(campFcHistory===null){
+    if(!campFcHistoryLoading)setTimeout(campFcLoadHistory,0);
+    return `<div style="font-size:12px;color:#94a3b8;padding:14px 0">Loading forecast history…</div>`;
+  }
+  if(campFcHistoryError)return `<div style="font-size:12px;color:#EF4444;padding:10px 0">⚠ ${campFcHistoryError}</div>`;
+  if(!campFcHistory.length)return `<div style="font-size:12px;color:#94a3b8;padding:14px 0">No saved forecasts yet — run one above and click "Save this forecast".</div>`;
+  const rows=campFcHistory.map(f=>{
+    const match=campFcMatchActual(f);
+    const exp=f.scenarios?.expected;
+    const savedDate=fmtShort(f.savedAt.slice(0,10));
+    let actualHTML=`<span style="color:#94a3b8;font-size:11px">No matching campaign run yet</span>`;
+    if(match){
+      const running=match.status==='Running';
+      if(match.actualUpliftPct!=null){
+        const clr=match.actualUpliftPct>=0?'#22C55E':'#EF4444';
+        const roiTxt=match.actualROI!=null?` · ROI ${match.actualROI.toFixed(2)}×`:'';
+        actualHTML=`<span style="color:${clr};font-weight:700">${match.actualUpliftPct>=0?'+':''}${match.actualUpliftPct.toFixed(0)}%</span><span style="color:#94a3b8">${roiTxt}${running?' (in progress)':''}</span>`;
+      }else{
+        actualHTML=`<span style="color:#94a3b8;font-size:11px">Campaign matched (${match.c.name||'—'}) — not enough data yet</span>`;
+      }
+    }
+    return `<div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1.4fr 1fr;gap:8px;padding:9px 0;border-bottom:0.5px solid #F1F5F9;font-size:12px;align-items:center">
+      <div><div style="font-weight:700;color:#0F172A">${bPill(f.brand,18)} ${f.brand} <span style="color:#94a3b8">×</span> ${f.agg}</div><div style="font-size:10px;color:#94a3b8;margin-top:2px">${f.discPct}% off${f.cap?' · cap AED '+f.cap:''} · saved ${savedDate} by ${f.savedByName||f.savedBy||'—'}</div></div>
+      <div style="color:#64748b">${f.start} – ${f.end}</div>
+      <div>${exp?`<strong style="color:#60A5FA">${exp.upliftPct>=0?'+':''}${Math.round(exp.upliftPct)}%</strong>`:'—'}</div>
+      <div>${actualHTML}</div>
+      <div style="font-size:9px;color:#94a3b8">${f.algoVersion||'—'}</div>
+    </div>`;
+  }).join('');
+  return `<div style="margin-top:6px">
+    <div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1.4fr 1fr;gap:8px;padding:5px 0;border-bottom:0.5px solid #E2E8F0;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Dates</div><div>Forecast</div><div>Actual</div><div>Build</div></div>
+    ${rows}
+  </div>`;
+}
+
 function campFcExport(){
   if(!campFcResult)return;
   const r=campFcResult;const fA=v=>Math.round(v);
@@ -8411,6 +8557,8 @@ function campFcHTML(){
     +(flagsHTML?`<div style="margin-bottom:10px">${flagsHTML}</div>`:'')
     // Export
     +`<div style="display:flex;gap:8px;justify-content:flex-end">`
+    +`<button onclick="campFcSaveForecast()" ${campFcSaving?'disabled':''} style="background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.35);border-radius:6px;color:#60A5FA;padding:5px 14px;font-size:11px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px">${campFcSaving?'Saving…':'📌 Save this forecast'}</button>`
+    +(campFcSaveMsg?`<span style="font-size:11px;color:${campFcSaveMsg.startsWith('✅')?'#22C55E':'#EF4444'};align-self:center">${campFcSaveMsg}</span>`:'')
     +`<button onclick="campFcExport()" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#16a34a;padding:5px 14px;font-size:11px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px">⬇ Export forecast + post-campaign tracker</button>`
     +'</div>'
     +'</div>';
@@ -8422,6 +8570,11 @@ function campFcHTML(){
   const inp=(k,type,cur,min,max)=>`<input type="${type}" value="${cur}" min="${min}" max="${max}" onchange="campFcSet('${k}',this.value)" style="width:100%;background:#F1F5F9;border:0.5px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:6px 8px;font-size:12px;font-weight:600;box-sizing:border-box">`;
   const fld=(lbl,html)=>`<div><div style="font-size:10px;font-weight:600;color:#64748b;margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px">${lbl}</div>${html}</div>`;
 
+  const historyPanel=`<div style="background:#FFFFFF;border:0.5px solid #E2E8F0;border-radius:12px;padding:14px 16px;margin-top:14px">
+    <div style="font-size:13px;font-weight:700;color:#0F172A;margin-bottom:4px">📜 Forecast History</div>
+    <div style="font-size:10px;color:#94a3b8;margin-bottom:8px">Every saved forecast, compared against the real campaign once one matching those parameters actually runs.</div>
+    ${campFcHistoryHTML()}
+  </div>`;
   return`<div style="background:#FFFFFF;border:0.5px solid #E2E8F0;border-radius:12px;padding:14px 16px;margin-bottom:14px;border-left:3px solid ${accent};border-top-left-radius:0;border-bottom-left-radius:0">`
   +`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${campFcCollapsed?'0':'12px'}">`
   +`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">📊</span><div style="font-size:15px;font-weight:800;color:#0F172A">Campaign Forecaster</div><div style="font-size:10px;color:#64748b;margin-left:4px">Estimate what a planned campaign will yield before you launch</div></div>`
@@ -8442,7 +8595,8 @@ function campFcHTML(){
     +`<button onclick="campFcRun()" style="background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.4);border-radius:6px;color:${accent};padding:6px 18px;font-size:12px;cursor:pointer;font-weight:700">▶ Run Forecast</button>`
     +resultsHTML
   )
-  +'</div>';
+  +'</div>'
+  +historyPanel;
 }
 
 async function renderCampaigns(){
@@ -10807,6 +10961,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
     sortTableBy,selectCamp,campSetSearch,campSetQuickFilter,campSetCardSort,campToggleFilter,campClearFilters,campSortBy,campSetDate,campClearDates,campSetElasticity,
     campTrajectory,campBreakevenUplift,campFindCleanBaseline,campCollapseSection,campParticipationV1,campParticipationTrend,cpcPacingRec,
+    campFcSaveForecast,campFcLoadHistory,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,cmpToggleExpand,
     injectCompareTab,loadKPIData,doLoad,
     dismissUpdateModal,hardRefreshNow,dismissWhatsNew,showWhatsNewIfNeeded,
