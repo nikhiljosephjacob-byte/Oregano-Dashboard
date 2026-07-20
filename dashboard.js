@@ -13,16 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-20-108";
+const BUILD_VERSION="2026-07-20-109";
 const BUILD_NOTES=[
-  "🛠️ Recovery build: an earlier build today was accidentally created from a stale pre-17-July copy of the code and briefly overwrote the Campaign Forecaster and several other features when uploaded. This build restores everything from the real GitHub history and re-applies today's genuinely new work on top of it — nothing from before 17 July is lost.",
-  "🎴 Campaign cards rebuilt: profitability-colored left border (green/amber/red/grey), symbol-only verdicts (✅/⚠️/❌/🛑), deduped offer/comment text, thin progress bar — all while keeping the exact Keeta participation P&L and the hover calculation tooltips exactly as they were.",
-  "📊 New KPI strip above the campaign tabs: Active / Ending in 3d / Winning / Losing / Campaign Contribution / Discount Burn / Blended ROI.",
-  "💡 Needs Attention became Recommendations: same signals plus a new Opportunity category, collapsible, auto-expands only when something critical needs attention.",
-  "🔎 Campaign toolbar: search box, quick filter chips (Winning/Losing/Ending soon), sort dropdown — all client-side.",
-  "🧹 Removed dead Calendar-tab code left over from an earlier cleanup (the tab itself had already been removed; only the unused function/state remained).",
-  "⚖️ Compare page: muted slate-blue/amber palette (was saturated blue/orange) with larger readable text across the stat cards, plus a new margin-focused Contribution card and a campaign-overlap-aware insight banner, replacing the earlier brand-mix bar chart and general narrative banner. Chart x-axis now shows weekday + date stacked for BOTH sides directly on the axis. The existing Platform Movement bar tile is unchanged (already good)."
+  "🔮 Campaign Forecaster moved into its own tab. It was previously rendered above every tab on the Campaign Manager page (Active, Upcoming, History, Detail all had it pushing content down) — now it only appears when you click the Forecaster tab, keeping the performance views clean."
 ];
+
 
 
 let _updateDialogShown=false;
@@ -8410,7 +8405,8 @@ async function renderCampaigns(){
     const tabs=[
       ['active',`🟢 Active`,active.length],
       ['upcoming',`⏰ Upcoming`,upcoming.length],
-      ['history',`📋 History`,completed.length]
+      ['history',`📋 History`,completed.length],
+      ['forecaster',`🔮 Forecaster`,null]
     ];
     if(selCamp)tabs.push(['detail','🔍 Campaign Detail',null]);
     else if(selBundle)tabs.push(['detail','🎯 Bundle Detail',null]);
@@ -8433,7 +8429,8 @@ async function renderCampaigns(){
       return html;
     };
     let main='';
-    if(campTab==='active'){const f=sortCampCards(applyCampFilters(activeSorted));main=campFilterBar()+renderCampListWithRewardsSplit(f,true,'🟢 Active Campaigns');}
+    if(campTab==='forecaster'){main=campFcHTML();}
+    else if(campTab==='active'){const f=sortCampCards(applyCampFilters(activeSorted));main=campFilterBar()+renderCampListWithRewardsSplit(f,true,'🟢 Active Campaigns');}
     else if(campTab==='upcoming'){const f=applyCampFilters(upcoming).slice().sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||''));main=campFilterBar()+`<div style="font-size:11px;color:#475569;font-weight:700;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px">⏰ Upcoming Campaigns (${f.length})</div>`+campCardGrid(f,false);}
     else if(campTab==='history'){const fcRaw=applyCampFilters(completed);const fc=campQuickFilter!=='all'?sortCampCards(fcRaw):fcRaw.slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));const shown=fc.slice(0,120);main=campFilterBar()+renderCampListWithRewardsSplit(shown,true,`📋 Completed Campaigns${fc.length>120?' · showing 120 most recent of '+fc.length:''}`);}
     else if(campTab==='detail'&&selBundle){main=bundleDetailHTML(selBundle);}
@@ -8446,7 +8443,7 @@ async function renderCampaigns(){
     // These changes save ~300px of vertical chrome at the top of the page.
     const attention=(campTab==='active'||campTab==='upcoming'||campTab==='history')?campNeedsAttentionPanel(active,upcoming):'';
     const kpiStrip=(campTab==='active')?campKPIStrip(active):'';initCalcTip();
-    pg.innerHTML=`${campFcHTML()}${header}${campDataFreshnessStrip()}${kpiStrip}${attention}<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
+    pg.innerHTML=`${header}${campDataFreshnessStrip()}${kpiStrip}${attention}<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
     // Fire non-blocking end-soon toasts on entry to Active tab (once per campaign+threshold per session)
     if(campTab==='active')setTimeout(()=>campEndSoonPopups(active),150);
     if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
