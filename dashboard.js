@@ -13,10 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-20-109";
+const BUILD_VERSION="2026-07-20-110";
 const BUILD_NOTES=[
-  "🔮 Campaign Forecaster moved into its own tab. It was previously rendered above every tab on the Campaign Manager page (Active, Upcoming, History, Detail all had it pushing content down) — now it only appears when you click the Forecaster tab, keeping the performance views clean."
+  "🔧 Campaign Forecaster logic fixed: the hard rule dropping any matched campaign under 3 days is gone — it was systematically excluding the MOST relevant evidence, since short flash promos are exactly what most % -off campaigns are. Matches are now weighted by recency (a repeat from last week counts far more than one from 5 months ago) and named one-off events (Fest, World Cup, Eid, etc.) are flagged and down-weighted instead of averaged in at full strength alongside routine discount promos.",
+  "📉 Seasonality recalculated: instead of comparing this month's sales to the average of whatever months the matched historical campaigns happened to run in (arbitrary, and easy to get backwards), it now compares the last 14 days to the preceding 14 days for that brand+platform — a real trailing-trend read, capped to a sane range so one noisy week can't swing the forecast wildly.",
+  "⚠️ New 'reality check' line on the Forecaster: if a near-identical campaign (same discount depth, same cap, run recently) exists, its actual result — uplift AND ROI — is surfaced prominently above the scenario cards, so a losing repeat can't get buried under rosier percentile math."
 ];
+
 
 
 
@@ -8075,6 +8078,12 @@ function campFcBaseline(brand,agg,branches,days){
   return{dailyNet:tNet/nDays,dailyOrders:tOrd/nDays,dailyGross:tGross/nDays,grossAOV:tOrd>0?tGross/tOrd:0,netAOV:tOrd>0?tNet/tOrd:0,refDays:nDays};
 }
 
+// v110: named one-off events (festivals, World Cup, Eid, etc.) drive uplift through footfall/
+// occasion, not through the discount mechanic itself — averaging them in alongside a routine
+// "X% off" promo at equal weight distorts the read for the promo you're actually planning.
+// This flags them (isAtypical) so campFcRun can down-weight rather than silently exclude them —
+// the info is still visible in the match table, just not allowed to dominate the estimate.
+const CAMP_FC_ATYPICAL_RE=/\b(fest(?:ival)?|world\s*cup|eid|ramadan|national\s*day|new\s*year|christmas|black\s*friday|anniversary|carnival|activation|launch\s*party|grand\s*opening)\b/i;
 function campFcFindMatches(brand,agg,discPct,cap){
   if(!campLoaded)return[];
   const done=campaignData.filter(c=>campStatus(c)==='Completed'&&c.brand===brand&&c.aggregator===agg);
@@ -8087,32 +8096,38 @@ function campFcFindMatches(brand,agg,discPct,cap){
     if(cap&&cCap&&Math.abs(cCap-cap)>6)continue;
     const a=campAnalysisV2(c);
     if(!a.hasData||!a.hasBaseline||a.ordersLift==null)continue;
-    out.push({c,discPct:hp,cap:cCap,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales,campOrdersPerDay:a.cs.orders/a.cDays,campSalesPerDay:a.cs.sales/a.cDays});
+    const isAtypical=CAMP_FC_ATYPICAL_RE.test(`${c.name||''} ${c.comments||''}`);
+    out.push({c,discPct:hp,cap:cCap,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales,campOrdersPerDay:a.cs.orders/a.cDays,campSalesPerDay:a.cs.sales/a.cDays,isAtypical});
   }
   // Most recent campaigns first — the display only shows the top 8, and recent campaigns
   // are more relevant for a forecast than old ones. All matches are still used in the
-  // percentile calculation regardless of this order; this only affects display priority.
+  // weighted estimate regardless of this order; this only affects display priority.
   out.sort((a,b)=>b.c.startDate.localeCompare(a.c.startDate));
   return out;
 }
 
-function campFcSeasonality(brand,agg,targetStart,matches){
-  if(!targetStart||!matches.length)return{factor:1,pct:0};
-  const tMo=targetStart.slice(0,7);
-  const tRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date.slice(0,7)===tMo&&r.branch!=='(brand-level)');
-  const tDays=[...new Set(tRecs.map(r=>r.date))].length||1;
-  const tDaily=tRecs.reduce((s,r)=>s+r.sales,0)/tDays;
-  const moAvgs={};
-  matches.forEach(m=>{
-    const mo=m.c.startDate.slice(0,7);
-    if(moAvgs[mo]!==undefined)return;
-    const recs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date.slice(0,7)===mo&&r.branch!=='(brand-level)');
-    const d=[...new Set(recs.map(r=>r.date))].length||1;
-    moAvgs[mo]=recs.reduce((s,r)=>s+r.sales,0)/d;
-  });
-  const matchAvg=Object.values(moAvgs).length?Object.values(moAvgs).reduce((s,v)=>s+v,0)/Object.values(moAvgs).length:0;
-  const factor=(tDaily>0&&matchAvg>0)?tDaily/matchAvg:1;
-  return{factor:Math.max(0.5,Math.min(2,factor)),pct:Math.round((Math.max(0.5,Math.min(2,factor))-1)*100)};
+// v110: seasonality rewritten. The old version compared this month's average sales to the
+// average of whichever CALENDAR MONTHS the matched historical campaigns happened to fall in —
+// arbitrary (a 5-month-old festival in April got mixed with a promo from this month), and easy
+// to land on a spurious boost that has nothing to do with actual seasonal demand. This instead
+// measures a real trailing trend: last 14 days vs the preceding 14 days for this brand+platform,
+// capped to ±25% so one noisy fortnight can't swing the whole forecast. That's a direct read on
+// "is this brand currently trending down" (e.g. the Dubai summer slump) rather than a proxy.
+function campFcSeasonality(brand,agg,targetStart){
+  if(!latest)return{factor:1,pct:0,method:'none'};
+  const winAvg=(s,e)=>{
+    const recs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)'&&r.date>=s&&r.date<=e);
+    if(!recs.length)return null;
+    const days=[...new Set(recs.map(r=>r.date))].length||1;
+    return recs.reduce((s2,r)=>s2+r.sales,0)/days;
+  };
+  const recentEnd=latest,recentStart=subDays(recentEnd,13);
+  const priorEnd=subDays(recentStart,1),priorStart=subDays(priorEnd,13);
+  const recentAvg=winAvg(recentStart,recentEnd),priorAvg=winAvg(priorStart,priorEnd);
+  if(!recentAvg||!priorAvg)return{factor:1,pct:0,method:'none'};
+  const trendFactor=recentAvg/priorAvg;
+  const factor=Math.max(0.75,Math.min(1.25,trendFactor));
+  return{factor,pct:Math.round((factor-1)*100),method:'14d trend'};
 }
 
 function campFcRunScenario(baseline,uplift,discPct,cap,coFundPct,agg,brand,nDays,dateStr){
@@ -8138,6 +8153,18 @@ function campFcRunScenario(baseline,uplift,discPct,cap,coFundPct,agg,brand,nDays
     incrContrib,incrContribPerDay:incrContrib/nDays,roi,effDisc,grossAOV,netAOV};
 }
 
+// v110: weighted percentile — each match contributes proportional to its weight instead of
+// counting equally. A weight of 1 = full vote; a weight of 0.3 = counts for 3/10 of a vote.
+// This is how "last week's exact repeat" ends up dominating "a festival from 5 months ago"
+// instead of the other way around.
+function campFcWeightedPercentile(weighted,p){
+  const sorted=[...weighted].sort((a,b)=>a.u-b.u);
+  const totalW=sorted.reduce((s,x)=>s+x.w,0);
+  if(totalW<=0)return sorted.length?sorted[Math.floor(sorted.length/2)].u:0;
+  let cum=0;
+  for(const x of sorted){cum+=x.w;if(cum/totalW>=p/100)return x.u;}
+  return sorted[sorted.length-1].u;
+}
 function campFcRun(){
   const brand=campFcBrand,agg=campFcAgg;
   if(!brand||!agg||!campFcStart||!campFcEnd){alert('Please fill in Brand, Aggregator, Start and End dates.');return;}
@@ -8145,17 +8172,27 @@ function campFcRun(){
   const baseline=campFcBaseline(brand,agg,campFcBranches,nDays);
   if(!baseline){alert('No sales data found for '+brand+' on '+agg+'. Upload data first.');return;}
   const matches=campFcFindMatches(brand,agg,campFcDiscPct,campFcCap);
-  const seas=campFcSeasonality(brand,agg,campFcStart,matches);
+  const seas=campFcSeasonality(brand,agg,campFcStart);
+  // v110: the closest available real-world evidence — same brand/agg/discount depth, most
+  // recent, not a named one-off event — surfaced prominently as a "reality check" regardless
+  // of how the weighted scenarios come out. Prevents a losing repeat from getting buried.
+  const closestMatch=matches.find(m=>!m.isAtypical&&m.upliftPct!=null&&Math.abs(m.upliftPct)<150)||null;
   let cU=0.10,eU=0.20,oU=0.35;
   if(matches.length){
-    const cleanM=matches.filter(m=>m.cDays>=3&&m.upliftPct!=null&&Math.abs(m.upliftPct)<150);
-    const useM=cleanM.length?cleanM:matches.filter(m=>m.upliftPct!=null);
-    const up=[...useM.map(m=>m.upliftPct/100)].sort((a,b)=>a-b);
-    if(up.length){
-      const pct=(arr,p)=>{if(arr.length===1)return arr[0];const i=(p/100)*(arr.length-1);const lo=Math.floor(i),hi=Math.ceil(i);return arr[lo]+(i-lo)*(arr[hi]-arr[lo]);};
-      cU=Math.max(-0.20,pct(up,25)*seas.factor);
-      eU=Math.max(-0.10,pct(up,50)*seas.factor);
-      oU=Math.min(0.75,Math.max(0.05,pct(up,75)*seas.factor));
+    // Only true statistical outliers get dropped entirely (data errors / freak swings).
+    // Everything else — including short campaigns and named events — stays in, just weighted.
+    const usable=matches.filter(m=>m.upliftPct!=null&&Math.abs(m.upliftPct)<150);
+    const useM=usable.length?usable:matches.filter(m=>m.upliftPct!=null);
+    const weighted=useM.map(m=>{
+      const daysAgo=Math.max(1,daysBetweenInclusive(m.c.endDate,campFcStart));
+      const recencyW=Math.exp(-daysAgo/45); // ~31-day half-life — a repeat from last week outweighs one from 5 months ago
+      const typeW=m.isAtypical?0.3:1; // named events (Fest, World Cup, etc.) count for 3/10 of a normal promo match
+      return{u:m.upliftPct/100,w:recencyW*typeW};
+    });
+    if(weighted.length){
+      cU=Math.max(-0.20,campFcWeightedPercentile(weighted,25)*seas.factor);
+      eU=Math.max(-0.10,campFcWeightedPercentile(weighted,50)*seas.factor);
+      oU=Math.min(0.75,Math.max(0.05,campFcWeightedPercentile(weighted,75)*seas.factor));
     }
   }else{cU*=seas.factor;eU*=seas.factor;oU*=seas.factor;}
   const coFP=campFcCoFund?campFcCoFundPct:0;
@@ -8182,7 +8219,7 @@ function campFcRun(){
     lyHasDisc:lyStart>='2026-05-01',
     pwOrders:pwRecs.length?pwRecs.reduce((s,r)=>s+r.orders,0)/pwDays:null,
     pwNet:pwRecs.length?pwRecs.reduce((s,r)=>s+r.sales,0)/pwDays:null,
-    recCamp,conc,
+    recCamp,conc,closestMatch,
     coFP,coFundPct:campFcCoFundPct,
     generatedAt:new Date().toISOString()
   };
@@ -8306,15 +8343,35 @@ function campFcHTML(){
     if(r.seasonality.pct!==0){flags.push({lvl:'info',msg:`Seasonality correction applied: <strong>${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong> vs periods when historical matches ran (${r.matches.length} campaign${r.matches.length!==1?'s':''}).`});}
     if(!r.matches.length){flags.push({lvl:'warn',msg:`No exact historical matches found for ${r.brand} × ${r.agg} at ${campFcDiscPct}% off (±8%) cap AED ${campFcCap} (±6). Fallback uplifts used: conservative 10%, expected 20%, optimistic 35%. Find and select a comparable past campaign for better accuracy.`});}
 
+    // v110: reality-check banner — the closest real recent match's ACTUAL result, shown
+    // prominently regardless of what the weighted scenarios say. Can't get buried by rosier math.
+    const cm=r.closestMatch;
+    const realityCheckHTML=cm?(()=>{
+      const roiClr=cm.discountROI==null?'#64748b':cm.discountROI>=0?'#16a34a':'#dc2626';
+      const roiTxt=cm.discountROI!=null?cm.discountROI.toFixed(2)+'×':'n/a';
+      const upliftClr=(cm.upliftPct||0)>=0?'#16a34a':'#dc2626';
+      const warn=cm.discountROI!=null&&cm.discountROI<0;
+      return `<div style="display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border-radius:8px;margin-bottom:12px;background:${warn?'rgba(239,68,68,.08)':'rgba(59,130,246,.08)'};border:1px solid ${warn?'rgba(239,68,68,.35)':'rgba(59,130,246,.3)'}">`
+        +`<span style="font-size:16px;flex-shrink:0">${warn?'⚠️':'ℹ️'}</span>`
+        +`<div style="font-size:12.5px;line-height:1.6;color:#1e293b"><strong>Reality check:</strong> the closest recent match — ${cm.c.name||cm.c.comments||'this campaign'} (${cm.c.startDate} – ${cm.c.endDate}, ${cm.discPct}% off${cm.cap?' · cap AED '+cm.cap:''}) — actually delivered <strong style="color:${upliftClr}">${fP(cm.upliftPct)}</strong> uplift with <strong style="color:${roiClr}">${roiTxt} ROI</strong>${warn?' — it lost money on a contribution basis. This match is already the largest single input to the scenarios below.':'.'}</div>`
+        +`</div>`;
+    })():'';
     const flagsHTML=flags.map(f=>`<div style="display:flex;align-items:flex-start;gap:8px;font-size:12px;padding:8px 10px;border-radius:6px;margin-bottom:6px;background:${f.lvl==='warn'?'rgba(245,158,11,.08)':'#F8FAFC'};border:0.5px solid ${f.lvl==='warn'?'rgba(245,158,11,.4)':'#E2E8F0'}">`
       +`<span style="font-size:14px;flex-shrink:0;margin-top:1px">${f.lvl==='warn'?'⚠️':'ℹ️'}</span><span style="color:${f.lvl==='warn'?'#92400e':'#475569'}">${f.msg}</span></div>`).join('');
 
-    // Match table
+    // v110: Match table — "excluded" is now ONLY for genuine statistical outliers (±150% swings,
+    // almost always a data issue). Short campaigns are no longer penalized (that was the bug).
+    // Named one-off events get their own distinct "atypical" flag instead of being dimmed the
+    // same as an outlier — they're still real data, just down-weighted in the calculation.
     const matchRows=r.matches.slice(0,8).map(m=>{
       const ic=m.discountROI!=null?(m.discountROI>=0?'#22C55E':'#EF4444'):'#64748b';
-      const isExcluded=m.cDays<3||Math.abs(m.upliftPct||0)>=150;
-      return`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr;gap:4px;padding:8px 0;border-bottom:0.5px solid #F1F5F9;font-size:13px;align-items:center${isExcluded?';opacity:.45':''}">`
-      +`<div style="color:#475569">${m.c.name||m.c.comments||'—'}${isExcluded?'<span style="font-size:8px;color:#F59E0B;background:rgba(245,158,11,.1);padding:1px 5px;border-radius:4px;margin-left:4px">⚠ outlier · excluded</span>':''}<div style="font-size:11px;color:#94a3b8">${m.c.startDate} – ${m.c.endDate}</div></div>`
+      const isOutlier=Math.abs(m.upliftPct||0)>=150;
+      const dimmed=isOutlier;
+      const flagHTML=isOutlier
+        ?'<span style="font-size:8px;color:#EF4444;background:rgba(239,68,68,.1);padding:1px 5px;border-radius:4px;margin-left:4px">⚠ statistical outlier · excluded</span>'
+        :(m.isAtypical?'<span style="font-size:8px;color:#F59E0B;background:rgba(245,158,11,.1);padding:1px 5px;border-radius:4px;margin-left:4px">🎪 atypical event · down-weighted</span>':'');
+      return`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr;gap:4px;padding:8px 0;border-bottom:0.5px solid #F1F5F9;font-size:13px;align-items:center${dimmed?';opacity:.45':''}">`
+      +`<div style="color:#475569">${m.c.name||m.c.comments||'—'}${flagHTML}<div style="font-size:11px;color:#94a3b8">${m.c.startDate} – ${m.c.endDate}</div></div>`
       +`<div style="color:#94a3b8">${m.cDays}d</div>`
       +`<div style="color:${(m.upliftPct||0)>=0?'#16a34a':'#dc2626'};font-weight:600">${m.upliftPct!=null?fP(m.upliftPct):'—'}</div>`
       +`<div style="color:#0F172A">${m.campOrdersPerDay!=null?Math.round(m.campOrdersPerDay).toLocaleString():'—'}</div>`
@@ -8328,11 +8385,12 @@ function campFcHTML(){
     +(r.matches.length?`<div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">`
     +bPill(r.brand,22)+aPill(r.agg,22)
     +`<span style="background:rgba(34,197,94,.1);color:#16a34a;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">${r.matches.length} historical match${r.matches.length!==1?'es':''}</span>`
-    +`<span style="font-size:10px;color:#94a3b8">· ${campFcDiscPct}% off ±8% · cap AED ${campFcCap} ±6 · <em style="opacity:.7">dimmed = excluded outlier</em></span></div>`
+    +`<span style="font-size:10px;color:#94a3b8">· ${campFcDiscPct}% off ±8% · cap AED ${campFcCap} ±6 · <em style="opacity:.7">dimmed = statistical outlier · excluded</em></span></div>`
     +`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr;gap:4px;padding:5px 0;border-bottom:0.5px solid #E2E8F0;font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Days</div><div>Uplift</div><div>Orders/day</div><div>Sales/day</div><div>Disc/day</div><div>ROI</div></div>`
     +matchRows
     +`<div style="font-size:12px;color:#94a3b8;margin-top:8px">Avg uplift: <strong style="color:#0F172A">${fP(r.matches.reduce((s,m)=>s+(m.upliftPct||0),0)/r.matches.length)}</strong>  ·  Seasonality: <strong style="color:${r.seasonality.pct>=0?'#0F172A':'#dc2626'}">${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong></div>`
     :`<div style="font-size:11px;color:#F59E0B;padding:8px;background:rgba(245,158,11,.08);border-radius:6px;margin-bottom:10px">No exact matches — using fallback estimates. Consider selecting a comparable past campaign.</div>`)
+    +realityCheckHTML
     // Three scenarios
     +`<div style="display:flex;gap:10px;margin:14px 0;flex-wrap:wrap">`
     +scCard('Conservative',r.conservative,false)
