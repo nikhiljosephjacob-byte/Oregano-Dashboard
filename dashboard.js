@@ -13,10 +13,14 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-117";
+const BUILD_VERSION="2026-07-21-118";
 const BUILD_NOTES=[
-  "🔧 Fixed the Clear (✕) buttons on the Data strip — v116's version embedded the multi-line confirmation text directly into the inline click handler, where the raw newlines made the handler a silent JavaScript syntax error: clicking ✕ did nothing and the click fell through to the chip underneath, opening the file picker instead. The confirmation now lives in a proper function and the ✕ works as intended."
+  "🎯 Careem attribution fix: Careem statements record discount under two different type columns, and a campaign only pulled records matching its own classification (promo vs catalog). When a single campaign was the ONLY one covering a day — like the restarted entire-menu 30% CAP 20 on 13 Jul — the other type's money (AED 1,192 that day) was orphaned into Uncategorized even though it obviously belonged to that campaign. Now a sole-covering campaign sweeps ALL discount types for the day; type-filtering only applies when concurrent Careem campaigns of different mechanics genuinely need separating.",
+  "⚖️ Talabat over-attribution fix: Talabat exact records carry no per-campaign tag, and every covering campaign was pulling the FULL day's exact discount — so two overlapping Talabat campaigns each claimed the same money (the red '+AED over-attributed' flags on Wicked Wings). Concurrent covering campaigns now split each day's exact discount by their declared discount-% ratio (equal split if none declared), same as the estimation path.",
+  "🔍 The per-date audit drill now shows Careem's exact per-type totals for the day (promo vs catalog), so a type-split day explains itself on screen.",
+  "🤫 Boundary-mismatch hints no longer fire on dates that ARE covered by a campaign — an under-allocation on a covered day is an attribution issue, not a sheet-date mismatch, and the old hint ('ran late?' / 'early activation?') was misleading there."
 ];
+
 
 
 
@@ -1305,11 +1309,24 @@ function getCareemExactDisc(c,start,end){
   if(end<dr[0]||start>dr[1])return null;
   const expectedType=classifyCareemCampaign(c);
   const myScope=campOutlets(c);
+  // v118: type-filtering exists to separate CONCURRENT Careem campaigns of different mechanics
+  // (a capped voucher promo vs a menu-price catalog discount running the same day). But when
+  // this campaign is the ONLY one covering a date, filtering by type just orphans real money —
+  // Careem statements can record a single entire-menu capped campaign's discount across BOTH
+  // type columns (seen live: 13 Jul, AED 2,118 promo + AED 1,192 catalog, one campaign, one
+  // mechanic). Sole coverer → sweep all types; contested date+type → matching type only.
+  const rivals=campaignData.filter(x=>x!==c&&x.brand===c.brand&&x.aggregator==='Careem'&&campStatus(x)!=='Cancelled'&&!isRewardsCampaign(x)&&!(x.endDate<start||x.startDate>end));
+  const rivalClaimsType=(date,dtype)=>{
+    for(const o of rivals){
+      if(o.startDate<=date&&o.endDate>=date&&classifyCareemCampaign(o)===dtype)return true;
+    }
+    return false;
+  };
   let menuDisc=0;const dailyAlloc={};let matched=0;
   for(const rec of careemOrdersData.records){
     if(rec.brand!==c.brand)continue;
-    if(rec.discount_type!==expectedType)continue;
     if(rec.date<start||rec.date>end)continue;
+    if(rec.discount_type!==expectedType&&rivalClaimsType(rec.date,rec.discount_type))continue;
     if(myScope&&!myScope.has(rec.outlet))continue;
     menuDisc+=rec.menu_disc;
     dailyAlloc[rec.date]=(dailyAlloc[rec.date]||0)+rec.menu_disc;
@@ -1543,14 +1560,32 @@ function getTalabatExactDisc(c,start,end){
   if(!dr[0]||!dr[1])return null;
   if(end<dr[0]||start>dr[1])return null;
   const myScope=campOutlets(c);
+  // v118: Talabat records carry no per-campaign tag, and previously EVERY covering campaign
+  // pulled the FULL day's exact discount — two overlapping Talabat campaigns each claimed the
+  // same money (visible as red "+AED over-attributed" flags on the Discount Burn page). Now,
+  // when other Talabat campaigns for the same brand also cover a date, the day's discount is
+  // split by declared discount-% ratio (equal split when nothing is declared) — the same rule
+  // the estimation path has always used for overlaps.
+  const rivals=campaignData.filter(x=>x!==c&&x.brand===c.brand&&x.aggregator==='Talabat'&&campStatus(x)!=='Cancelled'&&!isRewardsCampaign(x)&&!(x.endDate<start||x.startDate>end));
+  const pctOfCamp=cc=>{const m=(((cc.comments||'')+' '+(cc.name||'')).match(/(\d{1,3})\s*%/));return m?parseInt(m[1]):0;};
+  const myPct=pctOfCamp(c);
+  const myShareOn=(date)=>{
+    const live=rivals.filter(o=>o.startDate<=date&&o.endDate>=date);
+    if(!live.length)return 1;
+    const pcts=[myPct,...live.map(pctOfCamp)];
+    const total=pcts.reduce((s,v)=>s+v,0);
+    if(total<=0)return 1/(live.length+1);
+    return myPct>0?myPct/total:0; // declared %s present but mine missing → I claim nothing on contested days
+  };
   let menuDisc=0,talabatDisc=0;const dailyAlloc={};let matched=0;
   for(const rec of talabatOrdersData.records){
     if(rec.brand!==c.brand)continue;
     if(rec.date<start||rec.date>end)continue;
     if(myScope&&!myScope.has(rec.outlet))continue;
-    menuDisc+=rec.menu_disc;
-    talabatDisc+=(rec.talabat_disc||0);
-    dailyAlloc[rec.date]=(dailyAlloc[rec.date]||0)+rec.menu_disc;
+    const share=myShareOn(rec.date);
+    menuDisc+=rec.menu_disc*share;
+    talabatDisc+=(rec.talabat_disc||0)*share;
+    dailyAlloc[rec.date]=(dailyAlloc[rec.date]||0)+rec.menu_disc*share;
     matched++;
   }
   if(!matched)return null;
@@ -9038,11 +9073,20 @@ function computeDiscountBurn(){
     const _dayShift=(ymd,n)=>{const d=new Date(ymd+'T12:00:00');d.setDate(d.getDate()+n);return dk(d);};
     const _boundaryHint=(brand,aggregator,date,unc,disc)=>{
       if(unc<50||unc<disc*0.3)return null;
+      // v118: if ANY campaign already covers this date, the gap is an attribution/allocation
+      // issue on a covered day — NOT a sheet-date mismatch — and the adjacency hint ("ran
+      // late?" / "early activation?") would be misleading. Seen live on Careem 13 Jul: the
+      // restarted campaign covered the day but a type-split under-allocated it, and the hint
+      // wrongly pointed at the previous campaign's end date. Coverage → no adjacency hint;
+      // the click-through audit explains covered-day gaps instead.
+      const relevant=c=>c.aggregator===aggregator&&(c.brand===brand||c.brand==='All Brands')&&campStatus(c)!=='Cancelled'&&!isRewardsCampaign(c);
+      for(const c of campaignData){
+        if(!relevant(c))continue;
+        if(c.startDate<=date&&c.endDate>=date)return null;
+      }
       const next=_dayShift(date,1),prev=_dayShift(date,-1);
       for(const c of campaignData){
-        if(c.aggregator!==aggregator)continue;
-        if(c.brand!==brand&&c.brand!=='All Brands')continue;
-        if(campStatus(c)==='Cancelled'||isRewardsCampaign(c))continue;
+        if(!relevant(c))continue;
         const nm=c.name||c.comments||'campaign';
         if(c.startDate===next)return `${nm} starts next day — early activation?`;
         if(c.endDate===prev)return `${nm} ended day before — ran late?`;
@@ -9135,6 +9179,18 @@ function discAuditDateHTML(brand,aggregator,date){
   }).join('');
   const totalAllocated=allCovering.reduce((s,c)=>{const cb=(d.campaignBreakdown||[]).find(x=>x.campaign===c);return s+(cb?((cb.dailyAlloc||{})[date]||0):0);},0);
   const gap=sheetTotal-totalAllocated;
+  // v118: Careem exact per-type breakdown for this day — makes type-split days (one campaign,
+  // discount recorded across both statement type columns) self-explanatory in the audit.
+  let typeBreakdownHTML='';
+  if(aggregator==='Careem'&&typeof careemOrdersData!=='undefined'&&careemOrdersData&&careemOrdersData.records){
+    const byType={};
+    for(const rec of careemOrdersData.records){
+      if(rec.brand!==brand||rec.date!==date)continue;
+      byType[rec.discount_type||'?']=(byType[rec.discount_type||'?']||0)+(rec.menu_disc||0);
+    }
+    const parts=Object.entries(byType).filter(([,v])=>v>0.5).map(([t,v])=>`${t}: AED ${Math.round(v).toLocaleString()}`);
+    if(parts.length)typeBreakdownHTML='<div style="font-size:10px;color:#64748b;margin-top:5px;padding-top:5px;border-top:1px dashed #F1F5F9">Careem exact data this day by type — '+parts.join(' · ')+'</div>';
+  }
   return '<div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:10px;margin-top:6px">'
     +'<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid #F1F5F9">'
     +'<span style="color:#64748b">Sheet burn on '+fmtShort(date)+'</span><strong style="color:#0F172A">AED '+Math.round(sheetTotal).toLocaleString()+'</strong></div>'
@@ -9142,6 +9198,7 @@ function discAuditDateHTML(brand,aggregator,date){
     +'<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid #F1F5F9">'
     +'<span style="color:#64748b">Allocated total</span><strong style="color:#0F172A">AED '+Math.round(totalAllocated).toLocaleString()+'</strong></div>'
     +(gap>1?'<div style="margin-top:4px;font-size:11px;color:#DC2626;font-weight:700">Gap: AED '+Math.round(gap).toLocaleString()+' — '+(rows?'a campaign above is not receiving its expected share (check overlap/outlet-scope logic)':'no campaign in the sheet covers this date at all — check the aggregator portal')+'</div>':'')
+    +typeBreakdownHTML
     +'</div>';
 }
 
