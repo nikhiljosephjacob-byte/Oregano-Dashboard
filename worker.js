@@ -9,6 +9,12 @@
 //   event:<ts>:<rand>     → JSON of historical event (login_success, login_failed,
 //                           logout, admin_kick, admin_ban, admin_unban)
 //   banned:<user>         → JSON of ban metadata (reason, who, when)
+//   orderdata:<agg>       → JSON {metadata, records, updatedAt, updatedBy} of the parsed
+//                           aggregator order upload (keeta/careem/talabat/deliveroo/noon).
+//                           Written by ADMIN uploads only; read by every logged-in user so
+//                           all users see identical exact-order data. No TTL — persists until
+//                           replaced by a newer upload or explicitly cleared (which clears
+//                           for everyone, by design).
 //   forecast:<ts>:<rand>  → JSON of a SAVED Campaign Forecaster snapshot (only written when
 //                           the user explicitly clicks "Save this forecast" — never on every
 //                           Run Forecast click, to keep the log meaningful and quota-cheap).
@@ -182,6 +188,52 @@ async function handleLogout(request, env) {
     });
   }
   return json({ ok: true });
+}
+
+// ─── shared order-data endpoints ─────────────────────────────────────────────
+const ORDERDATA_AGGS = ["keeta", "careem", "talabat", "deliveroo", "noon"];
+const ORDERDATA_MAX_BYTES = 5 * 1024 * 1024; // hard guard — parsed aggregates run ~50-350KB in practice
+
+async function handleOrderDataSave(request, env, agg) {
+  const admin = await requireAdmin(request, env);
+  if (!admin) return json({ error: "forbidden_admin_only" }, 403);
+  if (!ORDERDATA_AGGS.includes(agg)) return json({ error: "unknown_aggregator" }, 400);
+
+  const raw = await request.text();
+  if (raw.length > ORDERDATA_MAX_BYTES) return json({ error: "payload_too_large" }, 413);
+  let body;
+  try { body = JSON.parse(raw); } catch (e) { return json({ error: "bad_json" }, 400); }
+  if (!body || !Array.isArray(body.records) || !body.metadata) return json({ error: "missing_records_or_metadata" }, 400);
+
+  const record = {
+    metadata: body.metadata,
+    records: body.records,
+    updatedAt: new Date().toISOString(),
+    updatedBy: admin.user
+  };
+  await env.SESSIONS.put(`orderdata:${agg}`, JSON.stringify(record)); // no TTL — lives until replaced/cleared
+  return json({ ok: true, agg, records: body.records.length, updatedAt: record.updatedAt });
+}
+
+async function handleOrderDataList(request, env) {
+  const sessionId = request.headers.get("X-Session-Id");
+  const session = await getSession(env, sessionId);
+  if (!session) return json({ error: "no_session" }, 401);
+
+  const out = {};
+  for (const agg of ORDERDATA_AGGS) {
+    const raw = await env.SESSIONS.get(`orderdata:${agg}`);
+    if (raw) out[agg] = JSON.parse(raw);
+  }
+  return json({ data: out, serverTime: new Date().toISOString() });
+}
+
+async function handleOrderDataClear(request, env, agg) {
+  const admin = await requireAdmin(request, env);
+  if (!admin) return json({ error: "forbidden_admin_only" }, 403);
+  if (!ORDERDATA_AGGS.includes(agg)) return json({ error: "unknown_aggregator" }, 400);
+  await env.SESSIONS.delete(`orderdata:${agg}`);
+  return json({ ok: true, agg, cleared: true });
 }
 
 // ─── forecast log endpoints ──────────────────────────────────────────────────
@@ -392,6 +444,12 @@ export default {
       if (path === "/api/logout"          && method === "POST") return await handleLogout(request, env);
       if (path === "/api/forecast/save"   && method === "POST") return await handleForecastSave(request, env);
       if (path === "/api/forecast/list"   && method === "GET")  return await handleForecastList(request, env);
+      if (path === "/api/orderdata"       && method === "GET")  return await handleOrderDataList(request, env);
+      {
+        const odm = path.match(/^\/api\/orderdata\/([a-z]+)$/);
+        if (odm && method === "POST")   return await handleOrderDataSave(request, env, odm[1]);
+        if (odm && method === "DELETE") return await handleOrderDataClear(request, env, odm[1]);
+      }
       if (path === "/api/admin/sessions"  && method === "GET")  return await handleAdminSessions(request, env);
       if (path === "/api/admin/kick"      && method === "POST") return await handleAdminKick(request, env);
       if (path === "/api/admin/ban"       && method === "POST") return await handleAdminBan(request, env);
