@@ -13,12 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-20-111";
+const BUILD_VERSION="2026-07-21-112";
 const BUILD_NOTES=[
-  "📌 Forecasts can now be saved: a new 'Save this forecast' button on the Forecaster records the config + scenarios (not every run — only when you explicitly save) to a durable server-side log via the Worker, tagged with who saved it and the dashboard version at the time so a later algorithm fix never gets confused with an old prediction.",
-  "📜 New Forecast History panel inside the Forecaster tab — every saved forecast, with a live comparison against the real campaign once one matching those parameters actually runs.",
-  "📋 Campaign Detail pages now show a 'You forecasted this' callout when a saved forecast's brand/platform/discount/cap closely match that campaign and predate its start — expected vs. actual, right where you're already looking at the results."
+  "🔄 Uploaded aggregator order data (Keeta/Careem/Talabat/Deliveroo/Noon exact per-order files) is now SHARED across all users. Until now each upload lived only in the uploader's own browser — which is why two people could see different Uncategorized Burn figures on the Discount Burn page. Now, when an admin uploads a file it also syncs to the server, and every user automatically receives the same data on their next load. One source of truth, same numbers for everyone.",
+  "🔐 Uploads and Clear are admin-only for the shared copy: non-admin users get read-only sync. Clearing an aggregator's data clears it for everyone (a cleared dataset means 'that upload was wrong' — nobody should keep computing on it).",
+  "⬇️ On load, the server copy wins whenever it's newer than what's in your browser — which also protects the uploader themself from the second-device / cleared-cache trap where a machine silently fell back to estimated figures."
 ];
+
 
 
 
@@ -437,6 +438,75 @@ function keetaResidualCampaignFor(brand,date){
   return null;
 }
 const KEETA_FD_COST=2.0; // AED per order — Keeta free-delivery share embedded in merchant-funded column
+// ════════════════════════════════════════════════════════════════════════════
+// v112 SHARED ORDER-DATA SYNC — one source of truth for uploaded aggregator files
+// ════════════════════════════════════════════════════════════════════════════
+// Until v112 the parsed uploads lived ONLY in the uploading user's localStorage, so different
+// users saw different Discount Burn / campaign attribution figures depending on what they
+// personally had uploaded. Now: admin uploads push the parsed result to the Worker (KV), and
+// every logged-in user pulls the server copy on load. Server wins when newer. Writes and
+// clears are admin-gated server-side too (the client checks are convenience, not security).
+const ORDER_SYNC_AGGS=[
+  {agg:'keeta',   get:()=>keetaOrdersData,    set:v=>{keetaOrdersData=v;},    lsKey:()=>KEETA_STORAGE_KEY},
+  {agg:'careem',  get:()=>careemOrdersData,   set:v=>{careemOrdersData=v;},   lsKey:()=>CAREEM_STORAGE_KEY},
+  {agg:'talabat', get:()=>talabatOrdersData,  set:v=>{talabatOrdersData=v;},  lsKey:()=>TALABAT_STORAGE_KEY},
+  {agg:'deliveroo',get:()=>deliverooOrdersData,set:v=>{deliverooOrdersData=v;},lsKey:()=>DELIVEROO_STORAGE_KEY},
+  {agg:'noon',    get:()=>noonOrdersData,     set:v=>{noonOrdersData=v;},     lsKey:()=>NOON_STORAGE_KEY}
+];
+// Fire-and-forget push of one aggregator's parsed data to the server. Called from each
+// saveXToStorage() — admin sessions only (server enforces this regardless).
+async function syncOrderDataToServer(agg,dataObj){
+  try{
+    const sess=getActiveSession();
+    if(!sess||!sess.sessionId||!sess.admin||!dataObj)return;
+    const res=await fetch(`/api/orderdata/${agg}`,{method:'POST',headers:{'Content-Type':'application/json','X-Session-Id':sess.sessionId},body:JSON.stringify({metadata:dataObj.metadata,records:dataObj.records})});
+    if(!res.ok){const d=await res.json().catch(()=>({}));console.log(`[sync] ${agg} push failed:`,d.error||res.status);}
+    else console.log(`[sync] ${agg} pushed to server`);
+  }catch(e){console.log(`[sync] ${agg} push error:`,e.message);}
+}
+// Admin-only server clear — used by the clearXData buttons so a bad upload disappears for
+// everyone, not just the clicking user.
+async function clearOrderDataOnServer(agg){
+  try{
+    const sess=getActiveSession();
+    if(!sess||!sess.sessionId||!sess.admin)return;
+    await fetch(`/api/orderdata/${agg}`,{method:'DELETE',headers:{'X-Session-Id':sess.sessionId}});
+    console.log(`[sync] ${agg} cleared on server`);
+  }catch(e){console.log(`[sync] ${agg} server clear error:`,e.message);}
+}
+// Pull the shared copies on load, for EVERY logged-in user. Server wins when its copy is newer
+// than (or absent locally vs) what this browser has. Returns true if anything changed so the
+// caller can invalidate caches and re-render.
+async function pullOrderDataFromServer(){
+  const sess=getActiveSession();
+  if(!sess||!sess.sessionId)return false;
+  let changed=false;
+  try{
+    const res=await fetch('/api/orderdata',{headers:{'X-Session-Id':sess.sessionId}});
+    if(!res.ok)return false;
+    const {data}=await res.json();
+    for(const cfg of ORDER_SYNC_AGGS){
+      const server=data[cfg.agg];
+      if(!server)continue;
+      const local=cfg.get();
+      const localTs=local?.metadata?.uploadDate||null;
+      const serverTs=server.metadata?.uploadDate||server.updatedAt||null;
+      if(!local||(serverTs&&(!localTs||serverTs>localTs))){
+        const obj={metadata:server.metadata,records:server.records};
+        cfg.set(obj);
+        try{localStorage.setItem(cfg.lsKey(),JSON.stringify(obj));}catch(e){}
+        changed=true;
+        console.log(`[sync] ${cfg.agg} updated from server (${server.records.length} records, by ${server.updatedBy||'—'})`);
+      }
+    }
+  }catch(e){console.log('[sync] pull error:',e.message);}
+  if(changed){
+    if(typeof _campPartCache!=="undefined")_campPartCache.clear();
+    if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
+    if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();
+  }
+  return changed;
+}
 const KEETA_STORAGE_KEY="keeta_orders_data_v1";
 
 // ═══════════════════════════════════════════════════════════════
@@ -513,14 +583,14 @@ function saveKeetaToStorage(){
   if(typeof _campPartCache!=="undefined")_campPartCache.clear(); // new upload → recompute participation
   if(!keetaOrdersData)return;
   try{localStorage.setItem(KEETA_STORAGE_KEY,JSON.stringify(keetaOrdersData));}
-  catch(e){console.log("[Keeta] localStorage save failed (quota?):",e.message);}
+  catch(e){console.log("[Keeta] localStorage save failed (quota?):",e.message);}  syncOrderDataToServer('keeta',keetaOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearKeetaData(){
   keetaOrdersData=null;
   if(typeof _campPartCache!=="undefined")_campPartCache.clear();
   try{localStorage.removeItem(KEETA_STORAGE_KEY);}catch(e){}
   if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
-  renderCampaigns();
+  renderCampaigns();  clearOrderDataOnServer('keeta'); // v112: cleared for EVERYONE (admin only; server enforces)
 }
 
 // ── Lookup used by allocateCampaignDiscount ──────────────────────────────
@@ -980,6 +1050,10 @@ const AGG_UPLOAD_CSS=`
 //                                                               check row 0 AND row 1)
 // Routes to the right parser and stores in the right state slot.
 async function handleOrdersUpload(filesOrFile){
+  // v112: uploads are admin-only — the parsed result now syncs to the SHARED server copy that
+  // every user reads, so a non-admin upload would either diverge locally (defeating the single
+  // source of truth) or be rejected server-side anyway. Blocking here keeps it unambiguous.
+  {const _s=getActiveSession();if(!_s||!_s.admin){alert('Order-file uploads are admin-only. The dashboard now shares one copy of this data for all users — ask an admin (e.g. Nikhil) to upload the file, and it will appear for you automatically.');return;}}
   // Normalize argument: accept a single File, a FileList, or an array of Files.
   let files=[];
   if(!filesOrFile)return;
@@ -1116,13 +1190,13 @@ function loadCareemFromStorage(){
 function saveCareemToStorage(){
   if(!careemOrdersData)return;
   try{localStorage.setItem(CAREEM_STORAGE_KEY,JSON.stringify(careemOrdersData));}
-  catch(e){console.log("[Careem] localStorage save failed (quota?):",e.message);}
+  catch(e){console.log("[Careem] localStorage save failed (quota?):",e.message);}  syncOrderDataToServer('careem',careemOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearCareemData(){
   careemOrdersData=null;
   try{localStorage.removeItem(CAREEM_STORAGE_KEY);}catch(e){}
   if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
-  renderCampaigns();
+  renderCampaigns();  clearOrderDataOnServer('careem'); // v112: cleared for EVERYONE (admin only; server enforces)
 }
 
 // Classify a Careem campaign as "catalog" or "promo" by inspecting its name + comments.
@@ -1346,13 +1420,13 @@ function loadTalabatFromStorage(){
 function saveTalabatToStorage(){
   if(!talabatOrdersData)return;
   try{localStorage.setItem(TALABAT_STORAGE_KEY,JSON.stringify(talabatOrdersData));}
-  catch(e){console.log("[Talabat] localStorage save failed (quota?):",e.message);}
+  catch(e){console.log("[Talabat] localStorage save failed (quota?):",e.message);}  syncOrderDataToServer('talabat',talabatOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearTalabatData(){
   talabatOrdersData=null;
   try{localStorage.removeItem(TALABAT_STORAGE_KEY);}catch(e){}
   if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
-  renderCampaigns();
+  renderCampaigns();  clearOrderDataOnServer('talabat'); // v112: cleared for EVERYONE (admin only; server enforces)
 }
 
 // Parse brand+outlet from Talabat "Restaurant name" field. Returns {brand,outlet} or
@@ -1598,13 +1672,13 @@ function loadDeliverooFromStorage(){
 function saveDeliverooToStorage(){
   if(!deliverooOrdersData)return;
   try{localStorage.setItem(DELIVEROO_STORAGE_KEY,JSON.stringify(deliverooOrdersData));}
-  catch(e){console.log("[Deliveroo] localStorage save failed (quota?):",e.message);}
+  catch(e){console.log("[Deliveroo] localStorage save failed (quota?):",e.message);}  syncOrderDataToServer('deliveroo',deliverooOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearDeliverooData(){
   deliverooOrdersData=null;
   try{localStorage.removeItem(DELIVEROO_STORAGE_KEY);}catch(e){}
   if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
-  renderCampaigns();
+  renderCampaigns();  clearOrderDataOnServer('deliveroo'); // v112: cleared for EVERYONE (admin only; server enforces)
 }
 
 // Parse "Restaurant Name" → {brand, outlet}. Returns nulls if unmappable.
@@ -1882,13 +1956,13 @@ function loadNoonFromStorage(){
 function saveNoonToStorage(){
   if(!noonOrdersData)return;
   try{localStorage.setItem(NOON_STORAGE_KEY,JSON.stringify(noonOrdersData));}
-  catch(e){console.log("[Noon] localStorage save failed (quota?):",e.message);}
+  catch(e){console.log("[Noon] localStorage save failed (quota?):",e.message);}  syncOrderDataToServer('noon',noonOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearNoonData(){
   noonOrdersData=null;
   try{localStorage.removeItem(NOON_STORAGE_KEY);}catch(e){}
   if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
-  renderCampaigns();
+  renderCampaigns();  clearOrderDataOnServer('noon'); // v112: cleared for EVERYONE (admin only; server enforces)
 }
 
 // Detect brand from filename
@@ -2397,6 +2471,9 @@ async function doLoad(){
   // (doLoad fires from doLogin's success path), unlike the DOMContentLoaded handler
   // which fires before the user has authenticated.
   if(typeof tryInitAdmin==="function")tryInitAdmin();
+  // v112: pull the shared aggregator order data from the server (all users). If anything
+  // updated, caches were already invalidated inside — re-render whichever page is open.
+  pullOrderDataFromServer().then(changed=>{if(changed&&typeof curPage!=='undefined'){if(curPage==='campaigns')renderCampaigns();else if(curPage==='discounts')renderDiscounts();}});
   // After the dashboard finishes loading, show the "What's new" popup if BUILD_VERSION
   // changed since the user's last visit. Small delay so it doesn't compete with the
   // initial dashboard render.
