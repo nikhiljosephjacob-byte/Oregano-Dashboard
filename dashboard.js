@@ -13,13 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-118";
+const BUILD_VERSION="2026-07-21-119";
 const BUILD_NOTES=[
-  "🎯 Careem attribution fix: Careem statements record discount under two different type columns, and a campaign only pulled records matching its own classification (promo vs catalog). When a single campaign was the ONLY one covering a day — like the restarted entire-menu 30% CAP 20 on 13 Jul — the other type's money (AED 1,192 that day) was orphaned into Uncategorized even though it obviously belonged to that campaign. Now a sole-covering campaign sweeps ALL discount types for the day; type-filtering only applies when concurrent Careem campaigns of different mechanics genuinely need separating.",
-  "⚖️ Talabat over-attribution fix: Talabat exact records carry no per-campaign tag, and every covering campaign was pulling the FULL day's exact discount — so two overlapping Talabat campaigns each claimed the same money (the red '+AED over-attributed' flags on Wicked Wings). Concurrent covering campaigns now split each day's exact discount by their declared discount-% ratio (equal split if none declared), same as the estimation path.",
-  "🔍 The per-date audit drill now shows Careem's exact per-type totals for the day (promo vs catalog), so a type-split day explains itself on screen.",
-  "🤫 Boundary-mismatch hints no longer fire on dates that ARE covered by a campaign — an under-allocation on a covered day is an attribution issue, not a sheet-date mismatch, and the old hint ('ran late?' / 'early activation?') was misleading there."
+  "🥪 Talabat item-level campaign discounts now attributed. Verified against a real orderDetails export: item-price campaigns (e.g. Sandwiches 30%) reduce the order Subtotal directly on Talabat and NEVER appear in any discount column of the settlement export — while the portal daily report feeding the Google Sheet counts them. Every Oregano×Talabat uncategorized amount in July matched sheet-minus-statement to the dirham. The engine now treats the statement as a floor: each covered day's residual (sheet daily − statement merchant discount) is distributed to the campaigns covering that day by declared-%, because on a covered day that residual IS the item campaign's money. Days with no covering campaign still surface as uncategorized, unchanged."
 ];
+
 
 
 
@@ -1578,9 +1576,11 @@ function getTalabatExactDisc(c,start,end){
     return myPct>0?myPct/total:0; // declared %s present but mine missing → I claim nothing on contested days
   };
   let menuDisc=0,talabatDisc=0;const dailyAlloc={};let matched=0;
+  const brandDayExact={}; // FULL brand-level statement discount per date (unscoped, unshared)
   for(const rec of talabatOrdersData.records){
     if(rec.brand!==c.brand)continue;
     if(rec.date<start||rec.date>end)continue;
+    brandDayExact[rec.date]=(brandDayExact[rec.date]||0)+rec.menu_disc;
     if(myScope&&!myScope.has(rec.outlet))continue;
     const share=myShareOn(rec.date);
     menuDisc+=rec.menu_disc*share;
@@ -1588,13 +1588,35 @@ function getTalabatExactDisc(c,start,end){
     dailyAlloc[rec.date]=(dailyAlloc[rec.date]||0)+rec.menu_disc*share;
     matched++;
   }
+  // v119: ITEM-LEVEL TOP-UP. Item-price campaigns reduce the Subtotal directly on Talabat and
+  // never appear in any discount column of the orderDetails settlement export — but the portal
+  // daily report feeding the Google Sheet counts them. Verified live: every Oregano×Talabat
+  // uncategorized day in July equalled (sheet daily − statement merchant discount) exactly
+  // (12 Jul: 545−174=371 = the Sandwiches 30% item promo). On days this campaign covers, that
+  // residual is real campaign money, so distribute it with the same declared-% concurrency
+  // share. Days with NO covering campaign are untouched and still surface as uncategorized.
+  let itemTopUp=0;
+  if(typeof brandDailyDiscount==='function'){
+    const sheetDaily=brandDailyDiscount(c.brand,'Talabat')||{};
+    const covS=start>dr[0]?start:dr[0];
+    const covE=end<dr[1]?end:dr[1];
+    let dCur=new Date(covS+'T12:00:00'),dEnd=new Date(covE+'T12:00:00');
+    for(;dCur<=dEnd;dCur.setDate(dCur.getDate()+1)){
+      const key=dk(dCur);
+      const resid=(sheetDaily[key]||0)-(brandDayExact[key]||0);
+      if(resid>1){
+        const add=resid*myShareOn(key);
+        if(add>0){menuDisc+=add;dailyAlloc[key]=(dailyAlloc[key]||0)+add;itemTopUp+=add;}
+      }
+    }
+  }
   if(!matched)return null;
   const daysIn=(s,e)=>Math.max(0,Math.round((new Date(e+"T12:00:00")-new Date(s+"T12:00:00"))/86400000)+1);
   const totalDays=daysIn(start,end);
   const covStart=start>dr[0]?start:dr[0];
   const covEnd=end<dr[1]?end:dr[1];
   const coveredDays=daysIn(covStart,covEnd);
-  return{menuDisc,talabatDisc,dailyAlloc,matchedRecords:matched,coveredDays,totalDays,partialCoverage:coveredDays<totalDays,uncoveredStart:end>dr[1]?dr[1]:null,uncoveredEnd:end>dr[1]?end:null};
+  return{menuDisc,talabatDisc,dailyAlloc,itemTopUp,matchedRecords:matched,coveredDays,totalDays,partialCoverage:coveredDays<totalDays,uncoveredStart:end>dr[1]?dr[1]:null,uncoveredEnd:end>dr[1]?end:null};
 }
 
 // Per-outlet exact menu_disc for a campaign window — used by campOutletBreakdownHTML
