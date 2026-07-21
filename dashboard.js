@@ -13,10 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-119";
+const BUILD_VERSION="2026-07-21-120";
 const BUILD_NOTES=[
-  "🥪 Talabat item-level campaign discounts now attributed. Verified against a real orderDetails export: item-price campaigns (e.g. Sandwiches 30%) reduce the order Subtotal directly on Talabat and NEVER appear in any discount column of the settlement export — while the portal daily report feeding the Google Sheet counts them. Every Oregano×Talabat uncategorized amount in July matched sheet-minus-statement to the dirham. The engine now treats the statement as a floor: each covered day's residual (sheet daily − statement merchant discount) is distributed to the campaigns covering that day by declared-%, because on a covered day that residual IS the item campaign's money. Days with no covering campaign still surface as uncategorized, unchanged."
+  "🎯 Fixed a v118 regression on Talabat: the concurrent-campaign split checked date overlap but IGNORED outlet scopes. Two campaigns with disjoint scopes — e.g. Super Saver (Jumeirah only, 50% CAP 30) and World Cup Deals (all locations EXCEPT Jumeirah, 40% CAP 40) — can never share an order, yet both were being diluted by the declared-% ratio, silently dropping ~47% of every day into Uncategorized (Smokeys×Talabat jumped to AED 2,439). The split is now decided PER OUTLET: a rival campaign only contests records in branches both campaigns actually cover. Disjoint scopes each keep 100% of their own branches; genuine same-branch overlaps still split by declared % with no over-attribution.",
+  "🥪 The v119 item-level top-up is now scope-aware too: each covered day's sheet-vs-statement residual is distributed to covering campaigns in proportion to their share of that day's statement discount (falling back to a scope-aware declared-% split on settlement-hole days), so a Jumeirah-only campaign no longer receives — or leaks — another scope's item-promo money."
 ];
+
 
 
 
@@ -1558,31 +1560,46 @@ function getTalabatExactDisc(c,start,end){
   if(!dr[0]||!dr[1])return null;
   if(end<dr[0]||start>dr[1])return null;
   const myScope=campOutlets(c);
-  // v118: Talabat records carry no per-campaign tag, and previously EVERY covering campaign
-  // pulled the FULL day's exact discount — two overlapping Talabat campaigns each claimed the
-  // same money (visible as red "+AED over-attributed" flags on the Discount Burn page). Now,
-  // when other Talabat campaigns for the same brand also cover a date, the day's discount is
-  // split by declared discount-% ratio (equal split when nothing is declared) — the same rule
-  // the estimation path has always used for overlaps.
-  const rivals=campaignData.filter(x=>x!==c&&x.brand===c.brand&&x.aggregator==='Talabat'&&campStatus(x)!=='Cancelled'&&!isRewardsCampaign(x)&&!(x.endDate<start||x.startDate>end));
+  // v118 (fixed in v120): Talabat records carry no per-campaign tag. Concurrent same-brand
+  // campaigns split contested money by declared discount-% ratio — but "contested" is decided
+  // PER OUTLET, not just per date. v118 checked date overlap only, so two campaigns with
+  // DISJOINT outlet scopes (Jumeirah-only 50% vs everywhere-except-Jumeirah 40%) diluted each
+  // other despite never sharing an order — silently dropping ~47% of every day into
+  // Uncategorized. A rival only contests a record if its scope includes that record's outlet.
+  const rivals=campaignData
+    .filter(x=>x!==c&&x.brand===c.brand&&x.aggregator==='Talabat'&&campStatus(x)!=='Cancelled'&&!isRewardsCampaign(x)&&!(x.endDate<start||x.startDate>end))
+    .map(x=>({camp:x,scope:campOutlets(x)}));
   const pctOfCamp=cc=>{const m=(((cc.comments||'')+' '+(cc.name||'')).match(/(\d{1,3})\s*%/));return m?parseInt(m[1]):0;};
   const myPct=pctOfCamp(c);
-  const myShareOn=(date)=>{
-    const live=rivals.filter(o=>o.startDate<=date&&o.endDate>=date);
+  const shareForRecord=(outlet,date)=>{
+    const contestants=rivals.filter(r=>r.camp.startDate<=date&&r.camp.endDate>=date&&(!r.scope||r.scope.has(outlet)));
+    if(!contestants.length)return 1;
+    const pcts=[myPct,...contestants.map(r=>pctOfCamp(r.camp))];
+    const total=pcts.reduce((s,v)=>s+v,0);
+    if(total<=0)return 1/(contestants.length+1);
+    return myPct>0?myPct/total:0; // declared %s present but mine missing → I claim nothing on contested records
+  };
+  // Scope-intersection test for settlement-hole days (no per-record outlet available there):
+  // a rival counts only if its scope could overlap mine at all.
+  const scopesIntersect=(a,b)=>{if(!a||!b)return true;for(const x of a){if(b.has(x))return true;}return false;};
+  const myShareHole=(date)=>{
+    const live=rivals.filter(r=>r.camp.startDate<=date&&r.camp.endDate>=date&&scopesIntersect(myScope,r.scope));
     if(!live.length)return 1;
-    const pcts=[myPct,...live.map(pctOfCamp)];
+    const pcts=[myPct,...live.map(r=>pctOfCamp(r.camp))];
     const total=pcts.reduce((s,v)=>s+v,0);
     if(total<=0)return 1/(live.length+1);
-    return myPct>0?myPct/total:0; // declared %s present but mine missing → I claim nothing on contested days
+    return myPct>0?myPct/total:0;
   };
   let menuDisc=0,talabatDisc=0;const dailyAlloc={};let matched=0;
   const brandDayExact={}; // FULL brand-level statement discount per date (unscoped, unshared)
+  const myScopedDayExact={}; // statement discount within MY scope per date (unshared) — used for top-up proportioning
   for(const rec of talabatOrdersData.records){
     if(rec.brand!==c.brand)continue;
     if(rec.date<start||rec.date>end)continue;
     brandDayExact[rec.date]=(brandDayExact[rec.date]||0)+rec.menu_disc;
     if(myScope&&!myScope.has(rec.outlet))continue;
-    const share=myShareOn(rec.date);
+    myScopedDayExact[rec.date]=(myScopedDayExact[rec.date]||0)+rec.menu_disc;
+    const share=shareForRecord(rec.outlet,rec.date);
     menuDisc+=rec.menu_disc*share;
     talabatDisc+=(rec.talabat_disc||0)*share;
     dailyAlloc[rec.date]=(dailyAlloc[rec.date]||0)+rec.menu_disc*share;
@@ -1605,7 +1622,13 @@ function getTalabatExactDisc(c,start,end){
       const key=dk(dCur);
       const resid=(sheetDaily[key]||0)-(brandDayExact[key]||0);
       if(resid>1){
-        const add=resid*myShareOn(key);
+        // v120: distribute the residual in proportion to each campaign's share of the day's
+        // STATEMENT discount (my scoped records ÷ full brand records) — a Jumeirah-only campaign
+        // receives Jumeirah's proportional slice of item-promo money, not a %-ratio slice of the
+        // whole brand's. Settlement-hole days (no statement at all) fall back to a scope-aware
+        // declared-% split among campaigns whose scopes could actually intersect.
+        const share=(brandDayExact[key]||0)>0?((myScopedDayExact[key]||0)/brandDayExact[key]):myShareHole(key);
+        const add=resid*share;
         if(add>0){menuDisc+=add;dailyAlloc[key]=(dailyAlloc[key]||0)+add;itemTopUp+=add;}
       }
     }
