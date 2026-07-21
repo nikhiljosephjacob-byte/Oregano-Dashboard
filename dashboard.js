@@ -13,13 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-115";
+const BUILD_VERSION="2026-07-21-116";
 const BUILD_NOTES=[
-  "🩹 Fixed the boundary-day merge bug that was CREATING most of the uncategorized burn. Every weekly aggregator statement contains a few late-settling orders from the previous period. The old merge rule — 'delete every existing record whose date appears in the new file' — meant those stragglers amputated the previous week's final day: uploading the 14-Jul Noon statement wiped 7 Jul's real AED 2,141 and replaced it with a ~AED 20 straggler. Same story on Careem's 13 Jul.",
-  "📄 New merge rules: Noon files now carry their statement number, so different statements SUM on shared boundary days (the arithmetic truth of settlements) and re-uploading the same statement cleanly replaces itself. Keeta/Careem/Talabat/Deliveroo use a 'richer day wins' rule — for any day both sides cover, whichever file has MORE orders for that brand+day keeps it, so a partial boundary day can never overwrite a complete one.",
-  "⚠️ ONE-TIME ACTION NEEDED: existing stored data is already damaged by the old merge (the amputated days are baked in). Clear Noon + Careem (+ Talabat if convenient) on the upload panel and re-upload each weekly statement — they'll accumulate correctly from now on, permanently.",
-  "🕵️ New boundary-mismatch detector on the Discount Burn page: when a day's uncategorized burn sits directly adjacent to a campaign's start or end date, the date chip now shows a hint like '⚠ 30% OFF starts next day — early activation?' so sheet-date mismatches identify themselves instead of hiding as mystery burn."
+  "🗑️ Added Clear buttons to the Data strip on the Campaigns page — there was previously no way to clear uploaded aggregator data from the UI at all (the old upload panel that had them was replaced by the compact strip without carrying the buttons over). Admins now see a small ✕ on each loaded aggregator chip. Clearing wipes that aggregator's exact-order data for ALL users and ALL dates (your Google Sheet numbers are untouched — the dashboard falls back to estimation until files are re-uploaded), and the confirmation dialog says exactly that before doing anything."
 ];
+
 
 
 
@@ -976,7 +974,7 @@ function campDataFreshnessStrip(){
     }
     return `${s.toLocaleDateString("en-AE",{...opts,year:"numeric"})}-${e.toLocaleDateString("en-AE",{...opts,year:"numeric"})}`;
   };
-  const chip=(label,logoKey,data,handler,placeholder)=>{
+  const chip=(label,logoKey,data,handler,placeholder,clearFn)=>{
     const md=data&&data.metadata?data.metadata:null;
     const uploadDate=md?md.uploadDate:null;
     const dateRange=md?md.date_range:null;
@@ -997,14 +995,15 @@ function campDataFreshnessStrip(){
       <span style="height:16px;display:inline-flex;align-items:center">${logoImg(logoKey,16)}</span>
       <span style="font-weight:700;color:#0F172A">${label}</span>
       <span style="color:#64748b;font-weight:600;font-size:10px">${secondaryText}</span>
+      ${(clearFn&&md&&typeof isAdminUser==='function'&&isAdminUser())?`<span onclick="event.stopPropagation();if(confirm('Clear ALL uploaded ${label} order data?\n\n• Removes every stored ${label} statement — ALL dates, not just recent ones\n• Clears it for EVERYONE (shared server copy), not just you\n• Google Sheet figures are NOT affected — the dashboard reverts to sales-weighted estimation for ${label} until files are re-uploaded\n\nYou can restore everything by re-uploading the statement files (multi-select supported).'))${clearFn}()" title="Clear all ${label} data (admin) — clears for everyone" style="margin-left:2px;color:#94a3b8;font-weight:800;font-size:11px;padding:0 3px;border-radius:3px;line-height:1" onmouseover="this.style.color='#EF4444'" onmouseout="this.style.color='#94a3b8'">✕</span>`:''}
     </div>`;
   };
   const chips=[
-    chip("Deliveroo","Deliveroo",deliverooOrdersData,"document.getElementById('orders-file-deliveroo').click()",false),
-    chip("Talabat","Talabat",talabatOrdersData,"document.getElementById('orders-file-talabat').click()",false),
-    chip("Careem","Careem",careemOrdersData,"document.getElementById('orders-file-careem').click()",false),
-    chip("Noon","Noon",noonOrdersData,"document.getElementById('orders-file-noon').click()",false),
-    chip("Keeta","Keeta",keetaOrdersData,"document.getElementById('orders-file-keeta').click()",false)
+    chip("Deliveroo","Deliveroo",deliverooOrdersData,"document.getElementById('orders-file-deliveroo').click()",false,"clearDeliverooData"),
+    chip("Talabat","Talabat",talabatOrdersData,"document.getElementById('orders-file-talabat').click()",false,"clearTalabatData"),
+    chip("Careem","Careem",careemOrdersData,"document.getElementById('orders-file-careem').click()",false,"clearCareemData"),
+    chip("Noon","Noon",noonOrdersData,"document.getElementById('orders-file-noon').click()",false,"clearNoonData"),
+    chip("Keeta","Keeta",keetaOrdersData,"document.getElementById('orders-file-keeta').click()",false,"clearKeetaData")
   ].join("");
   const inputs=`<input type="file" id="orders-file-deliveroo" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
                 <input type="file" id="orders-file-talabat" accept=".xlsx,.xls,.csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
