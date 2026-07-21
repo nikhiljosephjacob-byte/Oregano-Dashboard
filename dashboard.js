@@ -13,11 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-120";
+const BUILD_VERSION="2026-07-21-121";
 const BUILD_NOTES=[
-  "🎯 Fixed a v118 regression on Talabat: the concurrent-campaign split checked date overlap but IGNORED outlet scopes. Two campaigns with disjoint scopes — e.g. Super Saver (Jumeirah only, 50% CAP 30) and World Cup Deals (all locations EXCEPT Jumeirah, 40% CAP 40) — can never share an order, yet both were being diluted by the declared-% ratio, silently dropping ~47% of every day into Uncategorized (Smokeys×Talabat jumped to AED 2,439). The split is now decided PER OUTLET: a rival campaign only contests records in branches both campaigns actually cover. Disjoint scopes each keep 100% of their own branches; genuine same-branch overlaps still split by declared % with no over-attribution.",
-  "🥪 The v119 item-level top-up is now scope-aware too: each covered day's sheet-vs-statement residual is distributed to covering campaigns in proportion to their share of that day's statement discount (falling back to a scope-aware declared-% split on settlement-hole days), so a Jumeirah-only campaign no longer receives — or leaks — another scope's item-promo money."
+  "🎁 Noon commission-waiver campaigns (e.g. BOGO Mondays: \"No Commission Charged on these Orders Except PG fees of 2%\") now get credit for the real saving. The Noon parser tracks, per day, the gross sales specifically from orders that carried a discount (BOGO-redeemed orders) separately from the day's total. When a campaign's comment declares a commission waiver, the engine computes the standard-vs-waived commission difference on JUST those discounted orders' net sales and adds it to the campaign's contribution — scoped exactly as agreed: only orders that show the discount, only when the campaign exists in the sheet, and only for dates where exact Noon data has actually been uploaded (no exact data for a date → standard commission stands, nothing assumed). Shown transparently on the campaign card and detail page as a '🎁 Commission waiver' line, not silently folded into the headline number.",
+  "This re-parses correctly on RE-upload too — no need to re-upload past Noon statements for this to take effect on already-uploaded dates."
 ];
+
 
 
 
@@ -2222,14 +2223,19 @@ async function parseNoonCSV(file){
     // of the same statement idempotent. Falls back to the filename if the column is absent.
     const srcStamp=(idx["statement_nr"]!==undefined?String(row[idx["statement_nr"]]||"").trim():"")||file.name||"upload";
     const key=`${brand}|${outlet}|${dateStr}|${srcStamp}`;
-    if(!agg[key])agg[key]={brand,outlet,date:dateStr,discount_type:"campaign",orders:0,gross:0,net_payout:0,menu_disc:0,_src:srcStamp};
+    if(!agg[key])agg[key]={brand,outlet,date:dateStr,discount_type:"campaign",orders:0,gross:0,net_payout:0,menu_disc:0,disc_gross:0,disc_orders:0,_src:srcStamp};
     agg[key].orders++;
     agg[key].gross+=itemValue;
     agg[key].menu_disc+=outletDisc;
     agg[key].net_payout+=netPayable;
+    // v121: track gross sales specifically from orders that carried a discount (the customer
+    // actually redeemed a BOGO/promo offer that day), separately from the day's total. This is
+    // what lets a "no commission on discounted orders" campaign clause apply to exactly the
+    // orders it describes, instead of the whole day.
+    if(outletDisc>0){agg[key].disc_gross+=itemValue;agg[key].disc_orders++;}
   }
 
-  const records=Object.values(agg).map(r=>({...r,gross:+r.gross.toFixed(2),net_payout:+r.net_payout.toFixed(2),menu_disc:+r.menu_disc.toFixed(2)}))
+  const records=Object.values(agg).map(r=>({...r,gross:+r.gross.toFixed(2),net_payout:+r.net_payout.toFixed(2),menu_disc:+r.menu_disc.toFixed(2),disc_gross:+(r.disc_gross||0).toFixed(2),disc_orders:r.disc_orders||0}))
     .sort((a,b)=>(a.brand+a.outlet+a.date).localeCompare(b.brand+b.outlet+b.date));
 
   console.log(`[Noon] ${file.name}: brand=${brand}, ${stats.delivered} delivered, ${records.length} records, ${stats.unmapped} unmapped`);
@@ -6405,7 +6411,9 @@ function campCardGrid(camps,showProfit){
           <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-top:10px">
             <div data-ctip="${_ctipId}" style="cursor:help"><div style="font-size:9px;color:#8A8578;text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Incr. Contribution <span style="opacity:.45;font-size:8px">ⓘ</span></div><div style="font-size:22px;font-weight:800;color:${incrClr}">${a.incrContribTotal>=0?'+':''}${fmtAEDx(a.incrContribTotal)}</div></div>
             <div data-ctip="${_ctipId}" style="cursor:help;text-align:right"><div style="font-size:9px;color:#8A8578;text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">ROI <span style="opacity:.45;font-size:8px">ⓘ</span></div><div style="font-size:15px;font-weight:700;color:${roiClr}">${roi!=null?roi.toFixed(2)+'×':'—'}</div><div style="font-size:11px;font-weight:700;color:${liftClr};margin-top:2px" title="${roi==null?'No ROI data':roi>=1?'Paid for itself':roi>=0.4?'Marginal':'Lost money'} · ${a.ordersLift!=null?(a.ordersLift>=0?'+':'')+a.ordersLift.toFixed(0)+'% orders':'no order-lift data'}">${verdictSym} ${a.ordersLift!=null?(a.ordersLift>=0?'▲':'▼')+' '+Math.abs(a.ordersLift).toFixed(0)+'%':''}</div></div>
-          </div>`;
+          </div>
+          ${a.commWaiver?`<div style="font-size:10.5px;color:#C084FC;margin-top:6px;font-weight:600" title="Noon waived standard commission (${(a.commWaiver.standardRate*100).toFixed(0)}%→${(a.commWaiver.overrideRate*100).toFixed(0)}%) on ${a.commWaiver.discOrders} order(s) that carried a discount, worth AED ${Math.round(a.commWaiver.discNet).toLocaleString()} net · ${a.commWaiver.coveredFully?'full window covered by exact Noon data':'partial — some dates not yet covered by an upload'}">🎁 Commission waiver: +${fmtAEDx(a.commWaiver.bonus)}</div>`:''}
+        `;
       }else{
         metricsHTML=`<div style="display:flex;align-items:center;gap:6px;padding:8px 0;color:#8A8578;font-size:12px"><span>⏳</span><span>No sales data yet</span></div>`;
       }
@@ -6895,6 +6903,59 @@ function allocateCampaignDiscount(c,start,end){
   return{allocatedDisc:est.allocatedDisc,overlapDays:est.overlapDays,hadOverlap:est.overlapDays.length>0,dailyAlloc:est.dailyAlloc,M:_Mest,myN:_myNest,source:"estimated",estimatedDisc:est.allocatedDisc,exactDisc:0};
 }
 
+// v121: detects a commission-waiver clause in a campaign's comment, e.g. "No Commission
+// Charged on these Orders Except PG fees of 2%". Free-text pattern match by design (per
+// agreed approach) — looks for "no commission" plus a "PG fee(s) of X%" figure anywhere in
+// the comment. Returns the override rate (e.g. 0.02) or null if no such clause is present.
+function parseNoonCommOverride(c){
+  const txt=(c.comments||'')+' '+(c.name||'');
+  if(!/no\s+commission/i.test(txt))return null;
+  const m=txt.match(/pg\s*fees?\s*(?:of\s*)?(\d{1,2}(?:\.\d+)?)\s*%/i);
+  if(!m)return null;
+  return parseFloat(m[1])/100;
+}
+// v121: the real saving from a Noon commission waiver, computed ONLY on orders that actually
+// carried a discount (redeemed the BOGO/promo), ONLY for dates where exact Noon per-order data
+// has been uploaded (no data for a date → no bonus for that date, standard commission stands —
+// nothing is assumed). This is additive on top of the standard incrContribTotal, which already
+// correctly reflects standard commission on every order; the bonus is the EXTRA margin from the
+// waiver on top of that, not a replacement calculation.
+function computeNoonCommWaiverBonus(c,effStart,effEnd,dref){
+  if(c.aggregator!=='Noon')return null;
+  const overrideRate=parseNoonCommOverride(c);
+  if(overrideRate==null)return null;
+  if(!noonOrdersData||!noonOrdersData.records||!noonOrdersData.metadata)return null;
+  const dr=noonOrdersData.metadata.date_range||[];
+  if(!dr[0]||!dr[1])return null;
+  const covS=effStart>dr[0]?effStart:dr[0];
+  const covE=effEnd<dr[1]?effEnd:dr[1];
+  if(covS>covE)return null; // no overlap between campaign window and uploaded data at all
+  const myScope=campOutlets(c);
+  let discGross=0,menuDisc=0,discOrders=0;
+  const datesSeen=new Set();
+  for(const rec of noonOrdersData.records){
+    if(rec.brand!==c.brand)continue;
+    if(rec.date<covS||rec.date>covE)continue;
+    if(myScope&&!myScope.has(rec.outlet))continue;
+    datesSeen.add(rec.date);
+    discGross+=(rec.disc_gross||0);
+    menuDisc+=(rec.menu_disc||0);
+    discOrders+=(rec.disc_orders||0);
+  }
+  if(discGross<=0)return null; // no discounted orders found in the covered window
+  const discNet=discGross-menuDisc; // merchant net sales from discounted orders only
+  if(discNet<=0)return null;
+  const standardRate=commissionRateFor('Noon',c.brand,dref);
+  const bonus=discNet*(standardRate-overrideRate);
+  // coveredFully checks TWO things: the campaign window sits fully inside the upload's overall
+  // date_range, AND every individual date in that window actually has at least one record —
+  // a metadata date_range can span a gap (e.g. a settlement hole on one specific day) even
+  // though its min/max bounds look like full coverage.
+  const totalDaysInWindow=Math.round((new Date(effEnd+'T12:00:00')-new Date(effStart+'T12:00:00'))/86400000)+1;
+  const coveredFully=(covS===effStart&&covE===effEnd&&datesSeen.size===totalDaysInWindow);
+  return{applies:true,discGross:+discGross.toFixed(2),discNet:+discNet.toFixed(2),discOrders,
+    standardRate,overrideRate,bonus:+bonus.toFixed(2),coveredFully};
+}
 function campAnalysisV2(c){
   const outletSet=campOutlets(c);
   const flt=r=>{if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;if(outletSet&&!outletSet.has(r.branch))return false;return true;};
@@ -6981,8 +7042,17 @@ function campAnalysisV2(c){
   // Incremental contribution (per day, then total over the elapsed window)
   const campContribPerDay=campC.contribution/cDays;
   const baseContribPerDay=baseC.contribution/bDays;
-  const incrContribPerDay=campContribPerDay-baseContribPerDay;
-  const incrContribTotal=incrContribPerDay*cDays;
+  let incrContribPerDay=campContribPerDay-baseContribPerDay;
+  let incrContribTotal=incrContribPerDay*cDays;
+  // v121: Noon commission-waiver bonus — additive on top of the standard calculation above,
+  // which already assumes standard commission on every order. This adds back the EXTRA margin
+  // from a declared waiver ("No Commission... Except PG fees of X%"), computed only on orders
+  // that actually show a discount and only for dates with exact Noon data uploaded.
+  const commWaiver=computeNoonCommWaiverBonus(c,effStart,effEnd,dref);
+  if(commWaiver){
+    incrContribTotal+=commWaiver.bonus;
+    incrContribPerDay=incrContribTotal/cDays;
+  }
   const profitabilityPct=baseContribPerDay!==0?(incrContribPerDay/Math.abs(baseContribPerDay))*100:null;
 
   // Lifts (per day)
@@ -7123,7 +7193,7 @@ function campAnalysisV2(c){
 
   return{
     brand:c.brand,aggregator:c.aggregator,outletSet,
-    effStart,effEnd,bStart,bEnd,cDays,bDays,
+    effStart,effEnd,bStart,bEnd,cDays,bDays,commWaiver,
     cs,bs,campGross:campC.gross,baseGross:baseC.gross,
     coFundedPct,needsCoFundClarity,ourDiscCost,ourDiscPerDay,
     aggInferredCoFund,totalCustomerDisc,
