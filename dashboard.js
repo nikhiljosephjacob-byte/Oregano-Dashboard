@@ -13,12 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-112";
+const BUILD_VERSION="2026-07-21-114";
 const BUILD_NOTES=[
-  "🔄 Uploaded aggregator order data (Keeta/Careem/Talabat/Deliveroo/Noon exact per-order files) is now SHARED across all users. Until now each upload lived only in the uploader's own browser — which is why two people could see different Uncategorized Burn figures on the Discount Burn page. Now, when an admin uploads a file it also syncs to the server, and every user automatically receives the same data on their next load. One source of truth, same numbers for everyone.",
-  "🔐 Uploads and Clear are admin-only for the shared copy: non-admin users get read-only sync. Clearing an aggregator's data clears it for everyone (a cleared dataset means 'that upload was wrong' — nobody should keep computing on it).",
-  "⬇️ On load, the server copy wins whenever it's newer than what's in your browser — which also protects the uploader themself from the second-device / cleared-cache trap where a machine silently fell back to estimated figures."
+  "🔁 Sync gap closed: v112 only pushed order data to the shared server copy when a file was actually uploaded — data already sitting in the admin's browser from BEFORE v112 (e.g. Talabat/Careem/Noon uploads from earlier weeks) never made it up, so other users were still missing those aggregators. Now, when an admin loads the dashboard, any aggregator whose local data is missing from the server (or newer than the server copy) is pushed up automatically. No re-uploading needed — the admin just has to open the dashboard once."
 ];
+
+
 
 
 
@@ -474,6 +474,32 @@ async function clearOrderDataOnServer(agg){
     console.log(`[sync] ${agg} cleared on server`);
   }catch(e){console.log(`[sync] ${agg} server clear error:`,e.message);}
 }
+// v113: invalidate cached campaign analyses for ONE aggregator (cache keys begin with the
+// capitalized aggregator name, e.g. "Keeta|Oregano|…"), instead of nuking every aggregator's
+// warm cache. Then re-run the background pre-warm so caches are hot before the user opens the
+// Campaigns page. Wholesale clearing without re-warming was the v112 regression that made the
+// Campaigns page slow: the first render after a sync recomputed everything synchronously.
+const _AGG_CAP={keeta:'Keeta',careem:'Careem',talabat:'Talabat',deliveroo:'Deliveroo',noon:'Noon'};
+function invalidateAggCaches(aggLower){
+  const cap=_AGG_CAP[aggLower]||aggLower;
+  const prefix=cap+'|';
+  let n=0;
+  if(typeof campAnalysisCache!=="undefined"){
+    for(const k of[...campAnalysisCache.keys()])if(k.startsWith(prefix)){campAnalysisCache.delete(k);n++;}
+  }
+  if(typeof _observedRatioCache!=="undefined"){
+    for(const k of[..._observedRatioCache.keys()])if(k.startsWith(prefix))_observedRatioCache.delete(k);
+  }
+  if(aggLower==='keeta'&&typeof _campPartCache!=="undefined")_campPartCache.clear(); // participation is Keeta-only
+  console.log(`[cache] invalidated ${n} ${cap} analyses`);
+}
+function rewarmCampaignAnalyses(){
+  // If a prewarm pass is mid-flight, wait for it to finish and then run again — entries it
+  // computed before our invalidation are gone, so a fresh pass is needed to re-heat them.
+  if(typeof campModelBuilding!=="undefined"&&campModelBuilding){setTimeout(rewarmCampaignAnalyses,2000);return;}
+  if(typeof campModelBuilt!=="undefined"){campModelBuilt=false;}
+  if(typeof prewarmCampaigns==="function")setTimeout(()=>{try{prewarmCampaigns();}catch(e){}},50);
+}
 // Pull the shared copies on load, for EVERY logged-in user. Server wins when its copy is newer
 // than (or absent locally vs) what this browser has. Returns true if anything changed so the
 // caller can invalidate caches and re-render.
@@ -496,15 +522,29 @@ async function pullOrderDataFromServer(){
         cfg.set(obj);
         try{localStorage.setItem(cfg.lsKey(),JSON.stringify(obj));}catch(e){}
         changed=true;
+        invalidateAggCaches(cfg.agg); // v113: surgical — only this aggregator's analyses go cold
         console.log(`[sync] ${cfg.agg} updated from server (${server.records.length} records, by ${server.updatedBy||'—'})`);
       }
     }
+    // v114: reverse direction — if this user is an ADMIN and their browser holds data the
+    // server doesn't have (or holds a NEWER upload than the server copy), push it up. This is
+    // what gets pre-v112 uploads (which never passed through a save/push) onto the server so
+    // every other user receives them. Without this, only files re-uploaded after v112 synced.
+    if(sess.admin){
+      for(const cfg of ORDER_SYNC_AGGS){
+        const local=cfg.get();
+        if(!local||!local.records)continue;
+        const server=data[cfg.agg];
+        const localTs=local.metadata?.uploadDate||null;
+        const serverTs=server?(server.metadata?.uploadDate||server.updatedAt||null):null;
+        if(!server||(localTs&&(!serverTs||localTs>serverTs))){
+          console.log(`[sync] ${cfg.agg}: local copy ${server?'newer than server':'missing on server'} — pushing up`);
+          syncOrderDataToServer(cfg.agg,local); // fire-and-forget; server enforces admin again
+        }
+      }
+    }
   }catch(e){console.log('[sync] pull error:',e.message);}
-  if(changed){
-    if(typeof _campPartCache!=="undefined")_campPartCache.clear();
-    if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
-    if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();
-  }
+  if(changed)rewarmCampaignAnalyses(); // v113: heat the caches back up in the background
   return changed;
 }
 const KEETA_STORAGE_KEY="keeta_orders_data_v1";
@@ -587,9 +627,8 @@ function saveKeetaToStorage(){
 }
 function clearKeetaData(){
   keetaOrdersData=null;
-  if(typeof _campPartCache!=="undefined")_campPartCache.clear();
   try{localStorage.removeItem(KEETA_STORAGE_KEY);}catch(e){}
-  if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
+  invalidateAggCaches('keeta');rewarmCampaignAnalyses(); // v113: surgical invalidation + background re-warm
   renderCampaigns();  clearOrderDataOnServer('keeta'); // v112: cleared for EVERYONE (admin only; server enforces)
 }
 
@@ -1195,7 +1234,7 @@ function saveCareemToStorage(){
 function clearCareemData(){
   careemOrdersData=null;
   try{localStorage.removeItem(CAREEM_STORAGE_KEY);}catch(e){}
-  if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
+  invalidateAggCaches('careem');rewarmCampaignAnalyses(); // v113: surgical invalidation + background re-warm
   renderCampaigns();  clearOrderDataOnServer('careem'); // v112: cleared for EVERYONE (admin only; server enforces)
 }
 
@@ -1425,7 +1464,7 @@ function saveTalabatToStorage(){
 function clearTalabatData(){
   talabatOrdersData=null;
   try{localStorage.removeItem(TALABAT_STORAGE_KEY);}catch(e){}
-  if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
+  invalidateAggCaches('talabat');rewarmCampaignAnalyses(); // v113: surgical invalidation + background re-warm
   renderCampaigns();  clearOrderDataOnServer('talabat'); // v112: cleared for EVERYONE (admin only; server enforces)
 }
 
@@ -1677,7 +1716,7 @@ function saveDeliverooToStorage(){
 function clearDeliverooData(){
   deliverooOrdersData=null;
   try{localStorage.removeItem(DELIVEROO_STORAGE_KEY);}catch(e){}
-  if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
+  invalidateAggCaches('deliveroo');rewarmCampaignAnalyses(); // v113: surgical invalidation + background re-warm
   renderCampaigns();  clearOrderDataOnServer('deliveroo'); // v112: cleared for EVERYONE (admin only; server enforces)
 }
 
@@ -1961,7 +2000,7 @@ function saveNoonToStorage(){
 function clearNoonData(){
   noonOrdersData=null;
   try{localStorage.removeItem(NOON_STORAGE_KEY);}catch(e){}
-  if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
+  invalidateAggCaches('noon');rewarmCampaignAnalyses(); // v113: surgical invalidation + background re-warm
   renderCampaigns();  clearOrderDataOnServer('noon'); // v112: cleared for EVERYONE (admin only; server enforces)
 }
 
