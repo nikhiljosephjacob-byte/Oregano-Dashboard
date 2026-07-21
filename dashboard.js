@@ -13,10 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-116";
+const BUILD_VERSION="2026-07-21-117";
 const BUILD_NOTES=[
-  "🗑️ Added Clear buttons to the Data strip on the Campaigns page — there was previously no way to clear uploaded aggregator data from the UI at all (the old upload panel that had them was replaced by the compact strip without carrying the buttons over). Admins now see a small ✕ on each loaded aggregator chip. Clearing wipes that aggregator's exact-order data for ALL users and ALL dates (your Google Sheet numbers are untouched — the dashboard falls back to estimation until files are re-uploaded), and the confirmation dialog says exactly that before doing anything."
+  "🔧 Fixed the Clear (✕) buttons on the Data strip — v116's version embedded the multi-line confirmation text directly into the inline click handler, where the raw newlines made the handler a silent JavaScript syntax error: clicking ✕ did nothing and the click fell through to the chip underneath, opening the file picker instead. The confirmation now lives in a proper function and the ✕ works as intended."
 ];
+
 
 
 
@@ -947,6 +948,18 @@ async function parseKeetaXlsx(file){
 // behaviour but shrinks from ~180px tall (5 big cards) to ~48px (1 row of chips). Removes the
 // order-count/date-range noise that isn't decision-relevant on the Campaigns page — the only
 // question here is "is my data fresh enough to trust the profitability numbers?".
+// v117: clear-confirmation in a real function. v116 inlined this text into the onclick
+// attribute; the raw newlines inside the attribute's JS string were a syntax error, so the
+// browser silently dropped the whole handler — the ✕ did nothing and the click bubbled to the
+// chip's file-picker. Never build multi-line strings inside inline handlers.
+function confirmClearAggData(label,fnName){
+  const msg="Clear ALL uploaded "+label+" order data?\n\n"
+    +"\u2022 Removes every stored "+label+" statement \u2014 ALL dates, not just recent ones\n"
+    +"\u2022 Clears it for EVERYONE (shared server copy), not just you\n"
+    +"\u2022 Google Sheet figures are NOT affected \u2014 the dashboard reverts to sales-weighted estimation for "+label+" until files are re-uploaded\n\n"
+    +"You can restore everything by re-uploading the statement files (multi-select supported).";
+  if(confirm(msg)){const fn=window[fnName];if(typeof fn==='function')fn();}
+}
 function campDataFreshnessStrip(){
   const STALE_HOURS=48, VERY_STALE_HOURS=72;
   const fmtAgo=(iso)=>{
@@ -995,7 +1008,7 @@ function campDataFreshnessStrip(){
       <span style="height:16px;display:inline-flex;align-items:center">${logoImg(logoKey,16)}</span>
       <span style="font-weight:700;color:#0F172A">${label}</span>
       <span style="color:#64748b;font-weight:600;font-size:10px">${secondaryText}</span>
-      ${(clearFn&&md&&typeof isAdminUser==='function'&&isAdminUser())?`<span onclick="event.stopPropagation();if(confirm('Clear ALL uploaded ${label} order data?\n\n• Removes every stored ${label} statement — ALL dates, not just recent ones\n• Clears it for EVERYONE (shared server copy), not just you\n• Google Sheet figures are NOT affected — the dashboard reverts to sales-weighted estimation for ${label} until files are re-uploaded\n\nYou can restore everything by re-uploading the statement files (multi-select supported).'))${clearFn}()" title="Clear all ${label} data (admin) — clears for everyone" style="margin-left:2px;color:#94a3b8;font-weight:800;font-size:11px;padding:0 3px;border-radius:3px;line-height:1" onmouseover="this.style.color='#EF4444'" onmouseout="this.style.color='#94a3b8'">✕</span>`:''}
+      ${(clearFn&&md&&typeof isAdminUser==='function'&&isAdminUser())?`<span onclick="event.stopPropagation();confirmClearAggData('${label}','${clearFn}')" title="Clear all ${label} data (admin) — clears for everyone" style="margin-left:2px;color:#94a3b8;font-weight:800;font-size:11px;padding:0 3px;border-radius:3px;line-height:1" onmouseover="this.style.color='#EF4444'" onmouseout="this.style.color='#94a3b8'">✕</span>`:''}
     </div>`;
   };
   const chips=[
@@ -11132,6 +11145,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     sortTableBy,selectCamp,campSetSearch,campSetQuickFilter,campSetCardSort,campToggleFilter,campClearFilters,campSortBy,campSetDate,campClearDates,campSetElasticity,
     campTrajectory,campBreakevenUplift,campFindCleanBaseline,campCollapseSection,campParticipationV1,campParticipationTrend,cpcPacingRec,
     campFcSaveForecast,campFcLoadHistory,
+    confirmClearAggData,clearKeetaData,clearCareemData,clearTalabatData,clearDeliverooData,clearNoonData,handleOrdersUpload,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,cmpToggleExpand,
     injectCompareTab,loadKPIData,doLoad,
     dismissUpdateModal,hardRefreshNow,dismissWhatsNew,showWhatsNewIfNeeded,
