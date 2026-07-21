@@ -13,10 +13,14 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-114";
+const BUILD_VERSION="2026-07-21-115";
 const BUILD_NOTES=[
-  "🔁 Sync gap closed: v112 only pushed order data to the shared server copy when a file was actually uploaded — data already sitting in the admin's browser from BEFORE v112 (e.g. Talabat/Careem/Noon uploads from earlier weeks) never made it up, so other users were still missing those aggregators. Now, when an admin loads the dashboard, any aggregator whose local data is missing from the server (or newer than the server copy) is pushed up automatically. No re-uploading needed — the admin just has to open the dashboard once."
+  "🩹 Fixed the boundary-day merge bug that was CREATING most of the uncategorized burn. Every weekly aggregator statement contains a few late-settling orders from the previous period. The old merge rule — 'delete every existing record whose date appears in the new file' — meant those stragglers amputated the previous week's final day: uploading the 14-Jul Noon statement wiped 7 Jul's real AED 2,141 and replaced it with a ~AED 20 straggler. Same story on Careem's 13 Jul.",
+  "📄 New merge rules: Noon files now carry their statement number, so different statements SUM on shared boundary days (the arithmetic truth of settlements) and re-uploading the same statement cleanly replaces itself. Keeta/Careem/Talabat/Deliveroo use a 'richer day wins' rule — for any day both sides cover, whichever file has MORE orders for that brand+day keeps it, so a partial boundary day can never overwrite a complete one.",
+  "⚠️ ONE-TIME ACTION NEEDED: existing stored data is already damaged by the old merge (the amputated days are baked in). Clear Noon + Careem (+ Talabat if convenient) on the upload panel and re-upload each weekly statement — they'll accumulate correctly from now on, permanently.",
+  "🕵️ New boundary-mismatch detector on the Discount Burn page: when a day's uncategorized burn sits directly adjacent to a campaign's start or end date, the date chip now shows a hint like '⚠ 30% OFF starts next day — early activation?' so sheet-date mismatches identify themselves instead of hiding as mystery burn."
 ];
+
 
 
 
@@ -566,35 +570,61 @@ const KEETA_STORAGE_KEY="keeta_orders_data_v1";
 // the recompute function. The returned object also carries an `uploadDate` ISO timestamp on
 // the metadata so the upload bar can show "uploaded N hours ago" and trigger the 72-hour
 // reminder blink.
-function mergeOrdersData(existing,fresh,recomputeTotals){
+function mergeOrdersData(existing,fresh,recomputeTotals,strategy){
+  // v115 MERGE STRATEGIES — the old rule ("delete every existing record whose date appears in
+  // the fresh file, then insert fresh") had a destructive failure mode: weekly statements always
+  // contain a few LATE-SETTLING straggler orders from the previous period, so each new weekly
+  // upload amputated the prior week's final day, replacing a complete day (e.g. Noon 7 Jul,
+  // AED 2,141) with just the stragglers (AED 20). That amputation then surfaced as huge
+  // single-day "uncategorized burn" on the Discount Burn page.
+  //
+  //   strategy "statement" (Noon): records carry _src = the statement number they came from.
+  //     Different statements legitimately contribute to the same boundary day, so they SUM.
+  //     Re-uploading the same statement replaces its own previous contribution (idempotent).
+  //     Legacy stored records without a _src stamp are dropped for the uploaded brand(s) —
+  //     they predate stamping and can't be deduplicated, so a clean re-upload is required
+  //     (see v115 build notes).
+  //   strategy "richer-day" (Keeta/Careem/Talabat/Deliveroo, default): these exports are
+  //     arbitrary/rolling date-range files that can overlap heavily, so summing across files
+  //     would double-count. Instead, for any (brand, date) both sides cover, whichever side
+  //     has MORE orders for that brand+day keeps the whole day — a partial boundary/straggler
+  //     day can never overwrite a complete one, and re-uploading the same file is a no-op.
+  //     Known limitation: a corrected re-export that legitimately has FEWER orders for a day
+  //     (e.g. cancellations removed) will lose to the stale larger day — clear + re-upload to
+  //     force it.
   const now=new Date().toISOString();
   if(!existing||!existing.records||!existing.records.length){
-    // Nothing to merge into — accept fresh as-is, just stamp upload time.
     const out={...fresh,metadata:{...fresh.metadata,uploadDate:now,lastFileDate:fresh.metadata?.date_range?.[1]||null}};
     return out;
   }
-  // BRAND-AWARE MERGE: detect which brands are present in the fresh upload. For per-brand files
-  // (Noon), freshBrands will be a single brand. For all-brand files (Keeta, Careem, Talabat,
-  // Deliveroo), freshBrands will be all 5 brands. We only replace records whose (date AND brand)
-  // match the fresh upload — so uploading Noon's Lollorosso file doesn't wipe out Oregano's
-  // records for the same dates. This was the root cause of "discounts not allocated after
-  // uploading Noon files" — only the last brand's data survived the merge.
-  const freshDates=new Set(fresh.records.map(r=>r.date));
   const freshBrands=new Set(fresh.records.map(r=>r.brand));
-  // Keep existing records that either:
-  //   (a) aren't in the fresh date range at all, OR
-  //   (b) are in the date range but belong to a DIFFERENT brand than what's being uploaded
-  const kept=existing.records.filter(r=>!freshDates.has(r.date)||!freshBrands.has(r.brand));
+  let kept;
+  if(strategy==='statement'){
+    const freshSrcs=new Set(fresh.records.map(r=>r._src).filter(Boolean));
+    kept=existing.records.filter(r=>{
+      if(freshBrands.has(r.brand)&&!r._src)return false; // drop unstamped legacy for uploaded brand(s)
+      if(r._src&&freshSrcs.has(r._src))return false;     // re-upload of same statement replaces itself
+      return true;
+    });
+  }else{
+    // richer-day: compare order counts per (brand|date) between sides
+    const cnt=recs=>{const m={};for(const r of recs){const k=r.brand+'|'+r.date;m[k]=(m[k]||0)+(r.orders||0);}return m;};
+    const exCnt=cnt(existing.records),frCnt=cnt(fresh.records);
+    const freshWins=new Set(); // (brand|date) keys where fresh side keeps the day
+    for(const k of Object.keys(frCnt)){
+      if(exCnt[k]===undefined||frCnt[k]>=exCnt[k])freshWins.add(k);
+    }
+    kept=existing.records.filter(r=>!freshWins.has(r.brand+'|'+r.date));
+    fresh={...fresh,records:fresh.records.filter(r=>freshWins.has(r.brand+'|'+r.date))};
+  }
   const merged=[...kept,...fresh.records].sort((a,b)=>{
     if(a.brand!==b.brand)return a.brand.localeCompare(b.brand);
     if(a.outlet!==b.outlet)return a.outlet.localeCompare(b.outlet);
     if(a.date!==b.date)return a.date.localeCompare(b.date);
     return 0;
   });
-  // Recompute date range from merged records
   const allDates=merged.map(r=>r.date).sort();
   const newRange=allDates.length?[allDates[0],allDates[allDates.length-1]]:[null,null];
-  // Recompute totals via caller-supplied function (aggregator-specific shape)
   const totals=recomputeTotals?recomputeTotals(merged):(existing.metadata?.totals_per_brand||{});
   return{
     metadata:{
@@ -1144,7 +1174,7 @@ async function handleOrdersUpload(filesOrFile){
       else if(detected==="careem"){careemOrdersData=mergeOrdersData(careemOrdersData,fresh,null);saveCareemToStorage();}
       else if(detected==="talabat"){talabatOrdersData=mergeOrdersData(talabatOrdersData,fresh,null);saveTalabatToStorage();}
       else if(detected==="deliveroo"){deliverooOrdersData=mergeOrdersData(deliverooOrdersData,fresh,deliverooRecomputeTotals);saveDeliverooToStorage();}
-      else if(detected==="noon"){noonOrdersData=mergeOrdersData(noonOrdersData,fresh,noonRecomputeTotals);saveNoonToStorage();}
+      else if(detected==="noon"){noonOrdersData=mergeOrdersData(noonOrdersData,fresh,noonRecomputeTotals,'statement');saveNoonToStorage();}
       const dr=fresh.metadata.date_range||[];
       results.push(`✓ ${file.name} (${detected.charAt(0).toUpperCase()+detected.slice(1)}): ${fresh.records.length.toLocaleString()} records, ${dr[0]||"?"} → ${dr[1]||"?"}`);
     }catch(e){
@@ -2095,8 +2125,12 @@ async function parseNoonCSV(file){
     const outletDisc=Math.abs(parseFloat(row[idx["outlet_discount"]])||0);
     const netPayable=parseFloat(row[idx["net_payable"]])||0;
 
-    const key=`${brand}|${outlet}|${dateStr}`;
-    if(!agg[key])agg[key]={brand,outlet,date:dateStr,discount_type:"campaign",orders:0,gross:0,net_payout:0,menu_disc:0};
+    // v115: stamp each record with the statement it came from, so the 'statement' merge
+    // strategy can sum different statements on shared boundary days while keeping re-uploads
+    // of the same statement idempotent. Falls back to the filename if the column is absent.
+    const srcStamp=(idx["statement_nr"]!==undefined?String(row[idx["statement_nr"]]||"").trim():"")||file.name||"upload";
+    const key=`${brand}|${outlet}|${dateStr}|${srcStamp}`;
+    if(!agg[key])agg[key]={brand,outlet,date:dateStr,discount_type:"campaign",orders:0,gross:0,net_payout:0,menu_disc:0,_src:srcStamp};
     agg[key].orders++;
     agg[key].gross+=itemValue;
     agg[key].menu_disc+=outletDisc;
@@ -8983,7 +9017,27 @@ function computeDiscountBurn(){
     // was the root cause of the v104 diagnostic showing small gaps smeared across every date.
     const _dDisc={};for(const r of matches){if(!(r.disc>0))continue;const bk=r.brand+'|'+r.aggregator;if(!_dDisc[bk])_dDisc[bk]={};_dDisc[bk][r.date]=(_dDisc[bk][r.date]||0)+r.disc;}
     const _dAttr={};for(const cb of campaignBreakdown){const bk=cb.campaign.brand+'|'+cb.campaign.aggregator;if(!_dAttr[bk])_dAttr[bk]={};for(const[ds,amt] of Object.entries(cb.dailyAlloc||{})){_dAttr[bk][ds]=(_dAttr[bk][ds]||0)+amt;}}
-    for(const row of out){const bk=row.brand+'|'+row.aggregator;const dd=_dDisc[bk]||{},da=_dAttr[bk]||{};const pts=[];for(const[date,disc] of Object.entries(dd)){const unc=Math.max(0,disc-(da[date]||0));if(unc>1)pts.push({date,disc,unc});}pts.sort((a,b)=>b.unc-a.unc);row.topDates=pts.slice(0,12);row.uncatDays=pts.length;}
+    // v115 boundary-mismatch detector: a big uncategorized day sitting DIRECTLY adjacent to a
+    // campaign's start or end date is the classic signature of a sheet-date mismatch (aggregator
+    // activated the promo a day early, or kept it burning past the entered end date). Attach a
+    // hint to the date point so it renders on the chip — the mismatch identifies itself instead
+    // of hiding as mystery burn. Only fires when the gap is material (≥ AED 50 and ≥ 30% of the
+    // day's burn) to avoid decorating ordinary estimation noise with false alarms.
+    const _dayShift=(ymd,n)=>{const d=new Date(ymd+'T12:00:00');d.setDate(d.getDate()+n);return dk(d);};
+    const _boundaryHint=(brand,aggregator,date,unc,disc)=>{
+      if(unc<50||unc<disc*0.3)return null;
+      const next=_dayShift(date,1),prev=_dayShift(date,-1);
+      for(const c of campaignData){
+        if(c.aggregator!==aggregator)continue;
+        if(c.brand!==brand&&c.brand!=='All Brands')continue;
+        if(campStatus(c)==='Cancelled'||isRewardsCampaign(c))continue;
+        const nm=c.name||c.comments||'campaign';
+        if(c.startDate===next)return `${nm} starts next day — early activation?`;
+        if(c.endDate===prev)return `${nm} ended day before — ran late?`;
+      }
+      return null;
+    };
+    for(const row of out){const bk=row.brand+'|'+row.aggregator;const dd=_dDisc[bk]||{},da=_dAttr[bk]||{};const pts=[];for(const[date,disc] of Object.entries(dd)){const unc=Math.max(0,disc-(da[date]||0));if(unc>1)pts.push({date,disc,unc,hint:_boundaryHint(row.brand,row.aggregator,date,unc,disc)});}pts.sort((a,b)=>b.unc-a.unc);row.topDates=pts.slice(0,12);row.uncatDays=pts.length;}
     return out;
   })();
   // Attributed (capped) for every row, including rows with zero uncategorized/overAttributed
@@ -9436,6 +9490,7 @@ function discountUncategorizedBreakdownHTML(d){
         +'<span style="font-weight:700">'+fmtShort(td.date)+'</span>'
         +' <span style="color:#B45309">AED '+Math.round(td.unc).toLocaleString()+'</span>'
         +(td.disc>td.unc+1?' <span style="opacity:.55;font-size:10px">(of '+Math.round(td.disc).toLocaleString()+' burn)</span>':'')
+        +(td.hint?' <span style="background:rgba(220,38,38,.1);color:#DC2626;font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:4px" title="Boundary-mismatch detector: large uncategorized burn directly adjacent to this campaign&#39;s entered dates — check whether the sheet dates match when the promo actually ran on the aggregator.">⚠ '+td.hint+'</span>':'')
         +' <span style="opacity:.6;font-size:9px">'+(_open?'▲':'▼')+'</span>'
         +'</span>'
         +(_open?discAuditDateHTML(x.brand,x.aggregator,td.date):'');}).join('')
