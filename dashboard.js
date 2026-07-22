@@ -13,10 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-125";
+const BUILD_VERSION="2026-07-21-127";
 const BUILD_NOTES=[
-  "🩹 Fixed Overview's Active Outlets card ignoring the Brand/Platform/Outlet filters entirely — it was counting from the whole unfiltered dataset instead of the same filtered data every other KPI card on the page already uses, so it always showed the full outlet count (e.g. 50) no matter what you'd filtered to. Now respects brand, platform, branch, and date range exactly like Orders/Net Sales/AOV/Discount Burn do."
+  "🎨 Platforms tile — final pass after several rounds of visual feedback. Net Sales and Discount Burn now show exact figures (e.g. AED 676,800) instead of K-abbreviated (676.8K). The vs-prior-period comparison sits on the same line as the Orders label, aligned to the right with a small inset from the card edge — not hugging the corner, not crowding Orders. Net Sales sits directly under the order count regardless of how tall the comparison block is. The prior-period row under AOV/Discount Burn/Outlets now matches the current row'\''s text size and uses a darker, clearly readable color for both the \"vs prior\" label and its values."
 ];
+
+
 
 
 
@@ -3503,17 +3505,26 @@ function renderOutlets(){
 // PLATFORMS
 function renderPlatforms(){
   const clr=AC[selPlatform]||"#888";const compShort=getCompShort();
-  // v124 Option A: each tile now carries AOV, Discount Burn, and Active Outlets alongside
-  // Orders/Net Sales, so all 7 platforms are comparable on every metric at a glance without
-  // clicking through each one. This absorbs what the separate 5-card summary row used to show
-  // for ONLY the selected platform (duplicating its tile) — that row is removed below.
+  // v124 Option A + v126/v127 visual refresh (several rounds of feedback): every tile shows
+  // AOV, Discount Burn, and Active Outlets alongside Orders/Net Sales, each with its own
+  // prior-period comparison. Net Sales/Discount Burn show exact figures (no K-abbreviation).
+  // The Orders vs-prior-period block sits on the same line as the Orders label, right-aligned
+  // with a small inset from the card edge. Net Sales sits directly under the order count
+  // regardless of the comparison block's height. Prior-period row matches the current row's
+  // text size, with darker, clearly-readable "vs prior" labels and values.
+  const fmtExact=n=>`AED ${Math.round(n).toLocaleString()}`;
   const aggSums=AGGS.map(ag=>{
     const ldA=getLD().filter(r=>r.aggregator===ag);
-    const c=sumR(ldA);const p=sumR(getPD().filter(r=>r.aggregator===ag));
+    const pdA=getPD().filter(r=>r.aggregator===ag);
+    const c=sumR(ldA);const p=sumR(pdA);
     const disc=c.disc||0;const gross=c.sales+disc;const depth=gross>0?(disc/gross*100):0;
+    const discP=p.disc||0;
     const outlets=new Set(ldA.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size;
-    return{ag,clr:AC[ag],...c,orders_prev:p.orders,aov:c.orders>0?c.sales/c.orders:0,
-      disc,depth,outlets,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};
+    const outletsP=new Set(pdA.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size;
+    return{ag,clr:AC[ag],...c,orders_prev:p.orders,
+      aov:c.orders>0?c.sales/c.orders:0,aovP:p.orders>0?p.sales/p.orders:0,
+      disc,depth,discP,outlets,outletsP,
+      oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};
   }).sort((a,b)=>b.sales-a.sales);
   const ld=getLD().filter(r=>r.aggregator===selPlatform),pd=getPD().filter(r=>r.aggregator===selPlatform);
   const ls=sumR(ld),ps=sumR(pd);
@@ -3525,17 +3536,28 @@ function renderPlatforms(){
     const shadow=isSel?`0 8px 25px ${a.clr}33`:'0 4px 6px -1px rgba(15,23,42,.08),0 2px 4px -2px rgba(15,23,42,.04)';
     const burnClr=a.disc>0?'#EF4444':'#94a3b8';
     return `<div style="cursor:pointer;background:linear-gradient(135deg,${a.clr}0d,#FEFDFA);border:2px solid ${border};border-radius:14px;padding:16px;box-shadow:${shadow};transition:all .2s ease" onmouseover="this.style.transform='translateY(-3px)'" onmouseout="this.style.transform='none'" onclick="selPlatform='${a.ag}';renderPlatforms()">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">${logoImg(a.ag,28)}<span style="font-size:11px;color:${a.clr};font-weight:800;text-transform:uppercase;letter-spacing:.5px">${a.ag}</span></div>
-      <div style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Orders</div>
-      <div style="font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:#0F172A">${a.orders.toLocaleString()}</div>
-      <div style="font-size:13px;color:#475569;font-weight:700;margin-top:4px">${fmtAED(a.sales)}</div>
-      <div style="margin-top:9px;padding-top:8px;border-top:1px solid #EDE7D9">
-        <div style="font-size:12px;color:#475569;font-weight:600">${compShort}: ${a.orders_prev!=null?a.orders_prev.toLocaleString():'—'} &nbsp;<span style="font-size:13px;color:${pctClr(a.oc)};font-weight:800">${fmtPct(a.oc)}</span></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">${logoImg(a.ag,28)}<span style="font-size:12px;color:${a.clr};font-weight:800;text-transform:uppercase;letter-spacing:.5px">${a.ag}</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;padding-right:14px">
+        <div>
+          <div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Orders</div>
+          <div style="font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:#0F172A">${a.orders.toLocaleString()}</div>
+          <div style="font-size:19px;color:#334155;font-weight:800;margin-top:4px">${fmtExact(a.sales)}</div>
+        </div>
+        <div>
+          <div style="font-size:12.5px;color:#94a3b8;font-weight:700">${compShort}</div>
+          <div style="font-size:17px;color:#334155;font-weight:800;margin-top:1px">${a.orders_prev!=null?a.orders_prev.toLocaleString():'—'}</div>
+          <div style="font-size:16px;color:${pctClr(a.oc)};font-weight:800;margin-top:1px">${fmtPct(a.oc)}</div>
+        </div>
       </div>
-      <div style="margin-top:9px;padding-top:8px;border-top:1px solid #EDE7D9;display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
-        <div><div style="font-size:8px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.4px">AOV</div><div style="font-size:13px;font-weight:800;color:#0F172A;margin-top:1px">${a.orders>0?'AED '+a.aov.toFixed(1):'—'}</div></div>
-        <div><div style="font-size:8px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Disc. Burn</div><div style="font-size:13px;font-weight:800;color:${burnClr};margin-top:1px">${a.disc>0?fmtAED(a.disc):'—'}</div></div>
-        <div><div style="font-size:8px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Outlets</div><div style="font-size:13px;font-weight:800;color:#0F172A;margin-top:1px">${a.outlets}</div></div>
+      <div style="margin-top:11px;padding-top:10px;border-top:1px solid #EDE7D9;display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+        <div><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.4px">AOV</div><div style="font-size:17px;font-weight:800;color:#0F172A;margin-top:2px">${a.orders>0?'AED '+a.aov.toFixed(1):'—'}</div></div>
+        <div><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Disc. Burn</div><div style="font-size:17px;font-weight:800;color:${burnClr};margin-top:2px">${a.disc>0?fmtExact(a.disc):'—'}</div></div>
+        <div><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Outlets</div><div style="font-size:17px;font-weight:800;color:#0F172A;margin-top:2px">${a.outlets}</div></div>
+      </div>
+      <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #D6CFB8;display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+        <div><div style="font-size:11px;color:#64748b;font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:#334155;margin-top:2px">${a.orders_prev>0?'AED '+a.aovP.toFixed(1):'—'}</div></div>
+        <div><div style="font-size:11px;color:#64748b;font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${a.discP>0?'#B45309':'#334155'};margin-top:2px">${a.discP>0?fmtExact(a.discP):'—'}</div></div>
+        <div><div style="font-size:11px;color:#64748b;font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:#334155;margin-top:2px">${a.outletsP}</div></div>
       </div>
     </div>`;
   }).join("");
