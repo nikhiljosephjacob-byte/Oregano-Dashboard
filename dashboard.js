@@ -13,10 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-127";
+const BUILD_VERSION="2026-07-21-128";
 const BUILD_NOTES=[
-  "🎨 Platforms tile — final pass after several rounds of visual feedback. Net Sales and Discount Burn now show exact figures (e.g. AED 676,800) instead of K-abbreviated (676.8K). The vs-prior-period comparison sits on the same line as the Orders label, aligned to the right with a small inset from the card edge — not hugging the corner, not crowding Orders. Net Sales sits directly under the order count regardless of how tall the comparison block is. The prior-period row under AOV/Discount Burn/Outlets now matches the current row'\''s text size and uses a darker, clearly readable color for both the \"vs prior\" label and its values."
+  "📱 Platforms tiles go 1-per-row on mobile instead of 2. Each tile now carries 5+ metrics plus a full prior-period row (from the recent redesign), and squeezing that into half a phone screen was what made it feel cramped. Scoped narrowly to just this page's tile grid via its own CSS class — the shared grid class used elsewhere on other pages, and the desktop/laptop 4-per-row layout, are both untouched."
 ];
+
 
 
 
@@ -2755,6 +2756,11 @@ function injectResponsiveCSS(){
   .g4{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
   .g3{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
   .g2{grid-template-columns:repeat(1,minmax(0,1fr)) !important;}
+  /* v128: Platforms tiles carry a lot more content per-tile now (AOV/burn/outlets + a whole
+     prior-period row) than a typical .g4 KPI card does elsewhere — 2-per-row squeezed all of
+     that into half a phone screen, which is what made it feel cramped. Scoped to just this
+     page's grid via the combined selector so nothing else using .g4 anywhere else is affected. */
+  .g4.plat-grid{grid-template-columns:1fr !important;}
   /* Card padding tighter on phones for more content density */
   .card{padding:12px !important;}
   .sm{padding:10px !important;}
@@ -3575,7 +3581,7 @@ function renderPlatforms(){
   ],sortVals:[b.n,b.cv.orders,b.cv.sales,b.cv.orders>0?b.cv.sales/b.cv.orders:0,disc,depth,b.oc,b.sc]};
   });
   document.getElementById("page-platforms").innerHTML=makeFilterBar({hidePlatform:true})+
-    `<div class="g4" style="margin-bottom:12px">${cards}</div>
+    `<div class="g4 plat-grid" style="margin-bottom:12px">${cards}</div>
     ${note?`<div class="card" style="background:rgba(245,158,11,.05);border-color:rgba(245,158,11,.2);margin-bottom:12px"><div style="font-size:12px;color:#FDE68A;line-height:1.7">💡 ${note}</div></div>`:""}
     <div class="sm" style="margin-bottom:12px"><div class="ct" style="color:${clr}">${selPlatform} — Net Sales Trend</div><div style="position:relative;height:130px"><canvas id="ch-p-trend"></canvas></div></div>
     <div class="card"><div class="ct" style="color:${clr}">Brand Performance on ${selPlatform} — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("pl-tbl",heads,tRows,2)}</div>`;
