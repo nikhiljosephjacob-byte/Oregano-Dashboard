@@ -59,8 +59,9 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
 .mnav:hover{background:rgba(255,255,255,.06);color:#FEFDFA}
 .mnav.act{background:linear-gradient(90deg,rgba(251,191,36,.15),transparent);color:#fbbf24;border-left:3px solid #fbbf24;padding-left:11px}
 
-/* Menu button attention-pulse — plays twice on first load to draw the eye */
-@keyframes menuPulse{0%,100%{box-shadow:0 0 0 0 rgba(251,191,36,0)}50%{box-shadow:0 0 0 8px rgba(251,191,36,.25)}}
+/* Menu button attention-pulse — v122: loops indefinitely, one gentle pulse every 5s, so the
+   hamburger stays noticeable through a long session instead of only blinking once ever. */
+@keyframes menuPulse{0%,50%,100%{box-shadow:0 0 0 0 rgba(251,191,36,0)}25%{box-shadow:0 0 0 8px rgba(251,191,36,.25)}}
 
 /* ── Mobile responsive ── */
 @media(max-width:900px){
@@ -68,12 +69,14 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
   /* Hide nav tabs on mobile — the hamburger drawer replaces them */
   nav{padding:0 8px;height:64px;flex-wrap:nowrap;gap:0;justify-content:flex-start}
   nav .tab{display:none}
-  #mobile-menu-btn{display:inline-flex!important;animation:menuPulse 2.5s ease-in-out 2;padding:5px 9px!important;font-size:12px!important}
+  #mobile-menu-btn{display:inline-flex!important;animation:menuPulse 5s ease-in-out infinite;padding:5px 9px!important;font-size:12px!important}
   #mobile-menu-btn span:first-child{font-size:16px!important}
   #nav-brand-strip{display:flex!important;overflow:visible!important}
   nav::after{display:none!important} /* remove scroll-fade on mobile */
   #ts-label{display:none}
-  nav > button:not(#mobile-menu-btn){display:none} /* hide refresh/logout on mobile — they're in the drawer */
+  nav > button:not(#mobile-menu-btn):not(#rating-alert-bell){display:none} /* hide refresh/logout on mobile — they're in the drawer. Bell stays visible: rating alerts matter enough to keep reachable outside the drawer. */
+  #rating-alert-bell{display:inline-flex!important;margin-left:6px!important;padding:5px 8px!important}
+  #rating-alert-panel{right:6px!important;top:60px!important}
   .logo{font-size:10px;margin-left:8px;margin-right:4px;flex-shrink:0;min-width:0;overflow:hidden}
   .logo span{display:none} /* hide "Oregano Restaurants" text on mobile — brand strip takes the space instead */
   .logo img{width:40px!important;height:40px!important;flex-shrink:0}
@@ -174,7 +177,7 @@ nav{background:linear-gradient(135deg,#1E293B 0%,#334155 50%,#475569 100%);borde
 
   <!-- MOBILE SLIDE-OUT NAV DRAWER -->
   <div id="mobile-nav-overlay" onclick="toggleMobileNav()" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:998;opacity:0;transition:opacity .25s ease"></div>
-  <div id="mobile-nav-drawer" style="display:none;position:fixed;top:0;left:-280px;width:280px;height:100vh;background:linear-gradient(180deg,#1E293B 0%,#0F172A 100%);z-index:999;transition:left .25s ease;box-shadow:4px 0 24px rgba(0,0,0,.3);flex-direction:column">
+  <div id="mobile-nav-drawer" style="display:none;position:fixed;top:0;left:0;width:280px;height:100vh;background:linear-gradient(180deg,#1E293B 0%,#0F172A 100%);z-index:999;transform:translateX(-280px);transition:transform .25s ease;box-shadow:4px 0 24px rgba(0,0,0,.3);flex-direction:column;will-change:transform">
     <div style="padding:20px 20px 24px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;gap:12px">
       <img id="drawer-logo" style="width:40px;height:40px;border-radius:8px;object-fit:cover">
       <div><div style="font-size:14px;font-weight:800;color:#fbbf24;letter-spacing:1.5px">OREGANO</div><div style="font-size:11px;color:rgba(255,255,255,.6);font-weight:600">Restaurants BD</div></div>
