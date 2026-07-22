@@ -13,12 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-122";
+const BUILD_VERSION="2026-07-21-123";
 const BUILD_NOTES=[
-  "📱 Mobile menu fixed: the hamburger's attention-pulse now loops every 5 seconds indefinitely (was: twice on first page load only, then silent for the rest of the session — you simply weren't seeing it anymore after the first few seconds). The drawer's slide-in animation was moving the `left` CSS property, which forces the browser to recalculate the whole page's layout on every frame — expensive on mobile, and the likely cause of the lag when opening the menu. It now animates `transform: translateX()` instead, which the GPU can composite directly with zero layout cost.",
-  "📊 Portrait-mode tables now show a small '⟷ swipe or rotate for full table' hint underneath any table that scrolls horizontally or hides columns on narrow screens — this was previously silent (columns just disappeared below ~560px width with no indication anything was missing).",
-  "🔔 New Talabat rating alert bell in the header (also visible on mobile, next to the hamburger). Checks every outlet's Talabat rating against 4.2 using the same data already read for the KPI Tracker page. Shows a red badge + dropdown list of any outlet currently below 4.2, and keeps re-surfacing (bell stays active/highlighted) every few hours for as long as an outlet stays below the threshold — clearing automatically once it recovers. This is in-dashboard only: it's visible when you open the app, not a push notification to your phone/email."
+  "🩹 Emergency fix: fetchCSV() had no timeout on any of its 3 attempts (direct Google Sheets, then 2 public CORS proxy fallbacks). If Google's CORS blocked the direct request AND one of the two public proxies was slow/rate-limited/down at that moment, the fetch could hang indefinitely with no way to fail and move on — since all 5 brands load in parallel, this could freeze the entire loading screen on any brand that drew the unlucky proxy, exactly matching a load stuck at a fixed percentage with the rest never completing. Each attempt now times out after 8 seconds and falls through to the next option, so a bad proxy can no longer block the dashboard from loading — worst case, that one brand's data is temporarily unavailable and reported in the error banner, instead of the whole app hanging forever."
 ];
+
 
 
 
@@ -2504,10 +2503,22 @@ function parseBrand(csv,brand){
 }
 
 // FETCHING
+// v123: each attempt now times out after 8s instead of waiting indefinitely. Previously a
+// hanging third-party CORS proxy (allorigins.win / corsproxy.io) had no way to fail and let
+// the loop move to the next option — with 5 brands fetching in parallel, one bad proxy could
+// freeze the ENTIRE loading screen forever on whichever brand drew it. Now a stuck request is
+// abandoned after 8s and the next fallback is tried, so a flaky proxy degrades gracefully
+// instead of hanging the whole dashboard.
+async function fetchWithTimeout(url,ms){
+  const ctrl=new AbortController();
+  const t=setTimeout(()=>ctrl.abort(),ms);
+  try{return await fetch(url,{signal:ctrl.signal});}
+  finally{clearTimeout(t);}
+}
 async function fetchCSV(gid){
   const raw=`${PUB}?gid=${gid}&single=true&output=csv`;
   const proxies=[raw,`https://api.allorigins.win/raw?url=${encodeURIComponent(raw)}`,`https://corsproxy.io/?${encodeURIComponent(raw)}`];
-  for(const u of proxies){try{const r=await fetch(u);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(","))return t;}}catch(e){}}
+  for(const u of proxies){try{const r=await fetchWithTimeout(u,8000);if(r.ok){const t=await r.text();if(t.length>200&&t.includes(","))return t;}}catch(e){}}
   throw new Error("blocked");
 }
 // Combined loading screen: greeting + brand logos + animated SVG pie progress. Replaces
