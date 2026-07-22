@@ -13,10 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-123";
+const BUILD_VERSION="2026-07-21-124";
 const BUILD_NOTES=[
-  "🩹 Emergency fix: fetchCSV() had no timeout on any of its 3 attempts (direct Google Sheets, then 2 public CORS proxy fallbacks). If Google's CORS blocked the direct request AND one of the two public proxies was slow/rate-limited/down at that moment, the fetch could hang indefinitely with no way to fail and move on — since all 5 brands load in parallel, this could freeze the entire loading screen on any brand that drew the unlucky proxy, exactly matching a load stuck at a fixed percentage with the rest never completing. Each attempt now times out after 8 seconds and falls through to the next option, so a bad proxy can no longer block the dashboard from loading — worst case, that one brand's data is temporarily unavailable and reported in the error banner, instead of the whole app hanging forever."
+  "🔁 One-click retry for brands that failed to load. If a brand's Google Sheet fetch fails (the issue behind the Lollorosso/Fyoozhen \"No data\" gaps), it's now tracked as genuinely FAILED rather than indistinguishable from a brand that legitimately had zero orders. Any tile currently showing that brand's data — starting with Overview's AOV by Brand — shows a \"⚠ Failed to load\" state with a Retry button right on the tile, instead of a generic banner elsewhere on the page. Retry re-fetches just that one brand and merges it in, without reloading everything else.",
+  "📊 Platforms page rebuilt per Option A: every aggregator tile now shows AOV, Discount Burn, and Active Outlets in a compact strip alongside Orders and Net Sales — comparable across all 7 platforms at a glance. The separate 5-card summary row below (which only ever described the one selected platform, duplicating its tile) is gone; the Net Sales Trend chart and Brand Performance table are unchanged."
 ];
+
 
 
 
@@ -2606,6 +2608,7 @@ async function doLoad(){
   // Time-based ticker: assume typical load takes ~6s. Climb toward the current ceiling
   // (based on completed brands) at a rate of ~1% per 60ms.
   let currentPct=0;
+  window.failedBrandGids={}; // brand name -> gid, for ones that failed this load — cleared/updated per attempt
   const ticker=setInterval(()=>{
     const ceiling=(completedCount/totalBrands)*100;
     // Even before the first brand completes, show some progress so the user knows things are happening
@@ -2619,8 +2622,8 @@ async function doLoad(){
     if(currentPct>=100)clearInterval(ticker);
   },80);
   await Promise.all(BR.map(async({n,gid},idx)=>{
-    try{all.push(...parseBrand(await fetchCSV(gid),n));}
-    catch(e){errs.push(`${n}: ${e.message}`);}
+    try{all.push(...parseBrand(await fetchCSV(gid),n));delete window.failedBrandGids[n];}
+    catch(e){errs.push(`${n}: ${e.message}`);window.failedBrandGids[n]=gid;}
     completedCount++;
     pt.textContent=`${n} loaded · ${completedCount} of ${totalBrands} brands`;
   }));
@@ -2691,6 +2694,29 @@ async function doLoad(){
   // Earlier delay was 1100ms to let other prewarms grab CPU first; reduced now that analyses are
   // indexed and per-campaign cost is much lower.
   setTimeout(()=>{prewarmCampaigns();},700);
+}
+// v124: re-fetch and merge in ONE brand that failed to load, without reloading everything
+// else. Called from the Retry button that appears directly on whichever tile is showing that
+// brand's missing data (starting with Overview's AOV by Brand) — not a generic page banner.
+async function retryBrand(brandName){
+  const gid=(window.failedBrandGids||{})[brandName];
+  if(!gid)return; // not currently marked failed — nothing to retry
+  const btn=document.getElementById(`retry-brand-${brandName.replace(/\\s+/g,'-')}`);
+  if(btn){btn.textContent='Retrying…';btn.style.pointerEvents='none';btn.style.opacity='.6';}
+  try{
+    const csv=await fetchCSV(gid);
+    const recs=parseBrand(csv,brandName);
+    // Remove any partial/stale records for this brand first, then add the fresh set —
+    // avoids duplicate rows if a previous partial fetch had actually returned something.
+    allData=allData.filter(r=>r.brand!==brandName);
+    allData.push(...recs);
+    buildDataIndex();
+    delete window.failedBrandGids[brandName];
+    if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
+    if(typeof renderPage==="function"&&typeof curPage!=="undefined")renderPage(curPage);
+  }catch(e){
+    if(btn){btn.textContent='⚠ Retry failed — try again';btn.style.pointerEvents='auto';btn.style.opacity='1';}
+  }
 }
 
 // Inject responsive CSS overrides so the dashboard works on mobile/tablet as well as desktop.
@@ -3256,7 +3282,11 @@ function renderOverview(){
   const aovBlock=aovDrill?(()=>{
     return `<div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>AOV by Brand — Daily Trend (${getPeriodLabel()})</span><button onclick="toggleAovDrill()" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer">✕ Collapse</button></div><div style="position:relative;height:300px"><canvas id="ch-aov-multi"></canvas></div><div style="font-size:10px;color:#64748b;margin-top:6px">Each line = one brand's daily AOV across the selected date range. Hover for exact values.</div></div>`;
   })():(()=>{
-    return `<div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>AOV by Brand <span style="color:#f59e0b;font-weight:400;text-transform:none;letter-spacing:0">· click to see daily trend lines</span></span></div><div onclick="toggleAovDrill()" style="cursor:pointer;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px" title="Click to open daily AOV trend per brand">${BR.map(b=>{const recs=ld.filter(r=>r.brand===b.n);const tot=sumR(recs);const aov=tot.orders>0?(tot.sales/tot.orders).toFixed(1):"—";const byAgg=AGGS.map(ag=>{const a=sumR(recs.filter(r=>r.aggregator===ag));return a.orders>0?`<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(15,23,42,.3);font-size:11px"><span style="color:${AC[ag]||"#888"}">${ag}</span><span style="font-variant-numeric:tabular-nums">AED ${(a.sales/a.orders).toFixed(1)}</span></div>`:"";}).join("");return`<div style="background:#F1F5F9;border:1px solid #E2E8F0;border-radius:8px;padding:10px"><div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">${logoImg(b.n,28)}<div><div style="font-size:11px;font-weight:700;color:${b.c}">${b.n}</div><div style="font-size:13px;font-weight:800">AED ${aov}</div></div></div>${byAgg||"<div style='color:#64748b;font-size:11px'>No data</div>"}</div>`;}).join("")}</div></div>`;
+    return `<div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>AOV by Brand <span style="color:#f59e0b;font-weight:400;text-transform:none;letter-spacing:0">· click to see daily trend lines</span></span></div><div onclick="toggleAovDrill()" style="cursor:pointer;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px" title="Click to open daily AOV trend per brand">${BR.map(b=>{const recs=ld.filter(r=>r.brand===b.n);const tot=sumR(recs);const aov=tot.orders>0?(tot.sales/tot.orders).toFixed(1):"—";const byAgg=AGGS.map(ag=>{const a=sumR(recs.filter(r=>r.aggregator===ag));return a.orders>0?`<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(15,23,42,.3);font-size:11px"><span style="color:${AC[ag]||"#888"}">${ag}</span><span style="font-variant-numeric:tabular-nums">AED ${(a.sales/a.orders).toFixed(1)}</span></div>`:"";}).join("");const failed=!!(window.failedBrandGids&&window.failedBrandGids[b.n]);
+    const noDataHTML=failed
+      ? `<div style="font-size:11px;color:#EF4444;font-weight:700;display:flex;align-items:center;gap:6px">⚠ Failed to load<span id="retry-brand-${b.n.replace(/\s+/g,'-')}" onclick="event.stopPropagation();retryBrand('${b.n}')" style="cursor:pointer;text-decoration:underline;color:#B91C1C;font-weight:800">Retry</span></div>`
+      : "<div style='color:#64748b;font-size:11px'>No data</div>";
+    return`<div style="background:#F1F5F9;border:1px solid ${failed?'#FCA5A5':'#E2E8F0'};border-radius:8px;padding:10px"><div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">${logoImg(b.n,28)}<div><div style="font-size:11px;font-weight:700;color:${b.c}">${b.n}</div><div style="font-size:13px;font-weight:800">AED ${aov}</div></div></div>${byAgg||noDataHTML}</div>`;}).join("")}</div></div>`;
   })();
 
   // Sortable brand table
@@ -3473,19 +3503,27 @@ function renderOutlets(){
 // PLATFORMS
 function renderPlatforms(){
   const clr=AC[selPlatform]||"#888";const compShort=getCompShort();
-  const aggSums=AGGS.map(ag=>{const c=sumR(getLD().filter(r=>r.aggregator===ag));const p=sumR(getPD().filter(r=>r.aggregator===ag));return{ag,clr:AC[ag],...c,orders_prev:p.orders,aov:c.orders>0?c.sales/c.orders:0,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};}).sort((a,b)=>b.sales-a.sales);
+  // v124 Option A: each tile now carries AOV, Discount Burn, and Active Outlets alongside
+  // Orders/Net Sales, so all 7 platforms are comparable on every metric at a glance without
+  // clicking through each one. This absorbs what the separate 5-card summary row used to show
+  // for ONLY the selected platform (duplicating its tile) — that row is removed below.
+  const aggSums=AGGS.map(ag=>{
+    const ldA=getLD().filter(r=>r.aggregator===ag);
+    const c=sumR(ldA);const p=sumR(getPD().filter(r=>r.aggregator===ag));
+    const disc=c.disc||0;const gross=c.sales+disc;const depth=gross>0?(disc/gross*100):0;
+    const outlets=new Set(ldA.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size;
+    return{ag,clr:AC[ag],...c,orders_prev:p.orders,aov:c.orders>0?c.sales/c.orders:0,
+      disc,depth,outlets,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};
+  }).sort((a,b)=>b.sales-a.sales);
   const ld=getLD().filter(r=>r.aggregator===selPlatform),pd=getPD().filter(r=>r.aggregator===selPlatform);
   const ls=sumR(ld),ps=sumR(pd);
   const brandRows=BR.map(({n,c})=>{const cv=sumR(ld.filter(r=>r.brand===n));const pv=sumR(pd.filter(r=>r.brand===n));return{n,c,cv,oc:pctOf(cv.orders,pv.orders),sc:pctOf(cv.sales,pv.sales)};}).filter(b=>b.cv.orders>0);
   const note=ANOTES[selPlatform];
-  // Individual aggregator tiles (v088): redesigned to match the kpiCard visual language used
-  // everywhere else — prominent current value, divider, then "vs {period}: {prior}" in a
-  // readable darker size, followed by the % change. Previously these only showed the % change
-  // alone with no "vs X" context at all, inconsistent with every other tile on the dashboard.
   const cards=aggSums.map(a=>{
     const isSel=selPlatform===a.ag;
     const border=isSel?a.clr:'#EDE7D9';
     const shadow=isSel?`0 8px 25px ${a.clr}33`:'0 4px 6px -1px rgba(15,23,42,.08),0 2px 4px -2px rgba(15,23,42,.04)';
+    const burnClr=a.disc>0?'#EF4444':'#94a3b8';
     return `<div style="cursor:pointer;background:linear-gradient(135deg,${a.clr}0d,#FEFDFA);border:2px solid ${border};border-radius:14px;padding:16px;box-shadow:${shadow};transition:all .2s ease" onmouseover="this.style.transform='translateY(-3px)'" onmouseout="this.style.transform='none'" onclick="selPlatform='${a.ag}';renderPlatforms()">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">${logoImg(a.ag,28)}<span style="font-size:11px;color:${a.clr};font-weight:800;text-transform:uppercase;letter-spacing:.5px">${a.ag}</span></div>
       <div style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Orders</div>
@@ -3493,6 +3531,11 @@ function renderPlatforms(){
       <div style="font-size:13px;color:#475569;font-weight:700;margin-top:4px">${fmtAED(a.sales)}</div>
       <div style="margin-top:9px;padding-top:8px;border-top:1px solid #EDE7D9">
         <div style="font-size:12px;color:#475569;font-weight:600">${compShort}: ${a.orders_prev!=null?a.orders_prev.toLocaleString():'—'} &nbsp;<span style="font-size:13px;color:${pctClr(a.oc)};font-weight:800">${fmtPct(a.oc)}</span></div>
+      </div>
+      <div style="margin-top:9px;padding-top:8px;border-top:1px solid #EDE7D9;display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+        <div><div style="font-size:8px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.4px">AOV</div><div style="font-size:13px;font-weight:800;color:#0F172A;margin-top:1px">${a.orders>0?'AED '+a.aov.toFixed(1):'—'}</div></div>
+        <div><div style="font-size:8px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Disc. Burn</div><div style="font-size:13px;font-weight:800;color:${burnClr};margin-top:1px">${a.disc>0?fmtAED(a.disc):'—'}</div></div>
+        <div><div style="font-size:8px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Outlets</div><div style="font-size:13px;font-weight:800;color:#0F172A;margin-top:1px">${a.outlets}</div></div>
       </div>
     </div>`;
   }).join("");
@@ -3509,43 +3552,14 @@ function renderPlatforms(){
     fmtChgCell(b.cv.sales,pv.sales,true)
   ],sortVals:[b.n,b.cv.orders,b.cv.sales,b.cv.orders>0?b.cv.sales/b.cv.orders:0,disc,depth,b.oc,b.sc]};
   });
-  const platDisc=ls.disc||0;const platGross=ls.sales+platDisc;const platDepth=platGross>0?(platDisc/platGross*100):0;
   document.getElementById("page-platforms").innerHTML=makeFilterBar({hidePlatform:true})+
     `<div class="g4" style="margin-bottom:12px">${cards}</div>
     ${note?`<div class="card" style="background:rgba(245,158,11,.05);border-color:rgba(245,158,11,.2);margin-bottom:12px"><div style="font-size:12px;color:#FDE68A;line-height:1.7">💡 ${note}</div></div>`:""}
-    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAED(ls.sales),`${compShort}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAED(platDisc),`${platDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAED(ps.disc||0)}`,pctOf(platDisc,ps.disc||0),null,null,true)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="sm" style="margin-bottom:12px"><div class="ct" style="color:${clr}">${selPlatform} — Net Sales Trend</div><div style="position:relative;height:130px"><canvas id="ch-p-trend"></canvas></div></div>
     <div class="card"><div class="ct" style="color:${clr}">Brand Performance on ${selPlatform} — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("pl-tbl",heads,tRows,2)}</div>`;
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.aggregator===selPlatform&&(!f.brands.size||f.brands.has(r.brand))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-p-trend",trend30(mf,f.start,f.end),clr);},50);
 }
 
-
-// CPC BUDGETS
-// ═══════════════════════════════════════════════════════════════
-// ADS PERFORMANCE CONSOLE
-// Aggregator → Brand → Outlet drill-down. Budget respects pooling (Careem/Noon = brand-level
-// pool; Deliveroo/Talabat = per-outlet). Results (orders/sales/AOV/CTO/ROAS) always valid
-// per-outlet. CPC vs Keywords (Talabat) tracked as separate ad types. Heavy computation runs
-// ONCE after load into a precomputed model (cpcModel) so drill-downs are instant.
-// ═══════════════════════════════════════════════════════════════
-
-// Food + packaging cost % per brand (for margin-aware break-even ROAS)
-const CPC_FOOD_COST={Oregano:0.30,Lollorosso:0.30,Smokeys:0.30,"Wicked Wings":0.30,Fyoozhen:0.40};
-// Pure commission rates for Ads Performance break-even (PG included; ads/CPC/cancellation excluded
-// since CPC spend is the very thing being measured on this page). Kept consistent with the COMM
-// table used in Campaign Manager. Keeta has no ads option, so it's excluded from the Ads page entirely.
-const CPC_COMM={
-  Talabat:{Oregano:0.22,Smokeys:0.22,DEFAULT:0.29}, // 20%+2% PG / 27%+2% PG
-  Careem:{DEFAULT:0.19},   // 17% + 2% PG
-  Deliveroo:{DEFAULT:0.23},// 23% commission (2% CPC excluded)
-  Noon:{DEFAULT:0.19}      // 17% + 2% PG
-};
-// Brands we exclude from the Ads dashboard entirely
-const CPC_EXCLUDE_BRANDS=new Set(["smiles","burgerstack"]);
-// The set of real brand names — used to flag CPC sheet rows whose Brand-Location cell didn't
-// parse into one of these (see rec.brandUnmapped in parseCPCSheet).
-const CPC_VALID_BRANDS=new Set(BR.map(b=>b.n));
-const CPC_EXCLUDE_AGGS=new Set(["smiles","keeta"]);
 
 function cpcBE(brand,aggregator){
   const f=CPC_FOOD_COST[brand]??0.30;
@@ -11462,7 +11476,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     sortTableBy,selectCamp,campSetSearch,campSetQuickFilter,campSetCardSort,campToggleFilter,campClearFilters,campSortBy,campSetDate,campClearDates,campSetElasticity,
     campTrajectory,campBreakevenUplift,campFindCleanBaseline,campCollapseSection,campParticipationV1,campParticipationTrend,cpcPacingRec,
     campFcSaveForecast,campFcLoadHistory,
-    toggleRatingBell,checkRatingAlerts,renderRatingBell,
+    toggleRatingBell,checkRatingAlerts,renderRatingBell,retryBrand,
     confirmClearAggData,clearKeetaData,clearCareemData,clearTalabatData,clearDeliverooData,clearNoonData,handleOrdersUpload,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,cmpToggleExpand,
     injectCompareTab,loadKPIData,doLoad,
