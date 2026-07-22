@@ -13,10 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-129";
+const BUILD_VERSION="2026-07-21-130";
 const BUILD_NOTES=[
-  "🩹 CRITICAL FIX: restored five constants (CPC_FOOD_COST, CPC_COMM, CPC_EXCLUDE_BRANDS, CPC_VALID_BRANDS, CPC_EXCLUDE_AGGS) that were silently deleted during the very first Platforms tile rewrite a few builds ago. My edit script replaced everything from the old renderPlatforms up to the next function declaration — but these five constants sat in that same gap, between the old renderPlatforms and the real next function, so they were deleted along with the code being replaced without me noticing, since a missing top-level constant doesn't show up as a syntax error, only as a runtime crash when that code path actually runs. That's exactly what broke Ads Performance: CPC_EXCLUDE_AGGS is not defined. All five are restored with their original values, confirmed against an untouched pre-edit copy of the file."
+  "📱 Brands page mobile fix: the 5 brand-selector buttons and the 5 KPI cards below them were both free-wrapping/2-column, which left the 5th item (Wicked Wings, and separately AOV) stranded alone in its own row with wasted space beside it \u2014 the \"disorganized\" look. Both now use a proper 2-column grid where the odd 5th item spans the full row instead of floating alone. The KPI-row fix is at the shared style level, so Overview and the Outlets-detail view (both also 5 cards) get the same cleanup as a side effect."
 ];
+
 
 
 
@@ -2762,6 +2763,15 @@ function injectResponsiveCSS(){
      that into half a phone screen, which is what made it feel cramped. Scoped to just this
      page's grid via the combined selector so nothing else using .g4 anywhere else is affected. */
   .g4.plat-grid{grid-template-columns:1fr !important;}
+  /* v130: Brands page — 5 brand-selector buttons and 5 KPI cards below them both used to
+     free-wrap/2-column, stranding the 5th item alone with wasted space beside it. Grid with
+     the odd last item spanning the full row instead. The KPI-row rule is on the SHARED
+     .ov-kpi-row class (Overview and Outlets-detail also render exactly 5 cards, so they get
+     the same fix as a side effect — same bug, same correct behavior everywhere it appears). */
+  .brand-sel-row{display:grid !important;grid-template-columns:repeat(2,1fr) !important;}
+  .brand-sel-row > button{width:100% !important;justify-content:center !important;box-sizing:border-box}
+  .brand-sel-row > button:last-child{grid-column:1/-1 !important;}
+  .ov-kpi-row > *:last-child{grid-column:1/-1 !important;}
   /* Card padding tighter on phones for more content density */
   .card{padding:12px !important;}
   .sm{padding:10px !important;}
@@ -3394,7 +3404,7 @@ function renderBrands(){
   const heads=["Outlet","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
   const brandDisc=ls.disc||0;const brandGross=ls.sales+brandDisc;const brandDepth=brandGross>0?(brandDisc/brandGross*100):0;
   document.getElementById("page-brands").innerHTML=makeFilterBar({hideBrand:true})+
-    `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
+    `<div class="brand-sel-row" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
     <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAED(ls.sales),compShort+": "+fmtAED(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAED(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAED(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="g2"><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — Net Sales Trend</div><div style="position:relative;height:180px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748B;font-weight:600;text-transform:none;letter-spacing:0;font-size:10px">sales bars · order count on top</span></div><div style="position:relative;height:180px"><canvas id="ch-b-agg"></canvas></div></div></div>
     <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>`;
