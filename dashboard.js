@@ -13,10 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-128";
+const BUILD_VERSION="2026-07-21-129";
 const BUILD_NOTES=[
-  "📱 Platforms tiles go 1-per-row on mobile instead of 2. Each tile now carries 5+ metrics plus a full prior-period row (from the recent redesign), and squeezing that into half a phone screen was what made it feel cramped. Scoped narrowly to just this page's tile grid via its own CSS class — the shared grid class used elsewhere on other pages, and the desktop/laptop 4-per-row layout, are both untouched."
+  "🩹 CRITICAL FIX: restored five constants (CPC_FOOD_COST, CPC_COMM, CPC_EXCLUDE_BRANDS, CPC_VALID_BRANDS, CPC_EXCLUDE_AGGS) that were silently deleted during the very first Platforms tile rewrite a few builds ago. My edit script replaced everything from the old renderPlatforms up to the next function declaration — but these five constants sat in that same gap, between the old renderPlatforms and the real next function, so they were deleted along with the code being replaced without me noticing, since a missing top-level constant doesn't show up as a syntax error, only as a runtime crash when that code path actually runs. That's exactly what broke Ads Performance: CPC_EXCLUDE_AGGS is not defined. All five are restored with their original values, confirmed against an untouched pre-edit copy of the file."
 ];
+
 
 
 
@@ -3588,6 +3589,33 @@ function renderPlatforms(){
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.aggregator===selPlatform&&(!f.brands.size||f.brands.has(r.brand))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-p-trend",trend30(mf,f.start,f.end),clr);},50);
 }
 
+
+// CPC BUDGETS
+// ═══════════════════════════════════════════════════════════════
+// ADS PERFORMANCE CONSOLE
+// Aggregator → Brand → Outlet drill-down. Budget respects pooling (Careem/Noon = brand-level
+// pool; Deliveroo/Talabat = per-outlet). Results (orders/sales/AOV/CTO/ROAS) always valid
+// per-outlet. CPC vs Keywords (Talabat) tracked as separate ad types. Heavy computation runs
+// ONCE after load into a precomputed model (cpcModel) so drill-downs are instant.
+// ═══════════════════════════════════════════════════════════════
+
+// Food + packaging cost % per brand (for margin-aware break-even ROAS)
+const CPC_FOOD_COST={Oregano:0.30,Lollorosso:0.30,Smokeys:0.30,"Wicked Wings":0.30,Fyoozhen:0.40};
+// Pure commission rates for Ads Performance break-even (PG included; ads/CPC/cancellation excluded
+// since CPC spend is the very thing being measured on this page). Kept consistent with the COMM
+// table used in Campaign Manager. Keeta has no ads option, so it's excluded from the Ads page entirely.
+const CPC_COMM={
+  Talabat:{Oregano:0.22,Smokeys:0.22,DEFAULT:0.29}, // 20%+2% PG / 27%+2% PG
+  Careem:{DEFAULT:0.19},   // 17% + 2% PG
+  Deliveroo:{DEFAULT:0.23},// 23% commission (2% CPC excluded)
+  Noon:{DEFAULT:0.19}      // 17% + 2% PG
+};
+// Brands we exclude from the Ads dashboard entirely
+const CPC_EXCLUDE_BRANDS=new Set(["smiles","burgerstack"]);
+// The set of real brand names — used to flag CPC sheet rows whose Brand-Location cell didn't
+// parse into one of these (see rec.brandUnmapped in parseCPCSheet).
+const CPC_VALID_BRANDS=new Set(BR.map(b=>b.n));
+const CPC_EXCLUDE_AGGS=new Set(["smiles","keeta"]);
 
 function cpcBE(brand,aggregator){
   const f=CPC_FOOD_COST[brand]??0.30;
