@@ -13,11 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-121";
+const BUILD_VERSION="2026-07-21-122";
 const BUILD_NOTES=[
-  "🎁 Noon commission-waiver campaigns (e.g. BOGO Mondays: \"No Commission Charged on these Orders Except PG fees of 2%\") now get credit for the real saving. The Noon parser tracks, per day, the gross sales specifically from orders that carried a discount (BOGO-redeemed orders) separately from the day's total. When a campaign's comment declares a commission waiver, the engine computes the standard-vs-waived commission difference on JUST those discounted orders' net sales and adds it to the campaign's contribution — scoped exactly as agreed: only orders that show the discount, only when the campaign exists in the sheet, and only for dates where exact Noon data has actually been uploaded (no exact data for a date → standard commission stands, nothing assumed). Shown transparently on the campaign card and detail page as a '🎁 Commission waiver' line, not silently folded into the headline number.",
-  "This re-parses correctly on RE-upload too — no need to re-upload past Noon statements for this to take effect on already-uploaded dates."
+  "📱 Mobile menu fixed: the hamburger's attention-pulse now loops every 5 seconds indefinitely (was: twice on first page load only, then silent for the rest of the session — you simply weren't seeing it anymore after the first few seconds). The drawer's slide-in animation was moving the `left` CSS property, which forces the browser to recalculate the whole page's layout on every frame — expensive on mobile, and the likely cause of the lag when opening the menu. It now animates `transform: translateX()` instead, which the GPU can composite directly with zero layout cost.",
+  "📊 Portrait-mode tables now show a small '⟷ swipe or rotate for full table' hint underneath any table that scrolls horizontally or hides columns on narrow screens — this was previously silent (columns just disappeared below ~560px width with no indication anything was missing).",
+  "🔔 New Talabat rating alert bell in the header (also visible on mobile, next to the hamburger). Checks every outlet's Talabat rating against 4.2 using the same data already read for the KPI Tracker page. Shows a red badge + dropdown list of any outlet currently below 4.2, and keeps re-surfacing (bell stays active/highlighted) every few hours for as long as an outlet stays below the threshold — clearing automatically once it recovers. This is in-dashboard only: it's visible when you open the app, not a push notification to your phone/email."
 ];
+
 
 
 
@@ -1123,6 +1125,25 @@ const AGG_UPLOAD_CSS=`
 }
 @media (max-width:520px) {
   div[style*="grid-template-columns:repeat(5,1fr)"] { grid-template-columns:repeat(3,1fr) !important; }
+}
+/* v122: portrait-mode table hint. Tables get wrapped in a div with inline overflow-x:auto
+   throughout the codebase (mkTable, campaign tables, CPC tables, etc.) — this attribute
+   selector catches ALL of them automatically without needing to touch every call site.
+   On narrow screens, some table columns also get hidden entirely via display:none further
+   down this stylesheet — previously with zero indication either was happening. This adds a
+   small caption so swiping (for cut-off visible columns) or rotating (for hidden columns)
+   is discoverable instead of silent. */
+@media (max-width:900px) {
+  div[style*="overflow-x:auto"] { position:relative; }
+  div[style*="overflow-x:auto"]::after {
+    content: "⟷ swipe or rotate your phone for the full table";
+    display: block;
+    font-size: 9px;
+    color: #94A3B8;
+    text-align: center;
+    font-style: italic;
+    padding: 4px 0 2px;
+  }
 }
 `;
 
@@ -3105,9 +3126,12 @@ function toggleMobileNav(){
   const drawer=document.getElementById("mobile-nav-drawer");
   const overlay=document.getElementById("mobile-nav-overlay");
   if(!drawer||!overlay)return;
-  const open=drawer.style.left==="0px";
+  // v122: was animating `left`, which forces a full layout recalculation on every frame — the
+  // likely cause of the drawer feeling slow to open on mobile. `transform: translateX()` is
+  // compositor-only and doesn't touch layout, so this should feel instant even on weaker devices.
+  const open=drawer.style.transform==="translateX(0px)";
   if(open){
-    drawer.style.left="-280px";
+    drawer.style.transform="translateX(-280px)";
     overlay.style.opacity="0";
     setTimeout(()=>{drawer.style.display="none";overlay.style.display="none";},250);
   }else{
@@ -3119,7 +3143,7 @@ function toggleMobileNav(){
     if(headerLogo&&drawerLogo)drawerLogo.src=headerLogo.src;
     // Sync active state
     document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===curPage);});
-    requestAnimationFrame(()=>{drawer.style.left="0px";overlay.style.opacity="1";});
+    requestAnimationFrame(()=>{drawer.style.transform="translateX(0px)";overlay.style.opacity="1";});
   }
 }
 // Navigate from mobile drawer + close it
@@ -10023,6 +10047,7 @@ async function loadKPIData(){
     }catch(e){diag.push(`✗ ${tab}: parse error ${e.message}`);}
   }));
   kpiLoaded=true;kpiLoading=false;
+  if(typeof renderRatingBell==="function")try{renderRatingBell();}catch(e){}
   // Print a diagnostic table so missing outlets are easy to spot in the browser console (F12)
   console.log("[KPI] Load summary — "+Object.keys(kpiData).length+"/"+KPI_OUTLETS.length+" outlets loaded:");
   diag.sort().forEach(d=>console.log("   "+d));
@@ -10077,6 +10102,115 @@ function buildKPIEvalRows(){
   });
   return rows;
 }
+// ════════════════════════════════════════════════════════════════════════════
+// v122 TALABAT RATING ALERT BELL — in-dashboard only (no email/push/Slack). Checks every
+// outlet's Talabat rating against a fixed 4.2 threshold (independent of whatever target each
+// outlet's own sheet specifies — this is a separate, simpler tripwire). Persisted in
+// localStorage per-browser: {firstBelowAt, lastNotifiedAt, lastRating} keyed by outlet|brand.
+// Re-surfaces (bell goes active/bold again) every few hours for as long as an outlet stays
+// below threshold, and clears automatically once it recovers.
+// ════════════════════════════════════════════════════════════════════════════
+const RATING_ALERT_THRESHOLD=4.2;
+const RATING_ALERT_RENOTIFY_MS=4*60*60*1000; // "every few hours" per user's answer
+const RATING_ALERT_LS_KEY="oregano_rating_alerts_v1";
+let ratingAlertPanelOpen=false;
+function _loadRatingAlertState(){
+  try{return JSON.parse(localStorage.getItem(RATING_ALERT_LS_KEY)||"{}");}catch(e){return{};}
+}
+function _saveRatingAlertState(state){
+  try{localStorage.setItem(RATING_ALERT_LS_KEY,JSON.stringify(state));}catch(e){}
+}
+// Recomputes alert state from the currently-loaded KPI data. Returns the list of outlets
+// CURRENTLY below threshold, each flagged needsResurface=true if it's due for a re-notify
+// (either brand-new, or past the re-notify interval since last time it was surfaced).
+function checkRatingAlerts(){
+  if(!kpiLoaded)return[];
+  const now=Date.now();
+  const state=_loadRatingAlertState();
+  const rows=buildKPIEvalRows().filter(r=>r.aggregator==="Talabat"&&r.type==="rating");
+  const activeKeys=new Set();
+  const active=[];
+  rows.forEach(r=>{
+    const key=`${r.outlet}|${r.brand}`;
+    if(r.latest<RATING_ALERT_THRESHOLD){
+      activeKeys.add(key);
+      let entry=state[key];
+      let needsResurface;
+      if(!entry){
+        entry={firstBelowAt:now,lastNotifiedAt:now,lastRating:r.latest};
+        needsResurface=true;
+      }else{
+        needsResurface=(now-entry.lastNotifiedAt)>=RATING_ALERT_RENOTIFY_MS;
+        if(needsResurface)entry.lastNotifiedAt=now;
+        entry.lastRating=r.latest;
+      }
+      state[key]=entry;
+      active.push({outlet:r.outlet,brand:r.brand,rating:r.latest,latestDate:r.latestDate,
+        firstBelowAt:entry.firstBelowAt,needsResurface});
+    }
+  });
+  // Recovery: clear state for any key that WAS below threshold but no longer is (or vanished
+  // from the data entirely — treat as recovered rather than leaving a stale alert forever).
+  Object.keys(state).forEach(key=>{if(!activeKeys.has(key))delete state[key];});
+  _saveRatingAlertState(state);
+  active.sort((a,b)=>a.rating-b.rating); // worst rating first
+  return active;
+}
+function renderRatingBell(){
+  const badge=document.getElementById("rating-alert-badge");
+  const bell=document.getElementById("rating-alert-bell");
+  if(!badge||!bell)return;
+  const active=checkRatingAlerts();
+  if(active.length){
+    badge.style.display="inline-block";
+    badge.textContent=active.length>9?"9+":String(active.length);
+    const anyDue=active.some(a=>a.needsResurface);
+    bell.style.color=anyDue?"#EF4444":"rgba(255,255,255,.85)";
+    bell.style.borderColor=anyDue?"#EF4444":"rgba(255,255,255,.2)";
+  }else{
+    badge.style.display="none";
+    bell.style.color="rgba(255,255,255,.85)";
+    bell.style.borderColor="rgba(255,255,255,.2)";
+  }
+  if(ratingAlertPanelOpen)renderRatingAlertPanel(active);
+  return active;
+}
+function renderRatingAlertPanel(active){
+  const panel=document.getElementById("rating-alert-panel");
+  if(!panel)return;
+  active=active||checkRatingAlerts();
+  if(!active.length){
+    panel.innerHTML=`<div style="padding:16px;font-size:12px;color:#64748b;text-align:center">✅ All Talabat outlets at or above ${RATING_ALERT_THRESHOLD}</div>`;
+    return;
+  }
+  const rows=active.map(a=>{
+    const daysBelow=Math.max(0,Math.round((Date.now()-a.firstBelowAt)/86400000));
+    return `<div style="padding:10px 14px;border-bottom:1px solid #F1F5F9">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+        <span style="font-weight:700;font-size:12.5px;color:#0F172A">${a.outlet} <span style="color:#94a3b8;font-weight:500">· ${a.brand}</span></span>
+        <span style="font-weight:800;font-size:14px;color:#EF4444">${a.rating.toFixed(1)}</span>
+      </div>
+      <div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Below ${RATING_ALERT_THRESHOLD} for ${daysBelow} day${daysBelow!==1?'s':''} · last updated ${a.latestDate||'—'}</div>
+    </div>`;
+  }).join('');
+  panel.innerHTML=`<div style="padding:12px 14px 8px;border-bottom:1px solid #E2E8F0;display:flex;justify-content:space-between;align-items:center">
+      <span style="font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.6px">Talabat Rating Alerts</span>
+      <span style="font-size:10px;color:#94a3b8">below ${RATING_ALERT_THRESHOLD}</span>
+    </div>${rows}
+    <div style="padding:8px 14px;font-size:10px;color:#94a3b8;text-align:center">Checked from KPI Tracker data · in-dashboard only</div>`;
+}
+function toggleRatingBell(){
+  const panel=document.getElementById("rating-alert-panel");
+  if(!panel)return;
+  ratingAlertPanelOpen=!ratingAlertPanelOpen;
+  panel.style.display=ratingAlertPanelOpen?"block":"none";
+  if(ratingAlertPanelOpen)renderRatingAlertPanel();
+}
+// Periodic re-check while the tab stays open, so "re-notify every few hours" also works within
+// a single long session (not just on fresh page loads). Cheap — reuses already-loaded KPI data,
+// does not re-fetch the Google Sheet.
+setInterval(()=>{try{renderRatingBell();}catch(e){}},15*60*1000);
+
 // Build a per-outlet "last update" map across ALL KPIs (for staleness panel)
 function buildKPIFreshness(){
   const map={}; // outlet → {lastEntry, blocks:[{brand,agg,lastEntry}]}
@@ -11317,6 +11451,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     sortTableBy,selectCamp,campSetSearch,campSetQuickFilter,campSetCardSort,campToggleFilter,campClearFilters,campSortBy,campSetDate,campClearDates,campSetElasticity,
     campTrajectory,campBreakevenUplift,campFindCleanBaseline,campCollapseSection,campParticipationV1,campParticipationTrend,cpcPacingRec,
     campFcSaveForecast,campFcLoadHistory,
+    toggleRatingBell,checkRatingAlerts,renderRatingBell,
     confirmClearAggData,clearKeetaData,clearCareemData,clearTalabatData,clearDeliverooData,clearNoonData,handleOrdersUpload,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,cmpToggleExpand,
     injectCompareTab,loadKPIData,doLoad,
