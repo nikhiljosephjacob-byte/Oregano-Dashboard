@@ -13,11 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-124";
+const BUILD_VERSION="2026-07-21-125";
 const BUILD_NOTES=[
-  "🔁 One-click retry for brands that failed to load. If a brand's Google Sheet fetch fails (the issue behind the Lollorosso/Fyoozhen \"No data\" gaps), it's now tracked as genuinely FAILED rather than indistinguishable from a brand that legitimately had zero orders. Any tile currently showing that brand's data — starting with Overview's AOV by Brand — shows a \"⚠ Failed to load\" state with a Retry button right on the tile, instead of a generic banner elsewhere on the page. Retry re-fetches just that one brand and merges it in, without reloading everything else.",
-  "📊 Platforms page rebuilt per Option A: every aggregator tile now shows AOV, Discount Burn, and Active Outlets in a compact strip alongside Orders and Net Sales — comparable across all 7 platforms at a glance. The separate 5-card summary row below (which only ever described the one selected platform, duplicating its tile) is gone; the Net Sales Trend chart and Brand Performance table are unchanged."
+  "🩹 Fixed Overview's Active Outlets card ignoring the Brand/Platform/Outlet filters entirely — it was counting from the whole unfiltered dataset instead of the same filtered data every other KPI card on the page already uses, so it always showed the full outlet count (e.g. 50) no matter what you'd filtered to. Now respects brand, platform, branch, and date range exactly like Orders/Net Sales/AOV/Discount Burn do."
 ];
+
 
 
 
@@ -3252,7 +3252,7 @@ function renderOverview(){
   CORE_VERDICT_AGGS.forEach(ag=>{verdVolByAg[ag]=ld.filter(r=>r.aggregator===ag).reduce((s,r)=>s+r.orders,0);});
   // Default selected tab: aggregator with the most orders this period (so a meaningful view loads first).
   const defaultVerdAg=CORE_VERDICT_AGGS.reduce((best,ag)=>verdVolByAg[ag]>(verdVolByAg[best]||0)?ag:best,CORE_VERDICT_AGGS[0]);
-  const activeOutlets=new Set(allData.filter(r=>r.branch!=='(brand-level)').map(r=>`${r.brand}|${r.branch}`)).size;
+  const activeOutlets=new Set(ld.map(r=>`${r.brand}|${r.branch}`)).size; // v125: was reading unfiltered allData — now matches every other KPI card on this page
   // Renderer used for both initial paint and the tab-switch JS handler below
   const renderVerdRows=(arr,kind)=>{
     if(!arr.length){
