@@ -13,11 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-132";
+const BUILD_VERSION="2026-07-21-133";
 const BUILD_NOTES=[
-  "\ud83d\udce5 'Download orders' now works for all 5 aggregators, not just Keeta. Talabat, Careem, Deliveroo, and Noon parsers now capture per-order detail the same way Keeta's does. The honest caveat: only Keeta has an item-to-campaign rules table (KEETA_ITEM_RULES), so only Keeta's export can tell concurrent campaigns apart at the order level. The other four are matched by date range + outlet scope only \u2014 the CSV says so explicitly, including a warning that a different campaign running the same brand+dates may show the same orders. This is a real precision difference in the underlying data, not a shortcut \u2014 building item-level rules for the other four would need the same kind of campaign-to-item mapping work that went into Keeta's rules.",
-  "\ud83e\udeb2 Caught and fixed a real bug while building this: the export's campaign-lookup only copied startDate/endDate when reconstructing a campaign object, silently dropping the outlet-scope field. An outlet-scoped campaign (e.g. \"Marina only\") would have ignored its own scope and pulled in orders from other outlets. Fixed by using the full real campaign object instead of a partial reconstruction, caught by testing exactly that scenario before shipping."
+  "\ud83d\udc1b Fixed: Keeta's order-export matching only checked (brand, campaign name) \u2014 no date-range check at all, unlike the other four aggregators. Keeta campaigns commonly reuse the same name across separate recurring periods (\"Keeta World Cup\" and \"Keeta Week\" both appear as several distinct campaign-card entries with different dates), so without a date check, every card sharing a name would have pulled in the SAME combined order set instead of just its own period. Fixed to require the order's date to actually fall within that specific card's start/end \u2014 verified against the exact two-card recurring scenario before shipping."
 ];
+
 
 
 
@@ -609,7 +609,13 @@ function _matchOrdersToCampaign(c){
   const detail=_orderDetailSource(c.aggregator);
   if(!detail)return null;
   if(c.aggregator==='Keeta'){
-    const rows=detail.filter(o=>o.br===c.brand&&o.a.some(([camp])=>camp===c.name));
+    // v133: was matching by (brand, campaign name) ONLY — no date-range check. Keeta campaigns
+    // often reuse the same name across separate recurring periods (e.g. "Keeta World Cup" and
+    // "Keeta Week" each appear as several distinct campaign-card entries with different date
+    // ranges) — without a date check, every one of those cards would pull in the SAME combined
+    // order set instead of just its own period's orders. Now requires the order to actually
+    // fall within this specific card's dates, matching how the other four aggregators work.
+    const rows=detail.filter(o=>o.br===c.brand&&o.d>=c.startDate&&o.d<=c.endDate&&o.a.some(([camp])=>camp===c.name));
     if(!rows.length)return null;
     return rows.map(o=>{
       const mine=o.a.find(([camp])=>camp===c.name);
