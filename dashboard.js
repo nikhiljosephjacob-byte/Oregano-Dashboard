@@ -13,10 +13,14 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-130";
+const BUILD_VERSION="2026-07-21-131";
 const BUILD_NOTES=[
-  "📱 Brands page mobile fix: the 5 brand-selector buttons and the 5 KPI cards below them were both free-wrapping/2-column, which left the 5th item (Wicked Wings, and separately AOV) stranded alone in its own row with wasted space beside it \u2014 the \"disorganized\" look. Both now use a proper 2-column grid where the odd 5th item spans the full row instead of floating alone. The KPI-row fix is at the shared style level, so Overview and the Outlets-detail view (both also 5 cards) get the same cleanup as a side effect."
+  "🔧 Correction on the Keeta World Cup investigation: the item mapping (Match Day Pizza Party / Match Day Solo Meal \u2192 Keeta World Cup) turned out to already be correct in the live code \u2014 confirmed by recalculating discount directly from the uploaded Keeta file, which matched the dashboard's own figures closely. My earlier diagnosis was based on the project skill's documentation, which was stale (written for an older campaign roster and never mentioned Keeta World Cup at all) \u2014 that's now updated for consistency, but it was never live logic.",
+  "🎯 Fixed the REAL cause: the 'data mismatch' check compared a single campaign's own exact discount against the FULL undivided Google Sheet total for its brand+aggregator window \u2014 which is the combined total of every campaign sharing that window, not just this one. Any campaign sharing its window with others (like Keeta World Cup, which shares Oregano\u00d7Keeta with 5 other concurrent campaigns) would ALWAYS look like a shortfall next to that undivided total, even with perfect attribution. The check is now suppressed specifically when concurrent same-brand+aggregator campaigns exist \u2014 the existing 'brand-level figure shared across N concurrent campaigns' note already explains that dynamic, so the two no longer contradict each other. Campaigns that fully own their window (the common case) keep the check exactly as before.",
+  "📥 New: 'Download orders' button on the campaign card and detail page (Keeta campaigns only, for now). Exports the exact order-level rows \u2014 order no., date, outlet, items, gross/net, and the discount actually attributed to that specific campaign (plus any other campaigns the same order was split across) \u2014 straight from the uploaded Keeta statement. Lets Finance independently verify attribution without a manual spreadsheet dig. Extending this to Talabat/Careem/Deliveroo/Noon would need the same per-order capture added to their parsers \u2014 not done yet."
 ];
+
+
 
 
 
@@ -582,6 +586,42 @@ const KEETA_STORAGE_KEY="keeta_orders_data_v1";
 // the recompute function. The returned object also carries an `uploadDate` ISO timestamp on
 // the metadata so the upload bar can show "uploaded N hours ago" and trigger the 72-hour
 // reminder blink.
+// v131: Finance order-level export. Currently Keeta-only, since only the Keeta parser
+// captures per-order attribution detail (orderDetail) — Talabat/Careem/Deliveroo/Noon would
+// need the same capture added to their own parsers to support this.
+function exportCampaignOrders(brand,aggregator,campaignName){
+  if(aggregator!=='Keeta'||!keetaOrdersData||!keetaOrdersData.orderDetail||!keetaOrdersData.orderDetail.length){
+    alert('Order-level export is only available for Keeta campaigns right now, and needs an uploaded Keeta statement covering this campaign\'s dates.');
+    return;
+  }
+  const rows=keetaOrdersData.orderDetail.filter(o=>o.br===brand&&o.a.some(([camp])=>camp===campaignName));
+  if(!rows.length){
+    alert('No orders found matching this campaign in the currently uploaded Keeta data. Either the upload doesn\'t cover this campaign\'s dates, or (less likely) the campaign name has changed since the file was parsed.');
+    return;
+  }
+  const esc=s=>`"${String(s).replace(/"/g,'""')}"`;
+  const header=['Order No','Date','Outlet','Items','Gross (AED)','Net (AED)',`Discount to "${campaignName}" (AED)`,'Other Campaigns on Same Order'];
+  const csvRows=rows.map(o=>{
+    const mine=o.a.find(([camp])=>camp===campaignName);
+    const others=o.a.filter(([camp])=>camp!==campaignName).map(([camp,share])=>`${camp}: AED ${share.toFixed(2)}`).join('; ');
+    return[o.o,o.d,o.ou,esc(o.i),o.g.toFixed(2),o.n.toFixed(2),mine[1].toFixed(2),others?esc(others):'—'].join(',');
+  });
+  const csv=[header.map(esc).join(','),...csvRows].join('\r\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const link=document.createElement('a');
+  link.href=url;
+  link.download=`${campaignName.replace(/[^a-z0-9]+/gi,'_')}_${brand}_orders.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+// Whether a Keeta campaign has any exportable order-level detail right now — used to decide
+// whether to show the Download button at all (rather than showing it and failing on click).
+function campHasOrderExport(c){
+  return c.aggregator==='Keeta'&&!!(keetaOrdersData&&keetaOrdersData.orderDetail&&keetaOrdersData.orderDetail.some(o=>o.br===c.brand&&o.a.some(([camp])=>camp===c.name)));
+}
 function mergeOrdersData(existing,fresh,recomputeTotals,strategy){
   // v115 MERGE STRATEGIES — the old rule ("delete every existing record whose date appears in
   // the fresh file, then insert fresh") had a destructive failure mode: weekly statements always
@@ -611,6 +651,7 @@ function mergeOrdersData(existing,fresh,recomputeTotals,strategy){
   }
   const freshBrands=new Set(fresh.records.map(r=>r.brand));
   let kept;
+  let freshWinsForDetail=null; // v131: reused below to merge orderDetail consistently with records
   if(strategy==='statement'){
     const freshSrcs=new Set(fresh.records.map(r=>r._src).filter(Boolean));
     kept=existing.records.filter(r=>{
@@ -626,6 +667,7 @@ function mergeOrdersData(existing,fresh,recomputeTotals,strategy){
     for(const k of Object.keys(frCnt)){
       if(exCnt[k]===undefined||frCnt[k]>=exCnt[k])freshWins.add(k);
     }
+    freshWinsForDetail=freshWins;
     kept=existing.records.filter(r=>!freshWins.has(r.brand+'|'+r.date));
     fresh={...fresh,records:fresh.records.filter(r=>freshWins.has(r.brand+'|'+r.date))};
   }
@@ -638,6 +680,25 @@ function mergeOrdersData(existing,fresh,recomputeTotals,strategy){
   const allDates=merged.map(r=>r.date).sort();
   const newRange=allDates.length?[allDates[0],allDates[allDates.length-1]]:[null,null];
   const totals=recomputeTotals?recomputeTotals(merged):(existing.metadata?.totals_per_brand||{});
+  // v131: merge orderDetail (currently Keeta-only — powers the Finance "Download orders" export)
+  // using the SAME day-keep/day-replace decision as records above, so the two never disagree
+  // about which days' data is "current" after a merge.
+  let orderDetail;
+  if(fresh.orderDetail){
+    if(!existing.orderDetail||!existing.orderDetail.length){
+      orderDetail=fresh.orderDetail;
+    }else if(freshWinsForDetail){
+      const keptDetail=existing.orderDetail.filter(o=>!freshWinsForDetail.has(o.br+'|'+o.d));
+      const freshDetail=fresh.orderDetail.filter(o=>freshWinsForDetail.has(o.br+'|'+o.d));
+      orderDetail=[...keptDetail,...freshDetail];
+    }else{
+      // statement strategy has no per-day winner set for detail — just append fresh, de-duped by order no.
+      const seen=new Set(fresh.orderDetail.map(o=>o.o));
+      orderDetail=[...existing.orderDetail.filter(o=>!seen.has(o.o)),...fresh.orderDetail];
+    }
+  }else{
+    orderDetail=existing.orderDetail; // fresh upload has none (non-Keeta) — keep whatever existed
+  }
   return{
     metadata:{
       ...existing.metadata,
@@ -648,7 +709,8 @@ function mergeOrdersData(existing,fresh,recomputeTotals,strategy){
       lastFileDate:fresh.metadata?.date_range?.[1]||null,
       mergedFromFiles:[...(existing.metadata?.mergedFromFiles||[]),...(fresh.metadata?.source_files||[fresh.metadata?.source_file||"upload"])].slice(-10)
     },
-    records:merged
+    records:merged,
+    ...(orderDetail?{orderDetail}:{})
   };
 }
 
@@ -817,6 +879,10 @@ async function parseKeetaXlsx(file){
   const data=rows.slice(1);
   const agg={};                  // key → {brand,outlet,date,campaign,orders,gross,net,menu_disc}
   const ordersSeen={};            // key → Set<orderNo>  (to count each order once per campaign)
+  // v131: compact per-order attribution detail, kept separately from the aggregated `agg`
+  // buckets above — this is what powers the Finance "Download orders" export. Only orders
+  // with actual discount are kept (menu_disc>0); everything else has nothing to attribute.
+  const orderDetail=[];
   const skipped={cancelled:0,no_brand:0,no_outlet:0,no_date:0};
   const unmapped=new Set();
   const unmappedItems={};        // {brand: {itemName: count}} — for surfacing in dashboard warning
@@ -910,6 +976,14 @@ async function parseKeetaXlsx(file){
       }
       agg[key].menu_disc+=share;
     }
+    if(menuDisc>0.01){
+      orderDetail.push({
+        o:String(orderNo),d:date,br:brand,ou:outlet,
+        i:parseKeetaItems(r[headerIdx["Items"]]).join("; ").slice(0,150),
+        g:Math.round(gross*100)/100,n:Math.round(net*100)/100,
+        a:attributions.map(([camp,share])=>[camp,Math.round(share*100)/100])
+      });
+    }
     datesSeen.add(date);totalGross+=gross;totalNet+=net;totalMenuDisc+=menuDisc;
   }
 
@@ -922,6 +996,7 @@ async function parseKeetaXlsx(file){
   }));
   const dates=Array.from(datesSeen).sort();
   return{
+    orderDetail,
     metadata:{
       source_file:file.name,
       generated_at:new Date().toISOString(),
@@ -6590,6 +6665,7 @@ function campCardGrid(camps,showProfit){
         ${coFundChip}
         ${exactChip}
         ${subsidyChip}
+        ${campHasOrderExport(c)?`<span onclick="event.stopPropagation();exportCampaignOrders('${c.brand}','${c.aggregator}','${(c.name||'').replace(/'/g,"\\'")}')" style="cursor:pointer;font-size:11px;background:rgba(34,197,94,.1);color:#16a34a;padding:2px 8px;border-radius:6px;font-weight:700" title="Download the exact order-level rows attributed to this campaign (CSV)">📥</span>`:''}
         <span style="font-size:10.5px;color:#8A8578;font-weight:600">${dateStrCompact}</span>
       </div>
       ${extraDetail?`<div style="font-size:11px;color:#64748b;margin-top:7px;line-height:1.5;font-weight:500" title="${(c.comments||'').replace(/"/g,'&quot;')}">${extraDetail}</div>`:''}
@@ -7194,13 +7270,31 @@ function campAnalysisV2(c){
   // rather than surface the misleading tiny denominator through the ROI. Previously (v057) we
   // used a "headline-vs-actual" heuristic which mislabeled incomplete-data cases as "platform-
   // subsidised" — replaced with this direct cross-source comparison which is unambiguous.
+  // v131: moved up from later in this function — needed here to gate the mismatch check below.
+  // Concurrent campaigns sharing THIS campaign's brand+aggregator window (same computation the
+  // participation view already uses to decide whether to show a "shared" headline).
+  const _myIdxEarly=campaignData.indexOf(c);
+  const _concurrentEarly=campaignData.filter((x,i)=>i!==_myIdxEarly&&x.startDate<=c.endDate&&x.endDate>=c.startDate);
+  const _sameBrandPlatConcurrentEarly=_concurrentEarly.filter(x=>x.brand===c.brand&&x.aggregator===c.aggregator);
+
   const _isExactSource=alloc.source&&alloc.source.endsWith('_exact');
   const _sheetDisc=cs.disc||0;
+  // v131: this check compares ONE campaign's own exact discount against the FULL undivided
+  // sheet total for its brand+aggregator window — correct when this campaign is the window's
+  // only occupant, but a guaranteed false positive whenever other campaigns share the same
+  // window (the sheet total reflects ALL of them combined, not just this one). Verified live:
+  // Keeta World Cup's own exact total (AED 12.9K, confirmed correct against the raw upload)
+  // looked like a "shortfall" next to the full AED 41.5K window total, which actually belongs
+  // to 6 concurrent campaigns combined. Suppressed here for exactly that case — the existing
+  // "brand-level figure shared across N concurrent campaigns" note already explains the
+  // dynamic, so this warning no longer contradicts it. Campaigns that fully own their window
+  // (the common case) keep the check exactly as before.
   const dataMismatchSuspected=(
     _isExactSource &&
     _sheetDisc > 100 &&                       // sheet says there was meaningful discount
     allocatedDisc < _sheetDisc / 3 &&          // but exact source found less than a third of it
-    cDays >= 2
+    cDays >= 2 &&
+    _sameBrandPlatConcurrentEarly.length === 0 // and this campaign isn't sharing its window with siblings
   );
   if(dataMismatchSuspected)discountROI=null;
 
@@ -7238,9 +7332,9 @@ function campAnalysisV2(c){
   // baseline itself wasn't the problem.
   const discountTooSmallForROI=false;
 
-  // Concurrent campaigns during THIS campaign (same brand+platform)
-  const concurrent=campaignData.filter((x,i)=>i!==myIdx&&x.startDate<=c.endDate&&x.endDate>=c.startDate);
-  const sameBrandPlatConcurrent=concurrent.filter(x=>x.brand===c.brand&&x.aggregator===c.aggregator);
+  // Concurrent campaigns during THIS campaign (same brand+platform) — reuse the early computation above
+  const concurrent=_concurrentEarly;
+  const sameBrandPlatConcurrent=_sameBrandPlatConcurrentEarly;
 
   // ── Elasticity counterfactual ──
   // Given the observed incremental orders at the actual discount depth, model what LOWER discounts
@@ -7749,6 +7843,7 @@ function campDetailV2HTML(c,idx){
       </div>
     </div>
     ${coFundChip}
+    ${campHasOrderExport(c)?`<button onclick="exportCampaignOrders('${c.brand}','${c.aggregator}','${(c.name||'').replace(/'/g,"\\'")}')" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.35);border-radius:8px;color:#16a34a;padding:6px 13px;font-size:11.5px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px" title="Export the exact order-level rows attributed to this campaign, straight from the uploaded Keeta statement — for Finance to independently verify attribution.">📥 Download orders (CSV)</button>`:''}
   </div>`;
   if(a.needsCoFundClarity){
     const unres=parseCampComment(c).unresolved.join(', ');
@@ -11542,7 +11637,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     sortTableBy,selectCamp,campSetSearch,campSetQuickFilter,campSetCardSort,campToggleFilter,campClearFilters,campSortBy,campSetDate,campClearDates,campSetElasticity,
     campTrajectory,campBreakevenUplift,campFindCleanBaseline,campCollapseSection,campParticipationV1,campParticipationTrend,cpcPacingRec,
     campFcSaveForecast,campFcLoadHistory,
-    toggleRatingBell,checkRatingAlerts,renderRatingBell,retryBrand,
+    toggleRatingBell,checkRatingAlerts,renderRatingBell,retryBrand,exportCampaignOrders,campHasOrderExport,
     confirmClearAggData,clearKeetaData,clearCareemData,clearTalabatData,clearDeliverooData,clearNoonData,handleOrdersUpload,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,cmpToggleExpand,
     injectCompareTab,loadKPIData,doLoad,
