@@ -13,12 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-131";
+const BUILD_VERSION="2026-07-21-132";
 const BUILD_NOTES=[
-  "🔧 Correction on the Keeta World Cup investigation: the item mapping (Match Day Pizza Party / Match Day Solo Meal \u2192 Keeta World Cup) turned out to already be correct in the live code \u2014 confirmed by recalculating discount directly from the uploaded Keeta file, which matched the dashboard's own figures closely. My earlier diagnosis was based on the project skill's documentation, which was stale (written for an older campaign roster and never mentioned Keeta World Cup at all) \u2014 that's now updated for consistency, but it was never live logic.",
-  "🎯 Fixed the REAL cause: the 'data mismatch' check compared a single campaign's own exact discount against the FULL undivided Google Sheet total for its brand+aggregator window \u2014 which is the combined total of every campaign sharing that window, not just this one. Any campaign sharing its window with others (like Keeta World Cup, which shares Oregano\u00d7Keeta with 5 other concurrent campaigns) would ALWAYS look like a shortfall next to that undivided total, even with perfect attribution. The check is now suppressed specifically when concurrent same-brand+aggregator campaigns exist \u2014 the existing 'brand-level figure shared across N concurrent campaigns' note already explains that dynamic, so the two no longer contradict each other. Campaigns that fully own their window (the common case) keep the check exactly as before.",
-  "📥 New: 'Download orders' button on the campaign card and detail page (Keeta campaigns only, for now). Exports the exact order-level rows \u2014 order no., date, outlet, items, gross/net, and the discount actually attributed to that specific campaign (plus any other campaigns the same order was split across) \u2014 straight from the uploaded Keeta statement. Lets Finance independently verify attribution without a manual spreadsheet dig. Extending this to Talabat/Careem/Deliveroo/Noon would need the same per-order capture added to their parsers \u2014 not done yet."
+  "\ud83d\udce5 'Download orders' now works for all 5 aggregators, not just Keeta. Talabat, Careem, Deliveroo, and Noon parsers now capture per-order detail the same way Keeta's does. The honest caveat: only Keeta has an item-to-campaign rules table (KEETA_ITEM_RULES), so only Keeta's export can tell concurrent campaigns apart at the order level. The other four are matched by date range + outlet scope only \u2014 the CSV says so explicitly, including a warning that a different campaign running the same brand+dates may show the same orders. This is a real precision difference in the underlying data, not a shortcut \u2014 building item-level rules for the other four would need the same kind of campaign-to-item mapping work that went into Keeta's rules.",
+  "\ud83e\udeb2 Caught and fixed a real bug while building this: the export's campaign-lookup only copied startDate/endDate when reconstructing a campaign object, silently dropping the outlet-scope field. An outlet-scoped campaign (e.g. \"Marina only\") would have ignored its own scope and pulled in orders from other outlets. Fixed by using the full real campaign object instead of a partial reconstruction, caught by testing exactly that scenario before shipping."
 ];
+
 
 
 
@@ -586,27 +586,64 @@ const KEETA_STORAGE_KEY="keeta_orders_data_v1";
 // the recompute function. The returned object also carries an `uploadDate` ISO timestamp on
 // the metadata so the upload bar can show "uploaded N hours ago" and trigger the 72-hour
 // reminder blink.
-// v131: Finance order-level export. Currently Keeta-only, since only the Keeta parser
-// captures per-order attribution detail (orderDetail) — Talabat/Careem/Deliveroo/Noon would
-// need the same capture added to their own parsers to support this.
+// v131/v132: Finance order-level export. All 5 aggregators now capture per-order detail, but
+// the ATTRIBUTION PRECISION genuinely differs between them, and the export is honest about it:
+//   Keeta      — item-resolved: KEETA_ITEM_RULES matches actual cart items to a specific
+//                campaign, so concurrent campaigns on the same brand+dates are correctly told
+//                apart at the order level.
+//   Talabat/Careem/Deliveroo/Noon — no item-mapping rules table exists for these yet, so a
+//                campaign's orders can only be matched by DATE RANGE (+ outlet scope). If two
+//                campaigns for the same brand overlap the exact same dates, their exports will
+//                show the same orders — the CSV's "Attribution basis" column says so plainly
+//                rather than pretending to a precision the data doesn't support.
+function _orderDetailSource(aggregator){
+  const map={Keeta:typeof keetaOrdersData!=='undefined'?keetaOrdersData:null,
+    Talabat:typeof talabatOrdersData!=='undefined'?talabatOrdersData:null,
+    Careem:typeof careemOrdersData!=='undefined'?careemOrdersData:null,
+    Deliveroo:typeof deliverooOrdersData!=='undefined'?deliverooOrdersData:null,
+    Noon:typeof noonOrdersData!=='undefined'?noonOrdersData:null};
+  const src=map[aggregator];
+  return(src&&src.orderDetail&&src.orderDetail.length)?src.orderDetail:null;
+}
+function _matchOrdersToCampaign(c){
+  const detail=_orderDetailSource(c.aggregator);
+  if(!detail)return null;
+  if(c.aggregator==='Keeta'){
+    const rows=detail.filter(o=>o.br===c.brand&&o.a.some(([camp])=>camp===c.name));
+    if(!rows.length)return null;
+    return rows.map(o=>{
+      const mine=o.a.find(([camp])=>camp===c.name);
+      const others=o.a.filter(([camp])=>camp!==c.name).map(([camp,share])=>`${camp}: AED ${share.toFixed(2)}`).join('; ');
+      return{orderNo:o.o,date:o.d,outlet:o.ou,items:o.i,gross:o.g,net:o.n,disc:mine[1],note:others||'—'};
+    });
+  }
+  // Talabat/Careem/Deliveroo/Noon: date-range + outlet-scope only (see note above).
+  const scope=campOutlets(c);
+  const rows=detail.filter(o=>o.br===c.brand&&o.d>=c.startDate&&o.d<=c.endDate&&(!scope||scope.has(o.ou)));
+  if(!rows.length)return null;
+  return rows.map(o=>({orderNo:o.o,date:o.d,outlet:o.ou,items:o.i||'—',gross:o.g||0,net:o.n||0,disc:o.disc,
+    note:o.dt?`type: ${o.dt}`:'—'}));
+}
 function exportCampaignOrders(brand,aggregator,campaignName){
-  if(aggregator!=='Keeta'||!keetaOrdersData||!keetaOrdersData.orderDetail||!keetaOrdersData.orderDetail.length){
-    alert('Order-level export is only available for Keeta campaigns right now, and needs an uploaded Keeta statement covering this campaign\'s dates.');
+  // Use the FULL real campaign object when we can find it — _matchOrdersToCampaign (via
+  // campOutlets) needs more than just dates (branch/outlet scope lives on c.outlet as a raw
+  // string field). A partial reconstruction here previously caused outlet-scoped campaigns to
+  // silently ignore their scope and pull in orders from other outlets — caught by testing a
+  // Marina-only Careem campaign against a JLT order that should have been excluded.
+  const real=(typeof campaignData!=='undefined'?campaignData:[]).find(x=>x.brand===brand&&x.aggregator===aggregator&&x.name===campaignName);
+  const c=real||{brand,aggregator,name:campaignName,startDate:null,endDate:null,outlet:''};
+  const rows=_matchOrdersToCampaign(c);
+  if(!rows){
+    alert(`No order-level data available for this campaign. Either no ${aggregator} statement has been uploaded covering its dates, or (for Keeta) the campaign name doesn't match what's in the uploaded file.`);
     return;
   }
-  const rows=keetaOrdersData.orderDetail.filter(o=>o.br===brand&&o.a.some(([camp])=>camp===campaignName));
-  if(!rows.length){
-    alert('No orders found matching this campaign in the currently uploaded Keeta data. Either the upload doesn\'t cover this campaign\'s dates, or (less likely) the campaign name has changed since the file was parsed.');
-    return;
-  }
+  const precise=aggregator==='Keeta';
   const esc=s=>`"${String(s).replace(/"/g,'""')}"`;
-  const header=['Order No','Date','Outlet','Items','Gross (AED)','Net (AED)',`Discount to "${campaignName}" (AED)`,'Other Campaigns on Same Order'];
-  const csvRows=rows.map(o=>{
-    const mine=o.a.find(([camp])=>camp===campaignName);
-    const others=o.a.filter(([camp])=>camp!==campaignName).map(([camp,share])=>`${camp}: AED ${share.toFixed(2)}`).join('; ');
-    return[o.o,o.d,o.ou,esc(o.i),o.g.toFixed(2),o.n.toFixed(2),mine[1].toFixed(2),others?esc(others):'—'].join(',');
-  });
-  const csv=[header.map(esc).join(','),...csvRows].join('\r\n');
+  const header=['Order No','Date','Outlet','Items','Gross (AED)','Net (AED)',`Discount to "${campaignName}" (AED)`,precise?'Other Campaigns on Same Order':'Attribution Basis'];
+  const csvRows=rows.map(o=>[o.orderNo,o.date,o.outlet,esc(o.items),o.gross.toFixed(2),o.net.toFixed(2),o.disc.toFixed(2),
+    esc(precise?o.note:`Date-range matched (${aggregator} has no item-level campaign rules yet) — ${o.note}`)].join(','));
+  const precisionNote=precise?'':`\r\n"NOTE: ${aggregator} orders are matched by date range only — no item-level campaign rules exist for this aggregator yet, so orders from a DIFFERENT campaign running the same dates for this brand may also appear here."`;
+  const csv=[header.map(esc).join(','),...csvRows].join('\r\n')+precisionNote;
   const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
   const url=URL.createObjectURL(blob);
   const link=document.createElement('a');
@@ -617,10 +654,10 @@ function exportCampaignOrders(brand,aggregator,campaignName){
   document.body.removeChild(link);
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
-// Whether a Keeta campaign has any exportable order-level detail right now — used to decide
-// whether to show the Download button at all (rather than showing it and failing on click).
+// Whether a campaign has any exportable order-level detail right now — used to decide whether
+// to show the Download button at all (rather than showing it and failing on click).
 function campHasOrderExport(c){
-  return c.aggregator==='Keeta'&&!!(keetaOrdersData&&keetaOrdersData.orderDetail&&keetaOrdersData.orderDetail.some(o=>o.br===c.brand&&o.a.some(([camp])=>camp===c.name)));
+  return !!_matchOrdersToCampaign(c);
 }
 function mergeOrdersData(existing,fresh,recomputeTotals,strategy){
   // v115 MERGE STRATEGIES — the old rule ("delete every existing record whose date appears in
@@ -1478,6 +1515,10 @@ async function parseCareemCSV(file){
 
   const data=rows.slice(1);
   const agg={};
+  // v132: Careem has no item list, only a discount_type (catalog/promo) — that's the only
+  // signal available to tell concurrent campaigns apart at the order level. No per-campaign
+  // rules table exists for Careem, so export matching is by discount_type + date range.
+  const orderDetail=[];
   const skipped={cancelled:0,no_brand:0,no_outlet:0,no_date:0};
   const unmappedOutlets=new Set();
   const unmappedBrands=new Set();
@@ -1509,6 +1550,16 @@ async function parseCareemCSV(file){
     const pb=perBrand[brand];
     pb.orders++;pb.gross+=gross;pb.net_payout+=netPayout;pb.cat_disc+=catDisc;pb.promo_disc+=promoDisc;
 
+    if(catDisc>0.01||promoDisc>0.01){
+      orderDetail.push({
+        o:String(r[headerIdx["REFERENCE_ID"]]||`row${orderDetail.length}`),
+        d:date,br:brand,ou:outlet,
+        dt:catDisc>0.01?"catalog":"promo",
+        g:Math.round(gross*100)/100,n:Math.round(netPayout*100)/100,
+        disc:Math.round((catDisc+promoDisc)*100)/100
+      });
+    }
+
     // Aggregate by (brand, outlet, date, discount_type). Both columns are usually mutually exclusive;
     // the ~1-per-file order with both gets recorded under each type, but gross/payout only under catalog
     // to avoid double-counting baseline figures when summing across types.
@@ -1537,6 +1588,7 @@ async function parseCareemCSV(file){
   }));
   const dates=Array.from(datesSeen).sort();
   return{
+    orderDetail,
     metadata:{
       source_file:file.name,
       generated_at:new Date().toISOString(),
@@ -1818,6 +1870,12 @@ async function parseTalabatXlsx(file){
 
   const data=rows.slice(dataStart);
   const agg={}; // key "brand|outlet|date" → {orders,gross,net_payout,menu_disc,commission,ops_charges}
+  // v132: Talabat's export has an "Order ID" and "Order Items" column — no per-campaign rules
+  // table exists for Talabat yet (unlike KEETA_ITEM_RULES), so this can't resolve which specific
+  // campaign an order belongs to when several overlap. It's captured anyway: the export matches
+  // orders to a campaign by date range (+ brand/outlet), and includes the actual item list so
+  // Finance can visually cross-check which promo an order really used.
+  const orderDetail=[];
   const skipped={cancelled:0,no_brand:0,no_outlet:0,no_date:0};
   const unmappedOutlets={}; // raw name → count
   const numAt=(row,col)=>{const v=row[colIdx[col]];if(v==null||v==="")return 0;if(typeof v==="number")return v;const n=parseFloat(String(v));return isNaN(n)?0:n;};
@@ -1841,6 +1899,17 @@ async function parseTalabatXlsx(file){
     b.talabat_disc+=numAt(row,"Talabat-Funded Voucher");
     b.commission+=numAt(row,"Commission");
     b.ops_charges+=numAt(row,"Operational Charges");
+    const _orderDisc=numAt(row,"Voucher Funded by you");
+    if(_orderDisc>0.01){
+      orderDetail.push({
+        o:String(colIdx["Order ID"]!==undefined?row[colIdx["Order ID"]]:`row${orderDetail.length}`),
+        d:date,br:brand,ou:outlet,
+        i:String(colIdx["Order Items"]!==undefined?(row[colIdx["Order Items"]]||""):"").slice(0,150),
+        g:Math.round(numAt(row,"Subtotal")*100)/100,
+        n:Math.round(numAt(row,"Payout Amount")*100)/100,
+        disc:Math.round(_orderDisc*100)/100
+      });
+    }
   }
 
   const records=Object.values(agg).map(r=>({
@@ -1867,6 +1936,7 @@ async function parseTalabatXlsx(file){
   Object.values(totals).forEach(t=>{["gross","net_payout","menu_disc","talabat_disc","commission","ops_charges"].forEach(k=>t[k]=+t[k].toFixed(2));});
 
   return{
+    orderDetail,
     metadata:{
       source_file:file.name||"orderDetails.xlsx",
       generated_at:new Date().toISOString(),
@@ -2042,6 +2112,10 @@ async function parseDeliverooCSV(file){
   };
 
   const agg={};
+  // v132: Deliveroo has discount_type (marketer_offer/rewards/unknown) but no item list — same
+  // coarse granularity as Careem. No per-campaign rules table exists, so export matching is by
+  // discount_type + date range.
+  const orderDetail=[];
   let stats={considered:0,skippedNoOrder:0,skippedHeader:0,skippedActivity:0,skippedBrand:0,skippedDate:0,kept:0};
   const unmappedRestaurants={};
   for(let i=2;i<rows.length;i++){
@@ -2073,6 +2147,10 @@ async function parseDeliverooCSV(file){
       agg[key].gross+=orderValue+marketerDisc;
       agg[key].net_payout+=totalPayable;
       agg[key].menu_disc+=marketerDisc;
+      if(marketerDisc>0.01){
+        orderDetail.push({o:String(orderNum),d:dateStr,br:brand,ou:outlet,dt:"marketer_offer",
+          g:Math.round((orderValue+marketerDisc)*100)/100,n:Math.round(totalPayable*100)/100,disc:Math.round(marketerDisc*100)/100});
+      }
     }else{
       const adj=Math.abs(parseFloat(row[colAdj])||0);
       if(adj<=0)continue;
@@ -2080,6 +2158,7 @@ async function parseDeliverooCSV(file){
       const key=`${brand}|${outlet}|${dateStr}|${discType}`;
       if(!agg[key])agg[key]={brand,outlet,date:dateStr,discount_type:discType,orders:0,gross:0,net_payout:0,menu_disc:0};
       agg[key].menu_disc+=adj;
+      orderDetail.push({o:String(orderNum),d:dateStr,br:brand,ou:outlet,dt:discType,g:0,n:0,disc:Math.round(adj*100)/100});
     }
     stats.kept++;
   }
@@ -2103,6 +2182,7 @@ async function parseDeliverooCSV(file){
   const totals=deliverooRecomputeTotals(records);
 
   return{
+    orderDetail,
     metadata:{
       aggregator:"Deliveroo",
       date_range:dates.length?[dates[0],dates[dates.length-1]]:[null,null],
@@ -2286,6 +2366,11 @@ async function parseNoonCSV(file){
   if(missing.length)throw new Error(`Noon CSV missing headers: ${missing.join(", ")}`);
 
   const agg={};
+  // v132: Noon's export has NO order ID and NO item list at all — the least detail of any
+  // aggregator. Export matching can only be by date range (no discount_type, no items to
+  // cross-check against). order_id is used if the column happens to exist; otherwise a
+  // synthetic per-row identifier is used so entries are still individually listable.
+  const orderDetail=[];
   let stats={considered:0,delivered:0,skipped:0,unmapped:0};
   const unmappedOutlets={};
 
@@ -2335,6 +2420,14 @@ async function parseNoonCSV(file){
     // what lets a "no commission on discounted orders" campaign clause apply to exactly the
     // orders it describes, instead of the whole day.
     if(outletDisc>0){agg[key].disc_gross+=itemValue;agg[key].disc_orders++;}
+    if(outletDisc>0.01){
+      orderDetail.push({
+        o:String(idx["order_id"]!==undefined?row[idx["order_id"]]:`n${i}_${dateStr}`),
+        d:dateStr,br:brand,ou:outlet,
+        g:Math.round(itemValue*100)/100,n:Math.round(netPayable*100)/100,
+        disc:Math.round(outletDisc*100)/100
+      });
+    }
   }
 
   const records=Object.values(agg).map(r=>({...r,gross:+r.gross.toFixed(2),net_payout:+r.net_payout.toFixed(2),menu_disc:+r.menu_disc.toFixed(2),disc_gross:+(r.disc_gross||0).toFixed(2),disc_orders:r.disc_orders||0}))
@@ -2354,6 +2447,7 @@ async function parseNoonCSV(file){
   const totals=noonRecomputeTotals(records);
 
   return{
+    orderDetail,
     metadata:{
       aggregator:"Noon",
       date_range:dates.length?[dates[0],dates[dates.length-1]]:[null,null],
