@@ -13,13 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-139";
+const BUILD_VERSION="2026-07-21-140";
 const BUILD_NOTES=[
-  "\ud83c\udfd7\ufe0f STRUCTURAL FIX to the Keeta commission model, verified against a real order (#6358, 8 Jul). Two real problems, confirmed by the actual math: (1) Keeta applies a FLOOR commission of AED 6 whenever the contractual-rate commission on an order's net value would come out below that \u2014 this order's net was AED 19.50, 18% of which is AED 3.51, but Keeta charged AED 6.00 flat. The dashboard's flat-rate formula had no idea this floor existed, so commission cost was understated (and contribution overstated) on low-AOV orders across the WHOLE Keeta model \u2014 campaign P&L, Ads Performance breakeven, everywhere. (2) The AED 2 free-delivery cost was being subtracted from EVERY order's discount, but when an order falls below Keeta's minimum order value, the CUSTOMER pays delivery, not us \u2014 detected by a flat AED 6 commission co-occurring with a non-zero \"Top-up to minimum\" value.",
-  "The fix: wherever an exact Keeta statement is uploaded, the dashboard now uses Keeta's OWN STATED per-order commission (summed directly from the file) instead of re-deriving it via a flat-rate formula \u2014 this is more accurate than trying to approximate the floor rule at an aggregate level, since Keeta already tells us the exact number. FD cost is only subtracted for orders that didn't hit the minimum-order-value exception. Estimation-only periods (no exact upload) still use the flat-rate approximation, since there's no way to know the floor kicked in without real order-level data.",
-  "Also added the short customer-facing \"Order number\" (e.g. #6358) as a second export column alongside the long internal \"Order no.\" \u2014 Keeta's file has both, and only the long one was being shown, which didn't match what you see in the Keeta app.",
-  "This needs a fresh Keeta re-upload \u2014 the new columns (Basic commission, Top-up to minimum, Order number) weren't being read before this build."
+  "\ud83d\udd52 Fixed a mid-day campaign transition bug: Smokeys switched from \"50% OFF CAP 20\" to \"50% OFF CAP 30\" partway through 8 July (confirmed: around 5 PM), but the residual-campaign matcher only compared calendar dates \u2014 it had no way to know a campaign changed mid-day, so it assigned the ENTIRE day to the new campaign, including orders placed hours earlier under the old one. Verified against two real flagged orders (00:10 and 01:04 on 8 July) that were being misattributed to CAP 30 when they should have been CAP 20 \u2014 both showed a suspiciously exact AED 20 discount (a CAP-20 ceiling) sitting in a CAP-30 export. The order time (previously discarded entirely) is now preserved and used specifically for same-day cutovers; dates without a time-of-day boundary behave exactly as before. This needs a fresh Keeta re-upload to correct."
 ];
+
 
 
 
@@ -451,18 +449,27 @@ const KEETA_RESIDUAL_RULES=[
   {brand:"Oregano",     campaign:"30% OFF CAP 20", startDate:"2026-06-24",endDate:"2026-06-30"},
   // ── July: menu-wide caps per brand ──
   {brand:"Lollorosso",  campaign:"50% OFF CAP 30", startDate:"2026-07-01",endDate:null},
-  // Smokeys switched CAP 20 → CAP 30 on Jul 8
-  {brand:"Smokeys",     campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:"2026-07-07"},
-  {brand:"Smokeys",     campaign:"50% OFF CAP 30", startDate:"2026-07-08",endDate:null},
+  // Smokeys switched CAP 20 → CAP 30 mid-day on Jul 8 (confirmed: ~5 PM) — a genuine same-day
+  // overlap. endTime/startTime below are ONLY checked on the exact boundary date; every other
+  // date behaves exactly as before (pure date comparison).
+  {brand:"Smokeys",     campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:"2026-07-08",endTime:"17:00"},
+  {brand:"Smokeys",     campaign:"50% OFF CAP 30", startDate:"2026-07-08",startTime:"17:00",endDate:null},
   {brand:"Wicked Wings",campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:null},
   {brand:"Fyoozhen",    campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:null}
 ];
 
-function keetaResidualCampaignFor(brand,date){
+// v140: now accepts an optional `timeStr` ("HH:MM") for same-day cutovers — a rule whose
+// boundary falls on the SAME calendar date as the order additionally checks time-of-day; every
+// other date is unaffected (pure date range, exactly as before). If timeStr can't be parsed for
+// some reason, the time check is skipped entirely rather than risk misclassifying — falls back
+// to the old date-only behavior for that one order rather than guess.
+function keetaResidualCampaignFor(brand,date,timeStr){
   for(const r of KEETA_RESIDUAL_RULES){
     if(r.brand!==brand)continue;
     if(date<r.startDate)continue;
     if(r.endDate&&date>r.endDate)continue;
+    if(r.endDate&&date===r.endDate&&r.endTime&&timeStr&&timeStr>=r.endTime)continue; // past the cutover on the boundary day — this rule no longer applies
+    if(date===r.startDate&&r.startTime&&timeStr&&timeStr<r.startTime)continue;       // before the cutover on the boundary day — this rule doesn't apply yet
     return r.campaign;
   }
   return null;
@@ -957,6 +964,17 @@ function parseKeetaOrderDate(s){
   if(!m)return null;
   return`${m[3]}-${months[m[2]]||"00"}-${String(m[1]).padStart(2,"0")}`;
 }
+// v140: order time-of-day (e.g. "01:04"), previously discarded entirely by parseKeetaOrderDate.
+// Needed for the rare case of a campaign changing mid-day — a same-day cutover can't be
+// represented by a calendar date alone. Returns null if the time can't be parsed (in which case
+// any time-boundary check in keetaResidualCampaignFor is skipped, matching the old date-only
+// behavior rather than risk misclassifying on a parse failure).
+function parseKeetaOrderTime(s){
+  if(!s)return null;
+  const m=String(s).match(/at (\d{1,2}):(\d{2})/);
+  if(!m)return null;
+  return`${m[1].padStart(2,"0")}:${m[2]}`;
+}
 // Restaurant name → [brand, outlet]. Returns [null,null] if unmapped.
 function parseKeetaRestaurant(name){
   if(!name)return[null,null];
@@ -1050,6 +1068,7 @@ async function parseKeetaXlsx(file){
     if(!brand){unmapped.add(r[headerIdx["Restaurant name"]]);skipped.no_brand++;continue;}
     if(!outlet){unmapped.add(r[headerIdx["Restaurant name"]]);skipped.no_outlet++;continue;}
     const date=parseKeetaOrderDate(r[headerIdx["Order time"]]);
+    const orderTime=parseKeetaOrderTime(r[headerIdx["Order time"]]); // v140: needed for same-day campaign cutovers
     if(!date){skipped.no_date++;continue;}
 
     const gross=parseKeetaAED(r[headerIdx["Original price"]]);
@@ -1089,7 +1108,7 @@ async function parseKeetaXlsx(file){
     const expectedByCampaign={};
     for(const h of hits)expectedByCampaign[h.campaign]=(expectedByCampaign[h.campaign]||0)+h.expected;
     const campKeys=Object.keys(expectedByCampaign);
-    const residualCamp=keetaResidualCampaignFor(brand,date);
+    const residualCamp=keetaResidualCampaignFor(brand,date,orderTime);
     const totalExpected=Object.values(expectedByCampaign).reduce((s,v)=>s+v,0);
     // Only flag unmapped items when matched items don't fully account for the discount — meaning
     // something ELSE in the cart was genuinely discounted. Example: an Alfredo Pasta (expected 15.30)
