@@ -13,10 +13,14 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-138";
+const BUILD_VERSION="2026-07-21-139";
 const BUILD_NOTES=[
-  "\ud83d\udd24 Noon actually DOES have real order-identifying columns (order_nr and order_ref) \u2014 they were just never read by the parser, since they weren't in the required-columns list I checked against earlier. Confirmed directly from a real Noon statement. Both are now captured as optional columns and appear as two separate columns in the export (Order Ref, Order Nr) instead of the synthetic row placeholder used before. This needs a fresh Noon re-upload to take effect \u2014 the columns exist in the file but the currently-stored parsed data doesn't have them yet."
+  "\ud83c\udfd7\ufe0f STRUCTURAL FIX to the Keeta commission model, verified against a real order (#6358, 8 Jul). Two real problems, confirmed by the actual math: (1) Keeta applies a FLOOR commission of AED 6 whenever the contractual-rate commission on an order's net value would come out below that \u2014 this order's net was AED 19.50, 18% of which is AED 3.51, but Keeta charged AED 6.00 flat. The dashboard's flat-rate formula had no idea this floor existed, so commission cost was understated (and contribution overstated) on low-AOV orders across the WHOLE Keeta model \u2014 campaign P&L, Ads Performance breakeven, everywhere. (2) The AED 2 free-delivery cost was being subtracted from EVERY order's discount, but when an order falls below Keeta's minimum order value, the CUSTOMER pays delivery, not us \u2014 detected by a flat AED 6 commission co-occurring with a non-zero \"Top-up to minimum\" value.",
+  "The fix: wherever an exact Keeta statement is uploaded, the dashboard now uses Keeta's OWN STATED per-order commission (summed directly from the file) instead of re-deriving it via a flat-rate formula \u2014 this is more accurate than trying to approximate the floor rule at an aggregate level, since Keeta already tells us the exact number. FD cost is only subtracted for orders that didn't hit the minimum-order-value exception. Estimation-only periods (no exact upload) still use the flat-rate approximation, since there's no way to know the floor kicked in without real order-level data.",
+  "Also added the short customer-facing \"Order number\" (e.g. #6358) as a second export column alongside the long internal \"Order no.\" \u2014 Keeta's file has both, and only the long one was being shown, which didn't match what you see in the Keeta app.",
+  "This needs a fresh Keeta re-upload \u2014 the new columns (Basic commission, Top-up to minimum, Order number) weren't being read before this build."
 ];
+
 
 
 
@@ -687,7 +691,7 @@ function _matchOrdersToCampaign(c){
     return{mode:'order-level',rows:rows.map(o=>{
       const mine=o.a.find(([camp])=>camp===c.name);
       const others=o.a.filter(([camp])=>camp!==c.name).map(([camp,share])=>`${camp}: AED ${share.toFixed(2)}`).join('; ');
-      return{orderNo:o.o,date:o.d,outlet:o.ou,items:o.i,gross:o.g,net:o.n,disc:mine[1],note:others||'—'};
+      return{orderNo:o.o,orderRef:o.orderRef,date:o.d,outlet:o.ou,items:o.i,gross:o.g,net:o.n,disc:mine[1],note:others||'—'};
     })};
   }
   // Talabat/Careem/Deliveroo/Noon: date-range + outlet-scope only (see note above).
@@ -740,17 +744,20 @@ function exportCampaignOrders(brand,aggregator,campaignName,knownCampaign){
   }else{
     const precise=aggregator==='Keeta';
     const isNoon=aggregator==='Noon';
-    // v138: Noon has TWO real order-identifying columns (order_ref, order_nr) — shown as their
-    // own separate columns rather than folded into a single generic "Order No", per Nikhil's
-    // request that both come through on the export.
+    // v138/v139: Noon has TWO real order-identifying columns (order_ref, order_nr), and Keeta
+    // does too (long internal "Order no." + short customer-facing "Order number", e.g. #6358 —
+    // the one visible in the Keeta app). Both shown as separate columns per Nikhil's request,
+    // so the export matches what's actually visible when cross-referencing an order.
     const header=isNoon
       ?['Order Ref','Order Nr','Date','Outlet','Items','Gross (AED)','Net (AED)',`Discount to "${campaignName}" (AED)`,'Attribution Basis']
-      :['Order No','Date','Outlet','Items','Gross (AED)','Net (AED)',`Discount to "${campaignName}" (AED)`,precise?'Other Campaigns on Same Order':'Attribution Basis'];
+      :precise
+        ?['Order No (long)','Order No (short)','Date','Outlet','Items','Gross (AED)','Net (AED)',`Discount to "${campaignName}" (AED)`,'Other Campaigns on Same Order']
+        :['Order No','Date','Outlet','Items','Gross (AED)','Net (AED)',`Discount to "${campaignName}" (AED)`,'Attribution Basis'];
     const csvRows=result.rows.map(o=>{
       const basis=esc(precise?o.note:`Date-range matched (${aggregator} has no item-level campaign rules yet) — ${o.note}`);
-      return isNoon
-        ?[escId(o.orderRef||'—'),escId(o.orderNr||'—'),o.date,o.outlet,esc(o.items),o.gross.toFixed(2),o.net.toFixed(2),o.disc.toFixed(2),basis].join(',')
-        :[escId(o.orderNo),o.date,o.outlet,esc(o.items),o.gross.toFixed(2),o.net.toFixed(2),o.disc.toFixed(2),basis].join(',');
+      if(isNoon)return[escId(o.orderRef||'—'),escId(o.orderNr||'—'),o.date,o.outlet,esc(o.items),o.gross.toFixed(2),o.net.toFixed(2),o.disc.toFixed(2),basis].join(',');
+      if(precise)return[escId(o.orderNo),escId(o.orderRef||'—'),o.date,o.outlet,esc(o.items),o.gross.toFixed(2),o.net.toFixed(2),o.disc.toFixed(2),basis].join(',');
+      return[escId(o.orderNo),o.date,o.outlet,esc(o.items),o.gross.toFixed(2),o.net.toFixed(2),o.disc.toFixed(2),basis].join(',');
     });
     const precisionNote=precise?'':`\r\n"NOTE: ${aggregator} orders are matched by date range only — no item-level campaign rules exist for this aggregator yet, so orders from a DIFFERENT campaign running the same dates for this brand may also appear here."`;
     csv=[header.map(esc).join(','),...csvRows].join('\r\n')+precisionNote;
@@ -1048,7 +1055,23 @@ async function parseKeetaXlsx(file){
     const gross=parseKeetaAED(r[headerIdx["Original price"]]);
     const net=parseKeetaAED(r[headerIdx["Customer paid"]]);
     const merch=Math.abs(parseKeetaAED(r[headerIdx["Promotion funded by merchant"]]));
-    const menuDisc=Math.max(0,merch-KEETA_FD_COST);
+    // v139: STRUCTURAL FIX, verified against a real order (#6358, 8 Jul). Two real problems:
+    //  (1) Keeta applies a FLOOR commission of AED 6 whenever the contractual-rate commission
+    //      on an order's net value would come out below that (confirmed: net AED 19.50 → 18%
+    //      = AED 3.51, but Keeta charged AED 6.00 flat). Using Keeta's OWN stated "Basic
+    //      commission" here — summed directly — is exact, and sidesteps needing to guess at
+    //      the floor rule from an aggregate net figure.
+    //  (2) The AED 2 free-delivery cost was subtracted from EVERY order, but when an order
+    //      falls below Keeta's minimum order value, the CUSTOMER pays delivery, not us —
+    //      detected by a flat AED 6 commission co-occurring with a non-zero "Top-up to
+    //      minimum" value (both present together = this exception; either alone is not
+    //      sufficient signal on its own).
+    const basicCommission=headerIdx["Basic commission"]!==undefined?Math.abs(parseKeetaAED(r[headerIdx["Basic commission"]])):null;
+    const topUpToMin=headerIdx["Top-up to minimum"]!==undefined?parseKeetaAED(r[headerIdx["Top-up to minimum"]]):0;
+    const noFDCharge=basicCommission!==null&&Math.abs(basicCommission-6)<0.01&&topUpToMin>0.01;
+    const realFD=noFDCharge?0:KEETA_FD_COST;
+    const menuDisc=Math.max(0,merch-realFD);
+    const orderNumberShort=headerIdx["Order number"]!==undefined?String(r[headerIdx["Order number"]]||""):"";
     const orderNo=r[headerIdx["Order no."]];
 
     // Attribute menu_disc across one or more campaigns using brand-generic item rules:
@@ -1113,20 +1136,25 @@ async function parseKeetaXlsx(file){
     for(let i=0;i<attributions.length;i++){
       const[campaign,share]=attributions[i];
       const key=`${brand}|${outlet}|${date}|${campaign}`;
-      if(!agg[key])agg[key]={brand,outlet,date,campaign,orders:0,gross:0,net:0,menu_disc:0};
+      if(!agg[key])agg[key]={brand,outlet,date,campaign,orders:0,gross:0,net:0,menu_disc:0,real_commission:0,real_fd:0};
       if(!ordersSeen[key])ordersSeen[key]=new Set();
       if(!ordersSeen[key].has(orderNo)){
         ordersSeen[key].add(orderNo);
         agg[key].orders++;
-        // Gross/net go fully to the first attribution only — avoids double-counting when
-        // an order spans two campaigns (its sales aren't split, only the discount is).
-        if(i===0){agg[key].gross+=gross;agg[key].net+=net;}
+        // Gross/net/real_commission/real_fd go fully to the first attribution only — avoids
+        // double-counting when an order spans two campaigns (its sales and per-order costs
+        // aren't split, only the discount is).
+        if(i===0){
+          agg[key].gross+=gross;agg[key].net+=net;
+          if(basicCommission!==null)agg[key].real_commission+=basicCommission;
+          agg[key].real_fd+=realFD;
+        }
       }
       agg[key].menu_disc+=share;
     }
     if(menuDisc>0.01){
       orderDetail.push({
-        o:String(orderNo),d:date,br:brand,ou:outlet,
+        o:String(orderNo),orderRef:orderNumberShort||null,d:date,br:brand,ou:outlet,
         i:parseKeetaItems(r[headerIdx["Items"]]).join("; ").slice(0,150),
         g:Math.round(gross*100)/100,n:Math.round(net*100)/100,
         a:attributions.map(([camp,share])=>[camp,Math.round(share*100)/100])
@@ -1140,7 +1168,9 @@ async function parseKeetaXlsx(file){
     orders:r.orders,
     gross:Math.round(r.gross*100)/100,
     net:Math.round(r.net*100)/100,
-    menu_disc:Math.round(r.menu_disc*100)/100
+    menu_disc:Math.round(r.menu_disc*100)/100,
+    real_commission:Math.round((r.real_commission||0)*100)/100,
+    real_fd:Math.round((r.real_fd||0)*100)/100
   }));
   const dates=Array.from(datesSeen).sort();
   return{
@@ -7831,22 +7861,38 @@ function campParticipationV1(c){
   const key=`${campaignData.indexOf(c)}|${c.name}|${a.effStart}|${a.effEnd}|${keetaOrdersData.metadata.generated_at||keetaOrdersData.metadata.uploaded_at||''}`;
   if(_campPartCache.has(key))return _campPartCache.get(key);
   const myScope=campOutlets(c);
-  let orders=0,gross=0,disc=0;const daily={};
+  let orders=0,gross=0,disc=0,realCommission=0,realFD=0,hasRealCostData=true;const daily={};
   for(const rec of keetaOrdersData.records){
     if(rec.brand!==c.brand)continue;
     if(rec.campaign!==c.name)continue;
     if(rec.date<a.effStart||rec.date>a.effEnd)continue;
     if(myScope&&!myScope.has(rec.outlet))continue;
     orders+=rec.orders;gross+=rec.gross;disc+=rec.menu_disc;
+    // v139: real_commission/real_fd only exist on records parsed under this build or later —
+    // a record from a not-yet-re-uploaded (pre-v139) file simply won't have the field at all.
+    // Silently treating a missing field as 0 would make commission cost look like ZERO for
+    // that record, wildly INFLATING contribution instead of just being slightly stale — so any
+    // record missing the field flips hasRealCostData off, and the whole calculation falls back
+    // to the previous (flat-rate) approach rather than risk a half-correct blend.
+    if(rec.real_commission===undefined)hasRealCostData=false;
+    realCommission+=(rec.real_commission||0);realFD+=(rec.real_fd||0);
     const d=daily[rec.date]||(daily[rec.date]={orders:0,gross:0,disc:0});
     d.orders+=rec.orders;d.gross+=rec.gross;d.disc+=rec.menu_disc;
   }
   let out=null;
   if(orders>0&&gross>0){
     const brandForCost=c.brand==='All Brands'?'Oregano':c.brand;
-    const fd=orders*KEETA_FD_COST; // merchant's AED2/order free-delivery cost — real cost of these orders
+    // v139: STRUCTURAL FIX — was `fd=orders*KEETA_FD_COST` (assumed every order incurred the
+    // AED2 free-delivery cost) and `contrib=brandContribution(...)` (re-derived commission via
+    // a flat contractual rate). Both replaced with the REAL per-order figures read directly
+    // from the Keeta statement: realFD correctly excludes orders where the customer paid their
+    // own delivery (below minimum order value), and realCommission is Keeta's own stated
+    // commission summed directly — which already reflects the AED 6 floor on low-AOV orders
+    // exactly, with no need to approximate it from an aggregate net figure. Falls back to the
+    // old flat-rate approach when the underlying data predates this build (see above).
+    const fd=hasRealCostData?realFD:orders*KEETA_FD_COST;
     const net=gross-disc-fd;       // merchant revenue on participating orders (co-fund inherent: statement discount is merchant share only)
-    const contrib=brandContribution('Keeta',brandForCost,net,gross,c.startDate);
+    const contrib=hasRealCostData?(net-realCommission-gross*foodPkgPct(brandForCost)):brandContribution('Keeta',brandForCost,net,gross,c.startDate);
     const covStart=a.effStart>dr[0]?a.effStart:dr[0];
     const covEnd=a.effEnd<dr[1]?a.effEnd:dr[1];
     const partialCoverage=covStart>a.effStart||covEnd<a.effEnd;
@@ -7855,7 +7901,7 @@ function campParticipationV1(c){
     const recs=c.brand==='All Brands'?allData.filter(r=>r.aggregator==='Keeta'):indexedRecords(c.brand,'Keeta');
     for(const r of recs){if(r.date>=covStart&&r.date<=covEnd&&(!myScope||myScope.has(r.branch)))brandOrders+=r.orders;}
     const shareOfBrandOrders=brandOrders>0?orders/brandOrders*100:null;
-    out={orders,gross,disc,fd,net,contrib,depth:disc/gross,daily,covStart,covEnd,partialCoverage,shareOfBrandOrders,brandForCost};
+    out={orders,gross,disc,fd,net,contrib,depth:disc/gross,daily,covStart,covEnd,partialCoverage,shareOfBrandOrders,brandForCost,hasRealCostData,realCommission:hasRealCostData?realCommission:null};
   }
   _campPartCache.set(key,out);
   return out;
