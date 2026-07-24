@@ -13,10 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-140";
+const BUILD_VERSION="2026-07-21-141";
 const BUILD_NOTES=[
-  "\ud83d\udd52 Fixed a mid-day campaign transition bug: Smokeys switched from \"50% OFF CAP 20\" to \"50% OFF CAP 30\" partway through 8 July (confirmed: around 5 PM), but the residual-campaign matcher only compared calendar dates \u2014 it had no way to know a campaign changed mid-day, so it assigned the ENTIRE day to the new campaign, including orders placed hours earlier under the old one. Verified against two real flagged orders (00:10 and 01:04 on 8 July) that were being misattributed to CAP 30 when they should have been CAP 20 \u2014 both showed a suspiciously exact AED 20 discount (a CAP-20 ceiling) sitting in a CAP-30 export. The order time (previously discarded entirely) is now preserved and used specifically for same-day cutovers; dates without a time-of-day boundary behave exactly as before. This needs a fresh Keeta re-upload to correct."
+  "\ud83c\udfaf Replaced the v139 FD-exception heuristic entirely \u2014 confirmed wrong in both directions by a second real order. Order #5946 had a flat AED 6 commission but ZERO top-up-to-minimum, yet FD genuinely wasn't charged (proving top-up presence wasn't required). Separately: a normal, full-FD order can coincidentally compute to exactly AED 6 commission via the plain contractual rate on its own net value \u2014 no floor, no exception involved \u2014 meaning flat AED 6 alone isn't reliable either. Replaced with a direct read of Keeta's own \"Campaign type\" column: confirmed against the real file that \"Delivery fee discounts\" appears there for ~99% of orders (where free delivery was genuinely applied) and is absent for the exact small minority where the customer paid their own delivery. No inference needed \u2014 Keeta already tells us directly.",
+  "This needs a fresh Keeta re-upload \u2014 Campaign type wasn't being read at all before this build."
 ];
+
 
 
 
@@ -1074,20 +1076,26 @@ async function parseKeetaXlsx(file){
     const gross=parseKeetaAED(r[headerIdx["Original price"]]);
     const net=parseKeetaAED(r[headerIdx["Customer paid"]]);
     const merch=Math.abs(parseKeetaAED(r[headerIdx["Promotion funded by merchant"]]));
-    // v139: STRUCTURAL FIX, verified against a real order (#6358, 8 Jul). Two real problems:
-    //  (1) Keeta applies a FLOOR commission of AED 6 whenever the contractual-rate commission
-    //      on an order's net value would come out below that (confirmed: net AED 19.50 → 18%
-    //      = AED 3.51, but Keeta charged AED 6.00 flat). Using Keeta's OWN stated "Basic
-    //      commission" here — summed directly — is exact, and sidesteps needing to guess at
-    //      the floor rule from an aggregate net figure.
-    //  (2) The AED 2 free-delivery cost was subtracted from EVERY order, but when an order
-    //      falls below Keeta's minimum order value, the CUSTOMER pays delivery, not us —
-    //      detected by a flat AED 6 commission co-occurring with a non-zero "Top-up to
-    //      minimum" value (both present together = this exception; either alone is not
-    //      sufficient signal on its own).
+    // v139: Keeta applies a FLOOR commission of AED 6 whenever the contractual-rate commission
+    // on an order's net value would come out below that. Using Keeta's OWN stated "Basic
+    // commission" — summed directly — is exact, and sidesteps needing to guess at the floor
+    // rule from an aggregate net figure.
     const basicCommission=headerIdx["Basic commission"]!==undefined?Math.abs(parseKeetaAED(r[headerIdx["Basic commission"]])):null;
-    const topUpToMin=headerIdx["Top-up to minimum"]!==undefined?parseKeetaAED(r[headerIdx["Top-up to minimum"]]):0;
-    const noFDCharge=basicCommission!==null&&Math.abs(basicCommission-6)<0.01&&topUpToMin>0.01;
+    // v141: FD-exception detection replaced entirely. The v139 heuristic (flat AED 6 commission
+    // + non-zero top-up-to-minimum) was WRONG in both directions, confirmed by two real orders:
+    //   - order #5946 (18 Jul): flat AED 6 commission, ZERO top-up, yet FD genuinely wasn't
+    //     charged — proving top-up presence isn't required.
+    //   - flagged directly: a normal, full-FD order can coincidentally compute to exactly AED 6
+    //     commission via the plain contractual rate on its own net value, with no floor and no
+    //     minimum-order-value exception involved at all — proving flat AED 6 alone isn't
+    //     sufficient signal either.
+    // Keeta's own "Campaign type" column settles this directly instead of inferring anything:
+    // confirmed against the real file that "Delivery fee discounts" appears in Campaign type
+    // for every order where free delivery was actually applied (~99% of orders), and is absent
+    // for the exact small minority where the customer paid their own delivery. No inference
+    // needed — just read what Keeta already tells us.
+    const campaignTypeStr=headerIdx["Campaign type"]!==undefined?String(r[headerIdx["Campaign type"]]||""):"";
+    const noFDCharge=campaignTypeStr!==""&&!campaignTypeStr.toLowerCase().includes("delivery fee discount");
     const realFD=noFDCharge?0:KEETA_FD_COST;
     const menuDisc=Math.max(0,merch-realFD);
     const orderNumberShort=headerIdx["Order number"]!==undefined?String(r[headerIdx["Order number"]]||""):"";
