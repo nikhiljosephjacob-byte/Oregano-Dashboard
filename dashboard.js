@@ -13,10 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-133";
+const BUILD_VERSION="2026-07-21-134";
 const BUILD_NOTES=[
-  "\ud83d\udc1b Fixed: Keeta's order-export matching only checked (brand, campaign name) \u2014 no date-range check at all, unlike the other four aggregators. Keeta campaigns commonly reuse the same name across separate recurring periods (\"Keeta World Cup\" and \"Keeta Week\" both appear as several distinct campaign-card entries with different dates), so without a date check, every card sharing a name would have pulled in the SAME combined order set instead of just its own period. Fixed to require the order's date to actually fall within that specific card's start/end \u2014 verified against the exact two-card recurring scenario before shipping."
+  "\ud83d\udc1b Real root cause of 'download button missing on some/all campaigns' found and fixed: the shared-server sync path (built in v112, before orderDetail existed in v131/v132) was silently stripping orderDetail at THREE separate points \u2014 the client's push to the server, the Worker's storage of what it received, and the client's pull back down \u2014 each one whitelisting only {metadata, records}. The very first upload on a fresh page looked fine (data was still in memory), but the moment a page reload triggered a pull from the server, the stripped-down copy overwrote the local one and the button disappeared \u2014 for ANY aggregator, not just Careem. All three points now preserve orderDetail when present. Verified with a full round-trip test: local parse \u2192 push \u2192 fake server storage \u2192 pull \u2192 confirmed intact.",
+  "This is a 3-file deploy this time: dashboard.js, worker.js, and version.txt \u2014 the fix requires both the client sync code and the Worker's save handler."
 ];
+
 
 
 
@@ -479,7 +481,14 @@ async function syncOrderDataToServer(agg,dataObj){
   try{
     const sess=getActiveSession();
     if(!sess||!sess.sessionId||!sess.admin||!dataObj)return;
-    const res=await fetch(`/api/orderdata/${agg}`,{method:'POST',headers:{'Content-Type':'application/json','X-Session-Id':sess.sessionId},body:JSON.stringify({metadata:dataObj.metadata,records:dataObj.records})});
+    // v134: this was built (v112) before orderDetail existed and only ever sent
+    // {metadata,records} — silently stripping the per-order Finance-export detail (v131/v132)
+    // on every push to the shared server. Root cause of "the download button works right after
+    // upload, then disappears" — the next page load pulls the server's stripped copy back down
+    // and overwrites the local one that still had it. Now included when present.
+    const payload={metadata:dataObj.metadata,records:dataObj.records};
+    if(dataObj.orderDetail)payload.orderDetail=dataObj.orderDetail;
+    const res=await fetch(`/api/orderdata/${agg}`,{method:'POST',headers:{'Content-Type':'application/json','X-Session-Id':sess.sessionId},body:JSON.stringify(payload)});
     if(!res.ok){const d=await res.json().catch(()=>({}));console.log(`[sync] ${agg} push failed:`,d.error||res.status);}
     else console.log(`[sync] ${agg} pushed to server`);
   }catch(e){console.log(`[sync] ${agg} push error:`,e.message);}
@@ -539,6 +548,7 @@ async function pullOrderDataFromServer(){
       const serverTs=server.metadata?.uploadDate||server.updatedAt||null;
       if(!local||(serverTs&&(!localTs||serverTs>localTs))){
         const obj={metadata:server.metadata,records:server.records};
+        if(server.orderDetail)obj.orderDetail=server.orderDetail;
         cfg.set(obj);
         try{localStorage.setItem(cfg.lsKey(),JSON.stringify(obj));}catch(e){}
         changed=true;
