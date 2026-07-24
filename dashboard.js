@@ -13,10 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-135";
+const BUILD_VERSION="2026-07-21-136";
 const BUILD_NOTES=[
-  "\ud83d\udce5 Talabat item-price campaigns (Pizza Week, World Cup Deals, etc.) can now export too \u2014 per Nikhil's insight that Talabat rarely runs concurrent same-brand campaigns. When a campaign has no genuine overlapping sibling for its brand/outlets, EVERY order in its window safely belongs to it, so a day-level summary (date, outlet, orders, gross, net, discount) is built straight from the already-existing aggregated records \u2014 no new data capture needed. Voucher-based campaigns (25% OFF CAP 20-style) are unaffected and still get the richer per-order export with real order numbers and items, UNLESS the day-level discount total meaningfully exceeds what the vouchers alone account for (the signature of item-price discount hiding in the aggregate) \u2014 that's decided by comparing discount AMOUNTS, not order counts, since most campaigns never get 100% of orders using a voucher and that's normal, not missing data. Genuine overlaps (or ambiguous ones, or ones with a cancelled/rewards sibling correctly excluded) still fall back to the safer voucher-only export."
+  "\ud83d\udc1b Fixed the download button showing on a campaign but failing with \"No order-level data available\" when clicked. The button was correctly checking the REAL campaign object when deciding whether to show, but the click handler only received (brand, aggregator, name) as plain strings and had to re-find the campaign by those three fields \u2014 the exact same recurring-name ambiguity from the v133 Keeta fix (e.g. two separate \"25% OFF Select Items\" cards with different date ranges), just in a different spot. The re-lookup could silently grab the WRONG same-named campaign, whose dates genuinely have no data, even though the one actually on screen does. Fixed by passing the campaign's real index in campaignData instead of re-deriving it by name \u2014 eliminates the ambiguity entirely rather than papering over it."
 ];
+
+
 
 
 
@@ -693,13 +695,22 @@ function _matchOrdersToCampaign(c){
   return{mode:'order-level',rows:rows.map(o=>({orderNo:o.o,date:o.d,outlet:o.ou,items:o.i||'—',gross:o.g||0,net:o.n||0,disc:o.disc,
     note:o.dt?`type: ${o.dt}`:'—'}))};
 }
-function exportCampaignOrders(brand,aggregator,campaignName){
-  // Use the FULL real campaign object when we can find it — _matchOrdersToCampaign (via
-  // campOutlets) needs more than just dates (branch/outlet scope lives on c.outlet as a raw
-  // string field). A partial reconstruction here previously caused outlet-scoped campaigns to
-  // silently ignore their scope and pull in orders from other outlets — caught by testing a
-  // Marina-only Careem campaign against a JLT order that should have been excluded.
-  const real=(typeof campaignData!=='undefined'?campaignData:[]).find(x=>x.brand===brand&&x.aggregator===aggregator&&x.name===campaignName);
+// v136: index-based wrapper — the buttons used to pass just (brand, aggregator, name) and
+// exportCampaignOrders had to re-find the campaign by those three fields, which is ambiguous
+// whenever two campaigns share a name (the same recurring-name problem fixed for matching in
+// v133, just resurfacing here in the lookup instead). Since the button is rendered from a
+// specific campaignData[idx], passing that index directly removes the ambiguity completely —
+// there's no re-lookup to get wrong.
+function exportCampaignOrdersByIdx(idx){
+  const c=(typeof campaignData!=='undefined'?campaignData:[])[idx];
+  if(!c){alert('Could not find this campaign — it may have moved. Please refresh and try again.');return;}
+  exportCampaignOrders(c.brand,c.aggregator,c.name,c);
+}
+function exportCampaignOrders(brand,aggregator,campaignName,knownCampaign){
+  // Prefer the exact campaign object passed by the caller (index-based lookup, unambiguous).
+  // Falls back to a name-based search only for any old call site that hasn't been updated —
+  // that search is inherently ambiguous when campaigns share a name, same as before.
+  const real=knownCampaign||(typeof campaignData!=='undefined'?campaignData:[]).find(x=>x.brand===brand&&x.aggregator===aggregator&&x.name===campaignName);
   const c=real||{brand,aggregator,name:campaignName,startDate:null,endDate:null,outlet:''};
   const result=_matchOrdersToCampaign(c);
   if(!result){
@@ -6840,7 +6851,7 @@ function campCardGrid(camps,showProfit){
         ${coFundChip}
         ${exactChip}
         ${subsidyChip}
-        ${campHasOrderExport(c)?`<span onclick="event.stopPropagation();exportCampaignOrders('${c.brand}','${c.aggregator}','${(c.name||'').replace(/'/g,"\\'")}')" style="cursor:pointer;font-size:11px;background:rgba(34,197,94,.1);color:#16a34a;padding:2px 8px;border-radius:6px;font-weight:700" title="Download the exact order-level rows attributed to this campaign (CSV)">📥</span>`:''}
+        ${campHasOrderExport(c)?`<span onclick="event.stopPropagation();exportCampaignOrdersByIdx(${idx})" style="cursor:pointer;font-size:11px;background:rgba(34,197,94,.1);color:#16a34a;padding:2px 8px;border-radius:6px;font-weight:700" title="Download the exact order-level rows attributed to this campaign (CSV)">📥</span>`:''}
         <span style="font-size:10.5px;color:#8A8578;font-weight:600">${dateStrCompact}</span>
       </div>
       ${extraDetail?`<div style="font-size:11px;color:#64748b;margin-top:7px;line-height:1.5;font-weight:500" title="${(c.comments||'').replace(/"/g,'&quot;')}">${extraDetail}</div>`:''}
@@ -8018,7 +8029,7 @@ function campDetailV2HTML(c,idx){
       </div>
     </div>
     ${coFundChip}
-    ${campHasOrderExport(c)?`<button onclick="exportCampaignOrders('${c.brand}','${c.aggregator}','${(c.name||'').replace(/'/g,"\\'")}')" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.35);border-radius:8px;color:#16a34a;padding:6px 13px;font-size:11.5px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px" title="Export the exact order-level rows attributed to this campaign, straight from the uploaded Keeta statement — for Finance to independently verify attribution.">📥 Download orders (CSV)</button>`:''}
+    ${campHasOrderExport(c)?`<button onclick="exportCampaignOrdersByIdx(${idx})" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.35);border-radius:8px;color:#16a34a;padding:6px 13px;font-size:11.5px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px" title="Export the exact order-level rows attributed to this campaign, straight from the uploaded Keeta statement — for Finance to independently verify attribution.">📥 Download orders (CSV)</button>`:''}
   </div>`;
   if(a.needsCoFundClarity){
     const unres=parseCampComment(c).unresolved.join(', ');
@@ -11812,7 +11823,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     sortTableBy,selectCamp,campSetSearch,campSetQuickFilter,campSetCardSort,campToggleFilter,campClearFilters,campSortBy,campSetDate,campClearDates,campSetElasticity,
     campTrajectory,campBreakevenUplift,campFindCleanBaseline,campCollapseSection,campParticipationV1,campParticipationTrend,cpcPacingRec,
     campFcSaveForecast,campFcLoadHistory,
-    toggleRatingBell,checkRatingAlerts,renderRatingBell,retryBrand,exportCampaignOrders,campHasOrderExport,
+    toggleRatingBell,checkRatingAlerts,renderRatingBell,retryBrand,exportCampaignOrders,exportCampaignOrdersByIdx,campHasOrderExport,
     confirmClearAggData,clearKeetaData,clearCareemData,clearTalabatData,clearDeliverooData,clearNoonData,handleOrdersUpload,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,cmpToggleExpand,
     injectCompareTab,loadKPIData,doLoad,
