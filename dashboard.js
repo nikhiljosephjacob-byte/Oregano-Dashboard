@@ -13,11 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-134";
+const BUILD_VERSION="2026-07-21-135";
 const BUILD_NOTES=[
-  "\ud83d\udc1b Real root cause of 'download button missing on some/all campaigns' found and fixed: the shared-server sync path (built in v112, before orderDetail existed in v131/v132) was silently stripping orderDetail at THREE separate points \u2014 the client's push to the server, the Worker's storage of what it received, and the client's pull back down \u2014 each one whitelisting only {metadata, records}. The very first upload on a fresh page looked fine (data was still in memory), but the moment a page reload triggered a pull from the server, the stripped-down copy overwrote the local one and the button disappeared \u2014 for ANY aggregator, not just Careem. All three points now preserve orderDetail when present. Verified with a full round-trip test: local parse \u2192 push \u2192 fake server storage \u2192 pull \u2192 confirmed intact.",
-  "This is a 3-file deploy this time: dashboard.js, worker.js, and version.txt \u2014 the fix requires both the client sync code and the Worker's save handler."
+  "\ud83d\udce5 Talabat item-price campaigns (Pizza Week, World Cup Deals, etc.) can now export too \u2014 per Nikhil's insight that Talabat rarely runs concurrent same-brand campaigns. When a campaign has no genuine overlapping sibling for its brand/outlets, EVERY order in its window safely belongs to it, so a day-level summary (date, outlet, orders, gross, net, discount) is built straight from the already-existing aggregated records \u2014 no new data capture needed. Voucher-based campaigns (25% OFF CAP 20-style) are unaffected and still get the richer per-order export with real order numbers and items, UNLESS the day-level discount total meaningfully exceeds what the vouchers alone account for (the signature of item-price discount hiding in the aggregate) \u2014 that's decided by comparing discount AMOUNTS, not order counts, since most campaigns never get 100% of orders using a voucher and that's normal, not missing data. Genuine overlaps (or ambiguous ones, or ones with a cancelled/rewards sibling correctly excluded) still fall back to the safer voucher-only export."
 ];
+
 
 
 
@@ -615,8 +615,61 @@ function _orderDetailSource(aggregator){
   const src=map[aggregator];
   return(src&&src.orderDetail&&src.orderDetail.length)?src.orderDetail:null;
 }
+// v135: Talabat has two genuinely different discount mechanisms — voucher-based (shows a
+// per-order amount in "Voucher Funded by you") and item-price-based (the item's listed price
+// is reduced directly; NEVER shows up per-order in the raw export at all, only as an aggregate
+// sheet-vs-statement gap via the v119 top-up). orderDetail only captures the voucher kind, so
+// item-price campaigns had no exportable rows even though their P&L is correct.
+// Per Nikhil: Talabat rarely runs concurrent same-brand campaigns — genuine overlaps are the
+// exception, not the rule. So when THIS campaign has no concurrent same-brand sibling
+// contesting its own outlets, every order in its window safely belongs to it — voucher-based
+// or not — and we can export a DAY-LEVEL summary from the aggregated records (which already
+// exist for every order regardless of discount type) instead of the incomplete per-order list.
+// When a genuine overlap exists, this falls back to the safer (but partial) voucher-only
+// per-order export rather than guess at an ambiguous split.
+function _talabatHasOverlap(c){
+  if(typeof campaignData==='undefined')return true; // conservative: assume overlap if we can't check
+  const myScope=campOutlets(c);
+  return campaignData.some(x=>{
+    if(x===c||x.aggregator!=='Talabat'||x.brand!==c.brand)return false;
+    if(typeof campStatus==='function'&&campStatus(x)==='Cancelled')return false;
+    if(typeof isRewardsCampaign==='function'&&isRewardsCampaign(x))return false;
+    if(x.startDate>c.endDate||x.endDate<c.startDate)return false; // no date overlap
+    const xScope=campOutlets(x);
+    if(!myScope||!xScope)return true; // either side is "all outlets" — can't be disjoint
+    for(const o of myScope)if(xScope.has(o))return true; // shares at least one outlet
+    return false;
+  });
+}
+function _talabatDayLevelExport(c){
+  if(typeof talabatOrdersData==='undefined'||!talabatOrdersData||!talabatOrdersData.records)return null;
+  const scope=campOutlets(c);
+  const rows=talabatOrdersData.records.filter(r=>r.brand===c.brand&&r.date>=c.startDate&&r.date<=c.endDate&&(!scope||scope.has(r.outlet)));
+  if(!rows.length)return null;
+  return rows.map(r=>({date:r.date,outlet:r.outlet,orders:r.orders,gross:r.gross,net:r.net_payout,
+    disc:(r.menu_disc||0)+(r.talabat_disc||0)}));
+}
 function _matchOrdersToCampaign(c){
   const detail=_orderDetailSource(c.aggregator);
+  if(c.aggregator==='Talabat'&&!_talabatHasOverlap(c)){
+    const dayRows=_talabatDayLevelExport(c);
+    if(dayRows){
+      // Day-level is a FALLBACK for discount invisible to voucher capture — not a replacement
+      // for good order-level data when it already accounts for the real money. Comparing ORDER
+      // COUNTS doesn't work here: most campaigns never get 100% of orders using the voucher
+      // (customers who don't apply it are normal, not "missing data"), so counts would almost
+      // always look incomplete. The real signal is DISCOUNT AMOUNT: if what voucher-captured
+      // orders add up to already accounts for (most of) the day-level aggregate's total
+      // discount, there's no item-price contamination and the richer order-level export (real
+      // order numbers, items) is used instead, below. Only falls back to day-level when the
+      // aggregate shows meaningfully more discount than any voucher order can explain — the
+      // same signature v119's item-price top-up already looks for.
+      const scope=campOutlets(c);
+      const dayTotalDisc=dayRows.reduce((s,r)=>s+(r.disc||0),0);
+      const voucherDiscSum=(detail||[]).filter(o=>o.br===c.brand&&o.d>=c.startDate&&o.d<=c.endDate&&(!scope||scope.has(o.ou))).reduce((s,o)=>s+(o.disc||0),0);
+      if(dayTotalDisc>1&&voucherDiscSum<dayTotalDisc*0.9)return{mode:'day-level',rows:dayRows};
+    }
+  }
   if(!detail)return null;
   if(c.aggregator==='Keeta'){
     // v133: was matching by (brand, campaign name) ONLY — no date-range check. Keeta campaigns
@@ -627,18 +680,18 @@ function _matchOrdersToCampaign(c){
     // fall within this specific card's dates, matching how the other four aggregators work.
     const rows=detail.filter(o=>o.br===c.brand&&o.d>=c.startDate&&o.d<=c.endDate&&o.a.some(([camp])=>camp===c.name));
     if(!rows.length)return null;
-    return rows.map(o=>{
+    return{mode:'order-level',rows:rows.map(o=>{
       const mine=o.a.find(([camp])=>camp===c.name);
       const others=o.a.filter(([camp])=>camp!==c.name).map(([camp,share])=>`${camp}: AED ${share.toFixed(2)}`).join('; ');
       return{orderNo:o.o,date:o.d,outlet:o.ou,items:o.i,gross:o.g,net:o.n,disc:mine[1],note:others||'—'};
-    });
+    })};
   }
   // Talabat/Careem/Deliveroo/Noon: date-range + outlet-scope only (see note above).
   const scope=campOutlets(c);
   const rows=detail.filter(o=>o.br===c.brand&&o.d>=c.startDate&&o.d<=c.endDate&&(!scope||scope.has(o.ou)));
   if(!rows.length)return null;
-  return rows.map(o=>({orderNo:o.o,date:o.d,outlet:o.ou,items:o.i||'—',gross:o.g||0,net:o.n||0,disc:o.disc,
-    note:o.dt?`type: ${o.dt}`:'—'}));
+  return{mode:'order-level',rows:rows.map(o=>({orderNo:o.o,date:o.d,outlet:o.ou,items:o.i||'—',gross:o.g||0,net:o.n||0,disc:o.disc,
+    note:o.dt?`type: ${o.dt}`:'—'}))};
 }
 function exportCampaignOrders(brand,aggregator,campaignName){
   // Use the FULL real campaign object when we can find it — _matchOrdersToCampaign (via
@@ -648,18 +701,30 @@ function exportCampaignOrders(brand,aggregator,campaignName){
   // Marina-only Careem campaign against a JLT order that should have been excluded.
   const real=(typeof campaignData!=='undefined'?campaignData:[]).find(x=>x.brand===brand&&x.aggregator===aggregator&&x.name===campaignName);
   const c=real||{brand,aggregator,name:campaignName,startDate:null,endDate:null,outlet:''};
-  const rows=_matchOrdersToCampaign(c);
-  if(!rows){
+  const result=_matchOrdersToCampaign(c);
+  if(!result){
     alert(`No order-level data available for this campaign. Either no ${aggregator} statement has been uploaded covering its dates, or (for Keeta) the campaign name doesn't match what's in the uploaded file.`);
     return;
   }
-  const precise=aggregator==='Keeta';
   const esc=s=>`"${String(s).replace(/"/g,'""')}"`;
-  const header=['Order No','Date','Outlet','Items','Gross (AED)','Net (AED)',`Discount to "${campaignName}" (AED)`,precise?'Other Campaigns on Same Order':'Attribution Basis'];
-  const csvRows=rows.map(o=>[o.orderNo,o.date,o.outlet,esc(o.items),o.gross.toFixed(2),o.net.toFixed(2),o.disc.toFixed(2),
-    esc(precise?o.note:`Date-range matched (${aggregator} has no item-level campaign rules yet) — ${o.note}`)].join(','));
-  const precisionNote=precise?'':`\r\n"NOTE: ${aggregator} orders are matched by date range only — no item-level campaign rules exist for this aggregator yet, so orders from a DIFFERENT campaign running the same dates for this brand may also appear here."`;
-  const csv=[header.map(esc).join(','),...csvRows].join('\r\n')+precisionNote;
+  let csv;
+  if(result.mode==='day-level'){
+    // v135: Talabat item-price campaigns (no concurrent same-brand sibling contesting this
+    // campaign's outlets) — every order in the window safely belongs to this campaign, but
+    // item-price discounts are never visible per-order in Talabat's export, only as a daily
+    // aggregate. Day-level rows, not order-level, and the CSV says so plainly.
+    const header=['Date','Outlet','Orders','Gross (AED)','Net (AED)',`Discount to "${campaignName}" (AED)`];
+    const csvRows=result.rows.map(r=>[r.date,r.outlet,r.orders,r.gross.toFixed(2),r.net.toFixed(2),r.disc.toFixed(2)].map(esc).join(','));
+    const note=`\r\n"NOTE: Day-level, not order-level — Talabat doesn't show item-price discounts per order, only as a daily total. This campaign had no concurrent same-brand campaign sharing its outlets during its dates, so every order in this window is safely this campaign's."`;
+    csv=[header.map(esc).join(','),...csvRows].join('\r\n')+note;
+  }else{
+    const precise=aggregator==='Keeta';
+    const header=['Order No','Date','Outlet','Items','Gross (AED)','Net (AED)',`Discount to "${campaignName}" (AED)`,precise?'Other Campaigns on Same Order':'Attribution Basis'];
+    const csvRows=result.rows.map(o=>[o.orderNo,o.date,o.outlet,esc(o.items),o.gross.toFixed(2),o.net.toFixed(2),o.disc.toFixed(2),
+      esc(precise?o.note:`Date-range matched (${aggregator} has no item-level campaign rules yet) — ${o.note}`)].join(','));
+    const precisionNote=precise?'':`\r\n"NOTE: ${aggregator} orders are matched by date range only — no item-level campaign rules exist for this aggregator yet, so orders from a DIFFERENT campaign running the same dates for this brand may also appear here."`;
+    csv=[header.map(esc).join(','),...csvRows].join('\r\n')+precisionNote;
+  }
   const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
   const url=URL.createObjectURL(blob);
   const link=document.createElement('a');
@@ -670,8 +735,8 @@ function exportCampaignOrders(brand,aggregator,campaignName){
   document.body.removeChild(link);
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
-// Whether a campaign has any exportable order-level detail right now — used to decide whether
-// to show the Download button at all (rather than showing it and failing on click).
+// Whether a campaign has any exportable detail right now (order-level or day-level) — used to
+// decide whether to show the Download button at all (rather than showing it and failing on click).
 function campHasOrderExport(c){
   return !!_matchOrdersToCampaign(c);
 }
