@@ -13,10 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-136";
+const BUILD_VERSION="2026-07-21-138";
 const BUILD_NOTES=[
-  "\ud83d\udc1b Fixed the download button showing on a campaign but failing with \"No order-level data available\" when clicked. The button was correctly checking the REAL campaign object when deciding whether to show, but the click handler only received (brand, aggregator, name) as plain strings and had to re-find the campaign by those three fields \u2014 the exact same recurring-name ambiguity from the v133 Keeta fix (e.g. two separate \"25% OFF Select Items\" cards with different date ranges), just in a different spot. The re-lookup could silently grab the WRONG same-named campaign, whose dates genuinely have no data, even though the one actually on screen does. Fixed by passing the campaign's real index in campaignData instead of re-deriving it by name \u2014 eliminates the ambiguity entirely rather than papering over it."
+  "\ud83d\udd24 Noon actually DOES have real order-identifying columns (order_nr and order_ref) \u2014 they were just never read by the parser, since they weren't in the required-columns list I checked against earlier. Confirmed directly from a real Noon statement. Both are now captured as optional columns and appear as two separate columns in the export (Order Ref, Order Nr) instead of the synthetic row placeholder used before. This needs a fresh Noon re-upload to take effect \u2014 the columns exist in the file but the currently-stored parsed data doesn't have them yet."
 ];
+
+
 
 
 
@@ -692,7 +694,7 @@ function _matchOrdersToCampaign(c){
   const scope=campOutlets(c);
   const rows=detail.filter(o=>o.br===c.brand&&o.d>=c.startDate&&o.d<=c.endDate&&(!scope||scope.has(o.ou)));
   if(!rows.length)return null;
-  return{mode:'order-level',rows:rows.map(o=>({orderNo:o.o,date:o.d,outlet:o.ou,items:o.i||'—',gross:o.g||0,net:o.n||0,disc:o.disc,
+  return{mode:'order-level',rows:rows.map(o=>({orderNo:o.o,orderRef:o.orderRef,orderNr:o.orderNr,date:o.d,outlet:o.ou,items:o.i||'—',gross:o.g||0,net:o.n||0,disc:o.disc,
     note:o.dt?`type: ${o.dt}`:'—'}))};
 }
 // v136: index-based wrapper — the buttons used to pass just (brand, aggregator, name) and
@@ -718,6 +720,13 @@ function exportCampaignOrders(brand,aggregator,campaignName,knownCampaign){
     return;
   }
   const esc=s=>`"${String(s).replace(/"/g,'""')}"`;
+  // v137: Excel reformats any CSV value that LOOKS like a pure number into scientific notation
+  // once it exceeds ~15 digits — Keeta's real order numbers are 16-digit strings, so plain
+  // quoting wasn't enough to stop Excel mangling them (e.g. 4697844214376578 → 4.69784E+15).
+  // The ={"..."} text-formula trick forces Excel to display the value exactly as written,
+  // regardless of length. Applied to every aggregator's Order No column for consistency, since
+  // Talabat/Careem/Deliveroo order IDs are numeric-looking too.
+  const escId=s=>`="${String(s).replace(/"/g,'""')}"`;
   let csv;
   if(result.mode==='day-level'){
     // v135: Talabat item-price campaigns (no concurrent same-brand sibling contesting this
@@ -730,9 +739,19 @@ function exportCampaignOrders(brand,aggregator,campaignName,knownCampaign){
     csv=[header.map(esc).join(','),...csvRows].join('\r\n')+note;
   }else{
     const precise=aggregator==='Keeta';
-    const header=['Order No','Date','Outlet','Items','Gross (AED)','Net (AED)',`Discount to "${campaignName}" (AED)`,precise?'Other Campaigns on Same Order':'Attribution Basis'];
-    const csvRows=result.rows.map(o=>[o.orderNo,o.date,o.outlet,esc(o.items),o.gross.toFixed(2),o.net.toFixed(2),o.disc.toFixed(2),
-      esc(precise?o.note:`Date-range matched (${aggregator} has no item-level campaign rules yet) — ${o.note}`)].join(','));
+    const isNoon=aggregator==='Noon';
+    // v138: Noon has TWO real order-identifying columns (order_ref, order_nr) — shown as their
+    // own separate columns rather than folded into a single generic "Order No", per Nikhil's
+    // request that both come through on the export.
+    const header=isNoon
+      ?['Order Ref','Order Nr','Date','Outlet','Items','Gross (AED)','Net (AED)',`Discount to "${campaignName}" (AED)`,'Attribution Basis']
+      :['Order No','Date','Outlet','Items','Gross (AED)','Net (AED)',`Discount to "${campaignName}" (AED)`,precise?'Other Campaigns on Same Order':'Attribution Basis'];
+    const csvRows=result.rows.map(o=>{
+      const basis=esc(precise?o.note:`Date-range matched (${aggregator} has no item-level campaign rules yet) — ${o.note}`);
+      return isNoon
+        ?[escId(o.orderRef||'—'),escId(o.orderNr||'—'),o.date,o.outlet,esc(o.items),o.gross.toFixed(2),o.net.toFixed(2),o.disc.toFixed(2),basis].join(',')
+        :[escId(o.orderNo),o.date,o.outlet,esc(o.items),o.gross.toFixed(2),o.net.toFixed(2),o.disc.toFixed(2),basis].join(',');
+    });
     const precisionNote=precise?'':`\r\n"NOTE: ${aggregator} orders are matched by date range only — no item-level campaign rules exist for this aggregator yet, so orders from a DIFFERENT campaign running the same dates for this brand may also appear here."`;
     csv=[header.map(esc).join(','),...csvRows].join('\r\n')+precisionNote;
   }
@@ -2513,8 +2532,15 @@ async function parseNoonCSV(file){
     // orders it describes, instead of the whole day.
     if(outletDisc>0){agg[key].disc_gross+=itemValue;agg[key].disc_orders++;}
     if(outletDisc>0.01){
+      // v138: Noon's real order-identifying columns — order_ref (short numeric, e.g. "7354")
+      // and order_nr (longer alphanumeric, e.g. "FG74NNXOHER3E0A") — confirmed directly from a
+      // real Noon statement. Both captured when present; synthetic ID kept ONLY as a last-resort
+      // fallback for older/different Noon export formats that might lack these columns.
+      const orderRef=idx["order_ref"]!==undefined?String(row[idx["order_ref"]]||"").trim():"";
+      const orderNr=idx["order_nr"]!==undefined?String(row[idx["order_nr"]]||"").trim():"";
       orderDetail.push({
-        o:String(idx["order_id"]!==undefined?row[idx["order_id"]]:`n${i}_${dateStr}`),
+        o:orderRef||orderNr||`n${i}_${dateStr}`,
+        orderRef:orderRef||null,orderNr:orderNr||null,
         d:dateStr,br:brand,ou:outlet,
         g:Math.round(itemValue*100)/100,n:Math.round(netPayable*100)/100,
         disc:Math.round(outletDisc*100)/100
