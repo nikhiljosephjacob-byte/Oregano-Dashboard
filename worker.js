@@ -31,9 +31,9 @@ const AUTH_USERS = {
   "tony":     { password: "oregano2028", displayName: "Tony",     initials: "T" },
   "rijeesh":  { password: "oregano2029", displayName: "Rijeesh",  initials: "R" },
   "nicole":   { password: "oregano2030", displayName: "Nicole",   initials: "N" },
-  "arun":     { password: "oregano2001", displayName: "Arun",     initials: "A" },
-  "admin":    { password: "admin223",       displayName: "Admin",    initials: "A" },
-  "bd":       { password: "oregano2031", displayName: "BD Team",  initials: "BD" }
+  "arun":     { password: "oregano2025", displayName: "Arun",     initials: "A" },
+  "admin":    { password: "admin2020",       displayName: "Admin",    initials: "A" },
+  "bd":       { password: "oregano2022", displayName: "BD Team",  initials: "BD" }
 };
 
 const SESSION_TTL_SECONDS = 86400; // 24 hours — refreshed by 60s heartbeats. Was 300 (5 min) which caused frequent logouts when tab was backgrounded or phone screen turned off.
@@ -211,6 +211,10 @@ async function handleOrderDataSave(request, env, agg) {
     updatedAt: new Date().toISOString(),
     updatedBy: admin.user
   };
+  // v134: was silently dropping orderDetail (added in v131/v132 for the Finance CSV export) —
+  // this whitelist predates that field and nobody updated it, so every push to the shared
+  // server wiped it even though the client was sending it correctly.
+  if (Array.isArray(body.orderDetail)) record.orderDetail = body.orderDetail;
   await env.SESSIONS.put(`orderdata:${agg}`, JSON.stringify(record)); // no TTL — lives until replaced/cleared
   return json({ ok: true, agg, records: body.records.length, updatedAt: record.updatedAt });
 }
