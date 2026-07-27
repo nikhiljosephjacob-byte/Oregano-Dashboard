@@ -13,12 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-144";
+const BUILD_VERSION="2026-07-21-145";
 const BUILD_NOTES=[
-  "\ud83c\udfa8 Ads Performance visual redesign, per feedback that the coloring was cluttered and hard to read. Root cause confirmed in the code: each card used brand/aggregator color in three places at once (name, card tint, progress bar) with no clear hierarchy, and the verdict palette had a real contrast problem \u2014 SCALE was vivid green (#22C55E) but INVEST was a near-identical pale green (#86EFAC) with a barely-visible background, making them hard to tell apart and hard to read against a light background.",
-  "New design: brand/aggregator identity now shows as a real logo + a left accent bar, not color bleeding across the whole card. ROAS is now a radial gauge instead of a bare number, filled relative to break-even. Budget-consumption progress bars are neutral (slate/amber/red by how full they are) instead of brand-tinted, so they actually mean something instead of just matching the card's tint. Verdict colors got real separation: SCALE green, INVEST blue, MONITOR amber, WITHDRAW red, all at full contrast \u2014 fixed at the shared constant level, so the same improvement applies to the outlet-detail table and campaign history table too, not just this one card.",
-  "Applied to both the brand-level cards (inside a specific aggregator) and the Ads Performance home page (aggregator-level cards, including the Contractual compliance section) for visual consistency across the whole section."
+  "\ud83d\udd0d Ads Performance sizing pass, per feedback that v144's redesign was too small for the available space \u2014 only 4-5 cards per row, but small logos/gauges/text left most of the card as empty whitespace. Scaled up meaningfully rather than nudging: home-page cards get a 44px logo (was 28px) and a 96px gauge with a thicker ring (was 64px, thin), brand-level cards get a 34px logo (was 22px) and an 82px gauge. All text sizes scaled up to match \u2014 names, ROAS-in-gauge, Invested/Consumed/Budget figures. Radial gauge helper now takes an optional stroke-width parameter so the ring can be proportionally thicker at larger sizes without looking spindly."
 ];
+
 
 
 
@@ -3999,11 +3998,12 @@ const CPC_VC={SCALE:"#16A34A",INVEST:"#2563EB",MONITOR:"#D97706",WITHDRAW:"#DC26
 const CPC_VB={SCALE:"rgba(22,163,74,.10)",INVEST:"rgba(37,99,235,.10)",MONITOR:"rgba(217,119,6,.10)",WITHDRAW:"rgba(220,38,38,.10)"};
 // v144: shared radial gauge, used by both the per-brand and per-aggregator Ads Performance
 // cards — an SVG ring filled proportionally to `pct` (0 to 1, already clamped by the caller).
-function cpcRadialGauge(pct,clr,size){
-  const r=size/2-5,circ=2*Math.PI*r,fill=Math.max(0,Math.min(1,pct))*circ;
+function cpcRadialGauge(pct,clr,size,stroke){
+  stroke=stroke||6;
+  const r=size/2-stroke/2-2,circ=2*Math.PI*r,fill=Math.max(0,Math.min(1,pct))*circ;
   return`<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
-    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="#F1EFE6" stroke-width="6"/>
-    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="${clr}" stroke-width="6" stroke-linecap="round"
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="#F1EFE6" stroke-width="${stroke}"/>
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="${clr}" stroke-width="${stroke}" stroke-linecap="round"
       stroke-dasharray="${fill} ${circ}" transform="rotate(-90 ${size/2} ${size/2})"/>
   </svg>`;
 }
@@ -4568,33 +4568,33 @@ function cpcRenderAggLevel(){
       ?`${monthLbl}${isViewingCurrent?' (current month)':''}`
       :`⚠ No campaigns in ${monthLbl}`;
     const grade=cpcAggGrade(roas);
-    return `<div onclick="cpcGoBrands('${A.name}')" style="cursor:pointer;background:#FFFFFF;border:1px solid #EDE7D9;border-left:4px solid ${clr};box-shadow:0 1px 3px rgba(15,23,42,.05);border-radius:14px;padding:18px;padding-left:16px;position:relative;overflow:hidden;transition:transform .15s,box-shadow .15s" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 16px rgba(15,23,42,.10)'" onmouseout="this.style.transform='none';this.style.boxShadow='0 1px 3px rgba(15,23,42,.05)'">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
-        <div style="display:flex;align-items:center;gap:9px">${logoImg(A.name,28)}<div><div style="font-size:15px;font-weight:800;color:#0F172A">${A.name}</div><div style="font-size:9px;color:#94A3B8;font-weight:600">${adTypes}</div></div></div>
-        ${actCount?`<div style="font-size:11px;font-weight:700;color:#DC2626">⚡${actCount}</div>`:''}
+    return `<div onclick="cpcGoBrands('${A.name}')" style="cursor:pointer;background:#FFFFFF;border:1px solid #EDE7D9;border-left:5px solid ${clr};box-shadow:0 2px 6px rgba(15,23,42,.06);border-radius:16px;padding:22px;padding-left:20px;position:relative;overflow:hidden;transition:transform .15s,box-shadow .15s" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 16px rgba(15,23,42,.10)'" onmouseout="this.style.transform='none';this.style.boxShadow='0 2px 6px rgba(15,23,42,.06)'">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <div style="display:flex;align-items:center;gap:12px">${logoImg(A.name,44)}<div><div style="font-size:20px;font-weight:800;color:#0F172A;line-height:1.2">${A.name}</div><div style="font-size:12px;color:#94A3B8;font-weight:600">${adTypes}</div></div></div>
+        ${actCount?`<div style="font-size:13px;font-weight:700;color:#DC2626">⚡${actCount}</div>`:''}
       </div>
-      <div style="font-size:9px;color:${hasData?'#B0AA98':'#94a3b8'};font-weight:600;margin:8px 0 10px 37px">${statusLine}</div>
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+      <div style="font-size:11px;color:${hasData?'#B0AA98':'#94a3b8'};font-weight:600;margin:10px 0 16px 56px">${statusLine}</div>
+      <div style="display:flex;align-items:center;gap:18px;margin-bottom:18px">
         <div style="position:relative;flex-shrink:0">
-          ${cpcRadialGauge(roas?Math.min(1,roas/12):0,grade.clr,64)}
+          ${cpcRadialGauge(roas?Math.min(1,roas/12):0,grade.clr,96,9)}
           <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
-            <div style="font-size:13px;font-weight:800;color:#0F172A;line-height:1">${roasStr}</div>
+            <div style="font-size:22px;font-weight:800;color:#0F172A;line-height:1">${roasStr}</div>
           </div>
         </div>
         <div style="flex:1">
-          <div style="display:inline-block;background:${grade.bg};color:${grade.clr};font-size:10px;font-weight:800;padding:3px 10px;border-radius:20px;margin-bottom:6px">${grade.label}</div>
-          <div style="font-size:9px;color:#94A3B8">last update ${A.lastUpdate?fmtDisp(A.lastUpdate):'—'}</div>
+          <div style="display:inline-block;background:${grade.bg};color:${grade.clr};font-size:13px;font-weight:800;padding:5px 14px;border-radius:20px;margin-bottom:8px">${grade.label}</div>
+          <div style="font-size:11px;color:#94A3B8">last update ${A.lastUpdate?fmtDisp(A.lastUpdate):'—'}</div>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px">
-        <div><div style="font-size:9px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Invested</div><div style="font-size:16px;font-weight:800;color:#0F172A">${fmtAED(inv)}</div></div>
-        <div><div style="font-size:9px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Consumed</div><div style="font-size:16px;font-weight:800;color:#0F172A">${fmtAED(spent)}</div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:12px">
+        <div><div style="font-size:11px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Invested</div><div style="font-size:22px;font-weight:800;color:#0F172A">${fmtAED(inv)}</div></div>
+        <div><div style="font-size:11px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Consumed</div><div style="font-size:22px;font-weight:800;color:#0F172A">${fmtAED(spent)}</div></div>
       </div>
-      <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:4px"><span style="color:#94A3B8;font-weight:600">Budget used</span><span style="color:#64748B;font-weight:700">${consum.toFixed(0)}%</span></div>
-      <div style="width:100%;height:4px;background:#F1EFE6;border-radius:2px;overflow:hidden;margin-bottom:10px"><div style="height:100%;width:${Math.min(100,consum)}%;background:${cpcBarColor(consum)}"></div></div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px"><span style="color:#94A3B8;font-weight:600">Budget used</span><span style="color:#64748B;font-weight:700">${consum.toFixed(0)}%</span></div>
+      <div style="width:100%;height:7px;background:#F1EFE6;border-radius:4px;overflow:hidden;margin-bottom:14px"><div style="height:100%;width:${Math.min(100,consum)}%;background:${cpcBarColor(consum)}"></div></div>
       ${unmappedNote}
-      <div style="font-size:10px;color:${clr};font-weight:700">View ${Object.keys(A.brands).length} brands →</div>
-      ${isViewingCurrent?(()=>{const ct=cpcModel.contractual&&cpcModel.contractual[A.name];if(!ct)return '';const gap=ct.expected-ct.investedSoFar;const metClr=ct.investedSoFar>=ct.expected?'#16A34A':'#D97706';return `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed #EDE7D9"><div style="font-size:9px;color:#94A3B8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Contractual (${(ct.pct*100).toFixed(0)}% of ${cpcMonthLabel(ct.priorMonth)} group sales)</div><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:12px;font-weight:800;color:#0F172A">${fmtAED(ct.investedSoFar)}<span style="font-size:10px;color:#94A3B8;font-weight:600"> / ${fmtAED(ct.expected)}</span></span><span style="font-size:10px;font-weight:800;color:${metClr}">${ct.investedSoFar>=ct.expected?'✓ met':fmtAED(gap)+' short'}</span></div></div>`;})():''}
+      <div style="font-size:13px;color:${clr};font-weight:700">View ${Object.keys(A.brands).length} brands →</div>
+      ${isViewingCurrent?(()=>{const ct=cpcModel.contractual&&cpcModel.contractual[A.name];if(!ct)return '';const gap=ct.expected-ct.investedSoFar;const metClr=ct.investedSoFar>=ct.expected?'#16A34A':'#D97706';return `<div style="margin-top:14px;padding-top:14px;border-top:1px dashed #EDE7D9"><div style="font-size:11px;color:#94A3B8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Contractual (${(ct.pct*100).toFixed(0)}% of ${cpcMonthLabel(ct.priorMonth)} group sales)</div><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:16px;font-weight:800;color:#0F172A">${fmtAED(ct.investedSoFar)}<span style="font-size:12px;color:#94A3B8;font-weight:600"> / ${fmtAED(ct.expected)}</span></span><span style="font-size:13px;font-weight:800;color:${metClr}">${ct.investedSoFar>=ct.expected?'✓ met':fmtAED(gap)+' short'}</span></div></div>`;})():''}
     </div>`;
   }).join('');
   return quickViewBar+cpcActionStrip()+`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${cards}</div>`;
@@ -4653,31 +4653,31 @@ function cpcRenderBrandLevel(ag){
     const statusLine=hasData
       ?`${monthLbl}${isViewingCurrent?' (current month)':''}`
       :`⚠ No campaigns in ${monthLbl}`;
-    return `<div onclick="cpcGoOutlets('${ag}','${B.name}')" style="cursor:pointer;background:#FFFFFF;border:1px solid #EDE7D9;border-left:4px solid ${bClr};box-shadow:0 1px 3px rgba(15,23,42,.05);border-radius:14px;padding:16px;padding-left:14px;position:relative;overflow:hidden;transition:transform .15s,box-shadow .15s" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 16px rgba(15,23,42,.10)'" onmouseout="this.style.transform='none';this.style.boxShadow='0 1px 3px rgba(15,23,42,.05)'">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
-        <div style="display:flex;align-items:center;gap:8px">${logoImg(B.name,22)}<div style="font-size:14px;font-weight:800;color:#0F172A">${B.name}</div></div>
-        ${actCount?`<div style="font-size:10px;font-weight:700;color:#DC2626">⚡${actCount}</div>`:''}
+    return `<div onclick="cpcGoOutlets('${ag}','${B.name}')" style="cursor:pointer;background:#FFFFFF;border:1px solid #EDE7D9;border-left:5px solid ${bClr};box-shadow:0 2px 6px rgba(15,23,42,.06);border-radius:16px;padding:20px;padding-left:18px;position:relative;overflow:hidden;transition:transform .15s,box-shadow .15s" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 16px rgba(15,23,42,.10)'" onmouseout="this.style.transform='none';this.style.boxShadow='0 2px 6px rgba(15,23,42,.06)'">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <div style="display:flex;align-items:center;gap:10px">${logoImg(B.name,34)}<div style="font-size:17px;font-weight:800;color:#0F172A">${B.name}</div></div>
+        ${actCount?`<div style="font-size:12px;font-weight:700;color:#DC2626">⚡${actCount}</div>`:''}
       </div>
-      <div style="font-size:9px;color:${hasData?'#B0AA98':'#94a3b8'};font-weight:600;margin:6px 0 10px 30px">${statusLine}</div>
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+      <div style="font-size:11px;color:${hasData?'#B0AA98':'#94a3b8'};font-weight:600;margin:8px 0 14px 44px">${statusLine}</div>
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
         <div style="position:relative;flex-shrink:0">
-          ${cpcRadialGauge(roas&&be?Math.min(1.3,roas/be)/1.3:0,vClr,64)}
+          ${cpcRadialGauge(roas&&be?Math.min(1.3,roas/be)/1.3:0,vClr,82,8)}
           <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
-            <div style="font-size:14px;font-weight:800;color:#0F172A;line-height:1">${roas?roas.toFixed(1)+'×':'—'}</div>
+            <div style="font-size:19px;font-weight:800;color:#0F172A;line-height:1">${roas?roas.toFixed(1)+'×':'—'}</div>
           </div>
         </div>
         <div style="flex:1">
-          ${verdict?`<div style="display:inline-block;background:${CPC_VB[verdict]};color:${vClr};font-size:10px;font-weight:800;padding:3px 10px;border-radius:20px;margin-bottom:6px">${verdict.charAt(0)+verdict.slice(1).toLowerCase()}</div>`:''}
-          <div style="font-size:9px;color:#94A3B8">break-even ${be.toFixed(2)}×</div>
+          ${verdict?`<div style="display:inline-block;background:${CPC_VB[verdict]};color:${vClr};font-size:12px;font-weight:800;padding:4px 12px;border-radius:20px;margin-bottom:6px">${verdict.charAt(0)+verdict.slice(1).toLowerCase()}</div>`:''}
+          <div style="font-size:11px;color:#94A3B8">break-even ${be.toFixed(2)}×</div>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px">
-        <div><div style="font-size:9px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Budget</div><div style="font-size:15px;font-weight:800;color:#0F172A">${fmtAED(inv)}</div></div>
-        <div><div style="font-size:9px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Consumed</div><div style="font-size:15px;font-weight:800;color:#0F172A">${fmtAED(spent)}</div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px">
+        <div><div style="font-size:10px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Budget</div><div style="font-size:18px;font-weight:800;color:#0F172A">${fmtAED(inv)}</div></div>
+        <div><div style="font-size:10px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Consumed</div><div style="font-size:18px;font-weight:800;color:#0F172A">${fmtAED(spent)}</div></div>
       </div>
-      <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:4px"><span style="color:#94A3B8;font-weight:600">Budget used</span><span style="color:#64748B;font-weight:700">${consum.toFixed(0)}%</span></div>
-      <div style="width:100%;height:4px;background:#F1EFE6;border-radius:2px;overflow:hidden;margin-bottom:10px"><div style="height:100%;width:${Math.min(100,consum)}%;background:${cpcBarColor(consum)}"></div></div>
-      <div style="font-size:10px;color:${bClr};font-weight:700">View ${Object.keys(B.outlets).length} outlets →</div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:5px"><span style="color:#94A3B8;font-weight:600">Budget used</span><span style="color:#64748B;font-weight:700">${consum.toFixed(0)}%</span></div>
+      <div style="width:100%;height:6px;background:#F1EFE6;border-radius:3px;overflow:hidden;margin-bottom:12px"><div style="height:100%;width:${Math.min(100,consum)}%;background:${cpcBarColor(consum)}"></div></div>
+      <div style="font-size:12px;color:${bClr};font-weight:700">View ${Object.keys(B.outlets).length} outlets →</div>
     </div>`;
   }).filter(Boolean).join('');
   // pooling note
