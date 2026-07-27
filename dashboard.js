@@ -13,12 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-142";
+const BUILD_VERSION="2026-07-21-143";
 const BUILD_NOTES=[
-  "\ud83c\udf19 Built the late-night outlet POS-bucketing fix for Discount Burn, confirmed against the real Google Sheet. Al Quoz, Marina, and Jumeirah (cutoff 3 AM) and Motorcity (cutoff 1 AM) operate past midnight, and their POS buckets very-early-morning orders under the PREVIOUS calendar day. Verified directly: Oregano\u00d7Noon's \"30% OFF CAP 20 : Friday-Sunday Weekend Deal\" starts 24 Jul, and each of these 4 outlets independently showed a small residual on the 23rd (20, 20, 54.9, 15.3 \u2014 summing to exactly the AED 110.2 gap) before jumping to much larger numbers on the 24th \u2014 the signature of the campaign's own early activation being mis-bucketed, not a genuine gap. When a campaign's own start date is reached, its outlet-specific spillover from the previous day (for just these 4 outlets, not the whole brand) is now correctly attributed to it instead of remaining uncategorized \u2014 confirmed this flows through to BOTH the real campaign contribution numbers and the Discount Burn diagnostic view, since they share the same underlying calculation.",
-  "Checked per-aggregator against the actual uploaded statements before building: Keeta and Talabat's own order timestamps are genuinely accurate and unaffected (this is purely a Sheet-side artifact, not something visible in any aggregator's raw export). Deliveroo's are accurate too once correctly converted from UTC to local time (+4h) \u2014 an important detail its export doesn't call out. Careem shows ZERO orders anywhere between midnight and 6 AM across the entire dataset, so this mechanism may simply not apply there. The fix itself is built generally (any aggregator, not hardcoded to Noon), since the underlying cause \u2014 the restaurant's own POS \u2014 doesn't depend on which delivery platform took the order.",
-  "Caught and fixed a real bug of my own while testing: the exclusion check (don't double-count a day another campaign already explains) was checking against a campaign list pre-filtered to overlap the CURRENT date range \u2014 which meant a rival campaign covering ONLY the previous day would never be found, silently failing to exclude its outlet. Fixed by checking the full campaign list directly for prior-day coverage instead."
+  "\ud83e\udd1d CRITICAL FIX: co-funding percentage was being read backwards for any comment that explicitly names both parties, confirmed on \"Keeta Week\" (\"Co-Funded 60% Oregano, 40% Keeta\"). The existing parser's documented convention is \"a bare X% next to co-funded = the PLATFORM's share\" \u2014 correct for comments like \"60% co-funded\" with no party named. But this comment explicitly labels 60% as OREGANO's (merchant's) share, and the parser grabbed that 60% anyway and treated it as Keeta's share \u2014 a straight inversion of who funds what. The badge showing \"60% co-funded\" was actually telling the P&L math the platform pays 60% (merchant pays 40%), when the sheet says the exact opposite. Fixed by adding an explicit-party-label check ahead of the existing bare-percentage fallback: when a percentage is directly followed by a recognizable name (the campaign's own aggregator or brand, including multi-word brands), that percentage is attributed to the party actually named \u2014 regardless of which one appears first in the sentence. Comments without explicit party names (e.g. plain \"60:40 co-funded\" ratios) are completely unaffected and keep using the existing convention."
 ];
+
 
 
 
@@ -6380,12 +6379,33 @@ function parseCampComment(c){
   //   "X:Y co-funding" / "X:Y co funded"  → brand:platform → platform funds Y%
   //   "<Platform> funds X%" / "<Platform> X%" near "co-fund"  → platform funds X%
   const t=text.toLowerCase();
+  // v143: comments that EXPLICITLY name both parties — e.g. "Co-Funded 60% Oregano, 40%
+  // Keeta" — were previously misread by the generic "bare X% near co-funded" pattern below,
+  // which assumes an unlabeled percentage is always the PLATFORM's share. That's correct when
+  // no party is named, but here the sheet explicitly labels 60% as the MERCHANT's (Oregano's)
+  // share — the old parser grabbed it anyway and treated it as the platform's share, a straight
+  // inversion of who actually funds what. Checked first: find every "NUMBER% <name>" pair in
+  // the comment, and if one is explicitly labeled with the campaign's own aggregator name, use
+  // THAT percentage as the platform's share — regardless of which number appears first in the
+  // sentence. Falls through untouched to the existing patterns below for comments that don't
+  // name a specific party (plain ratios, bare percentages).
+  if(/co[\s\-]?fund/.test(t)){
+    const labelRe=/(\d{1,3})\s*%\s*([a-z][a-z\s]*?)(?=[,;.\-–]|\s+co-?fund|$)/gi;
+    const labeled=[];let lm;
+    while((lm=labelRe.exec(t))!==null)labeled.push({pct:parseInt(lm[1],10),label:lm[2].trim()});
+    const aggLower=(c.aggregator||"").toLowerCase();
+    const aggFirstWord=aggLower.split(/\s+/)[0];
+    const aggMatch=aggFirstWord?labeled.find(x=>x.label&&(aggLower.startsWith(x.label)||x.label.startsWith(aggFirstWord))):null;
+    if(aggMatch&&aggMatch.pct>=0&&aggMatch.pct<=100){
+      result.coFundedPctOfDiscount=aggMatch.pct/100;result.hasInfo=true;
+    }
+  }
   // Ratio form: "A:B co-funding" / "A-B co-funded" / "co-funded A:B" / "co-funded A-B"
   // (brand:platform → platform funds B%). Separator can be colon, hyphen, en-dash, or "/".
   // The "co-fund" keyword may come before OR after the ratio.
   let m=t.match(/(\d{1,3})\s*[:\-–\/]\s*(\d{1,3})\s*(?:co[\s\-]?fund(?:ing|ed)?|cofund(?:ing|ed)?)/)
        ||t.match(/(?:co[\s\-]?fund(?:ing|ed)?|cofund(?:ing|ed)?)\s*(?:by\s+\S+\s+)?(\d{1,3})\s*[:\-–\/]\s*(\d{1,3})/);
-  if(m){const platformPct=parseInt(m[2],10);if(platformPct>=0&&platformPct<=100){result.coFundedPctOfDiscount=platformPct/100;result.hasInfo=true;}}
+  if(result.coFundedPctOfDiscount==null&&m){const platformPct=parseInt(m[2],10);if(platformPct>=0&&platformPct<=100){result.coFundedPctOfDiscount=platformPct/100;result.hasInfo=true;}}
   // Single percentage near "co-fund"
   if(result.coFundedPctOfDiscount==null){
     m=t.match(/(\d{1,3})\s*%\s*(?:co[\s\-]?funded|co[\s\-]?funding|cofunded)/)||t.match(/(?:co[\s\-]?funded|co[\s\-]?funding|cofunded)\s*(?:by\s+\S+\s+)?(?:at\s+)?(\d{1,3})\s*%/);
@@ -6992,7 +7012,7 @@ function campTableHTML(title,camps,showImpact){
       const fullList=list.join(', ');
       branchChip=`<div style="margin-top:4px"><span title="${fullList}" style="font-size:10px;color:#60A5FA;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.25);padding:2px 7px;border-radius:8px;font-weight:600;cursor:help">📍 ${list.length} branch${list.length!==1?'es':''}: ${summary}</span></div>`;
     }
-    const coFundChip=parsedC.coFundedPctOfDiscount?` <span style="font-size:9px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:2px 7px;border-radius:8px;border:1px solid rgba(168,85,247,.3);margin-left:5px">🤝 ${Math.round(parsedC.coFundedPctOfDiscount*100)}% co-funded</span>`:'';
+    const coFundChip=parsedC.coFundedPctOfDiscount?` <span style="font-size:9px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:2px 7px;border-radius:8px;border:1px solid rgba(168,85,247,.3);margin-left:5px" title="${c.aggregator} funds ${Math.round(parsedC.coFundedPctOfDiscount*100)}% of the discount; ${c.brand} funds the rest">🤝 ${c.aggregator} ${Math.round(parsedC.coFundedPctOfDiscount*100)}%</span>`:'';
     const unresolvedChip=parsedC.unresolved.length?` <span title="Unrecognized in comment: ${parsedC.unresolved.join(', ')}" style="font-size:9px;background:rgba(239,68,68,.12);color:#FCA5A5;font-weight:700;padding:2px 7px;border-radius:8px;border:1px solid rgba(239,68,68,.3);margin-left:5px;cursor:help">⚠ needs clarification</span>`:'';
     const offer=`<div><span style="font-size:11px;color:#94a3b8" title="${(c.comments||'').replace(/"/g,'&quot;')}">${(c.comments||'').length>60?(c.comments||'').slice(0,60)+'…':(c.comments||'')}</span>${coFundChip}${unresolvedChip}${branchChip}</div>`;
     const addonTag=(c.addons&&c.addons.length)?` <span style="background:rgba(232,214,20,0.15);color:#E8D614;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:5px;border:1px solid rgba(232,214,20,0.3)">+ ${c.addons.map(a=>a.name).join(', ')}</span>`:'';
