@@ -13,11 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-141";
+const BUILD_VERSION="2026-07-21-142";
 const BUILD_NOTES=[
-  "\ud83c\udfaf Replaced the v139 FD-exception heuristic entirely \u2014 confirmed wrong in both directions by a second real order. Order #5946 had a flat AED 6 commission but ZERO top-up-to-minimum, yet FD genuinely wasn't charged (proving top-up presence wasn't required). Separately: a normal, full-FD order can coincidentally compute to exactly AED 6 commission via the plain contractual rate on its own net value \u2014 no floor, no exception involved \u2014 meaning flat AED 6 alone isn't reliable either. Replaced with a direct read of Keeta's own \"Campaign type\" column: confirmed against the real file that \"Delivery fee discounts\" appears there for ~99% of orders (where free delivery was genuinely applied) and is absent for the exact small minority where the customer paid their own delivery. No inference needed \u2014 Keeta already tells us directly.",
-  "This needs a fresh Keeta re-upload \u2014 Campaign type wasn't being read at all before this build."
+  "\ud83c\udf19 Built the late-night outlet POS-bucketing fix for Discount Burn, confirmed against the real Google Sheet. Al Quoz, Marina, and Jumeirah (cutoff 3 AM) and Motorcity (cutoff 1 AM) operate past midnight, and their POS buckets very-early-morning orders under the PREVIOUS calendar day. Verified directly: Oregano\u00d7Noon's \"30% OFF CAP 20 : Friday-Sunday Weekend Deal\" starts 24 Jul, and each of these 4 outlets independently showed a small residual on the 23rd (20, 20, 54.9, 15.3 \u2014 summing to exactly the AED 110.2 gap) before jumping to much larger numbers on the 24th \u2014 the signature of the campaign's own early activation being mis-bucketed, not a genuine gap. When a campaign's own start date is reached, its outlet-specific spillover from the previous day (for just these 4 outlets, not the whole brand) is now correctly attributed to it instead of remaining uncategorized \u2014 confirmed this flows through to BOTH the real campaign contribution numbers and the Discount Burn diagnostic view, since they share the same underlying calculation.",
+  "Checked per-aggregator against the actual uploaded statements before building: Keeta and Talabat's own order timestamps are genuinely accurate and unaffected (this is purely a Sheet-side artifact, not something visible in any aggregator's raw export). Deliveroo's are accurate too once correctly converted from UTC to local time (+4h) \u2014 an important detail its export doesn't call out. Careem shows ZERO orders anywhere between midnight and 6 AM across the entire dataset, so this mechanism may simply not apply there. The fix itself is built generally (any aggregator, not hardcoded to Noon), since the underlying cause \u2014 the restaurant's own POS \u2014 doesn't depend on which delivery platform took the order.",
+  "Caught and fixed a real bug of my own while testing: the exclusion check (don't double-count a day another campaign already explains) was checking against a campaign list pre-filtered to overlap the CURRENT date range \u2014 which meant a rival campaign covering ONLY the previous day would never be found, silently failing to exclude its outlet. Fixed by checking the full campaign list directly for prior-day coverage instead."
 ];
+
 
 
 
@@ -7117,6 +7119,35 @@ function brandDailySalesByBranch(brand,aggregator){
   }
   return dataIndex.brandDailySalesByBranch.get(`${brand}|${aggregator}`)||{};
 }
+// v142: per-branch DAILY DISCOUNT (parallel to brandDailySalesByBranch above). The sheet's
+// underlying allData records already have branch-level discount — this just exposes it,
+// needed for the late-night-outlet POS-bucketing fix below (brandDailyDiscount alone collapses
+// all branches into one brand-level total, which is fine for the normal sales-weighted split
+// but not precise enough for isolating exactly one or two specific outlets' contribution).
+function brandDailyDiscountByBranch(brand,aggregator){
+  const map={};
+  allData.forEach(r=>{
+    if(r.aggregator!==aggregator)return;
+    if(brand!=='All Brands'&&r.brand!==brand)return;
+    if(r.branch==='(brand-level)'||!r.disc)return;
+    if(!map[r.date])map[r.date]={};
+    map[r.date][r.branch]=(map[r.date][r.branch]||0)+r.disc;
+  });
+  return map;
+}
+// v142: outlets confirmed (by Nikhil) to operate past midnight, whose POS buckets very-early-
+// morning orders under the PREVIOUS calendar day rather than the day they truly happened —
+// e.g. a 1 AM order on the 24th shows up in the sheet as part of the 23rd's total. Value is the
+// outlet's own confirmed cutoff (orders before this time get bucketed to the previous day).
+// Verified against real sheet data for Oregano×Noon, a Friday-start weekend deal (23→24 Jul):
+// each of these 4 outlets independently showed a small non-zero residual on the 23rd, jumping
+// to a much larger amount on the 24th — the signature of a campaign's own early activation
+// being mis-bucketed, not a genuine gap. Checked the other 3 aggregators for the same window:
+// none showed the same clean pattern (Careem has zero orders anywhere between midnight-6am at
+// all; Talabat/Deliveroo showed no consistent match either) — but the mechanism itself (a
+// restaurant's own POS, independent of which delivery platform took the order) is general, so
+// it's built to apply to any aggregator, not hardcoded to Noon.
+const LATE_NIGHT_OUTLETS={"Al Quoz":"03:00","Marina":"03:00","Jumeirah":"03:00","MC":"01:00"};
 // Compute the discount allocated to campaign c over [start,end] using SALES-WEIGHTED method.
 // Why this method: the sheet only reports discount at brand+platform+day level, not per branch.
 // The earlier N/M (branch-count) split assumed every branch had equal sales, which produced
@@ -7206,6 +7237,38 @@ function allocateCampaignDiscount(c,start,end){
     const _myIdx=campaignData.indexOf(c);
     const others=campaignData.filter((x,i)=>i!==_myIdx&&x.brand===c.brand&&x.aggregator===c.aggregator&&!(x.endDate<rangeStart||x.startDate>rangeEnd)&&campStatus(x)!=='Cancelled'&&!isRewardsCampaign(x));
     let allocatedDisc=0;const dailyAlloc={};const overlapDays=[];
+    // v142: late-night outlet POS-bucketing — see LATE_NIGHT_OUTLETS above. Only fires when
+    // rangeStart is genuinely this campaign's OWN true start date (not an uncovered sub-range
+    // from the hybrid exact+estimate blend) — that's the only case where "did this campaign's
+    // own early activation get mis-bucketed into the previous day" is a meaningful question.
+    if(rangeStart===c.startDate){
+      const myLateOutlets=[...myBranches].filter(b=>LATE_NIGHT_OUTLETS[b]);
+      if(myLateOutlets.length){
+        const prevDay=dateBefore(rangeStart);
+        // Don't steal from the previous day if some OTHER campaign already legitimately covers
+        // it for these specific outlets — avoids double-counting a day that's already explained.
+        // Checked directly against campaignData (not the pre-filtered `others` above, which is
+        // scoped to overlap with the CURRENT range only — a campaign covering just prevDay and
+        // nothing on/after rangeStart would never appear there, missing exactly this check).
+        const prevDayClaimed=new Set();
+        campaignData.forEach(x=>{
+          if(x===c)return;
+          if(x.brand!==c.brand||x.aggregator!==c.aggregator)return;
+          if(campStatus(x)==='Cancelled'||isRewardsCampaign(x))return;
+          if(!(x.startDate<=prevDay&&x.endDate>=prevDay))return;
+          const xScope=campOutlets(x)||allBrandBranches;
+          myLateOutlets.forEach(b=>{if(xScope.has(b))prevDayClaimed.add(b);});
+        });
+        const prevDayDiscByBranch=brandDailyDiscountByBranch(c.brand,c.aggregator)[prevDay]||{};
+        let spillover=0;
+        myLateOutlets.forEach(b=>{
+          if(prevDayClaimed.has(b))return;
+          const bDisc=prevDayDiscByBranch[b]||0;
+          if(bDisc>0){spillover+=bDisc;dailyAlloc[prevDay]=(dailyAlloc[prevDay]||0)+bDisc;}
+        });
+        allocatedDisc+=spillover;
+      }
+    }
     let d=new Date(rangeStart+'T12:00:00'),e=new Date(rangeEnd+'T12:00:00');
     for(;d<=e;d.setDate(d.getDate()+1)){
       const key=dk(d);const dayTotal=dailyDisc[key]||0;
