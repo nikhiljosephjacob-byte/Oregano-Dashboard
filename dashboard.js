@@ -13,10 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-143";
+const BUILD_VERSION="2026-07-21-144";
 const BUILD_NOTES=[
-  "\ud83e\udd1d CRITICAL FIX: co-funding percentage was being read backwards for any comment that explicitly names both parties, confirmed on \"Keeta Week\" (\"Co-Funded 60% Oregano, 40% Keeta\"). The existing parser's documented convention is \"a bare X% next to co-funded = the PLATFORM's share\" \u2014 correct for comments like \"60% co-funded\" with no party named. But this comment explicitly labels 60% as OREGANO's (merchant's) share, and the parser grabbed that 60% anyway and treated it as Keeta's share \u2014 a straight inversion of who funds what. The badge showing \"60% co-funded\" was actually telling the P&L math the platform pays 60% (merchant pays 40%), when the sheet says the exact opposite. Fixed by adding an explicit-party-label check ahead of the existing bare-percentage fallback: when a percentage is directly followed by a recognizable name (the campaign's own aggregator or brand, including multi-word brands), that percentage is attributed to the party actually named \u2014 regardless of which one appears first in the sentence. Comments without explicit party names (e.g. plain \"60:40 co-funded\" ratios) are completely unaffected and keep using the existing convention."
+  "\ud83c\udfa8 Ads Performance visual redesign, per feedback that the coloring was cluttered and hard to read. Root cause confirmed in the code: each card used brand/aggregator color in three places at once (name, card tint, progress bar) with no clear hierarchy, and the verdict palette had a real contrast problem \u2014 SCALE was vivid green (#22C55E) but INVEST was a near-identical pale green (#86EFAC) with a barely-visible background, making them hard to tell apart and hard to read against a light background.",
+  "New design: brand/aggregator identity now shows as a real logo + a left accent bar, not color bleeding across the whole card. ROAS is now a radial gauge instead of a bare number, filled relative to break-even. Budget-consumption progress bars are neutral (slate/amber/red by how full they are) instead of brand-tinted, so they actually mean something instead of just matching the card's tint. Verdict colors got real separation: SCALE green, INVEST blue, MONITOR amber, WITHDRAW red, all at full contrast \u2014 fixed at the shared constant level, so the same improvement applies to the outlet-detail table and campaign history table too, not just this one card.",
+  "Applied to both the brand-level cards (inside a specific aggregator) and the Ads Performance home page (aggregator-level cards, including the Contractual compliance section) for visual consistency across the whole section."
 ];
+
 
 
 
@@ -3987,8 +3990,39 @@ function cpcVerdict(roas,be){
   if(roas>=be*0.8)return"MONITOR";
   return"WITHDRAW";
 }
-const CPC_VC={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",WITHDRAW:"#EF4444"};
-const CPC_VB={SCALE:"rgba(34,197,94,.12)",INVEST:"rgba(134,239,172,.08)",MONITOR:"rgba(251,191,36,.1)",WITHDRAW:"rgba(239,68,68,.1)"};
+// v144: was SCALE #22C55E / INVEST #86EFAC — two near-identical shades of green with a barely
+// visible background on INVEST, making them hard to tell apart and hard to read. Real contrast
+// now: SCALE green, INVEST blue (a genuinely different hue, not a paler version of the same
+// one), MONITOR amber, WITHDRAW red — fixed here so the card, outlet-detail table, and history
+// table all get the same improvement, not just one of them.
+const CPC_VC={SCALE:"#16A34A",INVEST:"#2563EB",MONITOR:"#D97706",WITHDRAW:"#DC2626"};
+const CPC_VB={SCALE:"rgba(22,163,74,.10)",INVEST:"rgba(37,99,235,.10)",MONITOR:"rgba(217,119,6,.10)",WITHDRAW:"rgba(220,38,38,.10)"};
+// v144: shared radial gauge, used by both the per-brand and per-aggregator Ads Performance
+// cards — an SVG ring filled proportionally to `pct` (0 to 1, already clamped by the caller).
+function cpcRadialGauge(pct,clr,size){
+  const r=size/2-5,circ=2*Math.PI*r,fill=Math.max(0,Math.min(1,pct))*circ;
+  return`<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="#F1EFE6" stroke-width="6"/>
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="${clr}" stroke-width="6" stroke-linecap="round"
+      stroke-dasharray="${fill} ${circ}" transform="rotate(-90 ${size/2} ${size/2})"/>
+  </svg>`;
+}
+// v144: neutral, meaningful budget-consumption bar color — replaces brand-tinted bars that
+// carried no information about whether spend was actually healthy.
+function cpcBarColor(consumPct){
+  if(consumPct>=100)return"#DC2626";
+  if(consumPct>=85)return"#D97706";
+  return"#94A3B8";
+}
+// v144: the aggregator-level home page blends multiple brands together, so there's no single
+// break-even to gauge against (unlike the per-brand cards, which use cpcVerdict). Simple
+// 3-tier grade on absolute ROAS instead — still gives the radial gauge a meaningful color.
+function cpcAggGrade(roas){
+  if(roas==null)return{clr:"#94A3B8",bg:"#F1F5F9",label:"—"};
+  if(roas>=6)return{clr:"#16A34A",bg:"#F0FDF4",label:"Strong"};
+  if(roas>=3)return{clr:"#2563EB",bg:"#EFF6FF",label:"Solid"};
+  return{clr:"#D97706",bg:"#FFFBEB",label:"Watch"};
+}
 const AGG_LOGO_CLR={Talabat:"#FF6000",Deliveroo:"#00CCBC",Careem:"#3DDC73",Noon:"#F5CF00",Keeta:"#E8D614"};
 
 function parseCPCDate(s){
@@ -4533,25 +4567,34 @@ function cpcRenderAggLevel(){
     const statusLine=hasData
       ?`${monthLbl}${isViewingCurrent?' (current month)':''}`
       :`⚠ No campaigns in ${monthLbl}`;
-    return `<div onclick="cpcGoBrands('${A.name}')" style="cursor:pointer;background:linear-gradient(135deg,${clr}15,#FFFFFF);border:2px solid ${clr}44;border-radius:16px;padding:18px;position:relative;overflow:hidden;transition:all .25s ease;box-shadow:0 6px 12px -3px rgba(15,23,42,.08),0 3px 6px -3px rgba(15,23,42,.05)" onmouseover="this.style.borderColor='${clr}';this.style.transform='translateY(-3px)';this.style.boxShadow='0 14px 30px ${clr}25'" onmouseout="this.style.borderColor='${clr}44';this.style.transform='none';this.style.boxShadow='0 6px 12px -3px rgba(15,23,42,.08),0 3px 6px -3px rgba(15,23,42,.05)'">
-      <div style="position:absolute;top:-20px;right:-20px;width:100px;height:100px;background:radial-gradient(circle,${clr}22,transparent 70%);pointer-events:none"></div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;position:relative">
-        <div style="display:flex;align-items:center;gap:10px">${logoImg(A.name,40)}<div><div style="font-size:16px;font-weight:800;color:${clr};letter-spacing:.3px">${A.name}</div><div style="font-size:10px;color:#64748B;font-weight:600">${adTypes}</div></div></div>
-        ${actCount?`<div style="background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.4);border-radius:8px;padding:3px 9px;font-size:11px;font-weight:800;color:#EF4444">⚡ ${actCount}</div>`:''}
+    const grade=cpcAggGrade(roas);
+    return `<div onclick="cpcGoBrands('${A.name}')" style="cursor:pointer;background:#FFFFFF;border:1px solid #EDE7D9;border-left:4px solid ${clr};box-shadow:0 1px 3px rgba(15,23,42,.05);border-radius:14px;padding:18px;padding-left:16px;position:relative;overflow:hidden;transition:transform .15s,box-shadow .15s" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 16px rgba(15,23,42,.10)'" onmouseout="this.style.transform='none';this.style.boxShadow='0 1px 3px rgba(15,23,42,.05)'">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+        <div style="display:flex;align-items:center;gap:9px">${logoImg(A.name,28)}<div><div style="font-size:15px;font-weight:800;color:#0F172A">${A.name}</div><div style="font-size:9px;color:#94A3B8;font-weight:600">${adTypes}</div></div></div>
+        ${actCount?`<div style="font-size:11px;font-weight:700;color:#DC2626">⚡${actCount}</div>`:''}
       </div>
-      <div style="font-size:10px;color:${hasData?'#f59e0b':'#94a3b8'};font-weight:800;text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px">${statusLine}</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
-        <div><div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.7px">Invested</div><div style="font-size:20px;font-weight:800;color:#0F172A">${fmtAED(inv)}</div></div>
-        <div><div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.7px">Consumed</div><div style="font-size:20px;font-weight:800;color:#0F172A">${fmtAED(spent)}</div></div>
+      <div style="font-size:9px;color:${hasData?'#B0AA98':'#94a3b8'};font-weight:600;margin:8px 0 10px 37px">${statusLine}</div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <div style="position:relative;flex-shrink:0">
+          ${cpcRadialGauge(roas?Math.min(1,roas/12):0,grade.clr,64)}
+          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
+            <div style="font-size:13px;font-weight:800;color:#0F172A;line-height:1">${roasStr}</div>
+          </div>
+        </div>
+        <div style="flex:1">
+          <div style="display:inline-block;background:${grade.bg};color:${grade.clr};font-size:10px;font-weight:800;padding:3px 10px;border-radius:20px;margin-bottom:6px">${grade.label}</div>
+          <div style="font-size:9px;color:#94A3B8">last update ${A.lastUpdate?fmtDisp(A.lastUpdate):'—'}</div>
+        </div>
       </div>
-      <div style="width:100%;height:8px;background:#F1F5F9;border-radius:4px;overflow:hidden;margin-bottom:12px"><div style="height:100%;width:${Math.min(100,consum)}%;background:linear-gradient(90deg,${clr},${clr}dd);box-shadow:0 0 8px ${clr}66"></div></div>
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div><div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.7px">ROAS</div><div style="font-size:22px;font-weight:800;color:${clr}">${roasStr}</div></div>
-        <div style="text-align:right"><div style="font-size:10px;color:#64748B;font-weight:600">Last update</div><div style="font-size:12px;color:#475569;font-weight:600">${A.lastUpdate?fmtDisp(A.lastUpdate):'—'}</div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px">
+        <div><div style="font-size:9px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Invested</div><div style="font-size:16px;font-weight:800;color:#0F172A">${fmtAED(inv)}</div></div>
+        <div><div style="font-size:9px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Consumed</div><div style="font-size:16px;font-weight:800;color:#0F172A">${fmtAED(spent)}</div></div>
       </div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:4px"><span style="color:#94A3B8;font-weight:600">Budget used</span><span style="color:#64748B;font-weight:700">${consum.toFixed(0)}%</span></div>
+      <div style="width:100%;height:4px;background:#F1EFE6;border-radius:2px;overflow:hidden;margin-bottom:10px"><div style="height:100%;width:${Math.min(100,consum)}%;background:${cpcBarColor(consum)}"></div></div>
       ${unmappedNote}
-      <div style="margin-top:12px;font-size:11px;color:${clr};font-weight:800;letter-spacing:.3px">View ${Object.keys(A.brands).length} brands →</div>
-      ${isViewingCurrent?(()=>{const ct=cpcModel.contractual&&cpcModel.contractual[A.name];if(!ct)return '';const gap=ct.expected-ct.investedSoFar;const metClr=ct.investedSoFar>=ct.expected?'#22C55E':'#FBBF24';return `<div style="margin-top:12px;padding-top:12px;border-top:1px solid ${clr}22"><div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:4px">Contractual (${(ct.pct*100).toFixed(0)}% of ${cpcMonthLabel(ct.priorMonth)} group sales)</div><div style="display:flex;justify-content:space-between;align-items:baseline"><div><span style="font-size:14px;font-weight:800;color:#0F172A">${fmtAED(ct.investedSoFar)}</span><span style="font-size:11px;color:#64748B;font-weight:600"> / ${fmtAED(ct.expected)}</span></div><div style="font-size:11px;font-weight:800;color:${metClr}">${ct.investedSoFar>=ct.expected?'✓ met':fmtAED(gap)+' short'}</div></div></div>`;})():''}
+      <div style="font-size:10px;color:${clr};font-weight:700">View ${Object.keys(A.brands).length} brands →</div>
+      ${isViewingCurrent?(()=>{const ct=cpcModel.contractual&&cpcModel.contractual[A.name];if(!ct)return '';const gap=ct.expected-ct.investedSoFar;const metClr=ct.investedSoFar>=ct.expected?'#16A34A':'#D97706';return `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed #EDE7D9"><div style="font-size:9px;color:#94A3B8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Contractual (${(ct.pct*100).toFixed(0)}% of ${cpcMonthLabel(ct.priorMonth)} group sales)</div><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:12px;font-weight:800;color:#0F172A">${fmtAED(ct.investedSoFar)}<span style="font-size:10px;color:#94A3B8;font-weight:600"> / ${fmtAED(ct.expected)}</span></span><span style="font-size:10px;font-weight:800;color:${metClr}">${ct.investedSoFar>=ct.expected?'✓ met':fmtAED(gap)+' short'}</span></div></div>`;})():''}
     </div>`;
   }).join('');
   return quickViewBar+cpcActionStrip()+`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${cards}</div>`;
@@ -4610,23 +4653,31 @@ function cpcRenderBrandLevel(ag){
     const statusLine=hasData
       ?`${monthLbl}${isViewingCurrent?' (current month)':''}`
       :`⚠ No campaigns in ${monthLbl}`;
-    return `<div onclick="cpcGoOutlets('${ag}','${B.name}')" style="cursor:pointer;background:linear-gradient(135deg,${bClr}0d,rgba(255,255,255,.4));border:1px solid ${bClr}33;border-radius:14px;padding:16px;position:relative;overflow:hidden;transition:transform .15s,border-color .15s" onmouseover="this.style.borderColor='${bClr}88';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='${bClr}33';this.style.transform='none'">
-      <div style="position:absolute;top:-20px;right:-20px;width:80px;height:80px;background:radial-gradient(circle,${bClr}22,transparent 70%);pointer-events:none"></div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <div style="font-size:15px;font-weight:800;color:${bClr}">${B.name}</div>
-        <div style="display:flex;gap:6px;align-items:center">${actCount?`<div style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:8px;padding:2px 7px;font-size:10px;font-weight:700;color:#EF4444">⚡ ${actCount}</div>`:''}${verdict?`<div style="background:${CPC_VB[verdict]};border:1px solid ${vClr}44;border-radius:8px;padding:2px 8px;font-size:9px;font-weight:800;color:${vClr}">${verdict}</div>`:''}</div>
+    return `<div onclick="cpcGoOutlets('${ag}','${B.name}')" style="cursor:pointer;background:#FFFFFF;border:1px solid #EDE7D9;border-left:4px solid ${bClr};box-shadow:0 1px 3px rgba(15,23,42,.05);border-radius:14px;padding:16px;padding-left:14px;position:relative;overflow:hidden;transition:transform .15s,box-shadow .15s" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 16px rgba(15,23,42,.10)'" onmouseout="this.style.transform='none';this.style.boxShadow='0 1px 3px rgba(15,23,42,.05)'">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+        <div style="display:flex;align-items:center;gap:8px">${logoImg(B.name,22)}<div style="font-size:14px;font-weight:800;color:#0F172A">${B.name}</div></div>
+        ${actCount?`<div style="font-size:10px;font-weight:700;color:#DC2626">⚡${actCount}</div>`:''}
       </div>
-      <div style="font-size:9px;color:${hasData?'#f59e0b':'#94a3b8'};font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">${statusLine}</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-        <div><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.7px">Budget</div><div style="font-size:16px;font-weight:800;color:#0F172A">${fmtAED(inv)}</div></div>
-        <div><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.7px">Consumed</div><div style="font-size:16px;font-weight:800;color:#0F172A">${fmtAED(spent)}</div></div>
+      <div style="font-size:9px;color:${hasData?'#B0AA98':'#94a3b8'};font-weight:600;margin:6px 0 10px 30px">${statusLine}</div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <div style="position:relative;flex-shrink:0">
+          ${cpcRadialGauge(roas&&be?Math.min(1.3,roas/be)/1.3:0,vClr,64)}
+          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
+            <div style="font-size:14px;font-weight:800;color:#0F172A;line-height:1">${roas?roas.toFixed(1)+'×':'—'}</div>
+          </div>
+        </div>
+        <div style="flex:1">
+          ${verdict?`<div style="display:inline-block;background:${CPC_VB[verdict]};color:${vClr};font-size:10px;font-weight:800;padding:3px 10px;border-radius:20px;margin-bottom:6px">${verdict.charAt(0)+verdict.slice(1).toLowerCase()}</div>`:''}
+          <div style="font-size:9px;color:#94A3B8">break-even ${be.toFixed(2)}×</div>
+        </div>
       </div>
-      <div style="width:100%;height:6px;background:rgba(15,23,42,.4);border-radius:3px;overflow:hidden;margin-bottom:10px"><div style="height:100%;width:${Math.min(100,consum)}%;background:linear-gradient(90deg,${bClr},${bClr}88)"></div></div>
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.7px">ROAS</div><div style="font-size:17px;font-weight:800;color:${vClr}">${roas?roas.toFixed(2)+'×':'—'}</div></div>
-        <div style="text-align:right"><div style="font-size:9px;color:#64748b">break-even</div><div style="font-size:12px;color:#94a3b8">${be.toFixed(2)}×</div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px">
+        <div><div style="font-size:9px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Budget</div><div style="font-size:15px;font-weight:800;color:#0F172A">${fmtAED(inv)}</div></div>
+        <div><div style="font-size:9px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Consumed</div><div style="font-size:15px;font-weight:800;color:#0F172A">${fmtAED(spent)}</div></div>
       </div>
-      <div style="margin-top:10px;font-size:10px;color:#f59e0b;font-weight:600">View ${Object.keys(B.outlets).length} outlets →</div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:4px"><span style="color:#94A3B8;font-weight:600">Budget used</span><span style="color:#64748B;font-weight:700">${consum.toFixed(0)}%</span></div>
+      <div style="width:100%;height:4px;background:#F1EFE6;border-radius:2px;overflow:hidden;margin-bottom:10px"><div style="height:100%;width:${Math.min(100,consum)}%;background:${cpcBarColor(consum)}"></div></div>
+      <div style="font-size:10px;color:${bClr};font-weight:700">View ${Object.keys(B.outlets).length} outlets →</div>
     </div>`;
   }).filter(Boolean).join('');
   // pooling note
