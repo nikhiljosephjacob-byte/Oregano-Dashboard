@@ -13,10 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-145";
+const BUILD_VERSION="2026-07-21-146";
 const BUILD_NOTES=[
-  "\ud83d\udd0d Ads Performance sizing pass, per feedback that v144's redesign was too small for the available space \u2014 only 4-5 cards per row, but small logos/gauges/text left most of the card as empty whitespace. Scaled up meaningfully rather than nudging: home-page cards get a 44px logo (was 28px) and a 96px gauge with a thicker ring (was 64px, thin), brand-level cards get a 34px logo (was 22px) and an 82px gauge. All text sizes scaled up to match \u2014 names, ROAS-in-gauge, Invested/Consumed/Budget figures. Radial gauge helper now takes an optional stroke-width parameter so the ring can be proportionally thicker at larger sizes without looking spindly."
+  "\ud83d\udd0e Hover-to-see-exact-value feature, dashboard-wide. Any AED figure abbreviated with K or M now shows the precise number on hover (native browser tooltip, no extra UI). Investigated the scope carefully before touching anything: fmtAED is the SOLE K/M-abbreviating function in the whole codebase (confirmed \u2014 order counts and other non-AED numbers are never abbreviated, always shown in full via toLocaleString), used 150 times. Found exactly ONE risky usage \u2014 a spot where fmtAED's output already sits inside an HTML title=\"\" attribute (line ~3857) \u2014 wrapping that one in another HTML tag would have produced malformed nested markup, so it was deliberately left untouched. Every other call site was confirmed to land in plain body/table-cell text, safe to upgrade. New fmtAEDTip() only adds the tooltip when a number is ACTUALLY abbreviated (matching fmtAED's own >=1000 threshold exactly) \u2014 values already shown in full don't get a redundant hover state.",
+  "fmtAEDExact() already existed in the codebase for the exact-value computation \u2014 reused it directly rather than reimplementing."
 ];
+
 
 
 
@@ -351,6 +353,14 @@ function subMonth(k){
 function fmtDisp(k){if(!k)return"";return new Date(k+"T12:00:00").toLocaleDateString("en-AE",{weekday:"short",day:"numeric",month:"short",year:"numeric"});}
 function fmtShort(k){if(!k)return"";return new Date(k+"T12:00:00").toLocaleDateString("en-AE",{day:"numeric",month:"short"});}
 function fmtAED(n){if(n>=1e6)return`AED ${(n/1e6).toFixed(2)}M`;if(n>=1000)return`AED ${(n/1000).toFixed(1)}K`;return`AED ${Math.round(n)}`;}
+// v146: same as fmtAED, but wraps K/M-abbreviated values in a span with the exact figure as a
+// native hover tooltip. Only wraps when the value is ACTUALLY abbreviated (matches fmtAED's own
+// >=1000 threshold) — a value already shown in full (e.g. "AED 73.9") gets no tooltip, since
+// there's nothing more precise to reveal. NOT a safe drop-in replacement for every fmtAED call —
+// several existing call sites use fmtAED's output inside an HTML attribute (e.g. title="..."),
+// where wrapping in another tag would produce malformed nested markup. Use fmtAEDTip only in
+// plain body/table-cell text contexts.
+function fmtAEDTip(n){const s=fmtAED(n);if(!(n>=1000))return s;return`<span title="${fmtAEDExact(n)}" style="cursor:help;border-bottom:1px dotted currentColor">${s}</span>`;}
 // Full-number AED (no K/M abbreviation) for tables where exact figures matter.
 function fmtAEDExact(n){return`AED ${Math.round(n||0).toLocaleString()}`;}
 function pctOf(a,b){if(!b||b===0)return null;return((a-b)/b)*100;}
@@ -361,7 +371,7 @@ function fmtChgCell(cur,prev,isMoney){
   const pct=pctOf(cur,prev);
   const diff=cur-(prev||0);
   const clr=pctClr(pct);
-  const absFmt=isMoney?fmtAED(Math.abs(diff)):Math.abs(Math.round(diff)).toLocaleString();
+  const absFmt=isMoney?fmtAEDTip(Math.abs(diff)):Math.abs(Math.round(diff)).toLocaleString();
   if(pct==null||isNaN(pct))return'<span style="color:#94a3b8">—</span>';
   const sign=diff>=0?'+':'−';
   return`<span style="color:${clr};font-weight:700">${fmtPct(pct)}</span><br><span style="font-size:11px;color:#94a3b8;font-weight:500">${sign}${absFmt}</span>`;
@@ -371,7 +381,7 @@ function fmtChgCellInv(cur,prev,isMoney){
   const pct=pctOf(cur,prev);
   const diff=cur-(prev||0);
   const clr=pctClr(pct!=null?-pct:null);
-  const absFmt=isMoney?fmtAED(Math.abs(diff)):Math.abs(Math.round(diff)).toLocaleString();
+  const absFmt=isMoney?fmtAEDTip(Math.abs(diff)):Math.abs(Math.round(diff)).toLocaleString();
   if(pct==null||isNaN(pct))return'<span style="color:#94a3b8">—</span>';
   const sign=diff>=0?'+':'−';
   return`<span style="color:${clr};font-weight:700">${fmtPct(pct)}</span><br><span style="font-size:11px;color:#94a3b8;font-weight:500">${sign}${absFmt}</span>`;
@@ -3594,7 +3604,7 @@ function renderOverview(){
   const cmp=getCompRange();const prevDays=spanDays(cmp.s,cmp.e);
   // Per-day average data for Orders and Net Sales cards (only meaningful when range > 1 day)
   const ordPerDay=curDays>1?{cur:Math.round(ls.orders/curDays).toLocaleString(),prev:Math.round(ps.orders/prevDays).toLocaleString(),prevLabel:compShort.replace(/^vs /,"vs "),chg:pctOf(ls.orders/curDays,ps.orders/prevDays)}:null;
-  const salesPerDay=curDays>1?{cur:fmtAED(ls.sales/curDays),prev:fmtAED(ps.sales/prevDays),prevLabel:compShort.replace(/^vs /,"vs "),chg:pctOf(ls.sales/curDays,ps.sales/prevDays)}:null;
+  const salesPerDay=curDays>1?{cur:fmtAEDTip(ls.sales/curDays),prev:fmtAEDTip(ps.sales/prevDays),prevLabel:compShort.replace(/^vs /,"vs "),chg:pctOf(ls.sales/curDays,ps.sales/prevDays)}:null;
   const aggRows=AGGS.map(ag=>{const c=sumR(ld.filter(r=>r.aggregator===ag));const p=sumR(pd.filter(r=>r.aggregator===ag));return{ag,clr:AC[ag],...c,aov:c.orders>0?c.sales/c.orders:0,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};}).filter(a=>a.orders>0);
   const brandRows=BR.map(({n,c})=>{const cv=sumR(ld.filter(r=>r.brand===n));const pv=sumR(pd.filter(r=>r.brand===n));return{n,c,cv,oc:pctOf(cv.orders,pv.orders),sc:pctOf(cv.sales,pv.sales)};}).filter(b=>b.cv.orders>0);
   const cm=mkMap(ld,r=>`${r.brand}|${r.branch}|${r.aggregator}`),pm=mkMap(pd,r=>`${r.brand}|${r.branch}|${r.aggregator}`);
@@ -3627,7 +3637,7 @@ function renderOverview(){
         :"<div style='color:#22C55E;font-size:12px;padding:8px 4px'>All outlets performing — no drops or zero-order branches</div>";
     }
     if(kind==='winners'){
-      return arr.map(w=>`<div class="vrow"><div style="width:3px;height:34px;border-radius:2px;background:${BMAP[w.brand]?.c||"#888"};flex-shrink:0"></div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.brand} · ${w.branch}</div><div style="font-size:11px;color:#475569;font-weight:600">${w.aggregator} · ${w.orders} orders · ${fmtAED(w.sales)}</div></div><div style="color:#22C55E;font-size:12px;font-weight:700;flex-shrink:0">${fmtPct(w.oc)}</div></div>`).join("");
+      return arr.map(w=>`<div class="vrow"><div style="width:3px;height:34px;border-radius:2px;background:${BMAP[w.brand]?.c||"#888"};flex-shrink:0"></div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.brand} · ${w.branch}</div><div style="font-size:11px;color:#475569;font-weight:600">${w.aggregator} · ${w.orders} orders · ${fmtAEDTip(w.sales)}</div></div><div style="color:#22C55E;font-size:12px;font-weight:700;flex-shrink:0">${fmtPct(w.oc)}</div></div>`).join("");
     }
     return arr.map(w=>`<div class="vrow"><div style="width:3px;height:34px;border-radius:2px;background:${w.oc===-100?"#64748b":"#EF4444"};flex-shrink:0"></div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.brand} · ${w.branch}</div><div style="font-size:11px;color:#475569;font-weight:600">${w.aggregator} · ${w.orders===0?"ZERO orders":w.orders+" orders"}</div></div><div style="color:#EF4444;font-size:12px;font-weight:700;flex-shrink:0">${w.oc===-100?"ZERO":fmtPct(w.oc)}</div></div>`).join("");
   };
@@ -3664,8 +3674,8 @@ function renderOverview(){
     const pv=BR.find(x=>x.n===b.n)?sumR(pd.filter(r=>r.brand===b.n)):{sales:0,orders:0,disc:0};
     return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.n,22)}<strong style="color:${b.c}">${b.n}</strong></span>`,
-      b.cv.orders.toLocaleString(),fmtAED(b.cv.sales),b.cv.orders>0?`AED ${aov.toFixed(1)}`:'—',
-      disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAED(disc)}</span>`:'—',
+      b.cv.orders.toLocaleString(),fmtAEDTip(b.cv.sales),b.cv.orders>0?`AED ${aov.toFixed(1)}`:'—',
+      disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
       disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
       fmtChgCell(b.cv.orders,pv.orders,false),
       fmtChgCell(b.cv.sales,pv.sales,true)
@@ -3678,8 +3688,8 @@ function renderOverview(){
     const pv=sumR(pd.filter(r=>r.aggregator===a.ag));
     return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(a.ag,22)}<strong style="color:${a.clr}">${a.ag}</strong></span>`,
-      a.orders.toLocaleString(),fmtAED(a.sales),a.orders>0?`AED ${(a.sales/a.orders).toFixed(1)}`:'—',
-      disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAED(disc)}</span>`:'—',
+      a.orders.toLocaleString(),fmtAEDTip(a.sales),a.orders>0?`AED ${(a.sales/a.orders).toFixed(1)}`:'—',
+      disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
       disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
       fmtChgCell(a.orders,pv.orders,false),
       fmtChgCell(a.sales,pv.sales,true)
@@ -3688,7 +3698,7 @@ function renderOverview(){
   const heads=["","Orders","Net Sales","AOV","Discount Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
 
   document.getElementById("page-overview").innerHTML=makeFilterBar()+
-    `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders),null,ordPerDay)}${kpiCard("Total Net Sales",fmtAED(ls.sales),`${compShort}: ${fmtAED(ps.sales)}`,pctOf(ls.sales,ps.sales),null,salesPerDay)}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${(()=>{
+    `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders),null,ordPerDay)}${kpiCard("Total Net Sales",fmtAEDTip(ls.sales),`${compShort}: ${fmtAEDTip(ps.sales)}`,pctOf(ls.sales,ps.sales),null,salesPerDay)}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${(()=>{
       // Discount Burn KPI (v072) — merchant discount from allData for the filtered period.
       // Uses same filters (brand/platform/branch/date) as the other KPIs above via `ld`/`ps`.
       // Depth-of-gross % helps benchmark burn vs gross sales at a glance.
@@ -3696,7 +3706,7 @@ function renderOverview(){
       const depth=gross>0?((ls.disc||0)/gross*100):0;
       const priorGross=ps.sales+(ps.disc||0);
       const priorDepth=priorGross>0?((ps.disc||0)/priorGross*100):0;
-      return kpiCard("Discount Burn",fmtAED(ls.disc||0),`${depth.toFixed(1)}% of gross<br>${compShort}: ${fmtAED(ps.disc||0)}`,pctOf(ls.disc||0,ps.disc||0),null,null,true);
+      return kpiCard("Discount Burn",fmtAEDTip(ls.disc||0),`${depth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(ls.disc||0,ps.disc||0),null,null,true);
     })()}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
     <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:220px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="card" style="padding:14px">
@@ -3741,8 +3751,8 @@ function renderBrands(){
     return{cells:[
     `<strong>${r.branch}</strong>`,
     `<span style="color:${AC[r.aggregator]||"#888"};font-weight:700">${r.aggregator}</span>`,
-    r.orders,fmtAED(r.sales),r.orders>0?`AED ${r.aov.toFixed(1)}`:"—",
-    disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAED(disc)}</span>`:'—',
+    r.orders,fmtAEDTip(r.sales),r.orders>0?`AED ${r.aov.toFixed(1)}`:"—",
+    disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
     disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
     fmtChgCell(r.orders,pm2?.orders,false),
     fmtChgCell(r.sales,pm2?.sales,true)
@@ -3752,7 +3762,7 @@ function renderBrands(){
   const brandDisc=ls.disc||0;const brandGross=ls.sales+brandDisc;const brandDepth=brandGross>0?(brandDisc/brandGross*100):0;
   document.getElementById("page-brands").innerHTML=makeFilterBar({hideBrand:true})+
     `<div class="brand-sel-row" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
-    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAED(ls.sales),compShort+": "+fmtAED(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAED(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAED(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="g2"><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — Net Sales Trend</div><div style="position:relative;height:180px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748B;font-weight:600;text-transform:none;letter-spacing:0;font-size:10px">sales bars · order count on top</span></div><div style="position:relative;height:180px"><canvas id="ch-b-agg"></canvas></div></div></div>
     <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>`;
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.brand===selBrand&&(!f.platforms.size||f.platforms.has(r.aggregator))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-b-trend",trend30(mf,f.start,f.end),b?.c||"#888");
@@ -3783,8 +3793,8 @@ function renderOutlets(){
       const pv=sumR(outletPrev.filter(r=>r.brand===b.brand));
       return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.brand,22)}<strong style="color:${BMAP[b.brand]?.c||'#888'}">${b.brand}</strong></span>`,
-      b.orders.toLocaleString(),fmtAED(b.sales),b.orders>0?`AED ${b.aov.toFixed(1)}`:"—",
-      disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAED(disc)}</span>`:'—',
+      b.orders.toLocaleString(),fmtAEDTip(b.sales),b.orders>0?`AED ${b.aov.toFixed(1)}`:"—",
+      disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
       disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
       fmtChgCell(b.orders,pv.orders,false),
       fmtChgCell(b.sales,pv.sales,true)
@@ -3797,8 +3807,8 @@ function renderOutlets(){
       return{cells:[
       `<span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span>`,
       `<span style="color:${AC[r.aggregator]||'#888'};font-weight:700;font-size:11px">${r.aggregator}</span>`,
-      r.orders,fmtAED(r.sales),r.orders>0?`AED ${r.aov.toFixed(1)}`:"—",
-      disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAED(disc)}</span>`:'—',
+      r.orders,fmtAEDTip(r.sales),r.orders>0?`AED ${r.aov.toFixed(1)}`:"—",
+      disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
       disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
       fmtChgCell(r.orders,pv?.orders,false),
       fmtChgCell(r.sales,pv?.sales,true)
@@ -3814,9 +3824,9 @@ function renderOutlets(){
       </div>
       <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">
         ${kpiCard("Orders",tot.orders.toLocaleString(),compShort+": "+prev.orders,pctOf(tot.orders,prev.orders))}
-        ${kpiCard("Net Sales",fmtAED(tot.sales),compShort+": "+fmtAED(prev.sales),pctOf(tot.sales,prev.sales))}
+        ${kpiCard("Net Sales",fmtAEDTip(tot.sales),compShort+": "+fmtAEDTip(prev.sales),pctOf(tot.sales,prev.sales))}
         ${kpiCard("AOV",`AED ${tot.orders>0?(tot.sales/tot.orders).toFixed(1):0}`,"per order",null)}
-        ${kpiCard("Discount Burn",fmtAED(outDisc),`${outDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAED(prev.disc||0)}`,pctOf(outDisc,prev.disc||0),null,null,true)}
+        ${kpiCard("Discount Burn",fmtAEDTip(outDisc),`${outDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(prev.disc||0)}`,pctOf(outDisc,prev.disc||0),null,null,true)}
         ${kpiCard("Brands",brandsHere.length,brandsHere.join(", "),null)}
       </div>
       <div class="card"><div class="ct">${selOutlet} — Brand Performance (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("ou-brands",brHeads,brTRows,2)}</div>
@@ -3850,9 +3860,9 @@ function renderOutlets(){
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px 0;border-top:1px solid #F1F5F9;border-bottom:1px solid #F1F5F9;margin-bottom:10px">
           <div><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:3px">Orders</div><div style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:#0F172A;line-height:1">${t.orders.toLocaleString()}</div></div>
-          <div style="text-align:right"><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:3px">Net Sales</div><div style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:#0F172A;line-height:1">${fmtAED(t.sales)}</div></div>
+          <div style="text-align:right"><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:3px">Net Sales</div><div style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:#0F172A;line-height:1">${fmtAEDTip(t.sales)}</div></div>
         </div>
-        ${t.disc>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #F1F5F9"><div style="font-size:10px;color:#EF4444;font-weight:700">💸 Disc. Burn: ${fmtAED(t.disc)}</div><div style="font-size:10px;color:${t.depth>=20?'#EF4444':t.depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${t.depth.toFixed(1)}% depth</div></div>`:''}
+        ${t.disc>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #F1F5F9"><div style="font-size:10px;color:#EF4444;font-weight:700">💸 Disc. Burn: ${fmtAEDTip(t.disc)}</div><div style="font-size:10px;color:${t.depth>=20?'#EF4444':t.depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${t.depth.toFixed(1)}% depth</div></div>`:''}
         <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center">
           ${t.brands.map(b=>`<span title="${b}: ${fmtAED(t.brandGmv[b]||0)}" style="display:inline-flex;align-items:center;gap:4px;background:${BMAP[b]?.c||'#888'}18;color:${BMAP[b]?.c||'#888'};font-size:10px;font-weight:800;padding:3px 8px;border-radius:6px;border:1px solid ${BMAP[b]?.c||'#888'}33">${logoImg(b,16)}${b}</span>`).join('')}
         </div>
@@ -3931,8 +3941,8 @@ function renderPlatforms(){
     const pv=sumR(pd.filter(r=>r.brand===b.n));
     return{cells:[
     `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.n,22)}<strong style="color:${b.c}">${b.n}</strong></span>`,
-    b.cv.orders,fmtAED(b.cv.sales),b.cv.orders>0?`AED ${(b.cv.sales/b.cv.orders).toFixed(1)}`:"—",
-    disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAED(disc)}</span>`:'—',
+    b.cv.orders,fmtAEDTip(b.cv.sales),b.cv.orders>0?`AED ${(b.cv.sales/b.cv.orders).toFixed(1)}`:"—",
+    disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
     disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
     fmtChgCell(b.cv.orders,pv.orders,false),
     fmtChgCell(b.cv.sales,pv.sales,true)
@@ -4364,11 +4374,11 @@ function buildCPCModel(onProgress){
         // Top up: active, good verdict, exhausting soon
         if((r.status==="Active"||r.status==="Critical")&&(r.verdict==="SCALE"||r.verdict==="INVEST")&&r.daysUntilExhausted!=null&&r.daysUntilExhausted<=3){
           const sug=cpcTopUpSuggestion(r);
-          acts.push({type:"topup",priority:1,r,msg:`Exhausting in ${r.daysUntilExhausted}d · ROAS ${r.roi?.toFixed(1)}× — top up ${sug?fmtAED(sug.suggested):''}`});
+          acts.push({type:"topup",priority:1,r,msg:`Exhausting in ${r.daysUntilExhausted}d · ROAS ${r.roi?.toFixed(1)}× — top up ${sug?fmtAEDTip(sug.suggested):''}`});
         }
         // Withdraw: below BE still spending (must be currently active)
         if((r.status==="Active"||r.status==="Critical")&&r.verdict==="WITHDRAW"&&r.leftover>50){
-          acts.push({type:"withdraw",priority:2,r,msg:`ROAS ${r.roi?.toFixed(2)}× below BE ${r.be.toFixed(2)}× — shift ${fmtAED(Math.round(r.leftover*0.8))}`});
+          acts.push({type:"withdraw",priority:2,r,msg:`ROAS ${r.roi?.toFixed(2)}× below BE ${r.be.toFixed(2)}× — shift ${fmtAEDTip(Math.round(r.leftover*0.8))}`});
         }
         // Refill: big post-exhaustion drop — ONLY if the CPC's window is in the CURRENT calendar
         // month (so late-month campaigns don't bleed into next month's view) AND there's no active
@@ -4563,7 +4573,7 @@ function cpcRenderAggLevel(){
     // Brand-Location cell didn't resolve to a real brand. Surfaced so the gap between this card's
     // total and the sum of brand cards inside it is explained, not silently missing.
     const unmappedThisMonth=cpcData.filter(r=>r.aggregator===A.name&&r.month===targetMonth&&r.brandUnmapped).reduce((s,r)=>s+(r.budgetSpent||0),0);
-    const unmappedNote=unmappedThisMonth>0?`<div style="margin-top:8px;font-size:9.5px;color:#FBBF24" title="These rows' Brand-Location cell didn't match a known brand — fix the sheet format to attribute this spend correctly">⚠ ${fmtAED(unmappedThisMonth)} unattributed (check History tab)</div>`:'';
+    const unmappedNote=unmappedThisMonth>0?`<div style="margin-top:8px;font-size:9.5px;color:#FBBF24" title="These rows' Brand-Location cell didn't match a known brand — fix the sheet format to attribute this spend correctly">⚠ ${fmtAEDTip(unmappedThisMonth)} unattributed (check History tab)</div>`:'';
     const statusLine=hasData
       ?`${monthLbl}${isViewingCurrent?' (current month)':''}`
       :`⚠ No campaigns in ${monthLbl}`;
@@ -4587,14 +4597,14 @@ function cpcRenderAggLevel(){
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:12px">
-        <div><div style="font-size:11px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Invested</div><div style="font-size:22px;font-weight:800;color:#0F172A">${fmtAED(inv)}</div></div>
-        <div><div style="font-size:11px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Consumed</div><div style="font-size:22px;font-weight:800;color:#0F172A">${fmtAED(spent)}</div></div>
+        <div><div style="font-size:11px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Invested</div><div style="font-size:22px;font-weight:800;color:#0F172A">${fmtAEDTip(inv)}</div></div>
+        <div><div style="font-size:11px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Consumed</div><div style="font-size:22px;font-weight:800;color:#0F172A">${fmtAEDTip(spent)}</div></div>
       </div>
       <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px"><span style="color:#94A3B8;font-weight:600">Budget used</span><span style="color:#64748B;font-weight:700">${consum.toFixed(0)}%</span></div>
       <div style="width:100%;height:7px;background:#F1EFE6;border-radius:4px;overflow:hidden;margin-bottom:14px"><div style="height:100%;width:${Math.min(100,consum)}%;background:${cpcBarColor(consum)}"></div></div>
       ${unmappedNote}
       <div style="font-size:13px;color:${clr};font-weight:700">View ${Object.keys(A.brands).length} brands →</div>
-      ${isViewingCurrent?(()=>{const ct=cpcModel.contractual&&cpcModel.contractual[A.name];if(!ct)return '';const gap=ct.expected-ct.investedSoFar;const metClr=ct.investedSoFar>=ct.expected?'#16A34A':'#D97706';return `<div style="margin-top:14px;padding-top:14px;border-top:1px dashed #EDE7D9"><div style="font-size:11px;color:#94A3B8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Contractual (${(ct.pct*100).toFixed(0)}% of ${cpcMonthLabel(ct.priorMonth)} group sales)</div><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:16px;font-weight:800;color:#0F172A">${fmtAED(ct.investedSoFar)}<span style="font-size:12px;color:#94A3B8;font-weight:600"> / ${fmtAED(ct.expected)}</span></span><span style="font-size:13px;font-weight:800;color:${metClr}">${ct.investedSoFar>=ct.expected?'✓ met':fmtAED(gap)+' short'}</span></div></div>`;})():''}
+      ${isViewingCurrent?(()=>{const ct=cpcModel.contractual&&cpcModel.contractual[A.name];if(!ct)return '';const gap=ct.expected-ct.investedSoFar;const metClr=ct.investedSoFar>=ct.expected?'#16A34A':'#D97706';return `<div style="margin-top:14px;padding-top:14px;border-top:1px dashed #EDE7D9"><div style="font-size:11px;color:#94A3B8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Contractual (${(ct.pct*100).toFixed(0)}% of ${cpcMonthLabel(ct.priorMonth)} group sales)</div><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:16px;font-weight:800;color:#0F172A">${fmtAEDTip(ct.investedSoFar)}<span style="font-size:12px;color:#94A3B8;font-weight:600"> / ${fmtAEDTip(ct.expected)}</span></span><span style="font-size:13px;font-weight:800;color:${metClr}">${ct.investedSoFar>=ct.expected?'✓ met':fmtAEDTip(gap)+' short'}</span></div></div>`;})():''}
     </div>`;
   }).join('');
   return quickViewBar+cpcActionStrip()+`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${cards}</div>`;
@@ -4672,8 +4682,8 @@ function cpcRenderBrandLevel(ag){
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px">
-        <div><div style="font-size:10px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Budget</div><div style="font-size:18px;font-weight:800;color:#0F172A">${fmtAED(inv)}</div></div>
-        <div><div style="font-size:10px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Consumed</div><div style="font-size:18px;font-weight:800;color:#0F172A">${fmtAED(spent)}</div></div>
+        <div><div style="font-size:10px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Budget</div><div style="font-size:18px;font-weight:800;color:#0F172A">${fmtAEDTip(inv)}</div></div>
+        <div><div style="font-size:10px;color:#94A3B8;text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Consumed</div><div style="font-size:18px;font-weight:800;color:#0F172A">${fmtAEDTip(spent)}</div></div>
       </div>
       <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:5px"><span style="color:#94A3B8;font-weight:600">Budget used</span><span style="color:#64748B;font-weight:700">${consum.toFixed(0)}%</span></div>
       <div style="width:100%;height:6px;background:#F1EFE6;border-radius:3px;overflow:hidden;margin-bottom:12px"><div style="height:100%;width:${Math.min(100,consum)}%;background:${cpcBarColor(consum)}"></div></div>
@@ -5124,12 +5134,12 @@ function cpcObligationsCard(priorMonth,priorLabel,nextLabel){
     const status=ag==="Talabat"&&!TALABAT_DEAL_SIGNED
       ?`<span style="color:#fbbf24;font-size:10px;font-weight:700">⚠ Deal pending — conditional</span>`
       :`<span style="color:#22C55E;font-size:10px;font-weight:700">✓ Active</span>`;
-    return`<tr><td style="padding:8px 6px;color:${AC[ag]||'#fff'};font-weight:700">${ag}</td><td style="padding:8px 6px;text-align:right;color:#475569">${fmtAED(gmv)}</td><td style="padding:8px 6px;text-align:center;color:#94a3b8;font-size:11px">${pct}</td><td style="padding:8px 6px;text-align:right;color:#f59e0b;font-weight:800">${fmtAED(mand)}</td><td style="padding:8px 6px;color:#94a3b8;font-size:11px">${type}</td><td style="padding:8px 6px">${status}</td></tr>`;
+    return`<tr><td style="padding:8px 6px;color:${AC[ag]||'#fff'};font-weight:700">${ag}</td><td style="padding:8px 6px;text-align:right;color:#475569">${fmtAEDTip(gmv)}</td><td style="padding:8px 6px;text-align:center;color:#94a3b8;font-size:11px">${pct}</td><td style="padding:8px 6px;text-align:right;color:#f59e0b;font-weight:800">${fmtAEDTip(mand)}</td><td style="padding:8px 6px;color:#94a3b8;font-size:11px">${type}</td><td style="padding:8px 6px">${status}</td></tr>`;
   }).join("");
   const totalMand=aggs.reduce((s,ag)=>s+cpcMandatoryBudget(ag,cpcGroupGMV(priorMonth,ag)),0);
   return`<div class="card" style="border:1px solid rgba(245,158,11,.3);background:linear-gradient(135deg,rgba(245,158,11,.04),rgba(255,255,255,.5))">
     <div style="margin-bottom:10px"><div style="font-size:13px;font-weight:800;color:#fbbf24;letter-spacing:.3px">${nextLabel.toUpperCase()} INVESTMENT PLAN</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">based on ${priorLabel} data (latest available) · always available · recalculates as new data arrives</div></div>
-    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:1px solid #E2E8F0;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px;text-align:left">Aggregator</th><th style="padding:6px;text-align:right">Prior GMV</th><th style="padding:6px;text-align:center">% Oblig</th><th style="padding:6px;text-align:right">Mandatory Budget</th><th style="padding:6px;text-align:left">Budget Type</th><th style="padding:6px;text-align:left">Status</th></tr></thead><tbody>${rows}</tbody><tfoot><tr style="border-top:1px solid #E2E8F0"><td colspan="3" style="padding:8px 6px;text-align:right;color:#94a3b8;font-size:11px;font-weight:700">GROUP TOTAL</td><td style="padding:8px 6px;text-align:right;color:#22C55E;font-weight:800;font-size:14px">${fmtAED(totalMand)}</td><td colspan="2"></td></tr></tfoot></table></div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:1px solid #E2E8F0;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px;text-align:left">Aggregator</th><th style="padding:6px;text-align:right">Prior GMV</th><th style="padding:6px;text-align:center">% Oblig</th><th style="padding:6px;text-align:right">Mandatory Budget</th><th style="padding:6px;text-align:left">Budget Type</th><th style="padding:6px;text-align:left">Status</th></tr></thead><tbody>${rows}</tbody><tfoot><tr style="border-top:1px solid #E2E8F0"><td colspan="3" style="padding:8px 6px;text-align:right;color:#94a3b8;font-size:11px;font-weight:700">GROUP TOTAL</td><td style="padding:8px 6px;text-align:right;color:#22C55E;font-weight:800;font-size:14px">${fmtAEDTip(totalMand)}</td><td colspan="2"></td></tr></tfoot></table></div>
     <div style="margin-top:10px;padding:9px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px;font-size:11px;color:#475569;line-height:1.55">💡 <strong>Group-level obligations.</strong> The 2%/4% applies to total group GMV per aggregator — not per brand. Underperforming brands' shares get redirected to higher-ROAS combos in the per-outlet tables below.</div>
   </div>`;
 }
@@ -5182,15 +5192,15 @@ function cpcDeliverooAllocCard(priorMonth){
         r.rec=r.baseRec+r.surplusAlloc;
       });
       const eligibleCount=eligible.length;
-      reconciliationNote=`Base verdict-driven recommendations sum to <strong style="color:#475569">${fmtAED(baseTotal)}</strong>. Mandate is <strong style="color:#fbbf24">${fmtAED(mandate)}</strong>. Distributing the <strong style="color:#22C55E">${fmtAED(gap)}</strong> gap across <strong>${eligibleCount}</strong> top-performing outlet${eligibleCount===1?"":"s"} (weighted by ROAS upside above break-even, Smokeys & PAUSE excluded).`;
+      reconciliationNote=`Base verdict-driven recommendations sum to <strong style="color:#475569">${fmtAEDTip(baseTotal)}</strong>. Mandate is <strong style="color:#fbbf24">${fmtAEDTip(mandate)}</strong>. Distributing the <strong style="color:#22C55E">${fmtAEDTip(gap)}</strong> gap across <strong>${eligibleCount}</strong> top-performing outlet${eligibleCount===1?"":"s"} (weighted by ROAS upside above break-even, Smokeys & PAUSE excluded).`;
       surplusBanner=`<div style="background:rgba(34,197,94,.06);border-left:3px solid #22C55E;border-radius:4px;padding:7px 11px;margin-bottom:10px;font-size:11px;color:#475569">💡 <strong style="color:#22C55E">Mandate reconciliation:</strong> ${reconciliationNote}</div>`;
     }else{
       // No eligible outlets (everything is PAUSE or untested with no ROAS). Flag this — can't
       // hit the mandate by just topping up; needs strategic decision.
-      surplusBanner=`<div style="background:rgba(239,68,68,.06);border-left:3px solid #EF4444;border-radius:4px;padding:7px 11px;margin-bottom:10px;font-size:11px;color:#475569">⚠️ <strong style="color:#EF4444">Mandate gap:</strong> Base recommendations sum to ${fmtAED(baseTotal)} but mandate is ${fmtAED(mandate)} (gap ${fmtAED(mandate-baseTotal)}). No SCALE/INVEST/MONITOR outlets with positive ROAS upside found — review whether to pause the mandate, run brand-level promos, or reallocate to areas not yet tested.</div>`;
+      surplusBanner=`<div style="background:rgba(239,68,68,.06);border-left:3px solid #EF4444;border-radius:4px;padding:7px 11px;margin-bottom:10px;font-size:11px;color:#475569">⚠️ <strong style="color:#EF4444">Mandate gap:</strong> Base recommendations sum to ${fmtAEDTip(baseTotal)} but mandate is ${fmtAEDTip(mandate)} (gap ${fmtAEDTip(mandate-baseTotal)}). No SCALE/INVEST/MONITOR outlets with positive ROAS upside found — review whether to pause the mandate, run brand-level promos, or reallocate to areas not yet tested.</div>`;
     }
   }else if(mandate>0&&baseTotal>mandate*1.05){
-    surplusBanner=`<div style="background:rgba(251,191,36,.06);border-left:3px solid #FBBF24;border-radius:4px;padding:7px 11px;margin-bottom:10px;font-size:11px;color:#475569">⚠️ <strong style="color:#FBBF24">Over mandate:</strong> Base recommendations sum to ${fmtAED(baseTotal)} which exceeds the 2% mandate (${fmtAED(mandate)}) by ${fmtAED(baseTotal-mandate)}. Trim from MONITOR/INVEST first (preserve SCALE) — manual review recommended.</div>`;
+    surplusBanner=`<div style="background:rgba(251,191,36,.06);border-left:3px solid #FBBF24;border-radius:4px;padding:7px 11px;margin-bottom:10px;font-size:11px;color:#475569">⚠️ <strong style="color:#FBBF24">Over mandate:</strong> Base recommendations sum to ${fmtAEDTip(baseTotal)} which exceeds the 2% mandate (${fmtAEDTip(mandate)}) by ${fmtAEDTip(baseTotal-mandate)}. Trim from MONITOR/INVEST first (preserve SCALE) — manual review recommended.</div>`;
   }
 
   const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",PAUSE:"#EF4444",UNTESTED:"#94a3b8"};
@@ -5199,12 +5209,12 @@ function cpcDeliverooAllocCard(priorMonth){
     const beVal=cpcPlanBE(ag,r.brand);
     const roasTxt=r.latestROAS!=null?`<strong style="color:${r.latestROAS>=beVal?'#22C55E':'#EF4444'}">${r.latestROAS.toFixed(2)}×</strong> <span style="color:#64748b;font-size:10px">(BE ${beVal.toFixed(2)})</span>`:`<span style="color:#64748b">no data</span>`;
     const delta=r.rec-Math.round(r.priorSpend);
-    const deltaTxt=delta>0?`<span style="color:#22C55E">+${fmtAED(delta)}</span>`:delta<0?`<span style="color:#EF4444">${fmtAED(delta)}</span>`:`<span style="color:#64748b">—</span>`;
+    const deltaTxt=delta>0?`<span style="color:#22C55E">+${fmtAEDTip(delta)}</span>`:delta<0?`<span style="color:#EF4444">${fmtAEDTip(delta)}</span>`:`<span style="color:#64748b">—</span>`;
     // Show surplus-redistribution badge next to the recommended budget so it's transparent
     // where each AED came from
     const recCell=r.surplusAlloc>0
-      ?`<div style="color:#fbbf24;font-weight:800">${fmtAED(r.rec)}</div><div style="font-size:9.5px;color:#22C55E;margin-top:1px">base ${fmtAED(r.baseRec)} + <strong>${fmtAED(r.surplusAlloc)}</strong> redistributed</div>`
-      :`<span style="color:#fbbf24;font-weight:800">${fmtAED(r.rec)}</span>`;
+      ?`<div style="color:#fbbf24;font-weight:800">${fmtAEDTip(r.rec)}</div><div style="font-size:9.5px;color:#22C55E;margin-top:1px">base ${fmtAEDTip(r.baseRec)} + <strong>${fmtAEDTip(r.surplusAlloc)}</strong> redistributed</div>`
+      :`<span style="color:#fbbf24;font-weight:800">${fmtAEDTip(r.rec)}</span>`;
     let bidCol=`<span style="color:#64748b;font-size:10px" title="Need at least 2 months of CPC history with click data to suggest a bid">insufficient data</span>`;
     if(r.bidOpt){
       if(r.bidOpt.curBid&&r.bidOpt.direction){
@@ -5215,8 +5225,8 @@ function cpcDeliverooAllocCard(priorMonth){
         bidCol=`<span style="color:#94a3b8;font-weight:700;font-size:11px" title="Best historical bid (no current bid to compare)">AED ${r.bidOpt.suggestedBid.toFixed(2)}</span><br/><span style="color:#64748b;font-size:9.5px">target (best mo ${r.bidOpt.bestMonth||"?"})</span>`;
       }
     }
-    const histTxt=r.histTotal>0?`<span style="color:#94a3b8;font-size:10.5px">${fmtAED(r.histTotal)}</span>`:`<span style="color:#64748b;font-size:10px">none</span>`;
-    return`<tr style="background:${verdBg[r.verdict]};border-bottom:1px solid #E2E8F0"><td style="padding:7px 6px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}</td><td style="padding:7px 6px;color:#0F172A;font-size:11.5px">${r.outlet}</td><td style="padding:7px 6px;font-size:11px">${roasTxt}</td><td style="padding:7px 6px"><span style="background:${verdClr[r.verdict]}22;color:${verdClr[r.verdict]};padding:2px 7px;border-radius:4px;font-size:10px;font-weight:800;letter-spacing:.3px">${r.verdict}</span></td><td style="padding:7px 6px;text-align:right;color:#94a3b8;font-size:11px">${fmtAED(r.priorSpend)}</td><td style="padding:7px 6px;text-align:right">${recCell}</td><td style="padding:7px 6px;text-align:right;font-size:11px">${deltaTxt}</td><td style="padding:7px 6px;text-align:right">${bidCol}</td><td style="padding:7px 6px;text-align:right">${histTxt}</td></tr>`;
+    const histTxt=r.histTotal>0?`<span style="color:#94a3b8;font-size:10.5px">${fmtAEDTip(r.histTotal)}</span>`:`<span style="color:#64748b;font-size:10px">none</span>`;
+    return`<tr style="background:${verdBg[r.verdict]};border-bottom:1px solid #E2E8F0"><td style="padding:7px 6px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}</td><td style="padding:7px 6px;color:#0F172A;font-size:11.5px">${r.outlet}</td><td style="padding:7px 6px;font-size:11px">${roasTxt}</td><td style="padding:7px 6px"><span style="background:${verdClr[r.verdict]}22;color:${verdClr[r.verdict]};padding:2px 7px;border-radius:4px;font-size:10px;font-weight:800;letter-spacing:.3px">${r.verdict}</span></td><td style="padding:7px 6px;text-align:right;color:#94a3b8;font-size:11px">${fmtAEDTip(r.priorSpend)}</td><td style="padding:7px 6px;text-align:right">${recCell}</td><td style="padding:7px 6px;text-align:right;font-size:11px">${deltaTxt}</td><td style="padding:7px 6px;text-align:right">${bidCol}</td><td style="padding:7px 6px;text-align:right">${histTxt}</td></tr>`;
   }).join("");
   const totalRec=rows.reduce((s,r)=>s+r.rec,0);
   const totalPrior=rows.reduce((s,r)=>s+r.priorSpend,0);
@@ -5225,12 +5235,12 @@ function cpcDeliverooAllocCard(priorMonth){
   // Total-cell color: green if matching mandate within 2%, amber otherwise
   const totalMatchesMandate=mandate>0&&Math.abs(totalRec-mandate)/mandate<0.02;
   const totalClr=totalMatchesMandate?"#22C55E":(mandate>0&&totalRec<mandate?"#FBBF24":"#22C55E");
-  const totalLabel=mandate>0?`<span style="font-size:10px;color:#64748b">vs mandate ${fmtAED(mandate)}</span>`:"";
+  const totalLabel=mandate>0?`<span style="font-size:10px;color:#64748b">vs mandate ${fmtAEDTip(mandate)}</span>`:"";
   return`<div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-size:13px;font-weight:800;color:${AC.Deliveroo}">🛵 Deliveroo Per-Outlet Allocation</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Mandatory floor: AED ${floor}/outlet · 2% group GMV obligation · <strong style="color:#fbbf24">Bids are in our control</strong> — adjust to extend coverage on degrowing listings</div></div><div style="text-align:right"><div style="font-size:11px;color:#475569">Total recommended: <strong style="color:${totalClr};font-size:14px">${fmtAED(totalRec)}</strong></div>${totalLabel?`<div style="margin-top:2px">${totalLabel}</div>`:""}</div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-size:13px;font-weight:800;color:${AC.Deliveroo}">🛵 Deliveroo Per-Outlet Allocation</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Mandatory floor: AED ${floor}/outlet · 2% group GMV obligation · <strong style="color:#fbbf24">Bids are in our control</strong> — adjust to extend coverage on degrowing listings</div></div><div style="text-align:right"><div style="font-size:11px;color:#475569">Total recommended: <strong style="color:${totalClr};font-size:14px">${fmtAEDTip(totalRec)}</strong></div>${totalLabel?`<div style="margin-top:2px">${totalLabel}</div>`:""}</div></div>
     ${surplusBanner}
     ${lowerBidCount>0?`<div style="background:rgba(251,191,36,.06);border-left:3px solid #FBBF24;border-radius:4px;padding:7px 11px;margin-bottom:10px;font-size:11px;color:#475569"><strong style="color:#FBBF24">${lowerBidCount} outlets</strong> have bid-reduction signals (they overspent vs. their best-ROAS month). Lowering bids preserves budget for the full month and supports declining listings.</div>`:""}
-    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="border-bottom:1px solid #E2E8F0;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px;text-align:left">Brand</th><th style="padding:6px;text-align:left">Outlet</th><th style="padding:6px;text-align:left">Latest ROAS</th><th style="padding:6px;text-align:left">Verdict</th><th style="padding:6px;text-align:right">Prior Spend</th><th style="padding:6px;text-align:right">Recommended</th><th style="padding:6px;text-align:right">Δ vs Prior</th><th style="padding:6px;text-align:right" title="Bid suggestion based on best historical ROAS-volume month">Bid Suggest</th><th style="padding:6px;text-align:right">All-Time Spend</th></tr></thead><tbody>${tRows}</tbody><tfoot><tr style="border-top:2px solid #E2E8F0"><td colspan="4" style="padding:8px 6px;color:#94a3b8;font-size:11px;font-weight:700">${rows.length} OUTLETS · base ${fmtAED(totalBase)}${totalRec!==totalBase?` + ${fmtAED(totalRec-totalBase)} redistributed`:""}</td><td style="padding:8px 6px;text-align:right;color:#94a3b8">${fmtAED(totalPrior)}</td><td style="padding:8px 6px;text-align:right;color:${totalClr};font-weight:800">${fmtAED(totalRec)}</td><td colspan="3"></td></tr></tfoot></table></div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="border-bottom:1px solid #E2E8F0;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px;text-align:left">Brand</th><th style="padding:6px;text-align:left">Outlet</th><th style="padding:6px;text-align:left">Latest ROAS</th><th style="padding:6px;text-align:left">Verdict</th><th style="padding:6px;text-align:right">Prior Spend</th><th style="padding:6px;text-align:right">Recommended</th><th style="padding:6px;text-align:right">Δ vs Prior</th><th style="padding:6px;text-align:right" title="Bid suggestion based on best historical ROAS-volume month">Bid Suggest</th><th style="padding:6px;text-align:right">All-Time Spend</th></tr></thead><tbody>${tRows}</tbody><tfoot><tr style="border-top:2px solid #E2E8F0"><td colspan="4" style="padding:8px 6px;color:#94a3b8;font-size:11px;font-weight:700">${rows.length} OUTLETS · base ${fmtAEDTip(totalBase)}${totalRec!==totalBase?` + ${fmtAEDTip(totalRec-totalBase)} redistributed`:""}</td><td style="padding:8px 6px;text-align:right;color:#94a3b8">${fmtAEDTip(totalPrior)}</td><td style="padding:8px 6px;text-align:right;color:${totalClr};font-weight:800">${fmtAEDTip(totalRec)}</td><td colspan="3"></td></tr></tfoot></table></div>
   </div>`;
 }
 
@@ -5286,13 +5296,13 @@ function cpcTalabatAllocCard(priorMonth){
     const cpcRoasTxt=r.cpcROAS!=null?`<strong style="color:${r.cpcROAS>=r.beVal?'#22C55E':'#EF4444'}">${r.cpcROAS.toFixed(2)}×</strong>`:`<span style="color:#64748b;font-size:10.5px">no data</span>`;
     const kwRoasTxt=r.kwROAS!=null?`<strong style="color:${r.kwROAS>=r.beVal?'#22C55E':'#EF4444'}">${r.kwROAS.toFixed(2)}×</strong>`:r.kwTested?`<span style="color:#64748b;font-size:10.5px">no spend</span>`:`<span style="color:#64748b;font-size:10.5px">untested</span>`;
     const recTxt=TALABAT_DEAL_SIGNED
-      ?`<span style="color:#fbbf24;font-weight:700;font-size:11px">CPC ${fmtAED(r.cpcRec)}</span>${r.kwRec>0?`<br/><span style="color:#86EFAC;font-weight:700;font-size:11px">KW ${fmtAED(r.kwRec)}</span>`:''}`
+      ?`<span style="color:#fbbf24;font-weight:700;font-size:11px">CPC ${fmtAEDTip(r.cpcRec)}</span>${r.kwRec>0?`<br/><span style="color:#86EFAC;font-weight:700;font-size:11px">KW ${fmtAEDTip(r.kwRec)}</span>`:''}`
       :`<span style="color:#64748b">AED 0</span>`;
     return`<tr style="border-bottom:1px solid #E2E8F0"><td style="padding:7px 6px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}</td><td style="padding:7px 6px;color:#0F172A;font-size:11.5px">${r.outlet}</td><td style="padding:7px 6px;font-size:11px">${cpcRoasTxt}</td><td style="padding:7px 6px;font-size:11px">${kwRoasTxt}</td><td style="padding:7px 6px;font-size:10.5px;color:#94a3b8">(BE ${r.beVal.toFixed(2)})</td><td style="padding:7px 6px"><span style="color:${r.leverColor};font-weight:700;font-size:10.5px">${r.lever}</span></td><td style="padding:7px 6px;text-align:right">${recTxt}</td></tr>`;
   }).join("");
   const totalCPCRec=rows.reduce((s,r)=>s+r.cpcRec,0),totalKWRec=rows.reduce((s,r)=>s+r.kwRec,0);
   return`<div class="card" style="border:1px dashed rgba(255,90,0,.4);background:rgba(255,90,0,.03)">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-size:13px;font-weight:800;color:${AC.Talabat||'#FF5A00'}">🍔 Talabat Per-Outlet Allocation — CPC + Keywords ${TALABAT_DEAL_SIGNED?"":"<span style='color:#fbbf24;font-size:10px;font-weight:700;background:rgba(251,191,36,.12);padding:2px 8px;border-radius:4px;margin-left:6px'>⚠ DEAL PENDING</span>"}</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">${TALABAT_DEAL_SIGNED?`Active — AED 20K group obligation, AED ${floor}/outlet CPC floor, AED ${kwFloor}/listing Keywords floor`:`Recommendations frozen until AED 20K deal signed · Keywords lever (min AED ${kwFloor}/listing) tracked separately from CPC since Jun 2026`}</div></div>${TALABAT_DEAL_SIGNED?`<div style="text-align:right;font-size:11px;color:#475569">CPC: <strong style="color:#fbbf24">${fmtAED(totalCPCRec)}</strong> · Keywords: <strong style="color:#86EFAC">${fmtAED(totalKWRec)}</strong></div>`:""}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-size:13px;font-weight:800;color:${AC.Talabat||'#FF5A00'}">🍔 Talabat Per-Outlet Allocation — CPC + Keywords ${TALABAT_DEAL_SIGNED?"":"<span style='color:#fbbf24;font-size:10px;font-weight:700;background:rgba(251,191,36,.12);padding:2px 8px;border-radius:4px;margin-left:6px'>⚠ DEAL PENDING</span>"}</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">${TALABAT_DEAL_SIGNED?`Active — AED 20K group obligation, AED ${floor}/outlet CPC floor, AED ${kwFloor}/listing Keywords floor`:`Recommendations frozen until AED 20K deal signed · Keywords lever (min AED ${kwFloor}/listing) tracked separately from CPC since Jun 2026`}</div></div>${TALABAT_DEAL_SIGNED?`<div style="text-align:right;font-size:11px;color:#475569">CPC: <strong style="color:#fbbf24">${fmtAEDTip(totalCPCRec)}</strong> · Keywords: <strong style="color:#86EFAC">${fmtAEDTip(totalKWRec)}</strong></div>`:""}</div>
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="border-bottom:1px solid #E2E8F0;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px;text-align:left">Brand</th><th style="padding:6px;text-align:left">Outlet</th><th style="padding:6px;text-align:left">CPC ROAS</th><th style="padding:6px;text-align:left">Keywords ROAS</th><th style="padding:6px;text-align:left">Break-Even</th><th style="padding:6px;text-align:left">Recommended Lever</th><th style="padding:6px;text-align:right">Rec. Budget</th></tr></thead><tbody>${tRows}</tbody></table></div>
   </div>`;
 }
@@ -5350,11 +5360,11 @@ function cpcPoolAllocCard(ag,priorMonth){
       const types=[...Blocal.adTypes];
       const parts=types.map(t=>{
         const spent=cpcData.filter(rr=>rr.aggregator===ag&&rr.brand===r.brand&&rr.adType===t).reduce((s,rr)=>s+(rr.budgetSpent||0),0);
-        return spent>0?`<span style="color:#94a3b8">${t}: <strong style="color:#475569">${fmtAED(spent)}</strong></span>`:null;
+        return spent>0?`<span style="color:#94a3b8">${t}: <strong style="color:#475569">${fmtAEDTip(spent)}</strong></span>`:null;
       }).filter(Boolean);
       return parts.length>1?`<div style="font-size:9.5px;margin-top:2px">${parts.join(" · ")}</div>`:"";
     })();
-    return`<tr style="border-bottom:1px solid #E2E8F0"><td style="padding:7px 6px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}${adTypeBreakdown}</td><td style="padding:7px 6px;text-align:right;color:#475569">${fmtAED(r.bGMV)}</td><td style="padding:7px 6px;text-align:right;color:#94a3b8;font-size:11px">${(r.brandShare*100).toFixed(0)}%</td><td style="padding:7px 6px;text-align:right;color:#fbbf24;font-weight:700">${fmtAED(r.brandMand)}</td><td style="padding:7px 6px;font-size:11px">${roasTxt}</td><td style="padding:7px 6px"><span style="background:${verdClr[r.verdict]}22;color:${verdClr[r.verdict]};padding:2px 7px;border-radius:4px;font-size:10px;font-weight:800">${r.verdict}</span></td><td style="padding:7px 6px;text-align:center">${utilTxt}</td><td style="padding:7px 6px">${signal}</td></tr>`;
+    return`<tr style="border-bottom:1px solid #E2E8F0"><td style="padding:7px 6px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}${adTypeBreakdown}</td><td style="padding:7px 6px;text-align:right;color:#475569">${fmtAEDTip(r.bGMV)}</td><td style="padding:7px 6px;text-align:right;color:#94a3b8;font-size:11px">${(r.brandShare*100).toFixed(0)}%</td><td style="padding:7px 6px;text-align:right;color:#fbbf24;font-weight:700">${fmtAEDTip(r.brandMand)}</td><td style="padding:7px 6px;font-size:11px">${roasTxt}</td><td style="padding:7px 6px"><span style="background:${verdClr[r.verdict]}22;color:${verdClr[r.verdict]};padding:2px 7px;border-radius:4px;font-size:10px;font-weight:800">${r.verdict}</span></td><td style="padding:7px 6px;text-align:center">${utilTxt}</td><td style="padding:7px 6px">${signal}</td></tr>`;
   }).join("");
   const lockedNote=ag==="Careem"?` · <strong style="color:#fbbf24">Bids locked at AED 2.00</strong> — only lever is budget size`:ag==="Noon"?` · Minimum AED ${floor} to activate a brand pool`:"";
 
@@ -5384,10 +5394,10 @@ function cpcPoolAllocCard(ag,priorMonth){
       const outletRowsHtml=outletRows.map(o=>{
         const roasTxt=o.oROAS!=null?`<strong style="color:${o.oROAS>=beVal?'#22C55E':o.exclude?'#EF4444':'#FBBF24'}">${o.oROAS.toFixed(2)}×</strong>`:`<span style="color:#64748b">no spend</span>`;
         const tag=o.exclude?`<span style="background:rgba(239,68,68,.15);color:#EF4444;padding:1px 6px;border-radius:4px;font-size:9.5px;font-weight:800">EXCLUDE CANDIDATE</span>`:o.oROAS!=null&&o.oROAS>=beVal?`<span style="color:#22C55E;font-size:9.5px">keep</span>`:`<span style="color:#94a3b8;font-size:9.5px">monitor</span>`;
-        return`<tr style="border-bottom:1px solid rgba(15,23,42,.4)"><td style="padding:5px 8px 5px 20px;color:#475569;font-size:11px">${o.outlet}</td><td style="padding:5px 8px;text-align:right;font-size:10.5px">${roasTxt}</td><td style="padding:5px 8px;text-align:right;color:#94a3b8;font-size:10.5px">${fmtAED(o.oSpent)}</td><td style="padding:5px 8px;text-align:right;color:#94a3b8;font-size:10.5px">${fmtAED(o.oSales)}</td><td style="padding:5px 8px">${tag}</td></tr>`;
+        return`<tr style="border-bottom:1px solid rgba(15,23,42,.4)"><td style="padding:5px 8px 5px 20px;color:#475569;font-size:11px">${o.outlet}</td><td style="padding:5px 8px;text-align:right;font-size:10.5px">${roasTxt}</td><td style="padding:5px 8px;text-align:right;color:#94a3b8;font-size:10.5px">${fmtAEDTip(o.oSpent)}</td><td style="padding:5px 8px;text-align:right;color:#94a3b8;font-size:10.5px">${fmtAEDTip(o.oSales)}</td><td style="padding:5px 8px">${tag}</td></tr>`;
       }).join("");
       return`<div style="margin-bottom:8px;border:1px solid rgba(15,23,42,.12);border-radius:6px;overflow:hidden">
-        <div style="background:rgba(245,158,11,.05);padding:7px 10px;display:flex;justify-content:space-between;align-items:center"><span style="color:${BMAP[brand]?.c||'#fff'};font-weight:800;font-size:11.5px">${brand}</span><span style="font-size:10.5px;color:#94a3b8">${outletRows.length} outlets${excludeCount?` · <strong style="color:#EF4444">${excludeCount} exclude candidate${excludeCount===1?"":"s"}</strong>`:""} · Brand total: <strong style="color:#fbbf24">${fmtAED(r.poolSpent)}</strong></span></div>
+        <div style="background:rgba(245,158,11,.05);padding:7px 10px;display:flex;justify-content:space-between;align-items:center"><span style="color:${BMAP[brand]?.c||'#fff'};font-weight:800;font-size:11.5px">${brand}</span><span style="font-size:10.5px;color:#94a3b8">${outletRows.length} outlets${excludeCount?` · <strong style="color:#EF4444">${excludeCount} exclude candidate${excludeCount===1?"":"s"}</strong>`:""} · Brand total: <strong style="color:#fbbf24">${fmtAEDTip(r.poolSpent)}</strong></span></div>
         <table style="width:100%;border-collapse:collapse">${outletRowsHtml}</table>
       </div>`;
     }).filter(Boolean).join("");
@@ -5396,7 +5406,7 @@ function cpcPoolAllocCard(ag,priorMonth){
     }
   }
   return`<div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-size:13px;font-weight:800;color:${AC[ag]||'#fff'}">${ag==="Noon"?"🌙":"🚕"} ${ag} Brand Pool Allocation</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">4% group GMV obligation${lockedNote}</div></div><div style="font-size:11px;color:#475569">Group mandatory: <strong style="color:#22C55E;font-size:14px">${fmtAED(mand)}</strong></div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-size:13px;font-weight:800;color:${AC[ag]||'#fff'}">${ag==="Noon"?"🌙":"🚕"} ${ag} Brand Pool Allocation</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">4% group GMV obligation${lockedNote}</div></div><div style="font-size:11px;color:#475569">Group mandatory: <strong style="color:#22C55E;font-size:14px">${fmtAEDTip(mand)}</strong></div></div>
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="border-bottom:1px solid #E2E8F0;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px;text-align:left">Brand</th><th style="padding:6px;text-align:right">Prior GMV</th><th style="padding:6px;text-align:right">Share</th><th style="padding:6px;text-align:right">Proportional Mand.</th><th style="padding:6px;text-align:left">Latest ROAS</th><th style="padding:6px;text-align:left">Verdict</th><th style="padding:6px;text-align:center">Last Util</th><th style="padding:6px;text-align:left">Signal</th></tr></thead><tbody>${tRows}</tbody></table></div>
     ${poolOutletSection}
   </div>`;
@@ -5412,7 +5422,7 @@ function cpcDecliningOutletsCard(){
     const dominant=sortedAgs[0];
     const stack=sortedAgs.map(([ag,pct])=>`<span style="color:${AC[ag]||'#fff'};font-size:10px;font-weight:700">${ag} ${pct}%</span>`).join(" · ");
     const suggestion=dominant?`Boost <strong style="color:${AC[dominant[0]]||'#fff'}">${dominant[0]}</strong> visibility — ${dominant[1]}% of orders flow through it here`:"No clear dominant aggregator";
-    return`<tr style="border-bottom:1px solid #E2E8F0"><td style="padding:7px 6px;color:${BMAP[d.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${d.brand}</td><td style="padding:7px 6px;color:#0F172A;font-size:11.5px">${d.outlet}</td><td style="padding:7px 6px;text-align:right;color:#94a3b8">${fmtAED(d.prior)}</td><td style="padding:7px 6px;text-align:right;color:#475569">${fmtAED(d.cur)}</td><td style="padding:7px 6px;text-align:right;color:#EF4444;font-weight:800">${d.pct.toFixed(0)}%</td><td style="padding:7px 6px;font-size:11px">${stack}</td><td style="padding:7px 6px;color:#475569;font-size:11px">${suggestion}</td></tr>`;
+    return`<tr style="border-bottom:1px solid #E2E8F0"><td style="padding:7px 6px;color:${BMAP[d.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${d.brand}</td><td style="padding:7px 6px;color:#0F172A;font-size:11.5px">${d.outlet}</td><td style="padding:7px 6px;text-align:right;color:#94a3b8">${fmtAEDTip(d.prior)}</td><td style="padding:7px 6px;text-align:right;color:#475569">${fmtAEDTip(d.cur)}</td><td style="padding:7px 6px;text-align:right;color:#EF4444;font-weight:800">${d.pct.toFixed(0)}%</td><td style="padding:7px 6px;font-size:11px">${stack}</td><td style="padding:7px 6px;color:#475569;font-size:11px">${suggestion}</td></tr>`;
   }).join("");
   return`<div class="card" style="border:1px solid rgba(239,68,68,.25)">
     <div style="margin-bottom:10px"><div style="font-size:13px;font-weight:800;color:#fca5a5">📉 Declining Outlets — Visibility-Boost Candidates</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">MoM decline > 15% · CPC boost on the dominant aggregator may help recover visibility · funded by redirecting from PAUSE-rated outlets above</div></div>
@@ -5448,7 +5458,7 @@ function cpcHistoricalRefCard(){
       const total=cpcHistoricalSpend(b.n,ag,null);
       if(total===0)return`<td style="padding:7px 8px;text-align:right;color:#475569;font-size:10.5px">none</td>`;
       const months=new Set(cpcData.filter(r=>r.brand===b.n&&r.aggregator===ag&&r.adType==="CPC"&&r.budgetSpent>0).map(r=>r.month)).size;
-      return`<td style="padding:7px 8px;text-align:right;color:${AC[ag]||'#fff'};font-size:11px"><strong>${fmtAED(total)}</strong><br/><span style="color:#64748b;font-size:9.5px">${months}mo active</span></td>`;
+      return`<td style="padding:7px 8px;text-align:right;color:${AC[ag]||'#fff'};font-size:11px"><strong>${fmtAEDTip(total)}</strong><br/><span style="color:#64748b;font-size:9.5px">${months}mo active</span></td>`;
     }).join("");
     return`<tr style="border-bottom:1px solid #E2E8F0"><td style="padding:7px 8px;color:${b.c};font-weight:700;font-size:11.5px">${b.n}</td>${cells}</tr>`;
   }).join("");
@@ -5588,9 +5598,9 @@ function cpcHistTableView(){
   const totalROAS=totalSpent>0?totalSales/totalSpent:null;
   const summaryStrip=`<div class="card" style="padding:10px 14px;display:flex;gap:22px;flex-wrap:wrap;align-items:center">
     <div><div style="font-size:9.5px;color:#64748B;text-transform:uppercase;font-weight:700">Rows</div><div style="font-size:15px;font-weight:800;color:#0F172A">${rows.length}</div></div>
-    <div><div style="font-size:9.5px;color:#64748B;text-transform:uppercase;font-weight:700">Budget Allocated</div><div style="font-size:15px;font-weight:800;color:#fbbf24">${fmtAED(totalAlloc)}</div></div>
-    <div><div style="font-size:9.5px;color:#64748B;text-transform:uppercase;font-weight:700">Budget Spent</div><div style="font-size:15px;font-weight:800;color:#475569">${fmtAED(totalSpent)}</div></div>
-    <div><div style="font-size:9.5px;color:#64748B;text-transform:uppercase;font-weight:700">Sales</div><div style="font-size:15px;font-weight:800;color:#22C55E">${fmtAED(totalSales)}</div></div>
+    <div><div style="font-size:9.5px;color:#64748B;text-transform:uppercase;font-weight:700">Budget Allocated</div><div style="font-size:15px;font-weight:800;color:#fbbf24">${fmtAEDTip(totalAlloc)}</div></div>
+    <div><div style="font-size:9.5px;color:#64748B;text-transform:uppercase;font-weight:700">Budget Spent</div><div style="font-size:15px;font-weight:800;color:#475569">${fmtAEDTip(totalSpent)}</div></div>
+    <div><div style="font-size:9.5px;color:#64748B;text-transform:uppercase;font-weight:700">Sales</div><div style="font-size:15px;font-weight:800;color:#22C55E">${fmtAEDTip(totalSales)}</div></div>
     <div><div style="font-size:9.5px;color:#64748B;text-transform:uppercase;font-weight:700">Orders</div><div style="font-size:15px;font-weight:800;color:#0F172A">${totalOrders.toLocaleString()}</div></div>
     <div><div style="font-size:9.5px;color:#64748B;text-transform:uppercase;font-weight:700">Blended ROAS</div><div style="font-size:15px;font-weight:800;color:${totalROAS!=null?'#86EFAC':'#64748b'}">${totalROAS!=null?totalROAS.toFixed(2)+"×":"—"}</div></div>
   </div>`;
@@ -5599,7 +5609,7 @@ function cpcHistTableView(){
     const roasTxt=roas!=null?`<strong style="color:${roas>=r.be?'#22C55E':'#EF4444'}">${roas.toFixed(2)}×</strong>`:`<span style="color:#64748b;font-size:10.5px">—</span>`;
     const poolTag=r.budgetType==="combined"?`<span style="background:rgba(96,165,250,.12);color:#60A5FA;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700">POOL</span>`:`<span style="background:rgba(148,163,184,.1);color:#94a3b8;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700">SEPARATE</span>`;
     const fundedTag=/funded\s+by\s+noon/i.test(r.remarks||"")?`<span style="background:rgba(34,197,94,.12);color:#22C55E;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700;margin-left:4px">FUNDED BY NOON</span>`:"";
-    return`<tr style="border-bottom:1px solid #E2E8F0"><td style="padding:6px 8px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11px">${r.brand}</td><td style="padding:6px 8px;color:#0F172A;font-size:11px">${r.branch||"—"}</td><td style="padding:6px 8px;color:${AC[r.aggregator]||'#fff'};font-size:11px">${r.aggregator}</td><td style="padding:6px 8px;color:#94a3b8;font-size:10.5px">${r.adType}</td><td style="padding:6px 8px;color:#94a3b8;font-size:10.5px">${r.startDate||"?"} → ${r.endDate||"?"}</td><td style="padding:6px 8px;text-align:right;color:#94a3b8;font-size:11px">${fmtAED(r.budgetAlloc)}</td><td style="padding:6px 8px;text-align:right;color:#475569;font-size:11px">${fmtAED(r.budgetSpent)}</td><td style="padding:6px 8px;text-align:right;color:#22C55E;font-size:11px">${fmtAED(r.sales)}</td><td style="padding:6px 8px;text-align:right">${roasTxt}</td><td style="padding:6px 8px">${poolTag}</td><td style="padding:6px 8px;color:#94a3b8;font-size:10px">${r.updateDate||"—"}${fundedTag}</td></tr>`;
+    return`<tr style="border-bottom:1px solid #E2E8F0"><td style="padding:6px 8px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11px">${r.brand}</td><td style="padding:6px 8px;color:#0F172A;font-size:11px">${r.branch||"—"}</td><td style="padding:6px 8px;color:${AC[r.aggregator]||'#fff'};font-size:11px">${r.aggregator}</td><td style="padding:6px 8px;color:#94a3b8;font-size:10.5px">${r.adType}</td><td style="padding:6px 8px;color:#94a3b8;font-size:10.5px">${r.startDate||"?"} → ${r.endDate||"?"}</td><td style="padding:6px 8px;text-align:right;color:#94a3b8;font-size:11px">${fmtAEDTip(r.budgetAlloc)}</td><td style="padding:6px 8px;text-align:right;color:#475569;font-size:11px">${fmtAEDTip(r.budgetSpent)}</td><td style="padding:6px 8px;text-align:right;color:#22C55E;font-size:11px">${fmtAEDTip(r.sales)}</td><td style="padding:6px 8px;text-align:right">${roasTxt}</td><td style="padding:6px 8px">${poolTag}</td><td style="padding:6px 8px;color:#94a3b8;font-size:10px">${r.updateDate||"—"}${fundedTag}</td></tr>`;
   }).join("");
   return summaryStrip+`<div class="card" style="margin-top:12px"><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="border-bottom:1px solid #E2E8F0;color:#64748b;font-size:9.5px;text-transform:uppercase;letter-spacing:.3px"><th style="padding:6px 8px;text-align:left">Brand</th><th style="padding:6px 8px;text-align:left">Outlet</th><th style="padding:6px 8px;text-align:left">Aggregator</th><th style="padding:6px 8px;text-align:left">Ad Type</th><th style="padding:6px 8px;text-align:left">Period</th><th style="padding:6px 8px;text-align:right">Allocated</th><th style="padding:6px 8px;text-align:right">Spent</th><th style="padding:6px 8px;text-align:right">Sales</th><th style="padding:6px 8px;text-align:right">ROAS</th><th style="padding:6px 8px;text-align:left">Budget Type</th><th style="padding:6px 8px;text-align:left">Last Updated</th></tr></thead><tbody>${tRows}</tbody></table></div></div>`;
 }
@@ -5663,16 +5673,16 @@ function cpcHistCompareView(months){
   if(!compRows.length)return picker+`<div class="card" style="margin-top:12px;color:#94a3b8;font-size:12px">No rows match either side's filters.</div>`;
 
   const tRows=compRows.map(r=>{
-    const deltaTxt=r.deltaSpent>0?`<span style="color:#22C55E">+${fmtAED(r.deltaSpent)}</span>`:r.deltaSpent<0?`<span style="color:#EF4444">${fmtAED(r.deltaSpent)}</span>`:`<span style="color:#64748b">—</span>`;
+    const deltaTxt=r.deltaSpent>0?`<span style="color:#22C55E">+${fmtAEDTip(r.deltaSpent)}</span>`:r.deltaSpent<0?`<span style="color:#EF4444">${fmtAEDTip(r.deltaSpent)}</span>`:`<span style="color:#64748b">—</span>`;
     // Row-count mismatch is a grouping signal: if A had 1 row (combined) and B has 3 (separate),
     // or vice versa, flag it so the user can verify that's intentional.
     const rowCountFlag=r.aRowCount!==r.bRowCount?`<span style="color:#FBBF24;font-size:9.5px" title="Number of sheet rows feeding this total changed — check if entries were grouped/split differently">⚠ ${r.aRowCount}→${r.bRowCount} rows</span>`:`<span style="color:#64748b;font-size:9.5px">${r.aRowCount} rows</span>`;
-    return`<tr style="border-bottom:1px solid #E2E8F0"><td style="padding:7px 8px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}</td><td style="padding:7px 8px;color:${AC[r.ag]||'#fff'};font-size:11.5px">${r.ag}</td><td style="padding:7px 8px;text-align:right;color:#60A5FA;font-size:11px">${fmtAED(r.aSpent)}</td><td style="padding:7px 8px;text-align:right;color:#F59E0B;font-size:11px">${fmtAED(r.bSpent)}</td><td style="padding:7px 8px;text-align:right;font-size:11px">${deltaTxt}</td><td style="padding:7px 8px;text-align:right;color:#60A5FA;font-size:11px">${r.aROAS!=null?r.aROAS.toFixed(2)+"×":"—"}</td><td style="padding:7px 8px;text-align:right;color:#F59E0B;font-size:11px">${r.bROAS!=null?r.bROAS.toFixed(2)+"×":"—"}</td><td style="padding:7px 8px;text-align:center">${rowCountFlag}</td></tr>`;
+    return`<tr style="border-bottom:1px solid #E2E8F0"><td style="padding:7px 8px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}</td><td style="padding:7px 8px;color:${AC[r.ag]||'#fff'};font-size:11.5px">${r.ag}</td><td style="padding:7px 8px;text-align:right;color:#60A5FA;font-size:11px">${fmtAEDTip(r.aSpent)}</td><td style="padding:7px 8px;text-align:right;color:#F59E0B;font-size:11px">${fmtAEDTip(r.bSpent)}</td><td style="padding:7px 8px;text-align:right;font-size:11px">${deltaTxt}</td><td style="padding:7px 8px;text-align:right;color:#60A5FA;font-size:11px">${r.aROAS!=null?r.aROAS.toFixed(2)+"×":"—"}</td><td style="padding:7px 8px;text-align:right;color:#F59E0B;font-size:11px">${r.bROAS!=null?r.bROAS.toFixed(2)+"×":"—"}</td><td style="padding:7px 8px;text-align:center">${rowCountFlag}</td></tr>`;
   }).join("");
   const totA=compRows.reduce((s,r)=>s+r.aSpent,0),totB=compRows.reduce((s,r)=>s+r.bSpent,0);
   return picker+`<div class="card" style="margin-top:12px">
     <div style="margin-bottom:10px"><div style="font-size:12px;font-weight:800;color:#0F172A">Brand × Aggregator — A vs B</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Each side uses its own independent filters above. Row-count column flags when the number of underlying sheet entries differs — useful for catching unintended grouping/splitting.</div></div>
-    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="border-bottom:1px solid #E2E8F0;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px 8px;text-align:left">Brand</th><th style="padding:6px 8px;text-align:left">Aggregator</th><th style="padding:6px 8px;text-align:right">A Spent</th><th style="padding:6px 8px;text-align:right">B Spent</th><th style="padding:6px 8px;text-align:right">Δ Spent</th><th style="padding:6px 8px;text-align:right">A ROAS</th><th style="padding:6px 8px;text-align:right">B ROAS</th><th style="padding:6px 8px;text-align:center">Sheet Rows</th></tr></thead><tbody>${tRows}</tbody><tfoot><tr style="border-top:2px solid #E2E8F0"><td colspan="2" style="padding:8px;color:#94a3b8;font-size:11px;font-weight:700">TOTAL</td><td style="padding:8px;text-align:right;color:#60A5FA;font-weight:800">${fmtAED(totA)}</td><td style="padding:8px;text-align:right;color:#F59E0B;font-weight:800">${fmtAED(totB)}</td><td colspan="4"></td></tr></tfoot></table></div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="border-bottom:1px solid #E2E8F0;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px 8px;text-align:left">Brand</th><th style="padding:6px 8px;text-align:left">Aggregator</th><th style="padding:6px 8px;text-align:right">A Spent</th><th style="padding:6px 8px;text-align:right">B Spent</th><th style="padding:6px 8px;text-align:right">Δ Spent</th><th style="padding:6px 8px;text-align:right">A ROAS</th><th style="padding:6px 8px;text-align:right">B ROAS</th><th style="padding:6px 8px;text-align:center">Sheet Rows</th></tr></thead><tbody>${tRows}</tbody><tfoot><tr style="border-top:2px solid #E2E8F0"><td colspan="2" style="padding:8px;color:#94a3b8;font-size:11px;font-weight:700">TOTAL</td><td style="padding:8px;text-align:right;color:#60A5FA;font-weight:800">${fmtAEDTip(totA)}</td><td style="padding:8px;text-align:right;color:#F59E0B;font-weight:800">${fmtAEDTip(totB)}</td><td colspan="4"></td></tr></tfoot></table></div>
   </div>`;
 }
 
@@ -5908,7 +5918,7 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
             if(inv.additional>0&&goodVerdict){
               tInvest+=inv.additional;tInvestSep+=inv.additional;
               const dryClr=inv.daysUntilDry<=3?'#EF4444':inv.daysUntilDry<=7?'#FBBF24':'#94a3b8';
-              parts.push(`<div style="font-size:10px;color:${dryClr};font-weight:700">dry in ${inv.daysUntilDry}d · +${fmtAED(inv.additional)}</div>`);
+              parts.push(`<div style="font-size:10px;color:${dryClr};font-weight:700">dry in ${inv.daysUntilDry}d · +${fmtAEDTip(inv.additional)}</div>`);
             }else if(inv.additional>0&&poorVerdict){
               parts.push(`<div style="font-size:10px;color:#EF4444;font-weight:700">dry in ${inv.daysUntilDry}d · hold (below BE)</div>`);
             }else if(inv.additional<=0){
@@ -5916,7 +5926,7 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
               if(pace&&pace.goodROI){
                 parts.push(`<div style="font-size:10px;color:#F59E0B;font-weight:800" title="Only ~${pace.pacePct}% of the budget will be spent by month-end at the current burn — ~AED ${pace.projUnspent} would go unused. ROAS ${d.roi?d.roi.toFixed(1):'—'}×${pace.strongCTO?` and CTO ${d.cto.toFixed(0)}%`:''} support buying more impressions.${pace.capped?' Suggested bid is capped at 2× as a step — raise, re-check pace in 3–4 days, then step again if still underpacing.':''}">⚡ underpacing ${pace.pacePct}%${pace.suggestedBid?` — raise bid to AED ${pace.suggestedBid.toFixed(2)}`:' — raise bid / visibility'}</div>`);
               }else if(pace){
-                parts.push(`<div style="font-size:10px;color:#94a3b8" title="Only ~${pace.pacePct}% of the budget will be spent by month-end, and ROI here is modest — rather than forcing spend into a weak outlet, consider reallocating ~AED ${pace.projUnspent} to higher-ROAS outlets.">underpacing ${pace.pacePct}% · reallocate ~${fmtAED(pace.projUnspent)}</div>`);
+                parts.push(`<div style="font-size:10px;color:#94a3b8" title="Only ~${pace.pacePct}% of the budget will be spent by month-end, and ROI here is modest — rather than forcing spend into a weak outlet, consider reallocating ~AED ${pace.projUnspent} to higher-ROAS outlets.">underpacing ${pace.pacePct}% · reallocate ~${fmtAEDTip(pace.projUnspent)}</div>`);
               }else{
                 parts.push(`<div style="font-size:10px;color:#22C55E">✓ on pace</div>`);
               }
@@ -5924,7 +5934,7 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
           }else if(inv.mode==="restart"){
             if(goodVerdict&&inv.additional>0){
               tInvest+=inv.additional;tInvestSep+=inv.additional;
-              parts.push(`<div style="font-size:10px;color:#22C55E;font-weight:700">exhausted · restart +${fmtAED(inv.additional)}</div>`);
+              parts.push(`<div style="font-size:10px;color:#22C55E;font-weight:700">exhausted · restart +${fmtAEDTip(inv.additional)}</div>`);
             }else if(poorVerdict){
               parts.push(`<div style="font-size:10px;color:#EF4444">exhausted · don't restart (ROAS ${d.roi?d.roi.toFixed(2):'—'}×)</div>`);
             }
@@ -5952,7 +5962,7 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
       poolBannerEmitted=true;
       const poolLeft=Math.max(0,poolTotalAlloc-poolTotalSpent);
       const poolPct=poolTotalAlloc>0?Math.round(poolTotalSpent/poolTotalAlloc*100):0;
-      bannerRow=`<tr><td colspan="${colCount}" style="padding:0"><div style="margin:12px 0 6px 0;padding:10px 14px;background:linear-gradient(135deg,rgba(96,165,250,.08),rgba(96,165,250,.02));border:1px solid rgba(96,165,250,.25);border-radius:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:14px">🔒</span><div><div style="font-size:12px;font-weight:800;color:#60A5FA">Pooled Budget — ${pooledTableRows.length} outlets share this pool</div><div style="font-size:10px;color:#94a3b8;margin-top:2px">${ag} auto-distributes spend across these outlets. Per-outlet budget is not controllable individually.</div></div></div><div style="display:flex;gap:16px;align-items:center"><div style="text-align:center"><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700">Allocated</div><div style="font-size:15px;font-weight:800;color:#fbbf24">${fmtAED(poolTotalAlloc)}</div></div><div style="text-align:center"><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700">Spent</div><div style="font-size:15px;font-weight:800;color:#475569">${fmtAED(poolTotalSpent)}</div></div><div style="text-align:center"><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700">Remaining</div><div style="font-size:15px;font-weight:800;color:${poolLeft>0?'#22C55E':'#EF4444'}">${fmtAED(poolLeft)}</div></div><div style="text-align:center"><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700">Burn</div><div style="font-size:15px;font-weight:800;color:#94a3b8">${poolPct}%</div></div></div></div></td></tr>`;
+      bannerRow=`<tr><td colspan="${colCount}" style="padding:0"><div style="margin:12px 0 6px 0;padding:10px 14px;background:linear-gradient(135deg,rgba(96,165,250,.08),rgba(96,165,250,.02));border:1px solid rgba(96,165,250,.25);border-radius:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:14px">🔒</span><div><div style="font-size:12px;font-weight:800;color:#60A5FA">Pooled Budget — ${pooledTableRows.length} outlets share this pool</div><div style="font-size:10px;color:#94a3b8;margin-top:2px">${ag} auto-distributes spend across these outlets. Per-outlet budget is not controllable individually.</div></div></div><div style="display:flex;gap:16px;align-items:center"><div style="text-align:center"><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700">Allocated</div><div style="font-size:15px;font-weight:800;color:#fbbf24">${fmtAEDTip(poolTotalAlloc)}</div></div><div style="text-align:center"><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700">Spent</div><div style="font-size:15px;font-weight:800;color:#475569">${fmtAEDTip(poolTotalSpent)}</div></div><div style="text-align:center"><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700">Remaining</div><div style="font-size:15px;font-weight:800;color:${poolLeft>0?'#22C55E':'#EF4444'}">${fmtAEDTip(poolLeft)}</div></div><div style="text-align:center"><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700">Burn</div><div style="font-size:15px;font-weight:800;color:#94a3b8">${poolPct}%</div></div></div></div></td></tr>`;
     }
     const row=`<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:#0F172A">${t.outlet}</strong>${impTag}${poolTag}${fundedTag}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right">${(d.views||0).toLocaleString()}</td><td style="text-align:right">${(d.orders||0).toLocaleString()}</td><td style="text-align:right">${fmtAEDExact(d.sales)}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${isPooled?'<span style="color:#60A5FA;font-size:10px">pool</span>':fmtAEDExact(d.alloc)}</td><td style="text-align:right">${fmtAEDExact(d.spent)}</td><td style="text-align:right">${isPooled?'<span style="color:#60A5FA;font-size:10px">pool</span>':fmtAEDExact(d.leftover)}</td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}<div style="font-size:8px;color:${t.momChg==null?'#475569':pctClr(t.momChg)}">${t.momChg!=null?'MoM '+fmtPct(t.momChg):''}</div></td><td style="text-align:right">${t.calcBid!=null?'AED '+t.calcBid.toFixed(2):'—'}</td><td style="text-align:right">${d.ftu||0}</td>${showInvestCol?`<td style="text-align:right">${recCell}</td>`:''}</tr>`;
     return bannerRow+row;
@@ -6011,7 +6021,7 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
       // top-up is needed (so the user sees the healthy pool state and knows it's covered).
       if(poolRec.additional>0&&poolHasSomeGoodVerdict){
         const label=poolRec.mode==='restart'?'Brand-pool restart needed':'Brand-pool top-up';
-        lines.push(`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:6px 0;border-bottom:1px solid rgba(96,165,250,.15)"><div style="flex:1"><div style="font-size:11px;color:#60A5FA;font-weight:700">🔒 ${label}</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Edit at the ${ag} brand level — applies to all ${pooledTableRows.length} pooled ${brand} outlets together.</div>${fmtPoolAgg()}</div><div style="font-size:18px;font-weight:800;color:#60A5FA;white-space:nowrap">+${fmtAED(poolRec.additional)}</div></div>`);
+        lines.push(`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:6px 0;border-bottom:1px solid rgba(96,165,250,.15)"><div style="flex:1"><div style="font-size:11px;color:#60A5FA;font-weight:700">🔒 ${label}</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Edit at the ${ag} brand level — applies to all ${pooledTableRows.length} pooled ${brand} outlets together.</div>${fmtPoolAgg()}</div><div style="font-size:18px;font-weight:800;color:#60A5FA;white-space:nowrap">+${fmtAEDTip(poolRec.additional)}</div></div>`);
       }else{
         // Pool is healthy / covers month → still surface the state so user knows it was considered.
         const stateLbl=poolRec.mode==='restart'
@@ -6022,11 +6032,11 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
       }
     }
     if(tInvestSep>0){
-      lines.push(`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:6px 0"><div><div style="font-size:11px;color:#22C55E;font-weight:700">Per-outlet top-ups</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Sum of individually-editable outlet budgets shown in the table above.</div></div><div style="font-size:18px;font-weight:800;color:#22C55E;white-space:nowrap">+${fmtAED(tInvestSep)}</div></div>`);
+      lines.push(`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:6px 0"><div><div style="font-size:11px;color:#22C55E;font-weight:700">Per-outlet top-ups</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">Sum of individually-editable outlet budgets shown in the table above.</div></div><div style="font-size:18px;font-weight:800;color:#22C55E;white-space:nowrap">+${fmtAEDTip(tInvestSep)}</div></div>`);
     }
     const hasBoth=tInvestPool>0&&tInvestSep>0;
     const grandTotal=tInvestPool+tInvestSep;
-    const grandRow=hasBoth?`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding-top:8px;margin-top:6px;border-top:1px dashed rgba(34,197,94,.4)"><div style="font-size:11px;color:#86EFAC;font-weight:700;text-transform:uppercase;letter-spacing:.6px">💰 Total additional investment</div><div style="font-size:24px;font-weight:800;color:#22C55E;white-space:nowrap">+${fmtAED(grandTotal)}</div></div>`:'';
+    const grandRow=hasBoth?`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding-top:8px;margin-top:6px;border-top:1px dashed rgba(34,197,94,.4)"><div style="font-size:11px;color:#86EFAC;font-weight:700;text-transform:uppercase;letter-spacing:.6px">💰 Total additional investment</div><div style="font-size:24px;font-weight:800;color:#22C55E;white-space:nowrap">+${fmtAEDTip(grandTotal)}</div></div>`:'';
     const introBlurb=hasBoth
       ?`<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">${brand} on ${ag} has BOTH pooled and per-outlet budgets — actions are split below. Recommendations cover through ${monthLbl}${bidAdjNote}.</div>`
       :tInvestPool>0
@@ -6077,7 +6087,7 @@ function renderCPCOutletDetail(){
     const vClr=r.verdict?CPC_VC[r.verdict]:'#64748b';
     const imp=cpcModel.postImpact.get(r);
     const impCell=imp?`<span style="color:${pctClr(imp.salesChg)};font-weight:700">${fmtPct(imp.salesChg)}</span>`:'<span style="color:#475569">—</span>';
-    return `<tr><td style="font-size:10px">${r.adType}</td><td style="font-size:10px">${cpcMonthLabel(r.month)}</td><td style="font-size:10px">${r.startDate} → ${r.endDate}</td><td style="text-align:right">${fmtAED(r.budgetAlloc)}</td><td style="text-align:right">${fmtAED(r.budgetSpent)}</td><td style="text-align:right">${fmtAED(r.sales)}</td><td style="text-align:right">${r.orders}</td><td style="text-align:right">${r.cto.toFixed(1)}%</td><td style="text-align:right;font-weight:800;color:${vClr}">${r.roi?r.roi.toFixed(2)+'×':'—'}</td><td><span style="padding:2px 7px;border-radius:6px;background:${CPC_VB[r.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:9px;font-weight:700">${r.verdict||'—'}</span></td><td style="text-align:right">${impCell}</td></tr>`;
+    return `<tr><td style="font-size:10px">${r.adType}</td><td style="font-size:10px">${cpcMonthLabel(r.month)}</td><td style="font-size:10px">${r.startDate} → ${r.endDate}</td><td style="text-align:right">${fmtAEDTip(r.budgetAlloc)}</td><td style="text-align:right">${fmtAEDTip(r.budgetSpent)}</td><td style="text-align:right">${fmtAEDTip(r.sales)}</td><td style="text-align:right">${r.orders}</td><td style="text-align:right">${r.cto.toFixed(1)}%</td><td style="text-align:right;font-weight:800;color:${vClr}">${r.roi?r.roi.toFixed(2)+'×':'—'}</td><td><span style="padding:2px 7px;border-radius:6px;background:${CPC_VB[r.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:9px;font-weight:700">${r.verdict||'—'}</span></td><td style="text-align:right">${impCell}</td></tr>`;
   }).join('');
   const bClr=BMAP[brand]?.c||'#f59e0b';
   const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(15,23,42,.12)"><div><div style="font-size:9px;color:#FBBF24;font-weight:800;letter-spacing:1.5px;text-transform:uppercase">Outlet Deep Dive</div><div style="font-size:18px;font-weight:800;color:${bClr};margin-top:4px">${brand} · ${outlet}</div><div style="font-size:11px;color:#94a3b8;margin-top:2px"><span style="color:${AGG_LOGO_CLR[ag]||'#888'};font-weight:700">${ag}</span> · ${rows.length} CPC cycle${rows.length>1?'s':''} (newest first)</div></div><button onclick="cpcCloseOutletDetail()" style="background:none;border:1px solid #E2E8F0;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer">← Back</button></div>`;
@@ -8361,7 +8371,7 @@ function campDetailV2HTML(c,idx){
     </div>
   </div>`;
   // Remaining caveats → notes
-  if(a.dataMismatchSuspected)_notes.push({sev:'red',t:'Exact upload looks stale — discount ROI suppressed',b:`The exact ${c.aggregator} upload found only ${fmtAED(a.allocatedDisc)} in merchant discount for this window, but the Google Sheet daily aggregates suggest ${fmtAED(a.sheetDisc)}. Re-upload a fresh export covering this campaign's dates. The headline AED remains valid (sheet-consistent contribution math).`});
+  if(a.dataMismatchSuspected)_notes.push({sev:'red',t:'Exact upload looks stale — discount ROI suppressed',b:`The exact ${c.aggregator} upload found only ${fmtAEDTip(a.allocatedDisc)} in merchant discount for this window, but the Google Sheet daily aggregates suggest ${fmtAEDTip(a.sheetDisc)}. Re-upload a fresh export covering this campaign's dates. The headline AED remains valid (sheet-consistent contribution math).`});
   else if(a.baselineContaminated)_notes.push({sev:'blue',t:'Discount ROI hidden — unfair baseline',b:`The comparison baseline (${fmtShort(a.bStart)}–${fmtShort(a.bEnd)}) ran meaningfully deeper discounting than this campaign (≈${a.baselineDepth.toFixed(0)}% vs ${a.campaignDepth.toFixed(0)}% of gross), from: ${a.baselineCampaigns.map(x=>`"${x.name}"`).join(', ')}. The headline AED is still the number to read.`});
   const bigSwing=a.ordersLift!=null&&Math.abs(a.ordersLift)>40;
   if(sharedN>0)_notes.push({sev:'amber',t:`Brand-level figure shared across ${sharedN+1} concurrent campaigns`,b:`${c.brand} × ${c.aggregator} as a whole moved <strong style="color:${madeClr}">${madeAED>=0?'+':'−'}${fmtAEDx(Math.abs(madeAED))}</strong> vs the 4-weeks-ago baseline${a.ordersLift!=null?` (${a.ordersLift>=0?'+':''}${a.ordersLift.toFixed(0)}% orders)`:''}. The identical figure appears on every concurrent ${c.brand} × ${c.aggregator} campaign — never sum it across them.${bigSwing?' A swing this size is far bigger than any plausible item-promo effect — it reflects the baseline promo mix or seasonality, not these campaigns.':''}`});
@@ -8586,11 +8596,11 @@ function campDetailHTML(c,idx){
   if(!a.hasData)return header+`<div class="card"><div style="color:#64748b;font-size:12px;padding:4px 0">No sales data found for this campaign period.</div></div>`;
 
   // ── Performance KPIs (vs matched baseline) ──
-  const kpis=`<div class="g4">${kpiCard('Orders During',a.campOrders.toLocaleString(),`Baseline: ${a.baseOrders.toLocaleString()}`,a.ordersLift)}${kpiCard('Net Sales During',fmtAED(a.campSales),`Baseline: ${fmtAED(a.baseSales)}`,a.salesLift)}${kpiCard('AOV During',`AED ${a.campAOV.toFixed(1)}`,`Baseline: AED ${a.baseAOV.toFixed(1)}`,a.aovChange)}${kpiCard('Duration',`${a.days} day${a.days!==1?'s':''}`,`vs ${fmtDisp(a.bStart)} → ${fmtDisp(a.bEnd)}`,null)}</div>`;
+  const kpis=`<div class="g4">${kpiCard('Orders During',a.campOrders.toLocaleString(),`Baseline: ${a.baseOrders.toLocaleString()}`,a.ordersLift)}${kpiCard('Net Sales During',fmtAEDTip(a.campSales),`Baseline: ${fmtAEDTip(a.baseSales)}`,a.salesLift)}${kpiCard('AOV During',`AED ${a.campAOV.toFixed(1)}`,`Baseline: AED ${a.baseAOV.toFixed(1)}`,a.aovChange)}${kpiCard('Duration',`${a.days} day${a.days!==1?'s':''}`,`vs ${fmtDisp(a.bStart)} → ${fmtDisp(a.bEnd)}`,null)}</div>`;
 
   // ── Order volume change banner ──
   const ovUp=a.incrOrdersPerDay>=0;
-  const ovBanner=`<div class="card" style="border-color:${ovUp?'rgba(34,197,94,.3)':'rgba(239,68,68,.3)'};margin-bottom:12px"><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><div style="font-size:34px">${ovUp?'📈':'📉'}</div><div style="flex:1;min-width:200px"><div style="font-size:13px;font-weight:800;color:${ovUp?'#22C55E':'#EF4444'}">Order volume ${ovUp?'increased':'decreased'} ${fmtPct(a.ordersLift)} per day</div><div style="font-size:12px;color:#94a3b8;margin-top:3px">${ovUp?'+':''}${Math.round(a.incrOrdersPerDay)} orders/day vs baseline · ${ovUp?'+':''}${fmtAED(a.incrSalesPerDay).replace('AED ','AED ')} net sales/day</div></div></div></div>`;
+  const ovBanner=`<div class="card" style="border-color:${ovUp?'rgba(34,197,94,.3)':'rgba(239,68,68,.3)'};margin-bottom:12px"><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><div style="font-size:34px">${ovUp?'📈':'📉'}</div><div style="flex:1;min-width:200px"><div style="font-size:13px;font-weight:800;color:${ovUp?'#22C55E':'#EF4444'}">Order volume ${ovUp?'increased':'decreased'} ${fmtPct(a.ordersLift)} per day</div><div style="font-size:12px;color:#94a3b8;margin-top:3px">${ovUp?'+':''}${Math.round(a.incrOrdersPerDay)} orders/day vs baseline · ${ovUp?'+':''}${fmtAEDTip(a.incrSalesPerDay).replace('AED ','AED ')} net sales/day</div></div></div></div>`;
 
   // ── Daily sales chart ──
   const chart=`<div class="sm" style="margin-bottom:12px"><div class="ct" style="color:${accent}">Daily Sales — ${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)}</div><div style="position:relative;height:130px"><canvas id="ch-camp"></canvas></div></div>`;
@@ -8600,22 +8610,22 @@ function campDetailHTML(c,idx){
   if(a.discAvailable){
     const roiClr=a.discountROI==null?'#64748b':a.discountROI>=1?'#22C55E':a.discountROI<0?'#EF4444':'#FBBF24';
     const profClr=a.profitabilityPct==null?'#64748b':pctClr(a.profitabilityPct);
-    const cfBanner=a.coFundedPct>0?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(168,85,247,.08);border-left:3px solid #A855F7;border-radius:4px">🤝 <strong style="color:#C084FC">Co-funded ${Math.round(a.coFundedPct*100)}% by ${c.aggregator}</strong> — statements only show the merchant portion, so we infer the platform's share from the split. ${c.brand} paid <strong style="color:#0F172A">${fmtAED(a.ourDiscCost)}</strong> (as shown in the ${c.aggregator} export), ${c.aggregator} absorbed <strong style="color:#A855F7">${fmtAED(a.aggInferredCoFund)}</strong> (inferred, invoiced separately), total customer discount was <strong style="color:#0F172A">${fmtAED(a.totalCustomerDisc)}</strong>. ROI below is against ${c.brand}'s actual cost only.</div>`:'';
+    const cfBanner=a.coFundedPct>0?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(168,85,247,.08);border-left:3px solid #A855F7;border-radius:4px">🤝 <strong style="color:#C084FC">Co-funded ${Math.round(a.coFundedPct*100)}% by ${c.aggregator}</strong> — statements only show the merchant portion, so we infer the platform's share from the split. ${c.brand} paid <strong style="color:#0F172A">${fmtAEDTip(a.ourDiscCost)}</strong> (as shown in the ${c.aggregator} export), ${c.aggregator} absorbed <strong style="color:#A855F7">${fmtAEDTip(a.aggInferredCoFund)}</strong> (inferred, invoiced separately), total customer discount was <strong style="color:#0F172A">${fmtAEDTip(a.totalCustomerDisc)}</strong>. ROI below is against ${c.brand}'s actual cost only.</div>`:'';
     const subsidyBanner=a.dataMismatchSuspected?`<div style="font-size:12px;color:#0F172A;margin-bottom:12px;line-height:1.55;padding:10px 14px;background:rgba(239,68,68,.08);border-left:4px solid #EF4444;border-radius:6px">
       ⚠️ <strong style="color:#EF4444">Discount data mismatch detected — the exact ${c.aggregator} upload may be stale or incomplete for this window.</strong>
       <div style="margin-top:6px;color:#475569;font-size:11px;line-height:1.6">Two independent sources disagree for this campaign's ${a.cDays}-day window:</div>
       <ul style="margin:4px 0 4px 18px;padding:0;color:#475569;font-size:11px;line-height:1.6">
-        <li>Exact ${c.aggregator} upload → <strong style="color:#EF4444">${fmtAED(a.allocatedDisc)}</strong></li>
-        <li>Google Sheet daily aggregates → <strong style="color:#0F172A">${fmtAED(a.sheetDisc)}</strong></li>
+        <li>Exact ${c.aggregator} upload → <strong style="color:#EF4444">${fmtAEDTip(a.allocatedDisc)}</strong></li>
+        <li>Google Sheet daily aggregates → <strong style="color:#0F172A">${fmtAEDTip(a.sheetDisc)}</strong></li>
       </ul>
       <div style="margin-top:6px;color:#64748b;font-size:11px;line-height:1.6"><strong>Most likely cause:</strong> the ${c.aggregator} export uploaded to the dashboard was made before this campaign ended, so it doesn't include all the days. Discount ROI is <strong>suppressed</strong> to avoid a misleading number.</div>
       <div style="margin-top:6px;color:#64748b;font-size:11px;line-height:1.6"><strong>Fix:</strong> re-export ${c.aggregator} orders covering ${fmtShort(a.effStart)}–${fmtShort(a.effEnd)} and upload it via the data strip on the Campaigns page. The mismatch will resolve on next render.</div>
     </div>`:'';
     profitSection=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#f59e0b">💰 Profitability Analysis <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· real discount data + commission${a.coFundedPct>0?' + co-funding':''}</span></div>
       <div style="display:flex;align-items:stretch;gap:14px;flex-wrap:wrap;margin-bottom:14px;padding:12px 14px;background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.18);border-radius:8px">
-        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">${a.coFundedPct>0?'Total Customer Discount':'Total Discount Given'}</div><div style="font-size:22px;font-weight:800;color:#EF4444;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.coFundedPct>0?a.totalCustomerDisc:a.ourDiscCost)}</div>${a.coFundedPct>0?`<div style="font-size:10px;color:#94a3b8;margin-top:2px"><strong style="color:#0F172A">${c.brand}'s share:</strong> ${fmtAED(a.ourDiscCost)} · <strong style="color:#A855F7">${c.aggregator}:</strong> ${fmtAED(a.aggInferredCoFund)}</div>`:''}</div>
+        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">${a.coFundedPct>0?'Total Customer Discount':'Total Discount Given'}</div><div style="font-size:22px;font-weight:800;color:#EF4444;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAEDTip(a.coFundedPct>0?a.totalCustomerDisc:a.ourDiscCost)}</div>${a.coFundedPct>0?`<div style="font-size:10px;color:#94a3b8;margin-top:2px"><strong style="color:#0F172A">${c.brand}'s share:</strong> ${fmtAEDTip(a.ourDiscCost)} · <strong style="color:#A855F7">${c.aggregator}:</strong> ${fmtAEDTip(a.aggInferredCoFund)}</div>`:''}</div>
         <div style="width:1px;background:rgba(245,158,11,.2)"></div>
-        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Net Sales Generated</div><div style="font-size:22px;font-weight:800;color:#22C55E;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.cs.sales)}</div></div>
+        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Net Sales Generated</div><div style="font-size:22px;font-weight:800;color:#22C55E;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAEDTip(a.cs.sales)}</div></div>
         <div style="width:1px;background:rgba(245,158,11,.2)"></div>
         <div style="flex:1;min-width:150px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Actual Discount Depth</div><div style="font-size:22px;font-weight:800;color:#FBBF24;font-variant-numeric:tabular-nums;line-height:1.2">${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'%':'—'}</div><div style="font-size:10px;color:#64748b;margin-top:2px">of net sales went back as discount</div></div>
       </div>
@@ -8623,12 +8633,12 @@ function campDetailHTML(c,idx){
       ${subsidyBanner}
       ${(()=>{const m=(c.comments||'').match(/(\d{1,2})\s*%/);if(m&&a.discPctOfSales!=null){const headline=parseInt(m[1]);if(a.discPctOfSales<headline-3)return `<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(34,197,94,.06);border-left:3px solid #22C55E;border-radius:4px">ℹ️ The headline offer is <strong>${headline}% off</strong>, but because it only applies to selected items (not every order), the <strong>actual blended discount was just ${a.discPctOfSales.toFixed(1)}% of net sales</strong> — far less costly than ${headline}% on everything. This is the real figure used in the profitability math below.</div>`;}return '';})()}
       <div class="g4">
-        ${kpiCard(a.coFundedPct>0?`${c.brand}'s Discount Cost`:'Discount Given',fmtAED(a.ourDiscCost),`AED ${Math.round(a.ourDiscPerDay)}/day · ${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'% of sales':'—'}${a.coFundedPct>0?` · after ${Math.round(a.coFundedPct*100)}% co-fund`:''}`,null)}
+        ${kpiCard(a.coFundedPct>0?`${c.brand}'s Discount Cost`:'Discount Given',fmtAEDTip(a.ourDiscCost),`AED ${Math.round(a.ourDiscPerDay)}/day · ${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'% of sales':'—'}${a.coFundedPct>0?` · after ${Math.round(a.coFundedPct*100)}% co-fund`:''}`,null)}
         ${kpiCard('Commission Rate',`${(a.commRate*100).toFixed(0)}%`,`${c.aggregator} · ${c.brand}`,null)}
-        <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Daily Contribution</div><div style="font-size:21px;font-weight:800;color:${a.contribDiffPerDay>=0?'#22C55E':'#EF4444'};font-variant-numeric:tabular-nums;line-height:1">${a.contribDiffPerDay>=0?'+':''}${fmtAED(a.contribDiffPerDay)}</div><div style="font-size:11px;color:#475569;font-weight:600;margin-top:3px">vs baseline /day</div><div style="font-size:11px;color:${profClr};font-weight:700;margin-top:3px">${fmtPct(a.profitabilityPct)}</div></div>
+        <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Daily Contribution</div><div style="font-size:21px;font-weight:800;color:${a.contribDiffPerDay>=0?'#22C55E':'#EF4444'};font-variant-numeric:tabular-nums;line-height:1">${a.contribDiffPerDay>=0?'+':''}${fmtAEDTip(a.contribDiffPerDay)}</div><div style="font-size:11px;color:#475569;font-weight:600;margin-top:3px">vs baseline /day</div><div style="font-size:11px;color:${profClr};font-weight:700;margin-top:3px">${fmtPct(a.profitabilityPct)}</div></div>
         <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Discount ROI</div><div style="font-size:21px;font-weight:800;color:${roiClr};font-variant-numeric:tabular-nums;line-height:1">${a.discountROI==null?'—':(a.discountROI>=0?'+':'')+a.discountROI.toFixed(2)+'×'}</div><div style="font-size:11px;color:#475569;font-weight:600;margin-top:3px">contrib. per AED ${a.coFundedPct>0?'we spend':'disc.'}</div></div>
       </div>
-      <div style="font-size:11px;color:#475569;font-weight:600;margin-top:10px;line-height:1.6">Contribution = Net Sales × (1 − ${(a.commRate*100).toFixed(0)}% commission) − ${a.coFundedPct>0?`our share of discount (${Math.round((1-a.coFundedPct)*100)}% of AED ${fmtAED(a.campDisc).replace('AED ','')})`:'discount'}. ${a.discountROI!=null&&a.discountROI>=1?`<span style="color:#22C55E">The discount generated more incremental contribution than it cost — profitable.</span>`:a.discountROI!=null&&a.discountROI<0?`<span style="color:#EF4444">Incremental contribution was negative — the campaign lost money after discounts.</span>`:a.discountROI!=null?`<span style="color:#FBBF24">The discount returned less than AED 1 of contribution per AED spent — marginal.</span>`:''}</div></div>`;
+      <div style="font-size:11px;color:#475569;font-weight:600;margin-top:10px;line-height:1.6">Contribution = Net Sales × (1 − ${(a.commRate*100).toFixed(0)}% commission) − ${a.coFundedPct>0?`our share of discount (${Math.round((1-a.coFundedPct)*100)}% of AED ${fmtAEDTip(a.campDisc).replace('AED ','')})`:'discount'}. ${a.discountROI!=null&&a.discountROI>=1?`<span style="color:#22C55E">The discount generated more incremental contribution than it cost — profitable.</span>`:a.discountROI!=null&&a.discountROI<0?`<span style="color:#EF4444">Incremental contribution was negative — the campaign lost money after discounts.</span>`:a.discountROI!=null?`<span style="color:#FBBF24">The discount returned less than AED 1 of contribution per AED spent — marginal.</span>`:''}</div></div>`;
   }else{
     profitSection=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#64748b">💰 Profitability Analysis</div><div style="font-size:12px;color:#475569;font-weight:600;padding:4px 0">Discount data is only available from 1 May 2026. This campaign started ${fmtDisp(c.startDate)}, so profitability can't factor in actual discounts.</div></div>`;
   }
@@ -8691,7 +8701,7 @@ function campDetailHTML(c,idx){
       const prior=baselineCampForBranch(br);
       const priorBadge=prior.length?`<span title="${prior.map(p=>(p.name||'unnamed')+' ('+fmtCampDateRange(p.startDate,p.endDate)+')').join('; ')}" style="font-size:9px;background:rgba(251,191,36,.12);color:#FBBF24;font-weight:700;padding:2px 7px;border-radius:8px;border:1px solid rgba(251,191,36,.3);white-space:nowrap;display:inline-block;margin-top:3px;cursor:help">⚠ ${prior.length} other campaign${prior.length>1?'s':''} ran here previously</span>`:`<span style="font-size:9px;color:#64748b;font-weight:600;font-style:italic">clean baseline</span>`;
       const fmtN=(n)=>Math.round(n).toLocaleString();
-      return `<tr><td style="font-weight:700;color:#0F172A">${br}</td><td style="font-variant-numeric:tabular-nums">${fmtN(cs.orders)}<span style="color:#64748b;font-size:10px;margin-left:5px">vs ${fmtN(bs.orders)}</span><div style="font-size:10px;color:${pctClr(ordChg)};font-weight:700">${fmtPct(ordChg)}</div></td><td style="font-variant-numeric:tabular-nums">${fmtAED(cs.sales)}<span style="color:#64748b;font-size:10px;margin-left:5px">vs ${fmtAED(bs.sales)}</span><div style="font-size:10px;color:${pctClr(salChg)};font-weight:700">${fmtPct(salChg)}</div></td><td style="font-variant-numeric:tabular-nums">AED ${cAOV.toFixed(1)}<span style="color:#64748b;font-size:10px;margin-left:5px">vs AED ${bAOV.toFixed(1)}</span><div style="font-size:10px;color:${pctClr(aovChg)};font-weight:700">${fmtPct(aovChg)}</div></td><td>${priorBadge}</td></tr>`;
+      return `<tr><td style="font-weight:700;color:#0F172A">${br}</td><td style="font-variant-numeric:tabular-nums">${fmtN(cs.orders)}<span style="color:#64748b;font-size:10px;margin-left:5px">vs ${fmtN(bs.orders)}</span><div style="font-size:10px;color:${pctClr(ordChg)};font-weight:700">${fmtPct(ordChg)}</div></td><td style="font-variant-numeric:tabular-nums">${fmtAEDTip(cs.sales)}<span style="color:#64748b;font-size:10px;margin-left:5px">vs ${fmtAEDTip(bs.sales)}</span><div style="font-size:10px;color:${pctClr(salChg)};font-weight:700">${fmtPct(salChg)}</div></td><td style="font-variant-numeric:tabular-nums">AED ${cAOV.toFixed(1)}<span style="color:#64748b;font-size:10px;margin-left:5px">vs AED ${bAOV.toFixed(1)}</span><div style="font-size:10px;color:${pctClr(aovChg)};font-weight:700">${fmtPct(aovChg)}</div></td><td>${priorBadge}</td></tr>`;
     }).join('');
     const baselineLabel=`${fmtShort(bStart)} → ${fmtShort(bEnd)} (${a.bDays} day${a.bDays!==1?'s':''}, same weekdays prior week)`;
     perBranchSection=`<div class="card" style="margin-bottom:12px"><div class="ct">📍 Per-Branch Breakdown — Campaign vs Prior Week</div><div style="font-size:11px;color:#94a3b8;margin-bottom:10px;line-height:1.6">Each branch in the campaign's scope compared with its own performance during ${baselineLabel}. The "⚠" badge flags branches where another <strong>${c.aggregator}</strong> campaign was already running in the same period — those baseline numbers aren't clean, so the lift figure should be read with that in mind.</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Branch</th><th>Orders</th><th>Net Sales</th><th>AOV</th><th>Baseline period</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
@@ -8751,7 +8761,7 @@ function bundleDetailHTML(bundle){
   // Combined KPIs
   const kpiCards=`<div class="card" style="margin-bottom:12px"><div class="ct">Combined Performance</div><div class="g4">
     ${kpiCard('Orders During',a.cs.orders.toLocaleString(),`baseline /day: ${Math.round(a.baseOrders/Math.max(1,a.bDays)).toLocaleString()}`,a.ordersLift)}
-    ${kpiCard('Net Sales During',fmtAED(a.cs.sales),`baseline /day: ${fmtAED(a.baseSales/Math.max(1,a.bDays))}`,a.salesLift)}
+    ${kpiCard('Net Sales During',fmtAEDTip(a.cs.sales),`baseline /day: ${fmtAEDTip(a.baseSales/Math.max(1,a.bDays))}`,a.salesLift)}
     ${kpiCard('AOV',`AED ${a.campAOV.toFixed(1)}`,`baseline: AED ${a.baseAOV.toFixed(1)}`,a.aovChange)}
     ${kpiCard('Duration',`${a.days} day${a.days>1?'s':''}`,`${fmtShort(bundle.startDate)} → ${fmtShort(bundle.endDate)}`,null)}
   </div></div>`;
@@ -8762,17 +8772,17 @@ function bundleDetailHTML(bundle){
   if(a.discAvailable){
     profitSection=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#f59e0b">💰 Combined Profitability <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· real shared discount across all ${bundle.campaigns.length} segments</span></div>
       <div style="display:flex;align-items:stretch;gap:14px;flex-wrap:wrap;margin-bottom:14px;padding:12px 14px;background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.18);border-radius:8px">
-        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Total Discount (All ${bundle.campaigns.length} Segments)</div><div style="font-size:22px;font-weight:800;color:#EF4444;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.campDisc)}</div></div>
+        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Total Discount (All ${bundle.campaigns.length} Segments)</div><div style="font-size:22px;font-weight:800;color:#EF4444;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAEDTip(a.campDisc)}</div></div>
         <div style="width:1px;background:rgba(245,158,11,.2)"></div>
-        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Net Sales Generated</div><div style="font-size:22px;font-weight:800;color:#22C55E;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAED(a.cs.sales)}</div></div>
+        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Net Sales Generated</div><div style="font-size:22px;font-weight:800;color:#22C55E;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAEDTip(a.cs.sales)}</div></div>
         <div style="width:1px;background:rgba(245,158,11,.2)"></div>
         <div style="flex:1;min-width:150px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Blended Discount Depth</div><div style="font-size:22px;font-weight:800;color:#FBBF24;font-variant-numeric:tabular-nums;line-height:1.2">${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'%':'—'}</div><div style="font-size:10px;color:#64748b;margin-top:2px">across the whole bundle</div></div>
       </div>
       <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px;line-height:1.6">ℹ️ <strong>Why analyze the bundle together?</strong> Each segment targets a different customer group (new, lapsed, regular), so they don't compete for credit on the same orders. The platform reports a single combined discount across them — splitting it per segment would be guesswork. The combined view below is the honest read on whether the bundle paid off overall.</div>
       <div class="g4">
-        ${kpiCard('Combined Discount',fmtAED(a.campDisc),`AED ${Math.round(a.discPerDay)}/day · ${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'% of sales':'—'}`,null)}
+        ${kpiCard('Combined Discount',fmtAEDTip(a.campDisc),`AED ${Math.round(a.discPerDay)}/day · ${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'% of sales':'—'}`,null)}
         ${kpiCard('Commission Rate',`${(a.commRate*100).toFixed(0)}%`,`${bundle.aggregator} · ${bundle.brand}`,null)}
-        <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Daily Contribution</div><div style="font-size:21px;font-weight:800;color:${a.contribDiffPerDay>=0?'#22C55E':'#EF4444'};font-variant-numeric:tabular-nums;line-height:1">${a.contribDiffPerDay>=0?'+':''}${fmtAED(a.contribDiffPerDay)}</div><div style="font-size:11px;color:#475569;font-weight:600;margin-top:3px">vs baseline /day</div><div style="font-size:11px;color:${profClr};font-weight:700;margin-top:3px">${fmtPct(a.profitabilityPct)}</div></div>
+        <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Daily Contribution</div><div style="font-size:21px;font-weight:800;color:${a.contribDiffPerDay>=0?'#22C55E':'#EF4444'};font-variant-numeric:tabular-nums;line-height:1">${a.contribDiffPerDay>=0?'+':''}${fmtAEDTip(a.contribDiffPerDay)}</div><div style="font-size:11px;color:#475569;font-weight:600;margin-top:3px">vs baseline /day</div><div style="font-size:11px;color:${profClr};font-weight:700;margin-top:3px">${fmtPct(a.profitabilityPct)}</div></div>
         <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Bundle ROI</div><div style="font-size:21px;font-weight:800;color:${roiClr};font-variant-numeric:tabular-nums;line-height:1">${a.discountROI==null?'—':(a.discountROI>=0?'+':'')+a.discountROI.toFixed(2)+'×'}</div><div style="font-size:11px;color:#475569;font-weight:600;margin-top:3px">contrib. per AED disc.</div></div>
       </div>
       <div style="font-size:11px;color:#475569;font-weight:600;margin-top:10px;line-height:1.6">Contribution = Net Sales × (1 − ${(a.commRate*100).toFixed(0)}% commission) − combined discount. ${a.discountROI!=null&&a.discountROI>=1?`<span style="color:#22C55E">The bundle generated more contribution than it cost — the coordinated strategy paid off.</span>`:a.discountROI!=null&&a.discountROI<0?`<span style="color:#EF4444">Incremental contribution was negative — the bundle lost money overall after the combined discount.</span>`:a.discountROI!=null?`<span style="color:#FBBF24">The bundle returned less than AED 1 of contribution per AED discounted — marginal.</span>`:''}</div></div>`;
@@ -11418,9 +11428,9 @@ function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay){
     perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #E2E8F0">
       <div style="font-size:8px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
       <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
-        <span style="font-size:14px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAED(avgA)}</span>
+        <span style="font-size:14px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(avgA)}</span>
         <span style="font-size:9px;color:#64748b">vs</span>
-        <span style="font-size:14px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAED(avgB)}</span>
+        <span style="font-size:14px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(avgB)}</span>
         <span style="font-size:10px;color:${avgClr};font-weight:700">${fmtPct(avgDiff)}</span>
       </div>
       <div style="font-size:8px;color:#64748b;margin-top:2px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
@@ -11432,9 +11442,9 @@ function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay){
       <span style="font-size:8px;color:#64748b;background:rgba(100,116,139,.1);padding:1px 6px;border-radius:5px" title="Data source. 'Exact' = per-order uploaded data; 'Brand-level' = sheet's raw brand-level discount; 'Estimated' = sales-weighted allocation to selected outlets (less precise).">${srcCombo}</span>
     </div>
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
-      <span style="font-size:20px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAED(a)}</span>
+      <span style="font-size:20px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(a)}</span>
       <span style="font-size:11px;color:#475569;font-weight:600">vs</span>
-      <span style="font-size:20px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAED(b)}</span>
+      <span style="font-size:20px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(b)}</span>
     </div>
     <div style="font-size:12px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${arrow} <span style="color:#64748b;font-weight:400">B vs A · less is better</span></div>
     ${burnLine}
@@ -11566,9 +11576,9 @@ function cmpContribCard(contribA,contribB,salesDiff,perDay){
     perDayLine=`<div style="margin-top:9px;padding-top:8px;border-top:1px solid #F0EBDC">
       <div style="font-size:10px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Per day avg</div>
       <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
-        <span style="font-size:14px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAED(avgA)}</span>
+        <span style="font-size:14px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(avgA)}</span>
         <span style="font-size:10px;color:#94a3b8">vs</span>
-        <span style="font-size:14px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAED(avgB)}</span>
+        <span style="font-size:14px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(avgB)}</span>
         <span style="font-size:10.5px;color:${pctClr(avgDiff)};font-weight:700">${fmtPct(avgDiff)}</span>
       </div>
       <div style="font-size:10px;color:#8A8578;margin-top:3px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
@@ -11577,9 +11587,9 @@ function cmpContribCard(contribA,contribB,salesDiff,perDay){
   return `<div class="sm" style="padding:15px 16px">
     <div style="font-size:10px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.9px;margin-bottom:7px">Contribution <span style="text-transform:none;font-weight:500;color:#B0AA98">· margin</span></div>
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
-      <span style="font-size:20px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAED(a)}</span>
+      <span style="font-size:20px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(a)}</span>
       <span style="font-size:11.5px;color:#94a3b8;font-weight:600">vs</span>
-      <span style="font-size:20px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAED(b)}</span>
+      <span style="font-size:20px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(b)}</span>
     </div>
     <div style="font-size:12.5px;color:${dc};font-weight:700;margin-top:5px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:#8A8578;font-weight:400">B vs A</span></div>
     ${ctxLine}
@@ -11635,8 +11645,8 @@ function renderCompare(){
         `<span style="color:${CMP_A_CLR}">${r.a.orders.toLocaleString()}</span>`,
         `<span style="color:${CMP_B_CLR}">${r.b.orders.toLocaleString()}</span>`,
         `<span style="color:${pctClr(r.oDiff)};font-weight:700">${fmtPct(r.oDiff)}</span>`,
-        `<span style="color:#60A5FA">${fmtAED(r.a.sales)}</span>`,
-        `<span style="color:#F59E0B">${fmtAED(r.b.sales)}</span>`,
+        `<span style="color:#60A5FA">${fmtAEDTip(r.a.sales)}</span>`,
+        `<span style="color:#F59E0B">${fmtAEDTip(r.b.sales)}</span>`,
         `<span style="color:${pctClr(r.sDiff)};font-weight:700">${fmtPct(r.sDiff)}</span>`
       ],
       sortVals:[r.brand,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff]
@@ -11669,8 +11679,8 @@ function renderCompare(){
         `<span style="color:${CMP_A_CLR}">${r.a.orders.toLocaleString()}</span>`,
         `<span style="color:${CMP_B_CLR}">${r.b.orders.toLocaleString()}</span>`,
         `<span style="color:${pctClr(r.oDiff)};font-weight:700">${fmtPct(r.oDiff)}</span>`,
-        `<span style="color:#60A5FA">${fmtAED(r.a.sales)}</span>`,
-        `<span style="color:#F59E0B">${fmtAED(r.b.sales)}</span>`,
+        `<span style="color:#60A5FA">${fmtAEDTip(r.a.sales)}</span>`,
+        `<span style="color:#F59E0B">${fmtAEDTip(r.b.sales)}</span>`,
         `<span style="color:${pctClr(r.sDiff)};font-weight:700">${fmtPct(r.sDiff)}</span>`,
         `<span style="color:#60A5FA">${r.a.orders>0?'AED '+r.aov_a.toFixed(1):'—'}</span>`,
         `<span style="color:#F59E0B">${r.b.orders>0?'AED '+r.aov_b.toFixed(1):'—'}</span>`,
@@ -11682,7 +11692,7 @@ function renderCompare(){
     const totA=branchRows.reduce((s,r)=>({orders:s.orders+r.a.orders,sales:s.sales+r.a.sales}),{orders:0,sales:0});
     const totB=branchRows.reduce((s,r)=>({orders:s.orders+r.b.orders,sales:s.sales+r.b.sales}),{orders:0,sales:0});
     const totODiff=pctOf(totB.orders,totA.orders),totSDiff=pctOf(totB.sales,totA.sales);
-    const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:11px;color:#94a3b8;margin-bottom:10px;padding:8px 12px;background:rgba(245,158,11,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center"><span><span style="color:#60A5FA">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAED(totA.sales)}</span><span><span style="color:#F59E0B">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAED(totB.sales)}</span><span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span></div></div>`;
+    const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:11px;color:#94a3b8;margin-bottom:10px;padding:8px 12px;background:rgba(245,158,11,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center"><span><span style="color:#60A5FA">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAEDTip(totA.sales)}</span><span><span style="color:#F59E0B">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAEDTip(totB.sales)}</span><span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span></div></div>`;
     outletDrillCard=branchRows.length
       ?`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid #E2E8F0;color:#94a3b8;padding:4px 10px;font-size:10px;border-radius:5px;cursor:pointer" title="Close drill-down">✕ close</button></div>${totsLine}${sortableTable("cmp-outlet-tbl",oHeads,oRows,4)}</div>`
       :`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown</span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid #E2E8F0;color:#94a3b8;padding:4px 10px;font-size:10px;border-radius:5px;cursor:pointer">✕ close</button></div><div style="color:#64748b;font-size:12px;padding:8px 0">No outlets with activity in either window for this combination.</div></div>`;
@@ -11739,7 +11749,7 @@ function renderCompare(){
         +'<div style="width:50%;display:flex;align-items:center;padding-left:4px">'+(isPos?'<div style="height:6px;width:'+bw+'%;background:'+clr+';border-radius:0 3px 3px 0;opacity:.75"></div>':'')+'</div>'
         +'</div>'
         +'<div style="width:56px;flex-shrink:0;text-align:right;font-size:11px;font-weight:700;color:'+clr+'">'+(p.sDiff>=0?'+':'')+p.sDiff.toFixed(1)+'%</div>'
-        +'<div style="width:72px;flex-shrink:0;text-align:right;font-size:10px;color:#94a3b8">'+fmtAED(p.b.sales)+'</div>'
+        +'<div style="width:72px;flex-shrink:0;text-align:right;font-size:10px;color:#94a3b8">'+fmtAEDTip(p.b.sales)+'</div>'
         +'</div>';
     }).join('');
     return'<div class="card" style="margin-bottom:14px">'
@@ -11762,7 +11772,7 @@ function renderCompare(){
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:14px">
       ${cmpStatCard("Orders",sA.orders,sB.orders,v=>Math.round(v).toLocaleString(),"",{nA,nB})}
-      ${cmpStatCard("Net Sales",sA.sales,sB.sales,v=>fmtAED(v),"",{nA,nB})}
+      ${cmpStatCard("Net Sales",sA.sales,sB.sales,v=>fmtAEDTip(v),"",{nA,nB})}
       ${cmpStatCard("AOV",aovA,aovB,v=>"AED "+v.toFixed(1))}
       ${cmpDiscCard(discA,discB,sA.sales,sB.sales,discAObj.source,discBObj.source,{nA,nB})}
       ${cmpOutletCard(dA,dB)}
@@ -11777,7 +11787,7 @@ function renderCompare(){
       `<span style="color:${p.clr};font-weight:700">${p.ag}</span>`,
       `<span style="color:#60A5FA">${p.a.orders.toLocaleString()}</span>`,`<span style="color:#F59E0B">${p.b.orders.toLocaleString()}</span>`,
       `<span style="color:${pctClr(p.oDiff)};font-weight:700">${fmtPct(p.oDiff)}</span>`,
-      `<span style="color:#60A5FA">${fmtAED(p.a.sales)}</span>`,`<span style="color:#F59E0B">${fmtAED(p.b.sales)}</span>`,
+      `<span style="color:#60A5FA">${fmtAEDTip(p.a.sales)}</span>`,`<span style="color:#F59E0B">${fmtAEDTip(p.b.sales)}</span>`,
       `<span style="color:${pctClr(p.sDiff)};font-weight:700">${fmtPct(p.sDiff)}</span>`,
       `<span style="color:#60A5FA">${p.a.orders>0?'AED '+(p.a.sales/p.a.orders).toFixed(1):'—'}</span>`,`<span style="color:#F59E0B">${p.b.orders>0?'AED '+(p.b.sales/p.b.orders).toFixed(1):'—'}</span>`,
       `<span style="color:${pctClr(p.aDiff)};font-weight:700">${fmtPct(p.aDiff)}</span>`
