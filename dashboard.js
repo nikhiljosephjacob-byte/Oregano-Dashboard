@@ -13,11 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-146";
+const BUILD_VERSION="2026-07-21-147";
 const BUILD_NOTES=[
-  "\ud83d\udd0e Hover-to-see-exact-value feature, dashboard-wide. Any AED figure abbreviated with K or M now shows the precise number on hover (native browser tooltip, no extra UI). Investigated the scope carefully before touching anything: fmtAED is the SOLE K/M-abbreviating function in the whole codebase (confirmed \u2014 order counts and other non-AED numbers are never abbreviated, always shown in full via toLocaleString), used 150 times. Found exactly ONE risky usage \u2014 a spot where fmtAED's output already sits inside an HTML title=\"\" attribute (line ~3857) \u2014 wrapping that one in another HTML tag would have produced malformed nested markup, so it was deliberately left untouched. Every other call site was confirmed to land in plain body/table-cell text, safe to upgrade. New fmtAEDTip() only adds the tooltip when a number is ACTUALLY abbreviated (matching fmtAED's own >=1000 threshold exactly) \u2014 values already shown in full don't get a redundant hover state.",
-  "fmtAEDExact() already existed in the codebase for the exact-value computation \u2014 reused it directly rather than reimplementing."
+  "\ud83d\udcc8 STRUCTURAL FIX to the Investment Plan: the \"Prior GMV\" used to set next month's mandatory obligation was silently using an INCOMPLETE month whenever the plan is viewed before that month fully ends \u2014 confirmed against a real example (Careem: AED 565,831 through 28 of July's 31 days, understating the obligation as AED 22.6K when the properly projected figure is AED 25.0K). This isn't a rare edge case: since the plan is explicitly designed to be \"always available\", it's showing a partial-month total as if it were final on every single day before the month closes. Fixed with a simple linear day-count projection (partial GMV \u00f7 days elapsed \u00d7 days in month) \u2014 verified to the dollar against the worked example. Applied consistently across all four places that read this figure (the summary table, group total, Deliveroo's per-outlet mandate, and the Noon/Careem pool card) \u2014 previously each one independently re-fetched the raw partial total, risking silent drift between them.",
+  "Only projects when the reference month is genuinely incomplete \u2014 once a month fully closes, the real, final total is used directly with no extrapolation. Labeled clearly in the UI whenever a projection is in effect, so a projected figure is never mistaken for a closed-book actual.",
+  "\ud83c\udfa8 Also redesigned the obligations summary from a dense table into a card grid, per feedback that the Investment Plan was hard to scan."
 ];
+
 
 
 
@@ -4944,6 +4946,31 @@ function cpcNextMonthLabel(){
 function cpcGroupGMV(month,ag){
   return allData.filter(r=>recMonth(r)===month&&r.aggregator===ag).reduce((s,r)=>s+(r.sales||0),0);
 }
+// v147: how many days of `month` (YYYY-MM) actually have data, vs how many days that month
+// has in total. `latest` always falls within cpcPriorMonth()'s target month by construction
+// (cpcPriorMonth() is derived directly from `latest`), so "days elapsed" is simply latest's
+// day-of-month — but this is written generally in case it's ever called for a different month.
+function cpcMonthDaysInfo(month){
+  const[y,m]=month.split("-").map(Number);
+  const daysInMonth=new Date(y,m,0).getDate();
+  const anchor=latest||new Date().toISOString().slice(0,10);
+  const daysElapsed=(anchor.slice(0,7)===month)?Number(anchor.slice(8,10)):daysInMonth;
+  return{daysElapsed:Math.min(daysElapsed,daysInMonth),daysInMonth,isComplete:daysElapsed>=daysInMonth};
+}
+// v147: STRUCTURAL FIX — the Investment Plan is explicitly "always available", meaning it's
+// viewed continuously throughout the reference month, not just after it closes. Confirmed with
+// a real example: on 29 Jul (data through the 28th), Careem's raw July total (AED 565,831,
+// missing the last 3 days) was being used AS IF it were July's final figure, understating
+// August's mandatory obligation as AED 22.6K when the properly projected number is AED 25.0K.
+// Simple linear day-count projection when the month is incomplete: partial GMV ÷ days elapsed
+// × days in month. Once the month actually closes, the real final total is used directly — no
+// extrapolation ever applied to a closed month.
+function cpcProjectedGroupGMV(month,ag){
+  const raw=cpcGroupGMV(month,ag);
+  const{daysElapsed,daysInMonth,isComplete}=cpcMonthDaysInfo(month);
+  if(isComplete||daysElapsed<=0)return{value:raw,projected:false,daysElapsed,daysInMonth};
+  return{value:raw/daysElapsed*daysInMonth,projected:true,daysElapsed,daysInMonth,rawSoFar:raw};
+}
 
 // Mandatory budget per aggregator per skill rules
 function cpcMandatoryBudget(ag,priorGMV){
@@ -5125,21 +5152,46 @@ function cpcSmokeysBanner(){
 }
 
 function cpcObligationsCard(priorMonth,priorLabel,nextLabel){
+  const AGG_CARD_CLR={Deliveroo:"#00CCBC",Talabat:"#FF6000",Careem:"#3DDC73",Noon:"#F5CF00"};
   const aggs=["Deliveroo","Talabat","Careem","Noon"];
-  const rows=aggs.map(ag=>{
-    const gmv=cpcGroupGMV(priorMonth,ag);
+  const cards=aggs.map(ag=>{
+    const gmvInfo=cpcProjectedGroupGMV(priorMonth,ag);
+    const gmv=gmvInfo.value;
     const mand=cpcMandatoryBudget(ag,gmv);
-    const pct=ag==="Deliveroo"?"2%":ag==="Talabat"?"—":"4%";
+    const pct=ag==="Deliveroo"?"2%":ag==="Talabat"?null:"4%";
     const type=ag==="Deliveroo"||ag==="Talabat"?"Per outlet":"Brand pool";
-    const status=ag==="Talabat"&&!TALABAT_DEAL_SIGNED
-      ?`<span style="color:#fbbf24;font-size:10px;font-weight:700">⚠ Deal pending — conditional</span>`
-      :`<span style="color:#22C55E;font-size:10px;font-weight:700">✓ Active</span>`;
-    return`<tr><td style="padding:8px 6px;color:${AC[ag]||'#fff'};font-weight:700">${ag}</td><td style="padding:8px 6px;text-align:right;color:#475569">${fmtAEDTip(gmv)}</td><td style="padding:8px 6px;text-align:center;color:#94a3b8;font-size:11px">${pct}</td><td style="padding:8px 6px;text-align:right;color:#f59e0b;font-weight:800">${fmtAEDTip(mand)}</td><td style="padding:8px 6px;color:#94a3b8;font-size:11px">${type}</td><td style="padding:8px 6px">${status}</td></tr>`;
+    const clr=AGG_CARD_CLR[ag];
+    const statusChip=ag==="Talabat"&&!TALABAT_DEAL_SIGNED
+      ?`<span style="color:#D97706;font-size:11px;font-weight:700">⚠ Deal pending</span>`
+      :`<span style="color:#16A34A;font-size:11px;font-weight:700">✓ Active</span>`;
+    // v147: whenever the reference month is still in progress, the GMV feeding this obligation
+    // is a PROJECTION (linear day-count), not a closed-book actual — labeled explicitly so a
+    // projected figure is never mistaken for a final one.
+    const gmvLabel=gmvInfo.projected
+      ?`<span title="Projected from ${fmtAEDExact(gmvInfo.rawSoFar)} through day ${gmvInfo.daysElapsed} of ${gmvInfo.daysInMonth}">Projected ${priorLabel.split(' ')[0]} GMV ⓘ</span>`
+      :`${priorLabel.split(' ')[0]} GMV (final)`;
+    return`<div style="background:#FFFFFF;border:1px solid #EDE7D9;border-left:4px solid ${clr};border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(15,23,42,.05)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:15px;font-weight:800;color:#0F172A">${ag}</div>
+        ${statusChip}
+      </div>
+      <div style="font-size:10px;color:#94A3B8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;cursor:${gmvInfo.projected?'help':'default'}">Mandatory budget${pct?" · "+pct+" of "+gmvLabel:""}</div>
+      <div style="font-size:24px;font-weight:800;color:#D97706;margin-bottom:10px">${mand?fmtAEDTip(mand):"—"}</div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:#64748B;border-top:1px dashed #EDE7D9;padding-top:8px">
+        <span>${gmvInfo.projected?"Projected":priorLabel.split(' ')[0]} GMV: <strong style="color:#0F172A">${fmtAEDTip(gmv)}</strong></span>
+        <span>${type}</span>
+      </div>
+    </div>`;
   }).join("");
-  const totalMand=aggs.reduce((s,ag)=>s+cpcMandatoryBudget(ag,cpcGroupGMV(priorMonth,ag)),0);
+  const totalMand=aggs.reduce((s,ag)=>s+cpcMandatoryBudget(ag,cpcProjectedGroupGMV(priorMonth,ag).value),0);
+  const anyProjected=aggs.some(ag=>cpcProjectedGroupGMV(priorMonth,ag).projected);
   return`<div class="card" style="border:1px solid rgba(245,158,11,.3);background:linear-gradient(135deg,rgba(245,158,11,.04),rgba(255,255,255,.5))">
-    <div style="margin-bottom:10px"><div style="font-size:13px;font-weight:800;color:#fbbf24;letter-spacing:.3px">${nextLabel.toUpperCase()} INVESTMENT PLAN</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">based on ${priorLabel} data (latest available) · always available · recalculates as new data arrives</div></div>
-    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:1px solid #E2E8F0;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px;text-align:left">Aggregator</th><th style="padding:6px;text-align:right">Prior GMV</th><th style="padding:6px;text-align:center">% Oblig</th><th style="padding:6px;text-align:right">Mandatory Budget</th><th style="padding:6px;text-align:left">Budget Type</th><th style="padding:6px;text-align:left">Status</th></tr></thead><tbody>${rows}</tbody><tfoot><tr style="border-top:1px solid #E2E8F0"><td colspan="3" style="padding:8px 6px;text-align:right;color:#94a3b8;font-size:11px;font-weight:700">GROUP TOTAL</td><td style="padding:8px 6px;text-align:right;color:#22C55E;font-weight:800;font-size:14px">${fmtAEDTip(totalMand)}</td><td colspan="2"></td></tr></tfoot></table></div>
+    <div style="margin-bottom:14px"><div style="font-size:13px;font-weight:800;color:#fbbf24;letter-spacing:.3px">${nextLabel.toUpperCase()} INVESTMENT PLAN</div><div style="font-size:10.5px;color:#94a3b8;margin-top:2px">based on ${priorLabel} data${anyProjected?" (in progress — projected to month-end)":" (final)"} · always available · recalculates as new data arrives</div></div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px">${cards}</div>
+    <div style="background:#F8F6EE;border:1px solid #EDE7D9;border-radius:10px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:11px;color:#64748B;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Group total mandatory budget — ${nextLabel}</div>
+      <div style="font-size:19px;font-weight:800;color:#16A34A">${fmtAEDTip(totalMand)}</div>
+    </div>
     <div style="margin-top:10px;padding:9px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px;font-size:11px;color:#475569;line-height:1.55">💡 <strong>Group-level obligations.</strong> The 2%/4% applies to total group GMV per aggregator — not per brand. Underperforming brands' shares get redirected to higher-ROAS combos in the per-outlet tables below.</div>
   </div>`;
 }
@@ -5175,7 +5227,7 @@ function cpcDeliverooAllocCard(priorMonth){
   // best-performing outlets (weighted by ROAS upside above break-even). Always exclude PAUSE
   // outlets from receiving the surplus — they failed at break-even, more budget won't help.
   // Smokeys is also excluded per the standing structural-decline guidance.
-  const mandate=cpcMandatoryBudget(ag,cpcGroupGMV(priorMonth,ag));
+  const mandate=cpcMandatoryBudget(ag,cpcProjectedGroupGMV(priorMonth,ag).value);
   const baseTotal=rows.reduce((s,r)=>s+r.baseRec,0);
   let surplusBanner="";
   let reconciliationNote="";
@@ -5312,7 +5364,7 @@ function cpcTalabatAllocCard(priorMonth){
 // and accumulated current-month totals (curSpent / curSales / curInvested) at the brand level.
 function cpcPoolAllocCard(ag,priorMonth){
   const floor=CPC_MIN_PER_OUTLET[ag];
-  const gmv=cpcGroupGMV(priorMonth,ag);
+  const gmv=cpcProjectedGroupGMV(priorMonth,ag).value;
   const mand=cpcMandatoryBudget(ag,gmv);
   const A=(cpcModel&&cpcModel.byAgg)?cpcModel.byAgg[ag]:null;
   // Per-brand prior GMV (sales side) — keep this even when CPC model has no entries for the brand
