@@ -13,11 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-148";
+const BUILD_VERSION="2026-07-21-149";
 const BUILD_NOTES=[
-  "\u26a1 RELIABILITY FIX: fetchCSV() was trying its three data sources SEQUENTIALLY (direct sheet URL, then two free public CORS proxies), each with an 8-second timeout \u2014 worst case, up to 24 seconds before a brand was even reported as failed, and free public proxies are known to be flaky under real load. Confirmed this as the direct cause of \"have to hit retry several times\": any ONE slow/down proxy delayed the whole load. Now races all three in parallel (first to succeed wins) instead of chaining them \u2014 only waits as long as the fastest source takes, and a single flaky proxy no longer blocks the others.",
-  "\ud83d\udcca Investment Plan restructured: Deliveroo, Talabat, Noon, and Careem's per-outlet/per-brand allocation tables are now grouped by brand with click-to-expand outlet detail, instead of every outlet always shown flat. No data removed \u2014 every column and every outlet row is still there, just one click away instead of always visible. For Noon/Careem specifically, the existing outlet-level \"exclude candidate\" breakdown (previously a separate always-visible block below the main table) is now folded directly into each brand's expandable row."
+  "\u2702\ufe0f STRUCTURAL FIX per explicit instruction: Deliveroo's recommended budget total must never exceed the mandated (contractual) amount. Previously, when bottom-up per-outlet recommendations summed to MORE than the 2% mandate, the dashboard only showed a warning and left the actual trim to manual review \u2014 meaning the displayed \"Recommended\" total could sit above the obligation you're contractually meant to invest, not just at or under it. Now trims automatically: weakest ROAS-upside outlets within MONITOR/INVEST get cut first, down to each outlet's AED floor, with SCALE outlets fully preserved \u2014 unless even trimming every MONITOR/INVEST outlet to its floor still isn't enough to close the gap (meaning SCALE alone exceeds the mandate), in which case SCALE gets trimmed too, weakest-first, as a clearly-labeled last resort. Staying within the mandate is now the hard constraint; preserving SCALE is the preference applied within that constraint, not an override of it. Tolerance tightened from 5% to 2%, matching the existing under-mandate side.",
+  "Noon, Careem, and Talabat were checked and don't need the same fix: Noon/Careem's per-brand budgets are proportional shares of the mandate by construction (they always sum to exactly the mandate, can never exceed it), and Talabat's flat AED 20K obligation doesn't have this same bottom-up-sum risk."
 ];
+
 
 
 
@@ -5266,8 +5267,43 @@ function cpcDeliverooAllocCard(priorMonth){
       // hit the mandate by just topping up; needs strategic decision.
       surplusBanner=`<div style="background:rgba(239,68,68,.06);border-left:3px solid #EF4444;border-radius:4px;padding:7px 11px;margin-bottom:10px;font-size:11px;color:#475569">⚠️ <strong style="color:#EF4444">Mandate gap:</strong> Base recommendations sum to ${fmtAEDTip(baseTotal)} but mandate is ${fmtAEDTip(mandate)} (gap ${fmtAEDTip(mandate-baseTotal)}). No SCALE/INVEST/MONITOR outlets with positive ROAS upside found — review whether to pause the mandate, run brand-level promos, or reallocate to areas not yet tested.</div>`;
     }
-  }else if(mandate>0&&baseTotal>mandate*1.05){
-    surplusBanner=`<div style="background:rgba(251,191,36,.06);border-left:3px solid #FBBF24;border-radius:4px;padding:7px 11px;margin-bottom:10px;font-size:11px;color:#475569">⚠️ <strong style="color:#FBBF24">Over mandate:</strong> Base recommendations sum to ${fmtAEDTip(baseTotal)} which exceeds the 2% mandate (${fmtAEDTip(mandate)}) by ${fmtAEDTip(baseTotal-mandate)}. Trim from MONITOR/INVEST first (preserve SCALE) — manual review recommended.</div>`;
+  }else if(mandate>0&&baseTotal>mandate*1.02){ // v149: tightened from 5% to 2% tolerance, matching the under-mandate side
+    // v149: STRUCTURAL FIX per explicit instruction — recommended budget must never exceed the
+    // mandate. This used to just show a warning and leave the actual trim to manual review,
+    // meaning the displayed "Recommended" total could sit above the contractual 2% obligation.
+    // Now trims automatically: weakest-upside MONITOR/INVEST outlets first (closest to
+    // break-even gets cut before stronger performers in the same tier), respecting each
+    // outlet's AED floor, SCALE always preserved — UNLESS even trimming every MONITOR/INVEST
+    // outlet down to its floor still isn't enough to close the gap (SCALE alone exceeds the
+    // mandate), in which case SCALE gets trimmed too, weakest-first, as a clearly-labeled last
+    // resort — staying within the mandate is the hard constraint here, preserving SCALE is the
+    // preference within that constraint.
+    let excess=baseTotal-mandate;
+    const trimPool=rows.filter(r=>(r.verdict==="MONITOR"||r.verdict==="INVEST")&&r.latestROAS!=null)
+      .sort((a,b)=>((a.latestROAS-cpcPlanBE(ag,a.brand))-(b.latestROAS-cpcPlanBE(ag,b.brand))));
+    let trimmed=0;const trimLog=[];
+    for(const r of trimPool){
+      if(excess<=0)break;
+      const capacity=Math.max(0,r.baseRec-floor);
+      const cut=Math.min(capacity,excess);
+      if(cut>0){r.rec=r.baseRec-cut;trimmed+=cut;excess-=cut;trimLog.push({r,cut});}
+    }
+    let forcedScaleNote="";
+    if(excess>1){ // MONITOR/INVEST alone couldn't close the gap — SCALE alone exceeds the mandate
+      const scalePool=rows.filter(r=>r.verdict==="SCALE"&&r.latestROAS!=null)
+        .sort((a,b)=>((a.latestROAS-cpcPlanBE(ag,a.brand))-(b.latestROAS-cpcPlanBE(ag,b.brand))));
+      for(const r of scalePool){
+        if(excess<=0)break;
+        const capacity=Math.max(0,r.baseRec-floor);
+        const cut=Math.min(capacity,excess);
+        if(cut>0){r.rec=r.baseRec-cut;trimmed+=cut;excess-=cut;trimLog.push({r,cut});}
+      }
+      if(trimLog.some(t=>t.r.verdict==="SCALE")){
+        forcedScaleNote=` SCALE outlets' own base recommendations exceeded the mandate on their own — trimmed weakest-SCALE-first as a last resort since staying within the mandate takes priority.`;
+      }
+    }
+    const newTotal=rows.reduce((s,r)=>s+r.rec,0);
+    surplusBanner=`<div style="background:rgba(251,191,36,.06);border-left:3px solid #FBBF24;border-radius:4px;padding:7px 11px;margin-bottom:10px;font-size:11px;color:#475569">✂️ <strong style="color:#FBBF24">Trimmed to mandate:</strong> Base recommendations summed to ${fmtAEDTip(baseTotal)}, exceeding the 2% mandate (${fmtAEDTip(mandate)}) by ${fmtAEDTip(baseTotal-mandate)}. Automatically trimmed ${fmtAEDTip(trimmed)} from ${trimLog.length} outlet${trimLog.length===1?"":"s"} — weakest ROAS-upside within MONITOR/INVEST cut first, down to the AED ${floor}/outlet floor, SCALE preserved.${forcedScaleNote} Recommended total is now ${fmtAEDTip(newTotal)}.</div>`;
   }
 
   const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",PAUSE:"#EF4444",UNTESTED:"#94a3b8"};
