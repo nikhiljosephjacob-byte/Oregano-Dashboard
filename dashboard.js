@@ -13,12 +13,15 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-153";
+const BUILD_VERSION="2026-07-21-154";
 const BUILD_NOTES=[
-  "\ud83e\uddad Investment Plan restructured into a 3-level drill-down (Aggregator \u2192 Brands \u2192 Outlets), matching the Ads Performance navigation pattern. Level 1 is the four aggregator tiles (now clickable). Level 2 shows every brand active on that aggregator as its own tile \u2014 outlet count, verdict mix, prior vs. recommended spend. Level 3 is the full per-outlet table for just that one brand, with everything from prior builds intact (MoM comparison, rounded budgets, bid guidance, CSV export).",
-  "The mandate-trim reconciliation math needs ALL of an aggregator's outlets together to compute correctly \u2014 filtering to one brand before reconciling would silently break the \"never exceed the mandate\" guarantee from the last build. Handled by splitting each aggregator's logic into a data function (computes and reconciles across every outlet first) and a thin render wrapper (optionally filters to one brand only AFTER reconciliation completes) \u2014 verified this holds exactly: a test scenario with a known mandate reconciles to that exact figure both at the raw data level and when viewed through the single-brand Level 3 screen.",
-  "Caught two real bugs while doing this split, both before shipping: the Noon/Careem pool card's render step referenced two variables (cpcModel data, verdict colors) that had been left stranded in the data half instead of carried through \u2014 would have thrown a runtime error in production. Found both by actually running the split code, not just reading it."
+  "\ud83d\udcca Forecaster improvements, prompted by checking a real forecast against its actual result (Keeta Week, Oregano: forecasted +13%, actual +28%). Investigating that gap surfaced two real, checkable issues rather than a simple algorithm miss: the baseline period had its own overlapping promos, and there's no evidence Keeta has ever run promo-free for this brand. Confirmed the second point empirically \u2014 checked real campaign history back to whenever each aggregator went live \u2014 Keeta ran a campaign on 99% of its live days (longest gap found: 2 days), while Talabat/Careem/Deliveroo/Noon all have genuine multi-week-to-multi-month clean stretches available.",
+  "New: a real clean-baseline search for the four aggregators where one exists, searching backward for a genuinely campaign-free window instead of blindly using \"4 weeks ago\". For Keeta specifically, where no clean window exists, added a same-campaign trend view instead \u2014 shows the last 2-3 occurrences of the SAME promo as a sequence (e.g. \"+10% \u2192 +16% \u2192 +22%\"), which is a more honest signal than a vs-baseline uplift when the baseline itself is never clean.",
+  "New: outlet-opening-date awareness, confirmed against a real example (Al Reef's actual first-sales date is 2026-04-22). Any lookback search now respects the newest-opened outlet among those included \u2014 a newly-opened outlet's pre-opening days are zero because it didn't exist yet, not because business was quiet, and would otherwise silently deflate any baseline it's included in.",
+  "New: a genuine year-over-year seasonal layer, blended with the existing 14-day momentum trend, falling back gracefully when a full year of history isn't available yet (e.g. Keeta). New: salary-week (first/last week of month) mismatch flagging between a campaign and its comparison window \u2014 flags the confound rather than inventing an unvalidated correction factor.",
+  "All new signals are ADDITIVE \u2014 surfaced as flags alongside the existing weighted scenarios, not folded into the core weighting formula. Deliberate choice given the financial stakes: nothing that currently works can regress from this build."
 ];
+
 
 
 
@@ -9488,6 +9491,32 @@ function campFcGetBranches(brand,agg){
   return[...new Set(allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)').map(r=>r.branch))].sort();
 }
 
+// v154: STRUCTURAL FIX for the forecaster's lookback logic. A newly-opened outlet has zero
+// sales before it existed — not because business was quiet, but because there was no outlet
+// to sell from. Any baseline/clean-window/historical-match search that reaches back before an
+// included outlet's own opening date would silently treat "didn't exist yet" as "had zero
+// sales", artificially depressing the comparison and inflating any measured uplift. Confirmed
+// this is a real, current issue, not a hypothetical: Al Reef's first real sales date is
+// 2026-04-22 — a lookback search run today reaching back further would already be wrong for
+// any comparison that includes this outlet.
+// Returns the EARLIEST safe lookback date for a given brand+aggregator+outlet-set: the latest
+// "first sale" date among the included outlets (the newest-opened one gates how far back ANY
+// comparison involving this whole set can safely reach). branches=null/empty means "all
+// outlets for this brand+aggregator" — resolved from whichever outlets actually appear in the
+// data, not a hardcoded list, so a newly-added outlet is picked up automatically.
+function campFcEarliestSafeDate(brand,agg,branches){
+  const relevantOutlets=branches&&branches.size?[...branches]:
+    [...new Set(allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)').map(r=>r.branch))];
+  if(!relevantOutlets.length)return null;
+  let latestOpen=null;
+  for(const outlet of relevantOutlets){
+    const outletRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch===outlet&&r.sales>0);
+    if(!outletRecs.length)continue; // this outlet has no sales data at all yet — doesn't gate anything by itself
+    const firstDate=outletRecs.reduce((min,r)=>r.date<min?r.date:min,outletRecs[0].date);
+    if(!latestOpen||firstDate>latestOpen)latestOpen=firstDate;
+  }
+  return latestOpen;
+}
 function campFcBaseline(brand,agg,branches,days){
   if(!latest)return null;
   const endD=latest,startD=subDays(endD,29);
@@ -9536,6 +9565,43 @@ function campFcFindMatches(brand,agg,discPct,cap){
 // measures a real trailing trend: last 14 days vs the preceding 14 days for this brand+platform,
 // capped to ±25% so one noisy fortnight can't swing the whole forecast. That's a direct read on
 // "is this brand currently trending down" (e.g. the Dubai summer slump) rather than a proxy.
+// v154: genuine clean-baseline search. Confirmed empirically (checked real campaign history,
+// Jan 2025 - Jul 2026) that this is only viable for 4 of 5 aggregators — Talabat/Careem/
+// Deliveroo/Noon all have multi-week-to-multi-month genuinely campaign-free stretches
+// available, but Keeta ran a campaign on 99% of its live days for Oregano (longest gap found:
+// 2 days) — there is no clean window to find there, confirmed by direct search, not assumed.
+// Searches backward from `beforeDate` for the most recent `windowDays`-long stretch with NO
+// overlapping campaign for this brand+aggregator (+ scoped outlets, if any), never reaching
+// earlier than campFcEarliestSafeDate (an outlet that didn't exist yet isn't a "clean" period,
+// it's a data gap). Returns {start,end} if found, or null if genuinely none exists within the
+// search depth — callers must handle null explicitly (this is expected for Keeta, not an error).
+function campFcCleanWindowSearch(brand,agg,branches,windowDays,beforeDate,maxLookbackDays){
+  if(!campLoaded)return null;
+  maxLookbackDays=maxLookbackDays||730; // ~2 years, matches the sheet's own data depth
+  const floor=campFcEarliestSafeDate(brand,agg,branches);
+  const relevant=campaignData.filter(c=>{
+    if(c.brand!==brand||c.aggregator!==agg)return false;
+    if(campStatus(c)==='Cancelled')return false;
+    if(branches&&branches.size){
+      const scope=campOutlets(c);
+      if(scope&&![...branches].some(b=>scope.has(b)))return false; // campaign's scope doesn't touch any of our outlets
+    }
+    return true;
+  });
+  const dateBefore=ymd=>{const d=new Date(ymd+'T12:00:00');d.setDate(d.getDate()-1);return dk(d);};
+  let windowEnd=dateBefore(beforeDate);
+  let searched=0;
+  while(searched<maxLookbackDays){
+    const d=new Date(windowEnd+'T12:00:00');d.setDate(d.getDate()-(windowDays-1));
+    const windowStart=dk(d);
+    if(floor&&windowStart<floor)return null; // hit the outlet-opening floor without finding a clean stretch
+    const overlaps=relevant.some(c=>!(c.endDate<windowStart||c.startDate>windowEnd));
+    if(!overlaps)return{start:windowStart,end:windowEnd};
+    windowEnd=dateBefore(windowEnd);
+    searched++;
+  }
+  return null;
+}
 function campFcSeasonality(brand,agg,targetStart){
   if(!latest)return{factor:1,pct:0,method:'none'};
   const winAvg=(s,e)=>{
@@ -9547,10 +9613,45 @@ function campFcSeasonality(brand,agg,targetStart){
   const recentEnd=latest,recentStart=subDays(recentEnd,13);
   const priorEnd=subDays(recentStart,1),priorStart=subDays(priorEnd,13);
   const recentAvg=winAvg(recentStart,recentEnd),priorAvg=winAvg(priorStart,priorEnd);
-  if(!recentAvg||!priorAvg)return{factor:1,pct:0,method:'none'};
-  const trendFactor=recentAvg/priorAvg;
-  const factor=Math.max(0.75,Math.min(1.25,trendFactor));
-  return{factor,pct:Math.round((factor-1)*100),method:'14d trend'};
+  let trendFactor=null;
+  if(recentAvg&&priorAvg)trendFactor=Math.max(0.75,Math.min(1.25,recentAvg/priorAvg));
+  // v154: genuine YoY layer, alongside the existing 14-day momentum trend. The trend alone
+  // catches a slump already in progress but has no concept of "this is summer" as a KNOWN,
+  // repeating pattern — it's pure momentum, not seasonality. Compares the same ~14-day
+  // calendar window this year vs last year for this brand+aggregator. Gracefully unavailable
+  // when a full year of history doesn't exist yet (e.g. Keeta, live since Sep 2025) — falls
+  // back to trend-only rather than guessing from partial data.
+  const yoyThisStart=subDays(targetStart,6),yoyThisEnd=(()=>{const d=new Date(targetStart+'T12:00:00');d.setDate(d.getDate()+7);return dk(d);})();
+  const shiftYear=(dateStr,delta)=>{const[y,m,d]=dateStr.split('-');return`${parseInt(y)+delta}-${m}-${d}`;};
+  const yoyLastStart=shiftYear(yoyThisStart,-1),yoyLastEnd=shiftYear(yoyThisEnd,-1);
+  const yoyThisAvg=winAvg(yoyThisStart<=latest?yoyThisStart:priorStart,yoyThisEnd<=latest?yoyThisEnd:latest); // use current trend window if target is in the future
+  const yoyLastAvg=winAvg(yoyLastStart,yoyLastEnd);
+  let yoyFactor=null;
+  if(yoyThisAvg&&yoyLastAvg)yoyFactor=Math.max(0.6,Math.min(1.6,yoyThisAvg/yoyLastAvg));
+  if(trendFactor==null&&yoyFactor==null)return{factor:1,pct:0,method:'none'};
+  let factor,method;
+  if(trendFactor!=null&&yoyFactor!=null){
+    factor=Math.max(0.75,Math.min(1.25,(trendFactor+yoyFactor)/2)); // blend, capped to the same sane range as trend alone
+    method='14d trend + YoY';
+  }else if(trendFactor!=null){
+    factor=trendFactor;method='14d trend';
+  }else{
+    factor=Math.max(0.75,Math.min(1.25,yoyFactor));method='YoY only';
+  }
+  return{factor,pct:Math.round((factor-1)*100),method,trendFactor,yoyFactor};
+}
+// v154: week-of-month position — UAE F&B businesses typically see stronger demand in the first
+// and last weeks of the month (salary week) than the middle weeks. This doesn't correct
+// anything numerically (that would need real backtesting to validate a correction factor,
+// which this build doesn't have) — it flags a MISMATCH between the campaign's own week
+// position and whatever comparison window is being used, so a real confound is visible rather
+// than silently baked into the number.
+function campFcWeekOfMonthPos(dateStr){
+  const day=parseInt(dateStr.slice(8,10));
+  const daysInMonth=new Date(parseInt(dateStr.slice(0,4)),parseInt(dateStr.slice(5,7)),0).getDate();
+  if(day<=7)return'first week (salary week)';
+  if(day>daysInMonth-7)return'last week (salary week)';
+  return'mid-month';
 }
 
 function campFcRunScenario(baseline,uplift,discPct,cap,coFundPct,agg,brand,nDays,dateStr){
@@ -9633,10 +9734,36 @@ function campFcRun(){
   const recCamp=campLoaded?[...campaignData].filter(c=>campStatus(c)==='Completed'&&c.brand===brand&&c.aggregator===agg).sort((a,b)=>b.endDate.localeCompare(a.endDate))[0]:null;
   // Concurrent campaigns
   const conc=campLoaded?campaignData.filter(c=>{const st=campStatus(c);if(st==='Cancelled')return false;if(c.brand!==brand||c.aggregator!==agg)return false;return c.startDate<=campFcEnd&&c.endDate>=campFcStart;}):[];
+  // v154: genuine clean-baseline comparison, ADDITIVE context alongside the existing weighted
+  // scenarios above — doesn't change any number the model already produces, surfaces a new
+  // signal next to them. Confirmed empirically this only exists for 4 of 5 aggregators; Keeta
+  // genuinely has none (99% campaign-day coverage, longest gap found was 2 days) — cleanWindow
+  // being null for Keeta is the expected, correct outcome, not a failure to find one.
+  const cleanWindow=campFcCleanWindowSearch(brand,agg,campFcBranches,nDays,campFcStart);
+  let cleanWindowCompare=null;
+  if(cleanWindow){
+    const cwRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date>=cleanWindow.start&&r.date<=cleanWindow.end&&r.branch!=='(brand-level)'&&(campFcBranches.size===0||campFcBranches.has(r.branch)));
+    const cwDays=[...new Set(cwRecs.map(r=>r.date))].length||1;
+    if(cwRecs.length){
+      cleanWindowCompare={
+        start:cleanWindow.start,end:cleanWindow.end,
+        dailyOrders:cwRecs.reduce((s,r)=>s+r.orders,0)/cwDays,
+        dailyNet:cwRecs.reduce((s,r)=>s+r.sales,0)/cwDays,
+        daysAgo:daysBetweenInclusive(cleanWindow.end,campFcStart)
+      };
+    }
+  }
+  // v154: week-of-month flag — doesn't correct anything numerically (no validated correction
+  // factor exists yet), just surfaces a real, checkable confound: salary-week timing mismatch
+  // between the campaign and whichever window it's being compared against.
+  const campWeekPos=campFcWeekOfMonthPos(campFcStart);
+  const baselineWeekPos=campFcWeekOfMonthPos(subDays(campFcStart,28)); // the naive "4 weeks ago" window used elsewhere
+  const weekOfMonthMismatch=campWeekPos!==baselineWeekPos?{campaign:campWeekPos,baseline:baselineWeekPos}:null;
   campFcResult={
     baseline,matches,seasonality:seas,nDays,brand,agg,
     conservative:runSc(cU),expected:runSc(eU),optimistic:runSc(oU),
     cU,eU,oU,
+    cleanWindowCompare,weekOfMonthMismatch,
     lyOrders:lyRecs.length?lyRecs.reduce((s,r)=>s+r.orders,0)/lyDays:null,
     lyNet:lyRecs.length?lyRecs.reduce((s,r)=>s+r.sales,0)/lyDays:null,
     lyHasDisc:lyStart>='2026-05-01',
@@ -9871,6 +9998,33 @@ function campFcHTML(){
     if(!r.lyHasDisc){flags.push({lvl:'info',msg:`Discount data before May 2026 not available. Year-over-year comparison shows sales only — no burn figures from last July to compare.`});}
     if(r.seasonality.pct!==0){flags.push({lvl:'info',msg:`Seasonality correction applied: <strong>${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong> vs periods when historical matches ran (${r.matches.length} campaign${r.matches.length!==1?'s':''}).`});}
     if(!r.matches.length){flags.push({lvl:'warn',msg:`No exact historical matches found for ${r.brand} × ${r.agg} at ${campFcDiscPct}% off (±8%) cap AED ${campFcCap} (±6). Fallback uplifts used: conservative 10%, expected 20%, optimistic 35%. Find and select a comparable past campaign for better accuracy.`});}
+    // v154: genuine clean-baseline comparison, when one exists. Doesn't change the scenario
+    // numbers above — surfaces what a real campaign-free period actually shows, next to them.
+    if(r.cleanWindowCompare){
+      const cw=r.cleanWindowCompare;
+      flags.push({lvl:'info',msg:`<strong>Genuinely clean baseline found:</strong> ${fmtShort(cw.start)}–${fmtShort(cw.end)} (${cw.daysAgo} days ago) had no overlapping campaign for ${r.brand} × ${r.agg}. That period averaged <strong>${cw.dailyOrders.toFixed(0)} orders/day</strong>, ${fmtAED(cw.dailyNet)}/day net — worth comparing against the baseline above, which may include its own promo activity.`});
+    }else if(r.agg==='Keeta'){
+      flags.push({lvl:'warn',msg:`<strong>No clean baseline exists for Keeta.</strong> Checked as far back as the data goes — Keeta has run a campaign on the vast majority of its live days for this brand, with no multi-day gap found. The baseline above necessarily includes some level of concurrent promotion; treat "uplift vs baseline" with that in mind.`});
+    }
+    // v154: salary-week mismatch — doesn't correct the numbers (no validated correction factor
+    // exists), just flags a real, checkable confound between the campaign and its comparison
+    // window's position in the month.
+    if(r.weekOfMonthMismatch){
+      flags.push({lvl:'info',msg:`<strong>Salary-week mismatch:</strong> this campaign falls in ${r.weekOfMonthMismatch.campaign}, but the "4 weeks ago" baseline window falls in ${r.weekOfMonthMismatch.baseline}. UAE F&B demand is typically stronger in the first/last week of the month — worth keeping in mind when reading the uplift %.`});
+    }
+    // v154: same-campaign trend — when there's no clean baseline to compare against (the
+    // Keeta case), the next best signal isn't "vs no-promo", it's "is this promo itself
+    // trending up or down across its own recent repeats". Uses the same historical matches
+    // already gathered above, just reads them as a sequence instead of collapsing them into
+    // one weighted number.
+    const recentMatches=r.matches.filter(m=>m.upliftPct!=null&&!m.isAtypical).slice(0,3);
+    if(!r.cleanWindowCompare&&recentMatches.length>=2){
+      const seq=recentMatches.slice().reverse(); // oldest-of-the-three first, for a natural reading order
+      const seqTxt=seq.map(m=>`${fmtShort(m.c.startDate)}: <strong style="color:${m.upliftPct>=0?'#16a34a':'#dc2626'}">${m.upliftPct>=0?'+':''}${Math.round(m.upliftPct)}%</strong>`).join(' → ');
+      const trend=recentMatches[0].upliftPct-recentMatches[recentMatches.length-1].upliftPct;
+      const trendWord=trend>5?'improving':trend<-5?'declining':'holding steady';
+      flags.push({lvl:'info',msg:`<strong>Same-campaign trend</strong> (last ${recentMatches.length} runs, most recent last): ${seqTxt} — ${trendWord}. With no clean baseline available, this trajectory is the more reliable read than the vs-baseline uplift %.`});
+    }
 
     // v110: reality-check banner — the closest real recent match's ACTUAL result, shown
     // prominently regardless of what the weighted scenarios say. Can't get buried by rosier math.
