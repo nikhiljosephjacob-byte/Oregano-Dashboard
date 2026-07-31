@@ -13,14 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-154";
+const BUILD_VERSION="2026-07-21-155";
 const BUILD_NOTES=[
-  "\ud83d\udcca Forecaster improvements, prompted by checking a real forecast against its actual result (Keeta Week, Oregano: forecasted +13%, actual +28%). Investigating that gap surfaced two real, checkable issues rather than a simple algorithm miss: the baseline period had its own overlapping promos, and there's no evidence Keeta has ever run promo-free for this brand. Confirmed the second point empirically \u2014 checked real campaign history back to whenever each aggregator went live \u2014 Keeta ran a campaign on 99% of its live days (longest gap found: 2 days), while Talabat/Careem/Deliveroo/Noon all have genuine multi-week-to-multi-month clean stretches available.",
-  "New: a real clean-baseline search for the four aggregators where one exists, searching backward for a genuinely campaign-free window instead of blindly using \"4 weeks ago\". For Keeta specifically, where no clean window exists, added a same-campaign trend view instead \u2014 shows the last 2-3 occurrences of the SAME promo as a sequence (e.g. \"+10% \u2192 +16% \u2192 +22%\"), which is a more honest signal than a vs-baseline uplift when the baseline itself is never clean.",
-  "New: outlet-opening-date awareness, confirmed against a real example (Al Reef's actual first-sales date is 2026-04-22). Any lookback search now respects the newest-opened outlet among those included \u2014 a newly-opened outlet's pre-opening days are zero because it didn't exist yet, not because business was quiet, and would otherwise silently deflate any baseline it's included in.",
-  "New: a genuine year-over-year seasonal layer, blended with the existing 14-day momentum trend, falling back gracefully when a full year of history isn't available yet (e.g. Keeta). New: salary-week (first/last week of month) mismatch flagging between a campaign and its comparison window \u2014 flags the confound rather than inventing an unvalidated correction factor.",
-  "All new signals are ADDITIVE \u2014 surfaced as flags alongside the existing weighted scenarios, not folded into the core weighting formula. Deliberate choice given the financial stakes: nothing that currently works can regress from this build."
+  "\u2696\ufe0f Comparison page: optional 3rd group (Group C), off by default per the requirement \u2014 shown as a dashed \"+ Add Group C\" tile until explicitly added, not a full panel. Once added, all three panels compact together (smaller padding/chip/button sizing) to fit side by side \u2014 no filter option was removed to make room, unlike the earlier mockup's shortcut; Outlets and every date preset stay fully available, just smaller. Group C's own filter selections persist even while inactive, so toggling it off and back on doesn't lose whatever was configured.",
+  "The summary metric cards (Orders, Net Sales, AOV) now show a genuine 3-way comparison with chained deltas (B vs A, C vs B) when Group C is active, while staying fully backward-compatible for the normal 2-way case. The three more intricate cards (Discount Burn, Active Outlets, Contribution) get a simpler additional Group C line rather than a full 3-way restructure of their existing source-labeling/outlet-diffing/margin-context logic \u2014 a deliberate scope decision given their complexity. The detailed Platform Movement and Brand\u00d7Platform Breakdown tables below stay A-vs-B only, consistent with what was in the approved mockup \u2014 extending those to 3-way would be a materially bigger change.",
+  "Verified end-to-end, not just checked for syntax: default state (C inactive), Group C active with real numbers flowing correctly through the whole pipeline (confirmed A/B/C sales figures matched the exact test data), and toggling C off again reverting cleanly with no leftover 3-way UI state."
 ];
+
 
 
 
@@ -3401,6 +3400,7 @@ function handleDelegatedClick(e){
   if(act==="cmpToggleExpand"){e.stopPropagation();cmpToggleExpand(v1,v2);return;}
   if(act==="cmpSwap"){cmpSwap();return;}
   if(act==="cmpCopy"){cmpCopyAtoB();return;}
+  if(act==="cmpToggleC"){cmpToggleC();return;}
 }
 function handleDelegatedChange(e){
   const t=e.target.closest("[data-act]");
@@ -11787,9 +11787,16 @@ function injectCompareTab(){
 // Two independent filter states
 const cmpDefault=()=>({brands:new Set(),platforms:new Set(),branches:new Set(),start:null,end:null,preset:"custom"});
 let cmpA=cmpDefault(),cmpB=cmpDefault();
+// v155: optional third group. Off by default (not shown until explicitly added) — cmpC's own
+// filter state persists even while inactive, so re-adding it after removal doesn't lose
+// whatever was configured.
+let cmpC=cmpDefault(),cmpCActive=false;
 let cmpMetric="sales"; // which metric the trend chart plots: sales | orders | aov
 let cmpExpandedRow=null; // "<brand>|<aggregator>" when user clicked a row in the Brand × Platform Breakdown to see per-outlet drill-down. null = nothing expanded.
-const CMP_A_CLR="#5B7FA6",CMP_B_CLR="#C98A3E"; // v108: muted palette for the Compare page only
+const CMP_A_CLR="#5B7FA6",CMP_B_CLR="#C98A3E",CMP_C_CLR="#8B5CF6"; // v108/v155: muted palette for the Compare page only
+function cmpCfgFor(side){return side==="A"?cmpA:side==="B"?cmpB:cmpC;}
+function cmpClrFor(side){return side==="A"?CMP_A_CLR:side==="B"?CMP_B_CLR:CMP_C_CLR;}
+function cmpToggleC(){cmpCActive=!cmpCActive;renderCompare();}
 
 function cmpToggleExpand(brand,ag){
   const k=`${brand}|${ag}`;
@@ -11913,33 +11920,48 @@ function cmpDateLabel(cfg){
 }
 
 // State mutators (side = 'A' | 'B')
-function cmpToggle(side,type,val){const cfg=side==="A"?cmpA:cmpB;const s={brand:cfg.brands,platform:cfg.platforms,branch:cfg.branches}[type];if(s.has(val))s.delete(val);else s.add(val);renderCompare();}
-function cmpSetDate(side,which,val){const cfg=side==="A"?cmpA:cmpB;cfg[which]=val;cfg.preset="custom";renderCompare();}
-function cmpPreset(side,p){const cfg=side==="A"?cmpA:cmpB;cfg.preset=p;const today=dk(new Date());if(p==="yesterday"){cfg.start=cfg.end=subDays(today,1);}else if(p==="7d"){cfg.start=subDays(today,6);cfg.end=today;}else if(p==="30d"){cfg.start=subDays(today,29);cfg.end=today;}else if(p==="month"){cfg.start=today.slice(0,7)+"-01";cfg.end=today;}renderCompare();}
-function cmpClear(side){const cfg=side==="A"?cmpA:cmpB;cfg.brands.clear();cfg.platforms.clear();cfg.branches.clear();renderCompare();}
+function cmpToggle(side,type,val){const cfg=cmpCfgFor(side);const s={brand:cfg.brands,platform:cfg.platforms,branch:cfg.branches}[type];if(s.has(val))s.delete(val);else s.add(val);renderCompare();}
+function cmpSetDate(side,which,val){const cfg=cmpCfgFor(side);cfg[which]=val;cfg.preset="custom";renderCompare();}
+function cmpPreset(side,p){const cfg=cmpCfgFor(side);cfg.preset=p;const today=dk(new Date());if(p==="yesterday"){cfg.start=cfg.end=subDays(today,1);}else if(p==="7d"){cfg.start=subDays(today,6);cfg.end=today;}else if(p==="30d"){cfg.start=subDays(today,29);cfg.end=today;}else if(p==="month"){cfg.start=today.slice(0,7)+"-01";cfg.end=today;}renderCompare();}
+function cmpClear(side){const cfg=cmpCfgFor(side);cfg.brands.clear();cfg.platforms.clear();cfg.branches.clear();renderCompare();}
 function cmpCopyAtoB(){cmpB.brands=new Set(cmpA.brands);cmpB.platforms=new Set(cmpA.platforms);cmpB.branches=new Set(cmpA.branches);renderCompare();}
 function cmpSwap(){const t=cmpA;cmpA=cmpB;cmpB=t;renderCompare();}
 function cmpSetMetric(m){cmpMetric=m;renderCompare();}
 
 // Build a side's config panel
 function cmpPanel(side){
-  const cfg=side==="A"?cmpA:cmpB;
-  const accent=side==="A"?CMP_A_CLR:CMP_B_CLR;
+  const cfg=cmpCfgFor(side);
+  const accent=cmpClrFor(side);
+  const compact=cmpCActive; // all panels (including A/B) shrink slightly once a 3rd is active, so all 3 fit without losing any filter option
   const allBr=[...new Set(allData.map(r=>r.branch))].filter(b=>b!=="(brand-level)").sort();
   const dd=(type,label,activeSet,items)=>{
     const id=`cmp-${side}-${type}`;
     const count=activeSet.size,isOn=count>0;
     const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#F1F5F9'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="cmpToggle" data-v1="${side}" data-v2="${type}" data-v3="${esc(val)}"><span style="color:${clr}">${lbl}</span></label>`).join("");
     const menuStyle="display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:160px;box-shadow:0 12px 30px rgba(15,23,42,.12)";
-    return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" data-act="dd" data-v1="${id}">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;
+    const pillPad=compact?"4px 8px":"6px 10px",pillFs=compact?"11px":"12px";
+    return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" data-act="dd" data-v1="${id}" style="padding:${pillPad};font-size:${pillFs}">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;
   };
   const presets=[["yesterday","Latest day"],["7d","7d"],["30d","30d"],["month","This month"]];
-  const presetsH=presets.map(([k,l])=>`<button class="preset ${cfg.preset===k?"act":""}" data-act="cmpPreset" data-v1="${side}" data-v2="${k}">${l}</button>`).join("");
-  return `<div style="flex:1;min-width:300px;background:#FFFFFF;border:1px solid ${accent}55;border-radius:12px;padding:14px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-      <div style="font-size:13px;font-weight:800;color:${accent}">${side==="A"?"🔵 Group A":"🟠 Group B"}</div>
-      ${(cfg.brands.size||cfg.platforms.size||cfg.branches.size)?`<button data-act="cmpClear" data-v1="${side}" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:2px 8px;font-size:10px;cursor:pointer">✕ clear</button>`:""}
+  const presetsH=presets.map(([k,l])=>`<button class="preset ${cfg.preset===k?"act":""}" data-act="cmpPreset" data-v1="${side}" data-v2="${k}" style="${compact?'padding:4px 9px;font-size:11px':''}">${l}</button>`).join("");
+  const emoji={A:"🔵",B:"🟠",C:"🟣"}[side];
+  const pad=compact?"11px":"14px",titleFs=compact?"12px":"13px",dateInputW=compact?"115px":"135px",dateFs=compact?"12px":"13px";
+  // v155: selected brand/platform now shown as prominent colored chips (was small gray text
+  // under the date pickers) — the thing you're actually comparing should be the most visible
+  // part of the panel, not the least.
+  const chips=[...cfg.brands].map(b=>`<span style="background:${accent}15;border:1.5px solid ${accent}55;color:${accent};font-size:${compact?12:14}px;font-weight:800;padding:${compact?'5px 10px':'7px 14px'};border-radius:9px">${esc(b)}</span>`).join("");
+  const platChips=[...cfg.platforms].map(p=>`<span style="background:${accent}15;border:1.5px solid ${accent}55;color:${accent};font-size:${compact?12:14}px;font-weight:800;padding:${compact?'5px 10px':'7px 14px'};border-radius:9px">${esc(p)}</span>`).join("");
+  const dateChip=(cfg.start&&cfg.end)?`<span style="background:#F8F6EE;border:1.5px solid #EDE7D9;color:#64748B;font-size:${compact?11:12}px;font-weight:700;padding:${compact?'5px 9px':'7px 13px'};border-radius:9px;white-space:nowrap">📅 ${fmtShort(cfg.start)}→${fmtShort(cfg.end)}</span>`:"";
+  const selectedChipsRow=(chips||platChips||dateChip)?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:${compact?8:10}px">${chips}${platChips}${dateChip}</div>`:"";
+  return `<div style="flex:1;min-width:${compact?260:300}px;background:#FFFFFF;border:1px solid ${accent}55;border-radius:12px;padding:${pad}">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${compact?8:10}px">
+      <div style="font-size:${titleFs};font-weight:800;color:${accent}">${emoji} Group ${side}</div>
+      <div style="display:flex;align-items:center;gap:6px">
+        ${(cfg.brands.size||cfg.platforms.size||cfg.branches.size)?`<button data-act="cmpClear" data-v1="${side}" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:2px 8px;font-size:10px;cursor:pointer">✕ clear</button>`:""}
+        ${side==="C"?`<button data-act="cmpToggleC" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#94a3b8;padding:2px 8px;font-size:10px;cursor:pointer" title="Remove Group C">✕ remove</button>`:""}
+      </div>
     </div>
+    ${selectedChipsRow}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
       ${dd("brand","Brands",cfg.brands,BR.map(b=>({val:b.n,lbl:b.n,clr:b.c})))}
       ${dd("platform","Platforms",cfg.platforms,AGGS.map(a=>({val:a,lbl:a,clr:AC[a]||"#888"})))}
@@ -11947,15 +11969,58 @@ function cmpPanel(side){
     </div>
     <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">${presetsH}</div>
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-      <input type="date" value="${cfg.start||""}" data-act="cmpDate" data-v1="${side}" data-v2="start" style="background:#F1F5F9;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:7px 12px;font-size:13px;font-weight:600;color-scheme:light;min-width:135px">
+      <input type="date" value="${cfg.start||""}" data-act="cmpDate" data-v1="${side}" data-v2="start" style="background:#F1F5F9;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:${compact?'6px 10px':'7px 12px'};font-size:${dateFs};font-weight:600;color-scheme:light;min-width:${dateInputW}">
       <span style="color:#64748b">→</span>
-      <input type="date" value="${cfg.end||""}" data-act="cmpDate" data-v1="${side}" data-v2="end" style="background:#F1F5F9;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:7px 12px;font-size:13px;font-weight:600;color-scheme:light;min-width:135px">
+      <input type="date" value="${cfg.end||""}" data-act="cmpDate" data-v1="${side}" data-v2="end" style="background:#F1F5F9;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:${compact?'6px 10px':'7px 12px'};font-size:${dateFs};font-weight:600;color-scheme:light;min-width:${dateInputW}">
     </div>
-    <div style="margin-top:8px;font-size:11px;color:#94a3b8;line-height:1.5"><strong style="color:${accent}">${cmpLabel(cfg)}</strong><br>${cmpDateLabel(cfg)}</div>
+  </div>`;
+}
+// v155: shown in place of a Group C panel when it hasn't been added yet — not visible by
+// default, matching the requirement that a 3rd comparison isn't shown unless asked for.
+function cmpAddCTile(){
+  return`<div data-act="cmpToggleC" style="flex:1;min-width:220px;background:#FBFAF5;border:2px dashed #D6CFB8;border-radius:12px;padding:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;color:#94a3b8;min-height:170px" onmouseover="this.style.borderColor='${CMP_C_CLR}';this.style.color='${CMP_C_CLR}'" onmouseout="this.style.borderColor='#D6CFB8';this.style.color='#94a3b8'">
+    <div style="font-size:26px;margin-bottom:6px">+</div>
+    <div style="font-size:13px;font-weight:700">Add Group C</div>
+    <div style="font-size:10.5px;margin-top:2px">Compare a third combination</div>
   </div>`;
 }
 
-function cmpStatCard(label,a,b,fmt,unit,perDay){
+function cmpStatCard(label,a,b,fmt,unit,perDay,c,perDayC){
+  // v155: 3-way mode when c is provided (cmpCActive). Chained deltas (B vs A, C vs B) rather
+  // than every pairwise combination — keeps it readable with a third group instead of turning
+  // into a combinatorial mess.
+  if(c!==undefined){
+    const diffAB=pctOf(b,a),diffBC=pctOf(c,b);
+    const fa=fmt(a),fb=fmt(b),fc=fmt(c);
+    let perDayLine="";
+    if(perDay&&(perDay.nA>1||perDay.nB>1||(perDay.nC||1)>1)){
+      const avgA=a/perDay.nA,avgB=b/perDay.nB,avgC=perDayC!=null?perDayC/(perDay.nC||1):null;
+      perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #E2E8F0">
+        <div style="font-size:8px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
+        <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
+          <span style="font-size:12px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmt(avgA)}</span>
+          <span style="font-size:9px;color:#64748b">·</span>
+          <span style="font-size:12px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmt(avgB)}</span>
+          ${avgC!=null?`<span style="font-size:9px;color:#64748b">·</span><span style="font-size:12px;font-weight:800;color:${CMP_C_CLR};font-variant-numeric:tabular-nums">${fmt(avgC)}</span>`:""}
+        </div>
+      </div>`;
+    }
+    return `<div class="sm">
+      <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}</div>
+      <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
+        <span style="font-size:16px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fa}</span>
+        <span style="font-size:9px;color:#475569">vs</span>
+        <span style="font-size:16px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fb}</span>
+        <span style="font-size:9px;color:#475569">vs</span>
+        <span style="font-size:16px;font-weight:800;color:${CMP_C_CLR};font-variant-numeric:tabular-nums">${fc}</span>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">
+        <span style="font-size:10.5px;color:${pctClr(diffAB)};font-weight:700">${fmtPct(diffAB)} <span style="color:#64748b;font-weight:400">B vs A</span></span>
+        <span style="font-size:10.5px;color:${pctClr(diffBC)};font-weight:700">${fmtPct(diffBC)} <span style="color:#64748b;font-weight:400">C vs B</span></span>
+      </div>
+      ${perDayLine}
+    </div>`;
+  }
   // pctOf(b,a) measures how B changed relative to A as the baseline — the conventional
   // period-over-period view. Earlier we used pctOf(a,b) which reported A relative to B and
   // confused users (e.g. orders going 122 → 102 showed "+19.6% A vs B" instead of -16.4%).
@@ -11995,7 +12060,7 @@ function cmpStatCard(label,a,b,fmt,unit,perDay){
 // dropped (less discount), that's GREEN (good); when B's burn rose, RED. Per-day avg shown
 // when windows span multiple days, same as the other cards. The card also surfaces the data
 // source ("Exact" / "Brand-level" / "Estimated" / "Mixed") so the user knows the precision.
-function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay){
+function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay,discC,netC){
   const a=discA||0,b=discB||0;
   const diff=pctOf(b,a);
   // Inverted color: positive change = MORE burn = bad (red). Negative = less burn = good (green).
@@ -12022,6 +12087,9 @@ function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay){
       <div style="font-size:8px;color:#64748b;margin-top:2px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
     </div>`;
   }
+  // v155: Group C, when active — a simple additional line rather than a full 3-way redesign of
+  // this card's source-label/burn-rate logic.
+  const cLine=(discC!=null)?`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #E2E8F0"><span style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Group C</span><div style="font-size:15px;font-weight:800;color:${CMP_C_CLR};margin-top:2px">${fmtAEDTip(discC)}${netC>0?` <span style="font-size:10px;color:#64748b;font-weight:600">(${(discC/netC*100).toFixed(1)}% of net)</span>`:""}</div></div>`:"";
   return `<div class="sm">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
       <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px">Discount Burn</div>
@@ -12035,17 +12103,19 @@ function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay){
     <div style="font-size:12px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${arrow} <span style="color:#64748b;font-weight:400">B vs A · less is better</span></div>
     ${burnLine}
     ${perDayLine}
+    ${cLine}
   </div>`;
 }
 
 // Active Outlets card with a hover panel showing exactly which outlets differ A vs B
-function cmpOutletCard(dA,dB){
+function cmpOutletCard(dA,dB,dC){
   const setA=new Set(dA.map(r=>r.branch)),setB=new Set(dB.map(r=>r.branch));
   const onlyA=[...setA].filter(b=>!setB.has(b)).sort();
   const onlyB=[...setB].filter(b=>!setA.has(b)).sort();
   const both=[...setA].filter(b=>setB.has(b)).sort();
   const diff=setA.size-setB.size;
   const diffClr=diff>0?CMP_A_CLR:diff<0?CMP_B_CLR:"#64748b";
+  const setC=dC?new Set(dC.map(r=>r.branch)):null;
   const col=(title,clr,list)=>`<div style="flex:1;min-width:120px"><div style="font-size:9px;font-weight:700;color:${clr};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">${title} (${list.length})</div>${list.length?list.map(o=>`<div style="font-size:11px;color:#475569;padding:1px 0">${o}</div>`).join(""):`<div style="font-size:11px;color:#475569;font-weight:600">—</div>`}</div>`;
   // The panel is hidden by default and shown on hover (CSS sibling, inline handlers as fallback)
   const panel=`<div class="cmp-outlet-panel" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:30;margin-top:6px;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:10px;padding:12px;box-shadow:0 12px 30px rgba(15,23,42,.12)">
@@ -12065,6 +12135,7 @@ function cmpOutletCard(dA,dB){
       ${diff!==0?`<span style="font-size:12px;color:${diffClr};font-weight:700">(${diff>0?"+":""}${diff})</span>`:""}
     </div>
     <div style="font-size:10px;color:#64748b;margin-top:3px">${onlyA.length+onlyB.length>0?`${onlyA.length+onlyB.length} differ · hover for details`:"same outlets"}</div>
+    ${setC?`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #E2E8F0"><span style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Group C</span><div style="font-size:15px;font-weight:800;color:${CMP_C_CLR};margin-top:2px">${setC.size} outlet${setC.size!==1?"s":""}</div></div>`:""}
     ${panel}
   </div>`;
 }
@@ -12140,7 +12211,7 @@ function cmpComputeContribution(cfg){
   }
   return total;
 }
-function cmpContribCard(contribA,contribB,salesDiff,perDay){
+function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC){
   const a=contribA||0,b=contribB||0;
   const diff=pctOf(b,a);
   const dc=pctClr(diff);
@@ -12180,6 +12251,7 @@ function cmpContribCard(contribA,contribB,salesDiff,perDay){
     <div style="font-size:12.5px;color:${dc};font-weight:700;margin-top:5px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:#8A8578;font-weight:400">B vs A</span></div>
     ${ctxLine}
     ${perDayLine}
+    ${contribC!=null?`<div style="margin-top:9px;padding-top:8px;border-top:1px solid #F0EBDC"><span style="font-size:9px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Group C</span><div style="font-size:15px;font-weight:800;color:${CMP_C_CLR};margin-top:2px">${fmtAEDTip(contribC)}</div></div>`:""}
   </div>`;
 }
 function renderCompare(){
@@ -12198,6 +12270,15 @@ function renderCompare(){
   const discAObj=cmpComputeDisc(cmpA),discBObj=cmpComputeDisc(cmpB);
   const discA=discAObj.total,discB=discBObj.total;
   const contribA=cmpComputeContribution(cmpA),contribB=cmpComputeContribution(cmpB);
+  // v155: Group C — only computed when active, and only what the summary metric cards need.
+  // The detailed Platform Movement / Brand×Platform Breakdown tables below stay A-vs-B only —
+  // that wasn't part of what was scoped/approved for the 3-way view, and extending those to a
+  // 3rd column would be a materially bigger change than the summary cards.
+  let dC=null,sC=null,aovC=0,nC=1,discC=null,contribC=null;
+  if(cmpCActive){
+    dC=cmpData(cmpC);sC=sumR(dC);aovC=sC.orders>0?sC.sales/sC.orders:0;nC=daysIn(cmpC);
+    discC=cmpComputeDisc(cmpC).total;contribC=cmpComputeContribution(cmpC);
+  }
 
   // Aggregator movement: per-platform totals for the chosen metric on each side
   const platMove=AGGS.map(ag=>{
@@ -12354,15 +12435,15 @@ function renderCompare(){
     <div style="font-size:11px;color:#475569;font-weight:600;margin-bottom:12px">Pick any combination on each side — brands, platforms, outlets, and dates are fully independent. Example: Oregano+Lollorosso 11–13 May 2026 (A) vs the same 11–13 May 2025 (B).</div>
     ${yearBanner}
     ${insightBanner}
-    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">${cmpPanel("A")}${cmpPanel("B")}</div>
+    <div style="display:flex;gap:${cmpCActive?10:12}px;flex-wrap:wrap;margin-bottom:16px;align-items:stretch">${cmpPanel("A")}${cmpPanel("B")}${cmpCActive?cmpPanel("C"):cmpAddCTile()}</div>
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:14px">
-      ${cmpStatCard("Orders",sA.orders,sB.orders,v=>Math.round(v).toLocaleString(),"",{nA,nB})}
-      ${cmpStatCard("Net Sales",sA.sales,sB.sales,v=>fmtAEDTip(v),"",{nA,nB})}
-      ${cmpStatCard("AOV",aovA,aovB,v=>"AED "+v.toFixed(1))}
-      ${cmpDiscCard(discA,discB,sA.sales,sB.sales,discAObj.source,discBObj.source,{nA,nB})}
-      ${cmpOutletCard(dA,dB)}
-      ${cmpContribCard(contribA,contribB,salesDiff,{nA,nB})}
+      ${cmpStatCard("Orders",sA.orders,sB.orders,v=>Math.round(v).toLocaleString(),"",{nA,nB,nC},cmpCActive?sC.orders:undefined,cmpCActive?sC.orders:undefined)}
+      ${cmpStatCard("Net Sales",sA.sales,sB.sales,v=>fmtAEDTip(v),"",{nA,nB,nC},cmpCActive?sC.sales:undefined,cmpCActive?sC.sales:undefined)}
+      ${cmpStatCard("AOV",aovA,aovB,v=>"AED "+v.toFixed(1),"",undefined,cmpCActive?aovC:undefined)}
+      ${cmpDiscCard(discA,discB,sA.sales,sB.sales,discAObj.source,discBObj.source,{nA,nB},cmpCActive?discC:undefined,cmpCActive?sC.sales:undefined)}
+      ${cmpOutletCard(dA,dB,cmpCActive?dC:undefined)}
+      ${cmpContribCard(contribA,contribB,salesDiff,{nA,nB},cmpCActive?contribC:undefined)}
     </div>
 
     <div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>Trend — <span style="color:#60A5FA">A</span> vs <span style="color:#F59E0B">B</span> (aligned by day index)</span><div style="display:flex;gap:5px">${metricBtns}</div></div><div style="position:relative;height:220px"><canvas id="cmp-chart"></canvas></div><div style="font-size:10px;color:#64748b;margin-top:6px">Day 1 = first day of each window. This lets you compare windows of different years/lengths on the same axis.</div></div>
