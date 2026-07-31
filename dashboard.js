@@ -13,11 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-152";
+const BUILD_VERSION="2026-07-21-153";
 const BUILD_NOTES=[
-  "\ud83c\udfa8 Investment Plan refinements per approved mockup: Recommended budgets now round to the nearest AED 10 for display (e.g. AED 382 \u2192 AED 380) \u2014 practical for actually setting bids/budgets, rather than odd exact figures. The (BE x.xx) break-even reference next to ROAS is removed \u2014 the verdict badge already carries that signal. Bid guidance now reads as an explicit \"Previous Bid \u2192 Recommended Bid for [next month]\" comparison, shown only where a bid recommendation actually exists. Month-over-month deltas (ROAS, orders) now carry an explicit period label directly beside each figure (e.g. \"Orders \u2193 90% (Jun\u2192Jul, 301\u219229)\") instead of relying on an earlier prefix to establish which months are being compared.",
-  "Applied consistently across all four tables (Deliveroo, Talabat, Noon, Careem) and their CSV exports, so what's exported always matches what's on screen."
+  "\ud83e\uddad Investment Plan restructured into a 3-level drill-down (Aggregator \u2192 Brands \u2192 Outlets), matching the Ads Performance navigation pattern. Level 1 is the four aggregator tiles (now clickable). Level 2 shows every brand active on that aggregator as its own tile \u2014 outlet count, verdict mix, prior vs. recommended spend. Level 3 is the full per-outlet table for just that one brand, with everything from prior builds intact (MoM comparison, rounded budgets, bid guidance, CSV export).",
+  "The mandate-trim reconciliation math needs ALL of an aggregator's outlets together to compute correctly \u2014 filtering to one brand before reconciling would silently break the \"never exceed the mandate\" guarantee from the last build. Handled by splitting each aggregator's logic into a data function (computes and reconciles across every outlet first) and a thin render wrapper (optionally filters to one brand only AFTER reconciliation completes) \u2014 verified this holds exactly: a test scenario with a known mandate reconciles to that exact figure both at the raw data level and when viewed through the single-brand Level 3 screen.",
+  "Caught two real bugs while doing this split, both before shipping: the Noon/Careem pool card's render step referenced two variables (cpcModel data, verdict colors) that had been left stranded in the data half instead of carried through \u2014 would have thrown a runtime error in production. Found both by actually running the split code, not just reading it."
 ];
+
 
 
 
@@ -4449,6 +4451,12 @@ function cpcBidSuggestion(r){
 
 // ── DRILL-DOWN STATE ──
 let cpcDrill={level:"agg",agg:null,brand:null},cpcSort={col:"roas",dir:-1},cpcAdTypeFilter="all",cpcMonthFilter="all";
+// v153: Investment Plan's OWN drill-down state — separate from cpcDrill above (Ads Performance's
+// own drill-down), since they're reached via different tabs and shouldn't share navigation.
+let cpcInvPlanNav={level:"home",ag:null,brand:null};
+function cpcInvPlanGoHome(){cpcInvPlanNav={level:"home",ag:null,brand:null};renderCPC();}
+function cpcInvPlanGoBrands(ag){cpcInvPlanNav={level:"brands",ag,brand:null};renderCPC();}
+function cpcInvPlanGoOutlets(ag,brand){cpcInvPlanNav={level:"outlets",ag,brand};renderCPC();}
 // Investment Plan view toggle. 'drilldown' = existing per-aggregator/brand/outlet pages.
 // 'plan' = the new monthly investment plan view rendered by cpcRenderInvestmentPlan().
 let cpcViewMode="drilldown";
@@ -5215,18 +5223,105 @@ function cpcDeliverooBidOptModel(brand,outlet){
 
 // ─── RENDER FUNCTIONS ──────────────────────────────────────────────────
 
+// v153: Investment Plan Level 2 — brand tiles within one aggregator. Deliveroo/Talabat's rows
+// are per-OUTLET (need grouping by brand to summarize); Noon/Careem's rows are already per-
+// BRAND (pooled budgets), so no grouping needed there. Reuses the exact same reconciled data
+// the Level-3 outlet tables use — no separate computation, so the numbers can't drift apart.
+const BRAND_TILE_CLR={Oregano:"#C9933A",Lollorosso:"#7C8C2A",Smokeys:"#F07020",Fyoozhen:"#C9A227","Wicked Wings":"#E85D04"};
+const INV_PLAN_VERD={SCALE:{clr:"#16A34A",bg:"#F0FDF4"},INVEST:{clr:"#2563EB",bg:"#EFF6FF"},MONITOR:{clr:"#D97706",bg:"#FFFBEB"},PAUSE:{clr:"#DC2626",bg:"#FEF2F2"},UNTESTED:{clr:"#94A3B8",bg:"#F1F5F9"}};
+function cpcInvPlanRenderBrands(ag,priorMonth){
+  const AGG_CLR={Deliveroo:"#00CCBC",Talabat:"#FF6000",Careem:"#3DDC73",Noon:"#F5CF00"};
+  const clr=AGG_CLR[ag];
+  const isPool=(ag==="Careem"||ag==="Noon");
+  let brandTiles=[];
+  if(ag==="Talabat"){
+    const{rows,noData}=cpcTalabatRows(priorMonth);
+    if(!noData){
+      const groups={};
+      rows.forEach(r=>{(groups[r.brand]=groups[r.brand]||[]).push(r);});
+      brandTiles=Object.entries(groups).map(([brand,brRows])=>{
+        const vCounts={};brRows.forEach(r=>{vCounts[r.cpcVerdict]=(vCounts[r.cpcVerdict]||0)+1;});
+        const prior=brRows.reduce((s,r)=>s+r.cpcPriorSpend+r.kwPriorSpend,0);
+        const rec=brRows.reduce((s,r)=>s+roundTo10(r.cpcRec)+roundTo10(r.kwRec),0);
+        return{brand,outlets:brRows.length,vCounts,prior,rec};
+      });
+    }
+  }else if(isPool){
+    const{rows}=cpcPoolRows(ag,priorMonth);
+    brandTiles=rows.map(r=>({brand:r.brand,outlets:null,vCounts:{[r.verdict]:1},prior:r.poolSpent,rec:roundTo10(r.brandMand)}));
+  }else{ // Deliveroo
+    const{rows}=cpcDeliverooRows(priorMonth);
+    const groups={};
+    rows.forEach(r=>{(groups[r.brand]=groups[r.brand]||[]).push(r);});
+    brandTiles=Object.entries(groups).map(([brand,brRows])=>{
+      const vCounts={};brRows.forEach(r=>{vCounts[r.verdict]=(vCounts[r.verdict]||0)+1;});
+      const prior=brRows.reduce((s,r)=>s+r.priorSpend,0);
+      const rec=brRows.reduce((s,r)=>s+roundTo10(r.rec),0);
+      return{brand,outlets:brRows.length,vCounts,prior,rec};
+    });
+  }
+  const cards=brandTiles.map(B=>{
+    const bClr=BRAND_TILE_CLR[B.brand]||"#888";
+    const delta=B.rec-B.prior;
+    const vChips=Object.entries(B.vCounts).map(([v,n])=>{
+      const vc=INV_PLAN_VERD[v]||INV_PLAN_VERD.UNTESTED;
+      return`<span style="background:${vc.bg};color:${vc.clr};font-size:10px;font-weight:800;padding:2px 8px;border-radius:20px;margin-right:4px">${n} ${v}</span>`;
+    }).join("");
+    return`<div onclick="cpcInvPlanGoOutlets('${ag}','${B.brand.replace(/'/g,"\\'")}')" style="cursor:pointer;background:#FFFFFF;border:1px solid #EDE7D9;border-left:4px solid ${bClr};box-shadow:0 1px 4px rgba(15,23,42,.05);border-radius:14px;padding:18px;transition:transform .15s" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">${logoImg(B.brand,32)}<div style="font-size:16px;font-weight:800;color:#0F172A">${B.brand}</div></div>
+      ${B.outlets!=null?`<div style="font-size:10px;color:#94A3B8;font-weight:700;text-transform:uppercase;margin-bottom:10px">${B.outlets} outlet${B.outlets===1?"":"s"}</div>`:""}
+      <div style="margin-bottom:12px">${vChips}</div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;padding-top:12px;border-top:1px solid #F1EFE6">
+        <span style="color:#94A3B8">Prior: <strong style="color:#475569">${fmtAEDTip(B.prior)}</strong></span>
+        <span style="color:#D97706;font-weight:800;font-size:16px">${fmtAEDTip(B.rec)}</span>
+      </div>
+      <div style="font-size:11px;color:${delta>=0?"#16A34A":"#DC2626"};font-weight:700;text-align:right;margin-top:2px">${delta>=0?"+":""}${fmtAEDTip(Math.abs(delta))} vs prior</div>
+    </div>`;
+  }).join("");
+  const empty=!brandTiles.length?`<div style="grid-column:1/-1;text-align:center;padding:40px;color:#94A3B8">No brand data yet${ag==="Talabat"?" — Talabat deal is pending":""}</div>`:"";
+  const mandate=cpcMandatoryBudget(ag,cpcProjectedGroupGMV(priorMonth,ag).value);
+  return`<div class="breadcrumb" style="font-size:12px;color:#94a3b8;margin-bottom:10px">
+      <span style="color:#f59e0b;font-weight:600;cursor:pointer" onclick="cpcInvPlanGoHome()">Investment Plan</span> → <span style="color:#0F172A;font-weight:700">${ag}</span>
+    </div>
+    <div style="background:#F8F6EE;border:1px solid #EDE7D9;color:#475569;font-size:12px;font-weight:700;padding:7px 14px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin-bottom:16px" onclick="cpcInvPlanGoHome()">← Back to Aggregators</div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">${logoImg(ag,40)}<div><div style="font-size:20px;font-weight:800;color:#0F172A">${ag}</div><div style="font-size:12px;color:#94A3B8">Mandatory: <strong style="color:#D97706">${mandate?fmtAEDTip(mandate):"—"}</strong> · click a brand to see its outlet-level split</div></div></div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">${cards}${empty}</div>`;
+}
+
+// v153: Investment Plan Level 3 — the full per-outlet table, scoped to one brand. Dispatches
+// to whichever aggregator's already-built card function, passing brandFilter — same rendering,
+// same MoM comparison, same export, just filtered to one brand's rows.
+function cpcInvPlanRenderOutlets(ag,brand,priorMonth){
+  const AGG_CLR={Deliveroo:"#00CCBC",Talabat:"#FF6000",Careem:"#3DDC73",Noon:"#F5CF00"};
+  let cardHtml="";
+  if(ag==="Deliveroo")cardHtml=cpcDeliverooAllocCard(priorMonth,brand);
+  else if(ag==="Talabat")cardHtml=cpcTalabatAllocCard(priorMonth,brand);
+  else if(ag==="Careem"||ag==="Noon")cardHtml=cpcPoolAllocCard(ag,priorMonth,brand);
+  return`<div class="breadcrumb" style="font-size:12px;color:#94a3b8;margin-bottom:10px">
+      <span style="color:#f59e0b;font-weight:600;cursor:pointer" onclick="cpcInvPlanGoHome()">Investment Plan</span> → <span style="color:#f59e0b;font-weight:600;cursor:pointer" onclick="cpcInvPlanGoBrands('${ag}')">${ag}</span> → <span style="color:#0F172A;font-weight:700">${brand}</span>
+    </div>
+    <div style="background:#F8F6EE;border:1px solid #EDE7D9;color:#475569;font-size:12px;font-weight:700;padding:7px 14px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin-bottom:16px" onclick="cpcInvPlanGoBrands('${ag}')">← Back to ${ag} Brands</div>
+    ${cardHtml}`;
+}
+
 function cpcRenderInvestmentPlan(){
   try{
     const priorMonth=cpcPriorMonth();
     const priorMonthLabel=new Date(priorMonth+"-01T12:00:00").toLocaleString("en-US",{month:"long",year:"numeric"});
     const nextLabel=cpcNextMonthLabel();
+    // v153: 3-level drill-down (Aggregator → Brands → Outlets), matching the Ads Performance
+    // navigation pattern. The cross-aggregator insight cards (declining outlets, area strength,
+    // historical reference) aren't tied to any single aggregator's drill path, so they stay on
+    // the home level only.
+    if(cpcInvPlanNav.level==="brands"){
+      return cpcSmokeysBanner()+cpcInvPlanRenderBrands(cpcInvPlanNav.ag,priorMonth);
+    }
+    if(cpcInvPlanNav.level==="outlets"){
+      return cpcSmokeysBanner()+cpcInvPlanRenderOutlets(cpcInvPlanNav.ag,cpcInvPlanNav.brand,priorMonth);
+    }
     return [
       cpcSmokeysBanner(),
       cpcObligationsCard(priorMonth,priorMonthLabel,nextLabel),
-      cpcDeliverooAllocCard(priorMonth),
-      cpcTalabatAllocCard(priorMonth),
-      cpcPoolAllocCard("Noon",priorMonth),
-      cpcPoolAllocCard("Careem",priorMonth),
       cpcDecliningOutletsCard(),
       cpcAreaStrengthCard(priorMonth),
       cpcHistoricalRefCard()
@@ -5269,7 +5364,7 @@ function cpcObligationsCard(priorMonth,priorLabel,nextLabel){
     const gmvLabel=gmvInfo.projected
       ?`<span title="Projected from ${fmtAEDExact(gmvInfo.rawSoFar)} through day ${gmvInfo.daysElapsed} of ${gmvInfo.daysInMonth}">Projected ${priorLabel.split(' ')[0]} GMV ⓘ</span>`
       :`${priorLabel.split(' ')[0]} GMV (final)`;
-    return`<div style="background:#FFFFFF;border:1px solid #EDE7D9;border-left:4px solid ${clr};border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(15,23,42,.05)">
+    return`<div onclick="cpcInvPlanGoBrands('${ag}')" style="cursor:pointer;background:#FFFFFF;border:1px solid #EDE7D9;border-left:4px solid ${clr};border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(15,23,42,.05);transition:transform .15s" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <div style="font-size:15px;font-weight:800;color:#0F172A">${ag}</div>
         ${statusChip}
@@ -5280,6 +5375,7 @@ function cpcObligationsCard(priorMonth,priorLabel,nextLabel){
         <span>${gmvInfo.projected?"Projected":priorLabel.split(' ')[0]} GMV: <strong style="color:#0F172A">${fmtAEDTip(gmv)}</strong></span>
         <span>${type}</span>
       </div>
+      <div style="margin-top:10px;font-size:11px;color:${clr};font-weight:700">View brands →</div>
     </div>`;
   }).join("");
   const totalMand=aggs.reduce((s,ag)=>s+cpcMandatoryBudget(ag,cpcProjectedGroupGMV(priorMonth,ag).value),0);
@@ -5299,7 +5395,7 @@ function cpcObligationsCard(priorMonth,priorLabel,nextLabel){
 // cpcDeliverooBidOpt (Deliveroo is the only aggregator where bid is in our control).
 // Reconciles bottom-up recommendations to the top-down 2% mandate by redistributing any gap
 // to the best-performing outlets (weighted by ROAS upside).
-function cpcDeliverooAllocCard(priorMonth){
+function cpcDeliverooRows(priorMonth){
   const ag="Deliveroo";
   const floor=CPC_MIN_PER_OUTLET[ag];
   const combos=new Set();
@@ -5404,6 +5500,16 @@ function cpcDeliverooAllocCard(priorMonth){
       </div>
     </div>`;
   }
+  return{rows,mandate,floor,surplusBanner,ag};
+}
+
+function cpcDeliverooAllocCard(priorMonth,brandFilter){
+  const{rows:allRows,mandate,floor,surplusBanner,ag}=cpcDeliverooRows(priorMonth);
+  // v153: brandFilter (optional) scopes this card's rendering to ONE brand's outlets only —
+  // used by the Investment Plan's Level 3 (brand → outlets) drill-down. The reconciliation
+  // above already ran across ALL brands' outlets before this filter is applied, so the trim/
+  // surplus math stays correct regardless of which single brand is being viewed.
+  const rows=brandFilter?allRows.filter(r=>r.brand===brandFilter):allRows;
 
   const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",PAUSE:"#EF4444",UNTESTED:"#94a3b8"};
   const verdBg={SCALE:"rgba(34,197,94,.08)",INVEST:"rgba(134,239,172,.06)",MONITOR:"rgba(251,191,36,.06)",PAUSE:"rgba(239,68,68,.06)",UNTESTED:"rgba(148,163,184,.06)"};
@@ -5497,13 +5603,13 @@ function cpcExportDeliveroo(){
 // Since Jun 2026, Talabat campaigns can run as CPC, Keywords (min AED 875/listing), or both
 // simultaneously. We compute each lever's ROAS independently and recommend CPC-only,
 // Keywords-only, or a combination based on which lever (or both) clears break-even.
-function cpcTalabatAllocCard(priorMonth){
+function cpcTalabatRows(priorMonth){
   const ag="Talabat";
   const floor=CPC_MIN_PER_OUTLET[ag];
   const kwFloor=CPC_MIN_KEYWORDS_PER_LISTING;
   const combos=new Set();
   allData.filter(r=>r.aggregator===ag&&recMonth(r)===priorMonth&&r.sales>0).forEach(r=>combos.add(`${r.brand}|${r.branch}`));
-  if(!combos.size)return`<div class="card" style="border:1px dashed rgba(251,191,36,.4);background:rgba(251,191,36,.04)"><div style="font-size:13px;font-weight:800;color:${AC.Talabat||'#FF5A00'}">🍔 Talabat Per-Outlet Allocation — Conditional</div><div style="color:#94a3b8;font-size:11px;margin-top:6px">No prior-month Talabat sales found. ${TALABAT_DEAL_SIGNED?"":"Deal not yet signed."}</div></div>`;
+  if(!combos.size)return{rows:[],noData:true,floor:CPC_MIN_PER_OUTLET[ag],kwFloor:CPC_MIN_KEYWORDS_PER_LISTING,ag};
   const rows=[...combos].map(k=>{
     const[brand,outlet]=k.split("|");
     const cpcRow=cpcLatestRow(brand,ag,outlet); // adType="CPC" specifically
@@ -5537,6 +5643,14 @@ function cpcTalabatAllocCard(priorMonth){
     const order={SCALE:0,INVEST:1,MONITOR:2,UNTESTED:3,PAUSE:4};
     return(order[a.cpcVerdict]||5)-(order[b.cpcVerdict]||5);
   });
+  return{rows,floor,kwFloor,ag,noData:false};
+}
+
+function cpcTalabatAllocCard(priorMonth,brandFilter){
+  const{rows:allRows,floor,kwFloor,ag,noData}=cpcTalabatRows(priorMonth);
+  if(noData)return`<div class="card" style="border:1px dashed rgba(251,191,36,.4);background:rgba(251,191,36,.04)"><div style="font-size:13px;font-weight:800;color:${AC.Talabat||'#FF5A00'}">🍔 Talabat Per-Outlet Allocation — Conditional</div><div style="color:#94a3b8;font-size:11px;margin-top:6px">No prior-month Talabat sales found. ${TALABAT_DEAL_SIGNED?"":"Deal not yet signed."}</div></div>`;
+  // v153: brandFilter (optional) scopes rendering to one brand — used by Investment Plan Level 3.
+  const rows=brandFilter?allRows.filter(r=>r.brand===brandFilter):allRows;
   const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",PAUSE:"#EF4444",UNTESTED:"#94a3b8"};
   // v148: same restructuring as Deliveroo — rows/computation unchanged, only the final
   // rendering groups by brand with click-to-expand.
@@ -5595,7 +5709,7 @@ function cpcExportTalabat(){
 // Noon + Careem brand-pool allocation (pool not per-outlet for these). Reads from cpcModel.byAgg
 // rather than raw cpcData — the model has already done the aggregator/brand-name normalization
 // and accumulated current-month totals (curSpent / curSales / curInvested) at the brand level.
-function cpcPoolAllocCard(ag,priorMonth){
+function cpcPoolRows(ag,priorMonth){
   const floor=CPC_MIN_PER_OUTLET[ag];
   const gmv=cpcProjectedGroupGMV(priorMonth,ag).value;
   const mand=cpcMandatoryBudget(ag,gmv);
@@ -5620,7 +5734,16 @@ function cpcPoolAllocCard(ag,priorMonth){
     const verdict=cpcPlanVerdict(b.n,ag,poolROAS);
     return{brand:b.n,bGMV,brandShare,brandMand,poolSpent,poolAlloc,poolROAS,util,verdict,hasCurrent,hasAnyHistory:!!B};
   });
+  return{rows,floor,mand,gmv,ag,A};
+}
+
+function cpcPoolAllocCard(ag,priorMonth,brandFilter){
+  const{rows:allRows,floor,mand,gmv,A}=cpcPoolRows(ag,priorMonth);
   const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",PAUSE:"#EF4444",UNTESTED:"#94a3b8"};
+  // v153: brandFilter (optional) scopes rendering to one brand — used by Investment Plan Level 3.
+  // Each brand's mandate share (brandMand = mand * brandShare) is already computed above using
+  // the FULL group GMV, so filtering afterward doesn't change any brand's own numbers.
+  const rows=brandFilter?allRows.filter(r=>r.brand===brandFilter):allRows;
   // v148: outlet-breakdown computation extracted into a per-brand helper (logic byte-for-byte
   // identical to before — same exclude-candidate threshold, same sort, same columns), so it can
   // be folded into each brand's expandable row instead of living in a separate always-visible
