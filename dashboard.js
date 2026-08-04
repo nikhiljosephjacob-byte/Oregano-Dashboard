@@ -13,12 +13,14 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-155";
+const BUILD_VERSION="2026-07-21-156";
 const BUILD_NOTES=[
-  "\u2696\ufe0f Comparison page: optional 3rd group (Group C), off by default per the requirement \u2014 shown as a dashed \"+ Add Group C\" tile until explicitly added, not a full panel. Once added, all three panels compact together (smaller padding/chip/button sizing) to fit side by side \u2014 no filter option was removed to make room, unlike the earlier mockup's shortcut; Outlets and every date preset stay fully available, just smaller. Group C's own filter selections persist even while inactive, so toggling it off and back on doesn't lose whatever was configured.",
-  "The summary metric cards (Orders, Net Sales, AOV) now show a genuine 3-way comparison with chained deltas (B vs A, C vs B) when Group C is active, while staying fully backward-compatible for the normal 2-way case. The three more intricate cards (Discount Burn, Active Outlets, Contribution) get a simpler additional Group C line rather than a full 3-way restructure of their existing source-labeling/outlet-diffing/margin-context logic \u2014 a deliberate scope decision given their complexity. The detailed Platform Movement and Brand\u00d7Platform Breakdown tables below stay A-vs-B only, consistent with what was in the approved mockup \u2014 extending those to 3-way would be a materially bigger change.",
-  "Verified end-to-end, not just checked for syntax: default state (C inactive), Group C active with real numbers flowing correctly through the whole pipeline (confirmed A/B/C sales figures matched the exact test data), and toggling C off again reverting cleanly with no leftover 3-way UI state."
+  "\ud83d\udcca New on the Platforms page: a Monthly Performance table, multi-select across BOTH aggregators and brands independently. Went through several design rounds before landing here \u2014 a sparkline-summary \"zoomed out\" view was tried and rejected (numbers need to be fully readable, not abbreviated to a single latest-value-plus-trend), and an auto-totaling-across-brands approach was also rejected (brands need to sit side by side, never summed automatically). What shipped: month-by-month rows, with every selected brand getting its own column-group and every selected aggregator nested inside it as its own Sales + MoM% column pair \u2014 full, non-abbreviated figures throughout, matching the explicit requirement.",
+  "Cross-checked the uploaded reference file's numbers against the live Google Sheet data before designing anything. First pass found what looked like a precise, consistent ~2.00x discrepancy across 18 months \u2014 caught this as a mistake in the verification script itself (summing both individual outlet rows AND a separate \"Total\" rollup row) before treating it as a real data problem. After excluding the rollup row, the file's figures matched the live data closely (typically within 0.1\u20130.5%), confirming the file is trustworthy.",
+  "Excludes the '(brand-level)' marker row from monthly sums the same way every other per-outlet aggregation in this dashboard does \u2014 verified directly with a test case designed to catch a double-count if this were missed.",
+  "Defaults to the currently selected platform plus one other aggregator, and all brands, so the section isn't empty on first view \u2014 but every combination is still freely selectable via pills, nothing is locked."
 ];
+
 
 
 
@@ -3903,6 +3905,132 @@ function renderOutlets(){
 }
 
 // PLATFORMS
+// v156: Monthly Performance table state — multi-select aggregators AND brands, independent of
+// the single selPlatform used by the rest of the Platforms page. Defaults to the currently
+// selected platform plus Talabat (the two most commonly compared) and every brand, so the
+// section isn't empty on first view, but nothing here is meant to be exhaustive by default —
+// it's meant to be picked, the same way Comparison's Group C works.
+let platMultiAggs=new Set(),platMultiBrands=new Set(BR.map(b=>b.n));
+function platMultiAggsInit(){if(platMultiAggs.size===0){platMultiAggs=new Set([selPlatform,AGGS.find(a=>a!==selPlatform)].filter(Boolean));}}
+function platToggleMultiAgg(ag){if(platMultiAggs.has(ag))platMultiAggs.delete(ag);else platMultiAggs.add(ag);renderPlatforms();}
+function platToggleMultiBrand(b){if(platMultiBrands.has(b))platMultiBrands.delete(b);else platMultiBrands.add(b);renderPlatforms();}
+// Monthly totals for one brand+aggregator, sorted chronologically, keyed by YYYY-MM. Excludes
+// the '(brand-level)' marker row the same way every other per-outlet aggregation in this
+// dashboard does, to avoid double-counting against the individual outlet rows.
+function platMonthlySeries(brand,agg){
+  const byMonth={};
+  allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)').forEach(r=>{
+    const m=recMonth(r);
+    byMonth[m]=(byMonth[m]||0)+r.sales;
+  });
+  return byMonth;
+}
+// v156: renders the multi-brand × multi-aggregator monthly table — approved via mockup
+// iteration (rejected: sparkline-summary view, abbreviated figures; approved: full month-by-
+// month table, brand column-groups with aggregator sub-columns nested inside, full non-
+// abbreviated figures throughout).
+function platMonthlyTableCard(){
+  platMultiAggsInit();
+  const activeAggs=AGGS.filter(a=>platMultiAggs.has(a));
+  const activeBrands=BR.filter(b=>platMultiBrands.has(b.n));
+  const aggPills=AGGS.map(a=>{
+    const on=platMultiAggs.has(a),c=AC[a]||"#888";
+    return`<button onclick="platToggleMultiAgg('${a}')" style="background:${on?c+"18":"#F8F6EE"};border:2px solid ${on?c:"#EDE7D9"};color:${on?c:"#94A3B8"};font-size:12px;font-weight:700;padding:6px 12px;border-radius:9px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin:0 6px 6px 0">${logoImg(a,16)}${a}</button>`;
+  }).join("");
+  const brandPills=BR.map(b=>{
+    const on=platMultiBrands.has(b.n);
+    return`<button onclick="platToggleMultiBrand('${b.n}')" style="background:${on?b.c+"18":"#F8F6EE"};border:2px solid ${on?b.c:"#EDE7D9"};color:${on?b.c:"#94A3B8"};font-size:12px;font-weight:700;padding:6px 12px;border-radius:9px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin:0 6px 6px 0">${logoImg(b.n,16)}${b.n}</button>`;
+  }).join("");
+
+  if(!activeAggs.length||!activeBrands.length){
+    return`<div class="card" style="margin-top:12px"><div class="ct">📊 Monthly Performance — Brand × Aggregator</div>
+      <div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px">Aggregators</div><div>${aggPills}</div>
+      <div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 4px">Brands</div><div>${brandPills}</div>
+      <div style="text-align:center;padding:30px;color:#94a3b8;font-size:12px">Select at least one aggregator and one brand to see the monthly table.</div></div>`;
+  }
+
+  // Build each active brand×aggregator's monthly series, then the union of all months present
+  // across any of them, sorted chronologically — so a brand/aggregator with a shorter history
+  // (e.g. a newly-added aggregator) doesn't truncate the whole table to its own start date.
+  const seriesMap={};
+  const allMonths=new Set();
+  activeBrands.forEach(b=>activeAggs.forEach(a=>{
+    const s=platMonthlySeries(b.n,a);
+    seriesMap[b.n+"|"+a]=s;
+    Object.keys(s).forEach(m=>allMonths.add(m));
+  }));
+  const months=[...allMonths].sort();
+
+  if(!months.length){
+    return`<div class="card" style="margin-top:12px"><div class="ct">📊 Monthly Performance — Brand × Aggregator</div>
+      <div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px">Aggregators</div><div>${aggPills}</div>
+      <div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 4px">Brands</div><div>${brandPills}</div>
+      <div style="text-align:center;padding:30px;color:#94a3b8;font-size:12px">No data found for this combination.</div></div>`;
+  }
+
+  const brandGroupHeaders=activeBrands.map(b=>`<th colspan="${activeAggs.length*2}" style="padding:8px 16px;text-align:center;border-left:2px solid #E2E8F0;background:${b.c}0d"><div style="display:flex;align-items:center;justify-content:center;gap:7px">${logoImg(b.n,20)}<span style="font-size:13px;color:${b.c};font-weight:800">${b.n}</span></div></th>`).join("");
+  const aggSubHeaders=activeBrands.map(()=>activeAggs.map((a,i)=>`<th colspan="2" style="padding:6px 14px;text-align:center;font-size:11px;color:${AC[a]||"#888"};font-weight:800;border-left:${i===0?"2px solid #E2E8F0":"1px solid #F1EFE6"}">${a}</th>`).join("")).join("");
+  const metricHeaders=activeBrands.map(()=>activeAggs.map((a,i)=>`<th style="padding:6px 12px;text-align:right;font-size:10px;color:#94a3b8;font-weight:700;border-left:${i===0?"2px solid #E2E8F0":"1px solid #F1EFE6"}">Sales</th><th style="padding:6px 12px;text-align:right;font-size:10px;color:#94a3b8;font-weight:700">MoM</th>`).join("")).join("");
+
+  const rows=months.map((m,mi)=>{
+    const prevM=mi>0?months[mi-1]:null;
+    const cells=activeBrands.map(b=>activeAggs.map((a,ai)=>{
+      const s=seriesMap[b.n+"|"+a];
+      const v=s[m]||0;
+      const pv=prevM?(s[prevM]||0):null;
+      const momPct=(pv&&pv>0)?((v-pv)/pv*100):null;
+      const mClr=momPct==null?"#94a3b8":(momPct>=0?"#22C55E":"#EF4444");
+      return`<td style="padding:9px 14px;text-align:right;font-size:13px;font-weight:700;color:#0F172A;border-left:${ai===0?"2px solid #E2E8F0":"1px solid #F1EFE6"};font-variant-numeric:tabular-nums">${fmtAEDExact(v)}</td><td style="padding:9px 12px;text-align:right;font-size:11.5px;font-weight:700;color:${mClr}">${momPct==null?"—":(momPct>=0?"+":"")+momPct.toFixed(1)+"%"}</td>`;
+    }).join("")).join("");
+    return`<tr style="border-bottom:1px solid #F1EFE6"><td style="padding:9px 16px;font-weight:700;color:#0F172A;font-size:13px;white-space:nowrap">${cpcMonthLabel(m)}</td>${cells}</tr>`;
+  }).join("");
+
+  return`<div class="card" style="margin-top:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <div class="ct" style="margin-bottom:0">📊 Monthly Performance — Brand × Aggregator</div>
+      <button onclick="platExportMonthly()" style="background:#0F172A;color:#fff;border:none;border-radius:8px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer">⬇ Export CSV</button>
+    </div>
+    <div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px">Aggregators</div><div>${aggPills}</div>
+    <div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 10px">Brands</div><div>${brandPills}</div>
+    <div style="overflow-x:auto;margin-top:8px">
+      <table style="width:100%;border-collapse:collapse">
+        <thead>
+          <tr style="border-bottom:1px solid #F1EFE6"><th></th>${brandGroupHeaders}</tr>
+          <tr style="border-bottom:1px solid #F1EFE6"><th></th>${aggSubHeaders}</tr>
+          <tr style="border-bottom:2px solid #E2E8F0"><th style="padding:6px 16px;text-align:left;font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase">Month</th>${metricHeaders}</tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+// v156: export cache follows the same pattern used throughout this dashboard's other CSV
+// exports — populated by the last render, so the export always matches exactly what's on screen.
+function platExportMonthly(){
+  platMultiAggsInit();
+  const activeAggs=AGGS.filter(a=>platMultiAggs.has(a));
+  const activeBrands=BR.filter(b=>platMultiBrands.has(b.n));
+  if(!activeAggs.length||!activeBrands.length){alert("Select at least one aggregator and one brand first.");return;}
+  const seriesMap={};const allMonths=new Set();
+  activeBrands.forEach(b=>activeAggs.forEach(a=>{
+    const s=platMonthlySeries(b.n,a);seriesMap[b.n+"|"+a]=s;Object.keys(s).forEach(m=>allMonths.add(m));
+  }));
+  const months=[...allMonths].sort();
+  const header=["Month"];
+  activeBrands.forEach(b=>activeAggs.forEach(a=>{header.push(`${b.n} ${a} Sales (AED)`,`${b.n} ${a} MoM %`);}));
+  const rows=months.map((m,mi)=>{
+    const prevM=mi>0?months[mi-1]:null;
+    const row=[cpcMonthLabel(m)];
+    activeBrands.forEach(b=>activeAggs.forEach(a=>{
+      const s=seriesMap[b.n+"|"+a];const v=s[m]||0;const pv=prevM?(s[prevM]||0):null;
+      const momPct=(pv&&pv>0)?((v-pv)/pv*100):null;
+      row.push(v.toFixed(2),momPct==null?"":momPct.toFixed(1)+"%");
+    }));
+    return row;
+  });
+  cpcExportCSV(`monthly_performance_${dk(new Date())}.csv`,header,rows);
+}
+
 function renderPlatforms(){
   const clr=AC[selPlatform]||"#888";const compShort=getCompShort();
   // v124 Option A + v126/v127 visual refresh (several rounds of feedback): every tile shows
@@ -3978,7 +4106,8 @@ function renderPlatforms(){
     `<div class="g4 plat-grid" style="margin-bottom:12px">${cards}</div>
     ${note?`<div class="card" style="background:rgba(245,158,11,.05);border-color:rgba(245,158,11,.2);margin-bottom:12px"><div style="font-size:12px;color:#FDE68A;line-height:1.7">💡 ${note}</div></div>`:""}
     <div class="sm" style="margin-bottom:12px"><div class="ct" style="color:${clr}">${selPlatform} — Net Sales Trend</div><div style="position:relative;height:130px"><canvas id="ch-p-trend"></canvas></div></div>
-    <div class="card"><div class="ct" style="color:${clr}">Brand Performance on ${selPlatform} — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("pl-tbl",heads,tRows,2)}</div>`;
+    <div class="card"><div class="ct" style="color:${clr}">Brand Performance on ${selPlatform} — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("pl-tbl",heads,tRows,2)}</div>
+    ${platMonthlyTableCard()}`;
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.aggregator===selPlatform&&(!f.brands.size||f.brands.has(r.brand))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-p-trend",trend30(mf,f.start,f.end),clr);},50);
 }
 
