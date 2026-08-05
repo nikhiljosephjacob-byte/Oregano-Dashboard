@@ -13,13 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-165";
+const BUILD_VERSION="2026-07-21-166";
 const BUILD_NOTES=[
-  "\u2705 Recommendations are now dismissible \u2014 approved via mockup. Each item gets a \u2715 that removes it from the active list without deleting it outright; dismissed items collapse into a small \"N dismissed \u2014 click to review\" line with a bring-back option, so a long list doesn't require endless scrolling but nothing's permanently lost by a misclick. Verified across 5 scenarios: default state, dismissing one, reviewing dismissed items, bringing one back, and dismissing everything down to a friendly empty state.",
-  "\ud83c\udf19 Dark theme extended to Outlets (both the grid view and the per-outlet drill-down) \u2014 third and fourth pages in the rollout (Brands was the third). The outlet tiles have their own custom card design with inline colors throughout (not just .card/.sm classes), so they needed the same direct theme-aware treatment as kpiCard and the Brands selector buttons \u2014 applying the lesson from Overview proactively this time instead of discovering it through trial and error again.",
-  "Same verified fixes carried forward: the low-contrast muted label color and discount-burn red both swapped for their dark-verified equivalents, applied only when _darkPage is true. Tested both views (grid and drill-down) in both theme states \u2014 13 checks confirming dark mode renders correctly with real data and light mode remains completely untouched. All prior regression suites (Overview, Brands, Investment Plan, Comparison \u2014 68 checks total) still pass.",
-  "Remaining pages for the dark theme rollout: Platforms, Ads Performance, Campaigns, Discount Burn, KPI Tracker, Compare \u2014 continuing one at a time in the same tested way."
+  "\ud83d\udd24 Outlets page tiles: fixed per direct feedback that they'd become smaller/unreadable. Widened minimum tile size (280px\u2192340px, fewer tiles per row) and increased every key font size \u2014 outlet name 16\u219220px, Orders/Net Sales figures 20\u219225px, plus the region tag, delta badge, discount row, and brand chips all sized up. Verified against the existing 13-check Outlets test suite, all passing.",
+  "\ud83d\udd0d Investigated the Cancellation Monitor build before starting it, and found something that changes its scope: all 5 existing aggregator parsers (Keeta, Talabat, Careem, Deliveroo, Noon) currently discard cancelled-order rows entirely during upload \u2014 confirmed directly in the Keeta parser (skipped.cancelled++ then continue, no data captured). The cancellation data shown in the approved mockup only exists because the raw uploaded files were read directly for research \u2014 none of it is in the live data pipeline yet. Building this properly requires modifying all 5 parsers to capture cancellation detail instead of discarding it, which needs its own careful, tested pass given these parsers feed the sales/discount numbers used throughout the rest of the dashboard."
 ];
+
 
 
 
@@ -4023,29 +4022,29 @@ function renderOutlets(){
     const scBg=scClr==='#22C55E'?(_darkPage?'rgba(46,204,113,.15)':'rgba(34,197,94,.08)'):scClr==='#EF4444'?(_darkPage?'rgba(255,107,107,.15)':'rgba(239,68,68,.08)'):(_darkPage?'rgba(131,147,171,.15)':'rgba(148,163,184,.08)');
     return `<div onclick="selectOutlet('${t.branch.replace(/'/g,"\\'")}')" style="background:${tileBg};border:1px solid ${tileBorder};border-radius:14px;padding:0;cursor:pointer;transition:all .25s ease;box-shadow:0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04);overflow:hidden;position:relative" onmouseover="this.style.borderColor='${accent}';this.style.boxShadow='0 14px 30px rgba(15,23,42,.12)';this.style.transform='translateY(-3px)'" onmouseout="this.style.borderColor='${tileBorder}';this.style.boxShadow='0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04)';this.style.transform='none'">
       <div style="height:4px;background:linear-gradient(90deg,${accent},${accent}88)"></div>
-      <div style="padding:14px 16px 12px">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;gap:8px">
+      <div style="padding:18px 20px 16px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;gap:8px">
           <div style="min-width:0;flex:1">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              <div style="font-size:16px;font-weight:800;color:${textPrimary};letter-spacing:.2px">${t.branch}</div>
-              <span style="font-size:9px;font-weight:800;padding:2px 7px;border-radius:10px;background:${regionColor}15;color:${regionColor};letter-spacing:.6px">${region}</span>
+            <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+              <div style="font-size:20px;font-weight:800;color:${textPrimary};letter-spacing:.2px">${t.branch}</div>
+              <span style="font-size:10.5px;font-weight:800;padding:3px 8px;border-radius:10px;background:${regionColor}15;color:${regionColor};letter-spacing:.6px">${region}</span>
             </div>
-            <div style="font-size:11px;color:${textMuted};margin-top:3px;font-weight:600">${t.brands.length} brand${t.brands.length!==1?'s':''} · AOV AED ${t.aov.toFixed(1)}</div>
+            <div style="font-size:13px;color:${textMuted};margin-top:4px;font-weight:600">${t.brands.length} brand${t.brands.length!==1?'s':''} · AOV AED ${t.aov.toFixed(1)}</div>
           </div>
-          <div style="text-align:right;background:${scBg};border-radius:8px;padding:4px 8px;white-space:nowrap"><div style="font-size:12px;color:${scClr};font-weight:800" title="Net Sales change ${getCompShort()}">${fmtPct(t.sc)}</div></div>
+          <div style="text-align:right;background:${scBg};border-radius:8px;padding:5px 10px;white-space:nowrap"><div style="font-size:14px;color:${scClr};font-weight:800" title="Net Sales change ${getCompShort()}">${fmtPct(t.sc)}</div></div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px 0;border-top:1px solid ${dividerClr};border-bottom:1px solid ${dividerClr};margin-bottom:10px">
-          <div><div style="font-size:9px;color:${textMuted};text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:3px">Orders</div><div style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:${textPrimary};line-height:1">${t.orders.toLocaleString()}</div></div>
-          <div style="text-align:right"><div style="font-size:9px;color:${textMuted};text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:3px">Net Sales</div><div style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:${textPrimary};line-height:1">${fmtAEDTip(t.sales)}</div></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px 0;border-top:1px solid ${dividerClr};border-bottom:1px solid ${dividerClr};margin-bottom:12px">
+          <div><div style="font-size:10.5px;color:${textMuted};text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:4px">Orders</div><div style="font-size:25px;font-weight:800;font-variant-numeric:tabular-nums;color:${textPrimary};line-height:1">${t.orders.toLocaleString()}</div></div>
+          <div style="text-align:right"><div style="font-size:10.5px;color:${textMuted};text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:4px">Net Sales</div><div style="font-size:25px;font-weight:800;font-variant-numeric:tabular-nums;color:${textPrimary};line-height:1">${fmtAEDTip(t.sales)}</div></div>
         </div>
-        ${t.disc>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid ${dividerClr}"><div style="font-size:10px;color:${discClr};font-weight:700">💸 Disc. Burn: ${fmtAEDTip(t.disc)}</div><div style="font-size:10px;color:${t.depth>=20?discClr:t.depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${t.depth.toFixed(1)}% depth</div></div>`:''}
-        <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center">
-          ${t.brands.map(b=>`<span title="${b}: ${fmtAED(t.brandGmv[b]||0)}" style="display:inline-flex;align-items:center;gap:4px;background:${BMAP[b]?.c||'#888'}18;color:${BMAP[b]?.c||'#888'};font-size:10px;font-weight:800;padding:3px 8px;border-radius:6px;border:1px solid ${BMAP[b]?.c||'#888'}33">${logoImg(b,16)}${b}</span>`).join('')}
+        ${t.disc>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid ${dividerClr}"><div style="font-size:12.5px;color:${discClr};font-weight:700">💸 Disc. Burn: ${fmtAEDTip(t.disc)}</div><div style="font-size:12.5px;color:${t.depth>=20?discClr:t.depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${t.depth.toFixed(1)}% depth</div></div>`:''}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px">
+          ${t.brands.map(b=>`<span title="${b}: ${fmtAED(t.brandGmv[b]||0)}" style="display:inline-flex;align-items:center;gap:5px;background:${BMAP[b]?.c||'#888'}18;color:${BMAP[b]?.c||'#888'};font-size:12.5px;font-weight:800;padding:4px 10px;border-radius:7px;border:1px solid ${BMAP[b]?.c||'#888'}33">${logoImg(b,19)}${b}</span>`).join('')}
         </div>
       </div>
     </div>`;
   };
-  const grid=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${tiles.map(renderTile).join('')}</div>`;
+  const grid=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">${tiles.map(renderTile).join('')}</div>`;
   const outletsGridStyleOverride=_darkPage?`<style>
       #page-outlets{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
       #page-outlets .card{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
