@@ -13,11 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-161";
+const BUILD_VERSION="2026-07-21-162";
 const BUILD_NOTES=[
-  "\ud83d\udc1b Second attempt at the sides fix ALSO didn't work (per direct feedback: \"still same, didn't change\") \u2014 my calc(100% + 40px) fix assumed the parent's padding was close to my 20px guess, and it evidently isn't. Rather than guess a third padding value blindly, switched to a fundamentally different, more robust technique: viewport-anchored full-bleed (width:100vw + position:relative + left:50% + margin-left:-50vw), which breaks the element out to the actual browser viewport edges regardless of what the parent's padding/width actually is \u2014 doesn't require knowing or guessing the parent's dimensions at all, unlike the previous two attempts.",
-  "Still cannot visually verify this myself \u2014 this environment has no real browser layout engine. If this third attempt also doesn't resolve it, the next step should be getting actual diagnostic information (e.g. a browser inspect-element screenshot showing the real computed width/padding around #page-overview) rather than continuing to guess at CSS values with no way to see the result."
+  "\ud83d\udd0d DIAGNOSTIC BUILD, not a real fix attempt: three fundamentally different CSS techniques (padding-matched negative margin, width-compensated negative margin, viewport-anchored full-bleed) all produced the identical unchanged result \u2014 if the CSS were being applied but just calculated wrong, some visible difference between three very different approaches would be expected. Getting the exact same result three times suggests the style override may not be reaching the page at all, rather than reaching it with wrong values. Added an unmissable 6px magenta border around #page-overview specifically to test this: if the border doesn't appear at all, the style tag isn't taking effect and the real problem is elsewhere (caching, a stripped <style> tag, wrong element ID, etc.) \u2014 not a CSS value problem, meaning further guessing at margin/width numbers would keep failing regardless. If the border DOES appear but the sides are still wrong, that confirms the override IS working and narrows the problem specifically to the width/margin math or to a different element entirely being responsible for the white area."
 ];
+
 
 
 
@@ -3805,7 +3805,7 @@ function renderOverview(){
     // Expanding #page-overview itself via negative margins is scoped safely to this element
     // only, regardless of what else is in the DOM.
     `<style>
-      #page-overview{background:${DARK_THEME.bg};border-radius:0;width:100vw;position:relative;left:50%;right:50%;margin-left:-50vw;margin-right:-50vw;padding:16px 20px;box-sizing:border-box}
+      #page-overview{background:${DARK_THEME.bg};border-radius:0;width:100vw;position:relative;left:50%;right:50%;margin-left:-50vw;margin-right:-50vw;padding:16px 20px;box-sizing:border-box;border:6px solid magenta!important}
       #page-overview .card,#page-overview .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
       #page-overview .ct{color:${DARK_THEME.textPrimary}!important}
       #page-overview table.tbl th{color:${DARK_THEME.textMuted}!important;border-color:${DARK_THEME.cardBorder}!important}
