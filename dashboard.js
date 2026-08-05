@@ -13,12 +13,14 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-167";
+const BUILD_VERSION="2026-07-21-168";
 const BUILD_NOTES=[
-  "\ud83d\udd27 Cancellation Monitor data pipeline, started with the two aggregators with the most structured data (Keeta, Talabat). Both parsers previously discarded cancelled-order rows entirely (a count was kept, no detail) \u2014 now additively capture order number, brand/outlet, date, reason, responsibility/owner, amount, and (Talabat) the commission charged despite the cancellation, into a new `cancellations` array returned alongside the existing parsed data. Deliberately additive: the capture logic runs BEFORE the existing skip/continue, using separate calls to the existing brand/outlet parsers, so none of the existing sales/discount aggregation logic was touched or reordered.",
-  "Verified with real-shaped test data matching actual findings from earlier research \u2014 Talabat's test reproduces the exact real \"Too busy\" vendor-cancellation example (AED 149 order, AED 29.80 commission still charged) found in the uploaded file. Confirmed non-cancelled rows are completely unaffected in both parsers, and the existing skipped-counter logic still increments correctly (no regression). 41 checks across existing regression suites (Outlets, Overview, navigation) still pass.",
-  "Remaining for the full Cancellation Monitor: Careem, Deliveroo, and Noon parsers still need the same treatment (Deliveroo's is structurally different \u2014 reason/fault are embedded in a free-text note field rather than dedicated columns, needing regex extraction rather than a direct column read), a place to store the combined cancellations data across all 5 aggregators, and the actual page UI itself. Continuing this next."
+  "\ud83d\udd27 Cancellation Monitor data pipeline now complete \u2014 all 5 aggregator parsers (Keeta, Talabat, Careem, Noon, Deliveroo) capture cancellation/refund detail instead of discarding it, plus a combined storage layer merging all 5 into one unified dataset with simple aggregator+order-number dedup (appropriate given cancellations are a much smaller dataset than the full order records, which need the more complex day-based merge logic used elsewhere).",
+  "Deliveroo needed a genuinely different approach from the other 4: no dedicated cancelled status exists in its export, so reason and fault are extracted via regex from a free-text Note field (e.g. \"Refund reason: cooked_incorrectly\", \"Party at fault: Restaurant\") rather than a direct column read. Verified against the exact real example found during earlier research \u2014 correctly extracts cooked_incorrectly / Restaurant / AED -21.00 from the actual note text format, with a graceful fallback to the activity name when no structured reason is present.",
+  "Every parser change is purely additive: capture logic runs immediately before each parser's EXISTING skip/continue for cancelled rows, using separate calls to each aggregator's own established brand/outlet lookup functions, so none of the existing sales/discount aggregation logic was touched, reordered, or put at risk. All 5 parsers tested individually against real-shaped data reproducing actual findings from the uploaded files (Talabat's AED 29.80 commission-on-cancellation, Careem's negative merchant-fault payout, Noon's auto outlet-full adjustment, Deliveroo's embedded note parsing) \u2014 34 new checks across the 5 parsers plus the storage/merge layer, all passing. 57 checks total including every pre-existing regression suite, confirming this large a change didn't disturb anything already built.",
+  "IMPORTANT: the data pipeline is complete, but there is still no visible Cancellations page or navigation entry \u2014 uploading this version will not show anything new on screen yet. The page UI (KPI tiles, responsibility/reason breakdowns, per-aggregator cards with the approved 1-click order-level drill-down) and its navigation tab are the next and final piece."
 ];
+
 
 
 
@@ -653,6 +655,31 @@ async function pullOrderDataFromServer(){
   return changed;
 }
 const KEETA_STORAGE_KEY="keeta_orders_data_v1";
+// v167: Cancellation Monitor storage. A single combined array across all 5 aggregators (not
+// per-aggregator like the main orders data above) since the whole point is one unified view.
+// Dedup is a simple aggregator+order_no key rather than the day-based keep/replace logic
+// mergeOrdersData uses above — appropriate here since cancellations are a much smaller dataset
+// (dozens of rows, not thousands) and don't have the same overlapping-export volume problem.
+const CANCELLATIONS_STORAGE_KEY="cancellations_data_v1";
+let cancellationsData=[];
+function loadCancellationsFromStorage(){
+  try{const raw=localStorage.getItem(CANCELLATIONS_STORAGE_KEY);if(raw)cancellationsData=JSON.parse(raw)||[];}
+  catch(e){console.log("[Cancellations] localStorage load failed:",e.message);cancellationsData=[];}
+}
+function saveCancellationsToStorage(){
+  try{localStorage.setItem(CANCELLATIONS_STORAGE_KEY,JSON.stringify(cancellationsData));}
+  catch(e){console.log("[Cancellations] localStorage save failed (quota?):",e.message);}
+}
+function mergeCancellations(fresh){
+  if(!fresh||!fresh.length)return;
+  const freshKeys=new Set(fresh.map(c=>c.aggregator+"|"+c.order_no));
+  cancellationsData=[...cancellationsData.filter(c=>!freshKeys.has(c.aggregator+"|"+c.order_no)),...fresh];
+  saveCancellationsToStorage();
+}
+function clearCancellationsData(){
+  cancellationsData=[];
+  try{localStorage.removeItem(CANCELLATIONS_STORAGE_KEY);}catch(e){}
+}
 
 // ═══════════════════════════════════════════════════════════════
 // GENERIC ORDERS-DATA MERGE HELPER (used by every aggregator)
@@ -1581,6 +1608,7 @@ async function handleOrdersUpload(filesOrFile){
       else if(detected==="talabat"){talabatOrdersData=mergeOrdersData(talabatOrdersData,fresh,null);saveTalabatToStorage();}
       else if(detected==="deliveroo"){deliverooOrdersData=mergeOrdersData(deliverooOrdersData,fresh,deliverooRecomputeTotals);saveDeliverooToStorage();}
       else if(detected==="noon"){noonOrdersData=mergeOrdersData(noonOrdersData,fresh,noonRecomputeTotals,'statement');saveNoonToStorage();}
+      if(fresh.cancellations&&fresh.cancellations.length)mergeCancellations(fresh.cancellations);
       const dr=fresh.metadata.date_range||[];
       results.push(`✓ ${file.name} (${detected.charAt(0).toUpperCase()+detected.slice(1)}): ${fresh.records.length.toLocaleString()} records, ${dr[0]||"?"} → ${dr[1]||"?"}`);
     }catch(e){
@@ -1770,6 +1798,8 @@ async function parseCareemCSV(file){
   // rules table exists for Careem, so export matching is by discount_type + date range.
   const orderDetail=[];
   const skipped={cancelled:0,no_brand:0,no_outlet:0,no_date:0};
+  // v167: Cancellation Monitor support - see Keeta parser for the same pattern/rationale.
+  const cancellations=[];
   const unmappedOutlets=new Set();
   const unmappedBrands=new Set();
   const perBrand={};
@@ -1777,7 +1807,23 @@ async function parseCareemCSV(file){
 
   for(const r of data){
     const status=String(r[headerIdx["STATUS"]]||"").trim();
-    if(CAREEM_SKIPPED_STATUSES.has(status)){skipped.cancelled++;continue;}
+    if(CAREEM_SKIPPED_STATUSES.has(status)){
+      skipped.cancelled++;
+      const cBrandRaw=String(r[headerIdx["BRAND_NAME"]]||"").trim();
+      const cOutletRaw=String(r[headerIdx["MERCHANT_AREA"]]||"").trim();
+      cancellations.push({
+        aggregator:"Careem",
+        order_no:r[headerIdx["REFERENCE_ID"]]||null,
+        brand:CAREEM_BRAND_NORM[cBrandRaw]||null,outlet:CAREEM_OUTLET_CODE[cOutletRaw]||null,
+        date:parseCareemDate(r[headerIdx["TRANSACTION_DATE"]]),
+        reason:status, // Careem's export gives no reason text beyond the status itself
+        responsibility:status==="Cancelled by merchant"?"Restaurant":"Careem/Customer",
+        amount:parseCareemAmount(r[headerIdx["TOTAL_AMOUNT"]]),
+        netPayout:parseCareemAmount(r[headerIdx["TOTAL_PAYOUT_AMOUNT"]]), // negative = restaurant owes Careem
+        source_file:file.name
+      });
+      continue;
+    }
     const brandRaw=String(r[headerIdx["BRAND_NAME"]]||"").trim();
     const brand=CAREEM_BRAND_NORM[brandRaw];
     if(!brand){unmappedBrands.add(brandRaw);skipped.no_brand++;continue;}
@@ -1839,6 +1885,7 @@ async function parseCareemCSV(file){
   const dates=Array.from(datesSeen).sort();
   return{
     orderDetail,
+    cancellations,
     metadata:{
       source_file:file.name,
       generated_at:new Date().toISOString(),
@@ -2387,6 +2434,14 @@ async function parseDeliverooCSV(file){
   const orderDetail=[];
   let stats={considered:0,skippedNoOrder:0,skippedHeader:0,skippedActivity:0,skippedBrand:0,skippedDate:0,kept:0};
   const unmappedRestaurants={};
+  // v167: Cancellation Monitor support - see Keeta parser for the same pattern/rationale.
+  // Deliveroo is structurally different from the other 4: there's no dedicated "cancelled"
+  // status. Refund/quality-issue activities carry their reason and fault embedded as free text
+  // inside the Note column (e.g. "Refund reason: cooked_incorrectly\nParty at fault: Restaurant")
+  // rather than dedicated columns, so this needs regex extraction instead of a direct column
+  // read. Confirmed against real uploaded data before writing this pattern.
+  const DELIVEROO_REFUND_ACTIVITIES=new Set(["Customer refund","Contested customer refund"]);
+  const cancellations=[];
   for(let i=2;i<rows.length;i++){
     const row=rows[i];
     if(!row||!row.length)continue;
@@ -2395,7 +2450,29 @@ async function parseDeliverooCSV(file){
     if(orderNum==null||orderNum===""){stats.skippedNoOrder++;continue;}
     if(String(orderNum)==="Order Number"){stats.skippedHeader++;continue;}
     const activity=String(row[colAct]||"").trim();
-    if(activity!=="Delivery"&&activity!=="Restaurant funded voucher promotion"){stats.skippedActivity++;continue;}
+    if(activity!=="Delivery"&&activity!=="Restaurant funded voucher promotion"){
+      stats.skippedActivity++;
+      if(DELIVEROO_REFUND_ACTIVITIES.has(activity)){
+        const cRestName=String(row[colRest]||"").trim();
+        const{brand:cBrand,outlet:cOutlet}=parseDeliverooBrandOutlet(cRestName);
+        const note=String(row[colNote]||"");
+        const reasonM=note.match(/Refund reason:\s*(\w+)/);
+        const faultM=note.match(/Party at fault:\s*(\w+)/);
+        cancellations.push({
+          aggregator:"Deliveroo",
+          order_no:orderNum,
+          brand:cBrand||null,outlet:cOutlet||null,
+          date:toIsoDate(row[colDate]),
+          reason:reasonM?reasonM[1]:activity, // fall back to the activity name itself if no structured reason found
+          responsibility:faultM?faultM[1]:null,
+          amount:Math.abs(parseFloat(row[colPay]))||0,
+          netImpact:parseFloat(row[colPay])||0, // negative = restaurant debited
+          isPostDelivery:true, // these are refunds on DELIVERED orders, not pre-delivery cancellations - flagged for the page to label distinctly
+          source_file:file.name
+        });
+      }
+      continue;
+    }
     const restName=String(row[colRest]||"").trim();
     const{brand,outlet}=parseDeliverooBrandOutlet(restName);
     if(!brand||!outlet){
@@ -2452,6 +2529,7 @@ async function parseDeliverooCSV(file){
 
   return{
     orderDetail,
+    cancellations,
     metadata:{
       aggregator:"Deliveroo",
       date_range:dates.length?[dates[0],dates[dates.length-1]]:[null,null],
@@ -2642,12 +2720,39 @@ async function parseNoonCSV(file){
   const orderDetail=[];
   let stats={considered:0,delivered:0,skipped:0,unmapped:0};
   const unmappedOutlets={};
+  // v167: Cancellation Monitor support - see Keeta parser for the same pattern/rationale.
+  // Noon's status check below skips ANY non-"delivered" row, not just cancellations, so this
+  // specifically checks for canceled/cancelled rather than capturing every skipped status.
+  const cancellations=[];
 
   for(let i=1;i<rows.length;i++){
     const row=rows[i];
     stats.considered++;
     const status=String(row[idx["order_status"]]||"").trim().toLowerCase();
-    if(status!=="delivered"){stats.skipped++;continue;}
+    if(status!=="delivered"){
+      stats.skipped++;
+      if(status==="canceled"||status==="cancelled"){
+        const cOutletName=String(row[idx["outlet_name"]]||"").trim();
+        const cOutlet=noonMapOutlet(cOutletName);
+        const col=(name)=>idx[name]!==undefined?row[idx[name]]:null;
+        let cDate=null;
+        const cDateRaw=col("order_date");
+        if(cDateRaw instanceof Date&&!isNaN(cDateRaw)){cDate=dk(cDateRaw);}
+        else{const s=String(cDateRaw||"").trim();const m=s.match(/^(\d{4}-\d{2}-\d{2})/);if(m)cDate=m[1];}
+        cancellations.push({
+          aggregator:"Noon",
+          order_no:col("order_nr")||col("order_ref")||null,
+          brand:brand||null,outlet:cOutlet||null,
+          date:cDate,
+          reason:col("adjustment_reasons")||null, // usually blank - Noon logs very little reason detail
+          responsibility:null, // Noon's export doesn't indicate fault
+          amount:parseFloat(col("item_value"))||0,
+          netPayable:parseFloat(col("net_payable"))||0, // negative = restaurant owes Noon
+          source_file:file.name
+        });
+      }
+      continue;
+    }
     stats.delivered++;
 
     const outletName=String(row[idx["outlet_name"]]||"").trim();
@@ -2724,6 +2829,7 @@ async function parseNoonCSV(file){
 
   return{
     orderDetail,
+    cancellations,
     metadata:{
       aggregator:"Noon",
       date_range:dates.length?[dates[0],dates[dates.length-1]]:[null,null],
@@ -3103,6 +3209,7 @@ async function doLoad(){
   loadTalabatFromStorage();
   loadDeliverooFromStorage();
   loadNoonFromStorage();
+  loadCancellationsFromStorage();
   // ── DISCOUNT PARSE DIAGNOSTIC ──
   // Prints how much Disc was parsed per brand × aggregator so we can see if the sheet's
   // Disc column is being read. If a brand/aggregator you entered shows 0, the column header
