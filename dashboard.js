@@ -13,13 +13,14 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-169";
+const BUILD_VERSION="2026-07-21-170";
 const BUILD_NOTES=[
-  "\ud83c\udf89 Order Cancellation Monitor is now a real, visible page \u2014 the final piece after the parser and storage work from the last two builds. New \ud83d\udeab Cancellations tab in navigation, injected the same proven way Compare was added (a page container + tab created at startup, not baked into the original static HTML).",
-  "Matches the approved mockup: KPI tiles (total cancellations, revenue lost, commission/fees still charged), a responsibility breakdown (Restaurant/Driver/Platform/Unknown \u2014 the most actionable view since only some of this is within your control), top reasons, and per-aggregator cards with the requested 1-click drill-down \u2014 click any aggregator to expand the full order-level list in place, with CSV export. Built dark-theme from the start rather than needing a retrofit like Overview did.",
-  "Handles the real differences between aggregators rather than forcing them into one shape: Talabat's commission-charged-on-cancellation, Careem/Noon/Deliveroo's signed net-payout figures (negative = restaurant owes money back), and Keeta's compensated/uncompensated split are each read correctly through a single normalizing function, tested individually. Deliveroo's entries are explicitly labeled as post-delivery refunds rather than pre-delivery cancellations, matching the distinction flagged earlier in this project.",
-  "Tested properly before shipping, not just visually: 20 checks on the page itself (empty state, populated state with real-shaped data across all 5 aggregators, the 1-click expand/collapse cycle, the per-aggregator money-lost normalization, CSV export), plus 10 checks with a real DOM confirming the navigation tab injects correctly, doesn't duplicate on repeat calls, and gp('cancellations') correctly activates the right page and tab. 87 checks total including every pre-existing regression suite \u2014 nothing else in the dashboard was disturbed by adding this."
+  "\ud83c\udf19 Platforms page converted to dark theme \u2014 fifth page in the rollout (Overview, Brands, Outlets, Cancellations, now Platforms). Covered both the main render function's custom aggregator cards (own inline colors throughout, same treatment as kpiCard/outlet tiles/brand buttons before it) and the separate platMonthlyTableCard() function powering the Brand\u00d7Aggregator monthly table \u2014 that one needed its own theme object and a scoped line-range color pass since it's a substantial function in its own right, not just a helper.",
+  "Fixed the same class of low-contrast reds found on every prior page (#EF4444 at 4.17:1, swapped for the verified #FF6B6B at 5.65:1) in both the main cards and the monthly table's MoM indicators, applied only when _darkPage is true.",
+  "Verified in both directions: 12 checks on dark mode (style override present, dark card backgrounds, no leftover light-theme colors, verified accent red, real data flowing through correctly) and confirmed light mode renders completely unaffected. 61 checks total including every pre-existing regression suite.",
+  "Investigated Discount Burn next and found it's structured differently than its short 41-line entry function suggests \u2014 it dispatches to 7+ separate sub-functions (KPI row, trend chart, uncategorized breakdown, co-fund audit table, campaign table, etc.), each independently sized and colored. That's a materially bigger conversion than Platforms was, worth its own careful pass rather than rushing at the end of this one. Remaining: Discount Burn, KPI Tracker, Campaigns, Ads Performance, Compare."
 ];
+
 
 
 
@@ -3794,7 +3795,7 @@ function mNavGo(page){
 // dark theme one at a time. Adding a page here is the ONLY change needed at the dispatcher —
 // each page's own render function still needs its own scoped style override and theme-aware
 // calls, same as Overview's build.
-const DARK_PAGES=new Set(["overview","brands","outlets","cancellations"]);
+const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms"]);
 function renderPage(p){_darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();else if(p==="cancellations")renderCancellations();}
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
@@ -4247,23 +4248,25 @@ function platMonthlySeries(brand,agg){
 // month table, brand column-groups with aggregator sub-columns nested inside, full non-
 // abbreviated figures throughout).
 function platMonthlyTableCard(){
+  const T2=_darkPage?{mutedTxt:DARK_THEME.textMuted,pillBg:DARK_THEME.bg,pillBorder:DARK_THEME.cardBorder,pillInactiveTxt:DARK_THEME.textSecondary,headerBorder:DARK_THEME.cardBorder,headerBorderLight:DARK_THEME.cardBorder,cellBorder:DARK_THEME.cardBorder,valuePrimary:DARK_THEME.textPrimary,valueSecondary:DARK_THEME.textSecondary}
+    :{mutedTxt:"#94a3b8",pillBg:"#F8F6EE",pillBorder:"#EDE7D9",pillInactiveTxt:"#94A3B8",headerBorder:"#E2E8F0",headerBorderLight:"#F1EFE6",cellBorder:"#E2E8F0",valuePrimary:"#0F172A",valueSecondary:"#334155"};
   platMultiAggsInit();
   const activeAggs=AGGS.filter(a=>platMultiAggs.has(a));
   const activeBrands=BR.filter(b=>platMultiBrands.has(b.n));
   const aggPills=AGGS.map(a=>{
     const on=platMultiAggs.has(a),c=AC[a]||"#888";
-    return`<button onclick="platToggleMultiAgg('${a}')" style="background:${on?c+"18":"#F8F6EE"};border:2px solid ${on?c:"#EDE7D9"};color:${on?c:"#94A3B8"};font-size:12px;font-weight:700;padding:6px 12px;border-radius:9px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin:0 6px 6px 0">${logoImg(a,16)}${a}</button>`;
+    return`<button onclick="platToggleMultiAgg('${a}')" style="background:${on?c+"18":T2.pillBg};border:2px solid ${on?c:T2.pillBorder};color:${on?c:T2.pillInactiveTxt};font-size:12px;font-weight:700;padding:6px 12px;border-radius:9px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin:0 6px 6px 0">${logoImg(a,16)}${a}</button>`;
   }).join("");
   const brandPills=BR.map(b=>{
     const on=platMultiBrands.has(b.n);
-    return`<button onclick="platToggleMultiBrand('${b.n}')" style="background:${on?b.c+"18":"#F8F6EE"};border:2px solid ${on?b.c:"#EDE7D9"};color:${on?b.c:"#94A3B8"};font-size:12px;font-weight:700;padding:6px 12px;border-radius:9px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin:0 6px 6px 0">${logoImg(b.n,16)}${b.n}</button>`;
+    return`<button onclick="platToggleMultiBrand('${b.n}')" style="background:${on?b.c+"18":T2.pillBg};border:2px solid ${on?b.c:T2.pillBorder};color:${on?b.c:T2.pillInactiveTxt};font-size:12px;font-weight:700;padding:6px 12px;border-radius:9px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin:0 6px 6px 0">${logoImg(b.n,16)}${b.n}</button>`;
   }).join("");
 
   if(!activeAggs.length||!activeBrands.length){
     return`<div class="card" style="margin-top:12px"><div class="ct">📊 Monthly Performance — Brand × Aggregator</div>
-      <div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px">Aggregators</div><div>${aggPills}</div>
-      <div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 4px">Brands</div><div>${brandPills}</div>
-      <div style="text-align:center;padding:30px;color:#94a3b8;font-size:12px">Select at least one aggregator and one brand to see the monthly table.</div></div>`;
+      <div style="font-size:11px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px">Aggregators</div><div>${aggPills}</div>
+      <div style="font-size:11px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 4px">Brands</div><div>${brandPills}</div>
+      <div style="text-align:center;padding:30px;color:${T2.mutedTxt};font-size:12px">Select at least one aggregator and one brand to see the monthly table.</div></div>`;
   }
 
   // Build each active brand×aggregator's monthly series, then the union of all months present
@@ -4280,13 +4283,13 @@ function platMonthlyTableCard(){
 
   if(!months.length){
     return`<div class="card" style="margin-top:12px"><div class="ct">📊 Monthly Performance — Brand × Aggregator</div>
-      <div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px">Aggregators</div><div>${aggPills}</div>
-      <div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 4px">Brands</div><div>${brandPills}</div>
-      <div style="text-align:center;padding:30px;color:#94a3b8;font-size:12px">No data found for this combination.</div></div>`;
+      <div style="font-size:11px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px">Aggregators</div><div>${aggPills}</div>
+      <div style="font-size:11px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 4px">Brands</div><div>${brandPills}</div>
+      <div style="text-align:center;padding:30px;color:${T2.mutedTxt};font-size:12px">No data found for this combination.</div></div>`;
   }
 
-  const brandGroupHeaders=activeBrands.map(b=>`<th colspan="${activeAggs.length}" style="padding:8px 16px;text-align:center;border-left:2px solid #E2E8F0;background:${b.c}0d"><div style="display:flex;align-items:center;justify-content:center;gap:7px">${logoImg(b.n,20)}<span style="font-size:13px;color:${b.c};font-weight:800">${b.n}</span></div></th>`).join("");
-  const aggSubHeaders=activeBrands.map(()=>activeAggs.map((a,i)=>`<th style="padding:6px 18px;text-align:left;font-size:11px;color:${AC[a]||"#888"};font-weight:800;border-left:${i===0?"2px solid #E2E8F0":"1px solid #F1EFE6"}">${a}</th>`).join("")).join("");
+  const brandGroupHeaders=activeBrands.map(b=>`<th colspan="${activeAggs.length}" style="padding:8px 16px;text-align:center;border-left:2px solid ${T2.headerBorder};background:${b.c}0d"><div style="display:flex;align-items:center;justify-content:center;gap:7px">${logoImg(b.n,20)}<span style="font-size:13px;color:${b.c};font-weight:800">${b.n}</span></div></th>`).join("");
+  const aggSubHeaders=activeBrands.map(()=>activeAggs.map((a,i)=>`<th style="padding:6px 18px;text-align:left;font-size:11px;color:${AC[a]||"#888"};font-weight:800;border-left:${i===0?"2px solid "+T2.headerBorder:"1px solid "+T2.headerBorderLight}">${a}</th>`).join("")).join("");
 
   // v157: each cell now packs Sales+MoM (top line, largest), Orders+AOV (middle), Discount+
   // Discount% (bottom) — three lines within ONE column per brand×aggregator, instead of
@@ -4304,24 +4307,24 @@ function platMonthlyTableCard(){
       const gross=sales+disc;
       const discPct=gross>0?(disc/gross*100):0;
       const momPct=(prev&&prev.sales>0)?((sales-prev.sales)/prev.sales*100):null;
-      const mClr=momPct==null?"#94a3b8":(momPct>=0?"#22C55E":"#EF4444");
-      const discClr=discPct>=20?"#EF4444":discPct>=10?"#F59E0B":"#22C55E";
-      return`<td style="padding:11px 18px;border-left:${ai===0?"2px solid #E2E8F0":"1px solid #F1EFE6"};vertical-align:top;min-width:190px">
+      const mClr=momPct==null?T2.mutedTxt:(momPct>=0?"#22C55E":(_darkPage?"#FF6B6B":"#EF4444"));
+      const discClr=discPct>=20?(_darkPage?"#FF6B6B":"#EF4444"):discPct>=10?"#F59E0B":"#22C55E";
+      return`<td style="padding:11px 18px;border-left:${ai===0?"2px solid "+T2.headerBorder:"1px solid "+T2.headerBorderLight};vertical-align:top;min-width:190px">
         <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px">
-          <span style="font-size:15px;font-weight:800;color:#0F172A;font-variant-numeric:tabular-nums">${fmtAEDExact(sales)}</span>
+          <span style="font-size:15px;font-weight:800;color:${T2.valuePrimary};font-variant-numeric:tabular-nums">${fmtAEDExact(sales)}</span>
           <span style="font-size:11px;font-weight:700;color:${mClr}">${momPct==null?"—":(momPct>=0?"+":"")+momPct.toFixed(1)+"%"}</span>
         </div>
-        <div style="display:flex;gap:12px;font-size:11.5px;color:#64748b;margin-bottom:2px">
-          <span><strong style="color:#334155">${orders.toLocaleString()}</strong> orders</span>
-          <span>AOV <strong style="color:#334155">${orders>0?"AED "+aov.toFixed(1):"—"}</strong></span>
+        <div style="display:flex;gap:12px;font-size:11.5px;color:${T2.mutedTxt};margin-bottom:2px">
+          <span><strong style="color:${T2.valueSecondary}">${orders.toLocaleString()}</strong> orders</span>
+          <span>AOV <strong style="color:${T2.valueSecondary}">${orders>0?"AED "+aov.toFixed(1):"—"}</strong></span>
         </div>
         <div style="display:flex;gap:12px;font-size:11.5px">
-          <span style="color:#94a3b8">${disc>0?fmtAEDExact(disc)+" disc.":"—"}</span>
+          <span style="color:${T2.mutedTxt}">${disc>0?fmtAEDExact(disc)+" disc.":"—"}</span>
           ${disc>0?`<span style="color:${discClr};font-weight:700">${discPct.toFixed(1)}%</span>`:""}
         </div>
       </td>`;
     }).join("")).join("");
-    return`<tr style="border-bottom:1px solid #F1EFE6"><td style="padding:11px 16px;font-weight:700;color:#0F172A;font-size:13px;white-space:nowrap;vertical-align:top">${cpcMonthLabel(m)}</td>${cells}</tr>`;
+    return`<tr style="border-bottom:1px solid ${T2.headerBorderLight}"><td style="padding:11px 16px;font-weight:700;color:${T2.valuePrimary};font-size:13px;white-space:nowrap;vertical-align:top">${cpcMonthLabel(m)}</td>${cells}</tr>`;
   }).join("");
 
   return`<div class="card" style="margin-top:12px">
@@ -4329,13 +4332,13 @@ function platMonthlyTableCard(){
       <div class="ct" style="margin-bottom:0">📊 Monthly Performance — Brand × Aggregator</div>
       <button onclick="platExportMonthly()" style="background:#0F172A;color:#fff;border:none;border-radius:8px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer">⬇ Export CSV</button>
     </div>
-    <div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px">Aggregators</div><div>${aggPills}</div>
-    <div style="font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 10px">Brands</div><div>${brandPills}</div>
+    <div style="font-size:11px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px">Aggregators</div><div>${aggPills}</div>
+    <div style="font-size:11px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 10px">Brands</div><div>${brandPills}</div>
     <div style="overflow-x:auto;margin-top:8px">
       <table style="width:100%;border-collapse:collapse">
         <thead>
-          <tr style="border-bottom:1px solid #F1EFE6"><th></th>${brandGroupHeaders}</tr>
-          <tr style="border-bottom:2px solid #E2E8F0"><th style="padding:6px 16px;text-align:left;font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase">Month</th>${aggSubHeaders}</tr>
+          <tr style="border-bottom:1px solid ${T2.headerBorderLight}"><th></th>${brandGroupHeaders}</tr>
+          <tr style="border-bottom:2px solid ${T2.headerBorder}"><th style="padding:6px 16px;text-align:left;font-size:10px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase">Month</th>${aggSubHeaders}</tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
@@ -4402,55 +4405,73 @@ function renderPlatforms(){
   const ls=sumR(ld),ps=sumR(pd);
   const brandRows=BR.map(({n,c})=>{const cv=sumR(ld.filter(r=>r.brand===n));const pv=sumR(pd.filter(r=>r.brand===n));return{n,c,cv,oc:pctOf(cv.orders,pv.orders),sc:pctOf(cv.sales,pv.sales)};}).filter(b=>b.cv.orders>0);
   const note=ANOTES[selPlatform];
+  const T=_darkPage?{cardBg1:DARK_THEME.card,cardBg2:DARK_THEME.card,border:DARK_THEME.cardBorder,muted:DARK_THEME.textMuted,valuePrimary:DARK_THEME.textPrimary,valueSecondary:DARK_THEME.textSecondary,dashedBorder:DARK_THEME.cardBorder,priorLabel:DARK_THEME.textMuted,priorValue:DARK_THEME.textSecondary,discClr:"#FF6B6B",priorDiscClr:"#FBBF24"}
+    :{cardBg1:"#FEFDFA",border:"#EDE7D9",muted:"#94a3b8",valuePrimary:"#0F172A",valueSecondary:"#334155",dashedBorder:"#D6CFB8",priorLabel:"#64748b",priorValue:"#334155",discClr:"#EF4444",priorDiscClr:"#B45309"};
   const cards=aggSums.map(a=>{
     const isSel=selPlatform===a.ag;
-    const border=isSel?a.clr:'#EDE7D9';
+    const border=isSel?a.clr:T.border;
     const shadow=isSel?`0 8px 25px ${a.clr}33`:'0 4px 6px -1px rgba(15,23,42,.08),0 2px 4px -2px rgba(15,23,42,.04)';
-    const burnClr=a.disc>0?'#EF4444':'#94a3b8';
-    return `<div style="cursor:pointer;background:linear-gradient(135deg,${a.clr}0d,#FEFDFA);border:2px solid ${border};border-radius:14px;padding:16px;box-shadow:${shadow};transition:all .2s ease" onmouseover="this.style.transform='translateY(-3px)'" onmouseout="this.style.transform='none'" onclick="selPlatform='${a.ag}';renderPlatforms()">
+    const burnClr=a.disc>0?T.discClr:T.muted;
+    return `<div style="cursor:pointer;background:linear-gradient(135deg,${a.clr}0d,${T.cardBg1});border:2px solid ${border};border-radius:14px;padding:16px;box-shadow:${shadow};transition:all .2s ease" onmouseover="this.style.transform='translateY(-3px)'" onmouseout="this.style.transform='none'" onclick="selPlatform='${a.ag}';renderPlatforms()">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">${logoImg(a.ag,28)}<span style="font-size:12px;color:${a.clr};font-weight:800;text-transform:uppercase;letter-spacing:.5px">${a.ag}</span></div>
       <div style="display:flex;justify-content:space-between;align-items:flex-start;padding-right:14px">
         <div>
-          <div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Orders</div>
-          <div style="font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:#0F172A">${a.orders.toLocaleString()}</div>
-          <div style="font-size:19px;color:#334155;font-weight:800;margin-top:4px">${fmtExact(a.sales)}</div>
+          <div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Orders</div>
+          <div style="font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:${T.valuePrimary}">${a.orders.toLocaleString()}</div>
+          <div style="font-size:19px;color:${T.valueSecondary};font-weight:800;margin-top:4px">${fmtExact(a.sales)}</div>
         </div>
         <div>
-          <div style="font-size:12.5px;color:#94a3b8;font-weight:700">${compShort}</div>
-          <div style="font-size:17px;color:#334155;font-weight:800;margin-top:1px">${a.orders_prev!=null?a.orders_prev.toLocaleString():'—'}</div>
+          <div style="font-size:12.5px;color:${T.muted};font-weight:700">${compShort}</div>
+          <div style="font-size:17px;color:${T.valueSecondary};font-weight:800;margin-top:1px">${a.orders_prev!=null?a.orders_prev.toLocaleString():'—'}</div>
           <div style="font-size:16px;color:${pctClr(a.oc)};font-weight:800;margin-top:1px">${fmtPct(a.oc)}</div>
         </div>
       </div>
-      <div style="margin-top:11px;padding-top:10px;border-top:1px solid #EDE7D9;display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
-        <div><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.4px">AOV</div><div style="font-size:17px;font-weight:800;color:#0F172A;margin-top:2px">${a.orders>0?'AED '+a.aov.toFixed(1):'—'}</div></div>
-        <div><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Disc. Burn</div><div style="font-size:17px;font-weight:800;color:${burnClr};margin-top:2px">${a.disc>0?fmtExact(a.disc):'—'}</div></div>
-        <div><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Outlets</div><div style="font-size:17px;font-weight:800;color:#0F172A;margin-top:2px">${a.outlets}</div></div>
+      <div style="margin-top:11px;padding-top:10px;border-top:1px solid ${T.border};display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+        <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">AOV</div><div style="font-size:17px;font-weight:800;color:${T.valuePrimary};margin-top:2px">${a.orders>0?'AED '+a.aov.toFixed(1):'—'}</div></div>
+        <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Disc. Burn</div><div style="font-size:17px;font-weight:800;color:${burnClr};margin-top:2px">${a.disc>0?fmtExact(a.disc):'—'}</div></div>
+        <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Outlets</div><div style="font-size:17px;font-weight:800;color:${T.valuePrimary};margin-top:2px">${a.outlets}</div></div>
       </div>
-      <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #D6CFB8;display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
-        <div><div style="font-size:11px;color:#64748b;font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:#334155;margin-top:2px">${a.orders_prev>0?'AED '+a.aovP.toFixed(1):'—'}</div></div>
-        <div><div style="font-size:11px;color:#64748b;font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${a.discP>0?'#B45309':'#334155'};margin-top:2px">${a.discP>0?fmtExact(a.discP):'—'}</div></div>
-        <div><div style="font-size:11px;color:#64748b;font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:#334155;margin-top:2px">${a.outletsP}</div></div>
+      <div style="margin-top:8px;padding-top:8px;border-top:1px dashed ${T.dashedBorder};display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+        <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${T.priorValue};margin-top:2px">${a.orders_prev>0?'AED '+a.aovP.toFixed(1):'—'}</div></div>
+        <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${a.discP>0?T.priorDiscClr:T.priorValue};margin-top:2px">${a.discP>0?fmtExact(a.discP):'—'}</div></div>
+        <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${T.priorValue};margin-top:2px">${a.outletsP}</div></div>
       </div>
     </div>`;
   }).join("");
-  const heads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
+  const mutedClr=_darkPage?DARK_THEME.textMuted:"#64748b";
+  const discClr2=_darkPage?"#FF6B6B":"#EF4444";
+  const heads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
   const tRows=brandRows.map(b=>{
     const disc=b.cv.disc||0;const gross=b.cv.sales+disc;const depth=gross>0?(disc/gross*100):0;
     const pv=sumR(pd.filter(r=>r.brand===b.n));
     return{cells:[
     `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.n,22)}<strong style="color:${b.c}">${b.n}</strong></span>`,
     b.cv.orders,fmtAEDTip(b.cv.sales),b.cv.orders>0?`AED ${(b.cv.sales/b.cv.orders).toFixed(1)}`:"—",
-    disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
-    disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
+    disc>0?`<span style="color:${discClr2};font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
+    disc>0?`<span style="color:${depth>=20?discClr2:depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
     fmtChgCell(b.cv.orders,pv.orders,false),
     fmtChgCell(b.cv.sales,pv.sales,true)
   ],sortVals:[b.n,b.cv.orders,b.cv.sales,b.cv.orders>0?b.cv.sales/b.cv.orders:0,disc,depth,b.oc,b.sc]};
   });
-  document.getElementById("page-platforms").innerHTML=makeFilterBar({hidePlatform:true})+
+  const platStyleOverride=_darkPage?`<style>
+      #page-platforms{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
+      #page-platforms .card,#page-platforms .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
+      #page-platforms .ct{color:${DARK_THEME.textPrimary}!important}
+      #page-platforms table.tbl th{color:${DARK_THEME.textMuted}!important;border-color:${DARK_THEME.cardBorder}!important}
+      #page-platforms table.tbl td{color:${DARK_THEME.textPrimary}!important;border-color:${DARK_THEME.cardBorder}!important}
+      #page-platforms table.tbl tr:hover td{background:${DARK_THEME.cardBorder}44!important}
+      #page-platforms .fbar{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important}
+      #page-platforms .fbar .preset{background:${DARK_THEME.bg}!important;border:1px solid ${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+      #page-platforms .fbar .preset.act{background:${DARK_THEME.accentOrange}22!important;border-color:${DARK_THEME.accentOrange}!important;color:${DARK_THEME.accentOrange}!important}
+      #page-platforms .fbar .fpill{background:${DARK_THEME.bg}!important;border:1px solid ${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+      #page-platforms .fbar .fpill.on{border-color:${DARK_THEME.accentOrange}!important;color:${DARK_THEME.accentOrange}!important}
+      #page-platforms .fbar .fchip{color:${DARK_THEME.textSecondary}!important}
+    </style>`:"";
+  document.getElementById("page-platforms").innerHTML=platStyleOverride+makeFilterBar({hidePlatform:true})+
     `<div class="g4 plat-grid" style="margin-bottom:12px">${cards}</div>
     ${note?`<div class="card" style="background:rgba(245,158,11,.05);border-color:rgba(245,158,11,.2);margin-bottom:12px"><div style="font-size:12px;color:#FDE68A;line-height:1.7">💡 ${note}</div></div>`:""}
     <div class="sm" style="margin-bottom:12px"><div class="ct" style="color:${clr}">${selPlatform} — Net Sales Trend</div><div style="position:relative;height:130px"><canvas id="ch-p-trend"></canvas></div></div>
-    <div class="card"><div class="ct" style="color:${clr}">Brand Performance on ${selPlatform} — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("pl-tbl",heads,tRows,2)}</div>
+    <div class="card"><div class="ct" style="color:${clr}">Brand Performance on ${selPlatform} — ${getPeriodLabel()} <span style="color:${mutedClr};font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("pl-tbl",heads,tRows,2)}</div>
     ${platMonthlyTableCard()}`;
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.aggregator===selPlatform&&(!f.brands.size||f.brands.has(r.brand))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-p-trend",trend30(mf,f.start,f.end),clr);},50);
 }
