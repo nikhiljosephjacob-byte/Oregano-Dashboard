@@ -13,11 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-166";
+const BUILD_VERSION="2026-07-21-167";
 const BUILD_NOTES=[
-  "\ud83d\udd24 Outlets page tiles: fixed per direct feedback that they'd become smaller/unreadable. Widened minimum tile size (280px\u2192340px, fewer tiles per row) and increased every key font size \u2014 outlet name 16\u219220px, Orders/Net Sales figures 20\u219225px, plus the region tag, delta badge, discount row, and brand chips all sized up. Verified against the existing 13-check Outlets test suite, all passing.",
-  "\ud83d\udd0d Investigated the Cancellation Monitor build before starting it, and found something that changes its scope: all 5 existing aggregator parsers (Keeta, Talabat, Careem, Deliveroo, Noon) currently discard cancelled-order rows entirely during upload \u2014 confirmed directly in the Keeta parser (skipped.cancelled++ then continue, no data captured). The cancellation data shown in the approved mockup only exists because the raw uploaded files were read directly for research \u2014 none of it is in the live data pipeline yet. Building this properly requires modifying all 5 parsers to capture cancellation detail instead of discarding it, which needs its own careful, tested pass given these parsers feed the sales/discount numbers used throughout the rest of the dashboard."
+  "\ud83d\udd27 Cancellation Monitor data pipeline, started with the two aggregators with the most structured data (Keeta, Talabat). Both parsers previously discarded cancelled-order rows entirely (a count was kept, no detail) \u2014 now additively capture order number, brand/outlet, date, reason, responsibility/owner, amount, and (Talabat) the commission charged despite the cancellation, into a new `cancellations` array returned alongside the existing parsed data. Deliberately additive: the capture logic runs BEFORE the existing skip/continue, using separate calls to the existing brand/outlet parsers, so none of the existing sales/discount aggregation logic was touched or reordered.",
+  "Verified with real-shaped test data matching actual findings from earlier research \u2014 Talabat's test reproduces the exact real \"Too busy\" vendor-cancellation example (AED 149 order, AED 29.80 commission still charged) found in the uploaded file. Confirmed non-cancelled rows are completely unaffected in both parsers, and the existing skipped-counter logic still increments correctly (no regression). 41 checks across existing regression suites (Outlets, Overview, navigation) still pass.",
+  "Remaining for the full Cancellation Monitor: Careem, Deliveroo, and Noon parsers still need the same treatment (Deliveroo's is structurally different \u2014 reason/fault are embedded in a free-text note field rather than dedicated columns, needing regex extraction rather than a direct column read), a place to store the combined cancellations data across all 5 aggregators, and the actual page UI itself. Continuing this next."
 ];
+
 
 
 
@@ -1115,13 +1117,36 @@ async function parseKeetaXlsx(file){
   // with actual discount are kept (menu_disc>0); everything else has nothing to attribute.
   const orderDetail=[];
   const skipped={cancelled:0,no_brand:0,no_outlet:0,no_date:0};
+  // v167: Cancellation Monitor support - captures cancelled-order detail that was previously
+  // discarded entirely (only a count was kept). Purely additive: reads happen BEFORE the
+  // existing continue, using a separate parseKeetaRestaurant() call so this can never affect
+  // the existing skip/aggregation logic below it. Missing columns are checked individually
+  // since they weren't in the original required-columns list (older exports may lack them).
+  const cancellations=[];
   const unmapped=new Set();
   const unmappedItems={};        // {brand: {itemName: count}} — for surfacing in dashboard warning
   let totalGross=0,totalNet=0,totalMenuDisc=0;
   const datesSeen=new Set();
 
   for(const r of data){
-    if(r[headerIdx["Order status"]]==="Cancelled"){skipped.cancelled++;continue;}
+    if(r[headerIdx["Order status"]]==="Cancelled"){
+      skipped.cancelled++;
+      const[cBrand,cOutlet]=parseKeetaRestaurant(r[headerIdx["Restaurant name"]]);
+      const col=(name)=>headerIdx[name]!==undefined?r[headerIdx[name]]:null;
+      const compVal=col("Compensation from Keeta");
+      cancellations.push({
+        aggregator:"Keeta",
+        order_no:r[headerIdx["Order no."]],
+        brand:cBrand||null,outlet:cOutlet||null,
+        date:parseKeetaOrderDate(r[headerIdx["Order time"]]),
+        reason:col("Order cancellation reason")||col("Determination reason")||null,
+        responsibility:col("Responsibility")||null,
+        amount:parseKeetaAED(col("Customer paid")),
+        compensated:compVal!=null&&compVal!=="No compensation",
+        source_file:file.name
+      });
+      continue;
+    }
     const[brand,outlet]=parseKeetaRestaurant(r[headerIdx["Restaurant name"]]);
     if(!brand){unmapped.add(r[headerIdx["Restaurant name"]]);skipped.no_brand++;continue;}
     if(!outlet){unmapped.add(r[headerIdx["Restaurant name"]]);skipped.no_outlet++;continue;}
@@ -1258,6 +1283,7 @@ async function parseKeetaXlsx(file){
   const dates=Array.from(datesSeen).sort();
   return{
     orderDetail,
+    cancellations,
     metadata:{
       source_file:file.name,
       generated_at:new Date().toISOString(),
@@ -2101,13 +2127,31 @@ async function parseTalabatXlsx(file){
   // Finance can visually cross-check which promo an order really used.
   const orderDetail=[];
   const skipped={cancelled:0,no_brand:0,no_outlet:0,no_date:0};
+  // v167: Cancellation Monitor support - see Keeta parser for the same pattern/rationale.
+  const cancellations=[];
   const unmappedOutlets={}; // raw name → count
   const numAt=(row,col)=>{const v=row[colIdx[col]];if(v==null||v==="")return 0;if(typeof v==="number")return v;const n=parseFloat(String(v));return isNaN(n)?0:n;};
 
   for(const row of data){
     if(!row||row.length===0)continue;
     const status=String(row[colIdx["Order status"]]||"").trim();
-    if(status.toLowerCase()==="cancelled"){skipped.cancelled++;continue;}
+    if(status.toLowerCase()==="cancelled"){
+      skipped.cancelled++;
+      const{brand:cBrand,outlet:cOutlet}=parseTalabatBrandOutlet(row[colIdx["Restaurant name"]]);
+      const colVal=(name)=>colIdx[name]!==undefined?row[colIdx[name]]:null;
+      cancellations.push({
+        aggregator:"Talabat",
+        order_no:colVal("Order ID")||null,
+        brand:cBrand||null,outlet:cOutlet||null,
+        date:parseTalabatDate(colVal("Cancelled at"))||parseTalabatDate(row[colIdx["Order received at"]]),
+        reason:colVal("Cancellation reason")||null,
+        responsibility:colVal("Cancellation owner")||null,
+        amount:numAt(row,"Subtotal"),
+        commissionCharged:numAt(row,"Commission"),
+        source_file:file.name
+      });
+      continue;
+    }
     const{brand,outlet,rawOutlet}=parseTalabatBrandOutlet(row[colIdx["Restaurant name"]]);
     if(!brand){skipped.no_brand++;continue;}
     if(!outlet){skipped.no_outlet++;if(rawOutlet)unmappedOutlets[rawOutlet]=(unmappedOutlets[rawOutlet]||0)+1;continue;}
@@ -2161,6 +2205,7 @@ async function parseTalabatXlsx(file){
 
   return{
     orderDetail,
+    cancellations,
     metadata:{
       source_file:file.name||"orderDetails.xlsx",
       generated_at:new Date().toISOString(),
