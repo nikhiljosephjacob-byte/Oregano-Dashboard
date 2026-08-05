@@ -13,15 +13,14 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-171";
+const BUILD_VERSION="2026-07-21-172";
 const BUILD_NOTES=[
-  "\ud83d\udc1b Talabat cancellation-fault bug fixed \u2014 confirmed the cause directly: Talabat's own export uses \"Vendor\" where Keeta/Careem/Deliveroo use \"Restaurant\" for the same meaning, so every Talabat vendor-fault cancellation was silently miscounted as not-restaurant-fault on the summary tiles. Normalized at capture time now.",
-  "\ud83d\udd0d Careem missing-data issue investigated with real files, not just reasoning \u2014 tested the actual parseCareemCSV parser and file-detection logic directly against the real uploaded Careem statement (installed the xlsx package specifically to run this test properly): both work correctly, producing 221 records and 5 correctly brand/outlet-mapped cancellations. Found and fixed a real, confirmed bug along the way: the upload handler only ever refreshed the Campaigns page after processing files, never Cancellations \u2014 so newly uploaded data wouldn't appear until manually navigating away and back. Can't guarantee this was the exact cause of what was seen, but it's a genuine gap that's now closed.",
-  "\ud83c\udd95 Cancellations page is now filterable like every other page \u2014 given its own independent filter state (was silently falling back to share Overview's filters, since it had no entry of its own) and wired into the standard filter bar. New tiles surface which aggregator and which outlet is responsible for the most cancellations.",
-  "\ud83c\udd95 Full 3-level drill-down, replacing the old flat per-aggregator expand: Aggregator card \u2192 Brand breakdown (count, top reason, most common responsible party) \u2192 Outlet breakdown (which specific outlets are driving the cancellations for that brand+aggregator) \u2192 order-level detail at the bottom. Same nav-state pattern as the Investment Plan drill-down built earlier in this project.",
-  "CSV export now respects active filters (previously exported all data for an aggregator regardless of what was filtered on screen) \u2014 a gap caught and fixed before packaging rather than left silent.",
-  "19 checks covering every change in this build \u2014 the Talabat fix, both new tiles, the filter bar, all three drill-down levels with real navigation calls and breadcrumb verification, filters actually narrowing displayed data, and the zero-results empty state. Plus 68 checks across every pre-existing regression suite (Overview, Brands, Outlets, Platforms, Comparison, navigation) \u2014 all still passing."
+  "\ud83d\udc1b Fixed the white filter bar on Cancellations \u2014 confirmed root cause: this page never got the #page-cancellations .fbar style override that every other dark page has. It was built using inline DARK_THEME colors directly for most of its content, so it was missed that makeFilterBar() still relies on the external .fbar CSS class, which defaults to a light background. Same override pattern as Overview/Brands/Outlets/Platforms now applied.",
+  "\ud83c\udd95 By Responsibility table is now interactive, per direct request: clicking a responsibility (e.g. Restaurant) filters the Top Reasons panel on the right to just that category, showing both order count AND total amount per reason (was count-only, unfiltered before). Clicking the same responsibility again clears the filter, with an explicit \u2715 Clear option too.",
+  "\ud83d\udccc To-do list saved to memory per direct request, to keep resurfacing until complete: (1) sidebar navigation redesign (Option 3, approved but not built), (2) remaining dark-theme conversions for Discount Burn, KPI Tracker, Campaigns, Ads Performance, and Compare.",
+  "12 new checks covering both fixes \u2014 the fbar override presence, the default unfiltered state, selecting a responsibility and confirming the reasons panel correctly excludes non-matching entries while showing the right count and amount, toggling off, and the explicit Clear action. Plus 60 checks across every pre-existing regression suite, all passing."
 ];
+
 
 
 
@@ -12806,6 +12805,11 @@ function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC){
 // v171: 3-level drill-down, replacing the single flat expand — matches the same nav-state
 // pattern used for the Investment Plan drill-down (Aggregator -> Brands -> Outlets).
 let cancNav={level:"collapsed",agg:null,brand:null};
+// v172: which responsibility row is selected in the By Responsibility table, filtering the
+// Top Reasons panel alongside it. Clicking the same one again clears it (toggle), same pattern
+// as the aggregator drill-down elsewhere on this page.
+let cancSelectedResp=null;
+function cancSelectResp(r){cancSelectedResp=(cancSelectedResp===r)?null:r;renderCancellations();}
 function cancGoBrands(agg){cancNav={level:"brand",agg,brand:null};renderCancellations();}
 function cancGoOutlets(agg,brand){cancNav={level:"outlet",agg,brand};renderCancellations();}
 function cancGoCollapsed(){cancNav={level:"collapsed",agg:null,brand:null};renderCancellations();}
@@ -12828,7 +12832,20 @@ function renderCancellations(){
   // pattern as getLD() elsewhere — brand/platform/outlet/date range, all through the standard
   // filter bar rather than a bespoke filter UI for this one page.
   const f=curFilters();
-  const filterBar=makeFilterBar();
+  // v172: fixed bug — the filter bar was rendering with its default white/light background,
+  // since this page never got the #page-cancellations .fbar override that every other dark
+  // page has. This page was built using inline DARK_THEME colors directly for most of its
+  // content, so the fact that makeFilterBar() still relies on the external .fbar CSS class
+  // (light by default) was missed at the time.
+  const cancFbarOverride=`<style>
+      #page-cancellations .fbar{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important}
+      #page-cancellations .fbar .preset{background:${DARK_THEME.bg}!important;border:1px solid ${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+      #page-cancellations .fbar .preset.act{background:${DARK_THEME.accentOrange}22!important;border-color:${DARK_THEME.accentOrange}!important;color:${DARK_THEME.accentOrange}!important}
+      #page-cancellations .fbar .fpill{background:${DARK_THEME.bg}!important;border:1px solid ${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+      #page-cancellations .fbar .fpill.on{border-color:${DARK_THEME.accentOrange}!important;color:${DARK_THEME.accentOrange}!important}
+      #page-cancellations .fbar .fchip{color:${DARK_THEME.textSecondary}!important}
+    </style>`;
+  const filterBar=cancFbarOverride+makeFilterBar();
   const filtered=cancellationsData.filter(c=>{
     if(f.start&&c.date&&c.date<f.start)return false;
     if(f.end&&c.date&&c.date>f.end)return false;
@@ -12884,28 +12901,49 @@ function renderCancellations(){
     tile("Worst Outlet",topOutletEntry?topOutletEntry[0]:"—",topOutletEntry?`${topOutletEntry[1]} cancellation${topOutletEntry[1]!==1?"s":""}${topOutletEntries.length>1?` · ${topOutletEntries.length} outlets affected`:""}`:"no data",T.accentOrange),
   ];
 
-  // Responsibility breakdown
+  // Responsibility breakdown — v172: rows are now clickable, selecting one filters the Top
+  // Reasons panel on the right to just that responsibility, with both order count AND total
+  // amount per reason (was count-only, unfiltered), per direct request.
   const respCounts={};
   filtered.forEach(c=>{const r=c.responsibility||"Unknown";respCounts[r]=(respCounts[r]||0)+1;});
   const respMax=Math.max(...Object.values(respCounts),1);
   const respRows=Object.entries(respCounts).sort((a,b)=>b[1]-a[1]).map(([r,n])=>{
     const clr=r==="Restaurant"?T.accentRed:r==="Driver"?T.accentOrange:r==="Unknown"?T.textMuted:T.accentBlue;
-    return`<div style="margin-bottom:14px">
-      <div style="display:flex;justify-content:space-between;margin-bottom:5px"><span style="font-size:14px;font-weight:700;color:${T.textPrimary}">${r}</span><span style="font-size:14px;font-weight:800;color:${clr}">${n}</span></div>
-      <div style="background:${T.bg};border-radius:6px;height:9px;overflow:hidden"><div style="width:${(n/respMax*100)}%;height:100%;background:${clr}"></div></div>
+    const isSel=cancSelectedResp===r;
+    return`<div onclick="cancSelectResp('${r.replace(/'/g,"\\'")}')" style="margin-bottom:14px;cursor:pointer;padding:6px;margin:-6px -6px 8px -6px;border-radius:8px;background:${isSel?clr+"18":"transparent"};border:1px solid ${isSel?clr+"55":"transparent"}">
+      <div style="display:flex;justify-content:space-between;margin-bottom:5px;padding:0 6px">
+        <span style="font-size:14px;font-weight:700;color:${T.textPrimary}">${r}${isSel?" ▸":""}</span>
+        <span style="font-size:14px;font-weight:800;color:${clr}">${n}</span>
+      </div>
+      <div style="background:${T.bg};border-radius:6px;height:9px;overflow:hidden;margin:0 6px">
+        <div style="width:${(n/respMax*100)}%;height:100%;background:${clr}"></div>
+      </div>
     </div>`;
   }).join("");
 
-  // Top reasons
-  const reasonCounts={};
-  filtered.forEach(c=>{const r=c.reason||"No reason logged";reasonCounts[r]=(reasonCounts[r]||0)+1;});
-  const topReasons=Object.entries(reasonCounts).sort((a,b)=>b[1]-a[1]).slice(0,6);
-  const reasonMax=Math.max(...topReasons.map(r=>r[1]),1);
-  const reasonRows=topReasons.map(([r,n])=>`<div style="display:flex;align-items:center;gap:12px;margin-bottom:11px">
-    <div style="width:190px;font-size:13px;color:${T.textSecondary};overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r}">${r}</div>
-    <div style="flex:1;background:${T.bg};border-radius:6px;overflow:hidden;height:18px"><div style="width:${(n/reasonMax*100)}%;height:100%;background:${T.accentOrange}"></div></div>
-    <div style="width:28px;text-align:right;font-size:14px;font-weight:800;color:${T.textPrimary}">${n}</div>
-  </div>`).join("");
+  // Top reasons — filtered to the selected responsibility if one is chosen, showing count AND
+  // total amount per reason instead of count alone.
+  const reasonSourceItems=cancSelectedResp?filtered.filter(c=>(c.responsibility||"Unknown")===cancSelectedResp):filtered;
+  const reasonAgg={};
+  reasonSourceItems.forEach(c=>{
+    const r=c.reason||"No reason logged";
+    if(!reasonAgg[r])reasonAgg[r]={count:0,amount:0};
+    reasonAgg[r].count+=1;
+    reasonAgg[r].amount+=Math.abs(c.amount||0);
+  });
+  const topReasons=Object.entries(reasonAgg).sort((a,b)=>b[1].count-a[1].count).slice(0,6);
+  const reasonMax=Math.max(...topReasons.map(([,v])=>v.count),1);
+  const reasonRows=topReasons.length?topReasons.map(([r,v])=>`<div style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+      <span style="font-size:12.5px;color:${T.textSecondary};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:65%" title="${r}">${r}</span>
+      <span style="font-size:11px;color:${T.textMuted};font-weight:700">${fmtAEDTip(v.amount)}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div style="flex:1;background:${T.bg};border-radius:6px;overflow:hidden;height:16px"><div style="width:${(v.count/reasonMax*100)}%;height:100%;background:${T.accentOrange}"></div></div>
+      <div style="width:24px;text-align:right;font-size:13px;font-weight:800;color:${T.textPrimary}">${v.count}</div>
+    </div>
+  </div>`).join(""):`<div style="text-align:center;padding:20px;color:${T.textMuted};font-size:12px">No reasons logged for this responsibility.</div>`;
+  const reasonCardTitle=cancSelectedResp?`Top Reasons — ${cancSelectedResp} <span onclick="event.stopPropagation();cancSelectResp(null)" style="cursor:pointer;font-size:11px;color:${T.accentBlue};font-weight:700;margin-left:8px">✕ Clear</span>`:"Top Reasons";
 
   // v171: 3-level drill-down, per direct request — Aggregator summary -> Brand breakdown
   // (count, top reason, responsible party) -> Outlet breakdown (which outlets are responsible
@@ -13030,7 +13068,7 @@ function renderCancellations(){
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:20px">${tiles.join("")}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
       <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px"><div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:16px">By Responsibility</div>${respRows}</div>
-      <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px"><div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:16px">Top Reasons</div>${reasonRows}</div>
+      <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px"><div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:16px">${reasonCardTitle}</div>${reasonRows}</div>
     </div>
     ${drilldownHTML}
     <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:12px;padding:16px 20px;margin-top:16px">
