@@ -13,14 +13,14 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-158";
+const BUILD_VERSION="2026-07-21-159";
 const BUILD_NOTES=[
-  "\ud83c\udf19 Dark theme, first page (Overview) of an incremental rollout. Palette is the same one validated across three mockup rounds \u2014 verified WCAG contrast fixes (textMuted brought from a failing 3.29:1 to a verified 5.02:1; card border+shadow replacing what was a functionally invisible 1.27:1 border), smoothed chart curves, and dark-mode-tuned brand color variants, confirmed as a deliberate choice rather than applied silently.",
-  "Found a real problem while building this, not just while designing it: .card/.sm/.ct are defined in a stylesheet outside this file's control, so a CSS override on the page container alone can't reach elements that set their own inline color \u2014 verified this empirically with a real DOM test (an inline-colored element measurably ignored an !important ancestor rule; a plain element correctly inherited it). kpiCard(), pctClr()'s null-fallback, trendChart(), and barChart() all set colors internally and are shared across every other page, so they're now theme-aware via a single _darkPage flag set at the central page dispatcher \u2014 true only for Overview, false everywhere else, so no other page is affected.",
-  "Caught and fixed one more contrast bug in the process: the failed-brand-load \"Retry\" link used a dark red (#B91C1C, 2.42:1) meant for light backgrounds \u2014 would have been nearly invisible on dark. Replaced with the verified accent red (5.65:1).",
-  "Verified end-to-end with real data flowing through the actual renderOverview() function, not just its individual pieces \u2014 confirmed correct dark styling with zero leftover light-theme colors, and confirmed the same function still renders correctly if theme state were flipped. All pre-existing regression suites (Investment Plan navigation, 3-way Comparison, Platforms monthly table \u2014 42 checks total) still pass, confirming this incremental change didn't disturb anything already built.",
-  "Remaining pages (Brands, Outlets, Platforms, Ads Performance, Campaigns, Discount Burn, KPI Tracker, Compare) are unchanged \u2014 still light theme, to be converted in the same careful, one-page-at-a-time way in follow-up builds."
+  "\ud83c\udf19 Overview dark theme, three fixes/additions from live feedback. Filter bar (.fbar and its preset buttons/dropdown pills/chips) added to the scoped style override \u2014 was a genuine miss last time, a separate component the earlier override never touched. The white margin around the page edges is fixed via negative margins expanding #page-overview itself, not a body{} rule \u2014 deliberately avoided that, since this page's <style> tag lives inside #page-overview's own innerHTML, and if other pages just hide this container rather than clear it when you navigate away, a body-level rule would keep darkening the background behind every other still-light-theme page too.",
+  "New: hovering the Active Outlets tile shows which outlets had no orders in whatever period is currently filtered, grouped by brand \u2014 scoped to follow the date filter (not hardcoded to \"yesterday\"), and respecting the same brand/platform/outlet filters the Active Outlets count itself uses, so the two numbers stay consistent with each other.",
+  "Confirmed directly (not assumed) that Active Outlets showing a lower count on a single-day filter than a full-month filter isn't a bug \u2014 it's correctly counting only outlets with orders within whichever date range is selected, matching every other KPI card on the page.",
+  "Verified end-to-end with a real DOM test built specifically to catch the exact scenario flagged: an outlet with orders on the day before yesterday but not yesterday itself is correctly excluded from the missing list once it's back in scope, and an outlet with genuinely zero orders in the filtered period is correctly included."
 ];
+
 
 
 
@@ -3486,7 +3486,7 @@ function mkMap(recs,kFn){const m={};recs.forEach(r=>{const k=kFn(r);if(!m[k])m[k
 function trend30(filterFn,start,end){const s=start||subDays(latest,30),e=end||latest;const m={};allData.filter(r=>filterFn(r)&&r.date>=s&&r.date<=e).forEach(r=>{if(!m[r.date])m[r.date]={d:r.date.slice(5),date:r.date,s:0,o:0};m[r.date].s+=r.sales;m[r.date].o+=r.orders;});return Object.values(m).sort((a,b)=>a.d.localeCompare(b.d));}
 
 // RENDER HELPERS
-function kpiCard(label,value,sub,chg,onclick,perDay,invertChg){
+function kpiCard(label,value,sub,chg,onclick,perDay,invertChg,tooltipHTML){
   const hasChg=typeof chg==="number"&&!isNaN(chg);
   const T=_darkPage?{muted:DARK_THEME.textMuted,label:DARK_THEME.textSecondary,value:DARK_THEME.textPrimary,border:DARK_THEME.cardBorder,accent:DARK_THEME.accentOrange}
     :{muted:"#64748b",label:"#94a3b8",value:"#0F172A",border:"#EDE7D9",accent:"#f59e0b"};
@@ -3513,11 +3513,19 @@ function kpiCard(label,value,sub,chg,onclick,perDay,invertChg){
       <div style="font-size:13px;color:${T.label};font-weight:600;line-height:1.5">${sub||""}${hasChg?` &nbsp;<span style="font-size:13px;color:${cc};font-weight:800">${fmtPct(chg)}</span>`:""}</div>
     </div>`;
   }
-  return`<div class="sm" ${click}>
-    <div style="font-size:10px;color:${T.label};font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}${onclick?` <span style="color:${T.accent}">&#9656;</span>`:''}</div>
+  // v159: optional hover tooltip (e.g. Active Outlets → which outlets had no orders in the
+  // filtered period). CSS-only reveal via a sibling selector, since this is static HTML with
+  // no component state — the tooltip div starts hidden and a scoped hover rule in the page's
+  // style override shows it when the card itself is hovered. Positioned relative/absolute so it
+  // doesn't affect the card grid's layout when hidden.
+  const tooltipBlock=tooltipHTML?`<div class="kpi-tooltip" style="display:none;position:absolute;top:100%;left:0;margin-top:8px;z-index:20;width:280px">${tooltipHTML}</div>`:"";
+  const wrapStyle=tooltipHTML?"position:relative":"";
+  return`<div class="sm" style="${wrapStyle}" ${click}>
+    <div style="font-size:10px;color:${T.label};font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}${onclick?` <span style="color:${T.accent}">&#9656;</span>`:''}${tooltipHTML?' <span style="opacity:.6;cursor:help">&#9432;</span>':''}</div>
     <div style="font-size:28px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:${T.value}">${value}</div>
     ${compSection}
     ${pdLine}
+    ${tooltipBlock}
   </div>`;
 }
 // Built-in fallback logos (data URIs / emoji) used when index.html's LOGOS lacks an entry
@@ -3686,7 +3694,36 @@ function renderOverview(){
   CORE_VERDICT_AGGS.forEach(ag=>{verdVolByAg[ag]=ld.filter(r=>r.aggregator===ag).reduce((s,r)=>s+r.orders,0);});
   // Default selected tab: aggregator with the most orders this period (so a meaningful view loads first).
   const defaultVerdAg=CORE_VERDICT_AGGS.reduce((best,ag)=>verdVolByAg[ag]>(verdVolByAg[best]||0)?ag:best,CORE_VERDICT_AGGS[0]);
-  const activeOutlets=new Set(ld.map(r=>`${r.brand}|${r.branch}`)).size; // v125: was reading unfiltered allData — now matches every other KPI card on this page
+  const activeOutletKeys=new Set(ld.map(r=>`${r.brand}|${r.branch}`));
+  const activeOutlets=activeOutletKeys.size; // v125: was reading unfiltered allData — now matches every other KPI card on this page
+  // v159: which outlets are "missing" — matching the current brand/platform/outlet filters, but
+  // with NO orders in the currently-selected date range. Uses the same non-date filters as `ld`
+  // (via curFilters()) so this stays consistent with whatever the Active Outlets count itself is
+  // scoped to, rather than always comparing against every outlet in the whole business
+  // regardless of filters — confirmed with the user this should follow the date filter, not be
+  // hardcoded to "yesterday".
+  const missingOutletsHTML=(()=>{
+    const mf=curFilters();
+    const inScope=allData.filter(r=>r.branch!=="(brand-level)"
+      &&(!mf.brands.size||mf.brands.has(r.brand))
+      &&(!mf.platforms.size||mf.platforms.has(r.aggregator))
+      &&(!mf.branches.size||mf.branches.has(r.branch)));
+    const allInScopeKeys=new Set(inScope.map(r=>`${r.brand}|${r.branch}`));
+    const missingKeys=[...allInScopeKeys].filter(k=>!activeOutletKeys.has(k));
+    if(!missingKeys.length)return null;
+    const byBrand={};
+    missingKeys.forEach(k=>{const[brand,branch]=k.split("|");(byBrand[brand]=byBrand[brand]||[]).push(branch);});
+    const T=_darkPage?{card:DARK_THEME.bg,border:DARK_THEME.cardBorder,text:DARK_THEME.textPrimary,red:DARK_THEME.accentRed}
+      :{card:"#0F172A",border:"#334155",text:"#F1F5F9",red:"#EF4444"};
+    const rows=Object.entries(byBrand).map(([brand,branches])=>{
+      const clr=BMAP[brand]?.c||"#888";
+      return`<div style="margin-bottom:8px"><div style="font-size:11px;font-weight:800;color:${clr};margin-bottom:2px">${brand} (${branches.length})</div><div style="font-size:12px;color:${T.text};line-height:1.6">${branches.sort().join(", ")}</div></div>`;
+    }).join("");
+    return`<div style="background:${T.card};border:1px solid ${T.border};border-radius:10px;padding:14px 16px;box-shadow:0 12px 30px rgba(0,0,0,.35)">
+      <div style="font-size:12px;font-weight:800;color:${T.red};margin-bottom:10px">${missingKeys.length} outlet${missingKeys.length===1?"":"s"} with no orders ${getPeriodLabel().toLowerCase()}</div>
+      ${rows}
+    </div>`;
+  })();
   // Renderer used for both initial paint and the tab-switch JS handler below
   const renderVerdRows=(arr,kind)=>{
     if(!arr.length){
@@ -3756,18 +3793,31 @@ function renderOverview(){
   const heads=["","Orders","Net Sales","AOV","Discount Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#8393AB">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#8393AB">${compShort}</span>`];
 
   document.getElementById("page-overview").innerHTML=makeFilterBar()+
-    // v158: scoped style override — .card/.sm/.g2/.ct are defined in an external stylesheet
-    // this file doesn't control, so overriding their colors here (scoped to #page-overview
-    // specifically via the ID prefix, which wins on specificity without needing !important)
+    // v158/v159: scoped style override — .card/.sm/.g2/.ct/.fbar are defined in an external
+    // stylesheet this file doesn't control, so overriding their colors here (scoped to
+    // #page-overview via the ID prefix, which wins on specificity without needing !important)
     // is the only reliable way to theme this page without touching every other page that
     // still uses the light theme, or risking a half-themed page if the external rules won.
+    // v159: deliberately NOT using a bare body{...} rule to fix the cream margin around the
+    // edges — this <style> tag lives inside #page-overview's own innerHTML, and if other pages
+    // just hide this container rather than clear it when you navigate away, a body-level rule
+    // would keep darkening the background behind every other still-light-theme page too.
+    // Expanding #page-overview itself via negative margins is scoped safely to this element
+    // only, regardless of what else is in the DOM.
     `<style>
-      #page-overview{background:${DARK_THEME.bg};padding:16px;border-radius:12px}
+      #page-overview{background:${DARK_THEME.bg};padding:16px;border-radius:12px;margin:-16px -20px;padding:16px 20px}
       #page-overview .card,#page-overview .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
       #page-overview .ct{color:${DARK_THEME.textPrimary}!important}
       #page-overview table.tbl th{color:${DARK_THEME.textMuted}!important;border-color:${DARK_THEME.cardBorder}!important}
       #page-overview table.tbl td{color:${DARK_THEME.textPrimary}!important;border-color:${DARK_THEME.cardBorder}!important}
       #page-overview table.tbl tr:hover td{background:${DARK_THEME.cardBorder}44!important}
+      #page-overview .fbar{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important}
+      #page-overview .fbar .preset{background:${DARK_THEME.bg}!important;border:1px solid ${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+      #page-overview .fbar .preset.act{background:${DARK_THEME.accentOrange}22!important;border-color:${DARK_THEME.accentOrange}!important;color:${DARK_THEME.accentOrange}!important}
+      #page-overview .fbar .fpill{background:${DARK_THEME.bg}!important;border:1px solid ${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+      #page-overview .fbar .fpill.on{border-color:${DARK_THEME.accentOrange}!important;color:${DARK_THEME.accentOrange}!important}
+      #page-overview .fbar .fchip{color:${DARK_THEME.textSecondary}!important}
+      #page-overview .sm:hover .kpi-tooltip{display:block!important}
     </style>`+
     `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders),null,ordPerDay)}${kpiCard("Total Net Sales",fmtAEDTip(ls.sales),`${compShort}: ${fmtAEDTip(ps.sales)}`,pctOf(ls.sales,ps.sales),null,salesPerDay)}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${(()=>{
       // Discount Burn KPI (v072) — merchant discount from allData for the filtered period.
@@ -3778,7 +3828,7 @@ function renderOverview(){
       const priorGross=ps.sales+(ps.disc||0);
       const priorDepth=priorGross>0?((ps.disc||0)/priorGross*100):0;
       return kpiCard("Discount Burn",fmtAEDTip(ls.disc||0),`${depth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(ls.disc||0,ps.disc||0),null,null,true);
-    })()}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
+    })()}${kpiCard("Active Outlets",activeOutlets,"all brands",null,null,null,null,missingOutletsHTML)}</div>
     <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:220px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="card" style="padding:14px">
       <div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span>Outlet Highlights by Platform</span><span style="color:#8393AB;font-weight:400;text-transform:none;letter-spacing:0;font-size:10px">click a platform to see its top movers</span></div>
