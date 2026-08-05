@@ -13,12 +13,14 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-163";
+const BUILD_VERSION="2026-07-21-164";
 const BUILD_NOTES=[
-  "\ud83c\udfaf Sides issue actually resolved this time \u2014 root cause found via real dev tools inspection, not guessed. The white strip was body's own background (#FAF7F0, confirmed directly in the Styles panel) showing through beyond #main-app's edge \u2014 #main-app (the wrapper around every page) doesn't itself reach the full browser width, so no amount of expanding #page-overview could ever have covered that gap; it was nested one level too deep to reach it, explaining why three different CSS techniques on #page-overview all failed identically.",
-  "Real fix: body's background is now set directly via JavaScript at the page dispatcher (the same place _darkPage already toggles), rather than another CSS rule on #page-overview. This avoids the earlier concern about a body{} CSS rule embedded in #page-overview's own content potentially persisting if hidden rather than cleared when navigating away \u2014 explicit JS at the dispatcher runs fresh on every single page transition. Verified directly: navigating to Overview sets body dark, navigating to any other page resets it to CSS default, navigating back re-applies it \u2014 confirmed this doesn't leak onto other pages.",
-  "Removed the viewport-breakout CSS trick (width:100vw etc.) from #page-overview and the diagnostic magenta border \u2014 no longer needed now that body itself carries the correct background."
+  "\ud83d\udd24 AOV by Brand card: logo, brand name, and AOV value sized up (28\u219240px logo, 11\u219215px name, 13\u219219px AOV), per-aggregator rows bumped 11\u219214px \u2014 scoped specifically to this card, everything else on Overview left as-is per direct feedback.",
+  "\ud83c\udf19 Brands page converted to dark theme \u2014 second page in the incremental rollout, applying everything learned from Overview so the same trial-and-error isn't repeated: dark-page tracking generalized from a single overview check to a set (DARK_PAGES), body background already handled correctly at the dispatcher from the start (no risky CSS viewport tricks needed this time), and the brand-selector buttons (which set their own inline colors, same lesson as kpiCard) made theme-aware directly rather than relying on a CSS override that couldn't reach them.",
+  "Fixed two low-contrast colors while converting Brands, both already known issues from the Overview build: the Δ-column header label color (#64748b, 3.29:1, failing WCAG) and the discount-burn red (#EF4444, 4.17:1) both swapped for their verified dark-mode equivalents, applied only when _darkPage is true so light-theme pages are completely unaffected.",
+  "Verified end-to-end in both states: dark mode shows the style override, dark card backgrounds, and the verified accent red; light mode (simulating every other still-unconverted page) shows zero style override and the original light-theme colors, confirming this doesn't leak anywhere. All prior regression suites (Overview, Investment Plan navigation, 3-way Comparison \u2014 44 checks) still pass."
 ];
+
 
 
 
@@ -3634,7 +3636,12 @@ function mNavGo(page){
   toggleMobileNav();
   window.scrollTo({top:0,behavior:"smooth"});
 }
-function renderPage(p){_darkPage=(p==="overview");document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();}
+// v164: generalized from a single "overview" check to a set, as more pages get converted to
+// dark theme one at a time. Adding a page here is the ONLY change needed at the dispatcher —
+// each page's own render function still needs its own scoped style override and theme-aware
+// calls, same as Overview's build.
+const DARK_PAGES=new Set(["overview","brands"]);
+function renderPage(p){_darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();}
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 // AOV drilldown state
@@ -3756,11 +3763,11 @@ function renderOverview(){
   const aovBlock=aovDrill?(()=>{
     return `<div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>AOV by Brand — Daily Trend (${getPeriodLabel()})</span><button onclick="toggleAovDrill()" style="background:none;border:1px solid #3A4875;border-radius:5px;color:#8393AB;padding:3px 10px;font-size:10px;cursor:pointer">✕ Collapse</button></div><div style="position:relative;height:300px"><canvas id="ch-aov-multi"></canvas></div><div style="font-size:10px;color:#8393AB;margin-top:6px">Each line = one brand's daily AOV across the selected date range. Hover for exact values.</div></div>`;
   })():(()=>{
-    return `<div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>AOV by Brand <span style="color:#f59e0b;font-weight:400;text-transform:none;letter-spacing:0">· click to see daily trend lines</span></span></div><div onclick="toggleAovDrill()" style="cursor:pointer;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px" title="Click to open daily AOV trend per brand">${BR.map(b=>{const recs=ld.filter(r=>r.brand===b.n);const tot=sumR(recs);const aov=tot.orders>0?(tot.sales/tot.orders).toFixed(1):"—";const byAgg=AGGS.map(ag=>{const a=sumR(recs.filter(r=>r.aggregator===ag));return a.orders>0?`<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(15,23,42,.3);font-size:11px"><span style="color:${AC[ag]||"#888"}">${ag}</span><span style="font-variant-numeric:tabular-nums">AED ${(a.sales/a.orders).toFixed(1)}</span></div>`:"";}).join("");const failed=!!(window.failedBrandGids&&window.failedBrandGids[b.n]);
+    return `<div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>AOV by Brand <span style="color:#f59e0b;font-weight:400;text-transform:none;letter-spacing:0">· click to see daily trend lines</span></span></div><div onclick="toggleAovDrill()" style="cursor:pointer;display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px" title="Click to open daily AOV trend per brand">${BR.map(b=>{const recs=ld.filter(r=>r.brand===b.n);const tot=sumR(recs);const aov=tot.orders>0?(tot.sales/tot.orders).toFixed(1):"—";const byAgg=AGGS.map(ag=>{const a=sumR(recs.filter(r=>r.aggregator===ag));return a.orders>0?`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(15,23,42,.3);font-size:14px"><span style="color:${AC[ag]||"#888"}">${ag}</span><span style="font-variant-numeric:tabular-nums;font-weight:700">AED ${(a.sales/a.orders).toFixed(1)}</span></div>`:"";}).join("");const failed=!!(window.failedBrandGids&&window.failedBrandGids[b.n]);
     const noDataHTML=failed
-      ? `<div style="font-size:11px;color:#FF6B6B;font-weight:700;display:flex;align-items:center;gap:6px">⚠ Failed to load<span id="retry-brand-${b.n.replace(/\s+/g,'-')}" onclick="event.stopPropagation();retryBrand('${b.n}')" style="cursor:pointer;text-decoration:underline;color:#FF6B6B;font-weight:800">Retry</span></div>`
-      : "<div style='color:#8393AB;font-size:11px'>No data</div>";
-    return`<div style="background:#212B42;border:1px solid ${failed?'#FCA5A5':'#3A4875'};border-radius:8px;padding:10px"><div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">${logoImg(b.n,28)}<div><div style="font-size:11px;font-weight:700;color:${b.c}">${b.n}</div><div style="font-size:13px;font-weight:800">AED ${aov}</div></div></div>${byAgg||noDataHTML}</div>`;}).join("")}</div></div>`;
+      ? `<div style="font-size:13px;color:#FF6B6B;font-weight:700;display:flex;align-items:center;gap:6px">⚠ Failed to load<span id="retry-brand-${b.n.replace(/\s+/g,'-')}" onclick="event.stopPropagation();retryBrand('${b.n}')" style="cursor:pointer;text-decoration:underline;color:#FF6B6B;font-weight:800">Retry</span></div>`
+      : "<div style='color:#8393AB;font-size:13px'>No data</div>";
+    return`<div style="background:#212B42;border:1px solid ${failed?'#FCA5A5':'#3A4875'};border-radius:10px;padding:16px"><div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">${logoImg(b.n,40)}<div><div style="font-size:15px;font-weight:800;color:${b.c}">${b.n}</div><div style="font-size:19px;font-weight:800">AED ${aov}</div></div></div>${byAgg||noDataHTML}</div>`;}).join("")}</div></div>`;
   })();
 
   // Sortable brand table
@@ -3868,7 +3875,11 @@ function renderBrands(){
   const cm=mkMap(ld,r=>`${r.branch}|${r.aggregator}`),pm=mkMap(pd,r=>`${r.branch}|${r.aggregator}`);
   const rows=Object.values(cm).map(c=>{const[branch,aggregator]=c.k.split("|");const pv=pm[c.k];return{branch,aggregator,orders:c.orders,sales:c.sales,disc:c.disc||0,aov:c.orders>0?c.sales/c.orders:0,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};});
   const aggBar=AGGS.map(ag=>{const c=sumR(ld.filter(r=>r.aggregator===ag));return{ag,sales:c.sales,orders:c.orders,clr:AC[ag]};}).filter(a=>a.orders>0).sort((a,b)=>b.sales-a.sales);
-  const btnH=BR.map(br=>{const act=selBrand===br.n;return`<button onclick="selBrand='${br.n}';renderBrands()" style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:12px;cursor:pointer;border:2px solid ${act?br.c:'#E2E8F0'};background:${act?`linear-gradient(135deg,${br.c}22,${br.c}0a)`:'#FFFFFF'};color:${act?br.c:'#475569'};box-shadow:${act?`0 8px 20px ${br.c}30`:'0 4px 6px -1px rgba(15,23,42,.08),0 2px 4px -2px rgba(15,23,42,.04)'};transition:all .2s ease;font-weight:800" onmouseover="if(!${act}){this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 16px rgba(15,23,42,.1)';this.style.borderColor='${br.c}88'}" onmouseout="if(!${act}){this.style.transform='none';this.style.boxShadow='0 4px 6px -1px rgba(15,23,42,.08),0 2px 4px -2px rgba(15,23,42,.04)';this.style.borderColor='#E2E8F0'}">${logoImg(br.n,42)}<span style="font-size:13px;font-weight:800;white-space:nowrap">${br.n}</span></button>`;}).join("");
+  // v164: brand-selector buttons need their own theme-aware colors — same lesson as kpiCard on
+  // Overview, this button HTML sets its own inline colors and a CSS override on an ancestor
+  // can't reach them (verified empirically during the Overview build).
+  const btnBg=_darkPage?DARK_THEME.card:"#FFFFFF",btnInactiveBorder=_darkPage?DARK_THEME.cardBorder:"#E2E8F0",btnInactiveText=_darkPage?DARK_THEME.textSecondary:"#475569";
+  const btnH=BR.map(br=>{const act=selBrand===br.n;return`<button onclick="selBrand='${br.n}';renderBrands()" style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:12px;cursor:pointer;border:2px solid ${act?br.c:btnInactiveBorder};background:${act?`linear-gradient(135deg,${br.c}22,${br.c}0a)`:btnBg};color:${act?br.c:btnInactiveText};box-shadow:${act?`0 8px 20px ${br.c}30`:'0 4px 6px -1px rgba(15,23,42,.08),0 2px 4px -2px rgba(15,23,42,.04)'};transition:all .2s ease;font-weight:800" onmouseover="if(!${act}){this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 16px rgba(15,23,42,.1)';this.style.borderColor='${br.c}88'}" onmouseout="if(!${act}){this.style.transform='none';this.style.boxShadow='0 4px 6px -1px rgba(15,23,42,.08),0 2px 4px -2px rgba(15,23,42,.04)';this.style.borderColor='${btnInactiveBorder}'}">${logoImg(br.n,42)}<span style="font-size:13px;font-weight:800;white-space:nowrap">${br.n}</span></button>`;}).join("");
   const tRows=rows.map(r=>{
     const disc=r.disc||0;const gross=r.sales+disc;const depth=gross>0?(disc/gross*100):0;
     const pm2=pm[`${r.branch}|${r.aggregator}`];
@@ -3876,15 +3887,30 @@ function renderBrands(){
     `<strong>${r.branch}</strong>`,
     `<span style="color:${AC[r.aggregator]||"#888"};font-weight:700">${r.aggregator}</span>`,
     r.orders,fmtAEDTip(r.sales),r.orders>0?`AED ${r.aov.toFixed(1)}`:"—",
-    disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
-    disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
+    disc>0?`<span style="color:${_darkPage?'#FF6B6B':'#EF4444'};font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
+    disc>0?`<span style="color:${depth>=20?(_darkPage?'#FF6B6B':'#EF4444'):depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
     fmtChgCell(r.orders,pm2?.orders,false),
     fmtChgCell(r.sales,pm2?.sales,true)
   ],sortVals:[r.branch,r.aggregator,r.orders,r.sales,r.aov,disc,depth,r.oc,r.sc]};
   });
-  const heads=["Outlet","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
+  const mutedClr=_darkPage?DARK_THEME.textMuted:"#64748b";
+  const heads=["Outlet","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
   const brandDisc=ls.disc||0;const brandGross=ls.sales+brandDisc;const brandDepth=brandGross>0?(brandDisc/brandGross*100):0;
-  document.getElementById("page-brands").innerHTML=makeFilterBar({hideBrand:true})+
+  const brandsStyleOverride=_darkPage?`<style>
+      #page-brands{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
+      #page-brands .card,#page-brands .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
+      #page-brands .ct{color:${DARK_THEME.textPrimary}!important}
+      #page-brands table.tbl th{color:${DARK_THEME.textMuted}!important;border-color:${DARK_THEME.cardBorder}!important}
+      #page-brands table.tbl td{color:${DARK_THEME.textPrimary}!important;border-color:${DARK_THEME.cardBorder}!important}
+      #page-brands table.tbl tr:hover td{background:${DARK_THEME.cardBorder}44!important}
+      #page-brands .fbar{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important}
+      #page-brands .fbar .preset{background:${DARK_THEME.bg}!important;border:1px solid ${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+      #page-brands .fbar .preset.act{background:${DARK_THEME.accentOrange}22!important;border-color:${DARK_THEME.accentOrange}!important;color:${DARK_THEME.accentOrange}!important}
+      #page-brands .fbar .fpill{background:${DARK_THEME.bg}!important;border:1px solid ${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+      #page-brands .fbar .fpill.on{border-color:${DARK_THEME.accentOrange}!important;color:${DARK_THEME.accentOrange}!important}
+      #page-brands .fbar .fchip{color:${DARK_THEME.textSecondary}!important}
+    </style>`:"";
+  document.getElementById("page-brands").innerHTML=brandsStyleOverride+makeFilterBar({hideBrand:true})+
     `<div class="brand-sel-row" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
     <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="g2"><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — Net Sales Trend</div><div style="position:relative;height:180px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748B;font-weight:600;text-transform:none;letter-spacing:0;font-size:10px">sales bars · order count on top</span></div><div style="position:relative;height:180px"><canvas id="ch-b-agg"></canvas></div></div></div>
