@@ -13,13 +13,16 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-170";
+const BUILD_VERSION="2026-07-21-171";
 const BUILD_NOTES=[
-  "\ud83c\udf19 Platforms page converted to dark theme \u2014 fifth page in the rollout (Overview, Brands, Outlets, Cancellations, now Platforms). Covered both the main render function's custom aggregator cards (own inline colors throughout, same treatment as kpiCard/outlet tiles/brand buttons before it) and the separate platMonthlyTableCard() function powering the Brand\u00d7Aggregator monthly table \u2014 that one needed its own theme object and a scoped line-range color pass since it's a substantial function in its own right, not just a helper.",
-  "Fixed the same class of low-contrast reds found on every prior page (#EF4444 at 4.17:1, swapped for the verified #FF6B6B at 5.65:1) in both the main cards and the monthly table's MoM indicators, applied only when _darkPage is true.",
-  "Verified in both directions: 12 checks on dark mode (style override present, dark card backgrounds, no leftover light-theme colors, verified accent red, real data flowing through correctly) and confirmed light mode renders completely unaffected. 61 checks total including every pre-existing regression suite.",
-  "Investigated Discount Burn next and found it's structured differently than its short 41-line entry function suggests \u2014 it dispatches to 7+ separate sub-functions (KPI row, trend chart, uncategorized breakdown, co-fund audit table, campaign table, etc.), each independently sized and colored. That's a materially bigger conversion than Platforms was, worth its own careful pass rather than rushing at the end of this one. Remaining: Discount Burn, KPI Tracker, Campaigns, Ads Performance, Compare."
+  "\ud83d\udc1b Talabat cancellation-fault bug fixed \u2014 confirmed the cause directly: Talabat's own export uses \"Vendor\" where Keeta/Careem/Deliveroo use \"Restaurant\" for the same meaning, so every Talabat vendor-fault cancellation was silently miscounted as not-restaurant-fault on the summary tiles. Normalized at capture time now.",
+  "\ud83d\udd0d Careem missing-data issue investigated with real files, not just reasoning \u2014 tested the actual parseCareemCSV parser and file-detection logic directly against the real uploaded Careem statement (installed the xlsx package specifically to run this test properly): both work correctly, producing 221 records and 5 correctly brand/outlet-mapped cancellations. Found and fixed a real, confirmed bug along the way: the upload handler only ever refreshed the Campaigns page after processing files, never Cancellations \u2014 so newly uploaded data wouldn't appear until manually navigating away and back. Can't guarantee this was the exact cause of what was seen, but it's a genuine gap that's now closed.",
+  "\ud83c\udd95 Cancellations page is now filterable like every other page \u2014 given its own independent filter state (was silently falling back to share Overview's filters, since it had no entry of its own) and wired into the standard filter bar. New tiles surface which aggregator and which outlet is responsible for the most cancellations.",
+  "\ud83c\udd95 Full 3-level drill-down, replacing the old flat per-aggregator expand: Aggregator card \u2192 Brand breakdown (count, top reason, most common responsible party) \u2192 Outlet breakdown (which specific outlets are driving the cancellations for that brand+aggregator) \u2192 order-level detail at the bottom. Same nav-state pattern as the Investment Plan drill-down built earlier in this project.",
+  "CSV export now respects active filters (previously exported all data for an aggregator regardless of what was filtered on screen) \u2014 a gap caught and fixed before packaging rather than left silent.",
+  "19 checks covering every change in this build \u2014 the Talabat fix, both new tiles, the filter bar, all three drill-down levels with real navigation calls and breadcrumb verification, filters actually narrowing displayed data, and the zero-results empty state. Plus 68 checks across every pre-existing regression suite (Overview, Brands, Outlets, Platforms, Comparison, navigation) \u2014 all still passing."
 ];
+
 
 
 
@@ -1621,6 +1624,11 @@ async function handleOrdersUpload(filesOrFile){
 
   if(typeof campAnalysisCache!=="undefined"){campAnalysisCache.clear();if(typeof _observedRatioCache!=="undefined")_observedRatioCache.clear();}
   renderCampaigns();
+  // v171: confirmed bug fix — this handler only refreshed Campaigns, never Cancellations.
+  // If the user uploaded while already viewing (or stayed on) the Cancellations page, newly
+  // merged data would silently not appear until they navigated away and back, which would
+  // re-trigger renderPage() fresh. Re-render directly here instead of requiring that.
+  if(curPage==="cancellations")renderCancellations();
 
   // Summary alert — one message even when multiple files are processed.
   const summary=[];
@@ -2194,7 +2202,12 @@ async function parseTalabatXlsx(file){
         brand:cBrand||null,outlet:cOutlet||null,
         date:parseTalabatDate(colVal("Cancelled at"))||parseTalabatDate(row[colIdx["Order received at"]]),
         reason:colVal("Cancellation reason")||null,
-        responsibility:colVal("Cancellation owner")||null,
+        // v171: normalize Talabat's "Vendor" to "Restaurant" — same meaning (the restaurant
+        // itself cancelled), but Talabat's own export uses different wording than Keeta/Careem/
+        // Deliveroo's "Restaurant", which caused every Talabat vendor-fault cancellation to be
+        // miscounted as NOT restaurant-fault on the summary cards. Confirmed directly against
+        // the real uploaded file before fixing.
+        responsibility:(()=>{const raw=colVal("Cancellation owner");if(!raw)return null;return String(raw).trim().toLowerCase()==="vendor"?"Restaurant":raw;})(),
         amount:numAt(row,"Subtotal"),
         commissionCharged:numAt(row,"Commission"),
         source_file:file.name
@@ -3483,7 +3496,7 @@ let expandedBrand=null,expandedPlatform=null;
 // Per-page filter state — each page (overview/brands/outlets/platforms) keeps its OWN
 // brands/platforms/outlets/date selection so changing filters on one page doesn't affect others.
 function newFilterState(){return{start:null,end:null,preset:"yesterday",brands:new Set(),platforms:new Set(),branches:new Set()};}
-const pageFilters={overview:newFilterState(),brands:newFilterState(),outlets:newFilterState(),platforms:newFilterState()};
+const pageFilters={overview:newFilterState(),brands:newFilterState(),outlets:newFilterState(),platforms:newFilterState(),cancellations:newFilterState()};
 function curFilters(){return pageFilters[curPage]||pageFilters.overview;}
 // Generic per-table sort state: {tableId:{col,dir}}
 let tableSort={};
@@ -12790,8 +12803,12 @@ function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC){
 }
 // v168: Cancellation Monitor page. Reads from the global cancellationsData array (populated by
 // the 5 parser changes + merge layer built earlier). State for the 1-click drill-down.
-let cancExpandedAgg=null;
-function cancToggleExpand(agg){cancExpandedAgg=cancExpandedAgg===agg?null:agg;renderCancellations();}
+// v171: 3-level drill-down, replacing the single flat expand — matches the same nav-state
+// pattern used for the Investment Plan drill-down (Aggregator -> Brands -> Outlets).
+let cancNav={level:"collapsed",agg:null,brand:null};
+function cancGoBrands(agg){cancNav={level:"brand",agg,brand:null};renderCancellations();}
+function cancGoOutlets(agg,brand){cancNav={level:"outlet",agg,brand};renderCancellations();}
+function cancGoCollapsed(){cancNav={level:"collapsed",agg:null,brand:null};renderCancellations();}
 // Normalizes the "money lost despite cancellation" figure across aggregators with different
 // field names: Talabat has commissionCharged, Careem/Noon/Deliveroo have a signed net figure
 // (negative = restaurant owes), Keeta has no direct fee-charged field (its "loss" shows up as
@@ -12807,6 +12824,19 @@ function renderCancellations(){
   const pg=document.getElementById("page-cancellations");
   if(!pg)return;
   const T=DARK_THEME;
+  // v171: filterable like every other page, per direct request. Uses the same curFilters()
+  // pattern as getLD() elsewhere — brand/platform/outlet/date range, all through the standard
+  // filter bar rather than a bespoke filter UI for this one page.
+  const f=curFilters();
+  const filterBar=makeFilterBar();
+  const filtered=cancellationsData.filter(c=>{
+    if(f.start&&c.date&&c.date<f.start)return false;
+    if(f.end&&c.date&&c.date>f.end)return false;
+    if(f.brands.size&&!f.brands.has(c.brand))return false;
+    if(f.platforms.size&&!f.platforms.has(c.aggregator))return false;
+    if(f.branches.size&&!f.branches.has(c.outlet))return false;
+    return true;
+  });
   if(!cancellationsData||!cancellationsData.length){
     pg.innerHTML=`<div style="background:${T.bg};border-radius:12px;padding:16px 20px">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px"><span style="font-size:22px">🚫</span><div style="font-size:22px;font-weight:800;color:${T.textPrimary}">Order Cancellation Monitor</div></div>
@@ -12817,10 +12847,19 @@ function renderCancellations(){
     </div>`;
     return;
   }
+  if(!filtered.length){
+    pg.innerHTML=filterBar+`<div style="background:${T.bg};border-radius:12px;padding:16px 20px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px"><span style="font-size:22px">🚫</span><div style="font-size:22px;font-weight:800;color:${T.textPrimary}">Order Cancellation Monitor</div></div>
+      <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;padding:40px;text-align:center;margin-top:20px">
+        <div style="font-size:14px;color:${T.textSecondary};font-weight:700">No cancellations match the current filters</div>
+      </div>
+    </div>`;
+    return;
+  }
   const AGG_COLORS={Keeta:"#E8D614",Talabat:"#FF6000",Careem:"#3DDC77",Deliveroo:"#00CCBC",Noon:"#FA6423"};
-  const totalCancelled=cancellationsData.length;
-  const revenueLost=cancellationsData.reduce((s,c)=>s+Math.abs(c.amount||0),0);
-  const commissionCharged=cancellationsData.reduce((s,c)=>s+cancMoneyLostBeyondRevenue(c),0);
+  const totalCancelled=filtered.length;
+  const revenueLost=filtered.reduce((s,c)=>s+Math.abs(c.amount||0),0);
+  const commissionCharged=filtered.reduce((s,c)=>s+cancMoneyLostBeyondRevenue(c),0);
 
   const tile=(label,value,sub,clr)=>`<div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};flex:1;min-width:220px">
     <div style="padding:20px">
@@ -12828,15 +12867,26 @@ function renderCancellations(){
       <div style="font-size:28px;font-weight:800;color:${clr||T.textPrimary};margin-bottom:6px">${value}</div>
       <div style="font-size:12px;color:${T.textMuted}">${sub}</div>
     </div></div>`;
+  // v171: which aggregator/outlet is responsible for the most cancellations, per direct request.
+  const aggTallyForTile={};
+  filtered.forEach(c=>{aggTallyForTile[c.aggregator]=(aggTallyForTile[c.aggregator]||0)+1;});
+  const topAggEntry=Object.entries(aggTallyForTile).sort((a,b)=>b[1]-a[1])[0];
+  const outletTallyForTile={};
+  filtered.forEach(c=>{if(!c.outlet)return;const k=(c.brand||"?")+" - "+c.outlet;outletTallyForTile[k]=(outletTallyForTile[k]||0)+1;});
+  const topOutletEntries=Object.entries(outletTallyForTile).sort((a,b)=>b[1]-a[1]);
+  const topOutletEntry=topOutletEntries[0];
+
   const tiles=[
     tile("Total Cancellations/Refunds",totalCancelled.toLocaleString(),"across all uploaded statements",T.textPrimary),
     tile("Revenue Lost",fmtAEDTip(revenueLost),"gross order value affected",T.accentRed),
     tile("Commission/Fees Still Charged",fmtAEDTip(commissionCharged),"charged or owed despite cancellation",T.accentRed),
+    tile("Worst Aggregator",topAggEntry?topAggEntry[0]:"—",topAggEntry?`${topAggEntry[1]} cancellation${topAggEntry[1]!==1?"s":""}`:"no data",T.accentOrange),
+    tile("Worst Outlet",topOutletEntry?topOutletEntry[0]:"—",topOutletEntry?`${topOutletEntry[1]} cancellation${topOutletEntry[1]!==1?"s":""}${topOutletEntries.length>1?` · ${topOutletEntries.length} outlets affected`:""}`:"no data",T.accentOrange),
   ];
 
   // Responsibility breakdown
   const respCounts={};
-  cancellationsData.forEach(c=>{const r=c.responsibility||"Unknown";respCounts[r]=(respCounts[r]||0)+1;});
+  filtered.forEach(c=>{const r=c.responsibility||"Unknown";respCounts[r]=(respCounts[r]||0)+1;});
   const respMax=Math.max(...Object.values(respCounts),1);
   const respRows=Object.entries(respCounts).sort((a,b)=>b[1]-a[1]).map(([r,n])=>{
     const clr=r==="Restaurant"?T.accentRed:r==="Driver"?T.accentOrange:r==="Unknown"?T.textMuted:T.accentBlue;
@@ -12848,7 +12898,7 @@ function renderCancellations(){
 
   // Top reasons
   const reasonCounts={};
-  cancellationsData.forEach(c=>{const r=c.reason||"No reason logged";reasonCounts[r]=(reasonCounts[r]||0)+1;});
+  filtered.forEach(c=>{const r=c.reason||"No reason logged";reasonCounts[r]=(reasonCounts[r]||0)+1;});
   const topReasons=Object.entries(reasonCounts).sort((a,b)=>b[1]-a[1]).slice(0,6);
   const reasonMax=Math.max(...topReasons.map(r=>r[1]),1);
   const reasonRows=topReasons.map(([r,n])=>`<div style="display:flex;align-items:center;gap:12px;margin-bottom:11px">
@@ -12857,75 +12907,151 @@ function renderCancellations(){
     <div style="width:28px;text-align:right;font-size:14px;font-weight:800;color:${T.textPrimary}">${n}</div>
   </div>`).join("");
 
-  // Per-aggregator cards with 1-click drill-down
-  const byAgg={};
-  cancellationsData.forEach(c=>{(byAgg[c.aggregator]=byAgg[c.aggregator]||[]).push(c);});
-  const aggCards=Object.entries(byAgg).sort((a,b)=>b[1].length-a[1].length).map(([agg,items])=>{
-    const clr=AGG_COLORS[agg]||"#888";
-    const lost=items.reduce((s,c)=>s+Math.abs(c.amount||0),0);
-    const isExpanded=cancExpandedAgg===agg;
-    let note="";
-    if(agg==="Keeta"){
-      const uncomp=items.filter(c=>c.compensated===false).length;
-      note=uncomp>0?`${uncomp} of ${items.length} uncompensated (restaurant fault)`:"All compensated";
-    }else if(agg==="Deliveroo"){
-      const restFault=items.filter(c=>c.responsibility==="Restaurant").length;
-      note=`Refunds, not pre-delivery cancellations — ${restFault} of ${items.length} restaurant-fault`;
-    }else{
-      const restFault=items.filter(c=>c.responsibility==="Restaurant").length;
-      note=restFault>0?`${restFault} of ${items.length} restaurant-fault`:"None restaurant-fault";
-    }
+  // v171: 3-level drill-down, per direct request — Aggregator summary -> Brand breakdown
+  // (count, top reason, responsible party) -> Outlet breakdown (which outlets are responsible
+  // for the most cancellations on that brand+aggregator), with the order-level detail table
+  // at the final level. Same nav-state dispatch pattern as the Investment Plan drill-down.
+  const mostCommon=(arr,key)=>{
+    const counts={};
+    arr.forEach(x=>{const v=x[key]||"Unknown";counts[v]=(counts[v]||0)+1;});
+    const sorted=Object.entries(counts).sort((a,b)=>b[1]-a[1]);
+    return sorted.length?sorted[0][0]:"—";
+  };
+  const breadcrumb=(parts)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">${parts.map((p,i)=>`${i>0?`<span style="color:${T.textMuted}">›</span>`:""}${p}`).join("")}</div>`;
+  const crumbBtn=(label,onclick)=>`<span onclick="${onclick}" style="cursor:pointer;font-size:13px;font-weight:700;color:${T.accentBlue}">${label}</span>`;
+  const crumbCurrent=(label,clr)=>`<span style="font-size:13px;font-weight:800;color:${clr||T.textPrimary}">${label}</span>`;
+
+  let drilldownHTML="";
+  if(cancNav.level==="collapsed"){
+    const byAgg={};
+    filtered.forEach(c=>{(byAgg[c.aggregator]=byAgg[c.aggregator]||[]).push(c);});
+    const aggCards=Object.entries(byAgg).sort((a,b)=>b[1].length-a[1].length).map(([agg,items])=>{
+      const clr=AGG_COLORS[agg]||"#888";
+      const lost=items.reduce((s,c)=>s+Math.abs(c.amount||0),0);
+      let note="";
+      if(agg==="Keeta"){
+        const uncomp=items.filter(c=>c.compensated===false).length;
+        note=uncomp>0?`${uncomp} of ${items.length} uncompensated (restaurant fault)`:"All compensated";
+      }else if(agg==="Deliveroo"){
+        const restFault=items.filter(c=>c.responsibility==="Restaurant").length;
+        note=`Refunds, not pre-delivery cancellations — ${restFault} of ${items.length} restaurant-fault`;
+      }else{
+        const restFault=items.filter(c=>c.responsibility==="Restaurant").length;
+        note=restFault>0?`${restFault} of ${items.length} restaurant-fault`:"None restaurant-fault";
+      }
+      return`<div onclick="cancGoBrands('${agg}')" style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};cursor:pointer;min-width:280px" onmouseover="this.style.borderColor='${clr}'" onmouseout="this.style.borderColor='${T.cardBorder}'">
+        <div style="padding:18px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <div style="display:flex;align-items:center;gap:10px">${logoImg(agg,28)}<span style="font-size:16px;font-weight:800;color:${T.textPrimary}">${agg}</span></div>
+            <span style="font-size:12px;color:${T.accentBlue};font-weight:700">▸ ${items.length} order${items.length!==1?"s":""}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between">
+            <div><div style="font-size:10px;color:${T.textMuted};font-weight:700;text-transform:uppercase">Cancelled</div><div style="font-size:22px;font-weight:800;color:${T.textPrimary}">${items.length}</div></div>
+            <div style="text-align:right"><div style="font-size:10px;color:${T.textMuted};font-weight:700;text-transform:uppercase">Revenue Lost</div><div style="font-size:22px;font-weight:800;color:${T.accentRed}">${fmtAEDTip(lost)}</div></div>
+          </div>
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid ${T.cardBorder};font-size:12px;color:${T.textSecondary};font-weight:600">${note}</div>
+        </div>
+      </div>`;
+    }).join("");
+    drilldownHTML=`<div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin:20px 0 12px">By Aggregator — click to drill into brands</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${aggCards}</div>`;
+  }else if(cancNav.level==="brand"){
+    const agg=cancNav.agg,clr=AGG_COLORS[agg]||"#888";
+    const items=filtered.filter(c=>c.aggregator===agg);
+    const byBrand={};
+    items.forEach(c=>{const b=c.brand||"Unknown";(byBrand[b]=byBrand[b]||[]).push(c);});
+    const rows=Object.entries(byBrand).sort((a,b)=>b[1].length-a[1].length).map(([brand,bItems])=>{
+      const topReason=mostCommon(bItems,"reason");
+      const topResp=mostCommon(bItems,"responsibility");
+      const respClr=topResp==="Restaurant"?T.accentRed:topResp==="Driver"?T.accentOrange:T.textMuted;
+      return`<tr onclick="cancGoOutlets('${agg}','${brand.replace(/'/g,"\\'")}')" style="cursor:pointer;border-top:1px solid ${T.cardBorder}" onmouseover="this.style.background='${T.cardBorder}33'" onmouseout="this.style.background='transparent'">
+        <td style="padding:10px 12px;font-size:13px;font-weight:700;color:${T.textPrimary}">${brand}</td>
+        <td style="padding:10px 12px;text-align:center;font-size:14px;font-weight:800;color:${T.textPrimary}">${bItems.length}</td>
+        <td style="padding:10px 12px;font-size:12px;color:${T.textSecondary}">${topReason}</td>
+        <td style="padding:10px 12px;text-align:center"><span style="font-size:10px;font-weight:800;padding:3px 9px;border-radius:10px;background:${respClr}22;color:${respClr}">${topResp}</span></td>
+        <td style="padding:10px 12px;text-align:right;font-size:11px;color:${T.accentBlue};font-weight:700">View outlets ›</td>
+      </tr>`;
+    }).join("");
+    drilldownHTML=`${breadcrumb([crumbBtn("🚫 All Aggregators","cancGoCollapsed()"),crumbCurrent(agg,clr)])}
+      <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">${logoImg(agg,26)}<span style="font-size:16px;font-weight:800;color:${T.textPrimary}">${agg} — by Brand</span></div>
+        <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+          <thead><tr style="border-bottom:2px solid ${T.cardBorder}"><th style="text-align:left;padding:6px 12px;font-size:10px;color:${T.textMuted};text-transform:uppercase">Brand</th><th style="text-align:center;padding:6px 12px;font-size:10px;color:${T.textMuted};text-transform:uppercase">Count</th><th style="text-align:left;padding:6px 12px;font-size:10px;color:${T.textMuted};text-transform:uppercase">Top Reason</th><th style="text-align:center;padding:6px 12px;font-size:10px;color:${T.textMuted};text-transform:uppercase">Responsible</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>
+      </div>`;
+  }else if(cancNav.level==="outlet"){
+    const agg=cancNav.agg,brand=cancNav.brand,clr=AGG_COLORS[agg]||"#888";
+    const items=filtered.filter(c=>c.aggregator===agg&&(c.brand||"Unknown")===brand);
+    const byOutlet={};
+    items.forEach(c=>{const o=c.outlet||"Unknown";(byOutlet[o]=byOutlet[o]||[]).push(c);});
+    const outletRows=Object.entries(byOutlet).sort((a,b)=>b[1].length-a[1].length).map(([outlet,oItems])=>{
+      const topReason=mostCommon(oItems,"reason");
+      return`<tr style="border-top:1px solid ${T.cardBorder}">
+        <td style="padding:9px 12px;font-size:13px;font-weight:700;color:${T.textPrimary}">${outlet}</td>
+        <td style="padding:9px 12px;text-align:center;font-size:14px;font-weight:800;color:${T.textPrimary}">${oItems.length}</td>
+        <td style="padding:9px 12px;font-size:12px;color:${T.textSecondary}">${topReason}</td>
+      </tr>`;
+    }).join("");
     const detailRows=items.map(c=>{
       const amt=cancMoneyLostBeyondRevenue(c)>0?-cancMoneyLostBeyondRevenue(c):(c.amount||0);
       const negative=amt<0;
       return`<tr style="border-top:1px solid ${T.cardBorder}">
         <td style="padding:7px 8px;font-size:11px;color:${T.textMuted};font-family:monospace;white-space:nowrap">${c.order_no||"—"}</td>
-        <td style="padding:7px 8px;font-size:11px;color:${T.textPrimary}">${c.brand||"—"}${c.outlet?" - "+c.outlet:""}</td>
+        <td style="padding:7px 8px;font-size:11px;color:${T.textPrimary}">${c.outlet||"—"}</td>
         <td style="padding:7px 8px;font-size:11px;color:${T.textSecondary}">${c.reason||"—"}</td>
         <td style="padding:7px 8px;text-align:center"><span style="font-size:9.5px;font-weight:800;padding:2px 8px;border-radius:10px;background:${c.responsibility==="Restaurant"?T.accentRed:c.responsibility==="Driver"?T.accentOrange:T.textMuted}22;color:${c.responsibility==="Restaurant"?T.accentRed:c.responsibility==="Driver"?T.accentOrange:T.textMuted}">${c.responsibility||"Unknown"}</span></td>
         <td style="padding:7px 8px;text-align:right;font-size:12px;font-weight:700;color:${negative?T.accentRed:T.textPrimary}">${negative?"−":""}${fmtAEDTip(Math.abs(amt))}${negative?" (owed)":c.compensated===false?" ⚠":""}</td>
       </tr>`;
     }).join("");
-    const detailTable=isExpanded?`<div style="margin-top:12px;padding-top:12px;border-top:1px solid ${T.cardBorder}">
-      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
-        <thead><tr><th style="text-align:left;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Order</th><th style="text-align:left;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Outlet</th><th style="text-align:left;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Reason</th><th style="text-align:center;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Fault</th><th style="text-align:right;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Amount</th></tr></thead>
-        <tbody>${detailRows}</tbody>
-      </table></div>
-      <div style="text-align:center;margin-top:10px"><span onclick="event.stopPropagation();cancExportAgg('${agg}')" style="cursor:pointer;font-size:12px;color:${T.accentBlue};font-weight:700">⬇ Export ${agg} list as CSV</span></div>
-    </div>`:"";
-    return`<div onclick="cancToggleExpand('${agg}')" style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};cursor:pointer;min-width:280px;${isExpanded?"grid-column:1/-1":""}">
-      <div style="padding:18px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <div style="display:flex;align-items:center;gap:10px">${logoImg(agg,28)}<span style="font-size:16px;font-weight:800;color:${T.textPrimary}">${agg}</span></div>
-          <span style="font-size:12px;color:${T.accentBlue};font-weight:700">${isExpanded?"▾ Hide detail":"▸ View "+items.length+" order"+(items.length!==1?"s":"")}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between">
-          <div><div style="font-size:10px;color:${T.textMuted};font-weight:700;text-transform:uppercase">Cancelled</div><div style="font-size:22px;font-weight:800;color:${T.textPrimary}">${items.length}</div></div>
-          <div style="text-align:right"><div style="font-size:10px;color:${T.textMuted};font-weight:700;text-transform:uppercase">Revenue Lost</div><div style="font-size:22px;font-weight:800;color:${T.accentRed}">${fmtAEDTip(lost)}</div></div>
-        </div>
-        <div style="margin-top:10px;padding-top:10px;border-top:1px solid ${T.cardBorder};font-size:12px;color:${T.textSecondary};font-weight:600">${note}</div>
-        ${detailTable}
+    drilldownHTML=`${breadcrumb([crumbBtn("🚫 All Aggregators","cancGoCollapsed()"),crumbBtn(agg,`cancGoBrands('${agg}')`),crumbCurrent(brand,clr)])}
+      <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px;margin-bottom:16px">
+        <div style="font-size:16px;font-weight:800;color:${T.textPrimary};margin-bottom:16px">${brand} on ${agg} — Outlets Responsible</div>
+        <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+          <thead><tr style="border-bottom:2px solid ${T.cardBorder}"><th style="text-align:left;padding:6px 12px;font-size:10px;color:${T.textMuted};text-transform:uppercase">Outlet</th><th style="text-align:center;padding:6px 12px;font-size:10px;color:${T.textMuted};text-transform:uppercase">Count</th><th style="text-align:left;padding:6px 12px;font-size:10px;color:${T.textMuted};text-transform:uppercase">Top Reason</th></tr></thead>
+          <tbody>${outletRows}</tbody>
+        </table></div>
       </div>
-    </div>`;
-  }).join("");
+      <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div style="font-size:14px;font-weight:800;color:${T.textPrimary}">Every order</div>
+          <span onclick="cancExportAgg('${agg}')" style="cursor:pointer;font-size:12px;color:${T.accentBlue};font-weight:700">⬇ Export CSV</span>
+        </div>
+        <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+          <thead><tr><th style="text-align:left;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Order</th><th style="text-align:left;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Outlet</th><th style="text-align:left;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Reason</th><th style="text-align:center;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Fault</th><th style="text-align:right;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Amount</th></tr></thead>
+          <tbody>${detailRows}</tbody>
+        </table></div>
+      </div>`;
+  }
 
-  pg.innerHTML=`<div style="background:${T.bg};border-radius:12px;padding:16px 20px">
+  pg.innerHTML=filterBar+`<div style="background:${T.bg};border-radius:12px;padding:16px 20px">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px"><span style="font-size:22px">🚫</span><div style="font-size:22px;font-weight:800;color:${T.textPrimary}">Order Cancellation Monitor</div></div>
-    <div style="font-size:13px;color:${T.textSecondary};margin-bottom:20px">Click any aggregator card for the full order-level list</div>
+    <div style="font-size:13px;color:${T.textSecondary};margin-bottom:20px">Click any aggregator card to drill down — brands, then outlets responsible for the most cancellations</div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:20px">${tiles.join("")}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
       <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px"><div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:16px">By Responsibility</div>${respRows}</div>
       <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px"><div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:16px">Top Reasons</div>${reasonRows}</div>
     </div>
-    <div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin:20px 0 12px">By Aggregator — click to drill into every order</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${aggCards}</div>
+    ${drilldownHTML}
     <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:12px;padding:16px 20px;margin-top:16px">
       <div style="font-size:12.5px;color:${T.textSecondary};line-height:1.7">💡 <strong style="color:${T.textPrimary}">Deliveroo note:</strong> its entries are post-delivery quality refunds (wrong/missing items), not pre-delivery cancellations like the other aggregators — a different problem needing a different fix (kitchen QC, not delivery logistics), even though the financial impact is real.</div>
     </div>
   </div>`;
 }
 function cancExportAgg(agg){
-  const items=cancellationsData.filter(c=>c.aggregator===agg);
+  // v171: now respects active filters (brand/platform/outlet/date), matching what's actually
+  // shown on screen — was previously exporting all data for the aggregator regardless of
+  // filters, which could silently include rows the user had filtered out of view.
+  const f=curFilters();
+  const items=cancellationsData.filter(c=>{
+    if(c.aggregator!==agg)return false;
+    if(f.start&&c.date&&c.date<f.start)return false;
+    if(f.end&&c.date&&c.date>f.end)return false;
+    if(f.brands.size&&!f.brands.has(c.brand))return false;
+    if(f.platforms.size&&!f.platforms.has(c.aggregator))return false;
+    if(f.branches.size&&!f.branches.has(c.outlet))return false;
+    return true;
+  });
   if(!items.length)return;
   const header=["Order No","Brand","Outlet","Date","Reason","Responsibility","Amount (AED)"];
   const rows=items.map(c=>[c.order_no||"",c.brand||"",c.outlet||"",c.date||"",c.reason||"",c.responsibility||"",(c.amount||0).toFixed(2)]);
