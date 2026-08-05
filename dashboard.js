@@ -13,13 +13,14 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-164";
+const BUILD_VERSION="2026-07-21-165";
 const BUILD_NOTES=[
-  "\ud83d\udd24 AOV by Brand card: logo, brand name, and AOV value sized up (28\u219240px logo, 11\u219215px name, 13\u219219px AOV), per-aggregator rows bumped 11\u219214px \u2014 scoped specifically to this card, everything else on Overview left as-is per direct feedback.",
-  "\ud83c\udf19 Brands page converted to dark theme \u2014 second page in the incremental rollout, applying everything learned from Overview so the same trial-and-error isn't repeated: dark-page tracking generalized from a single overview check to a set (DARK_PAGES), body background already handled correctly at the dispatcher from the start (no risky CSS viewport tricks needed this time), and the brand-selector buttons (which set their own inline colors, same lesson as kpiCard) made theme-aware directly rather than relying on a CSS override that couldn't reach them.",
-  "Fixed two low-contrast colors while converting Brands, both already known issues from the Overview build: the Δ-column header label color (#64748b, 3.29:1, failing WCAG) and the discount-burn red (#EF4444, 4.17:1) both swapped for their verified dark-mode equivalents, applied only when _darkPage is true so light-theme pages are completely unaffected.",
-  "Verified end-to-end in both states: dark mode shows the style override, dark card backgrounds, and the verified accent red; light mode (simulating every other still-unconverted page) shows zero style override and the original light-theme colors, confirming this doesn't leak anywhere. All prior regression suites (Overview, Investment Plan navigation, 3-way Comparison \u2014 44 checks) still pass."
+  "\u2705 Recommendations are now dismissible \u2014 approved via mockup. Each item gets a \u2715 that removes it from the active list without deleting it outright; dismissed items collapse into a small \"N dismissed \u2014 click to review\" line with a bring-back option, so a long list doesn't require endless scrolling but nothing's permanently lost by a misclick. Verified across 5 scenarios: default state, dismissing one, reviewing dismissed items, bringing one back, and dismissing everything down to a friendly empty state.",
+  "\ud83c\udf19 Dark theme extended to Outlets (both the grid view and the per-outlet drill-down) \u2014 third and fourth pages in the rollout (Brands was the third). The outlet tiles have their own custom card design with inline colors throughout (not just .card/.sm classes), so they needed the same direct theme-aware treatment as kpiCard and the Brands selector buttons \u2014 applying the lesson from Overview proactively this time instead of discovering it through trial and error again.",
+  "Same verified fixes carried forward: the low-contrast muted label color and discount-burn red both swapped for their dark-verified equivalents, applied only when _darkPage is true. Tested both views (grid and drill-down) in both theme states \u2014 13 checks confirming dark mode renders correctly with real data and light mode remains completely untouched. All prior regression suites (Overview, Brands, Investment Plan, Comparison \u2014 68 checks total) still pass.",
+  "Remaining pages for the dark theme rollout: Platforms, Ads Performance, Campaigns, Discount Burn, KPI Tracker, Compare \u2014 continuing one at a time in the same tested way."
 ];
+
 
 
 
@@ -3640,7 +3641,7 @@ function mNavGo(page){
 // dark theme one at a time. Adding a page here is the ONLY change needed at the dispatcher —
 // each page's own render function still needs its own scoped style override and theme-aware
 // calls, same as Overview's build.
-const DARK_PAGES=new Set(["overview","brands"]);
+const DARK_PAGES=new Set(["overview","brands","outlets"]);
 function renderPage(p){_darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();}
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
@@ -3937,20 +3938,22 @@ function renderOutlets(){
     const rows=Object.values(cm).map(c=>{const[brand,aggregator]=c.k.split("|");const pv=pmM[c.k];return{brand,aggregator,orders:c.orders,sales:c.sales,disc:c.disc||0,aov:c.orders>0?c.sales/c.orders:0,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};});
     const brandRows=brandsHere.map(brand=>{const c=sumR(outletData.filter(r=>r.brand===brand));const p=sumR(outletPrev.filter(r=>r.brand===brand));return{brand,...c,aov:c.orders>0?c.sales/c.orders:0,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};});
     const region=AUH.has(selOutlet)?'🇦🇪 Abu Dhabi':'🇦🇪 Dubai';
-    const brHeads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
+    const mutedClr=_darkPage?DARK_THEME.textMuted:"#64748b";
+    const brHeads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
+    const discClr=_darkPage?"#FF6B6B":"#EF4444";
     const brTRows=brandRows.map(b=>{
       const disc=b.disc||0;const gross=b.sales+disc;const depth=gross>0?(disc/gross*100):0;
       const pv=sumR(outletPrev.filter(r=>r.brand===b.brand));
       return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.brand,22)}<strong style="color:${BMAP[b.brand]?.c||'#888'}">${b.brand}</strong></span>`,
       b.orders.toLocaleString(),fmtAEDTip(b.sales),b.orders>0?`AED ${b.aov.toFixed(1)}`:"—",
-      disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
-      disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
+      disc>0?`<span style="color:${discClr};font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
+      disc>0?`<span style="color:${depth>=20?discClr:depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
       fmtChgCell(b.orders,pv.orders,false),
       fmtChgCell(b.sales,pv.sales,true)
     ],sortVals:[b.brand,b.orders,b.sales,b.aov,disc,depth,b.oc,b.sc]};
     });
-    const bpHeads=["Brand","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
+    const bpHeads=["Brand","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
     const bpTRows=rows.map(r=>{
       const disc=r.disc||0;const gross=r.sales+disc;const depth=gross>0?(disc/gross*100):0;
       const pv=pmM[`${r.brand}|${r.aggregator}`];
@@ -3958,19 +3961,34 @@ function renderOutlets(){
       `<span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span>`,
       `<span style="color:${AC[r.aggregator]||'#888'};font-weight:700;font-size:11px">${r.aggregator}</span>`,
       r.orders,fmtAEDTip(r.sales),r.orders>0?`AED ${r.aov.toFixed(1)}`:"—",
-      disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
-      disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
+      disc>0?`<span style="color:${discClr};font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
+      disc>0?`<span style="color:${depth>=20?discClr:depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
       fmtChgCell(r.orders,pv?.orders,false),
       fmtChgCell(r.sales,pv?.sales,true)
     ],sortVals:[r.brand,r.aggregator,r.orders,r.sales,r.aov,disc,depth,r.oc,r.sc]};
     });
     const outDisc=tot.disc||0;const outGross=tot.sales+outDisc;const outDepth=outGross>0?(outDisc/outGross*100):0;
-    document.getElementById("page-outlets").innerHTML=
+    const outletsStyleOverride=_darkPage?`<style>
+      #page-outlets{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
+      #page-outlets .card,#page-outlets .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
+      #page-outlets .ct{color:${DARK_THEME.textPrimary}!important}
+      #page-outlets table.tbl th{color:${DARK_THEME.textMuted}!important;border-color:${DARK_THEME.cardBorder}!important}
+      #page-outlets table.tbl td{color:${DARK_THEME.textPrimary}!important;border-color:${DARK_THEME.cardBorder}!important}
+      #page-outlets table.tbl tr:hover td{background:${DARK_THEME.cardBorder}44!important}
+      #page-outlets .fbar{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important}
+      #page-outlets .fbar .preset{background:${DARK_THEME.bg}!important;border:1px solid ${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+      #page-outlets .fbar .preset.act{background:${DARK_THEME.accentOrange}22!important;border-color:${DARK_THEME.accentOrange}!important;color:${DARK_THEME.accentOrange}!important}
+      #page-outlets .fbar .fpill{background:${DARK_THEME.bg}!important;border:1px solid ${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+      #page-outlets .fbar .fpill.on{border-color:${DARK_THEME.accentOrange}!important;color:${DARK_THEME.accentOrange}!important}
+      #page-outlets .fbar .fchip{color:${DARK_THEME.textSecondary}!important}
+    </style>`:"";
+    const backBtnBorder=_darkPage?DARK_THEME.cardBorder:"#E2E8F0",backBtnText=_darkPage?DARK_THEME.textSecondary:"#64748b";
+    document.getElementById("page-outlets").innerHTML=outletsStyleOverride+
       makeFilterBar({hideOutlet:true})+
       `<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
-        <button onclick="backToOutlets()" style="background:none;border:1px solid #E2E8F0;border-radius:6px;color:#64748b;padding:6px 12px;cursor:pointer;font-size:12px">← Back to Outlets</button>
-        <div style="font-size:18px;font-weight:800">📍 ${selOutlet}</div>
-        <span style="font-size:11px;color:#475569;font-weight:600">${region} · ${brandsHere.length} brand${brandsHere.length!==1?'s':''}</span>
+        <button onclick="backToOutlets()" style="background:none;border:1px solid ${backBtnBorder};border-radius:6px;color:${backBtnText};padding:6px 12px;cursor:pointer;font-size:12px">← Back to Outlets</button>
+        <div style="font-size:18px;font-weight:800;color:${_darkPage?DARK_THEME.textPrimary:'inherit'}">📍 ${selOutlet}</div>
+        <span style="font-size:11px;color:${_darkPage?DARK_THEME.textSecondary:'#475569'};font-weight:600">${region} · ${brandsHere.length} brand${brandsHere.length!==1?'s':''}</span>
       </div>
       <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">
         ${kpiCard("Orders",tot.orders.toLocaleString(),compShort+": "+prev.orders,pctOf(tot.orders,prev.orders))}
@@ -3979,7 +3997,7 @@ function renderOutlets(){
         ${kpiCard("Discount Burn",fmtAEDTip(outDisc),`${outDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(prev.disc||0)}`,pctOf(outDisc,prev.disc||0),null,null,true)}
         ${kpiCard("Brands",brandsHere.length,brandsHere.join(", "),null)}
       </div>
-      <div class="card"><div class="ct">${selOutlet} — Brand Performance (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("ou-brands",brHeads,brTRows,2)}</div>
+      <div class="card"><div class="ct">${selOutlet} — Brand Performance (${getPeriodLabel()}) <span style="color:${mutedClr};font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("ou-brands",brHeads,brTRows,2)}</div>
       <div class="card"><div class="ct">${selOutlet} — Brand × Platform Breakdown</div>${sortableTable("ou-bp",bpHeads,bpTRows,3)}</div>`;
     return;
   }
@@ -3995,24 +4013,32 @@ function renderOutlets(){
     // Top brand determines the accent color of the tile (gradient header stripe)
     const topBrand=t.brands[0];
     const accent=topBrand?(BMAP[topBrand]?.c||'#f59e0b'):'#f59e0b';
-    return `<div onclick="selectOutlet('${t.branch.replace(/'/g,"\\'")}')" style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:14px;padding:0;cursor:pointer;transition:all .25s ease;box-shadow:0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04);overflow:hidden;position:relative" onmouseover="this.style.borderColor='${accent}';this.style.boxShadow='0 14px 30px rgba(15,23,42,.12)';this.style.transform='translateY(-3px)'" onmouseout="this.style.borderColor='#E2E8F0';this.style.boxShadow='0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04)';this.style.transform='none'">
+    // v164: tile sets its own inline colors throughout (background, borders, text) — same
+    // lesson as kpiCard and the Brands selector buttons, a CSS override on an ancestor can't
+    // reach these, so the tile itself needs to branch on _darkPage directly.
+    const tileBg=_darkPage?DARK_THEME.card:"#FFFFFF",tileBorder=_darkPage?DARK_THEME.cardBorder:"#E2E8F0";
+    const textPrimary=_darkPage?DARK_THEME.textPrimary:"#0F172A",textMuted=_darkPage?DARK_THEME.textMuted:"#64748B";
+    const dividerClr=_darkPage?DARK_THEME.cardBorder:"#F1F5F9";
+    const discClr=_darkPage?"#FF6B6B":"#EF4444";
+    const scBg=scClr==='#22C55E'?(_darkPage?'rgba(46,204,113,.15)':'rgba(34,197,94,.08)'):scClr==='#EF4444'?(_darkPage?'rgba(255,107,107,.15)':'rgba(239,68,68,.08)'):(_darkPage?'rgba(131,147,171,.15)':'rgba(148,163,184,.08)');
+    return `<div onclick="selectOutlet('${t.branch.replace(/'/g,"\\'")}')" style="background:${tileBg};border:1px solid ${tileBorder};border-radius:14px;padding:0;cursor:pointer;transition:all .25s ease;box-shadow:0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04);overflow:hidden;position:relative" onmouseover="this.style.borderColor='${accent}';this.style.boxShadow='0 14px 30px rgba(15,23,42,.12)';this.style.transform='translateY(-3px)'" onmouseout="this.style.borderColor='${tileBorder}';this.style.boxShadow='0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04)';this.style.transform='none'">
       <div style="height:4px;background:linear-gradient(90deg,${accent},${accent}88)"></div>
       <div style="padding:14px 16px 12px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;gap:8px">
           <div style="min-width:0;flex:1">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              <div style="font-size:16px;font-weight:800;color:#0F172A;letter-spacing:.2px">${t.branch}</div>
+              <div style="font-size:16px;font-weight:800;color:${textPrimary};letter-spacing:.2px">${t.branch}</div>
               <span style="font-size:9px;font-weight:800;padding:2px 7px;border-radius:10px;background:${regionColor}15;color:${regionColor};letter-spacing:.6px">${region}</span>
             </div>
-            <div style="font-size:11px;color:#64748B;margin-top:3px;font-weight:600">${t.brands.length} brand${t.brands.length!==1?'s':''} · AOV AED ${t.aov.toFixed(1)}</div>
+            <div style="font-size:11px;color:${textMuted};margin-top:3px;font-weight:600">${t.brands.length} brand${t.brands.length!==1?'s':''} · AOV AED ${t.aov.toFixed(1)}</div>
           </div>
-          <div style="text-align:right;background:${scClr==='#22C55E'?'rgba(34,197,94,.08)':scClr==='#EF4444'?'rgba(239,68,68,.08)':'rgba(148,163,184,.08)'};border-radius:8px;padding:4px 8px;white-space:nowrap"><div style="font-size:12px;color:${scClr};font-weight:800" title="Net Sales change ${getCompShort()}">${fmtPct(t.sc)}</div></div>
+          <div style="text-align:right;background:${scBg};border-radius:8px;padding:4px 8px;white-space:nowrap"><div style="font-size:12px;color:${scClr};font-weight:800" title="Net Sales change ${getCompShort()}">${fmtPct(t.sc)}</div></div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px 0;border-top:1px solid #F1F5F9;border-bottom:1px solid #F1F5F9;margin-bottom:10px">
-          <div><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:3px">Orders</div><div style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:#0F172A;line-height:1">${t.orders.toLocaleString()}</div></div>
-          <div style="text-align:right"><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:3px">Net Sales</div><div style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:#0F172A;line-height:1">${fmtAEDTip(t.sales)}</div></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px 0;border-top:1px solid ${dividerClr};border-bottom:1px solid ${dividerClr};margin-bottom:10px">
+          <div><div style="font-size:9px;color:${textMuted};text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:3px">Orders</div><div style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:${textPrimary};line-height:1">${t.orders.toLocaleString()}</div></div>
+          <div style="text-align:right"><div style="font-size:9px;color:${textMuted};text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:3px">Net Sales</div><div style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:${textPrimary};line-height:1">${fmtAEDTip(t.sales)}</div></div>
         </div>
-        ${t.disc>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #F1F5F9"><div style="font-size:10px;color:#EF4444;font-weight:700">💸 Disc. Burn: ${fmtAEDTip(t.disc)}</div><div style="font-size:10px;color:${t.depth>=20?'#EF4444':t.depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${t.depth.toFixed(1)}% depth</div></div>`:''}
+        ${t.disc>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid ${dividerClr}"><div style="font-size:10px;color:${discClr};font-weight:700">💸 Disc. Burn: ${fmtAEDTip(t.disc)}</div><div style="font-size:10px;color:${t.depth>=20?discClr:t.depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${t.depth.toFixed(1)}% depth</div></div>`:''}
         <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center">
           ${t.brands.map(b=>`<span title="${b}: ${fmtAED(t.brandGmv[b]||0)}" style="display:inline-flex;align-items:center;gap:4px;background:${BMAP[b]?.c||'#888'}18;color:${BMAP[b]?.c||'#888'};font-size:10px;font-weight:800;padding:3px 8px;border-radius:6px;border:1px solid ${BMAP[b]?.c||'#888'}33">${logoImg(b,16)}${b}</span>`).join('')}
         </div>
@@ -4020,9 +4046,20 @@ function renderOutlets(){
     </div>`;
   };
   const grid=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${tiles.map(renderTile).join('')}</div>`;
-  document.getElementById("page-outlets").innerHTML=
+  const outletsGridStyleOverride=_darkPage?`<style>
+      #page-outlets{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
+      #page-outlets .card{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
+      #page-outlets .ct{color:${DARK_THEME.textPrimary}!important}
+      #page-outlets .fbar{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important}
+      #page-outlets .fbar .preset{background:${DARK_THEME.bg}!important;border:1px solid ${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+      #page-outlets .fbar .preset.act{background:${DARK_THEME.accentOrange}22!important;border-color:${DARK_THEME.accentOrange}!important;color:${DARK_THEME.accentOrange}!important}
+      #page-outlets .fbar .fpill{background:${DARK_THEME.bg}!important;border:1px solid ${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+      #page-outlets .fbar .fpill.on{border-color:${DARK_THEME.accentOrange}!important;color:${DARK_THEME.accentOrange}!important}
+      #page-outlets .fbar .fchip{color:${DARK_THEME.textSecondary}!important}
+    </style>`:"";
+  document.getElementById("page-outlets").innerHTML=outletsGridStyleOverride+
     makeFilterBar({hideOutlet:true})+
-    `<div style="font-size:11px;color:#475569;font-weight:600;margin-bottom:14px">💡 Click any outlet tile to drill in. Brand chips are ordered by Net Sales (highest first).</div>
+    `<div style="font-size:11px;color:${_darkPage?DARK_THEME.textSecondary:'#475569'};font-weight:600;margin-bottom:14px">💡 Click any outlet tile to drill in. Brand chips are ordered by Net Sales (highest first).</div>
     <div class="card"><div class="ct">📍 All Outlets — ${getPeriodLabel()} (${tiles.length} outlets)</div>${grid}</div>`;
 }
 
@@ -9592,9 +9629,21 @@ function campNeedsAttentionItems(active,upcoming){
   items.sort((a,b)=>a.priority-b.priority);
   return items;
 }
+// v165: dismissible recommendations, approved via mockup. Dismissed items persist for the
+// browser session (not permanently — a fresh page load in a new session will show them again
+// if still relevant) and collapse into a small "N dismissed — click to review" line instead of
+// disappearing outright, so nothing is permanently lost if dismissed by mistake.
+let dismissedRecKeys=new Set();
+function recKey(it){return`${it.title}|${it.reason}`;}
+function dismissRec(key){dismissedRecKeys.add(key);renderPage(curPage);}
+function undismissRec(key){dismissedRecKeys.delete(key);renderPage(curPage);}
+let showDismissedRecs=false;
+function toggleDismissedRecsPanel(){showDismissedRecs=!showDismissedRecs;renderPage(curPage);}
 function campNeedsAttentionPanel(active,upcoming){
-  const items=campNeedsAttentionItems(active,upcoming);
-  if(items.length===0)return '';
+  const allItems=campNeedsAttentionItems(active,upcoming);
+  const items=allItems.filter(it=>!dismissedRecKeys.has(recKey(it)));
+  const dismissedItems=allItems.filter(it=>dismissedRecKeys.has(recKey(it)));
+  if(items.length===0&&dismissedItems.length===0)return '';
   const shown=items.slice(0,8);
   const more=items.length>shown.length?`<div style="font-size:10.5px;color:#94a3b8;padding:4px 0 0 30px">+ ${items.length-shown.length} more</div>`:'';
   const kindStyle={critical:{bg:'#FEF2F2',border:'#FECACA'},warning:{bg:'#FFFBEB',border:'#FDE68A'},opportunity:{bg:'#F0FDF4',border:'#BBF7D0'}};
@@ -9602,24 +9651,32 @@ function campNeedsAttentionPanel(active,upcoming){
     const s=kindStyle[it.kind]||kindStyle.warning;
     const cursor=it.action?'cursor:pointer':'';
     const onclick=it.action?`onclick="${it.action}"`:'';
-    return `<div ${onclick} style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border-radius:8px;background:${s.bg};border:1px solid ${s.border};${cursor}">
-      <span style="font-size:16px;flex-shrink:0;margin-top:1px">${it.icon}</span>
-      <div style="min-width:0;flex:1">
+    const key=recKey(it).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+    return `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border-radius:8px;background:${s.bg};border:1px solid ${s.border}">
+      <span ${onclick} style="font-size:16px;flex-shrink:0;margin-top:1px;${cursor}">${it.icon}</span>
+      <div ${onclick} style="min-width:0;flex:1;${cursor}">
         <div style="font-size:12px;font-weight:700;color:#0F172A">${it.title}</div>
         <div style="font-size:11px;color:#64748b;margin-top:2px;line-height:1.5">${it.reason}</div>
       </div>
-      ${it.action?`<span style="font-size:10px;color:#94a3b8;font-weight:700;white-space:nowrap;margin-top:2px">View →</span>`:''}
+      ${it.action?`<span ${onclick} style="font-size:10px;color:#94a3b8;font-weight:700;white-space:nowrap;margin-top:2px;${cursor}">View →</span>`:''}
+      <span onclick="event.stopPropagation();dismissRec('${key}')" title="Dismiss — won't show again this session unless brought back" style="cursor:pointer;color:#94a3b8;font-size:15px;font-weight:700;padding:0 4px;border-radius:5px;flex-shrink:0" onmouseover="this.style.color='#DC2626'" onmouseout="this.style.color='#94a3b8'">✕</span>
     </div>`;
   }).join('');
   const nCrit=items.filter(i=>i.kind==='critical').length;
   const dots=`<span style="display:flex;gap:4px"><span style="width:7px;height:7px;border-radius:50%;background:#EF4444;display:inline-block"></span><span style="width:7px;height:7px;border-radius:50%;background:#F59E0B;display:inline-block"></span><span style="width:7px;height:7px;border-radius:50%;background:#22C55E;display:inline-block"></span></span>`;
+  const dismissedPanel=dismissedItems.length?`<div style="padding:8px 14px 10px;border-top:1px solid #EDE7D9">
+    <div onclick="toggleDismissedRecsPanel()" style="cursor:pointer;font-size:10.5px;color:#94a3b8;font-weight:700;display:flex;align-items:center;gap:5px">${showDismissedRecs?'▾':'▸'} ${dismissedItems.length} dismissed — click to review</div>
+    ${showDismissedRecs?`<div style="margin-top:6px;display:flex;flex-direction:column;gap:5px">${dismissedItems.map(it=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border-radius:6px;background:#F8F6EE;border:1px solid #EDE7D9;opacity:.75"><div style="font-size:11px;color:#64748b">${it.title}</div><span onclick="undismissRec('${recKey(it).replace(/'/g,"\\'").replace(/"/g,'&quot;')}')" style="cursor:pointer;color:#16A34A;font-size:10.5px;font-weight:700;white-space:nowrap">↺ Bring back</span></div>`).join('')}</div>`:''}
+  </div>`:'';
+  const emptyState=items.length===0?`<div style="padding:16px 14px;text-align:center;color:#94a3b8;font-size:11.5px">All caught up — nothing needs attention right now.</div>`:'';
   return `<details ${nCrit>0?'open':''} style="background:#FFFFFF;border:1px solid #EDE7D9;border-radius:10px;margin-bottom:14px;overflow:hidden;box-shadow:0 4px 6px -1px rgba(15,23,42,.06)">
     <summary style="cursor:pointer;list-style:none;user-select:none;padding:10px 14px;display:flex;align-items:center;gap:10px">
       <span style="font-size:10px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.9px">Recommendations (${items.length})</span>
       ${dots}
       <span style="margin-left:auto;font-size:10px;color:#94a3b8">▾</span>
     </summary>
-    <div style="border-top:1px solid #EDE7D9;padding:10px 14px;display:flex;flex-direction:column;gap:8px">${rows}${more}</div>
+    <div style="border-top:1px solid #EDE7D9;padding:10px 14px;display:flex;flex-direction:column;gap:8px">${rows}${more}${emptyState}</div>
+    ${dismissedPanel}
   </details>`;
 }
 
