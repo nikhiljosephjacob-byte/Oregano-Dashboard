@@ -13,10 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-162";
+const BUILD_VERSION="2026-07-21-163";
 const BUILD_NOTES=[
-  "\ud83d\udd0d DIAGNOSTIC BUILD, not a real fix attempt: three fundamentally different CSS techniques (padding-matched negative margin, width-compensated negative margin, viewport-anchored full-bleed) all produced the identical unchanged result \u2014 if the CSS were being applied but just calculated wrong, some visible difference between three very different approaches would be expected. Getting the exact same result three times suggests the style override may not be reaching the page at all, rather than reaching it with wrong values. Added an unmissable 6px magenta border around #page-overview specifically to test this: if the border doesn't appear at all, the style tag isn't taking effect and the real problem is elsewhere (caching, a stripped <style> tag, wrong element ID, etc.) \u2014 not a CSS value problem, meaning further guessing at margin/width numbers would keep failing regardless. If the border DOES appear but the sides are still wrong, that confirms the override IS working and narrows the problem specifically to the width/margin math or to a different element entirely being responsible for the white area."
+  "\ud83c\udfaf Sides issue actually resolved this time \u2014 root cause found via real dev tools inspection, not guessed. The white strip was body's own background (#FAF7F0, confirmed directly in the Styles panel) showing through beyond #main-app's edge \u2014 #main-app (the wrapper around every page) doesn't itself reach the full browser width, so no amount of expanding #page-overview could ever have covered that gap; it was nested one level too deep to reach it, explaining why three different CSS techniques on #page-overview all failed identically.",
+  "Real fix: body's background is now set directly via JavaScript at the page dispatcher (the same place _darkPage already toggles), rather than another CSS rule on #page-overview. This avoids the earlier concern about a body{} CSS rule embedded in #page-overview's own content potentially persisting if hidden rather than cleared when navigating away \u2014 explicit JS at the dispatcher runs fresh on every single page transition. Verified directly: navigating to Overview sets body dark, navigating to any other page resets it to CSS default, navigating back re-applies it \u2014 confirmed this doesn't leak onto other pages.",
+  "Removed the viewport-breakout CSS trick (width:100vw etc.) from #page-overview and the diagnostic magenta border \u2014 no longer needed now that body itself carries the correct background."
 ];
+
 
 
 
@@ -3631,7 +3634,7 @@ function mNavGo(page){
   toggleMobileNav();
   window.scrollTo({top:0,behavior:"smooth"});
 }
-function renderPage(p){_darkPage=(p==="overview");if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();}
+function renderPage(p){_darkPage=(p==="overview");document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();}
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 // AOV drilldown state
@@ -3805,7 +3808,7 @@ function renderOverview(){
     // Expanding #page-overview itself via negative margins is scoped safely to this element
     // only, regardless of what else is in the DOM.
     `<style>
-      #page-overview{background:${DARK_THEME.bg};border-radius:0;width:100vw;position:relative;left:50%;right:50%;margin-left:-50vw;margin-right:-50vw;padding:16px 20px;box-sizing:border-box;border:6px solid magenta!important}
+      #page-overview{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
       #page-overview .card,#page-overview .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
       #page-overview .ct{color:${DARK_THEME.textPrimary}!important}
       #page-overview table.tbl th{color:${DARK_THEME.textMuted}!important;border-color:${DARK_THEME.cardBorder}!important}
