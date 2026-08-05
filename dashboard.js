@@ -13,11 +13,15 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-157";
+const BUILD_VERSION="2026-07-21-158";
 const BUILD_NOTES=[
-  "\ud83d\udcca Monthly Performance table: added Orders, AOV, Discount, and Discount% per requested \u2014 packed into each existing cell as a 3-line block (Sales+MoM, Orders+AOV, Discount+Discount%) rather than adding 4 more columns per brand\u00d7aggregator combination, which would have tripled the table width and forced small text. Column count is unchanged from before; each cell just carries the full picture now instead of one number.",
-  "Export CSV extended to match \u2014 now includes Orders, AOV, Discount, and Discount% columns alongside Sales and MoM%, so the export always mirrors exactly what's on screen."
+  "\ud83c\udf19 Dark theme, first page (Overview) of an incremental rollout. Palette is the same one validated across three mockup rounds \u2014 verified WCAG contrast fixes (textMuted brought from a failing 3.29:1 to a verified 5.02:1; card border+shadow replacing what was a functionally invisible 1.27:1 border), smoothed chart curves, and dark-mode-tuned brand color variants, confirmed as a deliberate choice rather than applied silently.",
+  "Found a real problem while building this, not just while designing it: .card/.sm/.ct are defined in a stylesheet outside this file's control, so a CSS override on the page container alone can't reach elements that set their own inline color \u2014 verified this empirically with a real DOM test (an inline-colored element measurably ignored an !important ancestor rule; a plain element correctly inherited it). kpiCard(), pctClr()'s null-fallback, trendChart(), and barChart() all set colors internally and are shared across every other page, so they're now theme-aware via a single _darkPage flag set at the central page dispatcher \u2014 true only for Overview, false everywhere else, so no other page is affected.",
+  "Caught and fixed one more contrast bug in the process: the failed-brand-load \"Retry\" link used a dark red (#B91C1C, 2.42:1) meant for light backgrounds \u2014 would have been nearly invisible on dark. Replaced with the verified accent red (5.65:1).",
+  "Verified end-to-end with real data flowing through the actual renderOverview() function, not just its individual pieces \u2014 confirmed correct dark styling with zero leftover light-theme colors, and confirmed the same function still renders correctly if theme state were flipped. All pre-existing regression suites (Investment Plan navigation, 3-way Comparison, Platforms monthly table \u2014 42 checks total) still pass, confirming this incremental change didn't disturb anything already built.",
+  "Remaining pages (Brands, Outlets, Platforms, Ads Performance, Campaigns, Discount Burn, KPI Tracker, Compare) are unchanged \u2014 still light theme, to be converted in the same careful, one-page-at-a-time way in follow-up builds."
 ];
+
 
 
 
@@ -271,6 +275,21 @@ window.addEventListener("load",()=>{
 
 const PUB="https://docs.google.com/spreadsheets/d/e/2PACX-1vR2PpdGikWQBRBclmQCvw95Z_1RtbkQ8AmZiv2SQq3CX8SPDTGHj3wqCUnJahp-lLGQet8FnLaXQbMa/pub";
 const BR=[{n:"Oregano",gid:"502198035",c:"#C9933A"},{n:"Lollorosso",gid:"1967911882",c:"#7C8C2A"},{n:"Smokeys",gid:"1503469680",c:"#F07020"},{n:"Fyoozhen",gid:"436809130",c:"#C9A227"},{n:"Wicked Wings",gid:"1467214878",c:"#E85D04"}];
+// v158: dark theme palette — first page (Overview) of an incremental, page-by-page rollout.
+// Colors verified against WCAG contrast requirements before use (not eyeballed): textMuted
+// measures 5.02:1 against the card background (fixing an earlier draft that measured 3.29:1,
+// failing the 4.5:1 minimum for body text); card border + shadow together replace what would
+// otherwise be a near-invisible 1.27:1 border-vs-card contrast.
+const DARK_THEME={
+  bg:"#0F1729",card:"#1A2337",cardBorder:"#3A4875",
+  textPrimary:"#F1F5F9",textSecondary:"#94A3B8",textMuted:"#8393AB",
+  accentGreen:"#2ECC71",accentOrange:"#FF8A3D",accentBlue:"#4E9BFF",accentPurple:"#A78BFA",accentRed:"#FF6B6B",
+  shadow:"0 4px 16px rgba(0,0,0,.35), 0 1px 3px rgba(0,0,0,.3)",
+};
+// Dark-mode-tuned brand color variants (brightened from the light-theme originals in BR above,
+// which read as muddy against a dark background) — a deliberate choice, confirmed with the user
+// rather than applied silently: same brand identity, a brighter tone specifically for dark mode.
+const BRAND_DARK={Oregano:"#FFA94D",Lollorosso:"#94D82D",Smokeys:"#FF8A65",Fyoozhen:"#FFD43B","Wicked Wings":"#FF6B6B"};
 const AGGS=["Deliveroo","Talabat","Noon","Careem","Keeta","Smiles","Instashop"];
 const AC={Deliveroo:"#00CCBC",Talabat:"#FF6000",Noon:"#F5CF00",Careem:"#3DDC73",Keeta:"#E8D614",Smiles:"#6B4FCB",Instashop:"#E91E8C","Google Maps":"#4285F4"};
 const MM={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
@@ -397,7 +416,15 @@ function fmtChgCellInv(cur,prev,isMoney){
   const sign=diff>=0?'+':'−';
   return`<span style="color:${clr};font-weight:700">${fmtPct(pct)}</span><br><span style="font-size:11px;color:#94a3b8;font-weight:500">${sign}${absFmt}</span>`;
 }
-function pctClr(n){if(n==null)return"#64748b";if(n>=15)return"#22C55E";if(n>=3)return"#86EFAC";if(n>=0)return"#A3E635";if(n>=-15)return"#FBBF24";return"#EF4444";}
+function pctClr(n){if(n==null)return _darkPage?DARK_THEME.textMuted:"#64748b";if(n>=15)return"#22C55E";if(n>=3)return"#86EFAC";if(n>=0)return"#A3E635";if(n>=-15)return"#FBBF24";return"#EF4444";}
+// v158: incremental dark-theme rollout — kpiCard/pctClr/sortableTable are shared across every
+// page, most of which are still light-theme. Verified directly with jsdom that a CSS override
+// on an ancestor cannot reach a descendant's own inline color (inheritance loses to any
+// explicit declaration on the element itself, even from an !important ancestor rule) — so
+// theming these shared, inline-styled functions requires them to check which theme is active,
+// not a CSS override alone. Defaults to light (false) so every page other than Overview is
+// completely unaffected; renderOverview() sets this true only while it's rendering.
+let _darkPage=false;
 
 // ═══════════════════════════════════════════════════════════════
 // KEETA EXACT-DISCOUNT MODULE
@@ -3461,16 +3488,18 @@ function trend30(filterFn,start,end){const s=start||subDays(latest,30),e=end||la
 // RENDER HELPERS
 function kpiCard(label,value,sub,chg,onclick,perDay,invertChg){
   const hasChg=typeof chg==="number"&&!isNaN(chg);
-  const cc=hasChg?pctClr(invertChg?-chg:chg):"#64748b";
-  const click=onclick?`onclick="${onclick}" style="cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='#EDE7D9'"`:""  ;
+  const T=_darkPage?{muted:DARK_THEME.textMuted,label:DARK_THEME.textSecondary,value:DARK_THEME.textPrimary,border:DARK_THEME.cardBorder,accent:DARK_THEME.accentOrange}
+    :{muted:"#64748b",label:"#94a3b8",value:"#0F172A",border:"#EDE7D9",accent:"#f59e0b"};
+  const cc=hasChg?pctClr(invertChg?-chg:chg):T.muted;
+  const click=onclick?`onclick="${onclick}" style="cursor:pointer" onmouseover="this.style.borderColor='${T.accent}'" onmouseout="this.style.borderColor='${T.border}'"`:""  ;
   // Per-day section (Orders + Net Sales tiles on Overview)
   let pdLine="";
   if(perDay){
-    const pc=typeof perDay.chg==="number"&&!isNaN(perDay.chg)?pctClr(perDay.chg):"#64748b";
-    pdLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #EDE7D9">
-      <div style="font-size:9px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:3px">Avg / day</div>
-      <div style="font-size:18px;font-weight:800;font-variant-numeric:tabular-nums;color:#0F172A">${perDay.cur}</div>
-      ${perDay.prev?`<div style="font-size:13px;color:#475569;font-weight:600;margin-top:2px">${perDay.prevLabel||"prev"}: ${perDay.prev}${typeof perDay.chg==="number"?` <span style="color:${pc};font-weight:800">${fmtPct(perDay.chg)}</span>`:""}</div>`:""}
+    const pc=typeof perDay.chg==="number"&&!isNaN(perDay.chg)?pctClr(perDay.chg):T.muted;
+    pdLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid ${T.border}">
+      <div style="font-size:9px;color:${T.label};font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:3px">Avg / day</div>
+      <div style="font-size:18px;font-weight:800;font-variant-numeric:tabular-nums;color:${T.value}">${perDay.cur}</div>
+      ${perDay.prev?`<div style="font-size:13px;color:${T.label};font-weight:600;margin-top:2px">${perDay.prevLabel||"prev"}: ${perDay.prev}${typeof perDay.chg==="number"?` <span style="color:${pc};font-weight:800">${fmtPct(perDay.chg)}</span>`:""}</div>`:""}
     </div>`;
   }
   // Comparison section — separated visually so current and prior values are distinct.
@@ -3480,13 +3509,13 @@ function kpiCard(label,value,sub,chg,onclick,perDay,invertChg){
   // row in line with that same pattern so every card is internally consistent.
   let compSection="";
   if(sub||hasChg){
-    compSection=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #EDE7D9">
-      <div style="font-size:13px;color:#475569;font-weight:600;line-height:1.5">${sub||""}${hasChg?` &nbsp;<span style="font-size:13px;color:${cc};font-weight:800">${fmtPct(chg)}</span>`:""}</div>
+    compSection=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid ${T.border}">
+      <div style="font-size:13px;color:${T.label};font-weight:600;line-height:1.5">${sub||""}${hasChg?` &nbsp;<span style="font-size:13px;color:${cc};font-weight:800">${fmtPct(chg)}</span>`:""}</div>
     </div>`;
   }
   return`<div class="sm" ${click}>
-    <div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}${onclick?' <span style="color:#f59e0b">&#9656;</span>':''}</div>
-    <div style="font-size:28px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:#0F172A">${value}</div>
+    <div style="font-size:10px;color:${T.label};font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}${onclick?` <span style="color:${T.accent}">&#9656;</span>`:''}</div>
+    <div style="font-size:28px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:${T.value}">${value}</div>
     ${compSection}
     ${pdLine}
   </div>`;
@@ -3537,6 +3566,7 @@ function mkTable(heads,rows){return`<div style="overflow-x:auto"><table class="t
 // CHARTS — tooltips show the exact date + value on hover
 function destroyChart(id){if(charts[id]){charts[id].destroy();delete charts[id];}}
 function trendChart(id,data,color){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);
+  const axisClr=_darkPage?DARK_THEME.textMuted:"#64748b",gridClr=_darkPage?"#2A3450":"#F1F5F9";
   // Multi-line x-axis labels: ["07-02","Thu"] renders MM-DD on top and day-of-week below. Falls back to
   // single-line labels for callers that don't pass a full ISO date (e.g. campaign detail trend graphs).
   const DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -3547,12 +3577,13 @@ function trendChart(id,data,color){const ctx=document.getElementById(id)?.getCon
     }
     return d.d;
   };
-  charts[id]=new Chart(ctx,{type:"line",data:{labels:data.map(buildLabel),datasets:[{data:data.map(d=>d.s),borderColor:color,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false,label:"Net Sales"}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:false},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{title:t=>Array.isArray(t[0].label)?t[0].label.join(" · "):t[0].label,label:c=>{const o=data[c.dataIndex]?.o;return [`AED ${Math.round(c.raw).toLocaleString()} Net Sales`,o!=null?`${Math.round(o).toLocaleString()} orders`:""].filter(Boolean);}}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"#F1F5F9"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#F1F5F9"},border:{display:false}}}}});}
+  charts[id]=new Chart(ctx,{type:"line",data:{labels:data.map(buildLabel),datasets:[{data:data.map(d=>d.s),borderColor:color,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false,label:"Net Sales"}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:false},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{title:t=>Array.isArray(t[0].label)?t[0].label.join(" · "):t[0].label,label:c=>{const o=data[c.dataIndex]?.o;return [`AED ${Math.round(c.raw).toLocaleString()} Net Sales`,o!=null?`${Math.round(o).toLocaleString()} orders`:""].filter(Boolean);}}}},scales:{x:{ticks:{color:axisClr,font:{size:9}},grid:{color:gridClr},border:{display:false}},y:{ticks:{color:axisClr,font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:gridClr},border:{display:false}}}}});}
 function barChart(id,labels,values,colors,extra,mode){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);const idx=[...Array(labels.length).keys()].sort((a,b)=>values[b]-values[a]);const sl=idx.map(i=>labels[i]),sv=idx.map(i=>values[i]),sc=idx.map(i=>colors[i]),se=extra?idx.map(i=>extra[i]):null;
+  const axisClrX=_darkPage?DARK_THEME.textSecondary:"#475569",axisClrY=_darkPage?DARK_THEME.textMuted:"#64748B",gridClrBar=_darkPage?"#2A3450":"#F1F5F9",barLabelClr=_darkPage?DARK_THEME.textPrimary:"#0F172A";
   const showOrdersOnTop=mode==="salesWithOrdersOnTop";
   // Custom plugin to render order counts on top of each bar
-  const ordersLabelPlugin={id:"ordersLabels",afterDatasetsDraw(chart){if(!showOrdersOnTop||!se)return;const{ctx,data,chartArea:{top,bottom},scales:{x,y}}=chart;ctx.save();ctx.font="700 11px Inter,system-ui,sans-serif";ctx.fillStyle="#0F172A";ctx.textAlign="center";ctx.textBaseline="bottom";data.datasets[0].data.forEach((v,i)=>{const xPos=x.getPixelForValue(i);const yPos=y.getPixelForValue(v);const orders=se[i];if(orders!=null){ctx.fillText(orders.toLocaleString(),xPos,yPos-4);}});ctx.restore();}};
-  charts[id]=new Chart(ctx,{type:"bar",data:{labels:sl,datasets:[{data:sv,backgroundColor:sc,borderRadius:6,minBarLength:6,label:mode==="orders"?"Orders":"Net Sales"}]},plugins:showOrdersOnTop?[ordersLabelPlugin]:[],options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:showOrdersOnTop?18:0}},plugins:{legend:{display:false},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{title:t=>t[0].label,label:c=>{const v=c.raw,i=c.dataIndex,ex=se?se[i]:null;if(showOrdersOnTop){return[`AED ${Math.round(v).toLocaleString()} Sales`,ex!=null?`${Math.round(ex).toLocaleString()} Orders`:""].filter(Boolean);}return mode==="orders"?[`${Math.round(v).toLocaleString()} Orders`,ex!=null?`AED ${Math.round(ex).toLocaleString()} Sales`:""].filter(Boolean):[`AED ${Math.round(v).toLocaleString()} Sales`,ex!=null?`${Math.round(ex).toLocaleString()} Orders`:""].filter(Boolean);}}}},scales:{x:{ticks:{color:"#475569",font:{size:11,weight:"600"}},grid:{display:false},border:{display:false}},y:{ticks:{color:"#64748B",font:{size:10,weight:"600"},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#F1F5F9"},border:{display:false}}}}});}
+  const ordersLabelPlugin={id:"ordersLabels",afterDatasetsDraw(chart){if(!showOrdersOnTop||!se)return;const{ctx,data,chartArea:{top,bottom},scales:{x,y}}=chart;ctx.save();ctx.font="700 11px Inter,system-ui,sans-serif";ctx.fillStyle=barLabelClr;ctx.textAlign="center";ctx.textBaseline="bottom";data.datasets[0].data.forEach((v,i)=>{const xPos=x.getPixelForValue(i);const yPos=y.getPixelForValue(v);const orders=se[i];if(orders!=null){ctx.fillText(orders.toLocaleString(),xPos,yPos-4);}});ctx.restore();}};
+  charts[id]=new Chart(ctx,{type:"bar",data:{labels:sl,datasets:[{data:sv,backgroundColor:sc,borderRadius:6,minBarLength:6,label:mode==="orders"?"Orders":"Net Sales"}]},plugins:showOrdersOnTop?[ordersLabelPlugin]:[],options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:showOrdersOnTop?18:0}},plugins:{legend:{display:false},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{title:t=>t[0].label,label:c=>{const v=c.raw,i=c.dataIndex,ex=se?se[i]:null;if(showOrdersOnTop){return[`AED ${Math.round(v).toLocaleString()} Sales`,ex!=null?`${Math.round(ex).toLocaleString()} Orders`:""].filter(Boolean);}return mode==="orders"?[`${Math.round(v).toLocaleString()} Orders`,ex!=null?`AED ${Math.round(ex).toLocaleString()} Sales`:""].filter(Boolean):[`AED ${Math.round(v).toLocaleString()} Sales`,ex!=null?`${Math.round(ex).toLocaleString()} Orders`:""].filter(Boolean);}}}},scales:{x:{ticks:{color:axisClrX,font:{size:11,weight:"600"}},grid:{display:false},border:{display:false}},y:{ticks:{color:axisClrY,font:{size:10,weight:"600"},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:gridClrBar},border:{display:false}}}}});}
 // Multi-line chart: one line per series. Used for AOV-by-brand drilldown.
 function multiLineChart(id,labels,series){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);charts[id]=new Chart(ctx,{type:"line",data:{labels,datasets:series.map(s=>({label:s.name,data:s.data,borderColor:s.color,backgroundColor:s.color,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false,spanGaps:true}))},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#475569",font:{size:10},boxWidth:12,padding:8}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label}: ${c.raw==null?'—':'AED '+Number(c.raw).toFixed(1)}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"#F1F5F9"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#F1F5F9"},border:{display:false}}}}});}
 
@@ -3592,7 +3623,7 @@ function mNavGo(page){
   toggleMobileNav();
   window.scrollTo({top:0,behavior:"smooth"});
 }
-function renderPage(p){if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();}
+function renderPage(p){_darkPage=(p==="overview");if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();}
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 // AOV drilldown state
@@ -3660,13 +3691,13 @@ function renderOverview(){
   const renderVerdRows=(arr,kind)=>{
     if(!arr.length){
       return kind==='winners'
-        ?"<div style='color:#64748b;font-size:12px;padding:8px 4px'>No standout winners in this aggregator for the comparison period</div>"
-        :"<div style='color:#22C55E;font-size:12px;padding:8px 4px'>All outlets performing — no drops or zero-order branches</div>";
+        ?"<div style='color:#8393AB;font-size:12px;padding:8px 4px'>No standout winners in this aggregator for the comparison period</div>"
+        :"<div style='color:#2ECC71;font-size:12px;padding:8px 4px'>All outlets performing — no drops or zero-order branches</div>";
     }
     if(kind==='winners'){
-      return arr.map(w=>`<div class="vrow"><div style="width:3px;height:34px;border-radius:2px;background:${BMAP[w.brand]?.c||"#888"};flex-shrink:0"></div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.brand} · ${w.branch}</div><div style="font-size:11px;color:#475569;font-weight:600">${w.aggregator} · ${w.orders} orders · ${fmtAEDTip(w.sales)}</div></div><div style="color:#22C55E;font-size:12px;font-weight:700;flex-shrink:0">${fmtPct(w.oc)}</div></div>`).join("");
+      return arr.map(w=>`<div class="vrow"><div style="width:3px;height:34px;border-radius:2px;background:${BMAP[w.brand]?.c||"#888"};flex-shrink:0"></div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.brand} · ${w.branch}</div><div style="font-size:11px;color:#94A3B8;font-weight:600">${w.aggregator} · ${w.orders} orders · ${fmtAEDTip(w.sales)}</div></div><div style="color:#2ECC71;font-size:12px;font-weight:700;flex-shrink:0">${fmtPct(w.oc)}</div></div>`).join("");
     }
-    return arr.map(w=>`<div class="vrow"><div style="width:3px;height:34px;border-radius:2px;background:${w.oc===-100?"#64748b":"#EF4444"};flex-shrink:0"></div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.brand} · ${w.branch}</div><div style="font-size:11px;color:#475569;font-weight:600">${w.aggregator} · ${w.orders===0?"ZERO orders":w.orders+" orders"}</div></div><div style="color:#EF4444;font-size:12px;font-weight:700;flex-shrink:0">${w.oc===-100?"ZERO":fmtPct(w.oc)}</div></div>`).join("");
+    return arr.map(w=>`<div class="vrow"><div style="width:3px;height:34px;border-radius:2px;background:${w.oc===-100?"#8393AB":"#FF6B6B"};flex-shrink:0"></div><div style="flex:1;min-width:0"><div style="font-weight:700;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${w.brand} · ${w.branch}</div><div style="font-size:11px;color:#94A3B8;font-weight:600">${w.aggregator} · ${w.orders===0?"ZERO orders":w.orders+" orders"}</div></div><div style="color:#FF6B6B;font-size:12px;font-weight:700;flex-shrink:0">${w.oc===-100?"ZERO":fmtPct(w.oc)}</div></div>`).join("");
   };
   // Stash the data for the tab-switch handler to consume
   window._verdByAg=verdByAg;
@@ -3676,20 +3707,20 @@ function renderOverview(){
     const isActive=ag===defaultVerdAg;
     const vol=verdVolByAg[ag]||0;
     const accent=AC[ag]||'#f59e0b';
-    return `<button id="verd-tab-${ag}" onclick="selectVerdAggregator('${ag}')" style="flex:1;min-width:0;background:${isActive?'rgba(245,158,11,.08)':'transparent'};border:1px solid ${isActive?accent:'#E2E8F0'};border-radius:8px;padding:8px 6px;cursor:pointer;transition:all .15s;display:flex;flex-direction:column;align-items:center;gap:4px"><div style="display:flex;align-items:center;gap:6px">${logoImg(ag,18)}<span style="font-size:12px;font-weight:700;color:${isActive?accent:'#cbd5e1'}">${ag}</span></div><div style="font-size:9px;color:#64748b;font-weight:600">${vol.toLocaleString()} orders</div></button>`;
+    return `<button id="verd-tab-${ag}" onclick="selectVerdAggregator('${ag}')" style="flex:1;min-width:0;background:${isActive?'rgba(245,158,11,.08)':'transparent'};border:1px solid ${isActive?accent:'#3A4875'};border-radius:8px;padding:8px 6px;cursor:pointer;transition:all .15s;display:flex;flex-direction:column;align-items:center;gap:4px"><div style="display:flex;align-items:center;gap:6px">${logoImg(ag,18)}<span style="font-size:12px;font-weight:700;color:${isActive?accent:'#94A3B8'}">${ag}</span></div><div style="font-size:9px;color:#8393AB;font-weight:600">${vol.toLocaleString()} orders</div></button>`;
   }).join("");
   const initialWinners=renderVerdRows(verdByAg[defaultVerdAg].winners,'winners');
   const initialIssues=renderVerdRows(verdByAg[defaultVerdAg].issues,'issues');
 
   // AOV by Brand block — clickable to drill into per-brand line graphs
   const aovBlock=aovDrill?(()=>{
-    return `<div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>AOV by Brand — Daily Trend (${getPeriodLabel()})</span><button onclick="toggleAovDrill()" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer">✕ Collapse</button></div><div style="position:relative;height:300px"><canvas id="ch-aov-multi"></canvas></div><div style="font-size:10px;color:#64748b;margin-top:6px">Each line = one brand's daily AOV across the selected date range. Hover for exact values.</div></div>`;
+    return `<div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>AOV by Brand — Daily Trend (${getPeriodLabel()})</span><button onclick="toggleAovDrill()" style="background:none;border:1px solid #3A4875;border-radius:5px;color:#8393AB;padding:3px 10px;font-size:10px;cursor:pointer">✕ Collapse</button></div><div style="position:relative;height:300px"><canvas id="ch-aov-multi"></canvas></div><div style="font-size:10px;color:#8393AB;margin-top:6px">Each line = one brand's daily AOV across the selected date range. Hover for exact values.</div></div>`;
   })():(()=>{
     return `<div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>AOV by Brand <span style="color:#f59e0b;font-weight:400;text-transform:none;letter-spacing:0">· click to see daily trend lines</span></span></div><div onclick="toggleAovDrill()" style="cursor:pointer;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px" title="Click to open daily AOV trend per brand">${BR.map(b=>{const recs=ld.filter(r=>r.brand===b.n);const tot=sumR(recs);const aov=tot.orders>0?(tot.sales/tot.orders).toFixed(1):"—";const byAgg=AGGS.map(ag=>{const a=sumR(recs.filter(r=>r.aggregator===ag));return a.orders>0?`<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(15,23,42,.3);font-size:11px"><span style="color:${AC[ag]||"#888"}">${ag}</span><span style="font-variant-numeric:tabular-nums">AED ${(a.sales/a.orders).toFixed(1)}</span></div>`:"";}).join("");const failed=!!(window.failedBrandGids&&window.failedBrandGids[b.n]);
     const noDataHTML=failed
-      ? `<div style="font-size:11px;color:#EF4444;font-weight:700;display:flex;align-items:center;gap:6px">⚠ Failed to load<span id="retry-brand-${b.n.replace(/\s+/g,'-')}" onclick="event.stopPropagation();retryBrand('${b.n}')" style="cursor:pointer;text-decoration:underline;color:#B91C1C;font-weight:800">Retry</span></div>`
-      : "<div style='color:#64748b;font-size:11px'>No data</div>";
-    return`<div style="background:#F1F5F9;border:1px solid ${failed?'#FCA5A5':'#E2E8F0'};border-radius:8px;padding:10px"><div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">${logoImg(b.n,28)}<div><div style="font-size:11px;font-weight:700;color:${b.c}">${b.n}</div><div style="font-size:13px;font-weight:800">AED ${aov}</div></div></div>${byAgg||noDataHTML}</div>`;}).join("")}</div></div>`;
+      ? `<div style="font-size:11px;color:#FF6B6B;font-weight:700;display:flex;align-items:center;gap:6px">⚠ Failed to load<span id="retry-brand-${b.n.replace(/\s+/g,'-')}" onclick="event.stopPropagation();retryBrand('${b.n}')" style="cursor:pointer;text-decoration:underline;color:#FF6B6B;font-weight:800">Retry</span></div>`
+      : "<div style='color:#8393AB;font-size:11px'>No data</div>";
+    return`<div style="background:#212B42;border:1px solid ${failed?'#FCA5A5':'#3A4875'};border-radius:8px;padding:10px"><div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">${logoImg(b.n,28)}<div><div style="font-size:11px;font-weight:700;color:${b.c}">${b.n}</div><div style="font-size:13px;font-weight:800">AED ${aov}</div></div></div>${byAgg||noDataHTML}</div>`;}).join("")}</div></div>`;
   })();
 
   // Sortable brand table
@@ -3702,8 +3733,8 @@ function renderOverview(){
     return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.n,22)}<strong style="color:${b.c}">${b.n}</strong></span>`,
       b.cv.orders.toLocaleString(),fmtAEDTip(b.cv.sales),b.cv.orders>0?`AED ${aov.toFixed(1)}`:'—',
-      disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
-      disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
+      disc>0?`<span style="color:#FF6B6B;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
+      disc>0?`<span style="color:${depth>=20?'#FF6B6B':depth>=10?'#F59E0B':'#2ECC71'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
       fmtChgCell(b.cv.orders,pv.orders,false),
       fmtChgCell(b.cv.sales,pv.sales,true)
     ],sortVals:[b.n,b.cv.orders,b.cv.sales,aov,disc,depth,b.oc,b.sc]};
@@ -3716,15 +3747,28 @@ function renderOverview(){
     return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(a.ag,22)}<strong style="color:${a.clr}">${a.ag}</strong></span>`,
       a.orders.toLocaleString(),fmtAEDTip(a.sales),a.orders>0?`AED ${(a.sales/a.orders).toFixed(1)}`:'—',
-      disc>0?`<span style="color:#EF4444;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
-      disc>0?`<span style="color:${depth>=20?'#EF4444':depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
+      disc>0?`<span style="color:#FF6B6B;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
+      disc>0?`<span style="color:${depth>=20?'#FF6B6B':depth>=10?'#F59E0B':'#2ECC71'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
       fmtChgCell(a.orders,pv.orders,false),
       fmtChgCell(a.sales,pv.sales,true)
     ],sortVals:[a.ag,a.orders,a.sales,a.aov,disc,depth,a.oc,a.sc]};
   });
-  const heads=["","Orders","Net Sales","AOV","Discount Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#64748b">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#64748b">${compShort}</span>`];
+  const heads=["","Orders","Net Sales","AOV","Discount Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#8393AB">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#8393AB">${compShort}</span>`];
 
   document.getElementById("page-overview").innerHTML=makeFilterBar()+
+    // v158: scoped style override — .card/.sm/.g2/.ct are defined in an external stylesheet
+    // this file doesn't control, so overriding their colors here (scoped to #page-overview
+    // specifically via the ID prefix, which wins on specificity without needing !important)
+    // is the only reliable way to theme this page without touching every other page that
+    // still uses the light theme, or risking a half-themed page if the external rules won.
+    `<style>
+      #page-overview{background:${DARK_THEME.bg};padding:16px;border-radius:12px}
+      #page-overview .card,#page-overview .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
+      #page-overview .ct{color:${DARK_THEME.textPrimary}!important}
+      #page-overview table.tbl th{color:${DARK_THEME.textMuted}!important;border-color:${DARK_THEME.cardBorder}!important}
+      #page-overview table.tbl td{color:${DARK_THEME.textPrimary}!important;border-color:${DARK_THEME.cardBorder}!important}
+      #page-overview table.tbl tr:hover td{background:${DARK_THEME.cardBorder}44!important}
+    </style>`+
     `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders),null,ordPerDay)}${kpiCard("Total Net Sales",fmtAEDTip(ls.sales),`${compShort}: ${fmtAEDTip(ps.sales)}`,pctOf(ls.sales,ps.sales),null,salesPerDay)}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${(()=>{
       // Discount Burn KPI (v072) — merchant discount from allData for the filtered period.
       // Uses same filters (brand/platform/branch/date) as the other KPIs above via `ld`/`ps`.
@@ -3737,16 +3781,16 @@ function renderOverview(){
     })()}${kpiCard("Active Outlets",activeOutlets,"all brands",null)}</div>
     <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:220px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="card" style="padding:14px">
-      <div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span>Outlet Highlights by Platform</span><span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0;font-size:10px">click a platform to see its top movers</span></div>
+      <div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span>Outlet Highlights by Platform</span><span style="color:#8393AB;font-weight:400;text-transform:none;letter-spacing:0;font-size:10px">click a platform to see its top movers</span></div>
       <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">${verdTabs}</div>
       <div class="g2" style="margin:0">
-        <div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:12px"><div class="ct" style="color:#22C55E;margin-bottom:8px">✅ What Worked</div><div id="verd-winners">${initialWinners}</div></div>
-        <div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:12px"><div class="ct" style="color:#EF4444;margin-bottom:8px">⚠️ Needs Attention</div><div id="verd-issues">${initialIssues}</div></div>
+        <div style="background:#212B42;border:1px solid #3A4875;border-radius:8px;padding:12px"><div class="ct" style="color:#2ECC71;margin-bottom:8px">✅ What Worked</div><div id="verd-winners">${initialWinners}</div></div>
+        <div style="background:#212B42;border:1px solid #3A4875;border-radius:8px;padding:12px"><div class="ct" style="color:#FF6B6B;margin-bottom:8px">⚠️ Needs Attention</div><div id="verd-issues">${initialIssues}</div></div>
       </div>
     </div>
     ${aovBlock}
-    <div class="card"><div class="ct">All Brands — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click any header to sort</span></div>${sortableTable("ov-brands",heads,brandTableRows,2)}</div>
-    <div class="card"><div class="ct">All Platforms — ${getPeriodLabel()} <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click any header to sort</span></div>${sortableTable("ov-plats",heads,aggTableRows,2)}</div>`;
+    <div class="card"><div class="ct">All Brands — ${getPeriodLabel()} <span style="color:#8393AB;font-weight:400;text-transform:none;letter-spacing:0">· click any header to sort</span></div>${sortableTable("ov-brands",heads,brandTableRows,2)}</div>
+    <div class="card"><div class="ct">All Platforms — ${getPeriodLabel()} <span style="color:#8393AB;font-weight:400;text-transform:none;letter-spacing:0">· click any header to sort</span></div>${sortableTable("ov-plats",heads,aggTableRows,2)}</div>`;
   setTimeout(()=>{
     // Trend must respect the active brand/platform/outlet filters (not just the date range).
     const f=curFilters();
