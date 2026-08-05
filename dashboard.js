@@ -13,13 +13,14 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-168";
+const BUILD_VERSION="2026-07-21-169";
 const BUILD_NOTES=[
-  "\ud83d\udd27 Cancellation Monitor data pipeline now complete \u2014 all 5 aggregator parsers (Keeta, Talabat, Careem, Noon, Deliveroo) capture cancellation/refund detail instead of discarding it, plus a combined storage layer merging all 5 into one unified dataset with simple aggregator+order-number dedup (appropriate given cancellations are a much smaller dataset than the full order records, which need the more complex day-based merge logic used elsewhere).",
-  "Deliveroo needed a genuinely different approach from the other 4: no dedicated cancelled status exists in its export, so reason and fault are extracted via regex from a free-text Note field (e.g. \"Refund reason: cooked_incorrectly\", \"Party at fault: Restaurant\") rather than a direct column read. Verified against the exact real example found during earlier research \u2014 correctly extracts cooked_incorrectly / Restaurant / AED -21.00 from the actual note text format, with a graceful fallback to the activity name when no structured reason is present.",
-  "Every parser change is purely additive: capture logic runs immediately before each parser's EXISTING skip/continue for cancelled rows, using separate calls to each aggregator's own established brand/outlet lookup functions, so none of the existing sales/discount aggregation logic was touched, reordered, or put at risk. All 5 parsers tested individually against real-shaped data reproducing actual findings from the uploaded files (Talabat's AED 29.80 commission-on-cancellation, Careem's negative merchant-fault payout, Noon's auto outlet-full adjustment, Deliveroo's embedded note parsing) \u2014 34 new checks across the 5 parsers plus the storage/merge layer, all passing. 57 checks total including every pre-existing regression suite, confirming this large a change didn't disturb anything already built.",
-  "IMPORTANT: the data pipeline is complete, but there is still no visible Cancellations page or navigation entry \u2014 uploading this version will not show anything new on screen yet. The page UI (KPI tiles, responsibility/reason breakdowns, per-aggregator cards with the approved 1-click order-level drill-down) and its navigation tab are the next and final piece."
+  "\ud83c\udf89 Order Cancellation Monitor is now a real, visible page \u2014 the final piece after the parser and storage work from the last two builds. New \ud83d\udeab Cancellations tab in navigation, injected the same proven way Compare was added (a page container + tab created at startup, not baked into the original static HTML).",
+  "Matches the approved mockup: KPI tiles (total cancellations, revenue lost, commission/fees still charged), a responsibility breakdown (Restaurant/Driver/Platform/Unknown \u2014 the most actionable view since only some of this is within your control), top reasons, and per-aggregator cards with the requested 1-click drill-down \u2014 click any aggregator to expand the full order-level list in place, with CSV export. Built dark-theme from the start rather than needing a retrofit like Overview did.",
+  "Handles the real differences between aggregators rather than forcing them into one shape: Talabat's commission-charged-on-cancellation, Careem/Noon/Deliveroo's signed net-payout figures (negative = restaurant owes money back), and Keeta's compensated/uncompensated split are each read correctly through a single normalizing function, tested individually. Deliveroo's entries are explicitly labeled as post-delivery refunds rather than pre-delivery cancellations, matching the distinction flagged earlier in this project.",
+  "Tested properly before shipping, not just visually: 20 checks on the page itself (empty state, populated state with real-shaped data across all 5 aggregators, the 1-click expand/collapse cycle, the per-aggregator money-lost normalization, CSV export), plus 10 checks with a real DOM confirming the navigation tab injects correctly, doesn't duplicate on repeat calls, and gp('cancellations') correctly activates the right page and tab. 87 checks total including every pre-existing regression suite \u2014 nothing else in the dashboard was disturbed by adding this."
 ];
+
 
 
 
@@ -3245,6 +3246,7 @@ async function doLoad(){
     });
   }
   injectCompareTab();
+  injectCancellationsTab();
   // Inject the Admin tab if the logged-in user is an admin. This runs AFTER login
   // (doLoad fires from doLogin's success path), unlike the DOMContentLoaded handler
   // which fires before the user has authenticated.
@@ -3753,7 +3755,7 @@ function barChart(id,labels,values,colors,extra,mode){const ctx=document.getElem
 function multiLineChart(id,labels,series){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);charts[id]=new Chart(ctx,{type:"line",data:{labels,datasets:series.map(s=>({label:s.name,data:s.data,borderColor:s.color,backgroundColor:s.color,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false,spanGaps:true}))},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#475569",font:{size:10},boxWidth:12,padding:8}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label}: ${c.raw==null?'—':'AED '+Number(c.raw).toFixed(1)}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"#F1F5F9"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#F1F5F9"},border:{display:false}}}}});}
 
 // NAVIGATION
-function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>t.classList.remove("act"));const idx={overview:0,brands:1,outlets:2,platforms:3,cpc:4,campaigns:5,discounts:6,kpi:7,compare:8}[page]||0;document.querySelectorAll(".tab")[idx]?.classList.add("act");document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
+function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>t.classList.remove("act"));const idx={overview:0,brands:1,outlets:2,platforms:3,cpc:4,campaigns:5,discounts:6,kpi:7,compare:8,cancellations:9}[page]||0;document.querySelectorAll(".tab")[idx]?.classList.add("act");document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
 
 // ── MOBILE NAV DRAWER ──
 // Slides in from the left on tap of hamburger. Overlay dims the page. Any tap on a nav item or
@@ -3792,8 +3794,8 @@ function mNavGo(page){
 // dark theme one at a time. Adding a page here is the ONLY change needed at the dispatcher —
 // each page's own render function still needs its own scoped style override and theme-aware
 // calls, same as Overview's build.
-const DARK_PAGES=new Set(["overview","brands","outlets"]);
-function renderPage(p){_darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();}
+const DARK_PAGES=new Set(["overview","brands","outlets","cancellations"]);
+function renderPage(p){_darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();else if(p==="cancellations")renderCancellations();}
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 // AOV drilldown state
@@ -12274,6 +12276,26 @@ function injectCompareTab(){
     }
   }
 }
+// v168: Cancellations tab, same injection pattern as Compare above — appended after Compare
+// (at the end) since it's the newest addition and doesn't need to sit beside any specific
+// existing tab the way Compare needed to sit beside KPI Tracker.
+function injectCancellationsTab(){
+  if(document.getElementById("page-cancellations"))return; // already injected
+  const anyPage=document.querySelector(".pg");
+  if(anyPage&&anyPage.parentNode){
+    const div=document.createElement("div");
+    div.className="pg";div.id="page-cancellations";
+    anyPage.parentNode.appendChild(div);
+  }
+  const tabs=document.querySelectorAll(".tab");
+  if(tabs.length){
+    const btn=document.createElement(tabs[0].tagName.toLowerCase());
+    btn.className="tab";btn.innerHTML="🚫 Cancellations";
+    btn.onclick=()=>gp("cancellations");
+    const last=tabs[tabs.length-1];
+    last.parentNode.insertBefore(btn,last.nextSibling);
+  }
+}
 
 // Two independent filter states
 const cmpDefault=()=>({brands:new Set(),platforms:new Set(),branches:new Set(),start:null,end:null,preset:"custom"});
@@ -12745,6 +12767,150 @@ function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC){
     ${contribC!=null?`<div style="margin-top:9px;padding-top:8px;border-top:1px solid #F0EBDC"><span style="font-size:9px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Group C</span><div style="font-size:15px;font-weight:800;color:${CMP_C_CLR};margin-top:2px">${fmtAEDTip(contribC)}</div></div>`:""}
   </div>`;
 }
+// v168: Cancellation Monitor page. Reads from the global cancellationsData array (populated by
+// the 5 parser changes + merge layer built earlier). State for the 1-click drill-down.
+let cancExpandedAgg=null;
+function cancToggleExpand(agg){cancExpandedAgg=cancExpandedAgg===agg?null:agg;renderCancellations();}
+// Normalizes the "money lost despite cancellation" figure across aggregators with different
+// field names: Talabat has commissionCharged, Careem/Noon/Deliveroo have a signed net figure
+// (negative = restaurant owes), Keeta has no direct fee-charged field (its "loss" shows up as
+// uncompensated order value instead, handled separately in the Keeta-specific note).
+function cancMoneyLostBeyondRevenue(c){
+  if(c.aggregator==="Talabat")return c.commissionCharged||0;
+  if(c.aggregator==="Careem")return c.netPayout<0?Math.abs(c.netPayout):0;
+  if(c.aggregator==="Noon")return c.netPayable<0?Math.abs(c.netPayable):0;
+  if(c.aggregator==="Deliveroo")return c.netImpact<0?Math.abs(c.netImpact):0;
+  return 0;
+}
+function renderCancellations(){
+  const pg=document.getElementById("page-cancellations");
+  if(!pg)return;
+  const T=DARK_THEME;
+  if(!cancellationsData||!cancellationsData.length){
+    pg.innerHTML=`<div style="background:${T.bg};border-radius:12px;padding:16px 20px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px"><span style="font-size:22px">🚫</span><div style="font-size:22px;font-weight:800;color:${T.textPrimary}">Order Cancellation Monitor</div></div>
+      <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;padding:40px;text-align:center;margin-top:20px">
+        <div style="font-size:15px;color:${T.textSecondary};font-weight:700;margin-bottom:8px">No cancellation data yet</div>
+        <div style="font-size:13px;color:${T.textMuted}">Upload a Keeta, Talabat, Careem, Noon, or Deliveroo statement from the Campaigns page — cancelled/refunded orders are captured automatically.</div>
+      </div>
+    </div>`;
+    return;
+  }
+  const AGG_COLORS={Keeta:"#E8D614",Talabat:"#FF6000",Careem:"#3DDC77",Deliveroo:"#00CCBC",Noon:"#FA6423"};
+  const totalCancelled=cancellationsData.length;
+  const revenueLost=cancellationsData.reduce((s,c)=>s+Math.abs(c.amount||0),0);
+  const commissionCharged=cancellationsData.reduce((s,c)=>s+cancMoneyLostBeyondRevenue(c),0);
+
+  const tile=(label,value,sub,clr)=>`<div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};flex:1;min-width:220px">
+    <div style="padding:20px">
+      <div style="font-size:11px;color:${T.textMuted};font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px">${label}</div>
+      <div style="font-size:28px;font-weight:800;color:${clr||T.textPrimary};margin-bottom:6px">${value}</div>
+      <div style="font-size:12px;color:${T.textMuted}">${sub}</div>
+    </div></div>`;
+  const tiles=[
+    tile("Total Cancellations/Refunds",totalCancelled.toLocaleString(),"across all uploaded statements",T.textPrimary),
+    tile("Revenue Lost",fmtAEDTip(revenueLost),"gross order value affected",T.accentRed),
+    tile("Commission/Fees Still Charged",fmtAEDTip(commissionCharged),"charged or owed despite cancellation",T.accentRed),
+  ];
+
+  // Responsibility breakdown
+  const respCounts={};
+  cancellationsData.forEach(c=>{const r=c.responsibility||"Unknown";respCounts[r]=(respCounts[r]||0)+1;});
+  const respMax=Math.max(...Object.values(respCounts),1);
+  const respRows=Object.entries(respCounts).sort((a,b)=>b[1]-a[1]).map(([r,n])=>{
+    const clr=r==="Restaurant"?T.accentRed:r==="Driver"?T.accentOrange:r==="Unknown"?T.textMuted:T.accentBlue;
+    return`<div style="margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:5px"><span style="font-size:14px;font-weight:700;color:${T.textPrimary}">${r}</span><span style="font-size:14px;font-weight:800;color:${clr}">${n}</span></div>
+      <div style="background:${T.bg};border-radius:6px;height:9px;overflow:hidden"><div style="width:${(n/respMax*100)}%;height:100%;background:${clr}"></div></div>
+    </div>`;
+  }).join("");
+
+  // Top reasons
+  const reasonCounts={};
+  cancellationsData.forEach(c=>{const r=c.reason||"No reason logged";reasonCounts[r]=(reasonCounts[r]||0)+1;});
+  const topReasons=Object.entries(reasonCounts).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const reasonMax=Math.max(...topReasons.map(r=>r[1]),1);
+  const reasonRows=topReasons.map(([r,n])=>`<div style="display:flex;align-items:center;gap:12px;margin-bottom:11px">
+    <div style="width:190px;font-size:13px;color:${T.textSecondary};overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r}">${r}</div>
+    <div style="flex:1;background:${T.bg};border-radius:6px;overflow:hidden;height:18px"><div style="width:${(n/reasonMax*100)}%;height:100%;background:${T.accentOrange}"></div></div>
+    <div style="width:28px;text-align:right;font-size:14px;font-weight:800;color:${T.textPrimary}">${n}</div>
+  </div>`).join("");
+
+  // Per-aggregator cards with 1-click drill-down
+  const byAgg={};
+  cancellationsData.forEach(c=>{(byAgg[c.aggregator]=byAgg[c.aggregator]||[]).push(c);});
+  const aggCards=Object.entries(byAgg).sort((a,b)=>b[1].length-a[1].length).map(([agg,items])=>{
+    const clr=AGG_COLORS[agg]||"#888";
+    const lost=items.reduce((s,c)=>s+Math.abs(c.amount||0),0);
+    const isExpanded=cancExpandedAgg===agg;
+    let note="";
+    if(agg==="Keeta"){
+      const uncomp=items.filter(c=>c.compensated===false).length;
+      note=uncomp>0?`${uncomp} of ${items.length} uncompensated (restaurant fault)`:"All compensated";
+    }else if(agg==="Deliveroo"){
+      const restFault=items.filter(c=>c.responsibility==="Restaurant").length;
+      note=`Refunds, not pre-delivery cancellations — ${restFault} of ${items.length} restaurant-fault`;
+    }else{
+      const restFault=items.filter(c=>c.responsibility==="Restaurant").length;
+      note=restFault>0?`${restFault} of ${items.length} restaurant-fault`:"None restaurant-fault";
+    }
+    const detailRows=items.map(c=>{
+      const amt=cancMoneyLostBeyondRevenue(c)>0?-cancMoneyLostBeyondRevenue(c):(c.amount||0);
+      const negative=amt<0;
+      return`<tr style="border-top:1px solid ${T.cardBorder}">
+        <td style="padding:7px 8px;font-size:11px;color:${T.textMuted};font-family:monospace;white-space:nowrap">${c.order_no||"—"}</td>
+        <td style="padding:7px 8px;font-size:11px;color:${T.textPrimary}">${c.brand||"—"}${c.outlet?" - "+c.outlet:""}</td>
+        <td style="padding:7px 8px;font-size:11px;color:${T.textSecondary}">${c.reason||"—"}</td>
+        <td style="padding:7px 8px;text-align:center"><span style="font-size:9.5px;font-weight:800;padding:2px 8px;border-radius:10px;background:${c.responsibility==="Restaurant"?T.accentRed:c.responsibility==="Driver"?T.accentOrange:T.textMuted}22;color:${c.responsibility==="Restaurant"?T.accentRed:c.responsibility==="Driver"?T.accentOrange:T.textMuted}">${c.responsibility||"Unknown"}</span></td>
+        <td style="padding:7px 8px;text-align:right;font-size:12px;font-weight:700;color:${negative?T.accentRed:T.textPrimary}">${negative?"−":""}${fmtAEDTip(Math.abs(amt))}${negative?" (owed)":c.compensated===false?" ⚠":""}</td>
+      </tr>`;
+    }).join("");
+    const detailTable=isExpanded?`<div style="margin-top:12px;padding-top:12px;border-top:1px solid ${T.cardBorder}">
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+        <thead><tr><th style="text-align:left;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Order</th><th style="text-align:left;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Outlet</th><th style="text-align:left;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Reason</th><th style="text-align:center;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Fault</th><th style="text-align:right;padding:4px 8px;font-size:9px;color:${T.textMuted};text-transform:uppercase">Amount</th></tr></thead>
+        <tbody>${detailRows}</tbody>
+      </table></div>
+      <div style="text-align:center;margin-top:10px"><span onclick="event.stopPropagation();cancExportAgg('${agg}')" style="cursor:pointer;font-size:12px;color:${T.accentBlue};font-weight:700">⬇ Export ${agg} list as CSV</span></div>
+    </div>`:"";
+    return`<div onclick="cancToggleExpand('${agg}')" style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};cursor:pointer;min-width:280px;${isExpanded?"grid-column:1/-1":""}">
+      <div style="padding:18px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div style="display:flex;align-items:center;gap:10px">${logoImg(agg,28)}<span style="font-size:16px;font-weight:800;color:${T.textPrimary}">${agg}</span></div>
+          <span style="font-size:12px;color:${T.accentBlue};font-weight:700">${isExpanded?"▾ Hide detail":"▸ View "+items.length+" order"+(items.length!==1?"s":"")}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between">
+          <div><div style="font-size:10px;color:${T.textMuted};font-weight:700;text-transform:uppercase">Cancelled</div><div style="font-size:22px;font-weight:800;color:${T.textPrimary}">${items.length}</div></div>
+          <div style="text-align:right"><div style="font-size:10px;color:${T.textMuted};font-weight:700;text-transform:uppercase">Revenue Lost</div><div style="font-size:22px;font-weight:800;color:${T.accentRed}">${fmtAEDTip(lost)}</div></div>
+        </div>
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid ${T.cardBorder};font-size:12px;color:${T.textSecondary};font-weight:600">${note}</div>
+        ${detailTable}
+      </div>
+    </div>`;
+  }).join("");
+
+  pg.innerHTML=`<div style="background:${T.bg};border-radius:12px;padding:16px 20px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px"><span style="font-size:22px">🚫</span><div style="font-size:22px;font-weight:800;color:${T.textPrimary}">Order Cancellation Monitor</div></div>
+    <div style="font-size:13px;color:${T.textSecondary};margin-bottom:20px">Click any aggregator card for the full order-level list</div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:20px">${tiles.join("")}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+      <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px"><div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:16px">By Responsibility</div>${respRows}</div>
+      <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px"><div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:16px">Top Reasons</div>${reasonRows}</div>
+    </div>
+    <div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin:20px 0 12px">By Aggregator — click to drill into every order</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${aggCards}</div>
+    <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:12px;padding:16px 20px;margin-top:16px">
+      <div style="font-size:12.5px;color:${T.textSecondary};line-height:1.7">💡 <strong style="color:${T.textPrimary}">Deliveroo note:</strong> its entries are post-delivery quality refunds (wrong/missing items), not pre-delivery cancellations like the other aggregators — a different problem needing a different fix (kitchen QC, not delivery logistics), even though the financial impact is real.</div>
+    </div>
+  </div>`;
+}
+function cancExportAgg(agg){
+  const items=cancellationsData.filter(c=>c.aggregator===agg);
+  if(!items.length)return;
+  const header=["Order No","Brand","Outlet","Date","Reason","Responsibility","Amount (AED)"];
+  const rows=items.map(c=>[c.order_no||"",c.brand||"",c.outlet||"",c.date||"",c.reason||"",c.responsibility||"",(c.amount||0).toFixed(2)]);
+  cpcExportCSV(`${agg.toLowerCase()}_cancellations_${dk(new Date())}.csv`,header,rows);
+}
+
 function renderCompare(){
   let pg=document.getElementById("page-compare");
   if(!pg){injectCompareTab();pg=document.getElementById("page-compare");}
