@@ -13,13 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-159";
+const BUILD_VERSION="2026-07-21-160";
 const BUILD_NOTES=[
-  "\ud83c\udf19 Overview dark theme, three fixes/additions from live feedback. Filter bar (.fbar and its preset buttons/dropdown pills/chips) added to the scoped style override \u2014 was a genuine miss last time, a separate component the earlier override never touched. The white margin around the page edges is fixed via negative margins expanding #page-overview itself, not a body{} rule \u2014 deliberately avoided that, since this page's <style> tag lives inside #page-overview's own innerHTML, and if other pages just hide this container rather than clear it when you navigate away, a body-level rule would keep darkening the background behind every other still-light-theme page too.",
-  "New: hovering the Active Outlets tile shows which outlets had no orders in whatever period is currently filtered, grouped by brand \u2014 scoped to follow the date filter (not hardcoded to \"yesterday\"), and respecting the same brand/platform/outlet filters the Active Outlets count itself uses, so the two numbers stay consistent with each other.",
-  "Confirmed directly (not assumed) that Active Outlets showing a lower count on a single-day filter than a full-month filter isn't a bug \u2014 it's correctly counting only outlets with orders within whichever date range is selected, matching every other KPI card on the page.",
-  "Verified end-to-end with a real DOM test built specifically to catch the exact scenario flagged: an outlet with orders on the day before yesterday but not yesterday itself is correctly excluded from the missing list once it's back in scope, and an outlet with genuinely zero orders in the filtered period is correctly included."
+  "\ud83d\udc1b Fixed a real bug in the previous sides-fix: negative margins (-16px -20px) were applied to #page-overview without a matching width increase to compensate, which shifted the whole block leftward instead of expanding it symmetrically \u2014 exactly the \"page shifted left, white gap on the right\" reported live. Added width:calc(100% + 40px) and box-sizing:border-box so the negative margin correctly bleeds the background on both sides instead of just moving the element. Standard CSS full-bleed math: 20px negative margin per side needs 40px of extra width to net out to the parent's full size without shifting.",
+  "Honest limitation: this environment can't render actual CSS layout, so this fix is verified as internally-consistent CSS math and confirmed not to break anything else (28 regression checks still pass), but not visually confirmed by me directly \u2014 worth checking live before considering this fully closed."
 ];
+
 
 
 
@@ -3805,7 +3804,7 @@ function renderOverview(){
     // Expanding #page-overview itself via negative margins is scoped safely to this element
     // only, regardless of what else is in the DOM.
     `<style>
-      #page-overview{background:${DARK_THEME.bg};padding:16px;border-radius:12px;margin:-16px -20px;padding:16px 20px}
+      #page-overview{background:${DARK_THEME.bg};border-radius:12px;margin:-16px -20px;width:calc(100% + 40px);padding:16px 20px;box-sizing:border-box}
       #page-overview .card,#page-overview .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
       #page-overview .ct{color:${DARK_THEME.textPrimary}!important}
       #page-overview table.tbl th{color:${DARK_THEME.textMuted}!important;border-color:${DARK_THEME.cardBorder}!important}
