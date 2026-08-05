@@ -13,13 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-156";
+const BUILD_VERSION="2026-07-21-157";
 const BUILD_NOTES=[
-  "\ud83d\udcca New on the Platforms page: a Monthly Performance table, multi-select across BOTH aggregators and brands independently. Went through several design rounds before landing here \u2014 a sparkline-summary \"zoomed out\" view was tried and rejected (numbers need to be fully readable, not abbreviated to a single latest-value-plus-trend), and an auto-totaling-across-brands approach was also rejected (brands need to sit side by side, never summed automatically). What shipped: month-by-month rows, with every selected brand getting its own column-group and every selected aggregator nested inside it as its own Sales + MoM% column pair \u2014 full, non-abbreviated figures throughout, matching the explicit requirement.",
-  "Cross-checked the uploaded reference file's numbers against the live Google Sheet data before designing anything. First pass found what looked like a precise, consistent ~2.00x discrepancy across 18 months \u2014 caught this as a mistake in the verification script itself (summing both individual outlet rows AND a separate \"Total\" rollup row) before treating it as a real data problem. After excluding the rollup row, the file's figures matched the live data closely (typically within 0.1\u20130.5%), confirming the file is trustworthy.",
-  "Excludes the '(brand-level)' marker row from monthly sums the same way every other per-outlet aggregation in this dashboard does \u2014 verified directly with a test case designed to catch a double-count if this were missed.",
-  "Defaults to the currently selected platform plus one other aggregator, and all brands, so the section isn't empty on first view \u2014 but every combination is still freely selectable via pills, nothing is locked."
+  "\ud83d\udcca Monthly Performance table: added Orders, AOV, Discount, and Discount% per requested \u2014 packed into each existing cell as a 3-line block (Sales+MoM, Orders+AOV, Discount+Discount%) rather than adding 4 more columns per brand\u00d7aggregator combination, which would have tripled the table width and forced small text. Column count is unchanged from before; each cell just carries the full picture now instead of one number.",
+  "Export CSV extended to match \u2014 now includes Orders, AOV, Discount, and Discount% columns alongside Sales and MoM%, so the export always mirrors exactly what's on screen."
 ];
+
 
 
 
@@ -3917,11 +3916,16 @@ function platToggleMultiBrand(b){if(platMultiBrands.has(b))platMultiBrands.delet
 // Monthly totals for one brand+aggregator, sorted chronologically, keyed by YYYY-MM. Excludes
 // the '(brand-level)' marker row the same way every other per-outlet aggregation in this
 // dashboard does, to avoid double-counting against the individual outlet rows.
+// v157: extended to track orders and discount alongside sales (was sales-only) — needed for
+// the Orders/AOV/Discount/Discount% metrics added to each cell.
 function platMonthlySeries(brand,agg){
   const byMonth={};
   allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)').forEach(r=>{
     const m=recMonth(r);
-    byMonth[m]=(byMonth[m]||0)+r.sales;
+    if(!byMonth[m])byMonth[m]={sales:0,orders:0,disc:0};
+    byMonth[m].sales+=r.sales;
+    byMonth[m].orders+=(r.orders||0);
+    byMonth[m].disc+=(r.disc||0);
   });
   return byMonth;
 }
@@ -3968,21 +3972,43 @@ function platMonthlyTableCard(){
       <div style="text-align:center;padding:30px;color:#94a3b8;font-size:12px">No data found for this combination.</div></div>`;
   }
 
-  const brandGroupHeaders=activeBrands.map(b=>`<th colspan="${activeAggs.length*2}" style="padding:8px 16px;text-align:center;border-left:2px solid #E2E8F0;background:${b.c}0d"><div style="display:flex;align-items:center;justify-content:center;gap:7px">${logoImg(b.n,20)}<span style="font-size:13px;color:${b.c};font-weight:800">${b.n}</span></div></th>`).join("");
-  const aggSubHeaders=activeBrands.map(()=>activeAggs.map((a,i)=>`<th colspan="2" style="padding:6px 14px;text-align:center;font-size:11px;color:${AC[a]||"#888"};font-weight:800;border-left:${i===0?"2px solid #E2E8F0":"1px solid #F1EFE6"}">${a}</th>`).join("")).join("");
-  const metricHeaders=activeBrands.map(()=>activeAggs.map((a,i)=>`<th style="padding:6px 12px;text-align:right;font-size:10px;color:#94a3b8;font-weight:700;border-left:${i===0?"2px solid #E2E8F0":"1px solid #F1EFE6"}">Sales</th><th style="padding:6px 12px;text-align:right;font-size:10px;color:#94a3b8;font-weight:700">MoM</th>`).join("")).join("");
+  const brandGroupHeaders=activeBrands.map(b=>`<th colspan="${activeAggs.length}" style="padding:8px 16px;text-align:center;border-left:2px solid #E2E8F0;background:${b.c}0d"><div style="display:flex;align-items:center;justify-content:center;gap:7px">${logoImg(b.n,20)}<span style="font-size:13px;color:${b.c};font-weight:800">${b.n}</span></div></th>`).join("");
+  const aggSubHeaders=activeBrands.map(()=>activeAggs.map((a,i)=>`<th style="padding:6px 18px;text-align:left;font-size:11px;color:${AC[a]||"#888"};font-weight:800;border-left:${i===0?"2px solid #E2E8F0":"1px solid #F1EFE6"}">${a}</th>`).join("")).join("");
 
+  // v157: each cell now packs Sales+MoM (top line, largest), Orders+AOV (middle), Discount+
+  // Discount% (bottom) — three lines within ONE column per brand×aggregator, instead of
+  // spreading these across separate columns. Keeps column count unchanged from before while
+  // surfacing all four newly-requested metrics, avoiding the font-shrinking that adding four
+  // more columns per combination would have forced.
   const rows=months.map((m,mi)=>{
     const prevM=mi>0?months[mi-1]:null;
     const cells=activeBrands.map(b=>activeAggs.map((a,ai)=>{
       const s=seriesMap[b.n+"|"+a];
-      const v=s[m]||0;
-      const pv=prevM?(s[prevM]||0):null;
-      const momPct=(pv&&pv>0)?((v-pv)/pv*100):null;
+      const cur=s[m]||{sales:0,orders:0,disc:0};
+      const prev=prevM?(s[prevM]||null):null;
+      const sales=cur.sales,orders=cur.orders,disc=cur.disc;
+      const aov=orders>0?sales/orders:0;
+      const gross=sales+disc;
+      const discPct=gross>0?(disc/gross*100):0;
+      const momPct=(prev&&prev.sales>0)?((sales-prev.sales)/prev.sales*100):null;
       const mClr=momPct==null?"#94a3b8":(momPct>=0?"#22C55E":"#EF4444");
-      return`<td style="padding:9px 14px;text-align:right;font-size:13px;font-weight:700;color:#0F172A;border-left:${ai===0?"2px solid #E2E8F0":"1px solid #F1EFE6"};font-variant-numeric:tabular-nums">${fmtAEDExact(v)}</td><td style="padding:9px 12px;text-align:right;font-size:11.5px;font-weight:700;color:${mClr}">${momPct==null?"—":(momPct>=0?"+":"")+momPct.toFixed(1)+"%"}</td>`;
+      const discClr=discPct>=20?"#EF4444":discPct>=10?"#F59E0B":"#22C55E";
+      return`<td style="padding:11px 18px;border-left:${ai===0?"2px solid #E2E8F0":"1px solid #F1EFE6"};vertical-align:top;min-width:190px">
+        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px">
+          <span style="font-size:15px;font-weight:800;color:#0F172A;font-variant-numeric:tabular-nums">${fmtAEDExact(sales)}</span>
+          <span style="font-size:11px;font-weight:700;color:${mClr}">${momPct==null?"—":(momPct>=0?"+":"")+momPct.toFixed(1)+"%"}</span>
+        </div>
+        <div style="display:flex;gap:12px;font-size:11.5px;color:#64748b;margin-bottom:2px">
+          <span><strong style="color:#334155">${orders.toLocaleString()}</strong> orders</span>
+          <span>AOV <strong style="color:#334155">${orders>0?"AED "+aov.toFixed(1):"—"}</strong></span>
+        </div>
+        <div style="display:flex;gap:12px;font-size:11.5px">
+          <span style="color:#94a3b8">${disc>0?fmtAEDExact(disc)+" disc.":"—"}</span>
+          ${disc>0?`<span style="color:${discClr};font-weight:700">${discPct.toFixed(1)}%</span>`:""}
+        </div>
+      </td>`;
     }).join("")).join("");
-    return`<tr style="border-bottom:1px solid #F1EFE6"><td style="padding:9px 16px;font-weight:700;color:#0F172A;font-size:13px;white-space:nowrap">${cpcMonthLabel(m)}</td>${cells}</tr>`;
+    return`<tr style="border-bottom:1px solid #F1EFE6"><td style="padding:11px 16px;font-weight:700;color:#0F172A;font-size:13px;white-space:nowrap;vertical-align:top">${cpcMonthLabel(m)}</td>${cells}</tr>`;
   }).join("");
 
   return`<div class="card" style="margin-top:12px">
@@ -3996,8 +4022,7 @@ function platMonthlyTableCard(){
       <table style="width:100%;border-collapse:collapse">
         <thead>
           <tr style="border-bottom:1px solid #F1EFE6"><th></th>${brandGroupHeaders}</tr>
-          <tr style="border-bottom:1px solid #F1EFE6"><th></th>${aggSubHeaders}</tr>
-          <tr style="border-bottom:2px solid #E2E8F0"><th style="padding:6px 16px;text-align:left;font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase">Month</th>${metricHeaders}</tr>
+          <tr style="border-bottom:2px solid #E2E8F0"><th style="padding:6px 16px;text-align:left;font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase">Month</th>${aggSubHeaders}</tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
@@ -4017,14 +4042,20 @@ function platExportMonthly(){
   }));
   const months=[...allMonths].sort();
   const header=["Month"];
-  activeBrands.forEach(b=>activeAggs.forEach(a=>{header.push(`${b.n} ${a} Sales (AED)`,`${b.n} ${a} MoM %`);}));
+  activeBrands.forEach(b=>activeAggs.forEach(a=>{header.push(`${b.n} ${a} Sales (AED)`,`${b.n} ${a} MoM %`,`${b.n} ${a} Orders`,`${b.n} ${a} AOV (AED)`,`${b.n} ${a} Discount (AED)`,`${b.n} ${a} Discount %`);}));
   const rows=months.map((m,mi)=>{
     const prevM=mi>0?months[mi-1]:null;
     const row=[cpcMonthLabel(m)];
     activeBrands.forEach(b=>activeAggs.forEach(a=>{
-      const s=seriesMap[b.n+"|"+a];const v=s[m]||0;const pv=prevM?(s[prevM]||0):null;
-      const momPct=(pv&&pv>0)?((v-pv)/pv*100):null;
-      row.push(v.toFixed(2),momPct==null?"":momPct.toFixed(1)+"%");
+      const s=seriesMap[b.n+"|"+a];
+      const cur=s[m]||{sales:0,orders:0,disc:0};
+      const prev=prevM?(s[prevM]||null):null;
+      const sales=cur.sales,orders=cur.orders,disc=cur.disc;
+      const aov=orders>0?sales/orders:0;
+      const gross=sales+disc;
+      const discPct=gross>0?(disc/gross*100):0;
+      const momPct=(prev&&prev.sales>0)?((sales-prev.sales)/prev.sales*100):null;
+      row.push(sales.toFixed(2),momPct==null?"":momPct.toFixed(1)+"%",orders,aov.toFixed(2),disc.toFixed(2),discPct.toFixed(1)+"%");
     }));
     return row;
   });
