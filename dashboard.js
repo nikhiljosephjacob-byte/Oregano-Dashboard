@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-174";
+const BUILD_VERSION="2026-08-06-175";
 const BUILD_NOTES=[
+  "\ud83d\udc1b Fixed: every page loaded showing blank/zero \"Yesterday\" figures until you clicked Last 7 Days then back to Yesterday. Root cause: the initial page-load default was anchored to `latest` (the most recent day found in the sales data) instead of the real calendar date \u2014 diverging from what the Yesterday button itself calculates whenever the two dates don't match. Both now compute the identical real-calendar-anchored date.",
+  "\ud83d\udc1b Cancellations page: fixed two related gaps in the shared server-sync path \u2014 (1) the boot-time \"pull latest data from server\" step refreshed Campaigns/Discounts but never Cancellations, so newly-synced cancellation data could sit in memory without the page re-rendering to show it; (2) hardened the pull so a server copy that's missing cancellations (e.g. from before this data started syncing) can no longer silently overwrite/wipe cancellations already held locally. If cancellations still disappear on reload after this, the next step is checking the browser console for the [sync] log lines right after a refresh.",
   "\ud83d\udccb To-do list check-in: investigated both the sidebar redesign and the Campaigns loading animation before touching either. Searched dashboard.js thoroughly for the \"green swipe\" loading animation (loading text, every CSS keyframe, progress-bar patterns) and couldn't locate it \u2014 it almost certainly lives in the external HTML/CSS shell this session doesn't have access to, the same place .card's and .fbar's base styles turned out to live. Sidebar scope is more contained than expected (only 9 .tab references across 3 functions), but the actual tab markup itself is also likely in that same external shell. Both need a screenshot/more access before they can be built correctly rather than guessed at \u2014 given the lesson learned earlier this session from three failed blind CSS guesses on the sides issue, not repeating that here.",
   "\ud83c\udf19 Compare page dark theme, started (sixth page in the rollout) \u2014 given prior familiarity with this page's structure from building the 3-way comparison feature. Converted: the Group A/B/C filter panels (cmpPanel) including proper dark color-scheme on the native date pickers (was hardcoded to light, which affects the browser's own calendar icon styling), the Add Group C tile, and the page header/action buttons, all with a scoped style override matching the pattern used on every prior page.",
   "Remaining for Compare: the summary stat cards (cmpStatCard/cmpDiscCard/cmpOutletCard/cmpContribCard \u2014 each sets its own inline colors, same treatment needed as kpiCard before them), the Brand\u00d7Platform breakdown table, the outlet drill-down, and the Platform Movement risers/fallers section. Verified what's done so far with 5 direct dark/light-mode checks on cmpPanel, plus the existing 16-check Comparison suite and 14-check navigation suite both still passing \u2014 nothing already built was disturbed."
@@ -632,7 +634,11 @@ async function pullOrderDataFromServer(){
       if(!local||(serverTs&&(!localTs||serverTs>localTs))){
         const obj={metadata:server.metadata,records:server.records};
         if(server.orderDetail)obj.orderDetail=server.orderDetail;
+        // v175: prefer server cancellations, but if the server's copy doesn't have any (e.g. an
+        // older push that predates cancellation tracking, or a failed sync), don't let that
+        // silently wipe out cancellations this browser already has locally.
         if(server.cancellations)obj.cancellations=server.cancellations;
+        else if(local&&local.cancellations)obj.cancellations=local.cancellations;
         cfg.set(obj);
         try{localStorage.setItem(cfg.lsKey(),JSON.stringify(obj));}catch(e){}
         changed=true;
@@ -3279,8 +3285,16 @@ async function doLoad(){
     return;
   }
   latest=all.reduce((m,r)=>r.date>m?r.date:m,all[0].date);
-  // Default every page's filter to "yesterday" (the latest day) independently.
-  Object.values(pageFilters).forEach(f=>{f.start=latest;f.end=latest;f.preset="yesterday";f.brands.clear();f.platforms.clear();f.branches.clear();});
+  // Default every page's filter to "yesterday" — anchored to the REAL calendar date, exactly
+  // matching fSetPreset("yesterday")'s own calculation. v175 fix: this used to default to
+  // `latest` (the most recent day WITH data) on the assumption that latest always equals
+  // real-calendar-yesterday. Whenever the two diverged (data pipeline behind, or a stray future-
+  // dated row), the page loaded showing `latest`'s (often zero/wrong) figures, while clicking
+  // "Last 7 Days" then back to "Yesterday" re-ran fSetPreset and jumped to the CORRECT
+  // real-calendar date — which is exactly the "blank until I toggle" symptom reported. Now both
+  // paths compute the same date the same way.
+  const initYesterday=subDays(dk(new Date()),1);
+  Object.values(pageFilters).forEach(f=>{f.start=initYesterday;f.end=initYesterday;f.preset="yesterday";f.brands.clear();f.platforms.clear();f.branches.clear();});
   const realToday=dk(new Date());
   const todayLabel=realToday!==latest?` · Today: ${fmtDisp(realToday)}`:'';
   document.getElementById("ts-label").textContent=`Latest: ${fmtDisp(latest)}${todayLabel}`;
@@ -3303,7 +3317,7 @@ async function doLoad(){
   if(typeof tryInitAdmin==="function")tryInitAdmin();
   // v112: pull the shared aggregator order data from the server (all users). If anything
   // updated, caches were already invalidated inside — re-render whichever page is open.
-  pullOrderDataFromServer().then(changed=>{if(changed&&typeof curPage!=='undefined'){if(curPage==='campaigns')renderCampaigns();else if(curPage==='discounts')renderDiscounts();}});
+  pullOrderDataFromServer().then(changed=>{if(changed&&typeof curPage!=='undefined'){if(curPage==='campaigns')renderCampaigns();else if(curPage==='discounts')renderDiscounts();else if(curPage==='cancellations')renderCancellations();}});
   // After the dashboard finishes loading, show the "What's new" popup if BUILD_VERSION
   // changed since the user's last visit. Small delay so it doesn't compete with the
   // initial dashboard render.
