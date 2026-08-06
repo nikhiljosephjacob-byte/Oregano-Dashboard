@@ -13,10 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-183";
+const BUILD_VERSION="2026-08-06-184";
 const BUILD_NOTES=[
-  "🆕 Sidebar: reordered so Cancellations sits right under KPI Tracker, and Admin now lives in its own section pinned to the bottom instead of mixed in with the page tabs. Also fixed a real bug this surfaced — the active-tab highlight used to be based on tab position in the list, which silently breaks the moment tabs get reordered (like this update does). Now based on which page each tab actually points to, so it can't drift out of sync again.",
-  "🆕 Sidebar header: removed the small logo — replacement options coming once one's picked.",
+  "🐛 Fixed the collapsed sidebar looking broken — labels were getting clipped mid-word instead of hiding cleanly, down to icon and label sharing one text node with no way to hide just the text. Split into separate icon/label parts so collapsing now shows a clean icon-only view.",
+  "🎨 Added icons to Overview, Brands, Outlets, Platforms, and Ads Performance tabs.",
+  "🆕 Sidebar header now shows a live sync status (green dot + last-synced time) instead of the wordmark.",
   "🔧 Cancellations: raised the server upload size limit and added visible warnings when a save doesn't fully fit — re-upload once more to pick up both fixes."
 ];
 
@@ -712,9 +713,13 @@ async function pullOrderDataFromServer(){
       }
     }
   }catch(e){console.log('[sync] pull error:',e.message);}
+  lastSyncAt=Date.now(); // v184: for the sidebar's "Synced Xm ago" status — set even when
+  // nothing changed, since a successful pull (regardless of whether it found anything new) is
+  // exactly what "synced" means.
   if(changed)rewarmCampaignAnalyses(); // v113: heat the caches back up in the background
   return changed;
 }
+let lastSyncAt=null;
 const KEETA_STORAGE_KEY="keeta_orders_data_v1";
 // v172: replaced the v167 approach (a separate cancellationsData array with its own
 // localStorage-only key) with this — cancellations now live on each aggregator's own data
@@ -3372,15 +3377,18 @@ async function doLoad(){
   injectCompareTab();
   injectCancellationsTab();
   tagTabsWithPageIds();
+  addTabIcons();
+  restructureTabIcons();
   if(typeof tryInitAdmin==="function")tryInitAdmin(); // must run AFTER login (doLoad fires from
   // doLogin's success path) — the DOMContentLoaded handler fires too early, before auth. Also
   // must run BEFORE buildSidebarNav so the admin tab (if this user is one) already exists to be
   // captured and placed in the sidebar footer, rather than being orphaned outside it.
   tagTabsWithPageIds(); // idempotent — catches the admin tab, which didn't exist for the first pass
+  restructureTabIcons(); // same idempotent catch, for the admin tab's icon/label split
   buildSidebarNav();
   // v112: pull the shared aggregator order data from the server (all users). If anything
   // updated, caches were already invalidated inside — re-render whichever page is open.
-  pullOrderDataFromServer().then(changed=>{if(changed&&typeof curPage!=='undefined'){if(curPage==='campaigns')renderCampaigns();else if(curPage==='discounts')renderDiscounts();else if(curPage==='cancellations')renderCancellations();}});
+  pullOrderDataFromServer().then(changed=>{if(typeof updateSidebarSyncStatus==="function")updateSidebarSyncStatus();if(changed&&typeof curPage!=='undefined'){if(curPage==='campaigns')renderCampaigns();else if(curPage==='discounts')renderDiscounts();else if(curPage==='cancellations')renderCancellations();}});
   // After the dashboard finishes loading, show the "What's new" popup if BUILD_VERSION
   // changed since the user's last visit. Small delay so it doesn't compete with the
   // initial dashboard render.
@@ -3430,6 +3438,20 @@ async function retryBrand(brandName){
 // Defensive throughout: bails out cleanly (leaving the original top nav in place) if the tab
 // count looks unexpected, wrapped in try/catch so a failure here can't break page load. Escape
 // hatch: append ?nosidebar=1 to disable it for a tab, same pattern as the existing ?nocheck=1.
+// v184: formats the sidebar header's "Synced Xm ago" caption from lastSyncAt (set by
+// pullOrderDataFromServer). Called once right after the header is built, then on a 30s interval
+// so it keeps counting up without needing another sync to trigger a refresh.
+function updateSidebarSyncStatus(){
+  const el=document.getElementById("sidebar-sync-caption");
+  if(!el)return;
+  if(!lastSyncAt){el.textContent="Syncing…";return;}
+  const secs=Math.round((Date.now()-lastSyncAt)/1000);
+  let txt;
+  if(secs<60)txt="Synced just now";
+  else if(secs<3600)txt=`Synced ${Math.floor(secs/60)}m ago`;
+  else txt=`Synced ${Math.floor(secs/3600)}h ago`;
+  el.textContent=txt;
+}
 function buildSidebarNav(){
   try{
     if(document.getElementById("app-sidebar"))return;
@@ -3459,11 +3481,13 @@ function buildSidebarNav(){
     sidebar.dataset.collapsed=collapsed?"1":"0";
     sidebar.style.cssText=`position:fixed;top:0;left:0;bottom:0;width:${collapsed?W_COLLAPSED:W_OPEN}px;background:${DARK_THEME.bg};border-right:1px solid ${DARK_THEME.cardBorder};display:flex;flex-direction:column;z-index:40;transition:width .18s ease;overflow-y:auto;overflow-x:hidden`;
 
-    // Header: text wordmark only (no logo icon — pending a replacement pick) + collapse toggle.
+    // Header: live sync status (Option B, picked from the mockup) + collapse toggle.
     const header=document.createElement("div");
     header.style.cssText=`display:flex;align-items:center;gap:8px;padding:14px 12px;border-bottom:1px solid ${DARK_THEME.cardBorder};flex-shrink:0;min-height:20px`;
-    header.innerHTML=`<span class="sidebar-brand-txt" style="font-size:13px;font-weight:800;color:${DARK_THEME.textPrimary};white-space:nowrap;overflow:hidden;letter-spacing:.3px">OREGANO</span><button id="sidebar-toggle" title="Collapse sidebar" style="margin-left:auto;background:none;border:none;color:${DARK_THEME.textMuted};cursor:pointer;font-size:15px;padding:4px;flex-shrink:0">${collapsed?"»":"«"}</button>`;
+    header.innerHTML=`<span style="width:7px;height:7px;border-radius:50%;background:${DARK_THEME.accentGreen};flex-shrink:0" aria-hidden="true"></span><span class="sidebar-brand-txt" style="line-height:1.3;overflow:hidden"><span style="display:block;font-size:11px;font-weight:700;color:${DARK_THEME.textPrimary};white-space:nowrap">Live</span><span id="sidebar-sync-caption" style="display:block;font-size:9px;color:${DARK_THEME.textMuted};white-space:nowrap"></span></span><button id="sidebar-toggle" title="Collapse sidebar" style="margin-left:auto;background:none;border:none;color:${DARK_THEME.textMuted};cursor:pointer;font-size:15px;padding:4px;flex-shrink:0">${collapsed?"»":"«"}</button>`;
     sidebar.appendChild(header);
+    updateSidebarSyncStatus();
+    if(!window._sidebarSyncInterval)window._sidebarSyncInterval=setInterval(updateSidebarSyncStatus,30000);
 
     const navWrap=document.createElement("div");
     navWrap.style.cssText="display:flex;flex-direction:column;gap:2px;padding:10px 8px;flex:1";
@@ -3486,7 +3510,9 @@ function buildSidebarNav(){
   #app-sidebar .tab{display:flex!important;align-items:center;gap:8px;width:100%;text-align:left;padding:9px 10px!important;border-radius:8px;font-size:13px!important;white-space:nowrap;overflow:hidden;color:${DARK_THEME.textSecondary};background:none!important;border:none!important}
   #app-sidebar .tab.act{background:${DARK_THEME.accentOrange}22!important;color:${DARK_THEME.accentOrange}!important}
   #app-sidebar .tab:hover{background:${DARK_THEME.cardBorder}55}
+  #app-sidebar .tab .tab-label{white-space:nowrap;overflow:hidden}
   #app-sidebar[data-collapsed="1"] .tab{justify-content:center;padding:9px 4px!important}
+  #app-sidebar[data-collapsed="1"] .tab .tab-label{display:none}
   #app-sidebar[data-collapsed="1"] .sidebar-brand-txt{display:none}
   #app-sidebar[data-collapsed="1"] #sidebar-toggle{margin-left:0}
   body{margin-left:${collapsed?W_COLLAPSED:W_OPEN}px!important;transition:margin-left .18s ease;box-sizing:border-box}
@@ -4028,6 +4054,40 @@ function tagTabsWithPageIds(){
     if(m){t.dataset.pg=m[1];return;}
     const txt=t.textContent||"";
     for(const[re,id]of textMap){if(re.test(txt)){t.dataset.pg=id;return;}}
+  });
+}
+// v184: icons for the 5 tabs that didn't have one (Combo 2 — analytics themed, picked from the
+// mockup options). Idempotent via data-icon-added, so calling it again for the admin tab is safe.
+const TAB_ICONS={overview:"📊",brands:"🏷️",outlets:"📍",platforms:"🌐",cpc:"🎯"};
+function addTabIcons(){
+  document.querySelectorAll(".tab").forEach(t=>{
+    if(t.dataset.iconAdded)return;
+    const pg=t.dataset.pg;
+    if(pg&&TAB_ICONS[pg]){
+      t.textContent=`${TAB_ICONS[pg]} ${(t.textContent||"").trim()}`;
+      t.dataset.iconAdded="1";
+    }
+  });
+}
+// v184: fixes the awkward collapsed-sidebar look — clipped mid-word labels instead of a clean
+// icon-only view. Root cause: the collapsed CSS only re-justified each tab's content, but the
+// icon and label were one plain text node, so a narrow collapsed width just clipped the text
+// wherever it ran out of room ("Overview" → "verview", "Platforms" → "latform"), not hidden it.
+// This splits every tab's "ICON Label" text into two separate spans so the label can be cleanly
+// display:none'd when collapsed, leaving just a centered icon. Idempotent via .tab-label check.
+function restructureTabIcons(){
+  document.querySelectorAll(".tab").forEach(t=>{
+    if(t.querySelector(".tab-label"))return;
+    const txt=(t.textContent||"").trim();
+    if(!txt)return;
+    // Only split off a leading emoji as the icon — checking for "any space" wrongly treated
+    // plain two-word labels with no icon at all (e.g. "KPI Tracker") as if "KPI" were an icon.
+    const m=txt.match(/^(\p{Extended_Pictographic}\uFE0F?)\s+(.*)$/u);
+    // fallback: no emoji prefix found — first letter as a small stand-in icon. Still fixes the
+    // collapse bug for that tab (the label still gets hidden), just without a proper icon.
+    const icon=m?m[1]:txt.charAt(0);
+    const label=m?m[2]:txt;
+    t.innerHTML=`<span class="tab-icon" style="flex-shrink:0;display:inline-flex;justify-content:center;width:18px">${icon}</span><span class="tab-label">${label}</span>`;
   });
 }
 function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>{t.classList.toggle("act",t.dataset.pg===page);});document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
