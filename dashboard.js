@@ -13,9 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-179";
+const BUILD_VERSION="2026-08-06-180";
 const BUILD_NOTES=[
-  "\ud83d\udc1b Fixed localStorage quota failures properly instead of just reporting them: when the full aggregator payload doesn't fit (confirmed live \u2014 Careem's local save hit the browser's quota), the save now sheds orderDetail first, then records if still too big, and keeps retrying \u2014 so metadata+cancellations still survive locally instead of an all-or-nothing failure. The shared server copy (which the page reload/pull path relies on) still gets the FULL object regardless; this only changes what's cached in this browser. Tested against a simulated quota-limited localStorage to confirm the fallback chain actually engages and keeps the smallest-but-most-important fields.",
+  "\ud83c\udfa8 Loading animation: rolled out Option D (segmented glow underline) to replace the old flat gradient fill \u2014 applied to BOTH nav-tab loading indicators (Campaigns and Ads Performance) via one shared function, so they stay visually identical going forward instead of drifting into two different implementations. Five segments light up left-to-right as background loading progresses, with the currently-filling segment pulsing.",
+  "\ud83c\udf19 Compare page filters: found the actual culprit from the screenshot \u2014 the Brands/Platforms/Outlets dropdown buttons and the date-preset buttons (Latest day/7d/30d/This month) use the bare `.fpill`/`.preset` classes directly, not wrapped in a `.fbar` container the way every other page's filter bar is. The existing dark overrides were all scoped to `.fbar .preset`, so they never matched Compare's bare buttons \u2014 that's exactly the light-shell background bleeding through in the screenshot. Added a direct `#page-compare .fpill` / `#page-compare .preset` override.",
+  "\u2139\ufe0f Cancellations: the still-missing-Keeta screenshot reflects data from BEFORE the v178 (server payload cap raised to 20MB) and v179 (local graceful-degradation) fixes ever had a chance to run \u2014 confirmed no upload has happened since either shipped. Both fixes only take effect on the NEXT upload. Re-uploading all 5 (Keeta especially) should finally confirm whether this closes it out for good.",
   "\ud83c\udf19 Found and fixed real theming gaps in the filter controls: the shared Brand/Platform/Outlet dropdown menu (used on every already-dark page, not just Compare) had a hardcoded white background with no dark-mode override at all \u2014 it was popping up light on every dark page whenever opened. The Custom date-range picker had the same issue. Checkboxes everywhere also never had an accent-color set, so they always rendered in the browser's plain default style regardless of theme \u2014 added theme-matched accent-color throughout.",
   "\ud83d\udd0d Cancellations: found a strong, testable lead on the reload-persistence gap. Two of the five aggregator save/sync failure paths were console-only \u2014 completely invisible unless DevTools happened to be open at the exact moment of upload. Both now surface as a visible on-screen warning (reusing the existing error-toast element), and every server push now logs its payload size. Also: the server's payload size guard was 5MB based on an early estimate of ~50-350KB uploads \u2014 that estimate didn't account for the merge strategy accumulating every upload on top of prior ones forever. Keeta (near-continuous campaigns, 50+ outlets, many months of accumulated history) is the most likely to have quietly outgrown that limit and been silently rejected. Raised to 20MB (Workers KV supports up to 25MiB). If a size-related rejection was the cause, this should fix it outright; if not, the new visible warning will show exactly what's failing on the next occurrence instead of requiring a DevTools screenshot.",
   "\u2139\ufe0f Adjusted the `latest`-date handling: confirmed the Google Sheet permanently carries pre-populated future-dated (empty) rows by design, not a one-off data error. `latest` is now unconditionally capped at the real calendar date every load \u2014 this is the permanent behavior going forward, not a stopgap pending a sheet cleanup.",
@@ -3497,26 +3499,51 @@ function cpcNavTab(){
   for(const t of tabs){const oc=t.getAttribute("onclick")||"";if(oc.includes("'cpc'")||oc.includes('"cpc"'))return t;}
   return tabs[4]||null; // fallback to known index
 }
-// Battery-style fill: paint the nav tab background from left (green) as computation progresses.
-function paintCPCNavBattery(pct){
-  const tab=cpcNavTab();if(!tab)return;
+// v180: Option D — segmented glow underline, replacing the old flat two-tone gradient fill on
+// both nav-tab loading indicators (Campaigns + Ads Performance). Shared so both stay visually
+// identical and any future tweak only needs to happen once.
+function ensureNavBatteryCSS(){
+  if(document.getElementById("nav-battery-css"))return;
+  const s=document.createElement("style");
+  s.id="nav-battery-css";
+  s.textContent="@keyframes navSegPulse{0%,100%{opacity:.5}50%{opacity:1}}";
+  document.head.appendChild(s);
+}
+function paintNavBattery(tab,pct,readyTitle,loadingLabel){
+  if(!tab)return;
+  ensureNavBatteryCSS();
+  let bar=tab.querySelector(".nav-battery-segs");
   if(pct>=100){
-    tab.style.background="";
-    tab.style.backgroundImage="";
-    tab.style.pointerEvents="";
-    tab.style.opacity="";
-    tab.removeAttribute("data-charging");
-    tab.title="Ads Performance — ready";
+    tab.style.pointerEvents="";tab.style.opacity="";tab.removeAttribute("data-charging");
+    tab.title=readyTitle;
+    if(bar)bar.remove();
     return;
   }
-  // not ready: show charging fill and block clicks
   tab.setAttribute("data-charging","1");
-  tab.style.backgroundImage=`linear-gradient(90deg, rgba(34,197,94,.35) ${pct}%, rgba(15,23,42,.0) ${pct}%)`;
-  tab.style.backgroundRepeat="no-repeat";
-  tab.style.borderRadius="6px";
+  if(getComputedStyle(tab).position==="static")tab.style.position="relative";
   tab.style.pointerEvents="none";
-  tab.style.opacity="0.85";
-  tab.title=`Computing Ads Performance… ${pct}%`;
+  tab.style.opacity="0.9";
+  tab.title=`${loadingLabel}… ${pct}%`;
+  if(!bar){
+    bar=document.createElement("div");
+    bar.className="nav-battery-segs";
+    bar.style.cssText="position:absolute;left:6px;right:6px;bottom:2px;display:flex;gap:2px;pointer-events:none";
+    tab.appendChild(bar);
+  }
+  const N=5,segs=[];
+  for(let i=0;i<N;i++){
+    const segFloor=i*100/N,segCeil=(i+1)*100/N;
+    const lit=pct>=segCeil,active=!lit&&pct>segFloor;
+    const bg=(lit||active)?"#22C55E":"rgba(148,163,184,.25)";
+    const glow=(lit||active)?"box-shadow:0 0 4px #22C55E99;":"";
+    const anim=active?"animation:navSegPulse 1s ease-in-out infinite;":"";
+    segs.push(`<span style="flex:1;height:2px;border-radius:2px;background:${bg};${glow}${anim}"></span>`);
+  }
+  bar.innerHTML=segs.join("");
+}
+// Battery-style fill: paint the nav tab background from left (green) as computation progresses.
+function paintCPCNavBattery(pct){
+  paintNavBattery(cpcNavTab(),pct,"Ads Performance — ready","Computing Ads Performance");
 }
 // Proactively load + build the CPC model so it's ready before the user clicks.
 async function prewarmCPC(){
@@ -3549,11 +3576,7 @@ function campNavTab(){
   return null;
 }
 function paintCampNavBattery(pct){
-  const tab=campNavTab();if(!tab)return;
-  if(pct>=100){tab.style.backgroundImage="";tab.style.pointerEvents="";tab.style.opacity="";tab.title="Campaigns — ready";return;}
-  tab.style.backgroundImage=`linear-gradient(90deg, rgba(34,197,94,.35) ${pct}%, rgba(15,23,42,.0) ${pct}%)`;
-  tab.style.backgroundRepeat="no-repeat";tab.style.borderRadius="6px";
-  tab.style.pointerEvents="none";tab.style.opacity="0.85";tab.title=`Loading campaigns… ${pct}%`;
+  paintNavBattery(campNavTab(),pct,"Campaigns — ready","Loading campaigns");
 }
 // Proactively load campaign data and precompute every campaign's analysis in chunks (yields to the
 // UI between batches so it never blocks). The cache means the page then renders instantly.
@@ -13400,6 +13423,10 @@ function renderCompare(){
       #page-compare table.tbl th{color:${DARK_THEME.textMuted}!important;border-color:${DARK_THEME.cardBorder}!important}
       #page-compare table.tbl td{color:${DARK_THEME.textPrimary}!important;border-color:${DARK_THEME.cardBorder}!important}
       #page-compare table.tbl tr:hover td{background:${DARK_THEME.cardBorder}44!important}
+      #page-compare .fpill{background:${DARK_THEME.bg}!important;border:1px solid ${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+      #page-compare .fpill.on{border-color:${DARK_THEME.accentOrange}!important;color:${DARK_THEME.accentOrange}!important}
+      #page-compare .preset{background:${DARK_THEME.bg}!important;border:1px solid ${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+      #page-compare .preset.act{background:${DARK_THEME.accentOrange}22!important;border-color:${DARK_THEME.accentOrange}!important;color:${DARK_THEME.accentOrange}!important}
     </style>`:"";
   pg.innerHTML=cmpStyleOverride+`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div style="font-size:18px;font-weight:800;color:${cmpTitleClr}">⚖️ Comparison</div>
