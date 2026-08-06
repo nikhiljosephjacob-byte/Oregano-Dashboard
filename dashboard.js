@@ -13,9 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-178";
+const BUILD_VERSION="2026-08-06-179";
 const BUILD_NOTES=[
-  "\ud83c\udf19 Compare page dark theme: DONE. Finished the remaining pieces \u2014 all 4 summary stat cards (Orders/Net Sales/AOV/Discount/Active Outlets/Contribution), the outlet-drill-down hover panel and table, the Platform Movement tile, the year-mismatch and auto-insight banners, and the Brand\u00d7Platform breakdown table. Same theme-aware `T` pattern used everywhere else in this rollout \u2014 checked every function for stray hardcoded hex colors after the pass, not just the ones with obvious findings.",
+  "\ud83d\udc1b Fixed localStorage quota failures properly instead of just reporting them: when the full aggregator payload doesn't fit (confirmed live \u2014 Careem's local save hit the browser's quota), the save now sheds orderDetail first, then records if still too big, and keeps retrying \u2014 so metadata+cancellations still survive locally instead of an all-or-nothing failure. The shared server copy (which the page reload/pull path relies on) still gets the FULL object regardless; this only changes what's cached in this browser. Tested against a simulated quota-limited localStorage to confirm the fallback chain actually engages and keeps the smallest-but-most-important fields.",
+  "\ud83c\udf19 Found and fixed real theming gaps in the filter controls: the shared Brand/Platform/Outlet dropdown menu (used on every already-dark page, not just Compare) had a hardcoded white background with no dark-mode override at all \u2014 it was popping up light on every dark page whenever opened. The Custom date-range picker had the same issue. Checkboxes everywhere also never had an accent-color set, so they always rendered in the browser's plain default style regardless of theme \u2014 added theme-matched accent-color throughout.",
   "\ud83d\udd0d Cancellations: found a strong, testable lead on the reload-persistence gap. Two of the five aggregator save/sync failure paths were console-only \u2014 completely invisible unless DevTools happened to be open at the exact moment of upload. Both now surface as a visible on-screen warning (reusing the existing error-toast element), and every server push now logs its payload size. Also: the server's payload size guard was 5MB based on an early estimate of ~50-350KB uploads \u2014 that estimate didn't account for the merge strategy accumulating every upload on top of prior ones forever. Keeta (near-continuous campaigns, 50+ outlets, many months of accumulated history) is the most likely to have quietly outgrown that limit and been silently rejected. Raised to 20MB (Workers KV supports up to 25MiB). If a size-related rejection was the cause, this should fix it outright; if not, the new visible warning will show exactly what's failing on the next occurrence instead of requiring a DevTools screenshot.",
   "\u2139\ufe0f Adjusted the `latest`-date handling: confirmed the Google Sheet permanently carries pre-populated future-dated (empty) rows by design, not a one-off data error. `latest` is now unconditionally capped at the real calendar date every load \u2014 this is the permanent behavior going forward, not a stopgap pending a sheet cleanup.",
   "\ud83d\udc1b Fixed: every page loaded showing blank/zero \"Yesterday\" figures until you clicked Last 7 Days then back to Yesterday. Root cause: the initial page-load default was anchored to `latest` (the most recent day found in the sales data) instead of the real calendar date \u2014 diverging from what the Yesterday button itself calculates whenever the two dates don't match. Both now compute the identical real-calendar-anchored date.",
@@ -577,6 +578,28 @@ function showSyncWarning(msg){
     if(e){e.textContent="⚠️ "+msg;e.style.display="block";setTimeout(()=>e.style.display="none",10000);}
   }catch(err){}
 }
+// v179: graceful degradation for localStorage quota failures. Total browser localStorage quota
+// (typically 5-10MB per origin, shared across ALL FIVE aggregators) doesn't grow — but the merge
+// strategy accumulates every upload on top of prior ones forever, so the combined total only
+// ever grows. Rather than an all-or-nothing failure once that total tips over the quota, this
+// sheds the least-essential large fields first (orderDetail, then records) and retries with a
+// smaller payload, so metadata+cancellations still survive locally even when the full object
+// doesn't fit. The server sync (called separately, right after) still gets the FULL object
+// regardless — this only affects what's cached in this browser's localStorage.
+function trySaveLocalOrderData(key,dataObj,label){
+  const attempts=[
+    ()=>dataObj,
+    ()=>{const{orderDetail,...rest}=dataObj;return rest;},
+    ()=>{const{orderDetail,records,...rest}=dataObj;return rest;},
+  ];
+  for(let i=0;i<attempts.length;i++){
+    try{
+      localStorage.setItem(key,JSON.stringify(attempts[i]()));
+      if(i>0)showSyncWarning(`${label} local cache saved without ${i===1?"order-level Finance detail":"full order records"} — too large for this browser's storage. Full data is still on the shared server.`);
+      return;
+    }catch(e){ if(i===attempts.length-1)showSyncWarning(`${label} localStorage save failed even after shrinking the payload (${e.message}) — likely quota. This browser's local copy may be stale until the server sync catches up.`); }
+  }
+}
 async function syncOrderDataToServer(agg,dataObj){
   try{
     const sess=getActiveSession();
@@ -1014,8 +1037,8 @@ function loadKeetaFromStorage(){
 function saveKeetaToStorage(){
   if(typeof _campPartCache!=="undefined")_campPartCache.clear(); // new upload → recompute participation
   if(!keetaOrdersData)return;
-  try{localStorage.setItem(KEETA_STORAGE_KEY,JSON.stringify(keetaOrdersData));}
-  catch(e){showSyncWarning(`Keeta localStorage save failed (${e.message}) — likely quota. This browser's local copy may be stale until the server sync catches up.`);}  syncOrderDataToServer('keeta',keetaOrdersData); // v112: push shared copy (admin only; server enforces)
+  trySaveLocalOrderData(KEETA_STORAGE_KEY,keetaOrdersData,"Keeta");
+  syncOrderDataToServer('keeta',keetaOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearKeetaData(){
   keetaOrdersData=null;
@@ -1744,8 +1767,8 @@ function loadCareemFromStorage(){
 }
 function saveCareemToStorage(){
   if(!careemOrdersData)return;
-  try{localStorage.setItem(CAREEM_STORAGE_KEY,JSON.stringify(careemOrdersData));}
-  catch(e){showSyncWarning(`Careem localStorage save failed (${e.message}) — likely quota. This browser's local copy may be stale until the server sync catches up.`);}  syncOrderDataToServer('careem',careemOrdersData); // v112: push shared copy (admin only; server enforces)
+  trySaveLocalOrderData(CAREEM_STORAGE_KEY,careemOrdersData,"Careem");
+  syncOrderDataToServer('careem',careemOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearCareemData(){
   careemOrdersData=null;
@@ -2021,8 +2044,8 @@ function loadTalabatFromStorage(){
 }
 function saveTalabatToStorage(){
   if(!talabatOrdersData)return;
-  try{localStorage.setItem(TALABAT_STORAGE_KEY,JSON.stringify(talabatOrdersData));}
-  catch(e){showSyncWarning(`Talabat localStorage save failed (${e.message}) — likely quota. This browser's local copy may be stale until the server sync catches up.`);}  syncOrderDataToServer('talabat',talabatOrdersData); // v112: push shared copy (admin only; server enforces)
+  trySaveLocalOrderData(TALABAT_STORAGE_KEY,talabatOrdersData,"Talabat");
+  syncOrderDataToServer('talabat',talabatOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearTalabatData(){
   talabatOrdersData=null;
@@ -2378,8 +2401,8 @@ function loadDeliverooFromStorage(){
 }
 function saveDeliverooToStorage(){
   if(!deliverooOrdersData)return;
-  try{localStorage.setItem(DELIVEROO_STORAGE_KEY,JSON.stringify(deliverooOrdersData));}
-  catch(e){showSyncWarning(`Deliveroo localStorage save failed (${e.message}) — likely quota. This browser's local copy may be stale until the server sync catches up.`);}  syncOrderDataToServer('deliveroo',deliverooOrdersData); // v112: push shared copy (admin only; server enforces)
+  trySaveLocalOrderData(DELIVEROO_STORAGE_KEY,deliverooOrdersData,"Deliveroo");
+  syncOrderDataToServer('deliveroo',deliverooOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearDeliverooData(){
   deliverooOrdersData=null;
@@ -2720,8 +2743,8 @@ function loadNoonFromStorage(){
 }
 function saveNoonToStorage(){
   if(!noonOrdersData)return;
-  try{localStorage.setItem(NOON_STORAGE_KEY,JSON.stringify(noonOrdersData));}
-  catch(e){showSyncWarning(`Noon localStorage save failed (${e.message}) — likely quota. This browser's local copy may be stale until the server sync catches up.`);}  syncOrderDataToServer('noon',noonOrdersData); // v112: push shared copy (admin only; server enforces)
+  trySaveLocalOrderData(NOON_STORAGE_KEY,noonOrdersData,"Noon");
+  syncOrderDataToServer('noon',noonOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearNoonData(){
   noonOrdersData=null;
@@ -3712,7 +3735,8 @@ function makeFilterBar(opts){
   const f=curFilters();
   const presets=[["yesterday","Yesterday"],["7d","Last 7 Days"],["30d","Last 30 Days"],["month","This Month"],["lmonth","Last Month"],["custom","Custom"]];
   const pH=presets.map(([k,l])=>`<button class="preset ${f.preset===k?"act":""}" data-act="preset" data-v1="${k}">${l}</button>`).join("");
-  const custH=f.preset==="custom"?`<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap"><input type="date" id="f-s" value="${f.start||""}" style="background:#F1F5F9;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:7px 12px;font-size:13px;font-weight:600;color-scheme:light;min-width:135px"><span style="color:#64748b">→</span><input type="date" id="f-e" value="${f.end||""}" style="background:#F1F5F9;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:7px 12px;font-size:13px;font-weight:600;color-scheme:light;min-width:135px"><button data-act="apply" style="background:#f59e0b;border:none;border-radius:5px;color:#000;font-weight:700;padding:7px 14px;font-size:12px;cursor:pointer">Apply</button></div>`:"";
+  const custDateBg=_darkPage?DARK_THEME.bg:"#F1F5F9",custDateBorder=_darkPage?DARK_THEME.cardBorder:"#E2E8F0",custDateTxt=_darkPage?DARK_THEME.textPrimary:"#0F172A",custDateScheme=_darkPage?"dark":"light",custArrow=_darkPage?DARK_THEME.textMuted:"#64748b";
+  const custH=f.preset==="custom"?`<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap"><input type="date" id="f-s" value="${f.start||""}" style="background:${custDateBg};border:1px solid ${custDateBorder};border-radius:6px;color:${custDateTxt};padding:7px 12px;font-size:13px;font-weight:600;color-scheme:${custDateScheme};min-width:135px"><span style="color:${custArrow}">→</span><input type="date" id="f-e" value="${f.end||""}" style="background:${custDateBg};border:1px solid ${custDateBorder};border-radius:6px;color:${custDateTxt};padding:7px 12px;font-size:13px;font-weight:600;color-scheme:${custDateScheme};min-width:135px"><button data-act="apply" style="background:#f59e0b;border:none;border-radius:5px;color:#000;font-weight:700;padding:7px 14px;font-size:12px;cursor:pointer">Apply</button></div>`:"";
   const allBr=[...new Set(allData.map(r=>r.branch))].filter(b=>b!=="(brand-level)").sort();
   const brDD=hideBrand?"":ddHTML("fdd-br","Brand",f.brands,BR.map(b=>({val:b.n,lbl:b.n,clr:b.c})),"brand");
   const plDD=hidePlatform?"":ddHTML("fdd-pl","Platform",f.platforms,AGGS.map(a=>({val:a,lbl:a,clr:AC[a]||"#888"})),"platform");
@@ -3729,8 +3753,9 @@ function makeFilterBar(opts){
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");}
 function ddHTML(id,label,activeSet,items,type){
   const count=activeSet.size,isOn=count>0;
-  const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#F1F5F9'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="ftoggle" data-v1="${type}" data-v2="${esc(val)}"><span style="color:${clr}">${lbl}</span></label>`).join("");
-  const menuStyle="display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:160px;box-shadow:0 12px 30px rgba(15,23,42,.12)";
+  const menuBg=_darkPage?DARK_THEME.card:"#FFFFFF",menuBorder=_darkPage?DARK_THEME.cardBorder:"#E2E8F0",menuHover=_darkPage?DARK_THEME.cardBorder:"#F1F5F9",menuTxt=_darkPage?DARK_THEME.textPrimary:"#0F172A",menuShadow=_darkPage?DARK_THEME.shadow:"0 12px 30px rgba(15,23,42,.12)",accent=_darkPage?DARK_THEME.accentOrange:"#f59e0b";
+  const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap;color:${menuTxt}" onmouseover="this.style.background='${menuHover}'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="ftoggle" data-v1="${type}" data-v2="${esc(val)}" style="accent-color:${accent}"><span style="color:${clr}">${lbl}</span></label>`).join("");
+  const menuStyle=`display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:${menuBg};border:1px solid ${menuBorder};border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:160px;box-shadow:${menuShadow}`;
   return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" data-act="dd" data-v1="${id}">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;
 }
 
@@ -12567,7 +12592,7 @@ function cmpPanel(side){
   const dd=(type,label,activeSet,items)=>{
     const id=`cmp-${side}-${type}`;
     const count=activeSet.size,isOn=count>0;
-    const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap;color:${T.dateText}" onmouseover="this.style.background='${T.menuHover}'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="cmpToggle" data-v1="${side}" data-v2="${type}" data-v3="${esc(val)}"><span style="color:${clr}">${lbl}</span></label>`).join("");
+    const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap;color:${T.dateText}" onmouseover="this.style.background='${T.menuHover}'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="cmpToggle" data-v1="${side}" data-v2="${type}" data-v3="${esc(val)}" style="accent-color:${accent}"><span style="color:${clr}">${lbl}</span></label>`).join("");
     const menuStyle=`display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:${T.menuBg};border:1px solid ${T.menuBorder};border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:160px;box-shadow:0 12px 30px rgba(0,0,0,.3)`;
     const pillPad=compact?"4px 8px":"6px 10px",pillFs=compact?"11px":"12px";
     return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" data-act="dd" data-v1="${id}" style="padding:${pillPad};font-size:${pillFs}">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;
