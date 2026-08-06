@@ -13,13 +13,15 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-172";
+const BUILD_VERSION="2026-07-21-173";
 const BUILD_NOTES=[
-  "\ud83d\udc1b Fixed the white filter bar on Cancellations \u2014 confirmed root cause: this page never got the #page-cancellations .fbar style override that every other dark page has. It was built using inline DARK_THEME colors directly for most of its content, so it was missed that makeFilterBar() still relies on the external .fbar CSS class, which defaults to a light background. Same override pattern as Overview/Brands/Outlets/Platforms now applied.",
-  "\ud83c\udd95 By Responsibility table is now interactive, per direct request: clicking a responsibility (e.g. Restaurant) filters the Top Reasons panel on the right to just that category, showing both order count AND total amount per reason (was count-only, unfiltered before). Clicking the same responsibility again clears the filter, with an explicit \u2715 Clear option too.",
-  "\ud83d\udccc To-do list saved to memory per direct request, to keep resurfacing until complete: (1) sidebar navigation redesign (Option 3, approved but not built), (2) remaining dark-theme conversions for Discount Burn, KPI Tracker, Campaigns, Ads Performance, and Compare.",
-  "12 new checks covering both fixes \u2014 the fbar override presence, the default unfiltered state, selecting a responsibility and confirming the reasons panel correctly excludes non-matching entries while showing the right count and amount, toggling off, and the explicit Clear action. Plus 60 checks across every pre-existing regression suite, all passing."
+  "\ud83d\udd27 Cancellations now genuinely persist like every other aggregator's data \u2014 root cause traced all the way through and fixed on both ends. Backend (worker.js): the save endpoint explicitly whitelisted only metadata/records/orderDetail, silently dropping cancellations on every push \u2014 confirmed directly in the code, now fixed with the same pattern as the existing orderDetail whitelist.",
+  "Frontend: removed the separate localStorage-only cancellationsData array entirely. Cancellations now live on each aggregator's own data object (keetaOrdersData.cancellations, etc.) \u2014 the same object that already syncs to/from the server \u2014 combined on-demand via a new getAllCancellations(). Found and fixed a second real bug in the process: mergeOrdersData()'s merge path (used on every RE-upload, not just the first) explicitly rebuilt its return object without a cancellations field, meaning even after the server-sync fix, a second upload would have silently dropped everything from the first. Fixed with the same append+dedup-by-order-number pattern as orderDetail. Verified with 12 checks including the exact re-upload/merge scenario that would have caught this.",
+  "\ud83d\udcb0 Gross vs net, checked directly against real files rather than assumed: Keeta confirmed and fixed (was using Customer paid AED 40.30, a post-discount figure; now uses Original price AED 62.00, the real gross \u2014 verified against the actual example). Deliveroo confirmed and fixed with a genuinely different approach than first attempted \u2014 found that ALL 13 real refund rows have an empty Order Value column (the gross figure only exists on that order's separate, earlier Delivery row), so a pre-pass now cross-references by Order Number before the main parse. Tested against the real uploaded file: all 13 cancellations now show realistic gross values (7\u2013402 AED) instead of tiny net payout figures.",
+  "Talabat and Careem: genuinely couldn't verify from the data available \u2014 neither uploaded file has a single discounted order (cancelled or otherwise) to test gross-vs-net against. Column structure suggests both are likely already correct, but this isn't confirmed the way Keeta and Deliveroo now are. Worth a real check once a discounted example is available.",
+  "6 additional end-to-end checks confirm the full page renders correctly against the new per-aggregator data source, including Noon (deliberately given zero cancellations in the test) not breaking anything. 90 checks total across everything old and new."
 ];
+
 
 
 
@@ -569,6 +571,7 @@ async function syncOrderDataToServer(agg,dataObj){
     // and overwrites the local one that still had it. Now included when present.
     const payload={metadata:dataObj.metadata,records:dataObj.records};
     if(dataObj.orderDetail)payload.orderDetail=dataObj.orderDetail;
+    if(dataObj.cancellations)payload.cancellations=dataObj.cancellations;
     const res=await fetch(`/api/orderdata/${agg}`,{method:'POST',headers:{'Content-Type':'application/json','X-Session-Id':sess.sessionId},body:JSON.stringify(payload)});
     if(!res.ok){const d=await res.json().catch(()=>({}));console.log(`[sync] ${agg} push failed:`,d.error||res.status);}
     else console.log(`[sync] ${agg} pushed to server`);
@@ -630,6 +633,7 @@ async function pullOrderDataFromServer(){
       if(!local||(serverTs&&(!localTs||serverTs>localTs))){
         const obj={metadata:server.metadata,records:server.records};
         if(server.orderDetail)obj.orderDetail=server.orderDetail;
+        if(server.cancellations)obj.cancellations=server.cancellations;
         cfg.set(obj);
         try{localStorage.setItem(cfg.lsKey(),JSON.stringify(obj));}catch(e){}
         changed=true;
@@ -659,30 +663,20 @@ async function pullOrderDataFromServer(){
   return changed;
 }
 const KEETA_STORAGE_KEY="keeta_orders_data_v1";
-// v167: Cancellation Monitor storage. A single combined array across all 5 aggregators (not
-// per-aggregator like the main orders data above) since the whole point is one unified view.
-// Dedup is a simple aggregator+order_no key rather than the day-based keep/replace logic
-// mergeOrdersData uses above — appropriate here since cancellations are a much smaller dataset
-// (dozens of rows, not thousands) and don't have the same overlapping-export volume problem.
-const CANCELLATIONS_STORAGE_KEY="cancellations_data_v1";
-let cancellationsData=[];
-function loadCancellationsFromStorage(){
-  try{const raw=localStorage.getItem(CANCELLATIONS_STORAGE_KEY);if(raw)cancellationsData=JSON.parse(raw)||[];}
-  catch(e){console.log("[Cancellations] localStorage load failed:",e.message);cancellationsData=[];}
-}
-function saveCancellationsToStorage(){
-  try{localStorage.setItem(CANCELLATIONS_STORAGE_KEY,JSON.stringify(cancellationsData));}
-  catch(e){console.log("[Cancellations] localStorage save failed (quota?):",e.message);}
-}
-function mergeCancellations(fresh){
-  if(!fresh||!fresh.length)return;
-  const freshKeys=new Set(fresh.map(c=>c.aggregator+"|"+c.order_no));
-  cancellationsData=[...cancellationsData.filter(c=>!freshKeys.has(c.aggregator+"|"+c.order_no)),...fresh];
-  saveCancellationsToStorage();
-}
-function clearCancellationsData(){
-  cancellationsData=[];
-  try{localStorage.removeItem(CANCELLATIONS_STORAGE_KEY);}catch(e){}
+// v172: replaced the v167 approach (a separate cancellationsData array with its own
+// localStorage-only key) with this — cancellations now live on each aggregator's own data
+// object (keetaOrdersData.cancellations, etc.), the same object that already syncs to the
+// server via syncOrderDataToServer/pullOrderDataFromServer. That was the actual root cause of
+// cancellations not surviving a refresh/reset/different device the way everything else does:
+// they were never part of the server-synced payload at all, confirmed directly in the backend
+// code (which explicitly whitelists which fields get stored) before fixing both sides.
+// cancellationsData is kept as a getter-like function rather than a maintained global array,
+// since the source of truth is now each aggregator's own object, not a separately-tracked copy.
+function getAllCancellations(){
+  const sources=[keetaOrdersData,careemOrdersData,talabatOrdersData,deliverooOrdersData,noonOrdersData];
+  const out=[];
+  sources.forEach(s=>{if(s&&s.cancellations&&s.cancellations.length)out.push(...s.cancellations);});
+  return out;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -952,6 +946,22 @@ function mergeOrdersData(existing,fresh,recomputeTotals,strategy){
   }else{
     orderDetail=existing.orderDetail; // fresh upload has none (non-Keeta) — keep whatever existed
   }
+  // v172: cancellations merge — simple append + dedup by order_no, since cancellations don't
+  // need the same day-level "richer-day"/"statement" merge complexity as the main records
+  // above (each cancellation is naturally unique by its own order number, unlike a day's
+  // aggregate order count). Was previously dropped entirely by this function returning a new
+  // object that only explicitly copied metadata/records/orderDetail.
+  let cancellations;
+  if(fresh.cancellations&&fresh.cancellations.length){
+    if(!existing.cancellations||!existing.cancellations.length){
+      cancellations=fresh.cancellations;
+    }else{
+      const freshKeys=new Set(fresh.cancellations.map(c=>c.order_no));
+      cancellations=[...existing.cancellations.filter(c=>!freshKeys.has(c.order_no)),...fresh.cancellations];
+    }
+  }else{
+    cancellations=existing.cancellations; // fresh upload had none this time — keep whatever existed
+  }
   return{
     metadata:{
       ...existing.metadata,
@@ -963,7 +973,8 @@ function mergeOrdersData(existing,fresh,recomputeTotals,strategy){
       mergedFromFiles:[...(existing.metadata?.mergedFromFiles||[]),...(fresh.metadata?.source_files||[fresh.metadata?.source_file||"upload"])].slice(-10)
     },
     records:merged,
-    ...(orderDetail?{orderDetail}:{})
+    ...(orderDetail?{orderDetail}:{}),
+    ...(cancellations?{cancellations}:{})
   };
 }
 
@@ -1172,7 +1183,11 @@ async function parseKeetaXlsx(file){
         date:parseKeetaOrderDate(r[headerIdx["Order time"]]),
         reason:col("Order cancellation reason")||col("Determination reason")||null,
         responsibility:col("Responsibility")||null,
-        amount:parseKeetaAED(col("Customer paid")),
+        // v172: gross (Original price), not net (Customer paid) — confirmed directly against a
+        // real cancelled order: Customer paid AED 40.30 vs Original price AED 62.00, a ~35% gap.
+        // Customer paid is post-discount; the Cancellation Monitor should show gross per direct
+        // confirmation.
+        amount:parseKeetaAED(col("Original price"))||parseKeetaAED(col("Customer paid")),
         compensated:compVal!=null&&compVal!=="No compensation",
         source_file:file.name
       });
@@ -1612,7 +1627,11 @@ async function handleOrdersUpload(filesOrFile){
       else if(detected==="talabat"){talabatOrdersData=mergeOrdersData(talabatOrdersData,fresh,null);saveTalabatToStorage();}
       else if(detected==="deliveroo"){deliverooOrdersData=mergeOrdersData(deliverooOrdersData,fresh,deliverooRecomputeTotals);saveDeliverooToStorage();}
       else if(detected==="noon"){noonOrdersData=mergeOrdersData(noonOrdersData,fresh,noonRecomputeTotals,'statement');saveNoonToStorage();}
-      if(fresh.cancellations&&fresh.cancellations.length)mergeCancellations(fresh.cancellations);
+      // v172: cancellations are now merged automatically inside mergeOrdersData above (per
+      // aggregator, alongside records/orderDetail) and synced to the server the same way — the
+      // separate mergeCancellations() call and its own localStorage-only key are removed, since
+      // that was the root cause of cancellations not surviving a refresh/reset/different device
+      // the way every other aggregator's data does.
       const dr=fresh.metadata.date_range||[];
       results.push(`✓ ${file.name} (${detected.charAt(0).toUpperCase()+detected.slice(1)}): ${fresh.records.length.toLocaleString()} records, ${dr[0]||"?"} → ${dr[1]||"?"}`);
     }catch(e){
@@ -2455,6 +2474,20 @@ async function parseDeliverooCSV(file){
   // rather than dedicated columns, so this needs regex extraction instead of a direct column
   // read. Confirmed against real uploaded data before writing this pattern.
   const DELIVEROO_REFUND_ACTIVITIES=new Set(["Customer refund","Contested customer refund"]);
+  // v172: gross value pre-pass. Confirmed directly against real data that ALL "Customer refund"
+  // rows have an EMPTY Order Value column — the gross figure lives only on that order's earlier
+  // "Delivery" activity row, cross-referenced here by Order Number. Without this, refund rows
+  // would keep falling back to the net payout figure despite the fallback logic below looking
+  // like it should prefer gross.
+  const deliverooGrossByOrder={};
+  for(let i=2;i<rows.length;i++){
+    const row=rows[i];
+    if(!row||!row.length)continue;
+    if(String(row[colAct]||"").trim()!=="Delivery")continue;
+    const on=row[colOrd];
+    const val=parseFloat(row[colVal]);
+    if(on!=null&&!isNaN(val))deliverooGrossByOrder[on]=val;
+  }
   const cancellations=[];
   for(let i=2;i<rows.length;i++){
     const row=rows[i];
@@ -2479,7 +2512,10 @@ async function parseDeliverooCSV(file){
           date:toIsoDate(row[colDate]),
           reason:reasonM?reasonM[1]:activity, // fall back to the activity name itself if no structured reason found
           responsibility:faultM?faultM[1]:null,
-          amount:Math.abs(parseFloat(row[colPay]))||0,
+          // v172: gross (Order Value), not net payout (Total Payable) — was using the refund/
+          // payout amount as if it were the order's gross value, which understates it. Per
+          // direct confirmation the Cancellation Monitor should show gross throughout.
+          amount:deliverooGrossByOrder[orderNum]||Math.abs(parseFloat(row[colVal]))||Math.abs(parseFloat(row[colPay]))||0,
           netImpact:parseFloat(row[colPay])||0, // negative = restaurant debited
           isPostDelivery:true, // these are refunds on DELIVERED orders, not pre-delivery cancellations - flagged for the page to label distinctly
           source_file:file.name
@@ -3223,7 +3259,9 @@ async function doLoad(){
   loadTalabatFromStorage();
   loadDeliverooFromStorage();
   loadNoonFromStorage();
-  loadCancellationsFromStorage();
+  // v172: no separate load call needed — cancellations now load automatically as part of each
+  // aggregator's own loadKeetaFromStorage()/etc. call above, since they live on that same
+  // object now (and sync to/from the server the same way too).
   // ── DISCOUNT PARSE DIAGNOSTIC ──
   // Prints how much Disc was parsed per brand × aggregator so we can see if the sheet's
   // Disc column is being read. If a brand/aggregator you entered shows 0, the column header
@@ -12800,8 +12838,9 @@ function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC){
     ${contribC!=null?`<div style="margin-top:9px;padding-top:8px;border-top:1px solid #F0EBDC"><span style="font-size:9px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Group C</span><div style="font-size:15px;font-weight:800;color:${CMP_C_CLR};margin-top:2px">${fmtAEDTip(contribC)}</div></div>`:""}
   </div>`;
 }
-// v168: Cancellation Monitor page. Reads from the global cancellationsData array (populated by
-// the 5 parser changes + merge layer built earlier). State for the 1-click drill-down.
+// v172: Cancellation Monitor page. Reads via getAllCancellations(), which combines each
+// aggregator's own .cancellations field (now server-synced the same way as everything else),
+// instead of the earlier separate, localStorage-only array. State for the 1-click drill-down.
 // v171: 3-level drill-down, replacing the single flat expand — matches the same nav-state
 // pattern used for the Investment Plan drill-down (Aggregator -> Brands -> Outlets).
 let cancNav={level:"collapsed",agg:null,brand:null};
@@ -12846,6 +12885,7 @@ function renderCancellations(){
       #page-cancellations .fbar .fchip{color:${DARK_THEME.textSecondary}!important}
     </style>`;
   const filterBar=cancFbarOverride+makeFilterBar();
+  const cancellationsData=getAllCancellations();
   const filtered=cancellationsData.filter(c=>{
     if(f.start&&c.date&&c.date<f.start)return false;
     if(f.end&&c.date&&c.date>f.end)return false;
@@ -13081,7 +13121,7 @@ function cancExportAgg(agg){
   // shown on screen — was previously exporting all data for the aggregator regardless of
   // filters, which could silently include rows the user had filtered out of view.
   const f=curFilters();
-  const items=cancellationsData.filter(c=>{
+  const items=getAllCancellations().filter(c=>{
     if(c.aggregator!==agg)return false;
     if(f.start&&c.date&&c.date<f.start)return false;
     if(f.end&&c.date&&c.date>f.end)return false;
