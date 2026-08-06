@@ -26,14 +26,14 @@
 // User directory. Edit here to add/remove users — these passwords are NEVER
 // shipped to clients (this code only runs on Cloudflare's edge).
 const AUTH_USERS = {
-  "nikhil":   { password: "oregano2026", displayName: "Nikhil",   initials: "N",  admin: true },
-  "biju":     { password: "oregano2027", displayName: "Biju",     initials: "B" },
-  "tony":     { password: "oregano2028", displayName: "Tony",     initials: "T" },
-  "rijeesh":  { password: "oregano2029", displayName: "Rijeesh",  initials: "R" },
-  "nicole":   { password: "oregano2030", displayName: "Nicole",   initials: "N" },
+  "nikhil":   { password: "oregano2020", displayName: "Nikhil",   initials: "N",  admin: true },
+  "biju":     { password: "oregano2021", displayName: "Biju",     initials: "B" },
+  "tony":     { password: "oregano2022", displayName: "Tony",     initials: "T" },
+  "rijeesh":  { password: "oregano2023", displayName: "Rijeesh",  initials: "R" },
+  "nicole":   { password: "oregano2024", displayName: "Nicole",   initials: "N" },
   "arun":     { password: "oregano2025", displayName: "Arun",     initials: "A" },
-  "admin":    { password: "admin2020",       displayName: "Admin",    initials: "A" },
-  "bd":       { password: "oregano2022", displayName: "BD Team",  initials: "BD" }
+  "admin":    { password: "admin2026",       displayName: "Admin",    initials: "A" },
+  "bd":       { password: "oregano2027", displayName: "BD Team",  initials: "BD" }
 };
 
 const SESSION_TTL_SECONDS = 86400; // 24 hours — refreshed by 60s heartbeats. Was 300 (5 min) which caused frequent logouts when tab was backgrounded or phone screen turned off.
@@ -215,6 +215,10 @@ async function handleOrderDataSave(request, env, agg) {
   // this whitelist predates that field and nobody updated it, so every push to the shared
   // server wiped it even though the client was sending it correctly.
   if (Array.isArray(body.orderDetail)) record.orderDetail = body.orderDetail;
+  // v172: same fix as v134's orderDetail whitelist above — cancellations was being silently
+  // dropped on every push since this endpoint only ever copied whitelisted fields into the
+  // stored record. Confirmed directly in the code before fixing, not assumed.
+  if (Array.isArray(body.cancellations)) record.cancellations = body.cancellations;
   await env.SESSIONS.put(`orderdata:${agg}`, JSON.stringify(record)); // no TTL — lives until replaced/cleared
   return json({ ok: true, agg, records: body.records.length, updatedAt: record.updatedAt });
 }
