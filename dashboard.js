@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-175";
+const BUILD_VERSION="2026-08-06-176";
 const BUILD_NOTES=[
+  "\ud83d\udc1b Fixed (root cause, not a patch): campaign contribution calc was still comparing against the FULL campaign length instead of true elapsed days, and baselines were still overlapping campaign start dates, even on the latest build. Traced it to `latest` (the most recent date found anywhere in the sales data) running 25 days AHEAD of the real calendar \u2014 almost certainly a stray future-dated row in the Google Sheet. `latest` is trusted as \"effectively today\" throughout the app, most importantly in the campaign elapsed-day clamp, so an in-progress campaign looked fully finished and its 28-day-back baseline landed well past its own start date. `latest` is now hard-capped at the real calendar date (with a console warning if it ever has to kick in) \u2014 verified against both reported scenarios (Oregano\u00d7Smiles and Wicked Wings\u00d7Keeta) and both now produce the correct elapsed-day count and a non-overlapping baseline. Worth checking the sheet's brand tabs for a row dated after today, since that's what's driving `latest` this far out.",
   "\ud83d\udc1b Fixed: every page loaded showing blank/zero \"Yesterday\" figures until you clicked Last 7 Days then back to Yesterday. Root cause: the initial page-load default was anchored to `latest` (the most recent day found in the sales data) instead of the real calendar date \u2014 diverging from what the Yesterday button itself calculates whenever the two dates don't match. Both now compute the identical real-calendar-anchored date.",
   "\ud83d\udc1b Cancellations page: fixed two related gaps in the shared server-sync path \u2014 (1) the boot-time \"pull latest data from server\" step refreshed Campaigns/Discounts but never Cancellations, so newly-synced cancellation data could sit in memory without the page re-rendering to show it; (2) hardened the pull so a server copy that's missing cancellations (e.g. from before this data started syncing) can no longer silently overwrite/wipe cancellations already held locally. If cancellations still disappear on reload after this, the next step is checking the browser console for the [sync] log lines right after a refresh.",
   "\ud83d\udccb To-do list check-in: investigated both the sidebar redesign and the Campaigns loading animation before touching either. Searched dashboard.js thoroughly for the \"green swipe\" loading animation (loading text, every CSS keyframe, progress-bar patterns) and couldn't locate it \u2014 it almost certainly lives in the external HTML/CSS shell this session doesn't have access to, the same place .card's and .fbar's base styles turned out to live. Sidebar scope is more contained than expected (only 9 .tab references across 3 functions), but the actual tab markup itself is also likely in that same external shell. Both need a screenshot/more access before they can be built correctly rather than guessed at \u2014 given the lesson learned earlier this session from three failed blind CSS guesses on the sides issue, not repeating that here.",
@@ -3285,6 +3286,23 @@ async function doLoad(){
     return;
   }
   latest=all.reduce((m,r)=>r.date>m?r.date:m,all[0].date);
+  // v175: defensive cap — `latest` must never be later than the real calendar date. A day that
+  // hasn't happened yet cannot have real sales, so `latest` running ahead of today can only mean
+  // a stray future-dated row in the Google Sheet (bad manual entry, a dragged formula, etc.).
+  // `latest` is trusted as "effectively today" all over the app — most importantly, campAnalysisV2
+  // clamps a campaign's elapsed window to `latest` (effEnd=c.endDate<latest?c.endDate:latest).
+  // An uncapped future `latest` (traced live: 31 Aug vs a real today of 6 Aug) made every
+  // in-progress campaign look FULLY elapsed, which is exactly what produced both reported bugs at
+  // once — the contribution calc comparing against the full campaign length instead of true
+  // elapsed days, AND the resulting 28-day-back baseline window landing far enough forward that it
+  // overlapped the campaign's own start date. Capping here fixes both at the source without
+  // touching the campaign math itself. Logged as a warning since it also flags a real data issue
+  // worth checking in the sheet, not just a code symptom.
+  const realCalendarToday=dk(new Date());
+  if(latest>realCalendarToday){
+    console.warn(`[data] latest (${latest}) is AFTER today (${realCalendarToday}) — capping to today. Check the Google Sheet's brand tabs for a stray future-dated row.`);
+    latest=realCalendarToday;
+  }
   // Default every page's filter to "yesterday" — anchored to the REAL calendar date, exactly
   // matching fSetPreset("yesterday")'s own calculation. v175 fix: this used to default to
   // `latest` (the most recent day WITH data) on the assumption that latest always equals
@@ -3293,9 +3311,9 @@ async function doLoad(){
   // "Last 7 Days" then back to "Yesterday" re-ran fSetPreset and jumped to the CORRECT
   // real-calendar date — which is exactly the "blank until I toggle" symptom reported. Now both
   // paths compute the same date the same way.
-  const initYesterday=subDays(dk(new Date()),1);
+  const initYesterday=subDays(realCalendarToday,1);
   Object.values(pageFilters).forEach(f=>{f.start=initYesterday;f.end=initYesterday;f.preset="yesterday";f.brands.clear();f.platforms.clear();f.branches.clear();});
-  const realToday=dk(new Date());
+  const realToday=realCalendarToday;
   const todayLabel=realToday!==latest?` · Today: ${fmtDisp(realToday)}`:'';
   document.getElementById("ts-label").textContent=`Latest: ${fmtDisp(latest)}${todayLabel}`;
   document.getElementById("loading-screen").style.display="none";
