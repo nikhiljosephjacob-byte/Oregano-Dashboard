@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-184";
+const BUILD_VERSION="2026-08-06-185";
 const BUILD_NOTES=[
-  "🐛 Fixed the collapsed sidebar looking broken — labels were getting clipped mid-word instead of hiding cleanly, down to icon and label sharing one text node with no way to hide just the text. Split into separate icon/label parts so collapsing now shows a clean icon-only view.",
+  "📱 Sidebar: now stays vertical at every screen size instead of switching to a different mobile layout — but auto-starts collapsed (icon-only) on phone-width screens by default, so it doesn't eat half the screen. Tap it open any time; your choice is remembered from then on. Toggle button is also a proper 36px touch target now, not a tiny 15px icon.",
   "🎨 Added icons to Overview, Brands, Outlets, Platforms, and Ads Performance tabs.",
   "🆕 Sidebar header now shows a live sync status (green dot + last-synced time) instead of the wordmark.",
   "🔧 Cancellations: raised the server upload size limit and added visible warnings when a save doesn't fully fit — re-upload once more to pick up both fixes."
@@ -3473,7 +3473,17 @@ function buildSidebarNav(){
     const known=new Set([...ORDER,"admin"]);
     tabs.forEach(t=>{if(t.dataset.pg&&!known.has(t.dataset.pg)&&!orderedTabs.includes(t))orderedTabs.push(t);});
 
-    const collapsed=(()=>{try{return localStorage.getItem("oregano_sidebar_collapsed")==="1";}catch(e){return false;}})();
+    // v185: always vertical, at every screen width — no horizontal-strip fallback anymore (was
+    // a defensive compromise, not something better on its own merits). The real problem on
+    // narrow screens isn't the vertical layout itself, it's an EXPANDED 208px sidebar eating
+    // over half a ~380px phone screen. Fixed by defaulting to collapsed on narrow screens
+    // instead — same sidebar everywhere, just starts icon-only where space is tight. Only
+    // applies when there's no saved preference yet, so an explicit user choice always wins.
+    let collapsed;
+    try{
+      const saved=localStorage.getItem("oregano_sidebar_collapsed");
+      collapsed=saved!==null?saved==="1":window.innerWidth<=640;
+    }catch(e){collapsed=false;}
     const W_OPEN=208,W_COLLAPSED=60;
 
     const sidebar=document.createElement("div");
@@ -3481,10 +3491,11 @@ function buildSidebarNav(){
     sidebar.dataset.collapsed=collapsed?"1":"0";
     sidebar.style.cssText=`position:fixed;top:0;left:0;bottom:0;width:${collapsed?W_COLLAPSED:W_OPEN}px;background:${DARK_THEME.bg};border-right:1px solid ${DARK_THEME.cardBorder};display:flex;flex-direction:column;z-index:40;transition:width .18s ease;overflow-y:auto;overflow-x:hidden`;
 
-    // Header: live sync status (Option B, picked from the mockup) + collapse toggle.
+    // Header: live sync status (Option B) + collapse toggle — sized as a real touch target
+    // (36px, not 15px-font-in-4px-padding) since this has to be reliably tappable on phones.
     const header=document.createElement("div");
-    header.style.cssText=`display:flex;align-items:center;gap:8px;padding:14px 12px;border-bottom:1px solid ${DARK_THEME.cardBorder};flex-shrink:0;min-height:20px`;
-    header.innerHTML=`<span style="width:7px;height:7px;border-radius:50%;background:${DARK_THEME.accentGreen};flex-shrink:0" aria-hidden="true"></span><span class="sidebar-brand-txt" style="line-height:1.3;overflow:hidden"><span style="display:block;font-size:11px;font-weight:700;color:${DARK_THEME.textPrimary};white-space:nowrap">Live</span><span id="sidebar-sync-caption" style="display:block;font-size:9px;color:${DARK_THEME.textMuted};white-space:nowrap"></span></span><button id="sidebar-toggle" title="Collapse sidebar" style="margin-left:auto;background:none;border:none;color:${DARK_THEME.textMuted};cursor:pointer;font-size:15px;padding:4px;flex-shrink:0">${collapsed?"»":"«"}</button>`;
+    header.style.cssText=`display:flex;align-items:center;gap:8px;padding:10px 8px;border-bottom:1px solid ${DARK_THEME.cardBorder};flex-shrink:0;min-height:20px`;
+    header.innerHTML=`<span style="width:7px;height:7px;border-radius:50%;background:${DARK_THEME.accentGreen};flex-shrink:0" aria-hidden="true"></span><span class="sidebar-brand-txt" style="line-height:1.3;overflow:hidden"><span style="display:block;font-size:11px;font-weight:700;color:${DARK_THEME.textPrimary};white-space:nowrap">Live</span><span id="sidebar-sync-caption" style="display:block;font-size:9px;color:${DARK_THEME.textMuted};white-space:nowrap"></span></span><button id="sidebar-toggle" title="Collapse sidebar" aria-label="Collapse sidebar" style="margin-left:auto;background:none;border:none;color:${DARK_THEME.textMuted};cursor:pointer;font-size:17px;width:36px;height:36px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:6px">${collapsed?"»":"«"}</button>`;
     sidebar.appendChild(header);
     updateSidebarSyncStatus();
     if(!window._sidebarSyncInterval)window._sidebarSyncInterval=setInterval(updateSidebarSyncStatus,30000);
@@ -3506,26 +3517,19 @@ function buildSidebarNav(){
     const css=document.createElement("style");
     css.id="sidebar-css";
     css.textContent=`
-@media (min-width:961px){
-  #app-sidebar .tab{display:flex!important;align-items:center;gap:8px;width:100%;text-align:left;padding:9px 10px!important;border-radius:8px;font-size:13px!important;white-space:nowrap;overflow:hidden;color:${DARK_THEME.textSecondary};background:none!important;border:none!important}
-  #app-sidebar .tab.act{background:${DARK_THEME.accentOrange}22!important;color:${DARK_THEME.accentOrange}!important}
-  #app-sidebar .tab:hover{background:${DARK_THEME.cardBorder}55}
-  #app-sidebar .tab .tab-label{white-space:nowrap;overflow:hidden}
-  #app-sidebar[data-collapsed="1"] .tab{justify-content:center;padding:9px 4px!important}
-  #app-sidebar[data-collapsed="1"] .tab .tab-label{display:none}
-  #app-sidebar[data-collapsed="1"] .sidebar-brand-txt{display:none}
-  #app-sidebar[data-collapsed="1"] #sidebar-toggle{margin-left:0}
-  body{margin-left:${collapsed?W_COLLAPSED:W_OPEN}px!important;transition:margin-left .18s ease;box-sizing:border-box}
-}
-@media (max-width:960px){
-  /* v182 safety: rather than hiding the sidebar (and with it, every relocated tab) on
-     tablet/mobile without being able to visually confirm .mnav covers navigation at every
-     width, fall back to a plain horizontal strip in its original top-of-page position —
-     functionally the same as the pre-sidebar top nav, so navigation can never be lost. */
-  #app-sidebar{position:static!important;width:100%!important;height:auto!important;flex-direction:row!important;align-items:center;border-right:none!important;border-bottom:1px solid ${DARK_THEME.cardBorder}}
-  #app-sidebar > div:first-child{display:none!important}
-  #app-sidebar > div:not(:first-child){flex-direction:row!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch;white-space:nowrap;padding:8px!important;border-top:none!important;margin-top:0!important}
-  body{margin-left:0!important}
+#app-sidebar .tab{display:flex!important;align-items:center;gap:8px;width:100%;text-align:left;padding:10px!important;border-radius:8px;font-size:13px!important;white-space:nowrap;overflow:hidden;color:${DARK_THEME.textSecondary};background:none!important;border:none!important;min-height:20px}
+#app-sidebar .tab.act{background:${DARK_THEME.accentOrange}22!important;color:${DARK_THEME.accentOrange}!important}
+#app-sidebar .tab:hover{background:${DARK_THEME.cardBorder}55}
+#app-sidebar .tab .tab-label{white-space:nowrap;overflow:hidden}
+#app-sidebar .tab .tab-icon{font-size:16px}
+#app-sidebar[data-collapsed="1"] .tab{justify-content:center;padding:10px 4px!important}
+#app-sidebar[data-collapsed="1"] .tab .tab-label{display:none}
+#app-sidebar[data-collapsed="1"] .sidebar-brand-txt{display:none}
+#app-sidebar[data-collapsed="1"] #sidebar-toggle{margin-left:0}
+body{margin-left:${collapsed?W_COLLAPSED:W_OPEN}px!important;transition:margin-left .18s ease;box-sizing:border-box}
+@media (max-width:640px){
+  #app-sidebar .tab{padding:12px 10px!important;font-size:14px!important}
+  #app-sidebar[data-collapsed="1"] .tab{padding:12px 4px!important}
 }`;
     document.head.appendChild(css);
 
