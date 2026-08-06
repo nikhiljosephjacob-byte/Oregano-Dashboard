@@ -13,11 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-182";
+const BUILD_VERSION="2026-08-06-183";
 const BUILD_NOTES=[
-  "🆕 Sidebar navigation is live (Option 3, approved earlier) — collapsible left sidebar on desktop, replacing the top tab strip. Built by relocating the existing tabs rather than recreating them, so nothing else changes. Falls back to the original horizontal strip on tablet/phone widths rather than risking navigation disappearing.",
-  "⚡ Campaigns page should load noticeably faster — the background prewarm was precomputing every completed campaign ever recorded (2.5+ years and growing). Now bounded to active campaigns plus the last 120 days; older campaigns still compute correctly the moment you click them.",
-  "🔠 Comparison page: bigger, bolder text throughout — stat card values, table cells, and the outlet drill-down all sized up using the extra room in the tiles.",
+  "🆕 Sidebar: reordered so Cancellations sits right under KPI Tracker, and Admin now lives in its own section pinned to the bottom instead of mixed in with the page tabs. Also fixed a real bug this surfaced — the active-tab highlight used to be based on tab position in the list, which silently breaks the moment tabs get reordered (like this update does). Now based on which page each tab actually points to, so it can't drift out of sync again.",
+  "🆕 Sidebar header: removed the small logo — replacement options coming once one's picked.",
   "🔧 Cancellations: raised the server upload size limit and added visible warnings when a save doesn't fully fit — re-upload once more to pick up both fixes."
 ];
 
@@ -3372,11 +3371,13 @@ async function doLoad(){
   }
   injectCompareTab();
   injectCancellationsTab();
+  tagTabsWithPageIds();
+  if(typeof tryInitAdmin==="function")tryInitAdmin(); // must run AFTER login (doLoad fires from
+  // doLogin's success path) — the DOMContentLoaded handler fires too early, before auth. Also
+  // must run BEFORE buildSidebarNav so the admin tab (if this user is one) already exists to be
+  // captured and placed in the sidebar footer, rather than being orphaned outside it.
+  tagTabsWithPageIds(); // idempotent — catches the admin tab, which didn't exist for the first pass
   buildSidebarNav();
-  // Inject the Admin tab if the logged-in user is an admin. This runs AFTER login
-  // (doLoad fires from doLogin's success path), unlike the DOMContentLoaded handler
-  // which fires before the user has authenticated.
-  if(typeof tryInitAdmin==="function")tryInitAdmin();
   // v112: pull the shared aggregator order data from the server (all users). If anything
   // updated, caches were already invalidated inside — re-render whichever page is open.
   pullOrderDataFromServer().then(changed=>{if(changed&&typeof curPage!=='undefined'){if(curPage==='campaigns')renderCampaigns();else if(curPage==='discounts')renderDiscounts();else if(curPage==='cancellations')renderCancellations();}});
@@ -3434,8 +3435,21 @@ function buildSidebarNav(){
     if(document.getElementById("app-sidebar"))return;
     if(new URLSearchParams(location.search).get("nosidebar")==="1")return;
     const tabs=[...document.querySelectorAll(".tab")];
-    if(tabs.length<8||tabs.length>14)return; // sanity check — expected ~10; unexpected shape → bail
+    if(tabs.length<8||tabs.length>14)return; // sanity check — expected ~10-11; unexpected shape → bail
     if(!tabs[0].parentElement)return;
+
+    // v183: reorder by data-pg (set by tagTabsWithPageIds, called before this) rather than
+    // trusting whatever DOM order the tabs happened to arrive in — Cancellations goes right
+    // after KPI Tracker, Admin is pulled out entirely into its own footer section at the bottom.
+    const ORDER=["overview","brands","outlets","platforms","cpc","campaigns","discounts","kpi","cancellations","compare"];
+    const byPg={};
+    tabs.forEach(t=>{if(t.dataset.pg)byPg[t.dataset.pg]=t;});
+    const orderedTabs=ORDER.map(id=>byPg[id]).filter(Boolean);
+    const adminTab=byPg["admin"]||null;
+    // anything tagged with a page id we didn't expect still gets shown (defensive — better to
+    // show an extra tab in a slightly odd spot than silently drop navigation to a whole page)
+    const known=new Set([...ORDER,"admin"]);
+    tabs.forEach(t=>{if(t.dataset.pg&&!known.has(t.dataset.pg)&&!orderedTabs.includes(t))orderedTabs.push(t);});
 
     const collapsed=(()=>{try{return localStorage.getItem("oregano_sidebar_collapsed")==="1";}catch(e){return false;}})();
     const W_OPEN=208,W_COLLAPSED=60;
@@ -3445,16 +3459,23 @@ function buildSidebarNav(){
     sidebar.dataset.collapsed=collapsed?"1":"0";
     sidebar.style.cssText=`position:fixed;top:0;left:0;bottom:0;width:${collapsed?W_COLLAPSED:W_OPEN}px;background:${DARK_THEME.bg};border-right:1px solid ${DARK_THEME.cardBorder};display:flex;flex-direction:column;z-index:40;transition:width .18s ease;overflow-y:auto;overflow-x:hidden`;
 
+    // Header: text wordmark only (no logo icon — pending a replacement pick) + collapse toggle.
     const header=document.createElement("div");
     header.style.cssText=`display:flex;align-items:center;gap:8px;padding:14px 12px;border-bottom:1px solid ${DARK_THEME.cardBorder};flex-shrink:0;min-height:20px`;
-    const origLogo=document.getElementById("nav-logo");
-    header.innerHTML=`${origLogo?`<img src="${origLogo.src}" style="width:26px;height:26px;border-radius:6px;flex-shrink:0">`:""}<span class="sidebar-brand-txt" style="font-size:12px;font-weight:800;color:${DARK_THEME.textPrimary};white-space:nowrap;overflow:hidden">OREGANO</span><button id="sidebar-toggle" title="Collapse sidebar" style="margin-left:auto;background:none;border:none;color:${DARK_THEME.textMuted};cursor:pointer;font-size:15px;padding:4px;flex-shrink:0">${collapsed?"»":"«"}</button>`;
+    header.innerHTML=`<span class="sidebar-brand-txt" style="font-size:13px;font-weight:800;color:${DARK_THEME.textPrimary};white-space:nowrap;overflow:hidden;letter-spacing:.3px">OREGANO</span><button id="sidebar-toggle" title="Collapse sidebar" style="margin-left:auto;background:none;border:none;color:${DARK_THEME.textMuted};cursor:pointer;font-size:15px;padding:4px;flex-shrink:0">${collapsed?"»":"«"}</button>`;
     sidebar.appendChild(header);
 
     const navWrap=document.createElement("div");
     navWrap.style.cssText="display:flex;flex-direction:column;gap:2px;padding:10px 8px;flex:1";
-    tabs.forEach(t=>navWrap.appendChild(t)); // MOVE, not clone — preserves identity/handlers/order
+    orderedTabs.forEach(t=>navWrap.appendChild(t)); // MOVE, not clone — preserves identity/handlers
     sidebar.appendChild(navWrap);
+
+    if(adminTab){
+      const footer=document.createElement("div");
+      footer.style.cssText=`display:flex;flex-direction:column;gap:2px;padding:10px 8px;border-top:1px solid ${DARK_THEME.cardBorder};margin-top:auto;flex-shrink:0`;
+      footer.appendChild(adminTab);
+      sidebar.appendChild(footer);
+    }
 
     document.body.insertBefore(sidebar,document.body.firstChild);
 
@@ -3477,7 +3498,7 @@ function buildSidebarNav(){
      functionally the same as the pre-sidebar top nav, so navigation can never be lost. */
   #app-sidebar{position:static!important;width:100%!important;height:auto!important;flex-direction:row!important;align-items:center;border-right:none!important;border-bottom:1px solid ${DARK_THEME.cardBorder}}
   #app-sidebar > div:first-child{display:none!important}
-  #app-sidebar > div:last-child{flex-direction:row!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch;white-space:nowrap;padding:8px!important}
+  #app-sidebar > div:not(:first-child){flex-direction:row!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch;white-space:nowrap;padding:8px!important;border-top:none!important;margin-top:0!important}
   body{margin-left:0!important}
 }`;
     document.head.appendChild(css);
@@ -3989,7 +4010,27 @@ function barChart(id,labels,values,colors,extra,mode){const ctx=document.getElem
 function multiLineChart(id,labels,series){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);charts[id]=new Chart(ctx,{type:"line",data:{labels,datasets:series.map(s=>({label:s.name,data:s.data,borderColor:s.color,backgroundColor:s.color,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false,spanGaps:true}))},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#475569",font:{size:10},boxWidth:12,padding:8}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label}: ${c.raw==null?'—':'AED '+Number(c.raw).toFixed(1)}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"#F1F5F9"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#F1F5F9"},border:{display:false}}}}});}
 
 // NAVIGATION
-function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>t.classList.remove("act"));const idx={overview:0,brands:1,outlets:2,platforms:3,cpc:4,campaigns:5,discounts:6,kpi:7,compare:8,cancellations:9}[page]||0;document.querySelectorAll(".tab")[idx]?.classList.add("act");document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
+// v183: tag every .tab with a reliable data-pg attribute so gp() and buildSidebarNav() can
+// identify tabs by WHICH PAGE they represent instead of by DOM position — position breaks the
+// moment tabs get reordered (which the sidebar does, moving Cancellations next to KPI and Admin
+// into its own footer). Most tabs set onclick as a literal HTML attribute (`onclick="gp('x')"`),
+// which we can read directly; the 3 dynamically-injected ones (Compare/Cancellations/Admin) set
+// onclick as a JS property instead, which getAttribute can't see, so those fall back to matching
+// their known label text. Idempotent — skips any tab that already has data-pg set.
+function tagTabsWithPageIds(){
+  const textMap=[[/compare/i,"compare"],[/cancellations/i,"cancellations"],[/admin/i,"admin"],
+    [/ads performance/i,"cpc"],[/kpi/i,"kpi"],[/discount burn/i,"discounts"],[/campaigns/i,"campaigns"],
+    [/platforms/i,"platforms"],[/outlets/i,"outlets"],[/brands/i,"brands"],[/overview/i,"overview"]];
+  document.querySelectorAll(".tab").forEach(t=>{
+    if(t.dataset.pg)return;
+    const oc=t.getAttribute("onclick")||"";
+    const m=oc.match(/gp\(['"]([a-zA-Z]+)['"]\)/);
+    if(m){t.dataset.pg=m[1];return;}
+    const txt=t.textContent||"";
+    for(const[re,id]of textMap){if(re.test(txt)){t.dataset.pg=id;return;}}
+  });
+}
+function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>{t.classList.toggle("act",t.dataset.pg===page);});document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
 
 // ── MOBILE NAV DRAWER ──
 // Slides in from the left on tap of hamburger. Overlay dims the page. Any tap on a nav item or
