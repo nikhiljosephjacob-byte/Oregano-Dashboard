@@ -192,7 +192,15 @@ async function handleLogout(request, env) {
 
 // ─── shared order-data endpoints ─────────────────────────────────────────────
 const ORDERDATA_AGGS = ["keeta", "careem", "talabat", "deliveroo", "noon"];
-const ORDERDATA_MAX_BYTES = 5 * 1024 * 1024; // hard guard — parsed aggregates run ~50-350KB in practice
+const ORDERDATA_MAX_BYTES = 20 * 1024 * 1024; // v178: was 5MB, based on an early estimate of
+// ~50-350KB parsed payloads. That estimate didn't account for the merge strategy — every upload
+// accumulates on top of prior ones forever (records/orderDetail/cancellations are never pruned,
+// per mergeOrdersData's "cumulative, never blown away" design) — so a high-volume, long-running
+// aggregator's payload only ever grows. Keeta specifically (near-continuous campaigns across
+// 50+ outlets, many months of accumulated history) is the most likely to have quietly outgrown
+// the original 5MB guess and been silently rejected on push (visible now via the client's new
+// showSyncWarning toast, but wasn't before). Workers KV supports values up to 25MiB, so 20MB
+// leaves comfortable headroom without removing the guard entirely.
 
 async function handleOrderDataSave(request, env, agg) {
   const admin = await requireAdmin(request, env);
