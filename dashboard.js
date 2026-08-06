@@ -13,14 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-07-21-173";
+const BUILD_VERSION="2026-07-21-174";
 const BUILD_NOTES=[
-  "\ud83d\udd27 Cancellations now genuinely persist like every other aggregator's data \u2014 root cause traced all the way through and fixed on both ends. Backend (worker.js): the save endpoint explicitly whitelisted only metadata/records/orderDetail, silently dropping cancellations on every push \u2014 confirmed directly in the code, now fixed with the same pattern as the existing orderDetail whitelist.",
-  "Frontend: removed the separate localStorage-only cancellationsData array entirely. Cancellations now live on each aggregator's own data object (keetaOrdersData.cancellations, etc.) \u2014 the same object that already syncs to/from the server \u2014 combined on-demand via a new getAllCancellations(). Found and fixed a second real bug in the process: mergeOrdersData()'s merge path (used on every RE-upload, not just the first) explicitly rebuilt its return object without a cancellations field, meaning even after the server-sync fix, a second upload would have silently dropped everything from the first. Fixed with the same append+dedup-by-order-number pattern as orderDetail. Verified with 12 checks including the exact re-upload/merge scenario that would have caught this.",
-  "\ud83d\udcb0 Gross vs net, checked directly against real files rather than assumed: Keeta confirmed and fixed (was using Customer paid AED 40.30, a post-discount figure; now uses Original price AED 62.00, the real gross \u2014 verified against the actual example). Deliveroo confirmed and fixed with a genuinely different approach than first attempted \u2014 found that ALL 13 real refund rows have an empty Order Value column (the gross figure only exists on that order's separate, earlier Delivery row), so a pre-pass now cross-references by Order Number before the main parse. Tested against the real uploaded file: all 13 cancellations now show realistic gross values (7\u2013402 AED) instead of tiny net payout figures.",
-  "Talabat and Careem: genuinely couldn't verify from the data available \u2014 neither uploaded file has a single discounted order (cancelled or otherwise) to test gross-vs-net against. Column structure suggests both are likely already correct, but this isn't confirmed the way Keeta and Deliveroo now are. Worth a real check once a discounted example is available.",
-  "6 additional end-to-end checks confirm the full page renders correctly against the new per-aggregator data source, including Noon (deliberately given zero cancellations in the test) not breaking anything. 90 checks total across everything old and new."
+  "\ud83d\udccb To-do list check-in: investigated both the sidebar redesign and the Campaigns loading animation before touching either. Searched dashboard.js thoroughly for the \"green swipe\" loading animation (loading text, every CSS keyframe, progress-bar patterns) and couldn't locate it \u2014 it almost certainly lives in the external HTML/CSS shell this session doesn't have access to, the same place .card's and .fbar's base styles turned out to live. Sidebar scope is more contained than expected (only 9 .tab references across 3 functions), but the actual tab markup itself is also likely in that same external shell. Both need a screenshot/more access before they can be built correctly rather than guessed at \u2014 given the lesson learned earlier this session from three failed blind CSS guesses on the sides issue, not repeating that here.",
+  "\ud83c\udf19 Compare page dark theme, started (sixth page in the rollout) \u2014 given prior familiarity with this page's structure from building the 3-way comparison feature. Converted: the Group A/B/C filter panels (cmpPanel) including proper dark color-scheme on the native date pickers (was hardcoded to light, which affects the browser's own calendar icon styling), the Add Group C tile, and the page header/action buttons, all with a scoped style override matching the pattern used on every prior page.",
+  "Remaining for Compare: the summary stat cards (cmpStatCard/cmpDiscCard/cmpOutletCard/cmpContribCard \u2014 each sets its own inline colors, same treatment needed as kpiCard before them), the Brand\u00d7Platform breakdown table, the outlet drill-down, and the Platform Movement risers/fallers section. Verified what's done so far with 5 direct dark/light-mode checks on cmpPanel, plus the existing 16-check Comparison suite and 14-check navigation suite both still passing \u2014 nothing already built was disturbed."
 ];
+
 
 
 
@@ -3845,7 +3844,7 @@ function mNavGo(page){
 // dark theme one at a time. Adding a page here is the ONLY change needed at the dispatcher —
 // each page's own render function still needs its own scoped style override and theme-aware
 // calls, same as Overview's build.
-const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms"]);
+const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare"]);
 function renderPage(p){_darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();else if(p==="cancellations")renderCancellations();}
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
@@ -12517,12 +12516,14 @@ function cmpPanel(side){
   const cfg=cmpCfgFor(side);
   const accent=cmpClrFor(side);
   const compact=cmpCActive; // all panels (including A/B) shrink slightly once a 3rd is active, so all 3 fit without losing any filter option
+  const T=_darkPage?{cardBg:DARK_THEME.card,border:DARK_THEME.cardBorder,menuBg:DARK_THEME.card,menuBorder:DARK_THEME.cardBorder,menuHover:DARK_THEME.cardBorder,muted:DARK_THEME.textMuted,mutedText:DARK_THEME.textSecondary,dateBg:DARK_THEME.bg,dateText:DARK_THEME.textPrimary,dateScheme:"dark",clearBorder:DARK_THEME.cardBorder,clearTxt:DARK_THEME.textSecondary}
+    :{cardBg:"#FFFFFF",border:"#E2E8F0",menuBg:"#FFFFFF",menuBorder:"#E2E8F0",menuHover:"#F1F5F9",muted:"#94a3b8",mutedText:"#64748B",dateBg:"#F1F5F9",dateText:"#0F172A",dateScheme:"light",clearBorder:"#E2E8F0",clearTxt:"#64748b"};
   const allBr=[...new Set(allData.map(r=>r.branch))].filter(b=>b!=="(brand-level)").sort();
   const dd=(type,label,activeSet,items)=>{
     const id=`cmp-${side}-${type}`;
     const count=activeSet.size,isOn=count>0;
-    const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#F1F5F9'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="cmpToggle" data-v1="${side}" data-v2="${type}" data-v3="${esc(val)}"><span style="color:${clr}">${lbl}</span></label>`).join("");
-    const menuStyle="display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:160px;box-shadow:0 12px 30px rgba(15,23,42,.12)";
+    const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap;color:${T.dateText}" onmouseover="this.style.background='${T.menuHover}'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="cmpToggle" data-v1="${side}" data-v2="${type}" data-v3="${esc(val)}"><span style="color:${clr}">${lbl}</span></label>`).join("");
+    const menuStyle=`display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:${T.menuBg};border:1px solid ${T.menuBorder};border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:160px;box-shadow:0 12px 30px rgba(0,0,0,.3)`;
     const pillPad=compact?"4px 8px":"6px 10px",pillFs=compact?"11px":"12px";
     return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" data-act="dd" data-v1="${id}" style="padding:${pillPad};font-size:${pillFs}">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="0" style="${menuStyle}">${itemsH}</div></div>`;
   };
@@ -12535,34 +12536,35 @@ function cmpPanel(side){
   // part of the panel, not the least.
   const chips=[...cfg.brands].map(b=>`<span style="background:${accent}15;border:1.5px solid ${accent}55;color:${accent};font-size:${compact?12:14}px;font-weight:800;padding:${compact?'5px 10px':'7px 14px'};border-radius:9px">${esc(b)}</span>`).join("");
   const platChips=[...cfg.platforms].map(p=>`<span style="background:${accent}15;border:1.5px solid ${accent}55;color:${accent};font-size:${compact?12:14}px;font-weight:800;padding:${compact?'5px 10px':'7px 14px'};border-radius:9px">${esc(p)}</span>`).join("");
-  const dateChip=(cfg.start&&cfg.end)?`<span style="background:#F8F6EE;border:1.5px solid #EDE7D9;color:#64748B;font-size:${compact?11:12}px;font-weight:700;padding:${compact?'5px 9px':'7px 13px'};border-radius:9px;white-space:nowrap">📅 ${fmtShort(cfg.start)}→${fmtShort(cfg.end)}</span>`:"";
+  const dateChip=(cfg.start&&cfg.end)?`<span style="background:${T.dateBg};border:1.5px solid ${T.border};color:${T.mutedText};font-size:${compact?11:12}px;font-weight:700;padding:${compact?'5px 9px':'7px 13px'};border-radius:9px;white-space:nowrap">📅 ${fmtShort(cfg.start)}→${fmtShort(cfg.end)}</span>`:"";
   const selectedChipsRow=(chips||platChips||dateChip)?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:${compact?8:10}px">${chips}${platChips}${dateChip}</div>`:"";
-  return `<div style="flex:1;min-width:${compact?260:300}px;background:#FFFFFF;border:1px solid ${accent}55;border-radius:12px;padding:${pad}">
+  return `<div style="flex:1;min-width:${compact?260:300}px;background:${T.cardBg};border:1px solid ${accent}55;border-radius:12px;padding:${pad}">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${compact?8:10}px">
       <div style="font-size:${titleFs};font-weight:800;color:${accent}">${emoji} Group ${side}</div>
       <div style="display:flex;align-items:center;gap:6px">
-        ${(cfg.brands.size||cfg.platforms.size||cfg.branches.size)?`<button data-act="cmpClear" data-v1="${side}" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:2px 8px;font-size:10px;cursor:pointer">✕ clear</button>`:""}
-        ${side==="C"?`<button data-act="cmpToggleC" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#94a3b8;padding:2px 8px;font-size:10px;cursor:pointer" title="Remove Group C">✕ remove</button>`:""}
+        ${(cfg.brands.size||cfg.platforms.size||cfg.branches.size)?`<button data-act="cmpClear" data-v1="${side}" style="background:none;border:1px solid ${T.clearBorder};border-radius:5px;color:${T.clearTxt};padding:2px 8px;font-size:10px;cursor:pointer">✕ clear</button>`:""}
+        ${side==="C"?`<button data-act="cmpToggleC" style="background:none;border:1px solid ${T.clearBorder};border-radius:5px;color:${T.muted};padding:2px 8px;font-size:10px;cursor:pointer" title="Remove Group C">✕ remove</button>`:""}
       </div>
     </div>
     ${selectedChipsRow}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
       ${dd("brand","Brands",cfg.brands,BR.map(b=>({val:b.n,lbl:b.n,clr:b.c})))}
       ${dd("platform","Platforms",cfg.platforms,AGGS.map(a=>({val:a,lbl:a,clr:AC[a]||"#888"})))}
-      ${dd("branch","Outlets",cfg.branches,allBr.map(b=>({val:b,lbl:b,clr:"#94a3b8"})))}
+      ${dd("branch","Outlets",cfg.branches,allBr.map(b=>({val:b,lbl:b,clr:T.muted})))}
     </div>
     <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">${presetsH}</div>
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-      <input type="date" value="${cfg.start||""}" data-act="cmpDate" data-v1="${side}" data-v2="start" style="background:#F1F5F9;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:${compact?'6px 10px':'7px 12px'};font-size:${dateFs};font-weight:600;color-scheme:light;min-width:${dateInputW}">
-      <span style="color:#64748b">→</span>
-      <input type="date" value="${cfg.end||""}" data-act="cmpDate" data-v1="${side}" data-v2="end" style="background:#F1F5F9;border:1px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:${compact?'6px 10px':'7px 12px'};font-size:${dateFs};font-weight:600;color-scheme:light;min-width:${dateInputW}">
+      <input type="date" value="${cfg.start||""}" data-act="cmpDate" data-v1="${side}" data-v2="start" style="background:${T.dateBg};border:1px solid ${T.border};border-radius:6px;color:${T.dateText};padding:${compact?'6px 10px':'7px 12px'};font-size:${dateFs};font-weight:600;color-scheme:${T.dateScheme};min-width:${dateInputW}">
+      <span style="color:${T.clearTxt}">→</span>
+      <input type="date" value="${cfg.end||""}" data-act="cmpDate" data-v1="${side}" data-v2="end" style="background:${T.dateBg};border:1px solid ${T.border};border-radius:6px;color:${T.dateText};padding:${compact?'6px 10px':'7px 12px'};font-size:${dateFs};font-weight:600;color-scheme:${T.dateScheme};min-width:${dateInputW}">
     </div>
   </div>`;
 }
 // v155: shown in place of a Group C panel when it hasn't been added yet — not visible by
 // default, matching the requirement that a 3rd comparison isn't shown unless asked for.
 function cmpAddCTile(){
-  return`<div data-act="cmpToggleC" style="flex:1;min-width:220px;background:#FBFAF5;border:2px dashed #D6CFB8;border-radius:12px;padding:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;color:#94a3b8;min-height:170px" onmouseover="this.style.borderColor='${CMP_C_CLR}';this.style.color='${CMP_C_CLR}'" onmouseout="this.style.borderColor='#D6CFB8';this.style.color='#94a3b8'">
+  const tileBg=_darkPage?DARK_THEME.bg:"#FBFAF5",tileBorder=_darkPage?DARK_THEME.cardBorder:"#D6CFB8",tileMuted=_darkPage?DARK_THEME.textMuted:"#94a3b8";
+  return`<div data-act="cmpToggleC" style="flex:1;min-width:220px;background:${tileBg};border:2px dashed ${tileBorder};border-radius:12px;padding:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;color:${tileMuted};min-height:170px" onmouseover="this.style.borderColor='${CMP_C_CLR}';this.style.color='${CMP_C_CLR}'" onmouseout="this.style.borderColor='${tileBorder}';this.style.color='${tileMuted}'">
     <div style="font-size:26px;margin-bottom:6px">+</div>
     <div style="font-size:13px;font-weight:700">Add Group C</div>
     <div style="font-size:10.5px;margin-top:2px">Compare a third combination</div>
@@ -13310,11 +13312,20 @@ function renderCompare(){
       +(rows||'<div style="color:#64748b;font-size:12px">No platform data.</div>')+'</div>';
   })();
 
-  pg.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-      <div style="font-size:18px;font-weight:800;color:#0F172A">⚖️ Comparison</div>
-      <div style="display:flex;gap:8px"><button data-act="cmpCopy" style="background:none;border:1px solid #E2E8F0;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer" title="Copy A's brand/platform/outlet filters to B">⎘ A→B filters</button><button data-act="cmpSwap" style="background:none;border:1px solid #E2E8F0;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer">⇄ Swap A/B</button></div>
+  const cmpStyleOverride=_darkPage?`<style>
+      #page-compare{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
+      #page-compare .card,#page-compare .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
+      #page-compare .ct{color:${DARK_THEME.textPrimary}!important}
+      #page-compare table.tbl th{color:${DARK_THEME.textMuted}!important;border-color:${DARK_THEME.cardBorder}!important}
+      #page-compare table.tbl td{color:${DARK_THEME.textPrimary}!important;border-color:${DARK_THEME.cardBorder}!important}
+      #page-compare table.tbl tr:hover td{background:${DARK_THEME.cardBorder}44!important}
+    </style>`:"";
+  const cmpTitleClr=_darkPage?DARK_THEME.textPrimary:"#0F172A",cmpBtnBorder=_darkPage?DARK_THEME.cardBorder:"#E2E8F0",cmpBtnTxt=_darkPage?DARK_THEME.textSecondary:"#94a3b8",cmpSubTxt=_darkPage?DARK_THEME.textSecondary:"#475569";
+  pg.innerHTML=cmpStyleOverride+`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div style="font-size:18px;font-weight:800;color:${cmpTitleClr}">⚖️ Comparison</div>
+      <div style="display:flex;gap:8px"><button data-act="cmpCopy" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:11px;cursor:pointer" title="Copy A's brand/platform/outlet filters to B">⎘ A→B filters</button><button data-act="cmpSwap" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:11px;cursor:pointer">⇄ Swap A/B</button></div>
     </div>
-    <div style="font-size:11px;color:#475569;font-weight:600;margin-bottom:12px">Pick any combination on each side — brands, platforms, outlets, and dates are fully independent. Example: Oregano+Lollorosso 11–13 May 2026 (A) vs the same 11–13 May 2025 (B).</div>
+    <div style="font-size:11px;color:${cmpSubTxt};font-weight:600;margin-bottom:12px">Pick any combination on each side — brands, platforms, outlets, and dates are fully independent. Example: Oregano+Lollorosso 11–13 May 2026 (A) vs the same 11–13 May 2025 (B).</div>
     ${yearBanner}
     ${insightBanner}
     <div style="display:flex;gap:${cmpCActive?10:12}px;flex-wrap:wrap;margin-bottom:16px;align-items:stretch">${cmpPanel("A")}${cmpPanel("B")}${cmpCActive?cmpPanel("C"):cmpAddCTile()}</div>
