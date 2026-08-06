@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-185";
+const BUILD_VERSION="2026-08-06-186";
 const BUILD_NOTES=[
-  "📱 Sidebar: now stays vertical at every screen size instead of switching to a different mobile layout — but auto-starts collapsed (icon-only) on phone-width screens by default, so it doesn't eat half the screen. Tap it open any time; your choice is remembered from then on. Toggle button is also a proper 36px touch target now, not a tiny 15px icon.",
+  "🌙 Discount Burn page dark theme: DONE. All 8 pieces converted — filter bar, KPI tiles, trend chart, campaign table, co-fund audit table, uncategorized burn breakdown, and the unmapped-Keeta-items warning. Caught and fixed a real contrast bug along the way: an amber warning chip had near-black text that would've gone unreadable against the dark page.",
   "🎨 Added icons to Overview, Brands, Outlets, Platforms, and Ads Performance tabs.",
   "🆕 Sidebar header now shows a live sync status (green dot + last-synced time) instead of the wordmark.",
   "🔧 Cancellations: raised the server upload size limit and added visible warnings when a save doesn't fully fit — re-upload once more to pick up both fixes."
@@ -4133,7 +4133,7 @@ function mNavGo(page){
 // dark theme one at a time. Adding a page here is the ONLY change needed at the dispatcher —
 // each page's own render function still needs its own scoped style override and theme-aware
 // calls, same as Overview's build.
-const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare"]);
+const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare","discounts"]);
 function renderPage(p){_darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();else if(p==="cancellations")renderCancellations();}
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
@@ -11421,40 +11421,54 @@ function discountOpenCampaign(idx){
 }
 
 // ── UI rendering ──
+// v186: shared theme lookup for the Discount Burn page (same pattern used for Compare's cmp*
+// variables) — called at the top of every disc* HTML-building function so they all stay in sync
+// rather than each hardcoding its own light-only colors.
+function discTheme(){
+  return _darkPage?{
+    muted:DARK_THEME.textMuted,label:DARK_THEME.textMuted,border:DARK_THEME.cardBorder,
+    text:DARK_THEME.textPrimary,panelBg:DARK_THEME.card,rowBg:DARK_THEME.cardBorder+'44'
+  }:{
+    muted:"#64748b",label:"#94a3b8",border:"#EDE7D9",
+    text:"#0F172A",panelBg:"#FEFDFA",rowBg:"#F5F0E5"
+  };
+}
 function discountFilterBarHTML(){
+  const T=discTheme();
   const{aggregators,brands,branch,preset,dateStart,dateEnd}=discountFilters;
   const allAggs=["Deliveroo","Talabat","Careem","Noon","Keeta"];
   const allBrands=[...new Set(campaignData.map(c=>c.brand).filter(b=>b&&b!=="All Brands"))].sort();
-  const presetChip=(k,l)=>`<button onclick="discountSetPreset('${k}')" class="preset ${preset===k?'act':''}" style="padding:5px 10px;border-radius:6px;border:1px solid ${preset===k?'#f59e0b':'#EDE7D9'};background:${preset===k?'rgba(245,158,11,.12)':'transparent'};color:${preset===k?'#f59e0b':'#64748b'};font-size:11px;font-weight:600;cursor:pointer">${l}</button>`;
-  const aggChip=a=>{const on=aggregators.includes(a);return `<button onclick="discountToggleAggregator('${a}')" class="fpill ${on?'on':''}" style="padding:4px 10px;border-radius:14px;border:1px solid ${on?'#f59e0b':'#EDE7D9'};background:${on?'rgba(245,158,11,.14)':'#FEFDFA'};color:${on?'#f59e0b':'#64748b'};font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:5px">${logoImg(a,14)} ${a}</button>`;};
-  const brandChip=b=>{const on=brands.includes(b);const clr=BMAP[b]?.c||'#94a3b8';return `<button onclick="discountToggleBrand('${b}')" class="fpill ${on?'on':''}" style="padding:4px 10px;border-radius:14px;border:1px solid ${on?clr:'#EDE7D9'};background:${on?clr+'22':'#FEFDFA'};color:${on?clr:'#64748b'};font-size:11px;font-weight:600;cursor:pointer">${b}</button>`;};
-  const branchOpts=["All","DXB","AUH"].map(b=>`<button onclick="discountSetBranch('${b}')" style="padding:4px 10px;border-radius:6px;border:1px solid ${branch===b?'#f59e0b':'#EDE7D9'};background:${branch===b?'rgba(245,158,11,.12)':'transparent'};color:${branch===b?'#f59e0b':'#64748b'};font-size:11px;font-weight:600;cursor:pointer">${b==='All'?'🌐 All':b==='DXB'?'🏙️ Dubai':'🏛️ Abu Dhabi'}</button>`).join("");
+  const presetChip=(k,l)=>`<button onclick="discountSetPreset('${k}')" class="preset ${preset===k?'act':''}" style="padding:5px 10px;border-radius:6px;border:1px solid ${preset===k?'#f59e0b':T.border};background:${preset===k?'rgba(245,158,11,.12)':'transparent'};color:${preset===k?'#f59e0b':T.muted};font-size:11px;font-weight:600;cursor:pointer">${l}</button>`;
+  const aggChip=a=>{const on=aggregators.includes(a);return `<button onclick="discountToggleAggregator('${a}')" class="fpill ${on?'on':''}" style="padding:4px 10px;border-radius:14px;border:1px solid ${on?'#f59e0b':T.border};background:${on?'rgba(245,158,11,.14)':T.panelBg};color:${on?'#f59e0b':T.muted};font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:5px">${logoImg(a,14)} ${a}</button>`;};
+  const brandChip=b=>{const on=brands.includes(b);const clr=BMAP[b]?.c||T.label;return `<button onclick="discountToggleBrand('${b}')" class="fpill ${on?'on':''}" style="padding:4px 10px;border-radius:14px;border:1px solid ${on?clr:T.border};background:${on?clr+'22':T.panelBg};color:${on?clr:T.muted};font-size:11px;font-weight:600;cursor:pointer">${b}</button>`;};
+  const branchOpts=["All","DXB","AUH"].map(b=>`<button onclick="discountSetBranch('${b}')" style="padding:4px 10px;border-radius:6px;border:1px solid ${branch===b?'#f59e0b':T.border};background:${branch===b?'rgba(245,158,11,.12)':'transparent'};color:${branch===b?'#f59e0b':T.muted};font-size:11px;font-weight:600;cursor:pointer">${b==='All'?'🌐 All':b==='DXB'?'🏙️ Dubai':'🏛️ Abu Dhabi'}</button>`).join("");
   const hasFilters=aggregators.length>0||brands.length>0||branch!=="All"||preset!=="thisMonth";
   return `<div class="card" style="padding:14px 16px;margin-bottom:14px">
     <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">
-      <div style="min-width:120px"><div style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.9px;margin-bottom:6px">Aggregator</div><div style="display:flex;flex-wrap:wrap;gap:5px">${allAggs.map(aggChip).join("")}</div></div>
-      <div style="min-width:120px"><div style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.9px;margin-bottom:6px">Brand</div><div style="display:flex;flex-wrap:wrap;gap:5px">${allBrands.map(brandChip).join("")}</div></div>
-      <div><div style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.9px;margin-bottom:6px">Region</div><div style="display:flex;gap:5px">${branchOpts}</div></div>
-      <div><div style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.9px;margin-bottom:6px">Period</div>
+      <div style="min-width:120px"><div style="font-size:9px;font-weight:800;color:${T.label};text-transform:uppercase;letter-spacing:.9px;margin-bottom:6px">Aggregator</div><div style="display:flex;flex-wrap:wrap;gap:5px">${allAggs.map(aggChip).join("")}</div></div>
+      <div style="min-width:120px"><div style="font-size:9px;font-weight:800;color:${T.label};text-transform:uppercase;letter-spacing:.9px;margin-bottom:6px">Brand</div><div style="display:flex;flex-wrap:wrap;gap:5px">${allBrands.map(brandChip).join("")}</div></div>
+      <div><div style="font-size:9px;font-weight:800;color:${T.label};text-transform:uppercase;letter-spacing:.9px;margin-bottom:6px">Region</div><div style="display:flex;gap:5px">${branchOpts}</div></div>
+      <div><div style="font-size:9px;font-weight:800;color:${T.label};text-transform:uppercase;letter-spacing:.9px;margin-bottom:6px">Period</div>
         <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center">
           ${presetChip('thisMonth','This Month')}${presetChip('lastMonth','Last Month')}${presetChip('last7d','Last 7d')}${presetChip('last30d','Last 30d')}${presetChip('last90d','Last 90d')}
-          <span style="color:#94a3b8;font-size:11px;margin:0 4px">|</span>
-          <input type="date" value="${dateStart||''}" onchange="discountSetCustom('start',this.value)" style="border:1px solid #EDE7D9;border-radius:5px;padding:3px 6px;font-size:11px;color:#0F172A;background:#FEFDFA" title="Custom start date">
-          <span style="color:#94a3b8;font-size:11px">→</span>
-          <input type="date" value="${dateEnd||''}" onchange="discountSetCustom('end',this.value)" style="border:1px solid #EDE7D9;border-radius:5px;padding:3px 6px;font-size:11px;color:#0F172A;background:#FEFDFA" title="Custom end date">
+          <span style="color:${T.label};font-size:11px;margin:0 4px">|</span>
+          <input type="date" value="${dateStart||''}" onchange="discountSetCustom('start',this.value)" style="border:1px solid ${T.border};border-radius:5px;padding:3px 6px;font-size:11px;color:${T.text};background:${T.panelBg};color-scheme:${_darkPage?'dark':'light'}" title="Custom start date">
+          <span style="color:${T.label};font-size:11px">→</span>
+          <input type="date" value="${dateEnd||''}" onchange="discountSetCustom('end',this.value)" style="border:1px solid ${T.border};border-radius:5px;padding:3px 6px;font-size:11px;color:${T.text};background:${T.panelBg};color-scheme:${_darkPage?'dark':'light'}" title="Custom end date">
         </div>
       </div>
-      ${hasFilters?`<button onclick="discountClearFilters()" style="align-self:center;background:transparent;border:1px solid #EDE7D9;color:#64748b;padding:5px 10px;font-size:11px;border-radius:6px;cursor:pointer">✕ Clear</button>`:''}
+      ${hasFilters?`<button onclick="discountClearFilters()" style="align-self:center;background:transparent;border:1px solid ${T.border};color:${T.muted};padding:5px 10px;font-size:11px;border-radius:6px;cursor:pointer">✕ Clear</button>`:''}
     </div>
   </div>`;
 }
 
 function discountKpiRowHTML(d){
+  const T=discTheme();
   const fmt=n=>`AED ${Math.round(n||0).toLocaleString()}`;
-  const pctOf=(a,b)=>b>0?` <span style="font-size:11px;color:#94a3b8;font-weight:600">(${(a/b*100).toFixed(0)}%)</span>`:'';
+  const pctOf=(a,b)=>b>0?` <span style="font-size:11px;color:${T.label};font-weight:600">(${(a/b*100).toFixed(0)}%)</span>`:'';
   const depth=d.grossSales>0?(d.totalBurn/d.grossSales*100):0;
   const dailyBurn=d.daysInWindow>0?d.totalBurn/d.daysInWindow:0;
-  const tile=(icon,label,val,sub,clr)=>`<div style="flex:1;min-width:170px;background:#FEFDFA;border:1px solid #EDE7D9;border-left:4px solid ${clr};border-radius:12px;padding:14px 16px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06)"><div style="display:flex;align-items:center;gap:7px;margin-bottom:6px"><span style="font-size:18px">${icon}</span><div style="font-size:10px;color:#64748b;font-weight:800;letter-spacing:.8px;text-transform:uppercase">${label}</div></div><div style="font-size:22px;font-weight:800;color:${clr};font-variant-numeric:tabular-nums;line-height:1.1">${val}</div><div style="font-size:10px;color:#64748b;margin-top:4px;line-height:1.35">${sub}</div></div>`;
+  const tile=(icon,label,val,sub,clr)=>`<div style="flex:1;min-width:170px;background:${T.panelBg};border:1px solid ${T.border};border-left:4px solid ${clr};border-radius:12px;padding:14px 16px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06)"><div style="display:flex;align-items:center;gap:7px;margin-bottom:6px"><span style="font-size:18px">${icon}</span><div style="font-size:10px;color:${T.muted};font-weight:800;letter-spacing:.8px;text-transform:uppercase">${label}</div></div><div style="font-size:22px;font-weight:800;color:${clr};font-variant-numeric:tabular-nums;line-height:1.1">${val}</div><div style="font-size:10px;color:${T.muted};margin-top:4px;line-height:1.35">${sub}</div></div>`;
   return `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
     ${tile('💸','Total Discount Burn',fmt(d.totalBurn),`${depth.toFixed(1)}% of gross · ${fmt(dailyBurn)}/day avg`,'#EF4444')}
     ${tile('🎯','Attributed to Campaigns',fmt(d.attributedBurn)+pctOf(d.attributedBurn,d.totalBurn),`${d.activeCampaignCount} campaign${d.activeCampaignCount===1?'':'s'} ran in this window`,'#22C55E')}
@@ -11479,15 +11493,17 @@ function discountTrendChartHTML(d){
 }
 
 function discountCampaignTableHTML(d){
+  const T=discTheme();
   const fmt=n=>`AED ${Math.round(n||0).toLocaleString()}`;
   if(d.campaignBreakdown.length===0){
-    return `<div class="card"><div style="text-align:center;color:#64748b;padding:24px;font-size:13px">No tracked campaigns ran in this window. All ${fmt(d.totalBurn)} of burn was ambient (loyalty programs, aggregator-driven promos, first-order codes, etc.).</div></div>`;
+    return `<div class="card"><div style="text-align:center;color:${T.muted};padding:24px;font-size:13px">No tracked campaigns ran in this window. All ${fmt(d.totalBurn)} of burn was ambient (loyalty programs, aggregator-driven promos, first-order codes, etc.).</div></div>`;
   }
   const regular=d.campaignBreakdown.filter(x=>!x.isRewards);
   const rewards=d.campaignBreakdown.filter(x=>x.isRewards);
+  const rowHoverBg=_darkPage?DARK_THEME.cardBorder+'55':'rgba(148,163,184,.06)';
   const rowHTML=x=>{
     const c=x.campaign,idx=campaignData.indexOf(c);
-    const b=BMAP[c.brand]?.c||'#94a3b8';
+    const b=BMAP[c.brand]?.c||T.label;
     const depth=d.grossSales>0?(x.burnInWindow/d.grossSales*100).toFixed(1):'—';
     // Source badge: exact / hybrid / assumption. Reflects the v067 hybrid attribution — when the
     // exact upload only partially covers the campaign window, we use exact for covered days and
@@ -11501,23 +11517,23 @@ function discountCampaignTableHTML(d){
     }else{
       srcTag=`<span style="font-size:9px;background:rgba(245,158,11,.12);color:#F59E0B;padding:1px 6px;border-radius:8px;font-weight:700;margin-left:4px" title="Sales-weighted estimation from Google Sheet daily aggregates. Will convert to exact/hybrid when the aggregator's per-order upload lands.">🔮 Assumption</span>`;
     }
-    const cfCell=x.coFundInWindow>0?`<div style="color:#3B82F6;font-weight:700">${fmt(x.coFundInWindow)}</div><div style="font-size:9px;color:#94a3b8">${x.coFundPct}% declared</div>`:`<span style="color:#94a3b8">—</span>`;
-    return `<tr onclick="discountOpenCampaign(${idx})" style="cursor:pointer" onmouseover="this.style.background='rgba(148,163,184,.06)'" onmouseout="this.style.background=''">
-      <td style="padding:9px 8px"><div style="font-weight:700;color:#0F172A">${c.name||'(untitled)'}</div><div style="font-size:10px;color:#64748b;display:flex;align-items:center;gap:5px;margin-top:2px"><span style="width:8px;height:8px;background:${b};border-radius:50%;flex-shrink:0"></span>${c.brand} · ${c.aggregator} ${srcTag}</div></td>
-      <td style="padding:9px 8px;font-size:11px;color:#64748b;white-space:nowrap">${fmtDisp(x.cStart).replace(/, \d{4}/,'')} → ${fmtDisp(x.cEnd).replace(/, \d{4}/,'')}<div style="font-size:9px;color:#94a3b8">${x.days} day${x.days===1?'':'s'} in window</div></td>
-      <td style="padding:9px 8px;text-align:right;font-weight:800;color:#EF4444">${fmt(x.burnInWindow)}<div style="font-size:9px;color:#94a3b8;font-weight:500">${depth}% of gross</div></td>
+    const cfCell=x.coFundInWindow>0?`<div style="color:#3B82F6;font-weight:700">${fmt(x.coFundInWindow)}</div><div style="font-size:9px;color:${T.label}">${x.coFundPct}% declared</div>`:`<span style="color:${T.label}">—</span>`;
+    return `<tr onclick="discountOpenCampaign(${idx})" style="cursor:pointer" onmouseover="this.style.background='${rowHoverBg}'" onmouseout="this.style.background=''">
+      <td style="padding:9px 8px"><div style="font-weight:700;color:${T.text}">${c.name||'(untitled)'}</div><div style="font-size:10px;color:${T.muted};display:flex;align-items:center;gap:5px;margin-top:2px"><span style="width:8px;height:8px;background:${b};border-radius:50%;flex-shrink:0"></span>${c.brand} · ${c.aggregator} ${srcTag}</div></td>
+      <td style="padding:9px 8px;font-size:11px;color:${T.muted};white-space:nowrap">${fmtDisp(x.cStart).replace(/, \d{4}/,'')} → ${fmtDisp(x.cEnd).replace(/, \d{4}/,'')}<div style="font-size:9px;color:${T.label}">${x.days} day${x.days===1?'':'s'} in window</div></td>
+      <td style="padding:9px 8px;text-align:right;font-weight:800;color:#EF4444">${fmt(x.burnInWindow)}<div style="font-size:9px;color:${T.label};font-weight:500">${depth}% of gross</div></td>
       <td style="padding:9px 8px;text-align:right">${cfCell}</td>
-      <td style="padding:9px 8px;text-align:right;color:#94a3b8;font-size:16px">→</td>
+      <td style="padding:9px 8px;text-align:right;color:${T.label};font-size:16px">→</td>
     </tr>`;
   };
-  const tableHead=`<thead><tr style="border-bottom:2px solid #EDE7D9"><th style="text-align:left;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Campaign</th><th style="text-align:left;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Overlap Window</th><th style="text-align:right;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Burn in Window</th><th style="text-align:right;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Co-Fund</th><th></th></tr></thead>`;
+  const tableHead=`<thead><tr style="border-bottom:2px solid ${T.border}"><th style="text-align:left;padding:8px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px">Campaign</th><th style="text-align:left;padding:8px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px">Overlap Window</th><th style="text-align:right;padding:8px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px">Burn in Window</th><th style="text-align:right;padding:8px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px">Co-Fund</th><th></th></tr></thead>`;
   let html=`<div class="card" style="padding:14px 16px;margin-bottom:14px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="ct" style="margin-bottom:0">Campaign Breakdown (${regular.length})</div>${regular.length>0?`<div style="font-size:10px;color:#94a3b8">Click any row for full campaign detail</div>`:''}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="ct" style="margin-bottom:0">Campaign Breakdown (${regular.length})</div>${regular.length>0?`<div style="font-size:10px;color:${T.label}">Click any row for full campaign detail</div>`:''}</div>
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">${tableHead}<tbody>${regular.map(rowHTML).join('')}</tbody></table></div>
   </div>`;
   if(rewards.length>0){
     html+=`<div class="card" style="padding:14px 16px;margin-bottom:14px;border-left:4px solid #8B5CF6">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><div class="ct" style="margin-bottom:0">💎 Loyalty Programs (${rewards.length})</div><span style="font-size:10px;color:#94a3b8;text-transform:none;letter-spacing:0;font-weight:500">— excluded from campaign profitability comparisons</span></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><div class="ct" style="margin-bottom:0">💎 Loyalty Programs (${rewards.length})</div><span style="font-size:10px;color:${T.label};text-transform:none;letter-spacing:0;font-weight:500">— excluded from campaign profitability comparisons</span></div>
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">${tableHead}<tbody>${rewards.map(rowHTML).join('')}</tbody></table></div>
     </div>`;
   }
@@ -11586,6 +11602,7 @@ function discountExportCSV(){
 //   - Total customer discount (merchant + agg)
 // Talabat ambient (from talabat_disc column, if any) is shown as a separate line at bottom.
 function discountCoFundAuditTableHTML(d){
+  const T=discTheme();
   const fmt=n=>`AED ${Math.round(n||0).toLocaleString()}`;
   const coFunded=d.campaignBreakdown.filter(x=>x.coFundInWindow>0);
   const hasCoFunded=coFunded.length>0;
@@ -11593,7 +11610,7 @@ function discountCoFundAuditTableHTML(d){
   if(!hasCoFunded&&!hasAmbient){
     return `<div class="card" style="padding:14px 16px;margin-bottom:14px">
       <div class="ct" style="margin-bottom:6px">🔍 Co-Fund Audit</div>
-      <div style="font-size:11px;color:#94a3b8">No co-funded campaigns detected in this window and no ambient platform-funded amounts in exact uploads. If you expected co-fund here, check that the campaign comment in the sheet uses one of the recognised phrasings: "50-50 co-funded" / "50:50 co-funded" / "35% co-funded" / "co-funded 60-40".</div>
+      <div style="font-size:11px;color:${T.label}">No co-funded campaigns detected in this window and no ambient platform-funded amounts in exact uploads. If you expected co-fund here, check that the campaign comment in the sheet uses one of the recognised phrasings: "50-50 co-funded" / "50:50 co-funded" / "35% co-funded" / "co-funded 60-40".</div>
     </div>`;
   }
   // Group by aggregator
@@ -11606,22 +11623,23 @@ function discountCoFundAuditTableHTML(d){
     byAgg[a].subtotalCoFund+=x.coFundInWindow;
   });
   const AGG_CLR={Deliveroo:'#00CCBC',Talabat:'#EF4136',Careem:'#00A651',Noon:'#FEEE00',Keeta:'#FFC72C'};
+  const rowHoverBg=_darkPage?DARK_THEME.cardBorder+'55':'rgba(148,163,184,.05)';
   const aggRow=(agg,group)=>{
-    const clr=AGG_CLR[agg]||'#94a3b8';
+    const clr=AGG_CLR[agg]||T.label;
     const rows=group.items.map(x=>{
       const c=x.campaign,idx=campaignData.indexOf(c);
-      const b=BMAP[c.brand]?.c||'#94a3b8';
+      const b=BMAP[c.brand]?.c||T.label;
       const totalCustDisc=x.merchantBurn+x.coFundInWindow;
       // Truncate long campaign names for the audit view
       const cName=(c.name||'(untitled)').length>52?(c.name||'').slice(0,50)+'…':(c.name||'(untitled)');
-      return `<tr onclick="discountOpenCampaign(${idx})" style="cursor:pointer;border-bottom:1px solid #F5F0E5" onmouseover="this.style.background='rgba(148,163,184,.05)'" onmouseout="this.style.background=''">
+      return `<tr onclick="discountOpenCampaign(${idx})" style="cursor:pointer;border-bottom:1px solid ${T.rowBg}" onmouseover="this.style.background='${rowHoverBg}'" onmouseout="this.style.background=''">
         <td style="padding:7px 8px 7px 22px;font-size:11px" title="${(c.name||'').replace(/"/g,'&quot;')}">${cName}</td>
-        <td style="padding:7px 8px;font-size:10px;color:#64748b"><span style="width:7px;height:7px;background:${b};border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle"></span>${c.brand}</td>
-        <td style="padding:7px 8px;font-size:10px;color:#64748b;white-space:nowrap">${fmtShort(x.cStart)}–${fmtShort(x.cEnd)}<div style="font-size:9px;color:#94a3b8">${x.days}d</div></td>
-        <td style="padding:7px 8px;text-align:right;font-size:11px;color:#0F172A;font-weight:600">${fmt(x.merchantBurn)}</td>
-        <td style="padding:7px 8px;text-align:center;font-size:10px;color:#64748b">${Math.round(x.coFundPct)}%</td>
+        <td style="padding:7px 8px;font-size:10px;color:${T.muted}"><span style="width:7px;height:7px;background:${b};border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle"></span>${c.brand}</td>
+        <td style="padding:7px 8px;font-size:10px;color:${T.muted};white-space:nowrap">${fmtShort(x.cStart)}–${fmtShort(x.cEnd)}<div style="font-size:9px;color:${T.label}">${x.days}d</div></td>
+        <td style="padding:7px 8px;text-align:right;font-size:11px;color:${T.text};font-weight:600">${fmt(x.merchantBurn)}</td>
+        <td style="padding:7px 8px;text-align:center;font-size:10px;color:${T.muted}">${Math.round(x.coFundPct)}%</td>
         <td style="padding:7px 8px;text-align:right;font-size:11px;color:#3B82F6;font-weight:800">${fmt(x.coFundInWindow)}</td>
-        <td style="padding:7px 8px;text-align:right;font-size:10px;color:#64748b">${fmt(totalCustDisc)}</td>
+        <td style="padding:7px 8px;text-align:right;font-size:10px;color:${T.muted}">${fmt(totalCustDisc)}</td>
       </tr>`;
     }).join('');
     const subtotalTotal=group.subtotalMerchant+group.subtotalCoFund;
@@ -11630,46 +11648,46 @@ function discountCoFundAuditTableHTML(d){
     </tr>
     ${rows}
     <tr style="background:${clr}08;border-bottom:2px solid ${clr}44">
-      <td colspan="3" style="padding:8px 12px;font-size:10px;font-weight:700;color:#64748b;text-align:right">Subtotal · ${agg} (${group.items.length} campaign${group.items.length===1?'':'s'})</td>
-      <td style="padding:8px 8px;text-align:right;font-size:11px;color:#0F172A;font-weight:800">${fmt(group.subtotalMerchant)}</td>
+      <td colspan="3" style="padding:8px 12px;font-size:10px;font-weight:700;color:${T.muted};text-align:right">Subtotal · ${agg} (${group.items.length} campaign${group.items.length===1?'':'s'})</td>
+      <td style="padding:8px 8px;text-align:right;font-size:11px;color:${T.text};font-weight:800">${fmt(group.subtotalMerchant)}</td>
       <td></td>
       <td style="padding:8px 8px;text-align:right;font-size:12px;color:#3B82F6;font-weight:800">${fmt(group.subtotalCoFund)}</td>
-      <td style="padding:8px 8px;text-align:right;font-size:11px;color:#64748b;font-weight:700">${fmt(subtotalTotal)}</td>
+      <td style="padding:8px 8px;text-align:right;font-size:11px;color:${T.muted};font-weight:700">${fmt(subtotalTotal)}</td>
     </tr>`;
   };
   const aggregatorOrder=["Deliveroo","Talabat","Careem","Noon","Keeta"].filter(a=>byAgg[a]);
   Object.keys(byAgg).forEach(a=>{if(!aggregatorOrder.includes(a))aggregatorOrder.push(a);});
-  const head=`<thead><tr style="background:#F5F0E5;border-bottom:2px solid #EDE7D9">
-    <th style="text-align:left;padding:8px 8px 8px 22px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Campaign</th>
-    <th style="text-align:left;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Brand</th>
-    <th style="text-align:left;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Window</th>
-    <th style="text-align:right;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Merchant portion — from aggregator statement">Merchant</th>
-    <th style="text-align:center;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Platform's declared share of the customer-facing discount">CF %</th>
+  const head=`<thead><tr style="background:${T.rowBg};border-bottom:2px solid ${T.border}">
+    <th style="text-align:left;padding:8px 8px 8px 22px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px">Campaign</th>
+    <th style="text-align:left;padding:8px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px">Brand</th>
+    <th style="text-align:left;padding:8px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px">Window</th>
+    <th style="text-align:right;padding:8px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Merchant portion — from aggregator statement">Merchant</th>
+    <th style="text-align:center;padding:8px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Platform's declared share of the customer-facing discount">CF %</th>
     <th style="text-align:right;padding:8px;font-size:10px;color:#3B82F6;font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Inferred: merchant × pct / (1 − pct)">Agg Co-Fund</th>
-    <th style="text-align:right;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Merchant + Agg Co-Fund">Total to Customer</th>
+    <th style="text-align:right;padding:8px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Merchant + Agg Co-Fund">Total to Customer</th>
   </tr></thead>`;
   // Ambient Talabat row + grand total footer
   let ambientRow='';
   if(hasAmbient){
     ambientRow=`<tr style="background:rgba(239,65,54,.08);border-top:2px solid rgba(239,65,54,.5)">
-      <td colspan="5" style="padding:8px 12px;font-size:11px;color:#64748b"><strong style="color:#EF4136">🍔 Talabat ambient</strong> — from <code style="font-size:10px">talabat_disc</code> column (Talabat Pro vouchers, first-order codes, ambient promos not tied to a tracked campaign)</td>
+      <td colspan="5" style="padding:8px 12px;font-size:11px;color:${T.muted}"><strong style="color:#EF4136">🍔 Talabat ambient</strong> — from <code style="font-size:10px">talabat_disc</code> column (Talabat Pro vouchers, first-order codes, ambient promos not tied to a tracked campaign)</td>
       <td style="padding:8px 8px;text-align:right;font-size:12px;color:#3B82F6;font-weight:800">${fmt(d.coFundAmbient)}</td>
       <td></td>
     </tr>`;
   }
   const grand=d.coFundTotalDisplay||0;
   const grandRow=`<tr style="background:linear-gradient(90deg,rgba(59,130,246,.15),rgba(59,130,246,.05));border-top:3px solid #3B82F6">
-    <td colspan="5" style="padding:11px 12px;font-size:12px;color:#0F172A;font-weight:800;text-transform:uppercase;letter-spacing:.8px">Grand Total · Aggregator Co-Fund</td>
+    <td colspan="5" style="padding:11px 12px;font-size:12px;color:${T.text};font-weight:800;text-transform:uppercase;letter-spacing:.8px">Grand Total · Aggregator Co-Fund</td>
     <td style="padding:11px 8px;text-align:right;font-size:16px;color:#3B82F6;font-weight:800">${fmt(grand)}</td>
-    <td style="padding:11px 8px;text-align:right;font-size:10px;color:#94a3b8">← should match tile above</td>
+    <td style="padding:11px 8px;text-align:right;font-size:10px;color:${T.label}">← should match tile above</td>
   </tr>`;
   return `<div class="card" style="padding:14px 16px;margin-bottom:14px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <div class="ct" style="margin-bottom:0">🔍 Co-Fund Audit — inferred aggregator contributions by campaign</div>
-      <div style="font-size:10px;color:#94a3b8">Click any row to open the campaign</div>
+      <div style="font-size:10px;color:${T.label}">Click any row to open the campaign</div>
     </div>
-    <div style="font-size:11px;color:#64748b;line-height:1.5;margin-bottom:12px;padding:8px 10px;background:rgba(59,130,246,.06);border-left:3px solid #3B82F6;border-radius:4px">
-      For each co-funded campaign, the platform's contribution isn't in your statement — we infer it as <code style="color:#0F172A">merchant × pct / (1 − pct)</code>. Example: on a 50:50 co-fund campaign where the statement shows AED 15 in merchant discount, the platform's share is AED 15 too, so the customer saw AED 30 off. Verify against your aggregator co-fund invoices.
+    <div style="font-size:11px;color:${T.muted};line-height:1.5;margin-bottom:12px;padding:8px 10px;background:rgba(59,130,246,.06);border-left:3px solid #3B82F6;border-radius:4px">
+      For each co-funded campaign, the platform's contribution isn't in your statement — we infer it as <code style="color:${T.text}">merchant × pct / (1 − pct)</code>. Example: on a 50:50 co-fund campaign where the statement shows AED 15 in merchant discount, the platform's share is AED 15 too, so the customer saw AED 30 off. Verify against your aggregator co-fund invoices.
     </div>
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
       ${head}
@@ -11686,6 +11704,7 @@ function discountCoFundAuditTableHTML(d){
 // their brand. Populated during parseKeetaXLSX. Helps catch cases where an item was renamed by
 // Keeta or a promo was added to the sheet without a corresponding item rule. Hidden if empty.
 function discountUnmappedKeetaItemsWarning(){
+  const T=discTheme();
   if(!keetaOrdersData||!keetaOrdersData.metadata||!keetaOrdersData.metadata.unmapped_items)return '';
   const summary=keetaOrdersData.metadata.unmapped_items;
   const brands=Object.keys(summary);
@@ -11699,18 +11718,18 @@ function discountUnmappedKeetaItemsWarning(){
   }
   if(!anyFlagged)return '';
   const rows=Object.entries(filtered).map(([brand,items])=>{
-    const clr=BMAP[brand]?.c||'#94a3b8';
+    const clr=BMAP[brand]?.c||T.label;
     return `<div style="margin:8px 0">
       <div style="font-size:11px;font-weight:800;color:${clr};text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">${brand}</div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px">${items.map(x=>`<span style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);color:#0F172A;padding:3px 8px;border-radius:6px;font-size:11px" title="Appears in ${x.count} order${x.count===1?'':'s'} — no matching item rule found">${x.item.replace(/;$/,'')} <span style="color:#94a3b8;font-size:9px">×${x.count}</span></span>`).join('')}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">${items.map(x=>`<span style="background:${_darkPage?'rgba(245,158,11,.15)':'rgba(245,158,11,.08)'};border:1px solid rgba(245,158,11,.35);color:${T.text};padding:3px 8px;border-radius:6px;font-size:11px" title="Appears in ${x.count} order${x.count===1?'':'s'} — no matching item rule found">${x.item.replace(/;$/,'')} <span style="color:${T.label};font-size:9px">×${x.count}</span></span>`).join('')}</div>
     </div>`;
   }).join('');
   return `<div class="card" style="padding:12px 14px;margin-bottom:14px;border-left:4px solid #F59E0B">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
       <span style="font-size:16px">⚠️</span>
-      <div style="font-size:12px;font-weight:800;color:#F59E0B">Keeta orders had unexplained discount — likely from items not in <code style="color:#0F172A">KEETA_ITEM_RULES</code></div>
+      <div style="font-size:12px;font-weight:800;color:#F59E0B">Keeta orders had unexplained discount — likely from items not in <code style="color:${T.text}">KEETA_ITEM_RULES</code></div>
     </div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:8px;line-height:1.5">In these orders, the merchant discount was <strong>larger</strong> than what the matched item rules can explain — and there's no menu-wide residual campaign for this brand+date to catch the leftover. That leftover is landing in "(Unattributed)". These items were in the same cart and may be the actual culprits. Tell me the item + expected discount + which sheet campaign it should feed, and I'll add a rule.</div>
+    <div style="font-size:11px;color:${T.muted};margin-bottom:8px;line-height:1.5">In these orders, the merchant discount was <strong>larger</strong> than what the matched item rules can explain — and there's no menu-wide residual campaign for this brand+date to catch the leftover. That leftover is landing in "(Unattributed)". These items were in the same cart and may be the actual culprits. Tell me the item + expected discount + which sheet campaign it should feed, and I'll add a rule.</div>
     ${rows}
   </div>`;
 }
@@ -11724,29 +11743,33 @@ function discountUnmappedKeetaItemsWarning(){
 //   - Item-level "Restaurant offers" on side items not declared as their own campaigns
 //   - Manual sheet entries for disc that don't match what exact upload data shows
 function discountUncategorizedBreakdownHTML(d){
+  const T=discTheme();
   if(!d.uncategorizedByBrandAgg||d.uncategorizedByBrandAgg.length===0)return '';
   const fmt=n=>`AED ${Math.round(n||0).toLocaleString()}`;
   const AGG_CLR={Deliveroo:'#00CCBC',Talabat:'#EF4136',Careem:'#00A651',Noon:'#FEEE00',Keeta:'#FFC72C'};
+  const dateRowBg=_darkPage?'rgba(245,158,11,.08)':'#FFFCF0';
   const rows=d.uncategorizedByBrandAgg.map(x=>{
-    const brandClr=BMAP[x.brand]?.c||'#94a3b8';
-    const aggClr=AGG_CLR[x.aggregator]||'#94a3b8';
+    const brandClr=BMAP[x.brand]?.c||T.label;
+    const aggClr=AGG_CLR[x.aggregator]||T.label;
     const attribPct=x.total>0?(x.attributed/x.total*100):0;
     const uncatPct=x.total>0?(x.uncategorized/x.total*100):0;
     const overAttrBadge=x.overAttributed>1?`<span style="display:block;font-size:9px;color:#DC2626;font-weight:700;margin-top:2px" title="Campaign math assigned ${fmt(x.overAttributed)} more merchant discount than the Sheet shows for this brand+aggregator+window — likely an estimation/overlap-splitting issue on one of the campaigns below. Worth checking which specific campaign is over-counting.">⚠ +${fmt(x.overAttributed)} over-attributed</span>`:'';
-    return `<tr style="border-bottom:1px solid #F5F0E5">
-      <td style="padding:8px 12px;font-size:11px"><span style="width:8px;height:8px;background:${brandClr};border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle"></span><strong style="color:#0F172A">${x.brand}</strong></td>
+    return `<tr style="border-bottom:1px solid ${T.rowBg}">
+      <td style="padding:8px 12px;font-size:11px"><span style="width:8px;height:8px;background:${brandClr};border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle"></span><strong style="color:${T.text}">${x.brand}</strong></td>
       <td style="padding:8px 8px;font-size:11px"><span style="width:8px;height:8px;background:${aggClr};border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle"></span>${x.aggregator}</td>
-      <td style="padding:8px 8px;text-align:right;font-size:11px;color:#0F172A;font-weight:600">${fmt(x.total)}</td>
-      <td style="padding:8px 8px;text-align:right;font-size:11px;color:#22C55E">${fmt(x.attributed)}<div style="font-size:9px;color:#94a3b8;font-weight:400">${attribPct.toFixed(0)}%</div>${overAttrBadge}</td>
-      <td style="padding:8px 8px;text-align:right;font-size:12px;color:#F59E0B;font-weight:800">${fmt(x.uncategorized)}<div style="font-size:9px;color:#94a3b8;font-weight:400">${uncatPct.toFixed(0)}%</div></td>
+      <td style="padding:8px 8px;text-align:right;font-size:11px;color:${T.text};font-weight:600">${fmt(x.total)}</td>
+      <td style="padding:8px 8px;text-align:right;font-size:11px;color:#22C55E">${fmt(x.attributed)}<div style="font-size:9px;color:${T.label};font-weight:400">${attribPct.toFixed(0)}%</div>${overAttrBadge}</td>
+      <td style="padding:8px 8px;text-align:right;font-size:12px;color:#F59E0B;font-weight:800">${fmt(x.uncategorized)}<div style="font-size:9px;color:${T.label};font-weight:400">${uncatPct.toFixed(0)}%</div></td>
     </tr>`
-    +(x.topDates&&x.topDates.length?'<tr style="border-bottom:1px solid #F5F0E5;background:#FFFCF0">'
+    +(x.topDates&&x.topDates.length?'<tr style="border-bottom:1px solid '+T.rowBg+';background:'+dateRowBg+'">'
       +'<td colspan="5" style="padding:5px 12px 11px">'
-      +'<div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Dates with uncategorized burn ('+x.uncatDays+' day'+(x.uncatDays!==1?'s':'')+' · real per-day allocation · click a date to see why)</div>'
+      +'<div style="font-size:10px;color:'+T.label+';font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Dates with uncategorized burn ('+x.uncatDays+' day'+(x.uncatDays!==1?'s':'')+' · real per-day allocation · click a date to see why)</div>'
       +'<div style="display:flex;flex-wrap:wrap;gap:5px">'
       +x.topDates.map(function(td){
         const _key=x.brand+'|'+x.aggregator+'|'+td.date;
         const _open=discAuditExpanded.has(_key);
+        // Self-contained amber badge — its own light background + dark-amber text carry their
+        // own contrast regardless of page theme, so these deliberately aren't theme-switched.
         return '<span onclick="discAuditToggle(\''+x.brand.replace(/'/g,"\\'")+'\',\''+x.aggregator+'\',\''+td.date+'\')" style="display:inline-flex;align-items:center;gap:5px;background:'+(_open?'#FDE68A':'#FEF3C7')+';border:0.5px solid rgba(245,158,11,.45);border-radius:4px;padding:4px 9px;font-size:12px;color:#92400e;white-space:nowrap;cursor:pointer">'
         +'<span style="font-weight:700">'+fmtShort(td.date)+'</span>'
         +' <span style="color:#B45309">AED '+Math.round(td.unc).toLocaleString()+'</span>'
@@ -11763,9 +11786,9 @@ function discountUncategorizedBreakdownHTML(d){
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <div class="ct" style="margin-bottom:0">❓ Uncategorized burn — where the ${fmt(grandUnc)} is coming from</div>
     </div>
-    <div style="font-size:11px;color:#64748b;line-height:1.6;margin-bottom:12px;padding:8px 10px;background:rgba(245,158,11,.06);border-left:3px solid #F59E0B;border-radius:4px">
+    <div style="font-size:11px;color:${T.muted};line-height:1.6;margin-bottom:12px;padding:8px 10px;background:rgba(245,158,11,.06);border-left:3px solid #F59E0B;border-radius:4px">
       Merchant discount from the Google Sheet daily data that couldn't be attributed to any tracked campaign in this window. Common causes to check for the top rows below:
-      <ul style="margin:6px 0 0 18px;padding:0;color:#64748b">
+      <ul style="margin:6px 0 0 18px;padding:0;color:${T.muted}">
         <li>A campaign is running but isn't in the sheet — check the aggregator portal for that brand+aggregator</li>
         <li>The campaign IS in the sheet but its start/end dates don't cover the actual burn dates</li>
         <li>Ambient platform promos (Talabat Pro, first-order codes) reflected in merchant column</li>
@@ -11774,10 +11797,10 @@ function discountUncategorizedBreakdownHTML(d){
       </ul>
     </div>
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
-      <thead><tr style="background:#F5F0E5;border-bottom:2px solid #EDE7D9">
-        <th style="text-align:left;padding:8px 12px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Brand</th>
-        <th style="text-align:left;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px">Aggregator</th>
-        <th style="text-align:right;padding:8px;font-size:10px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Merchant discount from Google Sheet daily data">Total Burn</th>
+      <thead><tr style="background:${T.rowBg};border-bottom:2px solid ${T.border}">
+        <th style="text-align:left;padding:8px 12px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px">Brand</th>
+        <th style="text-align:left;padding:8px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px">Aggregator</th>
+        <th style="text-align:right;padding:8px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Merchant discount from Google Sheet daily data">Total Burn</th>
         <th style="text-align:right;padding:8px;font-size:10px;color:#22C55E;font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Sum of allocated merchant burn to overlapping campaigns">Attributed</th>
         <th style="text-align:right;padding:8px;font-size:10px;color:#F59E0B;font-weight:800;text-transform:uppercase;letter-spacing:.6px" title="Total − Attributed (this is what to investigate)">Uncategorized</th>
       </tr></thead>
@@ -11785,12 +11808,23 @@ function discountUncategorizedBreakdownHTML(d){
     </table></div>
   </div>`;
 }
-
 async function renderDiscounts(){
   const pg=document.getElementById("page-discounts");
   if(!pg)return;
+  const T=discTheme();
+  const styleOverride=_darkPage?`<style>
+    #page-discounts{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
+    #page-discounts .card,#page-discounts .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
+    #page-discounts .ct{color:${DARK_THEME.textPrimary}!important}
+    #page-discounts table th{color:${DARK_THEME.textMuted}!important}
+    #page-discounts table td{color:${DARK_THEME.textPrimary}!important}
+    #page-discounts .fpill{background:${DARK_THEME.bg}!important;border-color:${DARK_THEME.cardBorder}!important}
+    #page-discounts .fpill.on{border-color:#f59e0b!important}
+    #page-discounts .preset{background:${DARK_THEME.bg}!important;border-color:${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+    #page-discounts .preset.act{background:rgba(245,158,11,.15)!important;border-color:#f59e0b!important;color:#f59e0b!important}
+  </style>`:"";
   if(!campLoaded){
-    pg.innerHTML=`<div style="padding:30px;text-align:center;color:#64748b;font-size:13px">⏳ Loading campaign data…</div>`;
+    pg.innerHTML=`${styleOverride}<div style="padding:30px;text-align:center;color:${T.muted};font-size:13px">⏳ Loading campaign data…</div>`;
     await loadCampaigns();
     return renderDiscounts();
   }
@@ -11799,21 +11833,22 @@ async function renderDiscounts(){
   // cards below show the newly-computed range — user sees a mismatch and it looks like
   // filters aren't working.
   discountEnsureDates();
-  const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(15,23,42,.12)"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">💸</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Discount Burn Analysis</div></div><div style="font-size:10px;color:#64748b;margin-top:2px;letter-spacing:.4px">Total burn · Campaign attribution · Ambient discount tracking</div></div><button onclick="discountExportCSV()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:5px">⬇ Download CSV</button></div>`;
+  const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid ${T.border}"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">💸</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Discount Burn Analysis</div></div><div style="font-size:10px;color:${T.muted};margin-top:2px;letter-spacing:.4px">Total burn · Campaign attribution · Ambient discount tracking</div></div><button onclick="discountExportCSV()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:5px">⬇ Download CSV</button></div>`;
   const filterBar=discountFilterBarHTML();
   const data=computeDiscountBurn();
   _lastDiscBurnData=data; // cached for discAuditDateHTML — the per-date drill-down tool
   if(!data){
-    pg.innerHTML=`${header}${filterBar}<div class="card" style="text-align:center;padding:30px;color:#64748b">Please select a valid date range to view results.</div>`;
+    pg.innerHTML=`${styleOverride}${header}${filterBar}<div class="card" style="text-align:center;padding:30px;color:${T.muted}">Please select a valid date range to view results.</div>`;
     return;
   }
   if(data.matchesCount===0){
-    pg.innerHTML=`${header}${filterBar}<div class="card" style="text-align:center;padding:30px;color:#64748b">No sales data matches these filters. Try widening the aggregator/brand/region selection or picking a different date range.</div>`;
+    pg.innerHTML=`${styleOverride}${header}${filterBar}<div class="card" style="text-align:center;padding:30px;color:${T.muted}">No sales data matches these filters. Try widening the aggregator/brand/region selection or picking a different date range.</div>`;
     return;
   }
-  pg.innerHTML=`${header}${filterBar}${discountKpiRowHTML(data)}${discountUnmappedKeetaItemsWarning()}${discountTrendChartHTML(data)}${discountUncategorizedBreakdownHTML(data)}${discountCoFundAuditTableHTML(data)}${discountCampaignTableHTML(data)}`;
+  pg.innerHTML=`${styleOverride}${header}${filterBar}${discountKpiRowHTML(data)}${discountUnmappedKeetaItemsWarning()}${discountTrendChartHTML(data)}${discountUncategorizedBreakdownHTML(data)}${discountCoFundAuditTableHTML(data)}${discountCampaignTableHTML(data)}`;
   // Render trend chart after DOM is in place
   if(data.trend&&data.trend.length>0){
+    const axisClr=_darkPage?DARK_THEME.textMuted:"#64748b";
     setTimeout(()=>{
       const ctx=document.getElementById("ch-discount-trend");
       if(!ctx)return;
@@ -11821,7 +11856,7 @@ async function renderDiscounts(){
       charts["ch-discount-trend"]=new Chart(ctx,{
         type:"line",
         data:{labels:data.trend.map(x=>x.d),datasets:[{label:"Daily Burn",data:data.trend.map(x=>x.burn),borderColor:"#EF4444",backgroundColor:"rgba(239,68,68,.12)",borderWidth:2,pointRadius:2,pointHoverRadius:5,fill:true,tension:.25}]},
-        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`AED ${Math.round(c.parsed.y).toLocaleString()}`}}},scales:{y:{beginAtZero:true,ticks:{callback:v=>`AED ${(v/1000).toFixed(1)}k`,font:{size:10},color:"#64748b"},grid:{color:"rgba(148,163,184,.15)"}},x:{ticks:{font:{size:9},color:"#64748b",maxRotation:0,autoSkip:true,maxTicksLimit:12},grid:{display:false}}}}
+        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`AED ${Math.round(c.parsed.y).toLocaleString()}`}}},scales:{y:{beginAtZero:true,ticks:{callback:v=>`AED ${(v/1000).toFixed(1)}k`,font:{size:10},color:axisClr},grid:{color:"rgba(148,163,184,.15)"}},x:{ticks:{font:{size:9},color:axisClr,maxRotation:0,autoSkip:true,maxTicksLimit:12},grid:{display:false}}}}
       });
     },50);
   }
