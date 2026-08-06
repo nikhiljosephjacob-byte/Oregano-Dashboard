@@ -13,19 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-180";
+const BUILD_VERSION="2026-08-06-181";
 const BUILD_NOTES=[
-  "\ud83c\udfa8 Loading animation: rolled out Option D (segmented glow underline) to replace the old flat gradient fill \u2014 applied to BOTH nav-tab loading indicators (Campaigns and Ads Performance) via one shared function, so they stay visually identical going forward instead of drifting into two different implementations. Five segments light up left-to-right as background loading progresses, with the currently-filling segment pulsing.",
-  "\ud83c\udf19 Compare page filters: found the actual culprit from the screenshot \u2014 the Brands/Platforms/Outlets dropdown buttons and the date-preset buttons (Latest day/7d/30d/This month) use the bare `.fpill`/`.preset` classes directly, not wrapped in a `.fbar` container the way every other page's filter bar is. The existing dark overrides were all scoped to `.fbar .preset`, so they never matched Compare's bare buttons \u2014 that's exactly the light-shell background bleeding through in the screenshot. Added a direct `#page-compare .fpill` / `#page-compare .preset` override.",
-  "\u2139\ufe0f Cancellations: the still-missing-Keeta screenshot reflects data from BEFORE the v178 (server payload cap raised to 20MB) and v179 (local graceful-degradation) fixes ever had a chance to run \u2014 confirmed no upload has happened since either shipped. Both fixes only take effect on the NEXT upload. Re-uploading all 5 (Keeta especially) should finally confirm whether this closes it out for good.",
-  "\ud83c\udf19 Found and fixed real theming gaps in the filter controls: the shared Brand/Platform/Outlet dropdown menu (used on every already-dark page, not just Compare) had a hardcoded white background with no dark-mode override at all \u2014 it was popping up light on every dark page whenever opened. The Custom date-range picker had the same issue. Checkboxes everywhere also never had an accent-color set, so they always rendered in the browser's plain default style regardless of theme \u2014 added theme-matched accent-color throughout.",
-  "\ud83d\udd0d Cancellations: found a strong, testable lead on the reload-persistence gap. Two of the five aggregator save/sync failure paths were console-only \u2014 completely invisible unless DevTools happened to be open at the exact moment of upload. Both now surface as a visible on-screen warning (reusing the existing error-toast element), and every server push now logs its payload size. Also: the server's payload size guard was 5MB based on an early estimate of ~50-350KB uploads \u2014 that estimate didn't account for the merge strategy accumulating every upload on top of prior ones forever. Keeta (near-continuous campaigns, 50+ outlets, many months of accumulated history) is the most likely to have quietly outgrown that limit and been silently rejected. Raised to 20MB (Workers KV supports up to 25MiB). If a size-related rejection was the cause, this should fix it outright; if not, the new visible warning will show exactly what's failing on the next occurrence instead of requiring a DevTools screenshot.",
-  "\u2139\ufe0f Adjusted the `latest`-date handling: confirmed the Google Sheet permanently carries pre-populated future-dated (empty) rows by design, not a one-off data error. `latest` is now unconditionally capped at the real calendar date every load \u2014 this is the permanent behavior going forward, not a stopgap pending a sheet cleanup.",
-  "\ud83d\udc1b Fixed: every page loaded showing blank/zero \"Yesterday\" figures until you clicked Last 7 Days then back to Yesterday. Root cause: the initial page-load default was anchored to `latest` (the most recent day found in the sales data) instead of the real calendar date \u2014 diverging from what the Yesterday button itself calculates whenever the two dates don't match. Both now compute the identical real-calendar-anchored date.",
-  "\ud83d\udc1b Cancellations page: fixed two related gaps in the shared server-sync path \u2014 (1) the boot-time \"pull latest data from server\" step refreshed Campaigns/Discounts but never Cancellations, so newly-synced cancellation data could sit in memory without the page re-rendering to show it; (2) hardened the pull so a server copy that's missing cancellations (e.g. from before this data started syncing) can no longer silently overwrite/wipe cancellations already held locally. If cancellations still disappear on reload after this, the next step is checking the browser console for the [sync] log lines right after a refresh.",
-  "\ud83d\udccb To-do list check-in: investigated both the sidebar redesign and the Campaigns loading animation before touching either. Searched dashboard.js thoroughly for the \"green swipe\" loading animation (loading text, every CSS keyframe, progress-bar patterns) and couldn't locate it \u2014 it almost certainly lives in the external HTML/CSS shell this session doesn't have access to, the same place .card's and .fbar's base styles turned out to live. Sidebar scope is more contained than expected (only 9 .tab references across 3 functions), but the actual tab markup itself is also likely in that same external shell. Both need a screenshot/more access before they can be built correctly rather than guessed at \u2014 given the lesson learned earlier this session from three failed blind CSS guesses on the sides issue, not repeating that here.",
-  "\ud83c\udf19 Compare page dark theme, started (sixth page in the rollout) \u2014 given prior familiarity with this page's structure from building the 3-way comparison feature. Converted: the Group A/B/C filter panels (cmpPanel) including proper dark color-scheme on the native date pickers (was hardcoded to light, which affects the browser's own calendar icon styling), the Add Group C tile, and the page header/action buttons, all with a scoped style override matching the pattern used on every prior page.",
-  "Remaining for Compare: the summary stat cards (cmpStatCard/cmpDiscCard/cmpOutletCard/cmpContribCard \u2014 each sets its own inline colors, same treatment needed as kpiCard before them), the Brand\u00d7Platform breakdown table, the outlet drill-down, and the Platform Movement risers/fallers section. Verified what's done so far with 5 direct dark/light-mode checks on cmpPanel, plus the existing 16-check Comparison suite and 14-check navigation suite both still passing \u2014 nothing already built was disturbed."
+  "🎨 Loading bar: thicker, brighter segments (was barely visible).",
+  "🌙 Brightened muted/caption text across every dark page — was passing contrast standards but read as thin at small sizes, especially on Compare.",
+  "🔧 The \"local cache trimmed\" message on re-upload is now a calmer blue notice instead of a red warning — it was never a real error, just alarming-looking.",
+  "🐛 Fixed the \"What's new\" popup being unscrollable when the changelog ran long, trapping the dismiss button off-screen.",
+  "🔧 Cancellations: raised the server upload size limit and added visible warnings when a save doesn't fully fit — re-upload once more to pick up both fixes."
 ];
 
 
@@ -229,14 +223,14 @@ function showWhatsNewIfNeeded(){
   overlay.style.cssText="position:fixed;inset:0;background:rgba(15,23,42,.78);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:99999;padding:20px";
   const items=BUILD_NOTES.map(n=>`<li style="margin-bottom:10px;line-height:1.55">${n}</li>`).join("");
   overlay.innerHTML=`
-    <div style="background:#FFFFFF;border:1px solid #22C55E80;border-radius:12px;padding:24px 28px;max-width:540px;width:100%;box-shadow:0 20px 60px rgba(15,23,42,.6);animation:fadeInUp .3s ease">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+    <div style="background:#FFFFFF;border:1px solid #22C55E80;border-radius:12px;padding:24px 28px;max-width:540px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(15,23,42,.6);animation:fadeInUp .3s ease">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-shrink:0">
         <div style="font-size:24px">🎉</div>
         <div style="font-size:18px;font-weight:800;color:#22C55E">What's new in this update</div>
       </div>
-      <div style="font-size:10px;color:#64748b;margin-bottom:14px">Version ${BUILD_VERSION}</div>
-      <ul style="font-size:13px;color:#475569;padding-left:22px;margin:0 0 18px 0">${items}</ul>
-      <div style="display:flex;justify-content:flex-end">
+      <div style="font-size:10px;color:#64748b;margin-bottom:14px;flex-shrink:0">Version ${BUILD_VERSION}</div>
+      <ul style="font-size:13px;color:#475569;padding-left:22px;margin:0 0 18px 0;overflow-y:auto;flex:1;min-height:0">${items}</ul>
+      <div style="display:flex;justify-content:flex-end;flex-shrink:0">
         <button onclick="dismissWhatsNew()" style="background:#22C55E;border:none;color:#000;padding:7px 18px;font-size:11px;font-weight:700;border-radius:6px;cursor:pointer">Got it</button>
       </div>
     </div>
@@ -304,7 +298,7 @@ const BR=[{n:"Oregano",gid:"502198035",c:"#C9933A"},{n:"Lollorosso",gid:"1967911
 // otherwise be a near-invisible 1.27:1 border-vs-card contrast.
 const DARK_THEME={
   bg:"#0F1729",card:"#1A2337",cardBorder:"#3A4875",
-  textPrimary:"#F1F5F9",textSecondary:"#94A3B8",textMuted:"#8393AB",
+  textPrimary:"#F1F5F9",textSecondary:"#94A3B8",textMuted:"#A3B4CC",
   accentGreen:"#2ECC71",accentOrange:"#FF8A3D",accentBlue:"#4E9BFF",accentPurple:"#A78BFA",accentRed:"#FF6B6B",
   shadow:"0 4px 16px rgba(0,0,0,.35), 0 1px 3px rgba(0,0,0,.3)",
 };
@@ -573,11 +567,23 @@ const ORDER_SYNC_AGGS=[
 // several rounds of investigation. Now surfaces visibly via the existing error-toast element
 // used elsewhere for upload errors, and logs the actual payload size so a size-related
 // rejection is immediately obvious rather than guessed at.
-function showSyncWarning(msg){
+function showSyncWarning(msg,severity){
   console.log(msg);
   try{
     const e=document.getElementById("etoa");
-    if(e){e.textContent="⚠️ "+msg;e.style.display="block";setTimeout(()=>e.style.display="none",10000);}
+    if(!e)return;
+    if(severity==="info"){
+      // Low severity: data is fine, just didn't fully fit in this browser's local cache. The
+      // shell's default etoa styling reads as red/alarming (built for real errors) — override
+      // inline here so a routine, expected message doesn't look like something's broken.
+      e.style.background="rgba(59,130,246,.12)";e.style.border="1px solid rgba(59,130,246,.4)";e.style.color="#60A5FA";
+      e.textContent="ℹ️ "+msg;
+    }else{
+      e.style.background="";e.style.border="";e.style.color=""; // reset to shell default (real warning)
+      e.textContent="⚠️ "+msg;
+    }
+    e.style.display="block";
+    setTimeout(()=>e.style.display="none",severity==="info"?7000:10000);
   }catch(err){}
 }
 // v179: graceful degradation for localStorage quota failures. Total browser localStorage quota
@@ -597,7 +603,7 @@ function trySaveLocalOrderData(key,dataObj,label){
   for(let i=0;i<attempts.length;i++){
     try{
       localStorage.setItem(key,JSON.stringify(attempts[i]()));
-      if(i>0)showSyncWarning(`${label} local cache saved without ${i===1?"order-level Finance detail":"full order records"} — too large for this browser's storage. Full data is still on the shared server.`);
+      if(i>0)showSyncWarning(`${label} local cache saved without ${i===1?"order-level Finance detail":"full order records"} — too large for this browser's storage. Full data is still on the shared server.`,"info");
       return;
     }catch(e){ if(i===attempts.length-1)showSyncWarning(`${label} localStorage save failed even after shrinking the payload (${e.message}) — likely quota. This browser's local copy may be stale until the server sync catches up.`); }
   }
@@ -3527,17 +3533,17 @@ function paintNavBattery(tab,pct,readyTitle,loadingLabel){
   if(!bar){
     bar=document.createElement("div");
     bar.className="nav-battery-segs";
-    bar.style.cssText="position:absolute;left:6px;right:6px;bottom:2px;display:flex;gap:2px;pointer-events:none";
+    bar.style.cssText="position:absolute;left:6px;right:6px;bottom:1px;display:flex;gap:3px;pointer-events:none";
     tab.appendChild(bar);
   }
   const N=5,segs=[];
   for(let i=0;i<N;i++){
     const segFloor=i*100/N,segCeil=(i+1)*100/N;
     const lit=pct>=segCeil,active=!lit&&pct>segFloor;
-    const bg=(lit||active)?"#22C55E":"rgba(148,163,184,.25)";
-    const glow=(lit||active)?"box-shadow:0 0 4px #22C55E99;":"";
+    const bg=(lit||active)?"#3EE07F":"rgba(148,163,184,.4)";
+    const glow=(lit||active)?"box-shadow:0 0 7px 1px #22C55Ecc;":"";
     const anim=active?"animation:navSegPulse 1s ease-in-out infinite;":"";
-    segs.push(`<span style="flex:1;height:2px;border-radius:2px;background:${bg};${glow}${anim}"></span>`);
+    segs.push(`<span style="flex:1;height:4px;border-radius:2px;background:${bg};${glow}${anim}"></span>`);
   }
   bar.innerHTML=segs.join("");
 }
@@ -12721,7 +12727,7 @@ function cmpStatCard(label,a,b,fmt,unit,perDay,c,perDayC){
         <span style="font-size:14px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmt(avgB)}</span>
         <span style="font-size:10px;color:${pctClr(avgDiff)};font-weight:700">${fmtPct(avgDiff)}</span>
       </div>
-      <div style="font-size:8px;color:${T.muted};margin-top:2px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
+      <div style="font-size:9px;color:${T.muted};font-weight:600;margin-top:2px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
     </div>`;
   }
   return `<div class="sm">
@@ -12767,7 +12773,7 @@ function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay,discC,netC){
         <span style="font-size:14px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(avgB)}</span>
         <span style="font-size:10px;color:${avgClr};font-weight:700">${fmtPct(avgDiff)}</span>
       </div>
-      <div style="font-size:8px;color:${T.muted};margin-top:2px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
+      <div style="font-size:9px;color:${T.muted};font-weight:600;margin-top:2px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
     </div>`;
   }
   // v155: Group C, when active — a simple additional line rather than a full 3-way redesign of
