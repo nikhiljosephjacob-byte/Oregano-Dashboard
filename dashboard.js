@@ -13,9 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-176";
+const BUILD_VERSION="2026-08-06-178";
 const BUILD_NOTES=[
-  "\ud83d\udc1b Fixed (root cause, not a patch): campaign contribution calc was still comparing against the FULL campaign length instead of true elapsed days, and baselines were still overlapping campaign start dates, even on the latest build. Traced it to `latest` (the most recent date found anywhere in the sales data) running 25 days AHEAD of the real calendar \u2014 almost certainly a stray future-dated row in the Google Sheet. `latest` is trusted as \"effectively today\" throughout the app, most importantly in the campaign elapsed-day clamp, so an in-progress campaign looked fully finished and its 28-day-back baseline landed well past its own start date. `latest` is now hard-capped at the real calendar date (with a console warning if it ever has to kick in) \u2014 verified against both reported scenarios (Oregano\u00d7Smiles and Wicked Wings\u00d7Keeta) and both now produce the correct elapsed-day count and a non-overlapping baseline. Worth checking the sheet's brand tabs for a row dated after today, since that's what's driving `latest` this far out.",
+  "\ud83c\udf19 Compare page dark theme: DONE. Finished the remaining pieces \u2014 all 4 summary stat cards (Orders/Net Sales/AOV/Discount/Active Outlets/Contribution), the outlet-drill-down hover panel and table, the Platform Movement tile, the year-mismatch and auto-insight banners, and the Brand\u00d7Platform breakdown table. Same theme-aware `T` pattern used everywhere else in this rollout \u2014 checked every function for stray hardcoded hex colors after the pass, not just the ones with obvious findings.",
+  "\ud83d\udd0d Cancellations: found a strong, testable lead on the reload-persistence gap. Two of the five aggregator save/sync failure paths were console-only \u2014 completely invisible unless DevTools happened to be open at the exact moment of upload. Both now surface as a visible on-screen warning (reusing the existing error-toast element), and every server push now logs its payload size. Also: the server's payload size guard was 5MB based on an early estimate of ~50-350KB uploads \u2014 that estimate didn't account for the merge strategy accumulating every upload on top of prior ones forever. Keeta (near-continuous campaigns, 50+ outlets, many months of accumulated history) is the most likely to have quietly outgrown that limit and been silently rejected. Raised to 20MB (Workers KV supports up to 25MiB). If a size-related rejection was the cause, this should fix it outright; if not, the new visible warning will show exactly what's failing on the next occurrence instead of requiring a DevTools screenshot.",
+  "\u2139\ufe0f Adjusted the `latest`-date handling: confirmed the Google Sheet permanently carries pre-populated future-dated (empty) rows by design, not a one-off data error. `latest` is now unconditionally capped at the real calendar date every load \u2014 this is the permanent behavior going forward, not a stopgap pending a sheet cleanup.",
   "\ud83d\udc1b Fixed: every page loaded showing blank/zero \"Yesterday\" figures until you clicked Last 7 Days then back to Yesterday. Root cause: the initial page-load default was anchored to `latest` (the most recent day found in the sales data) instead of the real calendar date \u2014 diverging from what the Yesterday button itself calculates whenever the two dates don't match. Both now compute the identical real-calendar-anchored date.",
   "\ud83d\udc1b Cancellations page: fixed two related gaps in the shared server-sync path \u2014 (1) the boot-time \"pull latest data from server\" step refreshed Campaigns/Discounts but never Cancellations, so newly-synced cancellation data could sit in memory without the page re-rendering to show it; (2) hardened the pull so a server copy that's missing cancellations (e.g. from before this data started syncing) can no longer silently overwrite/wipe cancellations already held locally. If cancellations still disappear on reload after this, the next step is checking the browser console for the [sync] log lines right after a refresh.",
   "\ud83d\udccb To-do list check-in: investigated both the sidebar redesign and the Campaigns loading animation before touching either. Searched dashboard.js thoroughly for the \"green swipe\" loading animation (loading text, every CSS keyframe, progress-bar patterns) and couldn't locate it \u2014 it almost certainly lives in the external HTML/CSS shell this session doesn't have access to, the same place .card's and .fbar's base styles turned out to live. Sidebar scope is more contained than expected (only 9 .tab references across 3 functions), but the actual tab markup itself is also likely in that same external shell. Both need a screenshot/more access before they can be built correctly rather than guessed at \u2014 given the lesson learned earlier this session from three failed blind CSS guesses on the sides issue, not repeating that here.",
@@ -562,6 +564,19 @@ const ORDER_SYNC_AGGS=[
 ];
 // Fire-and-forget push of one aggregator's parsed data to the server. Called from each
 // saveXToStorage() — admin sessions only (server enforces this regardless).
+// v178: failures here used to be console-only, invisible unless someone happened to have
+// DevTools open at the exact moment of upload — which is exactly why a real, recurring failure
+// (Keeta's cancellations/records silently not surviving a reload) went unconfirmed across
+// several rounds of investigation. Now surfaces visibly via the existing error-toast element
+// used elsewhere for upload errors, and logs the actual payload size so a size-related
+// rejection is immediately obvious rather than guessed at.
+function showSyncWarning(msg){
+  console.log(msg);
+  try{
+    const e=document.getElementById("etoa");
+    if(e){e.textContent="⚠️ "+msg;e.style.display="block";setTimeout(()=>e.style.display="none",10000);}
+  }catch(err){}
+}
 async function syncOrderDataToServer(agg,dataObj){
   try{
     const sess=getActiveSession();
@@ -574,9 +589,12 @@ async function syncOrderDataToServer(agg,dataObj){
     const payload={metadata:dataObj.metadata,records:dataObj.records};
     if(dataObj.orderDetail)payload.orderDetail=dataObj.orderDetail;
     if(dataObj.cancellations)payload.cancellations=dataObj.cancellations;
-    const res=await fetch(`/api/orderdata/${agg}`,{method:'POST',headers:{'Content-Type':'application/json','X-Session-Id':sess.sessionId},body:JSON.stringify(payload)});
-    if(!res.ok){const d=await res.json().catch(()=>({}));console.log(`[sync] ${agg} push failed:`,d.error||res.status);}
-    else console.log(`[sync] ${agg} pushed to server`);
+    const body=JSON.stringify(payload);
+    const sizeKB=Math.round(body.length/1024);
+    if(sizeKB>2000)console.log(`[sync] ${agg} payload is ${sizeKB}KB — large, watch for size-related rejections`);
+    const res=await fetch(`/api/orderdata/${agg}`,{method:'POST',headers:{'Content-Type':'application/json','X-Session-Id':sess.sessionId},body});
+    if(!res.ok){const d=await res.json().catch(()=>({}));showSyncWarning(`${agg} failed to save to the shared server (${d.error||res.status}, ${sizeKB}KB payload) — it'll look fine until the next reload, then revert. Re-upload after fixing, or ask Claude to raise the size limit if this keeps happening.`);}
+    else console.log(`[sync] ${agg} pushed to server (${sizeKB}KB)`);
   }catch(e){console.log(`[sync] ${agg} push error:`,e.message);}
 }
 // Admin-only server clear — used by the clearXData buttons so a bad upload disappears for
@@ -997,7 +1015,7 @@ function saveKeetaToStorage(){
   if(typeof _campPartCache!=="undefined")_campPartCache.clear(); // new upload → recompute participation
   if(!keetaOrdersData)return;
   try{localStorage.setItem(KEETA_STORAGE_KEY,JSON.stringify(keetaOrdersData));}
-  catch(e){console.log("[Keeta] localStorage save failed (quota?):",e.message);}  syncOrderDataToServer('keeta',keetaOrdersData); // v112: push shared copy (admin only; server enforces)
+  catch(e){showSyncWarning(`Keeta localStorage save failed (${e.message}) — likely quota. This browser's local copy may be stale until the server sync catches up.`);}  syncOrderDataToServer('keeta',keetaOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearKeetaData(){
   keetaOrdersData=null;
@@ -1727,7 +1745,7 @@ function loadCareemFromStorage(){
 function saveCareemToStorage(){
   if(!careemOrdersData)return;
   try{localStorage.setItem(CAREEM_STORAGE_KEY,JSON.stringify(careemOrdersData));}
-  catch(e){console.log("[Careem] localStorage save failed (quota?):",e.message);}  syncOrderDataToServer('careem',careemOrdersData); // v112: push shared copy (admin only; server enforces)
+  catch(e){showSyncWarning(`Careem localStorage save failed (${e.message}) — likely quota. This browser's local copy may be stale until the server sync catches up.`);}  syncOrderDataToServer('careem',careemOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearCareemData(){
   careemOrdersData=null;
@@ -2004,7 +2022,7 @@ function loadTalabatFromStorage(){
 function saveTalabatToStorage(){
   if(!talabatOrdersData)return;
   try{localStorage.setItem(TALABAT_STORAGE_KEY,JSON.stringify(talabatOrdersData));}
-  catch(e){console.log("[Talabat] localStorage save failed (quota?):",e.message);}  syncOrderDataToServer('talabat',talabatOrdersData); // v112: push shared copy (admin only; server enforces)
+  catch(e){showSyncWarning(`Talabat localStorage save failed (${e.message}) — likely quota. This browser's local copy may be stale until the server sync catches up.`);}  syncOrderDataToServer('talabat',talabatOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearTalabatData(){
   talabatOrdersData=null;
@@ -2361,7 +2379,7 @@ function loadDeliverooFromStorage(){
 function saveDeliverooToStorage(){
   if(!deliverooOrdersData)return;
   try{localStorage.setItem(DELIVEROO_STORAGE_KEY,JSON.stringify(deliverooOrdersData));}
-  catch(e){console.log("[Deliveroo] localStorage save failed (quota?):",e.message);}  syncOrderDataToServer('deliveroo',deliverooOrdersData); // v112: push shared copy (admin only; server enforces)
+  catch(e){showSyncWarning(`Deliveroo localStorage save failed (${e.message}) — likely quota. This browser's local copy may be stale until the server sync catches up.`);}  syncOrderDataToServer('deliveroo',deliverooOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearDeliverooData(){
   deliverooOrdersData=null;
@@ -2703,7 +2721,7 @@ function loadNoonFromStorage(){
 function saveNoonToStorage(){
   if(!noonOrdersData)return;
   try{localStorage.setItem(NOON_STORAGE_KEY,JSON.stringify(noonOrdersData));}
-  catch(e){console.log("[Noon] localStorage save failed (quota?):",e.message);}  syncOrderDataToServer('noon',noonOrdersData); // v112: push shared copy (admin only; server enforces)
+  catch(e){showSyncWarning(`Noon localStorage save failed (${e.message}) — likely quota. This browser's local copy may be stale until the server sync catches up.`);}  syncOrderDataToServer('noon',noonOrdersData); // v112: push shared copy (admin only; server enforces)
 }
 function clearNoonData(){
   noonOrdersData=null;
@@ -3286,21 +3304,16 @@ async function doLoad(){
     return;
   }
   latest=all.reduce((m,r)=>r.date>m?r.date:m,all[0].date);
-  // v175: defensive cap — `latest` must never be later than the real calendar date. A day that
-  // hasn't happened yet cannot have real sales, so `latest` running ahead of today can only mean
-  // a stray future-dated row in the Google Sheet (bad manual entry, a dragged formula, etc.).
-  // `latest` is trusted as "effectively today" all over the app — most importantly, campAnalysisV2
-  // clamps a campaign's elapsed window to `latest` (effEnd=c.endDate<latest?c.endDate:latest).
-  // An uncapped future `latest` (traced live: 31 Aug vs a real today of 6 Aug) made every
-  // in-progress campaign look FULLY elapsed, which is exactly what produced both reported bugs at
-  // once — the contribution calc comparing against the full campaign length instead of true
-  // elapsed days, AND the resulting 28-day-back baseline window landing far enough forward that it
-  // overlapped the campaign's own start date. Capping here fixes both at the source without
-  // touching the campaign math itself. Logged as a warning since it also flags a real data issue
-  // worth checking in the sheet, not just a code symptom.
+  // v177: the Google Sheet always carries pre-populated rows for future dates (empty until that
+  // day actually happens) — confirmed by Nikhil as permanent/by-design, not a data error to fix.
+  // So `latest` (computed above as the max date string found anywhere in the sheet) will
+  // routinely run ahead of real today, every load, indefinitely. `latest` is trusted as
+  // "effectively today" throughout the app (most importantly campAnalysisV2's elapsed-day
+  // clamp), so it's hard-capped at the real calendar date here, unconditionally — this is the
+  // permanent, expected behavior going forward, not a one-off patch.
   const realCalendarToday=dk(new Date());
   if(latest>realCalendarToday){
-    console.warn(`[data] latest (${latest}) is AFTER today (${realCalendarToday}) — capping to today. Check the Google Sheet's brand tabs for a stray future-dated row.`);
+    console.log(`[data] latest (${latest}) is ahead of today (${realCalendarToday}) — expected, sheet pre-populates future dates. Using today.`);
     latest=realCalendarToday;
   }
   // Default every page's filter to "yesterday" — anchored to the REAL calendar date, exactly
@@ -12604,6 +12617,8 @@ function cmpAddCTile(){
 }
 
 function cmpStatCard(label,a,b,fmt,unit,perDay,c,perDayC){
+  const T=_darkPage?{muted:DARK_THEME.textMuted,vs:DARK_THEME.textSecondary,border:DARK_THEME.cardBorder,panelBg:DARK_THEME.card,panelBorder:DARK_THEME.cardBorder,panelShadow:DARK_THEME.shadow,rowText:DARK_THEME.textSecondary}
+    :{muted:"#64748b",vs:"#475569",border:"#E2E8F0",panelBg:"#FFFFFF",panelBorder:"#E2E8F0",panelShadow:"0 12px 30px rgba(15,23,42,.12)",rowText:"#475569"};
   // v155: 3-way mode when c is provided (cmpCActive). Chained deltas (B vs A, C vs B) rather
   // than every pairwise combination — keeps it readable with a third group instead of turning
   // into a combinatorial mess.
@@ -12613,28 +12628,28 @@ function cmpStatCard(label,a,b,fmt,unit,perDay,c,perDayC){
     let perDayLine="";
     if(perDay&&(perDay.nA>1||perDay.nB>1||(perDay.nC||1)>1)){
       const avgA=a/perDay.nA,avgB=b/perDay.nB,avgC=perDayC!=null?perDayC/(perDay.nC||1):null;
-      perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #E2E8F0">
-        <div style="font-size:8px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
+      perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid ${T.border}">
+        <div style="font-size:8px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
         <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
           <span style="font-size:12px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmt(avgA)}</span>
-          <span style="font-size:9px;color:#64748b">·</span>
+          <span style="font-size:9px;color:${T.muted}">·</span>
           <span style="font-size:12px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmt(avgB)}</span>
-          ${avgC!=null?`<span style="font-size:9px;color:#64748b">·</span><span style="font-size:12px;font-weight:800;color:${CMP_C_CLR};font-variant-numeric:tabular-nums">${fmt(avgC)}</span>`:""}
+          ${avgC!=null?`<span style="font-size:9px;color:${T.muted}">·</span><span style="font-size:12px;font-weight:800;color:${CMP_C_CLR};font-variant-numeric:tabular-nums">${fmt(avgC)}</span>`:""}
         </div>
       </div>`;
     }
     return `<div class="sm">
-      <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}</div>
+      <div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}</div>
       <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
         <span style="font-size:16px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fa}</span>
-        <span style="font-size:9px;color:#475569">vs</span>
+        <span style="font-size:9px;color:${T.vs}">vs</span>
         <span style="font-size:16px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fb}</span>
-        <span style="font-size:9px;color:#475569">vs</span>
+        <span style="font-size:9px;color:${T.vs}">vs</span>
         <span style="font-size:16px;font-weight:800;color:${CMP_C_CLR};font-variant-numeric:tabular-nums">${fc}</span>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">
-        <span style="font-size:10.5px;color:${pctClr(diffAB)};font-weight:700">${fmtPct(diffAB)} <span style="color:#64748b;font-weight:400">B vs A</span></span>
-        <span style="font-size:10.5px;color:${pctClr(diffBC)};font-weight:700">${fmtPct(diffBC)} <span style="color:#64748b;font-weight:400">C vs B</span></span>
+        <span style="font-size:10.5px;color:${pctClr(diffAB)};font-weight:700">${fmtPct(diffAB)} <span style="color:${T.muted};font-weight:400">B vs A</span></span>
+        <span style="font-size:10.5px;color:${pctClr(diffBC)};font-weight:700">${fmtPct(diffBC)} <span style="color:${T.muted};font-weight:400">C vs B</span></span>
       </div>
       ${perDayLine}
     </div>`;
@@ -12650,25 +12665,25 @@ function cmpStatCard(label,a,b,fmt,unit,perDay,c,perDayC){
   if(perDay&&(perDay.nA>1||perDay.nB>1)){
     const avgA=a/perDay.nA,avgB=b/perDay.nB;
     const avgDiff=pctOf(avgB,avgA);
-    perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #E2E8F0">
-      <div style="font-size:8px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
+    perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid ${T.border}">
+      <div style="font-size:8px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
       <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
         <span style="font-size:14px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmt(avgA)}</span>
-        <span style="font-size:9px;color:#64748b">vs</span>
+        <span style="font-size:9px;color:${T.muted}">vs</span>
         <span style="font-size:14px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmt(avgB)}</span>
         <span style="font-size:10px;color:${pctClr(avgDiff)};font-weight:700">${fmtPct(avgDiff)}</span>
       </div>
-      <div style="font-size:8px;color:#64748b;margin-top:2px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
+      <div style="font-size:8px;color:${T.muted};margin-top:2px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
     </div>`;
   }
   return `<div class="sm">
-    <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}</div>
+    <div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}</div>
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
       <span style="font-size:20px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fa}</span>
-      <span style="font-size:11px;color:#475569;font-weight:600">vs</span>
+      <span style="font-size:11px;color:${T.vs};font-weight:600">vs</span>
       <span style="font-size:20px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fb}</span>
     </div>
-    <div style="font-size:12px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:#64748b;font-weight:400">B vs A</span></div>
+    <div style="font-size:12px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:${T.muted};font-weight:400">B vs A</span></div>
     ${perDayLine}
   </div>`;
 }
@@ -12679,13 +12694,15 @@ function cmpStatCard(label,a,b,fmt,unit,perDay,c,perDayC){
 // when windows span multiple days, same as the other cards. The card also surfaces the data
 // source ("Exact" / "Brand-level" / "Estimated" / "Mixed") so the user knows the precision.
 function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay,discC,netC){
+  const T=_darkPage?{muted:DARK_THEME.textMuted,vs:DARK_THEME.textSecondary,border:DARK_THEME.cardBorder,panelBg:DARK_THEME.card,panelBorder:DARK_THEME.cardBorder,panelShadow:DARK_THEME.shadow,rowText:DARK_THEME.textSecondary}
+    :{muted:"#64748b",vs:"#475569",border:"#E2E8F0",panelBg:"#FFFFFF",panelBorder:"#E2E8F0",panelShadow:"0 12px 30px rgba(15,23,42,.12)",rowText:"#475569"};
   const a=discA||0,b=discB||0;
   const diff=pctOf(b,a);
   // Inverted color: positive change = MORE burn = bad (red). Negative = less burn = good (green).
   const dc=diff==null?"#64748b":(diff>0?"#EF4444":(diff<0?"#22C55E":"#94a3b8"));
   const arrow=diff==null?"":(diff>0?"▲":(diff<0?"▼":""));
   const burnA=netA>0?(a/netA*100):null,burnB=netB>0?(b/netB*100):null;
-  const burnLine=(burnA!=null||burnB!=null)?`<div style="font-size:10px;color:#64748b;margin-top:4px">Burn rate · <span style="color:${CMP_A_CLR}">${burnA!=null?burnA.toFixed(1)+'%':'—'}</span> vs <span style="color:${CMP_B_CLR}">${burnB!=null?burnB.toFixed(1)+'%':'—'}</span> of net</div>`:'';
+  const burnLine=(burnA!=null||burnB!=null)?`<div style="font-size:10px;color:${T.muted};margin-top:4px">Burn rate · <span style="color:${CMP_A_CLR}">${burnA!=null?burnA.toFixed(1)+'%':'—'}</span> vs <span style="color:${CMP_B_CLR}">${burnB!=null?burnB.toFixed(1)+'%':'—'}</span> of net</div>`:'';
   // Most informative source label between the two sides
   const srcLabel=(s)=>({exact:"📊 Exact",brand_level:"Brand-level",estimated:"≈ Estimated",mixed:"Mixed"}[s]||'—');
   const srcCombo=sourceA===sourceB?srcLabel(sourceA):`${srcLabel(sourceA)} / ${srcLabel(sourceB)}`;
@@ -12694,31 +12711,31 @@ function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay,discC,netC){
     const avgA=a/perDay.nA,avgB=b/perDay.nB;
     const avgDiff=pctOf(avgB,avgA);
     const avgClr=avgDiff==null?"#64748b":(avgDiff>0?"#EF4444":(avgDiff<0?"#22C55E":"#94a3b8"));
-    perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #E2E8F0">
-      <div style="font-size:8px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
+    perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid ${T.border}">
+      <div style="font-size:8px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
       <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
         <span style="font-size:14px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(avgA)}</span>
-        <span style="font-size:9px;color:#64748b">vs</span>
+        <span style="font-size:9px;color:${T.muted}">vs</span>
         <span style="font-size:14px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(avgB)}</span>
         <span style="font-size:10px;color:${avgClr};font-weight:700">${fmtPct(avgDiff)}</span>
       </div>
-      <div style="font-size:8px;color:#64748b;margin-top:2px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
+      <div style="font-size:8px;color:${T.muted};margin-top:2px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
     </div>`;
   }
   // v155: Group C, when active — a simple additional line rather than a full 3-way redesign of
   // this card's source-label/burn-rate logic.
-  const cLine=(discC!=null)?`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #E2E8F0"><span style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Group C</span><div style="font-size:15px;font-weight:800;color:${CMP_C_CLR};margin-top:2px">${fmtAEDTip(discC)}${netC>0?` <span style="font-size:10px;color:#64748b;font-weight:600">(${(discC/netC*100).toFixed(1)}% of net)</span>`:""}</div></div>`:"";
+  const cLine=(discC!=null)?`<div style="margin-top:8px;padding-top:7px;border-top:1px solid ${T.border}"><span style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.5px">Group C</span><div style="font-size:15px;font-weight:800;color:${CMP_C_CLR};margin-top:2px">${fmtAEDTip(discC)}${netC>0?` <span style="font-size:10px;color:${T.muted};font-weight:600">(${(discC/netC*100).toFixed(1)}% of net)</span>`:""}</div></div>`:"";
   return `<div class="sm">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-      <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px">Discount Burn</div>
-      <span style="font-size:8px;color:#64748b;background:rgba(100,116,139,.1);padding:1px 6px;border-radius:5px" title="Data source. 'Exact' = per-order uploaded data; 'Brand-level' = sheet's raw brand-level discount; 'Estimated' = sales-weighted allocation to selected outlets (less precise).">${srcCombo}</span>
+      <div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:1px">Discount Burn</div>
+      <span style="font-size:8px;color:${T.muted};background:rgba(100,116,139,.1);padding:1px 6px;border-radius:5px" title="Data source. 'Exact' = per-order uploaded data; 'Brand-level' = sheet's raw brand-level discount; 'Estimated' = sales-weighted allocation to selected outlets (less precise).">${srcCombo}</span>
     </div>
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
       <span style="font-size:20px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(a)}</span>
-      <span style="font-size:11px;color:#475569;font-weight:600">vs</span>
+      <span style="font-size:11px;color:${T.vs};font-weight:600">vs</span>
       <span style="font-size:20px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(b)}</span>
     </div>
-    <div style="font-size:12px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${arrow} <span style="color:#64748b;font-weight:400">B vs A · less is better</span></div>
+    <div style="font-size:12px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${arrow} <span style="color:${T.muted};font-weight:400">B vs A · less is better</span></div>
     ${burnLine}
     ${perDayLine}
     ${cLine}
@@ -12727,6 +12744,8 @@ function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay,discC,netC){
 
 // Active Outlets card with a hover panel showing exactly which outlets differ A vs B
 function cmpOutletCard(dA,dB,dC){
+  const T=_darkPage?{muted:DARK_THEME.textMuted,vs:DARK_THEME.textSecondary,border:DARK_THEME.cardBorder,panelBg:DARK_THEME.card,panelBorder:DARK_THEME.cardBorder,panelShadow:DARK_THEME.shadow,rowText:DARK_THEME.textSecondary}
+    :{muted:"#64748b",vs:"#475569",border:"#E2E8F0",panelBg:"#FFFFFF",panelBorder:"#E2E8F0",panelShadow:"0 12px 30px rgba(15,23,42,.12)",rowText:"#475569"};
   const setA=new Set(dA.map(r=>r.branch)),setB=new Set(dB.map(r=>r.branch));
   const onlyA=[...setA].filter(b=>!setB.has(b)).sort();
   const onlyB=[...setB].filter(b=>!setA.has(b)).sort();
@@ -12734,10 +12753,10 @@ function cmpOutletCard(dA,dB,dC){
   const diff=setA.size-setB.size;
   const diffClr=diff>0?CMP_A_CLR:diff<0?CMP_B_CLR:"#64748b";
   const setC=dC?new Set(dC.map(r=>r.branch)):null;
-  const col=(title,clr,list)=>`<div style="flex:1;min-width:120px"><div style="font-size:9px;font-weight:700;color:${clr};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">${title} (${list.length})</div>${list.length?list.map(o=>`<div style="font-size:11px;color:#475569;padding:1px 0">${o}</div>`).join(""):`<div style="font-size:11px;color:#475569;font-weight:600">—</div>`}</div>`;
+  const col=(title,clr,list)=>`<div style="flex:1;min-width:120px"><div style="font-size:9px;font-weight:700;color:${clr};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">${title} (${list.length})</div>${list.length?list.map(o=>`<div style="font-size:11px;color:${T.vs};padding:1px 0">${o}</div>`).join(""):`<div style="font-size:11px;color:${T.vs};font-weight:600">—</div>`}</div>`;
   // The panel is hidden by default and shown on hover (CSS sibling, inline handlers as fallback)
-  const panel=`<div class="cmp-outlet-panel" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:30;margin-top:6px;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:10px;padding:12px;box-shadow:0 12px 30px rgba(15,23,42,.12)">
-      <div style="font-size:10px;color:#64748b;margin-bottom:8px">${diff===0?"Both groups cover the same outlets.":`Group ${diff>0?"A":"B"} has ${Math.abs(diff)} more outlet${Math.abs(diff)!==1?"s":""}.`}</div>
+  const panel=`<div class="cmp-outlet-panel" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:30;margin-top:6px;background:${T.panelBg};border:1px solid ${T.panelBorder};border-radius:10px;padding:12px;box-shadow:${T.panelShadow}">
+      <div style="font-size:10px;color:${T.muted};margin-bottom:8px">${diff===0?"Both groups cover the same outlets.":`Group ${diff>0?"A":"B"} has ${Math.abs(diff)} more outlet${Math.abs(diff)!==1?"s":""}.`}</div>
       <div style="display:flex;gap:14px;flex-wrap:wrap">
         ${col("Only in A",CMP_A_CLR,onlyA)}
         ${col("Only in B",CMP_B_CLR,onlyB)}
@@ -12745,15 +12764,15 @@ function cmpOutletCard(dA,dB,dC){
       </div>
     </div>`;
   return `<div class="sm" style="position:relative;cursor:help" onmouseover="this.querySelector('.cmp-outlet-panel').style.display='block'" onmouseout="this.querySelector('.cmp-outlet-panel').style.display='none'">
-    <div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Active Outlets <span style="color:${CMP_B_CLR}">ⓘ</span></div>
+    <div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Active Outlets <span style="color:${CMP_B_CLR}">ⓘ</span></div>
     <div style="display:flex;align-items:baseline;gap:8px">
       <span style="font-size:20px;font-weight:800;color:${CMP_A_CLR}">${setA.size}</span>
-      <span style="font-size:11px;color:#475569;font-weight:600">vs</span>
+      <span style="font-size:11px;color:${T.vs};font-weight:600">vs</span>
       <span style="font-size:20px;font-weight:800;color:${CMP_B_CLR}">${setB.size}</span>
       ${diff!==0?`<span style="font-size:12px;color:${diffClr};font-weight:700">(${diff>0?"+":""}${diff})</span>`:""}
     </div>
-    <div style="font-size:10px;color:#64748b;margin-top:3px">${onlyA.length+onlyB.length>0?`${onlyA.length+onlyB.length} differ · hover for details`:"same outlets"}</div>
-    ${setC?`<div style="margin-top:8px;padding-top:7px;border-top:1px solid #E2E8F0"><span style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Group C</span><div style="font-size:15px;font-weight:800;color:${CMP_C_CLR};margin-top:2px">${setC.size} outlet${setC.size!==1?"s":""}</div></div>`:""}
+    <div style="font-size:10px;color:${T.muted};margin-top:3px">${onlyA.length+onlyB.length>0?`${onlyA.length+onlyB.length} differ · hover for details`:"same outlets"}</div>
+    ${setC?`<div style="margin-top:8px;padding-top:7px;border-top:1px solid ${T.border}"><span style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.5px">Group C</span><div style="font-size:15px;font-weight:800;color:${CMP_C_CLR};margin-top:2px">${setC.size} outlet${setC.size!==1?"s":""}</div></div>`:""}
     ${panel}
   </div>`;
 }
@@ -12830,6 +12849,8 @@ function cmpComputeContribution(cfg){
   return total;
 }
 function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC){
+  const T=_darkPage?{muted:DARK_THEME.textMuted,vs:DARK_THEME.textSecondary,border:DARK_THEME.cardBorder,panelBg:DARK_THEME.card,panelBorder:DARK_THEME.cardBorder,panelShadow:DARK_THEME.shadow,rowText:DARK_THEME.textSecondary}
+    :{muted:"#64748b",vs:"#475569",border:"#E2E8F0",panelBg:"#FFFFFF",panelBorder:"#E2E8F0",panelShadow:"0 12px 30px rgba(15,23,42,.12)",rowText:"#475569"};
   const a=contribA||0,b=contribB||0;
   const diff=pctOf(b,a);
   const dc=pctClr(diff);
@@ -12837,39 +12858,39 @@ function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC){
   if(diff!=null&&salesDiff!=null){
     const gap=salesDiff-diff;
     if(gap>4){
-      ctxLine=`<div style="font-size:11px;color:#B5762E;margin-top:5px">Sales ${fmtPct(salesDiff)} but margin ${fmtPct(diff)} — the gap is discount</div>`;
+      ctxLine=`<div style="font-size:11px;color:${_darkPage?'#F0B45C':'#B5762E'};margin-top:5px">Sales ${fmtPct(salesDiff)} but margin ${fmtPct(diff)} — the gap is discount</div>`;
     }else if(gap<-4){
       ctxLine=`<div style="font-size:11px;color:#4E9A6E;margin-top:5px">Margin grew faster than sales — cleaner growth, less discount-funded</div>`;
     }else{
-      ctxLine=`<div style="font-size:11px;color:#8A8578;margin-top:5px">Sales and margin moved together</div>`;
+      ctxLine=`<div style="font-size:11px;color:${T.muted};margin-top:5px">Sales and margin moved together</div>`;
     }
   }
   let perDayLine="";
   if(perDay&&(perDay.nA>1||perDay.nB>1)){
     const avgA=a/perDay.nA,avgB=b/perDay.nB;
     const avgDiff=pctOf(avgB,avgA);
-    perDayLine=`<div style="margin-top:9px;padding-top:8px;border-top:1px solid #F0EBDC">
-      <div style="font-size:10px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Per day avg</div>
+    perDayLine=`<div style="margin-top:9px;padding-top:8px;border-top:1px solid ${T.border}">
+      <div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Per day avg</div>
       <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
         <span style="font-size:14px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(avgA)}</span>
-        <span style="font-size:10px;color:#94a3b8">vs</span>
+        <span style="font-size:10px;color:${T.vs}">vs</span>
         <span style="font-size:14px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(avgB)}</span>
         <span style="font-size:10.5px;color:${pctClr(avgDiff)};font-weight:700">${fmtPct(avgDiff)}</span>
       </div>
-      <div style="font-size:10px;color:#8A8578;margin-top:3px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
+      <div style="font-size:10px;color:${T.muted};margin-top:3px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
     </div>`;
   }
   return `<div class="sm" style="padding:15px 16px">
-    <div style="font-size:10px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.9px;margin-bottom:7px">Contribution <span style="text-transform:none;font-weight:500;color:#B0AA98">· margin</span></div>
+    <div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.9px;margin-bottom:7px">Contribution <span style="text-transform:none;font-weight:500;color:${T.vs}">· margin</span></div>
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
       <span style="font-size:20px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(a)}</span>
-      <span style="font-size:11.5px;color:#94a3b8;font-weight:600">vs</span>
+      <span style="font-size:11.5px;color:${T.vs};font-weight:600">vs</span>
       <span style="font-size:20px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(b)}</span>
     </div>
-    <div style="font-size:12.5px;color:${dc};font-weight:700;margin-top:5px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:#8A8578;font-weight:400">B vs A</span></div>
+    <div style="font-size:12.5px;color:${dc};font-weight:700;margin-top:5px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:${T.muted};font-weight:400">B vs A</span></div>
     ${ctxLine}
     ${perDayLine}
-    ${contribC!=null?`<div style="margin-top:9px;padding-top:8px;border-top:1px solid #F0EBDC"><span style="font-size:9px;color:#8A8578;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Group C</span><div style="font-size:15px;font-weight:800;color:${CMP_C_CLR};margin-top:2px">${fmtAEDTip(contribC)}</div></div>`:""}
+    ${contribC!=null?`<div style="margin-top:9px;padding-top:8px;border-top:1px solid ${T.border}"><span style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.5px">Group C</span><div style="font-size:15px;font-weight:800;color:${CMP_C_CLR};margin-top:2px">${fmtAEDTip(contribC)}</div></div>`:""}
   </div>`;
 }
 // v172: Cancellation Monitor page. Reads via getAllCancellations(), which combines each
@@ -13174,6 +13195,9 @@ function renderCompare(){
   let pg=document.getElementById("page-compare");
   if(!pg){injectCompareTab();pg=document.getElementById("page-compare");}
   if(!pg)return;
+  const cmpTitleClr=_darkPage?DARK_THEME.textPrimary:"#0F172A",cmpBtnBorder=_darkPage?DARK_THEME.cardBorder:"#E2E8F0",cmpBtnTxt=_darkPage?DARK_THEME.textSecondary:"#94a3b8",cmpSubTxt=_darkPage?DARK_THEME.textSecondary:"#475569";
+  const cmpMutedTxt=_darkPage?DARK_THEME.textMuted:"#64748b",cmpDivider=_darkPage?DARK_THEME.cardBorder:"#E2E8F0",cmpFaintDivider=_darkPage?DARK_THEME.cardBorder:"#F8FAFC";
+  const cmpInsightBg=_darkPage?DARK_THEME.card:"#F3EFE3",cmpInsightBorder=_darkPage?DARK_THEME.cardBorder:"#E4DCC8",cmpInsightTxt=_darkPage?DARK_THEME.textSecondary:"#374151";
   if(!cmpInit)cmpSeed();
   const dA=cmpData(cmpA),dB=cmpData(cmpB);
   const sA=sumR(dA),sB=sumR(dB);
@@ -13224,7 +13248,7 @@ function renderCompare(){
     const rowBg=isExpanded?'background:rgba(245,158,11,.08);':'';
     return{
       cells:[
-        `<span data-act="cmpToggleExpand" data-v1="${r.brand}" data-v2="${r.ag}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;${rowBg}padding:2px 4px;border-radius:4px" title="Click to see per-outlet breakdown for ${r.brand} on ${r.ag}"><span style="color:${isExpanded?CMP_B_CLR:'#64748b'};font-size:10px;font-weight:700">${chev}</span><span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span><span style="color:${AC[r.ag]||'#888'};font-size:11px">${r.ag}</span></span>`,
+        `<span data-act="cmpToggleExpand" data-v1="${r.brand}" data-v2="${r.ag}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;${rowBg}padding:2px 4px;border-radius:4px" title="Click to see per-outlet breakdown for ${r.brand} on ${r.ag}"><span style="color:${isExpanded?CMP_B_CLR:(_darkPage?DARK_THEME.textMuted:'#64748b')};font-size:10px;font-weight:700">${chev}</span><span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span><span style="color:${AC[r.ag]||'#888'};font-size:11px">${r.ag}</span></span>`,
         `<span style="color:${CMP_A_CLR}">${r.a.orders.toLocaleString()}</span>`,
         `<span style="color:${CMP_B_CLR}">${r.b.orders.toLocaleString()}</span>`,
         `<span style="color:${pctClr(r.oDiff)};font-weight:700">${fmtPct(r.oDiff)}</span>`,
@@ -13258,7 +13282,7 @@ function renderCompare(){
     const oHeads=["Outlet","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A AOV","B AOV","Δ AOV"];
     const oRows=branchRows.map(r=>({
       cells:[
-        `<strong style="color:#0F172A;font-size:12px">${r.branch}</strong>`,
+        `<strong style="color:${_darkPage?DARK_THEME.textPrimary:'#0F172A'};font-size:12px">${r.branch}</strong>`,
         `<span style="color:${CMP_A_CLR}">${r.a.orders.toLocaleString()}</span>`,
         `<span style="color:${CMP_B_CLR}">${r.b.orders.toLocaleString()}</span>`,
         `<span style="color:${pctClr(r.oDiff)};font-weight:700">${fmtPct(r.oDiff)}</span>`,
@@ -13275,14 +13299,14 @@ function renderCompare(){
     const totA=branchRows.reduce((s,r)=>({orders:s.orders+r.a.orders,sales:s.sales+r.a.sales}),{orders:0,sales:0});
     const totB=branchRows.reduce((s,r)=>({orders:s.orders+r.b.orders,sales:s.sales+r.b.sales}),{orders:0,sales:0});
     const totODiff=pctOf(totB.orders,totA.orders),totSDiff=pctOf(totB.sales,totA.sales);
-    const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:11px;color:#94a3b8;margin-bottom:10px;padding:8px 12px;background:rgba(245,158,11,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center"><span><span style="color:#60A5FA">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAEDTip(totA.sales)}</span><span><span style="color:#F59E0B">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAEDTip(totB.sales)}</span><span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span></div></div>`;
+    const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:11px;color:${cmpBtnTxt};margin-bottom:10px;padding:8px 12px;background:rgba(245,158,11,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center"><span><span style="color:#60A5FA">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAEDTip(totA.sales)}</span><span><span style="color:#F59E0B">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAEDTip(totB.sales)}</span><span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span></div></div>`;
     outletDrillCard=branchRows.length
-      ?`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid #E2E8F0;color:#94a3b8;padding:4px 10px;font-size:10px;border-radius:5px;cursor:pointer" title="Close drill-down">✕ close</button></div>${totsLine}${sortableTable("cmp-outlet-tbl",oHeads,oRows,4)}</div>`
-      :`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown</span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid #E2E8F0;color:#94a3b8;padding:4px 10px;font-size:10px;border-radius:5px;cursor:pointer">✕ close</button></div><div style="color:#64748b;font-size:12px;padding:8px 0">No outlets with activity in either window for this combination.</div></div>`;
+      ?`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown <span style="color:${cmpMutedTxt};font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid ${cmpBtnBorder};color:${cmpBtnTxt};padding:4px 10px;font-size:10px;border-radius:5px;cursor:pointer" title="Close drill-down">✕ close</button></div>${totsLine}${sortableTable("cmp-outlet-tbl",oHeads,oRows,4)}</div>`
+      :`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown</span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid ${cmpBtnBorder};color:${cmpBtnTxt};padding:4px 10px;font-size:10px;border-radius:5px;cursor:pointer">✕ close</button></div><div style="color:${cmpMutedTxt};font-size:12px;padding:8px 0">No outlets with activity in either window for this combination.</div></div>`;
   }
 
   // Metric toggle for the trend chart
-  const metricBtns=[["sales","Net Sales"],["orders","Orders"],["aov","AOV"]].map(([k,l])=>`<button data-act="cmpMetric" data-v1="${k}" style="padding:4px 12px;border-radius:5px;border:1px solid ${cmpMetric===k?'#f59e0b':'#E2E8F0'};background:${cmpMetric===k?'#f59e0b22':'transparent'};color:${cmpMetric===k?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${l}</button>`).join("");
+  const metricBtns=[["sales","Net Sales"],["orders","Orders"],["aov","AOV"]].map(([k,l])=>`<button data-act="cmpMetric" data-v1="${k}" style="padding:4px 12px;border-radius:5px;border:1px solid ${cmpMetric===k?'#f59e0b':cmpBtnBorder};background:${cmpMetric===k?'#f59e0b22':'transparent'};color:${cmpMetric===k?'#f59e0b':cmpBtnTxt};font-size:11px;font-weight:600;cursor:pointer">${l}</button>`).join("");
 
   const moverChip=(p,val)=>`<span style="display:inline-flex;align-items:center;gap:6px;background:${p.clr}18;border:1px solid ${p.clr}44;border-radius:6px;padding:3px 10px;font-size:11px;margin:2px"><span style="color:${p.clr};font-weight:700">${p.ag}</span><span style="color:${pctClr(val)};font-weight:700">${fmtPct(val)}</span></span>`;
 
@@ -13314,7 +13338,7 @@ function renderCompare(){
     }else{
       sentence+='.';
     }
-    insightBanner=`<div style="background:#F3EFE3;border:1px solid #E4DCC8;border-left:3px solid ${dc};border-radius:8px;padding:11px 15px;margin-bottom:14px;display:flex;gap:10px;align-items:flex-start"><span style="color:${dc};font-size:14px">ⓘ</span><div style="font-size:12.5px;line-height:1.7;color:#374151">${sentence}</div></div>`;
+    insightBanner=`<div style="background:${cmpInsightBg};border:1px solid ${cmpInsightBorder};border-left:3px solid ${dc};border-radius:8px;padding:11px 15px;margin-bottom:14px;display:flex;gap:10px;align-items:flex-start"><span style="color:${dc};font-size:14px">ⓘ</span><div style="font-size:12.5px;line-height:1.7;color:${cmpInsightTxt}">${sentence}</div></div>`;
   }
   // Unified platform movers tile — centred-zero delta bar replacing the
   // old two-card risers/fallers grid. Built as a string here (before the
@@ -13324,24 +13348,24 @@ function renderCompare(){
     const rows=sorted.map(p=>{
       const bw=Math.min(Math.abs(p.sDiff)/40*80,80).toFixed(1);
       const isPos=p.sDiff>=0;const clr=pctClr(p.sDiff);
-      return'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #F8FAFC">'
+      return'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid '+cmpFaintDivider+'">'
         +'<div style="width:70px;flex-shrink:0;font-size:11px;font-weight:700;color:'+(AC[p.ag]||'#888')+'">'+p.ag+'</div>'
         +'<div style="flex:1;display:flex;align-items:center">'
         +'<div style="width:50%;display:flex;justify-content:flex-end;padding-right:4px">'+(!isPos?'<div style="height:6px;width:'+bw+'%;background:'+clr+';border-radius:3px 0 0 3px;opacity:.75"></div>':'')+'</div>'
-        +'<div style="width:1px;height:14px;background:#E2E8F0;flex-shrink:0"></div>'
+        +'<div style="width:1px;height:14px;background:'+cmpDivider+';flex-shrink:0"></div>'
         +'<div style="width:50%;display:flex;align-items:center;padding-left:4px">'+(isPos?'<div style="height:6px;width:'+bw+'%;background:'+clr+';border-radius:0 3px 3px 0;opacity:.75"></div>':'')+'</div>'
         +'</div>'
         +'<div style="width:56px;flex-shrink:0;text-align:right;font-size:11px;font-weight:700;color:'+clr+'">'+(p.sDiff>=0?'+':'')+p.sDiff.toFixed(1)+'%</div>'
-        +'<div style="width:72px;flex-shrink:0;text-align:right;font-size:10px;color:#94a3b8">'+fmtAEDTip(p.b.sales)+'</div>'
+        +'<div style="width:72px;flex-shrink:0;text-align:right;font-size:10px;color:'+cmpBtnTxt+'">'+fmtAEDTip(p.b.sales)+'</div>'
         +'</div>';
     }).join('');
     return'<div class="card" style="margin-bottom:14px">'
       +'<div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
       +'<span>Platform Movement · B vs A</span>'
-      +'<span style="font-size:10px;color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">by net sales Δ</span></div>'
-      +'<div style="font-size:9px;color:#94a3b8;display:flex;justify-content:space-between;margin-bottom:10px;padding:0 2px">'
+      +'<span style="font-size:10px;color:'+cmpMutedTxt+';font-weight:400;text-transform:none;letter-spacing:0">by net sales Δ</span></div>'
+      +'<div style="font-size:9px;color:'+cmpBtnTxt+';display:flex;justify-content:space-between;margin-bottom:10px;padding:0 2px">'
       +'<span>← declined</span><span>grew →</span></div>'
-      +(rows||'<div style="color:#64748b;font-size:12px">No platform data.</div>')+'</div>';
+      +(rows||'<div style="color:'+cmpMutedTxt+';font-size:12px">No platform data.</div>')+'</div>';
   })();
 
   const cmpStyleOverride=_darkPage?`<style>
@@ -13352,7 +13376,6 @@ function renderCompare(){
       #page-compare table.tbl td{color:${DARK_THEME.textPrimary}!important;border-color:${DARK_THEME.cardBorder}!important}
       #page-compare table.tbl tr:hover td{background:${DARK_THEME.cardBorder}44!important}
     </style>`:"";
-  const cmpTitleClr=_darkPage?DARK_THEME.textPrimary:"#0F172A",cmpBtnBorder=_darkPage?DARK_THEME.cardBorder:"#E2E8F0",cmpBtnTxt=_darkPage?DARK_THEME.textSecondary:"#94a3b8",cmpSubTxt=_darkPage?DARK_THEME.textSecondary:"#475569";
   pg.innerHTML=cmpStyleOverride+`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div style="font-size:18px;font-weight:800;color:${cmpTitleClr}">⚖️ Comparison</div>
       <div style="display:flex;gap:8px"><button data-act="cmpCopy" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:11px;cursor:pointer" title="Copy A's brand/platform/outlet filters to B">⎘ A→B filters</button><button data-act="cmpSwap" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:11px;cursor:pointer">⇄ Swap A/B</button></div>
@@ -13371,7 +13394,7 @@ function renderCompare(){
       ${cmpContribCard(contribA,contribB,salesDiff,{nA,nB},cmpCActive?contribC:undefined)}
     </div>
 
-    <div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>Trend — <span style="color:#60A5FA">A</span> vs <span style="color:#F59E0B">B</span> (aligned by day index)</span><div style="display:flex;gap:5px">${metricBtns}</div></div><div style="position:relative;height:220px"><canvas id="cmp-chart"></canvas></div><div style="font-size:10px;color:#64748b;margin-top:6px">Day 1 = first day of each window. This lets you compare windows of different years/lengths on the same axis.</div></div>
+    <div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>Trend — <span style="color:#60A5FA">A</span> vs <span style="color:#F59E0B">B</span> (aligned by day index)</span><div style="display:flex;gap:5px">${metricBtns}</div></div><div style="position:relative;height:220px"><canvas id="cmp-chart"></canvas></div><div style="font-size:10px;color:${cmpMutedTxt};margin-top:6px">Day 1 = first day of each window. This lets you compare windows of different years/lengths on the same axis.</div></div>
 
     ${moversTile}
 
@@ -13385,7 +13408,7 @@ function renderCompare(){
       `<span style="color:${pctClr(p.aDiff)};font-weight:700">${fmtPct(p.aDiff)}</span>`
     ]))}</div>
 
-    <div class="card"><div class="ct">Brand × Platform Breakdown <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click a row to drill down to outlets</span></div>${sortableTable("cmp-tbl",tHeads,tRows,4)}</div>
+    <div class="card"><div class="ct">Brand × Platform Breakdown <span style="color:${cmpMutedTxt};font-weight:400;text-transform:none;letter-spacing:0">· click a row to drill down to outlets</span></div>${sortableTable("cmp-tbl",tHeads,tRows,4)}</div>
     ${outletDrillCard}`;
 
   // Draw the overlaid trend chart (aligned by day index)
