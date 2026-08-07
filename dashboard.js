@@ -13,9 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-188";
+const BUILD_VERSION="2026-08-06-189";
 const BUILD_NOTES=[
-  "🐛 Fixed the Trend chart showing ghost/overlapping text after switching sub-tabs and coming back — the chart wasn't being cleaned up when you left the Trend tab, so its tooltip and listeners stayed attached to a canvas that had already been removed from the page.",
+  "🐛 Fixed the Trend chart's grid lines being brighter than the actual data line — they were hardcoded to a near-white color meant for a light background, never updated when Compare went dark. Now subtle and recessive like they should be.",
+  "🐛 Fixed a misleading cliff-drop in the Trend chart: days that haven't fully posted yet (today, sometimes yesterday) were computing as literal zero, making an in-progress week look like sales collapsed. Now shows a clean gap instead of a fake plunge to zero.",
+  "🔧 Sidebar collapse gap: second attempt — detected and synced a fixed/sticky header offset that body's margin-left couldn't reach. Needs live confirmation.",
+  "🌙 KPI Tracker dark theme: DONE. All 8 view levels converted — platform grid, lagging-updates panel, Google ratings, platform/brand/metric drill-downs, and the per-KPI trend detail (including the same chart grid-line fix as Compare's Trend tab).",
   "🐛 Fixed the \"What's new\" popup's \"Got it\" button being unresponsive right when it appears — it was firing at the exact same moment as another background data load, both competing for the browser's attention. Spaced them out.",
   "🎨 Enlarged the initial loading screen — bigger brand logos, bigger text, bigger progress ring, using the space that was empty before.",
   "🔧 Sidebar: when collapsed, the page content should now actually expand to use the freed-up space instead of leaving it empty on the right.",
@@ -3541,11 +3544,37 @@ body{margin-left:${collapsed?W_COLLAPSED:W_OPEN}px!important;transition:margin-l
 }`;
     document.head.appendChild(css);
 
+    // v189, second attempt at the collapse-gap issue: body's margin-left doesn't affect any
+    // ancestor that's position:fixed or position:sticky — those are positioned relative to the
+    // viewport, not body's content box, so if the original header (containing #nav-logo) is
+    // fixed with its own hardcoded left offset, it would explain exactly what was reported: the
+    // gap staying the same size regardless of collapse state. Detecting and syncing it directly
+    // rather than guessing a selector name blind a third time.
+    const syncFixedHeaderOffset=(px)=>{
+      try{
+        let el=document.getElementById("nav-logo");
+        for(let i=0;i<6&&el;i++){
+          el=el.parentElement;
+          if(!el)break;
+          const cs=getComputedStyle(el);
+          if(cs.position==="fixed"||cs.position==="sticky"){
+            el.style.left=px+"px";
+            el.dataset.sidebarSynced="1";
+            return true;
+          }
+        }
+      }catch(e){}
+      return false;
+    };
+    const foundFixedHeader=syncFixedHeaderOffset(collapsed?W_COLLAPSED:W_OPEN);
+    console.log(foundFixedHeader?"[sidebar] found and synced a fixed/sticky header offset":"[sidebar] no fixed/sticky ancestor found above #nav-logo — if the gap is still there, this needs a DevTools screenshot to diagnose further");
+
     document.getElementById("sidebar-toggle").onclick=()=>{
       const willCollapse=sidebar.dataset.collapsed!=="1";
       sidebar.dataset.collapsed=willCollapse?"1":"0";
       sidebar.style.width=(willCollapse?W_COLLAPSED:W_OPEN)+"px";
       document.body.style.marginLeft=(willCollapse?W_COLLAPSED:W_OPEN)+"px";
+      syncFixedHeaderOffset(willCollapse?W_COLLAPSED:W_OPEN);
       document.getElementById("sidebar-toggle").textContent=willCollapse?"»":"«";
       try{localStorage.setItem("oregano_sidebar_collapsed",willCollapse?"1":"0");}catch(e){}
     };
@@ -4142,7 +4171,7 @@ function mNavGo(page){
 // dark theme one at a time. Adding a page here is the ONLY change needed at the dispatcher —
 // each page's own render function still needs its own scoped style override and theme-aware
 // calls, same as Overview's build.
-const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare","discounts"]);
+const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare","discounts","kpi"]);
 function renderPage(p){_darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();else if(p==="cancellations")renderCancellations();}
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
@@ -12337,19 +12366,36 @@ function backToKPIMetrics(){kpiSelectedMetric=null;renderKPI();}
 function setKPITrendRange(r){kpiTrendRange=r;renderKPI();}
 
 // ── KPI RENDER ──
+// v190: shared theme lookup for the KPI Tracker page, same pattern as discTheme/cmp* variables.
+function kpiTheme(){
+  return _darkPage?{
+    muted:DARK_THEME.textMuted,label:DARK_THEME.textMuted,border:DARK_THEME.cardBorder,
+    text:DARK_THEME.textPrimary,panelBg:DARK_THEME.card,secondary:DARK_THEME.textSecondary
+  }:{
+    muted:"#64748b",label:"#94a3b8",border:"#E2E8F0",
+    text:"#0F172A",panelBg:"#FFFFFF",secondary:"#475569"
+  };
+}
 async function renderKPI(){
   const pg=document.getElementById("page-kpi");if(!pg)return;
+  const T=kpiTheme();
+  const styleOverride=_darkPage?`<style>
+    #page-kpi{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
+    #page-kpi .card,#page-kpi .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
+    #page-kpi .ct{color:${DARK_THEME.textPrimary}!important}
+    #page-kpi table th{color:${DARK_THEME.textMuted}!important}
+    #page-kpi table td{color:${DARK_THEME.textPrimary}!important}
+  </style>`:"";
   if(!kpiLoaded&&!kpiLoading){
-    pg.innerHTML=`<div style="padding:30px;text-align:center;color:#64748b;font-size:13px">⏳ Loading KPI data from all outlets…<div style="font-size:11px;margin-top:6px">(loading in parallel — usually a few seconds)</div></div>`;
+    pg.innerHTML=`${styleOverride}<div style="padding:30px;text-align:center;color:${T.muted};font-size:13px">⏳ Loading KPI data from all outlets…<div style="font-size:11px;margin-top:6px">(loading in parallel — usually a few seconds)</div></div>`;
     loadKPIData();return;
   }
   if(kpiLoading&&!kpiLoaded){
-    pg.innerHTML=`<div style="padding:30px;text-align:center;color:#64748b;font-size:13px">⏳ Loading KPI data…</div>`;return;
+    pg.innerHTML=`${styleOverride}<div style="padding:30px;text-align:center;color:${T.muted};font-size:13px">⏳ Loading KPI data…</div>`;return;
   }
   if(!kpiData||Object.keys(kpiData).length===0){
-    pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ No KPI data loaded</div><div style="color:#64748b;font-size:12px">The KPI Tracker sheet tabs could not be fetched. Make sure the sheet is published to web. <button onclick="kpiLoaded=false;renderKPI()" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:3px 10px;font-size:11px;cursor:pointer;margin-left:8px">↻ Retry</button></div></div>`;return;
+    pg.innerHTML=`${styleOverride}<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ No KPI data loaded</div><div style="color:${T.muted};font-size:12px">The KPI Tracker sheet tabs could not be fetched. Make sure the sheet is published to web. <button onclick="kpiLoaded=false;renderKPI()" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:3px 10px;font-size:11px;cursor:pointer;margin-left:8px">↻ Retry</button></div></div>`;return;
   }
-
   // Detail view for a single KPI metric trend
   if(kpiSelectedOutlet&&kpiSelectedKPIName){return renderKPIDetail();}
   // Google Maps: skip brand + metric levels — show outlet tiles directly (Rating in Google)
@@ -12366,6 +12412,8 @@ async function renderKPI(){
 
 function renderKPIPlatformGrid(){
   const pg=document.getElementById("page-kpi");
+  const T=kpiTheme();
+  const styleOverride=_darkPage?`<style>#page-kpi{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}#page-kpi .card,#page-kpi .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}#page-kpi .ct{color:${DARK_THEME.textPrimary}!important}</style>`:"";
   const rows=buildKPIEvalRows();
   const platforms=["Talabat","Deliveroo","Careem","Google Maps"];
   const tileH=platforms.map(p=>{
@@ -12374,27 +12422,29 @@ function renderKPIPlatformGrid(){
     const total=pr.length;
     const clr=AC[p]||"#888";
     const okPct=total>0?Math.round((1-bad/total)*100):null;
-    return `<div onclick="selectKPIPlatform('${p}')" style="background:#FFFFFF;border:1px solid ${bad>0?'#EF444455':'#E2E8F0'};border-radius:10px;padding:14px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${bad>0?'#EF444455':'#E2E8F0'}'">
+    const borderClr=bad>0?'#EF444455':T.border;
+    return `<div onclick="selectKPIPlatform('${p}')" style="background:${T.panelBg};border:1px solid ${borderClr};border-radius:10px;padding:14px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${borderClr}'">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">${logoImg(p,26)}<span style="font-size:13px;font-weight:800;color:${clr}">${p}</span></div>
       <div style="display:flex;justify-content:space-between;align-items:baseline">
-        <div><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Tracked KPIs</div><div style="font-size:20px;font-weight:800">${total}</div></div>
-        <div style="text-align:right"><div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Off target</div><div style="font-size:20px;font-weight:800;color:${bad>0?'#EF4444':'#22C55E'}">${bad}</div></div>
+        <div><div style="font-size:9px;color:${T.muted};text-transform:uppercase;font-weight:700;letter-spacing:.5px">Tracked KPIs</div><div style="font-size:20px;font-weight:800;color:${T.text}">${total}</div></div>
+        <div style="text-align:right"><div style="font-size:9px;color:${T.muted};text-transform:uppercase;font-weight:700;letter-spacing:.5px">Off target</div><div style="font-size:20px;font-weight:800;color:${bad>0?'#EF4444':'#22C55E'}">${bad}</div></div>
       </div>
-      ${okPct!=null?`<div style="margin-top:8px;height:5px;background:#E2E8F0;border-radius:3px;overflow:hidden"><div style="height:100%;width:${okPct}%;background:${okPct>=80?'#22C55E':okPct>=60?'#FBBF24':'#EF4444'}"></div></div><div style="font-size:10px;color:#64748b;margin-top:4px">${okPct}% on target</div>`:`<div style="font-size:11px;color:#475569;font-weight:600;margin-top:8px">No tracked KPIs</div>`}
+      ${okPct!=null?`<div style="margin-top:8px;height:5px;background:${T.border};border-radius:3px;overflow:hidden"><div style="height:100%;width:${okPct}%;background:${okPct>=80?'#22C55E':okPct>=60?'#FBBF24':'#EF4444'}"></div></div><div style="font-size:10px;color:${T.muted};margin-top:4px">${okPct}% on target</div>`:`<div style="font-size:11px;color:${T.secondary};font-weight:600;margin-top:8px">No tracked KPIs</div>`}
     </div>`;
   }).join("");
 
-  pg.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+  pg.innerHTML=`${styleOverride}<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
       <div style="font-size:16px;font-weight:800;color:#f59e0b">📊 KPI Tracker</div>
-      <button onclick="kpiLoaded=false;kpiData=null;renderKPI()" style="background:none;border:1px solid #E2E8F0;border-radius:4px;color:#64748b;padding:3px 10px;font-size:11px;cursor:pointer">↻ Refresh</button>
+      <button onclick="kpiLoaded=false;kpiData=null;renderKPI()" style="background:none;border:1px solid ${T.border};border-radius:4px;color:${T.muted};padding:3px 10px;font-size:11px;cursor:pointer">↻ Refresh</button>
     </div>
-    <div style="font-size:11px;color:#475569;font-weight:600;margin-bottom:12px">Click a platform to see which outlets are off-target on each KPI. Google ratings are tracked under <strong style="color:#4285F4">Google Maps</strong>.</div>
+    <div style="font-size:11px;color:${T.secondary};font-weight:600;margin-bottom:12px">Click a platform to see which outlets are off-target on each KPI. Google ratings are tracked under <strong style="color:#4285F4">Google Maps</strong>.</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:18px">${tileH}</div>
     ${renderKPILaggingPanel()}`;
 }
 
 // ── LAGGING UPDATES — compact summary (per-box badges carry the detail) ──
 function renderKPILaggingPanel(){
+  const T=kpiTheme();
   const fresh=buildKPIFreshness();
   const platforms=["Talabat","Deliveroo","Careem","Google Maps"];
   const byAgg={};platforms.forEach(p=>byAgg[p]=[]);
@@ -12408,18 +12458,19 @@ function renderKPILaggingPanel(){
   });
   const totalLagging=platforms.reduce((s,p)=>s+byAgg[p].length,0);
   if(totalLagging===0&&neverLoaded.length===0){
-    return `<div class="card" style="border-color:rgba(34,197,94,.3)"><div class="ct" style="color:#22C55E">✅ All KPIs up to date</div><div style="font-size:12px;color:#94a3b8">Every outlet has updated its KPIs within the last 48 hours.</div></div>`;
+    return `<div class="card" style="border-color:rgba(34,197,94,.3)"><div class="ct" style="color:#22C55E">✅ All KPIs up to date</div><div style="font-size:12px;color:${T.label}">Every outlet has updated its KPIs within the last 48 hours.</div></div>`;
   }
   // One compact row per platform listing the lagging outlets (badge shows worst delay)
+  const dividerClr=_darkPage?DARK_THEME.cardBorder:'rgba(15,23,42,.4)';
   const rowsH=platforms.filter(p=>byAgg[p].length>0).map(p=>{
     const clr=AC[p]||"#888";
-    const chips=byAgg[p].sort((a,b)=>b.st.hrs-a.st.hrs).map(x=>`<span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;background:${x.st.bg};border:1px solid ${x.st.color}44;border-radius:10px;padding:2px 8px;margin:2px 0;white-space:nowrap"><strong>${x.outlet}</strong><span style="color:#64748b">${x.brand}</span><span style="color:${x.st.color};font-weight:700">${x.st.label}</span></span>`).join(" ");
-    return `<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid rgba(15,23,42,.4)">
+    const chips=byAgg[p].sort((a,b)=>b.st.hrs-a.st.hrs).map(x=>`<span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;background:${x.st.bg};border:1px solid ${x.st.color}44;border-radius:10px;padding:2px 8px;margin:2px 0;white-space:nowrap"><strong>${x.outlet}</strong><span style="color:${T.muted}">${x.brand}</span><span style="color:${x.st.color};font-weight:700">${x.st.label}</span></span>`).join(" ");
+    return `<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid ${dividerClr}">
       <span style="display:inline-flex;align-items:center;gap:6px;min-width:110px;flex-shrink:0">${logoImg(p,20)}<span style="font-size:11px;font-weight:800;color:${clr}">${p}</span><span style="font-size:10px;font-weight:700;background:rgba(239,68,68,.15);color:#EF4444;padding:0 6px;border-radius:8px">${byAgg[p].length}</span></span>
       <div style="display:flex;flex-wrap:wrap;gap:4px">${chips}</div>
     </div>`;
   }).join("");
-  const neverH=neverLoaded.length?`<div style="margin-top:10px;padding:8px 12px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:6px"><span style="font-size:11px;font-weight:700;color:#EF4444">⚠️ No KPI data at all (${neverLoaded.length}):</span> <span style="font-size:11px;color:#94a3b8">${neverLoaded.join(", ")}</span></div>`:"";
+  const neverH=neverLoaded.length?`<div style="margin-top:10px;padding:8px 12px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:6px"><span style="font-size:11px;font-weight:700;color:#EF4444">⚠️ No KPI data at all (${neverLoaded.length}):</span> <span style="font-size:11px;color:${T.label}">${neverLoaded.join(", ")}</span></div>`:"";
   return `<div class="card" style="border-color:rgba(239,68,68,.25)">
     <div class="ct" style="color:#EF4444">⏰ Lagging KPI Updates — behind by more than 48 hours (${totalLagging})</div>
     ${rowsH}
@@ -12430,6 +12481,8 @@ function renderKPILaggingPanel(){
 // GOOGLE MAPS special view: outlet tiles labeled "Brand Outlet" (e.g. "Oregano Mirdif")
 function renderKPIGoogleOutlets(){
   const pg=document.getElementById("page-kpi");
+  const T=kpiTheme();
+  const styleOverride=_darkPage?`<style>#page-kpi{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}#page-kpi .card,#page-kpi .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}</style>`:"";
   const clr=AC["Google Maps"]||"#4285F4";
   const rows=buildKPIEvalRows().filter(r=>r.aggregator==="Google Maps"&&r.kpiName.toLowerCase().includes("rating"));
   // Worst rating on top (lower = worse), best at the bottom
@@ -12440,28 +12493,30 @@ function renderKPIGoogleOutlets(){
     const accent=rateClr(r.latest);
     const bad=r.latest<4.7;
     const flag=bad?`<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(239,68,68,.15);border:1px solid #EF444455;color:#FCA5A5;font-size:10px;font-weight:700;padding:2px 8px;border-radius:6px">⚠ FLAG</span>`:`<span style="color:#22C55E;font-size:14px;font-weight:700">✓</span>`;
-    return `<div onclick="kpiSelectedOutlet='${r.outlet.replace(/'/g,"\\'")}';kpiSelectedBrand='${r.brand}';kpiSelectedAggregator='Google Maps';kpiSelectedKPIName='${r.kpiName.replace(/'/g,"\\'")}';renderKPI()" style="position:relative;background:#FFFFFF;border:1px solid #E2E8F0;border-left:4px solid ${accent};border-radius:10px;padding:14px 16px;cursor:pointer;min-height:96px;display:flex;flex-direction:column;justify-content:space-between" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='#E2E8F0'">
+    return `<div onclick="kpiSelectedOutlet='${r.outlet.replace(/'/g,"\\'")}';kpiSelectedBrand='${r.brand}';kpiSelectedAggregator='Google Maps';kpiSelectedKPIName='${r.kpiName.replace(/'/g,"\\'")}';renderKPI()" style="position:relative;background:${T.panelBg};border:1px solid ${T.border};border-left:4px solid ${accent};border-radius:10px;padding:14px 16px;cursor:pointer;min-height:96px;display:flex;flex-direction:column;justify-content:space-between" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${T.border}'">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
-        <div style="display:flex;align-items:center;gap:8px">${logoImg(r.brand,24)}<div><div style="font-size:14px;font-weight:800;color:#0F172A">${r.brand} ${r.outlet}</div><div style="font-size:10px;color:#64748b">${st.label}</div></div></div>
+        <div style="display:flex;align-items:center;gap:8px">${logoImg(r.brand,24)}<div><div style="font-size:14px;font-weight:800;color:${T.text}">${r.brand} ${r.outlet}</div><div style="font-size:10px;color:${T.muted}">${st.label}</div></div></div>
         ${flag}
       </div>
       <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:8px">
         <div style="font-size:30px;font-weight:800;color:${accent};font-variant-numeric:tabular-nums;line-height:1">${r.latest}</div>
-        <div style="text-align:right"><div style="font-size:10px;color:#64748b">target ≥ 4.7</div><div style="font-size:9px;color:#64748b">${r.kdata.lastEntry?fmtDisp(r.kdata.lastEntry):'no date'}</div></div>
+        <div style="text-align:right"><div style="font-size:10px;color:${T.muted}">target ≥ 4.7</div><div style="font-size:9px;color:${T.muted}">${r.kdata.lastEntry?fmtDisp(r.kdata.lastEntry):'no date'}</div></div>
       </div>
     </div>`;
   }).join("");
-  pg.innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
-      <button onclick="backToKPIPlatforms()" style="background:none;border:1px solid #E2E8F0;border-radius:6px;color:#64748b;padding:6px 12px;cursor:pointer;font-size:12px">← All Platforms</button>
+  pg.innerHTML=`${styleOverride}<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+      <button onclick="backToKPIPlatforms()" style="background:none;border:1px solid ${T.border};border-radius:6px;color:${T.muted};padding:6px 12px;cursor:pointer;font-size:12px">← All Platforms</button>
       <div style="display:flex;align-items:center;gap:8px">${logoImg("Google Maps",28)}<span style="font-size:18px;font-weight:800;color:${clr}">Google Maps Ratings</span></div>
     </div>
-    <div style="font-size:11px;color:#475569;font-weight:600;margin-bottom:12px">${rows.length} outlet${rows.length!==1?'s':''} · <span style="color:#EF4444;font-weight:700">lowest rating on top</span> → <span style="color:#22C55E;font-weight:700">best at bottom</span> · click for trend</div>
-    ${cards?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${cards}</div>`:`<div class="card"><div style="color:#64748b;font-size:12px">No Google ratings found in the KPI sheets.</div></div>`}`;
+    <div style="font-size:11px;color:${T.secondary};font-weight:600;margin-bottom:12px">${rows.length} outlet${rows.length!==1?'s':''} · <span style="color:#EF4444;font-weight:700">lowest rating on top</span> → <span style="color:#22C55E;font-weight:700">best at bottom</span> · click for trend</div>
+    ${cards?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${cards}</div>`:`<div class="card"><div style="color:${T.muted};font-size:12px">No Google ratings found in the KPI sheets.</div></div>`}`;
 }
 
 // LEVEL 2: platform → brand tiles (only brands that have KPIs on this platform)
 function renderKPIPlatformView(){
   const pg=document.getElementById("page-kpi");
+  const T=kpiTheme();
+  const styleOverride=_darkPage?`<style>#page-kpi{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}#page-kpi .card,#page-kpi .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}</style>`:"";
   const p=kpiSelectedPlatform,clr=AC[p]||"#888";
   const rows=buildKPIEvalRows().filter(r=>r.aggregator===p);
   // Only brands present for this platform, in canonical order (e.g. Google Maps won't list Lollorosso)
@@ -12490,16 +12545,16 @@ function renderKPIPlatformView(){
   // justify-content:space-between leaves on wide tiles.
   const worstSection=(title,list)=>{
     if(!list||!list.length)return '';
-    const rankColor=i=>i===0?'#EF4444':i<=2?'#FBBF24':'#94a3b8';
+    const rankColor=i=>i===0?'#EF4444':i<=2?'#FBBF24':T.muted;
     return `<div style="margin-top:12px">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
         <div style="width:5px;height:5px;background:#f59e0b;border-radius:50%;flex-shrink:0"></div>
-        <div style="font-size:12px;color:#475569;letter-spacing:.3px;font-weight:700">${title}</div>
+        <div style="font-size:12px;color:${T.secondary};letter-spacing:.3px;font-weight:700">${title}</div>
       </div>
       ${list.map((r,i)=>{
         const c=rankColor(i);
         return `<div style="display:flex;align-items:baseline;font-size:12px;padding:3px 0;gap:6px">
-          <span style="color:#0F172A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex-shrink:1" title="${r.outlet}">${r.outlet}</span>
+          <span style="color:${T.text};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex-shrink:1" title="${r.outlet}">${r.outlet}</span>
           <span style="flex:1 1 auto;border-bottom:1px dotted rgba(100,116,139,.45);align-self:center;height:0;min-width:8px"></span>
           <span style="color:${c};font-weight:700;font-variant-numeric:tabular-nums;flex-shrink:0">${fmtVal(r)}</span>
         </div>`;
@@ -12507,6 +12562,7 @@ function renderKPIPlatformView(){
     </div>`;
   };
 
+  const dividerClr=_darkPage?DARK_THEME.cardBorder:'rgba(15,23,42,.6)';
   const tiles=brandsPresent.map(b=>{
     const rs=rows.filter(r=>r.brand===b.n);
     const bad=rs.filter(r=>r.isBad).length;
@@ -12515,54 +12571,60 @@ function renderKPIPlatformView(){
     const exp=expectedListings(b.n,p);
     const short=exp!=null&&outletCount<exp;
     const outletLabel=exp!=null?`${outletCount}/${exp}`:`${outletCount}`;
-    const outletClr=exp!=null?(outletCount>=exp?'#22C55E':'#FBBF24'):'#e2e8f0';
+    const outletClr=exp!=null?(outletCount>=exp?'#22C55E':'#FBBF24'):T.border;
     // Build the 4 worst-5 sections from this brand's rows
     const ratingW=worstByType(rs,'rating');
     const foodW=worstByType(rs,'food_ready');
     const prepW=worstByType(rs,'prep_time');
     const riderW=worstByType(rs,'rider_wait')||worstByType(rs,'rider_wait_pct');
     const worstHTML=[worstSection('Lowest Ratings',ratingW),worstSection('Lowest Food Ready %',foodW),worstSection('Slowest Prep Times',prepW),worstSection('Longest Rider Wait',riderW)].join('');
-    return `<div onclick="selectKPIBrand('${b.n}')" style="background:#FFFFFF;border:1px solid ${bad>0?'#EF444455':'#E2E8F0'};border-radius:10px;padding:12px 11px;cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${bad>0?'#EF444455':'#E2E8F0'}'">
+    const borderClr=bad>0?'#EF444455':T.border;
+    return `<div onclick="selectKPIBrand('${b.n}')" style="background:${T.panelBg};border:1px solid ${borderClr};border-radius:10px;padding:12px 11px;cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${borderClr}'">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">${logoImg(b.n,28)}<span style="font-size:15px;font-weight:800;color:${b.c}">${b.n}</span>${short?`<span title="${exp-outletCount} outlet(s) missing" style="margin-left:auto;font-size:10px;font-weight:700;color:#FBBF24;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3);padding:1px 7px;border-radius:8px">−${exp-outletCount}</span>`:''}</div>
       <div style="display:flex;justify-content:space-between;align-items:baseline">
-        <div><div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">KPIs · Outlets</div><div style="font-size:20px;font-weight:800">${metricCount} · <span style="color:${outletClr}">${outletLabel}</span></div></div>
-        <div style="text-align:right"><div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.5px">Off target</div><div style="font-size:20px;font-weight:800;color:${bad>0?'#EF4444':'#22C55E'}">${bad}</div></div>
+        <div><div style="font-size:10px;color:${T.muted};text-transform:uppercase;font-weight:700;letter-spacing:.5px">KPIs · Outlets</div><div style="font-size:20px;font-weight:800;color:${T.text}">${metricCount} · <span style="color:${outletClr}">${outletLabel}</span></div></div>
+        <div style="text-align:right"><div style="font-size:10px;color:${T.muted};text-transform:uppercase;font-weight:700;letter-spacing:.5px">Off target</div><div style="font-size:20px;font-weight:800;color:${bad>0?'#EF4444':'#22C55E'}">${bad}</div></div>
       </div>
-      ${worstHTML?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(15,23,42,.6)">${worstHTML}</div>`:''}
+      ${worstHTML?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid ${dividerClr}">${worstHTML}</div>`:''}
     </div>`;
   }).join("");
-  pg.innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
-      <button onclick="backToKPIPlatforms()" style="background:none;border:1px solid #E2E8F0;border-radius:6px;color:#64748b;padding:6px 12px;cursor:pointer;font-size:12px">← All Platforms</button>
+  pg.innerHTML=`${styleOverride}<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+      <button onclick="backToKPIPlatforms()" style="background:none;border:1px solid ${T.border};border-radius:6px;color:${T.muted};padding:6px 12px;cursor:pointer;font-size:12px">← All Platforms</button>
       <div style="display:flex;align-items:center;gap:8px">${logoImg(p,28)}<span style="font-size:18px;font-weight:800;color:${clr}">${p}</span></div>
-      <span style="font-size:11px;color:#475569;font-weight:600">click a brand for full metric breakdown · worst-5 outlets per KPI shown inline</span>
+      <span style="font-size:11px;color:${T.secondary};font-weight:600">click a brand for full metric breakdown · worst-5 outlets per KPI shown inline</span>
     </div>
-    ${tiles?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">${tiles}</div>`:`<div class="card"><div style="color:#64748b;font-size:12px">No KPIs tracked for ${p} yet.</div></div>`}`;
+    ${tiles?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">${tiles}</div>`:`<div class="card"><div style="color:${T.muted};font-size:12px">No KPIs tracked for ${p} yet.</div></div>`}`;
 }
 
 // LEVEL 3: Talabat → Oregano → KPI metric tiles
 function renderKPIBrandView(){
   const pg=document.getElementById("page-kpi");
+  const T=kpiTheme();
+  const styleOverride=_darkPage?`<style>#page-kpi{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}#page-kpi .card,#page-kpi .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}</style>`:"";
   const p=kpiSelectedPlatform,b=kpiSelectedBrand,clr=AC[p]||"#888",bc=BMAP[b]?.c||"#888";
   const rows=buildKPIEvalRows().filter(r=>r.aggregator===p&&r.brand===b);
   const byMetric={};rows.forEach(r=>{if(!byMetric[r.kpiName])byMetric[r.kpiName]=[];byMetric[r.kpiName].push(r);});
   const tiles=Object.entries(byMetric).map(([metric,rs])=>{
     const bad=rs.filter(r=>r.isBad).length;
-    return `<div onclick="selectKPIMetric('${metric.replace(/'/g,"\\'")}')" style="background:#FFFFFF;border:1px solid ${bad>0?'#EF444455':'#E2E8F0'};border-radius:10px;padding:14px;cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${bad>0?'#EF444455':'#E2E8F0'}'">
-      <div style="font-size:12px;font-weight:700;margin-bottom:8px">${metric}</div>
-      <div style="display:flex;justify-content:space-between;align-items:baseline"><div><div style="font-size:9px;color:#64748b">Outlets</div><div style="font-size:18px;font-weight:800">${new Set(rs.map(r=>r.outlet)).size}</div></div><div style="text-align:right"><div style="font-size:9px;color:#64748b">Off target</div><div style="font-size:18px;font-weight:800;color:${bad>0?'#EF4444':'#22C55E'}">${bad}</div></div></div>
+    const borderClr=bad>0?'#EF444455':T.border;
+    return `<div onclick="selectKPIMetric('${metric.replace(/'/g,"\\'")}')" style="background:${T.panelBg};border:1px solid ${borderClr};border-radius:10px;padding:14px;cursor:pointer" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${borderClr}'">
+      <div style="font-size:12px;font-weight:700;margin-bottom:8px;color:${T.text}">${metric}</div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><div><div style="font-size:9px;color:${T.muted}">Outlets</div><div style="font-size:18px;font-weight:800;color:${T.text}">${new Set(rs.map(r=>r.outlet)).size}</div></div><div style="text-align:right"><div style="font-size:9px;color:${T.muted}">Off target</div><div style="font-size:18px;font-weight:800;color:${bad>0?'#EF4444':'#22C55E'}">${bad}</div></div></div>
     </div>`;
   }).join("");
-  pg.innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
-      <button onclick="backToKPIBrands()" style="background:none;border:1px solid #E2E8F0;border-radius:6px;color:#64748b;padding:6px 12px;cursor:pointer;font-size:12px">← ${p} brands</button>
-      <div style="display:flex;align-items:center;gap:8px">${logoImg(b,26)}<span style="font-size:16px;font-weight:800;color:${bc}">${b}</span><span style="color:#64748b">·</span><span style="font-size:14px;font-weight:700;color:${clr}">${p}</span></div>
-      <span style="font-size:11px;color:#475569;font-weight:600">select a KPI</span>
+  pg.innerHTML=`${styleOverride}<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+      <button onclick="backToKPIBrands()" style="background:none;border:1px solid ${T.border};border-radius:6px;color:${T.muted};padding:6px 12px;cursor:pointer;font-size:12px">← ${p} brands</button>
+      <div style="display:flex;align-items:center;gap:8px">${logoImg(b,26)}<span style="font-size:16px;font-weight:800;color:${bc}">${b}</span><span style="color:${T.muted}">·</span><span style="font-size:14px;font-weight:700;color:${clr}">${p}</span></div>
+      <span style="font-size:11px;color:${T.secondary};font-weight:600">select a KPI</span>
     </div>
-    ${tiles?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">${tiles}</div>`:`<div class="card"><div style="color:#64748b;font-size:12px">No tracked KPIs for ${b} on ${p}.</div></div>`}`;
+    ${tiles?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">${tiles}</div>`:`<div class="card"><div style="color:${T.muted};font-size:12px">No tracked KPIs for ${b} on ${p}.</div></div>`}`;
 }
 
 // LEVEL 4: Talabat → Oregano → Prep Time → outlet cards (worst red on top, best green at bottom)
 function renderKPIMetricView(){
   const pg=document.getElementById("page-kpi");
+  const T=kpiTheme();
+  const styleOverride=_darkPage?`<style>#page-kpi{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}#page-kpi .card,#page-kpi .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}</style>`:"";
   const p=kpiSelectedPlatform,b=kpiSelectedBrand,m=kpiSelectedMetric,clr=AC[p]||"#888",bc=BMAP[b]?.c||"#888";
   const rows=buildKPIEvalRows().filter(r=>r.aggregator===p&&r.brand===b&&r.kpiName===m);
   const isRating=(m||"").toLowerCase().includes("rating");
@@ -12579,14 +12641,14 @@ function renderKPIMetricView(){
     const bad=r.isBad;
     const accent=isRating?rateClr(r.latest):(bad?"#EF4444":"#22C55E");
     const flag=bad?`<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(239,68,68,.15);border:1px solid #EF444455;color:#FCA5A5;font-size:10px;font-weight:700;padding:2px 8px;border-radius:6px">⚠ FLAG</span>`:`<span style="color:#22C55E;font-size:14px;font-weight:700">✓</span>`;
-    return `<div onclick="kpiSelectedOutlet='${r.outlet.replace(/'/g,"\\'")}';kpiSelectedAggregator='${r.aggregator}';kpiSelectedKPIName='${m.replace(/'/g,"\\'")}';renderKPI()" style="position:relative;background:#FFFFFF;border:1px solid #E2E8F0;border-left:4px solid ${accent};border-radius:10px;padding:14px 16px;cursor:pointer;min-height:96px;display:flex;flex-direction:column;justify-content:space-between" onmouseover="this.style.borderColor='#f59e0b';this.style.borderLeftColor='${accent}'" onmouseout="this.style.borderColor='#E2E8F0';this.style.borderLeftColor='${accent}'">
+    return `<div onclick="kpiSelectedOutlet='${r.outlet.replace(/'/g,"\\'")}';kpiSelectedAggregator='${r.aggregator}';kpiSelectedKPIName='${m.replace(/'/g,"\\'")}';renderKPI()" style="position:relative;background:${T.panelBg};border:1px solid ${T.border};border-left:4px solid ${accent};border-radius:10px;padding:14px 16px;cursor:pointer;min-height:96px;display:flex;flex-direction:column;justify-content:space-between" onmouseover="this.style.borderColor='#f59e0b';this.style.borderLeftColor='${accent}'" onmouseout="this.style.borderColor='${T.border}';this.style.borderLeftColor='${accent}'">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
-        <div><div style="font-size:15px;font-weight:800;color:#0F172A">${r.outlet}</div><div style="font-size:10px;color:#64748b">${st.label}</div></div>
+        <div><div style="font-size:15px;font-weight:800;color:${T.text}">${r.outlet}</div><div style="font-size:10px;color:${T.muted}">${st.label}</div></div>
         ${flag}
       </div>
       <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:8px">
         <div style="font-size:30px;font-weight:800;color:${accent};font-variant-numeric:tabular-nums;line-height:1">${r.latest}${r.unit}</div>
-        <div style="text-align:right"><div style="font-size:10px;color:#64748b">${r.direction==="below"?"≥":"≤"} ${r.target}${r.unit}</div><div style="font-size:9px;color:#64748b">${r.kdata.lastEntry?fmtDisp(r.kdata.lastEntry):'no date'}</div></div>
+        <div style="text-align:right"><div style="font-size:10px;color:${T.muted}">${r.direction==="below"?"≥":"≤"} ${r.target}${r.unit}</div><div style="font-size:9px;color:${T.muted}">${r.kdata.lastEntry?fmtDisp(r.kdata.lastEntry):'no date'}</div></div>
       </div>
     </div>`;
   }).join("");
@@ -12600,26 +12662,28 @@ function renderKPIMetricView(){
     const ok=present>=exp;
     countBadge=`<span style="font-weight:700;color:${ok?'#22C55E':'#FBBF24'}">${present} of ${exp}</span> expected outlets`;
     if(present<exp){
-      missingNote=`<div style="margin-bottom:12px;padding:8px 12px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25);border-radius:6px;font-size:11px;color:#FDE68A">⚠️ ${exp-present} outlet${exp-present!==1?'s':''} missing for ${b} on ${p} — that outlet's sheet may not have a ${m} value, or its tab didn't load (check the console summary).</div>`;
+      missingNote=`<div style="margin-bottom:12px;padding:8px 12px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25);border-radius:6px;font-size:11px;color:${_darkPage?'#FBBF24':'#B45309'}">⚠️ ${exp-present} outlet${exp-present!==1?'s':''} missing for ${b} on ${p} — that outlet's sheet may not have a ${m} value, or its tab didn't load (check the console summary).</div>`;
     }
   }
-  pg.innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
-      <button onclick="backToKPIMetrics()" style="background:none;border:1px solid #E2E8F0;border-radius:6px;color:#64748b;padding:6px 12px;cursor:pointer;font-size:12px">← ${b} KPIs</button>
-      <div style="display:flex;align-items:center;gap:8px">${logoImg(b,24)}<span style="font-size:16px;font-weight:800;color:${bc}">${b}</span><span style="color:#64748b">·</span><span style="font-size:14px;font-weight:700;color:${clr}">${p}</span><span style="color:#64748b">·</span><span style="font-size:15px;font-weight:800;color:#0F172A">${m}</span></div>
+  pg.innerHTML=`${styleOverride}<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+      <button onclick="backToKPIMetrics()" style="background:none;border:1px solid ${T.border};border-radius:6px;color:${T.muted};padding:6px 12px;cursor:pointer;font-size:12px">← ${b} KPIs</button>
+      <div style="display:flex;align-items:center;gap:8px">${logoImg(b,24)}<span style="font-size:16px;font-weight:800;color:${bc}">${b}</span><span style="color:${T.muted}">·</span><span style="font-size:14px;font-weight:700;color:${clr}">${p}</span><span style="color:${T.muted}">·</span><span style="font-size:15px;font-weight:800;color:${T.text}">${m}</span></div>
     </div>
     ${missingNote}
-    <div style="font-size:11px;color:#475569;font-weight:600;margin-bottom:12px">${countBadge} · <span style="color:#EF4444;font-weight:700">worst on top</span> → <span style="color:#22C55E;font-weight:700">best at bottom</span> · click a card for the trend</div>
-    ${cards?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${cards}</div>`:`<div class="card"><div style="color:#64748b;font-size:12px">No data for ${m}.</div></div>`}`;
+    <div style="font-size:11px;color:${T.secondary};font-weight:600;margin-bottom:12px">${countBadge} · <span style="color:#EF4444;font-weight:700">worst on top</span> → <span style="color:#22C55E;font-weight:700">best at bottom</span> · click a card for the trend</div>
+    ${cards?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">${cards}</div>`:`<div class="card"><div style="color:${T.muted};font-size:12px">No data for ${m}.</div></div>`}`;
 }
 
 function renderKPIDetail(){
   const pg=document.getElementById("page-kpi");
+  const T=kpiTheme();
+  const styleOverride=_darkPage?`<style>#page-kpi{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}#page-kpi .card,#page-kpi .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}#page-kpi .ct{color:${DARK_THEME.textPrimary}!important}</style>`:"";
   const od=kpiData[kpiSelectedOutlet];
   let kdata=null,blk=null;
   if(od)for(const b of od.blocks){if(b.brand===kpiSelectedBrand&&b.aggregator===kpiSelectedAggregator&&b.kpis[kpiSelectedKPIName]){kdata=b.kpis[kpiSelectedKPIName];blk=b;break;}}
   const clr=AC[kpiSelectedAggregator]||"#888";
-  const back=`<button onclick="kpiSelectedOutlet=null;kpiSelectedKPIName=null;renderKPI()" style="background:none;border:1px solid #E2E8F0;border-radius:6px;color:#64748b;padding:6px 12px;cursor:pointer;font-size:12px">← Back</button>`;
-  if(!kdata||!kdata.dailyValues||!kdata.dailyValues.length){pg.innerHTML=`<div style="margin-bottom:14px">${back}</div><div class="card"><div style="color:#64748b;font-size:12px">No trend data for this KPI.</div></div>`;return;}
+  const back=`<button onclick="kpiSelectedOutlet=null;kpiSelectedKPIName=null;renderKPI()" style="background:none;border:1px solid ${T.border};border-radius:6px;color:${T.muted};padding:6px 12px;cursor:pointer;font-size:12px">← Back</button>`;
+  if(!kdata||!kdata.dailyValues||!kdata.dailyValues.length){pg.innerHTML=`${styleOverride}<div style="margin-bottom:14px">${back}</div><div class="card"><div style="color:${T.muted};font-size:12px">No trend data for this KPI.</div></div>`;return;}
   const ev=getKPIEvaluator(kpiSelectedKPIName,kpiSelectedAggregator,kpiSelectedBrand,kdata.target);
   const range=kpiTrendRange;
   const vals=kdata.dailyValues.slice(-range);
@@ -12627,8 +12691,8 @@ function renderKPIDetail(){
   // degradation detection: first day it crossed target unfavourably (in this range)
   let degradedFrom=null;
   if(ev){for(let i=vals.length-1;i>=0;i--){const d=vals[i];const bad=(ev.direction==="below"&&d.num<ev.target)||(ev.direction==="above"&&d.num>ev.target);if(!bad){if(i+1<vals.length)degradedFrom=vals[i+1].date;break;}if(i===0)degradedFrom=vals[0].date;}}
-  const rngBtns=[7,15,30].map(r=>`<button onclick="setKPITrendRange(${r})" style="padding:4px 12px;border-radius:5px;border:1px solid ${kpiTrendRange===r?'#f59e0b':'#E2E8F0'};background:${kpiTrendRange===r?'#f59e0b22':'transparent'};color:${kpiTrendRange===r?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${r}d</button>`).join("");
-  pg.innerHTML=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">${back}<div style="display:flex;align-items:center;gap:8px">${logoImg(kpiSelectedBrand,24)}<div><div style="font-size:15px;font-weight:800">${kpiSelectedOutlet} · ${kpiSelectedKPIName}</div><div style="font-size:11px;color:#475569;font-weight:600"><span style="color:${BMAP[kpiSelectedBrand]?.c||'#888'}">${kpiSelectedBrand}</span> · <span style="color:${clr}">${kpiSelectedAggregator}</span></div></div></div><span style="margin-left:auto;font-size:11px;font-weight:700;color:${st.color}">${st.label}</span></div>
+  const rngBtns=[7,15,30].map(r=>`<button onclick="setKPITrendRange(${r})" style="padding:4px 12px;border-radius:5px;border:1px solid ${kpiTrendRange===r?'#f59e0b':T.border};background:${kpiTrendRange===r?'#f59e0b22':'transparent'};color:${kpiTrendRange===r?'#f59e0b':T.label};font-size:11px;font-weight:600;cursor:pointer">${r}d</button>`).join("");
+  pg.innerHTML=`${styleOverride}<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">${back}<div style="display:flex;align-items:center;gap:8px">${logoImg(kpiSelectedBrand,24)}<div><div style="font-size:15px;font-weight:800;color:${T.text}">${kpiSelectedOutlet} · ${kpiSelectedKPIName}</div><div style="font-size:11px;color:${T.secondary};font-weight:600"><span style="color:${BMAP[kpiSelectedBrand]?.c||'#888'}">${kpiSelectedBrand}</span> · <span style="color:${clr}">${kpiSelectedAggregator}</span></div></div></div><span style="margin-left:auto;font-size:11px;font-weight:700;color:${st.color}">${st.label}</span></div>
     <div class="g4">
       ${kpiCard("Latest",`${vals[vals.length-1].num}${ev?.unit||''}`,`on ${fmtShort(vals[vals.length-1].date)}`,null)}
       ${kpiCard("Target",ev?`${ev.direction==='below'?'≥':'≤'} ${ev.target}${ev.unit||''}`:'—',ev?'threshold':'',null)}
@@ -12642,7 +12706,10 @@ function renderKPIDetail(){
     const data=vals.map(v=>({d:fmtShort(v.date),s:v.num,o:null}));
     const ctx=document.getElementById("ch-kpi-detail")?.getContext("2d");if(!ctx)return;destroyChart("ch-kpi-detail");
     const tgtLine=ev?vals.map(()=>ev.target):null;
-    charts["ch-kpi-detail"]=new Chart(ctx,{type:"line",data:{labels:vals.map(v=>fmtShort(v.date)),datasets:[{label:kpiSelectedKPIName,data:vals.map(v=>v.num),borderColor:clr,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false},...(tgtLine?[{label:"Target",data:tgtLine,borderColor:"#EF4444",borderWidth:1,borderDash:[5,4],pointRadius:0,fill:false}]:[])]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#475569",font:{size:10},boxWidth:12}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label}: ${c.raw}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"#F1F5F9"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:9}},grid:{color:"#F1F5F9"},border:{display:false}}}}});
+    const gridClr=_darkPage?"rgba(255,255,255,.08)":"#F1F5F9";
+    const tickClr=_darkPage?DARK_THEME.textMuted:"#64748b";
+    const legendClr=_darkPage?DARK_THEME.textSecondary:"#475569";
+    charts["ch-kpi-detail"]=new Chart(ctx,{type:"line",data:{labels:vals.map(v=>fmtShort(v.date)),datasets:[{label:kpiSelectedKPIName,data:vals.map(v=>v.num),borderColor:clr,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false},...(tgtLine?[{label:"Target",data:tgtLine,borderColor:"#EF4444",borderWidth:1,borderDash:[5,4],pointRadius:0,fill:false}]:[])]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:legendClr,font:{size:10},boxWidth:12}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label}: ${c.raw}`}}},scales:{x:{ticks:{color:tickClr,font:{size:9}},grid:{color:gridClr},border:{display:false}},y:{ticks:{color:tickClr,font:{size:9}},grid:{color:gridClr},border:{display:false}}}}});
   },50);
 }
 
@@ -13725,7 +13792,19 @@ function cmpDayValues(data,start,end,metric){
   // Return an array of per-day values from start..end for the chosen metric
   const out=[];if(!start)return out;
   let d=new Date(start+"T12:00:00");const e=new Date((end||start)+"T12:00:00");
-  while(d<=e){const k=dk(d);const s=sumR(data.filter(r=>r.date===k));out.push(metric==="orders"?s.orders:metric==="aov"?(s.orders>0?s.sales/s.orders:0):s.sales);d.setDate(d.getDate()+1);}
+  while(d<=e){
+    const k=dk(d);
+    if(k>latest){
+      // v189: a day beyond `latest` hasn't been fully captured yet — it isn't a real zero, it's
+      // no data yet. Plotting it as 0 made an in-progress week look like sales collapsed to
+      // nothing. null creates a gap in the line instead (Chart.js skips null points by default).
+      out.push(null);
+    }else{
+      const s=sumR(data.filter(r=>r.date===k));
+      out.push(metric==="orders"?s.orders:metric==="aov"?(s.orders>0?s.sales/s.orders:0):s.sales);
+    }
+    d.setDate(d.getDate()+1);
+  }
   return out;
 }
 function cmpDrawChart(dA,dB){
@@ -13759,10 +13838,13 @@ function cmpDrawChart(dA,dB){
     return dateLine?[wd,dateLine]:[wd];
   });
   const fmtV=v=>cmpMetric==="orders"?Math.round(v).toLocaleString():cmpMetric==="aov"?"AED "+v.toFixed(1):"AED "+Math.round(v).toLocaleString();
+  const gridClr=_darkPage?"rgba(255,255,255,.08)":"#F1F5F9";
+  const tickClr=_darkPage?DARK_THEME.textMuted:"#64748b";
+  const legendClr=_darkPage?DARK_THEME.textSecondary:"#475569";
   charts["cmp-chart"]=new Chart(ctx,{type:"line",data:{labels,datasets:[
     {label:"A · "+cmpDateLabel(cmpA),data:va,borderColor:CMP_A_CLR,backgroundColor:CMP_A_CLR,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false},
     {label:"B · "+cmpDateLabel(cmpB),data:vb,borderColor:CMP_B_CLR,backgroundColor:CMP_B_CLR,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false}
-  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:"#475569",font:{size:11},boxWidth:12,padding:10}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label.split(" · ")[0]}: ${fmtV(c.raw)}`}}},scales:{x:{ticks:{color:"#64748b",font:{size:10}},grid:{color:"#F1F5F9"},border:{display:false}},y:{ticks:{color:"#64748b",font:{size:10},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#F1F5F9"},border:{display:false}}}}});
+  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:legendClr,font:{size:11},boxWidth:12,padding:10}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label.split(" · ")[0]}: ${fmtV(c.raw)}`}}},scales:{x:{ticks:{color:tickClr,font:{size:10}},grid:{color:gridClr},border:{display:false}},y:{ticks:{color:tickClr,font:{size:10},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:gridClr},border:{display:false}}}}});
 }
 
 // ═══════════════════════════════════════════════════════════════
