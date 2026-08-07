@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-190";
+const BUILD_VERSION="2026-08-06-191";
 const BUILD_NOTES=[
+  "🐛 Fixed the Platform chart overflowing its card and pushing the whole page wider than the screen (enabling horizontal scroll, which is what exposed the sidebar/logo overlap you saw). Root cause: grid cells default to growing for wide content instead of shrinking to fit — a 6th platform bar was enough to trigger it. Fixed globally, not just for that one chart.",
+  "🌙 Campaigns page dark theme: started. Filter bar, KPI strip, campaign cards, and the table view are converted — this covers the Active/Upcoming/History tabs, which is most of what gets used day to day. The single-campaign detail view and the Forecaster are still light-themed for now, so the page stays in light mode overall until those are done too — didn't want half a page looking dark and half looking light.",
   "🐛 Found the actual root cause of the sidebar collapse issues (both the gap and the \"can't collapse\" bug you just hit) — a CSS specificity conflict. The stylesheet set the content area's margin with !important, which permanently freezes it at whatever it was on first load; the toggle button's later updates used a plain style change that can never win against that, no matter how many times you click it. Switched to a CSS custom property so the toggle's updates actually take effect. Should fix both reports with one change.",
   "🐛 Fixed the Trend chart's grid lines being brighter than the actual data line — they were hardcoded to a near-white color meant for a light background, never updated when Compare went dark. Now subtle and recessive like they should be.",
   "🐛 Fixed a misleading cliff-drop in the Trend chart: days that haven't fully posted yet (today, sometimes yesterday) were computing as literal zero, making an in-progress week look like sales collapsed. Now shows a clean gap instead of a fake plunge to zero.",
@@ -3537,7 +3539,7 @@ function buildSidebarNav(){
 #app-sidebar[data-collapsed="1"] .tab .tab-label{display:none}
 #app-sidebar[data-collapsed="1"] .sidebar-brand-txt{display:none}
 #app-sidebar[data-collapsed="1"] #sidebar-toggle{margin-left:0}
-body{margin-left:var(--sidebar-w)!important;transition:margin-left .18s ease;box-sizing:border-box}
+body{margin-left:var(--sidebar-w)!important;transition:margin-left .18s ease;box-sizing:border-box;overflow-x:hidden!important}
 #main-app{max-width:none!important;width:100%!important;box-sizing:border-box}
 @media (max-width:640px){
   #app-sidebar .tab{padding:12px 10px!important;font-size:14px!important}
@@ -3597,6 +3599,14 @@ function injectResponsiveCSS(){
   const s=document.createElement("style");
   s.id="dash-responsive-css";
   s.textContent=AGG_UPLOAD_CSS+`
+/* v191: grid children default to min-width:auto, so a wide child (e.g. a bar chart that just
+   grew an extra category) can force its .g2/.g3/.g4 grid TRACK to grow past the container
+   instead of shrinking — that's what was pushing the whole page wider than the viewport and
+   enabling horizontal scroll (which is what exposed the fixed sidebar/logo overlap; scrolling
+   itself was a symptom, not the actual bug). The mobile media query below already had this fix
+   for narrow screens; applying it unconditionally so desktop is covered too. */
+.g2,.g3,.g4{min-width:0}
+.g2>*,.g3>*,.g4>*{min-width:0}
 /* ── Mobile (phones, ≤640px) ────────────────────────────────────────────── */
 @media (max-width: 640px){
   /* Make the top nav strip horizontally scrollable so all tabs (incl. Compare) are reachable.
@@ -8036,8 +8046,28 @@ function sortCampaigns(camps){
     return dir*((va||0)-(vb||0));
   });
 }
-function ddHTMLCamp(id,label,activeSet,items,type){const count=activeSet.size,isOn=count>0;const allSelected=items.length>0&&items.every(it=>activeSet.has(it.val));const selectAllRow=`<div class="ddi" style="display:flex;align-items:center;gap:7px;padding:6px 10px;cursor:pointer;font-size:11px;white-space:nowrap;border-bottom:1px solid #E2E8F0;font-weight:700;color:#f59e0b" data-act="campSelectAll" data-v1="${type}" onmouseover="this.style.background='#F1F5F9'" onmouseout="this.style.background='transparent'">${allSelected?'✓ ':''}All ${label}${type==='brand'?'s':type==='platform'?'s':'es'} ${allSelected?'(clear)':'(select all)'}</div>`;const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap" onmouseover="this.style.background='#F1F5F9'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="campToggle" data-v1="${type}" data-v2="${esc(val)}"><span style="color:${clr}">${lbl}</span></label>`).join("");const menuStyle=`${id===campOpenDDId?'display:block':'display:none'};position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:170px;box-shadow:0 12px 30px rgba(15,23,42,.12)`;return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" data-act="dd" data-v1="${id}">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="${id===campOpenDDId?'1':'0'}" style="${menuStyle}">${selectAllRow}${itemsH}</div></div>`;}
+function campTheme(){
+  return _darkPage?{
+    muted:DARK_THEME.textMuted,label:DARK_THEME.textMuted,border:DARK_THEME.cardBorder,
+    text:DARK_THEME.textPrimary,panelBg:DARK_THEME.card,rowBg:DARK_THEME.cardBorder+'44',
+    menuBg:DARK_THEME.card,menuHover:DARK_THEME.cardBorder,inputScheme:'dark'
+  }:{
+    muted:"#64748b",label:"#8A8578",border:"#EDE7D9",
+    text:"#0F172A",panelBg:"#FEFDFA",rowBg:"#F5F0E5",
+    menuBg:"#FFFFFF",menuHover:"#F1F5F9",inputScheme:'light'
+  };
+}
+function ddHTMLCamp(id,label,activeSet,items,type){
+  const T=campTheme();
+  const count=activeSet.size,isOn=count>0;
+  const allSelected=items.length>0&&items.every(it=>activeSet.has(it.val));
+  const selectAllRow=`<div class="ddi" style="display:flex;align-items:center;gap:7px;padding:6px 10px;cursor:pointer;font-size:11px;white-space:nowrap;border-bottom:1px solid ${T.border};font-weight:700;color:#f59e0b" data-act="campSelectAll" data-v1="${type}" onmouseover="this.style.background='${T.menuHover}'" onmouseout="this.style.background='transparent'">${allSelected?'✓ ':''}All ${label}${type==='brand'?'s':type==='platform'?'s':'es'} ${allSelected?'(clear)':'(select all)'}</div>`;
+  const itemsH=items.map(({val,lbl,clr})=>`<label class="ddi" style="display:flex;align-items:center;gap:7px;padding:5px 10px;cursor:pointer;font-size:12px;white-space:nowrap;color:${T.text}" onmouseover="this.style.background='${T.menuHover}'" onmouseout="this.style.background='transparent'"><input type="checkbox" ${activeSet.has(val)?"checked":""} data-act="campToggle" data-v1="${type}" data-v2="${esc(val)}" style="accent-color:#f59e0b"><span style="color:${clr}">${lbl}</span></label>`).join("");
+  const menuStyle=`${id===campOpenDDId?'display:block':'display:none'};position:absolute;top:100%;left:0;z-index:50;margin-top:4px;background:${T.menuBg};border:1px solid ${T.border};border-radius:8px;padding:4px;max-height:280px;overflow-y:auto;min-width:170px;box-shadow:0 12px 30px rgba(15,23,42,.12)`;
+  return`<div class="dd-wrap" style="position:relative;display:inline-block"><button class="fpill ${isOn?"on":""}" data-act="dd" data-v1="${id}">${label} ${isOn?"("+count+")":"▾"}</button><div class="dd-menu" id="${id}" data-open="${id===campOpenDDId?'1':'0'}" style="${menuStyle}">${selectAllRow}${itemsH}</div></div>`;
+}
 function campFilterBar(){
+  const T=campTheme();
   const brands=[...new Set(campaignData.map(c=>c.brand))].filter(b=>b!=='All Brands').sort();
   const platforms=[...new Set(campaignData.map(c=>c.aggregator))].sort();
   const statuses=['Running','Upcoming','Completed'];
@@ -8060,25 +8090,25 @@ function campFilterBar(){
   // Inline date inputs (was on a separate Scope row in the old layout — v070 consolidates
   // everything into a single-row filter bar per user request. Scope pills removed; branch
   // selection is now a proper multi-select dropdown alongside Brand/Platform/Status.)
-  const inp=(id,val,ph)=>`<input type="date" value="${val||''}" id="${id}" onchange="campSetDate('${id==='cf-from'?'from':'to'}',this.value)" style="background:#FEFDFA;border:1px solid #EDE7D9;border-radius:6px;color:#0F172A;padding:5px 8px;font-size:11px;font-family:inherit;color-scheme:light;font-weight:600;height:30px" title="${ph}">`;
-  const dateBits=`<span style="font-size:10px;color:#64748B;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-left:6px">Dates</span>${inp('cf-from',campFStartFrom,'Start From')}<span style="color:#94A3B8;font-size:12px">→</span>${inp('cf-to',campFStartTo,'Start To')}`;
-  const quickChip=(key,label)=>{const on=campQuickFilter===key;const clr=key==='winning'?'#22C55E':key==='losing'?'#EF4444':'#F59E0B';return `<button onclick="campSetQuickFilter('${key}')" style="padding:5px 12px;border-radius:6px;border:1px solid ${on?clr:'#EDE7D9'};background:${on?clr+'1A':'#FFFFFF'};color:${on?clr:'#8A8578'};font-size:11px;font-weight:700;cursor:pointer">${label}</button>`;};
+  const inp=(id,val,ph)=>`<input type="date" value="${val||''}" id="${id}" onchange="campSetDate('${id==='cf-from'?'from':'to'}',this.value)" style="background:${T.panelBg};border:1px solid ${T.border};border-radius:6px;color:${T.text};padding:5px 8px;font-size:11px;font-family:inherit;color-scheme:${T.inputScheme};font-weight:600;height:30px" title="${ph}">`;
+  const dateBits=`<span style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-left:6px">Dates</span>${inp('cf-from',campFStartFrom,'Start From')}<span style="color:${T.label};font-size:12px">→</span>${inp('cf-to',campFStartTo,'Start To')}`;
+  const quickChip=(key,label)=>{const on=campQuickFilter===key;const clr=key==='winning'?'#22C55E':key==='losing'?'#EF4444':'#F59E0B';return `<button onclick="campSetQuickFilter('${key}')" style="padding:5px 12px;border-radius:6px;border:1px solid ${on?clr:T.border};background:${on?clr+'1A':T.panelBg};color:${on?clr:T.label};font-size:11px;font-weight:700;cursor:pointer">${label}</button>`;};
   const sortOpts=[['contribution','Contribution ↓'],['roi','ROI ↓'],['end','End date'],['lift','Order lift ↓']];
-  const sortDD=`<select onchange="campSetCardSort(this.value)" style="padding:6px 10px;border-radius:7px;border:1px solid #E4DCC8;background:#FFFFFF;color:#64748b;font-size:11px;font-weight:600;cursor:pointer">${sortOpts.map(([k,l])=>`<option value="${k}" ${campCardSort===k?'selected':''}>Sort: ${l}</option>`).join('')}</select>`;
+  const sortDD=`<select onchange="campSetCardSort(this.value)" style="padding:6px 10px;border-radius:7px;border:1px solid ${T.border};background:${T.panelBg};color:${T.muted};font-size:11px;font-weight:600;cursor:pointer">${sortOpts.map(([k,l])=>`<option value="${k}" ${campCardSort===k?'selected':''}>Sort: ${l}</option>`).join('')}</select>`;
   const toolbarRow=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:11px;align-items:center">
-    <input type="text" placeholder="Search campaigns…" value="${esc(campSearchQ)}" oninput="campSetSearch(this.value)" style="flex:1;min-width:180px;background:#FFFFFF;border:1px solid #E4DCC8;border-radius:7px;padding:7px 12px;font-size:12px;color:#0F172A;outline:none">
+    <input type="text" placeholder="Search campaigns…" value="${esc(campSearchQ)}" oninput="campSetSearch(this.value)" style="flex:1;min-width:180px;background:${T.panelBg};border:1px solid ${T.border};border-radius:7px;padding:7px 12px;font-size:12px;color:${T.text};outline:none">
     ${quickChip('winning','✅ Winning')}${quickChip('losing','❌ Losing')}${quickChip('ending','⏳ Ending soon')}
     ${sortDD}
   </div>`;
-  return `<div style="background:#FEFDFA;border:1px solid #EDE7D9;border-radius:12px;padding:12px 14px;margin-bottom:14px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06)">
+  return `<div style="background:${T.panelBg};border:1px solid ${T.border};border-radius:12px;padding:12px 14px;margin-bottom:14px;box-shadow:0 4px 6px -1px rgba(15,23,42,.06)">
     ${toolbarRow}
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:10px;border-top:1px solid #F5F0E5">
-      <span style="font-size:11px;color:#64748B;font-weight:800;text-transform:uppercase;letter-spacing:.9px;margin-right:2px">Filters</span>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:10px;border-top:1px solid ${T.rowBg}">
+      <span style="font-size:11px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.9px;margin-right:2px">Filters</span>
       ${brDD}${plDD}${branchDD}${stDD}
       ${dateBits}
       ${clearBtn}
     </div>
-    ${chips?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid #F5F0E5">${chips}</div>`:''}
+    ${chips?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid ${T.rowBg}">${chips}</div>`:''}
   </div>`;
 }
 // Detect whether a campaign declares mutual exclusion with other concurrent campaigns.
@@ -8225,12 +8255,13 @@ function campCardExtraDetail(raw,offerText){
   return detail;
 }
 function campCardGrid(camps,showProfit){
-  if(!camps.length)return `<div class="card"><div style="text-align:center;padding:30px;color:#64748b">No campaigns match your filters.</div></div>`;
+  const T=campTheme();
+  if(!camps.length)return `<div class="card"><div style="text-align:center;padding:30px;color:${T.muted}">No campaigns match your filters.</div></div>`;
   const todayKey=dk(new Date());
   const cards=camps.map(c=>{
     const idx=campaignData.indexOf(c);
     const st=campStatus(c);
-    const stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#94a3b8',Cancelled:'#EF4444'}[st]||'#94a3b8';
+    const stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:T.muted,Cancelled:'#EF4444'}[st]||T.muted;
     const borderClr=campProfitColor(c,showProfit);
     let metricsHTML='';
     if(showProfit){
@@ -8245,26 +8276,26 @@ function campCardGrid(camps,showProfit){
         const verdictSym=part.contrib>=0?'✅':'❌';
         metricsHTML=`
           <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-top:10px">
-            <div><div style="font-size:9px;color:#8A8578;text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Own-Orders Contrib. 📊</div><div style="font-size:22px;font-weight:800;color:${pClr}">${part.contrib>=0?'+':'−'}${fmtAEDx(Math.abs(part.contrib))}</div></div>
-            <div style="text-align:right"><div style="font-size:9px;color:#8A8578;text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Orders</div><div style="font-size:15px;font-weight:700;color:${pClr}">${part.orders.toLocaleString()}</div><div style="font-size:11px;font-weight:700;color:${pClr};margin-top:2px" title="${part.contrib>=0?'Campaign orders profitable':'Campaign orders lose money'} · ⚭ brand-level figure shared with ${a.sameBrandPlatConcurrent.length} concurrent campaign(s)">${verdictSym} ${part.shareOfBrandOrders!=null?part.shareOfBrandOrders.toFixed(0)+'% of brand':''}</div></div>
+            <div><div style="font-size:9px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Own-Orders Contrib. 📊</div><div style="font-size:22px;font-weight:800;color:${pClr}">${part.contrib>=0?'+':'−'}${fmtAEDx(Math.abs(part.contrib))}</div></div>
+            <div style="text-align:right"><div style="font-size:9px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Orders</div><div style="font-size:15px;font-weight:700;color:${pClr}">${part.orders.toLocaleString()}</div><div style="font-size:11px;font-weight:700;color:${pClr};margin-top:2px" title="${part.contrib>=0?'Campaign orders profitable':'Campaign orders lose money'} · ⚭ brand-level figure shared with ${a.sameBrandPlatConcurrent.length} concurrent campaign(s)">${verdictSym} ${part.shareOfBrandOrders!=null?part.shareOfBrandOrders.toFixed(0)+'% of brand':''}</div></div>
           </div>`;
       }else if(a.hasData){
         const incrClr=a.incrContribTotal>=0?'#22C55E':'#EF4444';
         const roi=a.discountROI;
-        const roiClr=roi==null?'#64748b':roi>=1?'#22C55E':roi>=0.4?'#F59E0B':'#EF4444';
+        const roiClr=roi==null?T.muted:roi>=1?'#22C55E':roi>=0.4?'#F59E0B':'#EF4444';
         const verdictSym=roi==null?'—':roi>=1?'✅':roi>=0.4?'⚠️':roi>=0?'❌':'🛑';
         const liftClr=a.ordersLift>=0?'#22C55E':'#EF4444';
         // Preserve the existing hover calculation tooltip system exactly as it was.
         const _ctipId=storeTip(buildCampCalcTipHTML(a));
         metricsHTML=`
           <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-top:10px">
-            <div data-ctip="${_ctipId}" style="cursor:help"><div style="font-size:9px;color:#8A8578;text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Incr. Contribution <span style="opacity:.45;font-size:8px">ⓘ</span></div><div style="font-size:22px;font-weight:800;color:${incrClr}">${a.incrContribTotal>=0?'+':''}${fmtAEDx(a.incrContribTotal)}</div></div>
-            <div data-ctip="${_ctipId}" style="cursor:help;text-align:right"><div style="font-size:9px;color:#8A8578;text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">ROI <span style="opacity:.45;font-size:8px">ⓘ</span></div><div style="font-size:15px;font-weight:700;color:${roiClr}">${roi!=null?roi.toFixed(2)+'×':'—'}</div><div style="font-size:11px;font-weight:700;color:${liftClr};margin-top:2px" title="${roi==null?'No ROI data':roi>=1?'Paid for itself':roi>=0.4?'Marginal':'Lost money'} · ${a.ordersLift!=null?(a.ordersLift>=0?'+':'')+a.ordersLift.toFixed(0)+'% orders':'no order-lift data'}">${verdictSym} ${a.ordersLift!=null?(a.ordersLift>=0?'▲':'▼')+' '+Math.abs(a.ordersLift).toFixed(0)+'%':''}</div></div>
+            <div data-ctip="${_ctipId}" style="cursor:help"><div style="font-size:9px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Incr. Contribution <span style="opacity:.45;font-size:8px">ⓘ</span></div><div style="font-size:22px;font-weight:800;color:${incrClr}">${a.incrContribTotal>=0?'+':''}${fmtAEDx(a.incrContribTotal)}</div></div>
+            <div data-ctip="${_ctipId}" style="cursor:help;text-align:right"><div style="font-size:9px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">ROI <span style="opacity:.45;font-size:8px">ⓘ</span></div><div style="font-size:15px;font-weight:700;color:${roiClr}">${roi!=null?roi.toFixed(2)+'×':'—'}</div><div style="font-size:11px;font-weight:700;color:${liftClr};margin-top:2px" title="${roi==null?'No ROI data':roi>=1?'Paid for itself':roi>=0.4?'Marginal':'Lost money'} · ${a.ordersLift!=null?(a.ordersLift>=0?'+':'')+a.ordersLift.toFixed(0)+'% orders':'no order-lift data'}">${verdictSym} ${a.ordersLift!=null?(a.ordersLift>=0?'▲':'▼')+' '+Math.abs(a.ordersLift).toFixed(0)+'%':''}</div></div>
           </div>
           ${a.commWaiver?`<div style="font-size:10.5px;color:#C084FC;margin-top:6px;font-weight:600" title="Noon waived standard commission (${(a.commWaiver.standardRate*100).toFixed(0)}%→${(a.commWaiver.overrideRate*100).toFixed(0)}%) on ${a.commWaiver.discOrders} order(s) that carried a discount, worth AED ${Math.round(a.commWaiver.discNet).toLocaleString()} net · ${a.commWaiver.coveredFully?'full window covered by exact Noon data':'partial — some dates not yet covered by an upload'}">🎁 Commission waiver: +${fmtAEDx(a.commWaiver.bonus)}</div>`:''}
         `;
       }else{
-        metricsHTML=`<div style="display:flex;align-items:center;gap:6px;padding:8px 0;color:#8A8578;font-size:12px"><span>⏳</span><span>No sales data yet</span></div>`;
+        metricsHTML=`<div style="display:flex;align-items:center;gap:6px;padding:8px 0;color:${T.label};font-size:12px"><span>⏳</span><span>No sales data yet</span></div>`;
       }
     }else{
       const daysToStart=Math.ceil((new Date(c.startDate+'T12:00:00')-new Date())/86400000);
@@ -8308,26 +8339,26 @@ function campCardGrid(camps,showProfit){
     const totalDays=Math.max(1,daysBetweenInclusive(c.startDate,c.endDate));
     const elapsedDays=todayKey<c.startDate?0:todayKey>c.endDate?totalDays:daysBetweenInclusive(c.startDate,todayKey);
     const progressPct=Math.max(0,Math.min(100,Math.round(elapsedDays/totalDays*100)));
-    const progressBar=`<div style="background:#F0EBDC;border-radius:4px;height:3px;margin:11px 0 3px"><div style="background:${borderClr};height:3px;border-radius:4px;width:${progressPct}%"></div></div>`;
+    const progressBar=`<div style="background:${T.rowBg};border-radius:4px;height:3px;margin:11px 0 3px"><div style="background:${borderClr};height:3px;border-radius:4px;width:${progressPct}%"></div></div>`;
     const extraDetail=campCardExtraDetail(c.comments,offer);
-    return `<div onclick="selectCamp(${idx})" style="cursor:pointer;background:#FFFFFF;border:1px solid ${borderClr}33;border-left:4px solid ${borderClr};border-radius:12px;padding:15px;transition:transform .12s,border-color .12s" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
+    return `<div onclick="selectCamp(${idx})" style="cursor:pointer;background:${T.panelBg};border:1px solid ${borderClr}33;border-left:4px solid ${borderClr};border-radius:12px;padding:15px;transition:transform .12s,border-color .12s" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px">
-        <div style="display:flex;align-items:center;gap:6px" title="${c.brand} · ${c.aggregator}">${logoImg(c.brand,28)}<span style="color:#94a3b8;font-size:12px">×</span>${logoImg(c.aggregator,28)}</div>
+        <div style="display:flex;align-items:center;gap:6px" title="${c.brand} · ${c.aggregator}">${logoImg(c.brand,28)}<span style="color:${T.muted};font-size:12px">×</span>${logoImg(c.aggregator,28)}</div>
         <div style="display:flex;align-items:center;gap:7px">
-          ${st==='Running'?`<span style="font-size:10px;color:#64748b;font-weight:600">${totalDays-elapsedDays}d left</span>`:''}
+          ${st==='Running'?`<span style="font-size:10px;color:${T.muted};font-weight:600">${totalDays-elapsedDays}d left</span>`:''}
           <span style="padding:3px 8px;border-radius:6px;background:${stClr}22;color:${stClr};font-size:9px;font-weight:800;border:1px solid ${stClr}44;white-space:nowrap">${st.toUpperCase()}</span>
         </div>
       </div>
-      <div style="font-size:14px;font-weight:800;color:#0F172A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:7px">${c.name||'Campaign'}</div>
+      <div style="font-size:14px;font-weight:800;color:${T.text};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:7px">${c.name||'Campaign'}</div>
       <div style="display:flex;align-items:center;gap:6px;margin-top:2px;flex-wrap:wrap">
-        <span style="font-size:12px;color:#0F172A;background:rgba(15,23,42,.05);padding:3px 9px;border-radius:6px;font-weight:700">${offer}</span>
+        <span style="font-size:12px;color:${T.text};background:${_darkPage?DARK_THEME.cardBorder+'55':'rgba(15,23,42,.05)'};padding:3px 9px;border-radius:6px;font-weight:700">${offer}</span>
         ${coFundChip}
         ${exactChip}
         ${subsidyChip}
         ${campHasOrderExport(c)?`<span onclick="event.stopPropagation();exportCampaignOrdersByIdx(${idx})" style="cursor:pointer;font-size:11px;background:rgba(34,197,94,.1);color:#16a34a;padding:2px 8px;border-radius:6px;font-weight:700" title="Download the exact order-level rows attributed to this campaign (CSV)">📥</span>`:''}
-        <span style="font-size:10.5px;color:#8A8578;font-weight:600">${dateStrCompact}</span>
+        <span style="font-size:10.5px;color:${T.label};font-weight:600">${dateStrCompact}</span>
       </div>
-      ${extraDetail?`<div style="font-size:11px;color:#64748b;margin-top:7px;line-height:1.5;font-weight:500" title="${(c.comments||'').replace(/"/g,'&quot;')}">${extraDetail}</div>`:''}
+      ${extraDetail?`<div style="font-size:11px;color:${T.muted};margin-top:7px;line-height:1.5;font-weight:500" title="${(c.comments||'').replace(/"/g,'&quot;')}">${extraDetail}</div>`:''}
       ${progressBar}
       ${metricsHTML}
     </div>`;
@@ -8336,7 +8367,8 @@ function campCardGrid(camps,showProfit){
 }
 
 function campTableHTML(title,camps,showImpact){
-  if(!camps.length)return`<div class="card"><div class="ct">${title}</div><div style="color:#64748b;font-size:12px;padding:8px 0">No campaigns match your filters.</div></div>`;
+  const T=campTheme();
+  if(!camps.length)return`<div class="card"><div class="ct">${title}</div><div style="color:${T.muted};font-size:12px;padding:8px 0">No campaigns match your filters.</div></div>`;
   // Detect bundles BEFORE sorting/rendering. Bundles render as a single combined row.
   const{bundles,standalone}=buildCampBundles(camps);
   // For sorting/iteration we treat bundles as pseudo-campaigns (their fields satisfy sortCampaigns)
@@ -8349,23 +8381,23 @@ function campTableHTML(title,camps,showImpact){
     // Bundle row: shows combined analysis using real Disc totals (which already sum all segments)
     if(c.isBundle){
       const a=bundleAnalysis(c);
-      const profClr=a.profitabilityPct==null?'#64748b':a.profitabilityPct>0?'#22C55E':a.profitabilityPct>-20?'#FBBF24':'#EF4444';
+      const profClr=a.profitabilityPct==null?T.muted:a.profitabilityPct>0?'#22C55E':a.profitabilityPct>-20?'#FBBF24':'#EF4444';
       const profStr=a.profitabilityPct==null?'—':`${a.profitabilityPct>=0?'+':''}${a.profitabilityPct.toFixed(1)}%`;
       const segChips=c.campaigns.map(seg=>`<span style="background:rgba(245,158,11,.08);color:#FBBF24;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-right:3px;border:1px solid rgba(245,158,11,.25)">${seg.name||'(unnamed)'}</span>`).join('');
       const bundleIdx="bundle:"+c.campaigns.map(seg=>campaignData.indexOf(seg)).join(",");
       const viewBtn=`<button onclick="selectBundleByKey('${bundleIdx}')" style="background:#f59e0b22;border:1px solid #f59e0b66;border-radius:5px;color:#f59e0b;padding:3px 8px;font-size:10px;cursor:pointer;white-space:nowrap;font-weight:700">View Bundle →</button>`;
       const b=BMAP[c.brand];
-      const exclLabel=c.exclusive&&c.exclusive.length?`<span style="font-size:11px;color:#94a3b8">${c.campaigns.length} segments · <span style="color:#FBBF24;font-weight:700">⚠️ Mutual exclusion detected</span> — ${c.exclusive.length} pauses the other${c.pausedByExclusive.length>1?'s':''}</span>`:`<span style="font-size:11px;color:#94a3b8">${c.campaigns.length} concurrent segments — combined analysis</span>`;
+      const exclLabel=c.exclusive&&c.exclusive.length?`<span style="font-size:11px;color:${T.label}">${c.campaigns.length} segments · <span style="color:#FBBF24;font-weight:700">⚠️ Mutual exclusion detected</span> — ${c.exclusive.length} pauses the other${c.pausedByExclusive.length>1?'s':''}</span>`:`<span style="font-size:11px;color:${T.label}">${c.campaigns.length} concurrent segments — combined analysis</span>`;
       let row=`<tr style="background:rgba(245,158,11,.04)"><td><strong style="font-size:12px;color:#FBBF24">🎯 ${c.brand} ${c.aggregator} Bundle</strong><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px">${segChips}</div></td><td><span style="color:${b?.c||'#888'};font-weight:700;font-size:11px">${c.brand}</span></td><td><span style="color:${AC[c.aggregator]||'#888'};font-weight:700;font-size:11px">${c.aggregator}</span></td><td>${exclLabel}</td><td><span style="white-space:nowrap;font-size:11px">${fmtCampDateRange(c.startDate,c.endDate)}</span></td><td><span style="font-size:11px">${c.outlet}</span></td>`;
       if(showImpact){
         if(a.cs&&a.cs.orders>0){
           const ordClr=pctClr(a.ordersLift),salClr=pctClr(a.salesLift);
-          row+=`<td style="color:${ordClr};font-weight:700;font-size:11px">${fmtPct(a.ordersLift)}</td><td style="color:${salClr};font-weight:700;font-size:11px">${fmtPct(a.salesLift)}</td><td style="color:#64748b;font-size:11px">—</td><td style="color:${profClr};font-weight:700;font-size:11px">${profStr}</td>`;
-        }else row+='<td style="color:#64748b">—</td><td style="color:#64748b">—</td><td style="color:#64748b">—</td><td style="color:#64748b">—</td>';
+          row+=`<td style="color:${ordClr};font-weight:700;font-size:11px">${fmtPct(a.ordersLift)}</td><td style="color:${salClr};font-weight:700;font-size:11px">${fmtPct(a.salesLift)}</td><td style="color:${T.muted};font-size:11px">—</td><td style="color:${profClr};font-weight:700;font-size:11px">${profStr}</td>`;
+        }else row+=`<td style="color:${T.muted}">—</td><td style="color:${T.muted}">—</td><td style="color:${T.muted}">—</td><td style="color:${T.muted}">—</td>`;
       }else row+=`<td><span style="color:#22C55E;font-weight:700;font-size:11px">Running</span></td>`;
       row+=`<td>${viewBtn}</td></tr>`;return row;
     }
-    const realIdx=campaignData.indexOf(c);const st=campStatus(c),stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#64748b',Cancelled:'#EF4444'}[st]||'#64748b';const b=BMAP[c.brand];
+    const realIdx=campaignData.indexOf(c);const st=campStatus(c),stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:T.muted,Cancelled:'#EF4444'}[st]||T.muted;const b=BMAP[c.brand];
     const imp=showImpact&&(st==='Completed'||st==='Running')?campImpactExtended(c):null;
     const viewBtn=`<button onclick="selectCamp(${realIdx})" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:3px 8px;font-size:10px;cursor:pointer;white-space:nowrap">View →</button>`;
     // Offer cell now shows comment + resolved-branch chip + co-funding chip when applicable
@@ -8382,16 +8414,16 @@ function campTableHTML(title,camps,showImpact){
     }
     const coFundChip=parsedC.coFundedPctOfDiscount?` <span style="font-size:9px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:2px 7px;border-radius:8px;border:1px solid rgba(168,85,247,.3);margin-left:5px" title="${c.aggregator} funds ${Math.round(parsedC.coFundedPctOfDiscount*100)}% of the discount; ${c.brand} funds the rest">🤝 ${c.aggregator} ${Math.round(parsedC.coFundedPctOfDiscount*100)}%</span>`:'';
     const unresolvedChip=parsedC.unresolved.length?` <span title="Unrecognized in comment: ${parsedC.unresolved.join(', ')}" style="font-size:9px;background:rgba(239,68,68,.12);color:#FCA5A5;font-weight:700;padding:2px 7px;border-radius:8px;border:1px solid rgba(239,68,68,.3);margin-left:5px;cursor:help">⚠ needs clarification</span>`:'';
-    const offer=`<div><span style="font-size:11px;color:#94a3b8" title="${(c.comments||'').replace(/"/g,'&quot;')}">${(c.comments||'').length>60?(c.comments||'').slice(0,60)+'…':(c.comments||'')}</span>${coFundChip}${unresolvedChip}${branchChip}</div>`;
+    const offer=`<div><span style="font-size:11px;color:${T.label}" title="${(c.comments||'').replace(/"/g,'&quot;')}">${(c.comments||'').length>60?(c.comments||'').slice(0,60)+'…':(c.comments||'')}</span>${coFundChip}${unresolvedChip}${branchChip}</div>`;
     const addonTag=(c.addons&&c.addons.length)?` <span style="background:rgba(232,214,20,0.15);color:#E8D614;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:5px;border:1px solid rgba(232,214,20,0.3)">+ ${c.addons.map(a=>a.name).join(', ')}</span>`:'';
     let row=`<tr><td><strong style="font-size:12px">${c.name||'(no name)'}</strong>${addonTag}</td><td><span style="color:${b?.c||'#888'};font-weight:700;font-size:11px">${c.brand}</span></td><td><span style="color:${AC[c.aggregator]||'#888'};font-weight:700;font-size:11px">${c.aggregator}</span></td><td>${offer}</td><td><span style="white-space:nowrap;font-size:11px">${fmtCampDateRange(c.startDate,c.endDate)}</span></td><td><span style="font-size:11px">${c.outlet||'All'}</span></td>`;
     if(showImpact){
-      if(imp&&imp.hasData){const profClr=imp.profitability==null?'#64748b':imp.profitability>0?'#22C55E':imp.profitability>-20?'#FBBF24':'#EF4444';const profStr=imp.profitability==null?'—':`${imp.profitability>=0?'+':''}${imp.profitability.toFixed(1)}%`;row+=`<td style="color:${pctClr(imp.wowOrdersLift)};font-weight:700;font-size:11px">${fmtPct(imp.wowOrdersLift)}</td><td style="color:${pctClr(imp.wowSalesLift)};font-weight:700;font-size:11px">${fmtPct(imp.wowSalesLift)}</td><td style="color:${pctClr(imp.momSalesLift)};font-weight:700;font-size:11px">${fmtPct(imp.momSalesLift)}</td><td style="color:${profClr};font-weight:700;font-size:11px">${profStr}</td>`;}
-      else row+='<td style="color:#64748b">—</td><td style="color:#64748b">—</td><td style="color:#64748b">—</td><td style="color:#64748b">—</td>';
+      if(imp&&imp.hasData){const profClr=imp.profitability==null?T.muted:imp.profitability>0?'#22C55E':imp.profitability>-20?'#FBBF24':'#EF4444';const profStr=imp.profitability==null?'—':`${imp.profitability>=0?'+':''}${imp.profitability.toFixed(1)}%`;row+=`<td style="color:${pctClr(imp.wowOrdersLift)};font-weight:700;font-size:11px">${fmtPct(imp.wowOrdersLift)}</td><td style="color:${pctClr(imp.wowSalesLift)};font-weight:700;font-size:11px">${fmtPct(imp.wowSalesLift)}</td><td style="color:${pctClr(imp.momSalesLift)};font-weight:700;font-size:11px">${fmtPct(imp.momSalesLift)}</td><td style="color:${profClr};font-weight:700;font-size:11px">${profStr}</td>`;}
+      else row+=`<td style="color:${T.muted}">—</td><td style="color:${T.muted}">—</td><td style="color:${T.muted}">—</td><td style="color:${T.muted}">—</td>`;
     }else row+=`<td><span style="color:${stClr};font-weight:700;font-size:11px">${st}</span></td>`;
     row+=`<td>${viewBtn}</td></tr>`;return row;
   }).join('');
-  return`<div class="card"><div class="ct">${title} (${camps.length}${bundles.length?` · ${bundles.length} bundle${bundles.length>1?'s':''}`:''})</div>${bundles.length?`<div style="font-size:10px;color:#94a3b8;padding:0 0 8px 0;font-style:italic">🎯 = Concurrent campaigns on the same brand + platform, analyzed together (real combined discount). Click "View Bundle" to see per-segment breakdown.</div>`:''}<div style="overflow-x:auto"><table class="tbl"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  return`<div class="card"><div class="ct">${title} (${camps.length}${bundles.length?` · ${bundles.length} bundle${bundles.length>1?'s':''}`:''})</div>${bundles.length?`<div style="font-size:10px;color:${T.label};padding:0 0 8px 0;font-style:italic">🎯 = Concurrent campaigns on the same brand + platform, analyzed together (real combined discount). Click "View Bundle" to see per-segment breakdown.</div>`:''}<div style="overflow-x:auto"><table class="tbl"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 // ════════════════════════════════════════════════════════════════════════════
 // CAMPAIGN ANALYSIS V2 — weekday-aligned previous-month baseline + true per-brand
@@ -10102,6 +10134,7 @@ function bundleDetailHTML(bundle){
 // each has {icon, txt, action, priority}. Callers render them as a compact bulleted list.
 // Priority: 1=critical (ending today, negative ROI), 2=warn (48h end, stale data), 3=info.
 function campKPIStrip(active){
+  const T=campTheme();
   let winning=0,losing=0,contribTotal=0,discTotal=0,endingIn3d=0;
   const now=new Date();
   for(const c of active){
@@ -10118,15 +10151,15 @@ function campKPIStrip(active){
     }catch(e){/* skip */}
   }
   const roiDisplay=discTotal>0?((contribTotal+discTotal)/discTotal):null;
-  const kpi=(lbl,val,clr,sub)=>`<div class="sm" style="padding:12px 13px"><div style="font-size:9px;color:#8A8578;text-transform:uppercase;letter-spacing:.6px;font-weight:700;margin-bottom:5px">${lbl}</div><div style="font-size:20px;font-weight:800;color:${clr}">${val}</div>${sub?`<div style="font-size:10px;color:#8A8578;margin-top:2px">${sub}</div>`:''}</div>`;
+  const kpi=(lbl,val,clr,sub)=>`<div class="sm" style="padding:12px 13px"><div style="font-size:9px;color:${T.label};text-transform:uppercase;letter-spacing:.6px;font-weight:700;margin-bottom:5px">${lbl}</div><div style="font-size:20px;font-weight:800;color:${clr}">${val}</div>${sub?`<div style="font-size:10px;color:${T.label};margin-top:2px">${sub}</div>`:''}</div>`;
   return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:14px">
-    ${kpi('Active',active.filter(c=>!isRewardsCampaign(c)).length,'#0F172A')}
-    ${kpi('Ending in 3d',endingIn3d,endingIn3d>0?'#F59E0B':'#0F172A')}
+    ${kpi('Active',active.filter(c=>!isRewardsCampaign(c)).length,T.text)}
+    ${kpi('Ending in 3d',endingIn3d,endingIn3d>0?'#F59E0B':T.text)}
     ${kpi('✅ Winning',winning,'#22C55E')}
     ${kpi('❌ Losing',losing,'#EF4444')}
     ${kpi('Campaign Contribution',`${contribTotal>=0?'+':''}${fmtAEDx(contribTotal)}`,contribTotal>=0?'#22C55E':'#EF4444')}
     ${kpi('Disc. Burn',fmtAEDx(discTotal),'#C084FC')}
-    ${kpi('Blended ROI',roiDisplay!=null?roiDisplay.toFixed(2)+'×':'—',roiDisplay==null?'#64748b':roiDisplay>=1?'#22C55E':'#F59E0B')}
+    ${kpi('Blended ROI',roiDisplay!=null?roiDisplay.toFixed(2)+'×':'—',roiDisplay==null?T.muted:roiDisplay>=1?'#22C55E':'#F59E0B')}
   </div>`;
 }
 function campNeedsAttentionItems(active,upcoming){
@@ -11030,12 +11063,21 @@ function campFcHTML(){
 
 async function renderCampaigns(){
   const pg=document.getElementById('page-campaigns');if(!pg)return;
+  const T=campTheme();
+  const styleOverride=_darkPage?`<style>
+    #page-campaigns{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
+    #page-campaigns .card,#page-campaigns .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
+    #page-campaigns .ct{color:${DARK_THEME.textPrimary}!important}
+    #page-campaigns table.tbl th{color:${DARK_THEME.textMuted}!important;border-color:${DARK_THEME.cardBorder}!important}
+    #page-campaigns table.tbl td{color:${DARK_THEME.textPrimary}!important;border-color:${DARK_THEME.cardBorder}!important}
+    #page-campaigns table.tbl tr:hover td{background:${DARK_THEME.cardBorder}44!important}
+  </style>`:"";
   if(!campLoaded){
-    pg.innerHTML=`<div style="padding:30px;text-align:center;color:#64748b;font-size:13px">⏳ Loading campaigns from Google Sheets...</div>`;
+    pg.innerHTML=`${styleOverride}<div style="padding:30px;text-align:center;color:${T.muted};font-size:13px">⏳ Loading campaigns from Google Sheets...</div>`;
     try{const csv=await fetchCSV(CAMPAIGN_GID);campaignData=parseCampaigns(csv);campLoaded=true;campAnalysisCache.clear();}
-    catch(e){pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Could not load Campaign Activations sheet</div><div style="color:#64748b;font-size:12px">Error: ${e.message}</div></div>`;return;}
+    catch(e){pg.innerHTML=`${styleOverride}<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Could not load Campaign Activations sheet</div><div style="color:${T.muted};font-size:12px">Error: ${e.message}</div></div>`;return;}
   }
-  if(campaignData.length===0){pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Sheet loaded but no valid campaigns found</div></div>`;return;}
+  if(campaignData.length===0){pg.innerHTML=`${styleOverride}<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Sheet loaded but no valid campaigns found</div></div>`;return;}
   try{
     const active=campaignData.filter(c=>campStatus(c)==='Running'),upcoming=campaignData.filter(c=>campStatus(c)==='Upcoming'),completed=campaignData.filter(c=>campStatus(c)==='Completed');
     // Sort Active by end date ASCENDING (earliest-ending first, so campaigns about to end sit
@@ -11051,7 +11093,7 @@ async function renderCampaigns(){
     ];
     if(selCamp)tabs.push(['detail','🔍 Campaign Detail',null]);
     else if(selBundle)tabs.push(['detail','🎯 Bundle Detail',null]);
-    const tabH=tabs.map(([k,l,n])=>{const act=campTab===k;const cnt=n!=null?` <span style="background:${act?'rgba(245,158,11,.25)':'rgba(100,116,139,.2)'};color:${act?'#FBBF24':'#94a3b8'};font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;margin-left:3px">${n}</span>`:'';return `<button onclick="campTab='${k}';renderCampaigns()" style="padding:7px 14px;border-radius:7px;border:1px solid ${act?'#f59e0b':'rgba(15,23,42,.6)'};background:${act?'linear-gradient(180deg,rgba(245,158,11,.18),rgba(245,158,11,.08))':'transparent'};color:${act?'#f59e0b':'#94a3b8'};font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:3px;transition:all .15s">${l}${cnt}</button>`;}).join('');
+    const tabH=tabs.map(([k,l,n])=>{const act=campTab===k;const cnt=n!=null?` <span style="background:${act?'rgba(245,158,11,.25)':'rgba(100,116,139,.2)'};color:${act?'#FBBF24':T.label};font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;margin-left:3px">${n}</span>`:'';return `<button onclick="campTab='${k}';renderCampaigns()" style="padding:7px 14px;border-radius:7px;border:1px solid ${act?'#f59e0b':(_darkPage?DARK_THEME.cardBorder:'rgba(15,23,42,.6)')};background:${act?'linear-gradient(180deg,rgba(245,158,11,.18),rgba(245,158,11,.08))':'transparent'};color:${act?'#f59e0b':T.label};font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:3px;transition:all .15s">${l}${cnt}</button>`;}).join('');
     // Rewards segregation renderer: on Active/History, split the filtered list into "regular" and
     // "rewards" campaigns. Regular go first as the main grid. Rewards appear below in a labelled
     // sub-section so their unusual ROI (very high or very low from ambient loyalty redemption)
@@ -11060,10 +11102,10 @@ async function renderCampaigns(){
       const regular=f.filter(c=>!isRewardsCampaign(c));
       const rewards=f.filter(c=>isRewardsCampaign(c));
       let html='';
-      html+=`<div style="font-size:11px;color:#475569;font-weight:700;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px">${emptyLabel} (${regular.length})</div>`;
+      html+=`<div style="font-size:11px;color:${T.text==='#0F172A'?'#475569':T.text};font-weight:700;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px">${emptyLabel} (${regular.length})</div>`;
       html+=campCardGrid(regular,showProfit);
       if(rewards.length>0){
-        html+=`<div style="margin-top:22px"><div style="font-size:11px;color:#94a3b8;font-weight:700;margin:0 0 8px 2px;text-transform:uppercase;letter-spacing:.6px;display:flex;align-items:center;gap:8px">💎 Loyalty programs (${rewards.length}) <span style="font-size:9px;color:#64748b;text-transform:none;letter-spacing:0;font-weight:500">— shown separately, excluded from regular-campaign profitability comparisons</span></div>`;
+        html+=`<div style="margin-top:22px"><div style="font-size:11px;color:${T.label};font-weight:700;margin:0 0 8px 2px;text-transform:uppercase;letter-spacing:.6px;display:flex;align-items:center;gap:8px">💎 Loyalty programs (${rewards.length}) <span style="font-size:9px;color:${T.muted};text-transform:none;letter-spacing:0;font-weight:500">— shown separately, excluded from regular-campaign profitability comparisons</span></div>`;
         html+=campCardGrid(rewards,showProfit);
         html+=`</div>`;
       }
@@ -11072,24 +11114,24 @@ async function renderCampaigns(){
     let main='';
     if(campTab==='forecaster'){main=campFcHTML();}
     else if(campTab==='active'){const f=sortCampCards(applyCampFilters(activeSorted));main=campFilterBar()+renderCampListWithRewardsSplit(f,true,'🟢 Active Campaigns');}
-    else if(campTab==='upcoming'){const f=applyCampFilters(upcoming).slice().sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||''));main=campFilterBar()+`<div style="font-size:11px;color:#475569;font-weight:700;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px">⏰ Upcoming Campaigns (${f.length})</div>`+campCardGrid(f,false);}
+    else if(campTab==='upcoming'){const f=applyCampFilters(upcoming).slice().sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||''));main=campFilterBar()+`<div style="font-size:11px;color:${T.text==='#0F172A'?'#475569':T.text};font-weight:700;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px">⏰ Upcoming Campaigns (${f.length})</div>`+campCardGrid(f,false);}
     else if(campTab==='history'){const fcRaw=applyCampFilters(completed);const fc=campQuickFilter!=='all'?sortCampCards(fcRaw):fcRaw.slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));const shown=fc.slice(0,120);main=campFilterBar()+renderCampListWithRewardsSplit(shown,true,`📋 Completed Campaigns${fc.length>120?' · showing 120 most recent of '+fc.length:''}`);}
     else if(campTab==='detail'&&selBundle){main=bundleDetailHTML(selBundle);}
     else if(campTab==='detail'&&selCamp){main=campDetailV2HTML(selCamp,campaignData.indexOf(selCamp));}
     // Header
-    const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(15,23,42,.12)"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">⚡</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Campaign Manager</div></div><div style="font-size:10px;color:#64748b;margin-top:2px;letter-spacing:.4px">Performance · Profitability · Coordination</div></div><button onclick="campLoaded=false;selCamp=null;selBundle=null;campTab='active';renderCampaigns()" style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600">↻ Refresh Data</button></div>`;
+    const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid ${T.border}"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">⚡</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Campaign Manager</div></div><div style="font-size:10px;color:${T.muted};margin-top:2px;letter-spacing:.4px">Performance · Profitability · Coordination</div></div><button onclick="campLoaded=false;selCamp=null;selBundle=null;campTab='active';renderCampaigns()" style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600">↻ Refresh Data</button></div>`;
     // NEW LAYOUT (v052): compact freshness strip → Needs Attention panel → tabs → main content.
     // Removed: 4 big stat cards (Running Now / Upcoming / Completed / Total Tracked — pure duplicates
     // of the tab pill counts) and the 5 big data-source cards (replaced by the freshness strip).
     // These changes save ~300px of vertical chrome at the top of the page.
     const attention=(campTab==='active'||campTab==='upcoming'||campTab==='history')?campNeedsAttentionPanel(active,upcoming):'';
     const kpiStrip=(campTab==='active')?campKPIStrip(active):'';initCalcTip();
-    pg.innerHTML=`${header}${campDataFreshnessStrip()}${kpiStrip}${attention}<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
+    pg.innerHTML=`${styleOverride}${header}${campDataFreshnessStrip()}${kpiStrip}${attention}<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
     // Fire non-blocking end-soon toasts on entry to Active tab (once per campaign+threshold per session)
     if(campTab==='active')setTimeout(()=>campEndSoonPopups(active),150);
     if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
     if(campTab==='detail'&&selCamp){const c=selCamp;const imp=campImpact(c);if(campStatus(c)!=='Upcoming'&&imp.hasData){const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&(c.brand==='All Brands'||r.brand===c.brand)&&(c.aggregator==='All'||r.aggregator===c.aggregator)));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-camp',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}}
-  }catch(err){pg.innerHTML=`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Render error</div><div style="color:#64748b;font-size:12px">${err.message}</div></div>`;}
+  }catch(err){pg.innerHTML=`${styleOverride}<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Render error</div><div style="color:${T.muted};font-size:12px">${err.message}</div></div>`;}
 }
 
 // ── KPI TRACKER ──────────────────────────────────────────────────
