@@ -191,7 +191,7 @@ async function handleLogout(request, env) {
 }
 
 // ─── shared order-data endpoints ─────────────────────────────────────────────
-const ORDERDATA_AGGS = ["keeta", "careem", "talabat", "deliveroo", "noon"];
+const ORDERDATA_AGGS = ["keeta", "careem", "talabat", "deliveroo", "noon", "feedback"];
 const ORDERDATA_MAX_BYTES = 20 * 1024 * 1024; // v178: was 5MB, based on an early estimate of
 // ~50-350KB parsed payloads. That estimate didn't account for the merge strategy — every upload
 // accumulates on top of prior ones forever (records/orderDetail/cancellations are never pruned,
