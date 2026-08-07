@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-189";
+const BUILD_VERSION="2026-08-06-190";
 const BUILD_NOTES=[
+  "🐛 Found the actual root cause of the sidebar collapse issues (both the gap and the \"can't collapse\" bug you just hit) — a CSS specificity conflict. The stylesheet set the content area's margin with !important, which permanently freezes it at whatever it was on first load; the toggle button's later updates used a plain style change that can never win against that, no matter how many times you click it. Switched to a CSS custom property so the toggle's updates actually take effect. Should fix both reports with one change.",
   "🐛 Fixed the Trend chart's grid lines being brighter than the actual data line — they were hardcoded to a near-white color meant for a light background, never updated when Compare went dark. Now subtle and recessive like they should be.",
   "🐛 Fixed a misleading cliff-drop in the Trend chart: days that haven't fully posted yet (today, sometimes yesterday) were computing as literal zero, making an in-progress week look like sales collapsed. Now shows a clean gap instead of a fake plunge to zero.",
   "🔧 Sidebar collapse gap: second attempt — detected and synced a fixed/sticky header offset that body's margin-left couldn't reach. Needs live confirmation.",
@@ -3536,13 +3537,14 @@ function buildSidebarNav(){
 #app-sidebar[data-collapsed="1"] .tab .tab-label{display:none}
 #app-sidebar[data-collapsed="1"] .sidebar-brand-txt{display:none}
 #app-sidebar[data-collapsed="1"] #sidebar-toggle{margin-left:0}
-body{margin-left:${collapsed?W_COLLAPSED:W_OPEN}px!important;transition:margin-left .18s ease;box-sizing:border-box}
+body{margin-left:var(--sidebar-w)!important;transition:margin-left .18s ease;box-sizing:border-box}
 #main-app{max-width:none!important;width:100%!important;box-sizing:border-box}
 @media (max-width:640px){
   #app-sidebar .tab{padding:12px 10px!important;font-size:14px!important}
   #app-sidebar[data-collapsed="1"] .tab{padding:12px 4px!important}
 }`;
     document.head.appendChild(css);
+    document.documentElement.style.setProperty("--sidebar-w",(collapsed?W_COLLAPSED:W_OPEN)+"px");
 
     // v189, second attempt at the collapse-gap issue: body's margin-left doesn't affect any
     // ancestor that's position:fixed or position:sticky — those are positioned relative to the
@@ -3573,7 +3575,7 @@ body{margin-left:${collapsed?W_COLLAPSED:W_OPEN}px!important;transition:margin-l
       const willCollapse=sidebar.dataset.collapsed!=="1";
       sidebar.dataset.collapsed=willCollapse?"1":"0";
       sidebar.style.width=(willCollapse?W_COLLAPSED:W_OPEN)+"px";
-      document.body.style.marginLeft=(willCollapse?W_COLLAPSED:W_OPEN)+"px";
+      document.documentElement.style.setProperty("--sidebar-w",(willCollapse?W_COLLAPSED:W_OPEN)+"px");
       syncFixedHeaderOffset(willCollapse?W_COLLAPSED:W_OPEN);
       document.getElementById("sidebar-toggle").textContent=willCollapse?"»":"«";
       try{localStorage.setItem("oregano_sidebar_collapsed",willCollapse?"1":"0");}catch(e){}
