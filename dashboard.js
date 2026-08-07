@@ -13,8 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-191";
+const BUILD_VERSION="2026-08-06-192";
 const BUILD_NOTES=[
+  "🐛 Fixed the campaign contribution tooltip showing a declining campaign as if it were neutral — the negative sign was being silently stripped before display, leaving only a subtle color change to tell a gain from a loss. Now shows \"−AED X\" with an explicit \"(decrease)\" label. Same bug existed in the Forecaster's tooltip too, fixed there as well.",
+  "🔧 The contribution tooltip now shows merchant discount for the baseline period too, not just the campaign period — you can compare discount burn across both windows directly.",
+  "🌙 Campaigns page dark theme: DONE. Every view converted — the Active/Upcoming/History list, the single-campaign detail view (hero card, contribution breakdown, elasticity scenarios, compare-vs-similar table), bundle detail, the Forecaster, and the data-freshness and recommendations panels. Swept the entire page twice for stray colors, including several genuine bugs beyond just missing dark-mode support: a hardcoded white chip background, unthemed AI-analysis output, and pastel alert-row backgrounds that would've looked jarring on a dark page.",
   "🐛 Fixed the Platform chart overflowing its card and pushing the whole page wider than the screen (enabling horizontal scroll, which is what exposed the sidebar/logo overlap you saw). Root cause: grid cells default to growing for wide content instead of shrinking to fit — a 6th platform bar was enough to trigger it. Fixed globally, not just for that one chart.",
   "🌙 Campaigns page dark theme: started. Filter bar, KPI strip, campaign cards, and the table view are converted — this covers the Active/Upcoming/History tabs, which is most of what gets used day to day. The single-campaign detail view and the Forecaster are still light-themed for now, so the page stays in light mode overall until those are done too — didn't want half a page looking dark and half looking light.",
   "🐛 Found the actual root cause of the sidebar collapse issues (both the gap and the \"can't collapse\" bug you just hit) — a CSS specificity conflict. The stylesheet set the content area's margin with !important, which permanently freezes it at whatever it was on first load; the toggle button's later updates used a plain style change that can never win against that, no matter how many times you click it. Switched to a CSS custom property so the toggle's updates actually take effect. Should fix both reports with one change.",
@@ -1449,6 +1452,7 @@ function confirmClearAggData(label,fnName){
   if(confirm(msg)){const fn=window[fnName];if(typeof fn==='function')fn();}
 }
 function campDataFreshnessStrip(){
+  const T=campTheme();
   const STALE_HOURS=48, VERY_STALE_HOURS=72;
   const fmtAgo=(iso)=>{
     if(!iso)return"never";
@@ -1480,8 +1484,8 @@ function campDataFreshnessStrip(){
     const uploadDate=md?md.uploadDate:null;
     const dateRange=md?md.date_range:null;
     const hoursOld=uploadDate?(Date.now()-new Date(uploadDate).getTime())/3600000:null;
-    let dotClr='#94a3b8', title='Click to upload';
-    if(placeholder){dotClr='#94a3b8';title='Parser coming soon';}
+    let dotClr=T.label, title='Click to upload';
+    if(placeholder){dotClr=T.label;title='Parser coming soon';}
     else if(!uploadDate){dotClr='#F59E0B';title='Never uploaded — click to add data';}
     else if(hoursOld>VERY_STALE_HOURS){dotClr='#EF4444';title=`Very stale — ${fmtAgo(uploadDate)}. Data covers ${dateRange?dateRange[0]+' → '+dateRange[1]:'?'}. Click to upload fresh export.`;}
     else if(hoursOld>STALE_HOURS){dotClr='#F59E0B';title=`Stale — ${fmtAgo(uploadDate)}. Data covers ${dateRange?dateRange[0]+' → '+dateRange[1]:'?'}. Click to upload fresh export.`;}
@@ -1491,12 +1495,12 @@ function campDataFreshnessStrip(){
     // they've already ingested, so they know to upload from 29 Jun forward without overlapping.
     const secondaryText=placeholder?'coming soon':(dateRange&&dateRange[0]?fmtRange(dateRange):'not uploaded');
     const onclick=placeholder?`alert('${label} parser coming soon.')`:handler;
-    return `<div onclick="${onclick}" title="${title}" style="display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid #EDE7D9;border-radius:8px;background:#FEFDFA;cursor:pointer;transition:all .12s;font-size:11px" onmouseover="this.style.borderColor='${dotClr}';this.style.transform='translateY(-1px)'" onmouseout="this.style.borderColor='#EDE7D9';this.style.transform='none'">
+    return `<div onclick="${onclick}" title="${title}" style="display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid ${T.border};border-radius:8px;background:${T.panelBg};cursor:pointer;transition:all .12s;font-size:11px" onmouseover="this.style.borderColor='${dotClr}';this.style.transform='translateY(-1px)'" onmouseout="this.style.borderColor='${T.border}';this.style.transform='none'">
       <span style="width:8px;height:8px;border-radius:50%;background:${dotClr};box-shadow:0 0 0 2px ${dotClr}22;flex-shrink:0"></span>
       <span style="height:16px;display:inline-flex;align-items:center">${logoImg(logoKey,16)}</span>
-      <span style="font-weight:700;color:#0F172A">${label}</span>
-      <span style="color:#64748b;font-weight:600;font-size:10px">${secondaryText}</span>
-      ${(clearFn&&md&&typeof isAdminUser==='function'&&isAdminUser())?`<span onclick="event.stopPropagation();confirmClearAggData('${label}','${clearFn}')" title="Clear all ${label} data (admin) — clears for everyone" style="margin-left:2px;color:#94a3b8;font-weight:800;font-size:11px;padding:0 3px;border-radius:3px;line-height:1" onmouseover="this.style.color='#EF4444'" onmouseout="this.style.color='#94a3b8'">✕</span>`:''}
+      <span style="font-weight:700;color:${T.text}">${label}</span>
+      <span style="color:${T.muted};font-weight:600;font-size:10px">${secondaryText}</span>
+      ${(clearFn&&md&&typeof isAdminUser==='function'&&isAdminUser())?`<span onclick="event.stopPropagation();confirmClearAggData('${label}','${clearFn}')" title="Clear all ${label} data (admin) — clears for everyone" style="margin-left:2px;color:${T.label};font-weight:800;font-size:11px;padding:0 3px;border-radius:3px;line-height:1" onmouseover="this.style.color='#EF4444'" onmouseout="this.style.color='${T.label}'">✕</span>`:''}
     </div>`;
   };
   const chips=[
@@ -1512,7 +1516,7 @@ function campDataFreshnessStrip(){
                 <input type="file" id="orders-file-noon" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
                 <input type="file" id="orders-file-keeta" accept=".xlsx,.xls" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">`;
   return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:8px 12px;background:rgba(148,163,184,.05);border:1px solid rgba(148,163,184,.15);border-radius:10px">
-    <span style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.9px">Data</span>
+    <span style="font-size:9px;font-weight:800;color:${T.label};text-transform:uppercase;letter-spacing:.9px">Data</span>
     ${chips}
     ${inputs}
   </div>`;
@@ -4183,7 +4187,7 @@ function mNavGo(page){
 // dark theme one at a time. Adding a page here is the ONLY change needed at the dispatcher —
 // each page's own render function still needs its own scoped style override and theme-aware
 // calls, same as Overview's build.
-const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare","discounts","kpi"]);
+const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare","discounts","kpi","campaigns"]);
 function renderPage(p){_darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();else if(p==="cancellations")renderCancellations();}
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
@@ -8050,11 +8054,15 @@ function campTheme(){
   return _darkPage?{
     muted:DARK_THEME.textMuted,label:DARK_THEME.textMuted,border:DARK_THEME.cardBorder,
     text:DARK_THEME.textPrimary,panelBg:DARK_THEME.card,rowBg:DARK_THEME.cardBorder+'44',
-    menuBg:DARK_THEME.card,menuHover:DARK_THEME.cardBorder,inputScheme:'dark'
+    menuBg:DARK_THEME.card,menuHover:DARK_THEME.cardBorder,inputScheme:'dark',
+    text2:DARK_THEME.textSecondary,secondary:DARK_THEME.textSecondary,rowBg2:DARK_THEME.cardBorder+'55',
+    inputBg:DARK_THEME.bg
   }:{
     muted:"#64748b",label:"#8A8578",border:"#EDE7D9",
     text:"#0F172A",panelBg:"#FEFDFA",rowBg:"#F5F0E5",
-    menuBg:"#FFFFFF",menuHover:"#F1F5F9",inputScheme:'light'
+    menuBg:"#FFFFFF",menuHover:"#F1F5F9",inputScheme:'light',
+    text2:"#334155",secondary:"#475569",rowBg2:"#F1F5F9",
+    inputBg:"#F1F5F9"
   };
 }
 function ddHTMLCamp(id,label,activeSet,items,type){
@@ -8222,10 +8230,11 @@ function bundleAnalysis(bundle){
 function campProfitColor(c,showProfit){
   // Returns the LEFT BORDER color bucket for a card: green (winning), amber (marginal),
   // red (losing), grey (no data / upcoming / needs clarification).
-  if(!showProfit)return '#94a3b8';
+  const T=campTheme();
+  if(!showProfit)return T.muted;
   try{
     const a=campAnalysisCached(c);
-    if(a.needsCoFundClarity)return '#94a3b8';
+    if(a.needsCoFundClarity)return T.muted;
     if(a.hasData&&c.aggregator==='Keeta'&&((a.sameBrandPlatConcurrent&&a.sameBrandPlatConcurrent.length)||0)>0){
       const part=campParticipationV1(c);
       if(part)return part.contrib>=0?'#22C55E':'#EF4444';
@@ -8236,7 +8245,7 @@ function campProfitColor(c,showProfit){
       return roi>=1?'#22C55E':roi>=0.4?'#F59E0B':'#EF4444';
     }
   }catch(e){/* fall through to grey */}
-  return '#94a3b8';
+  return T.muted;
 }
 // Extract a compact, DEDUPED detail line from the comments field. If the comment is just
 // restating the offer (e.g. offer chip already says "25% off · cap AED 20" and the comment is
@@ -9256,16 +9265,19 @@ function campProsCons(a){
 // ════════════════════════════════════════════════════════════════════════════
 function fmtAEDx(n){return`AED ${Math.round(n||0).toLocaleString()}`;}
 function campKpiCard(label,value,sub,clr){
-  return `<div style="background:linear-gradient(135deg,${clr}0d,rgba(255,255,255,.4));border:1px solid ${clr}33;border-radius:14px;padding:16px 18px">
-    <div style="font-size:11px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:.7px;margin-bottom:8px">${label}</div>
+  const T=campTheme();
+  const bg=_darkPage?`linear-gradient(135deg,${clr}18,${DARK_THEME.card})`:`linear-gradient(135deg,${clr}0d,rgba(255,255,255,.4))`;
+  return `<div style="background:${bg};border:1px solid ${clr}33;border-radius:14px;padding:16px 18px">
+    <div style="font-size:11px;color:${T.muted};text-transform:uppercase;font-weight:700;letter-spacing:.7px;margin-bottom:8px">${label}</div>
     <div style="font-size:26px;font-weight:800;color:${clr};line-height:1.1">${value}</div>
-    <div style="font-size:13px;color:#475569;font-weight:600;margin-top:7px">${sub}</div>
+    <div style="font-size:13px;color:${T.text==='#0F172A'?'#475569':T.text};font-weight:600;margin-top:7px">${sub}</div>
   </div>`;
 }
 function campSetElasticity(e){campElasticity=e;renderCampaigns();}
 // Per-outlet breakdown with THREE baselines: prior week (-7d), prior 4 weeks/month (-28d), and
 // the immediately preceding equal-length period. Shows order uplift per outlet against each.
 function campOutletBreakdownHTML(c,a){
+  const T=campTheme();
   if(!a.hasData||campStatus(c)==='Upcoming')return '';
   const effStart=a.effStart,effEnd=a.effEnd;
   // Use indexed per-branch records — each branch's data is a small pre-built array, so date filtering
@@ -9292,12 +9304,12 @@ function campOutletBreakdownHTML(c,a){
     const campPerDay=campOrders/cDays, basePerDay=bs.orders/cDays;
     const chg=pctOf(campPerDay,basePerDay);
     const dirtyMark=dirty?`<span title="another campaign ran here during this baseline" style="color:#FBBF24;cursor:help">⚠</span> `:'';
-    const chgClr=chg==null?'#64748b':pctClr(chg);
+    const chgClr=chg==null?T.muted:pctClr(chg);
     // v095: baseline sales shown alongside orders (was orders-only) so the reader can see both
     // volume and revenue for each comparison window without cross-referencing another table.
     return `<td style="text-align:right;font-variant-numeric:tabular-nums;padding:10px 12px">
-      <div>${dirtyMark}<span style="color:#334155;font-size:13px;font-weight:700">${Math.round(bs.orders).toLocaleString()}</span><span style="color:#94a3b8;font-size:11px;font-weight:600"> orders</span></div>
-      <div style="font-size:12px;color:#64748b;font-weight:600;margin-top:2px">${fmtAEDx(bs.sales)}</div>
+      <div>${dirtyMark}<span style="color:${T.text==='#0F172A'?'#334155':T.text};font-size:13px;font-weight:700">${Math.round(bs.orders).toLocaleString()}</span><span style="color:${T.label};font-size:11px;font-weight:600"> orders</span></div>
+      <div style="font-size:12px;color:${T.muted};font-weight:600;margin-top:2px">${fmtAEDx(bs.sales)}</div>
       <div style="font-size:13px;color:${chgClr};font-weight:800;margin-top:3px">${chg!=null?fmtPct(chg):'—'}</div>
     </td>`;
   };
@@ -9327,7 +9339,7 @@ function campOutletBreakdownHTML(c,a){
     const pwCell=cellUplift(cs.orders,cDays,pwRecs,pw_s,pw_e,branchHasCamp(pwCamps,br));
     const pmCell=cellUplift(cs.orders,cDays,pmRecs,pm_s,pm_e,branchHasCamp(pmCamps,br));
     const p2Cell=cellUplift(cs.orders,cDays,p2Recs,p2_s,p2_e,branchHasCamp(p2Camps,br));
-    return `<tr><td style="font-weight:700;color:#0F172A">${br}</td><td style="text-align:right;font-weight:700;color:#0F172A;font-variant-numeric:tabular-nums">${Math.round(cs.orders).toLocaleString()}</td><td style="text-align:right;color:#94a3b8;font-variant-numeric:tabular-nums">${fmtAEDx(cs.sales)}</td>${pwCell}${pmCell}${p2Cell}</tr>`;
+    return `<tr><td style="font-weight:700;color:${T.text}">${br}</td><td style="text-align:right;font-weight:700;color:${T.text};font-variant-numeric:tabular-nums">${Math.round(cs.orders).toLocaleString()}</td><td style="text-align:right;color:${T.label};font-variant-numeric:tabular-nums">${fmtAEDx(cs.sales)}</td>${pwCell}${pmCell}${p2Cell}</tr>`;
   }).filter(Boolean).join('');
   if(!rows)return '';
   // Totals row: sum of orders/sales, simple average uplift across all outlets that had data.
@@ -9336,19 +9348,19 @@ function campOutletBreakdownHTML(c,a){
   const avgUplift=(arr)=>arr.length?arr.reduce((s,v)=>s+v,0)/arr.length:null;
   const avgPw=avgUplift(tPwUplifts),avgPm=avgUplift(tPmUplifts),avgP2=avgUplift(tP2Uplifts);
   const totBaselineCell=(totOrders,totSales,avg,n)=>`<td style="text-align:right;font-variant-numeric:tabular-nums;padding:10px 12px">
-    <div><span style="color:#0F172A;font-size:13px;font-weight:800">${Math.round(totOrders).toLocaleString()}</span><span style="color:#94a3b8;font-size:11px;font-weight:600"> orders</span></div>
-    <div style="font-size:12px;color:#64748b;font-weight:700;margin-top:2px">${fmtAEDx(totSales)}</div>
-    <div style="font-size:13px;font-weight:800;margin-top:3px">${avg!=null?`<span style="color:${pctClr(avg)}">${fmtPct(avg)}</span><span style="font-size:10px;color:#64748b;font-weight:600"> avg/${n}</span>`:'<span style="color:#64748b">—</span>'}</div>
+    <div><span style="color:${T.text};font-size:13px;font-weight:800">${Math.round(totOrders).toLocaleString()}</span><span style="color:${T.label};font-size:11px;font-weight:600"> orders</span></div>
+    <div style="font-size:12px;color:${T.muted};font-weight:700;margin-top:2px">${fmtAEDx(totSales)}</div>
+    <div style="font-size:13px;font-weight:800;margin-top:3px">${avg!=null?`<span style="color:${pctClr(avg)}">${fmtPct(avg)}</span><span style="font-size:10px;color:${T.muted};font-weight:600"> avg/${n}</span>`:`<span style="color:${T.muted}">—</span>`}</div>
   </td>`;
-  const totalsRow=`<tr style="border-top:2px solid rgba(245,158,11,.3);background:rgba(245,158,11,.04)"><td style="font-weight:800;color:#f59e0b">TOTAL</td><td style="text-align:right;font-weight:800;color:#0F172A;font-variant-numeric:tabular-nums">${Math.round(tClickOrders).toLocaleString()}</td><td style="text-align:right;font-weight:800;color:#0F172A;font-variant-numeric:tabular-nums">${fmtAEDx(tClickSales)}</td>${totBaselineCell(tPwOrders,tPwSales,avgPw,tPwUplifts.length)}${totBaselineCell(tPmOrders,tPmSales,avgPm,tPmUplifts.length)}${totBaselineCell(tP2Orders,tP2Sales,avgP2,tP2Uplifts.length)}</tr>`;
+  const totalsRow=`<tr style="border-top:2px solid rgba(245,158,11,.3);background:rgba(245,158,11,.04)"><td style="font-weight:800;color:#f59e0b">TOTAL</td><td style="text-align:right;font-weight:800;color:${T.text};font-variant-numeric:tabular-nums">${Math.round(tClickOrders).toLocaleString()}</td><td style="text-align:right;font-weight:800;color:${T.text};font-variant-numeric:tabular-nums">${fmtAEDx(tClickSales)}</td>${totBaselineCell(tPwOrders,tPwSales,avgPw,tPwUplifts.length)}${totBaselineCell(tPmOrders,tPmSales,avgPm,tPmUplifts.length)}${totBaselineCell(tP2Orders,tP2Sales,avgP2,tP2Uplifts.length)}</tr>`;
   const fmtRange=(s,e)=>`${fmtShort(s)}–${fmtShort(e)}`;
   return `<div class="card"><div class="ct">📍 Per-Outlet Order Uplift — vs 3 baselines</div>
-    <div style="font-size:11px;color:#94a3b8;margin-bottom:6px;line-height:1.6">Each outlet's orders during the campaign vs the same outlet in three earlier windows. Figures shown are baseline orders, baseline sales, and the % change in campaign orders/day above baseline. <span style="color:#FBBF24">⚠</span> = another ${c.aggregator} campaign ran in that outlet during that baseline (read with caution).</div>
+    <div style="font-size:11px;color:${T.label};margin-bottom:6px;line-height:1.6">Each outlet's orders during the campaign vs the same outlet in three earlier windows. Figures shown are baseline orders, baseline sales, and the % change in campaign orders/day above baseline. <span style="color:#FBBF24">⚠</span> = another ${c.aggregator} campaign ran in that outlet during that baseline (read with caution).</div>
     <div style="overflow-x:auto"><table class="tbl"><thead>
       <tr><th rowspan="2" style="vertical-align:bottom">Outlet</th><th rowspan="2" style="text-align:right;vertical-align:bottom">Campaign<br>Orders</th><th rowspan="2" style="text-align:right;vertical-align:bottom">Campaign<br>Sales</th><th style="text-align:center">Previous Week</th><th style="text-align:center">Previous Month</th><th style="text-align:center">2 Months Ago</th></tr>
-      <tr><th style="text-align:right;font-size:9px;color:#64748b;font-weight:500">${fmtRange(pw_s,pw_e)}</th><th style="text-align:right;font-size:9px;color:#64748b;font-weight:500">${fmtRange(pm_s,pm_e)}</th><th style="text-align:right;font-size:9px;color:#64748b;font-weight:500">${fmtRange(p2_s,p2_e)}</th></tr>
+      <tr><th style="text-align:right;font-size:9px;color:${T.muted};font-weight:500">${fmtRange(pw_s,pw_e)}</th><th style="text-align:right;font-size:9px;color:${T.muted};font-weight:500">${fmtRange(pm_s,pm_e)}</th><th style="text-align:right;font-size:9px;color:${T.muted};font-weight:500">${fmtRange(p2_s,p2_e)}</th></tr>
     </thead><tbody>${rows}${totalsRow}</tbody></table></div>
-    <div style="font-size:10px;color:#64748b;margin-top:8px">Each comparison uses the same weekdays: Previous Week = 7 days earlier · Previous Month = 28 days earlier · 2 Months Ago = 56 days earlier. The % is the change in campaign orders/day vs that baseline.</div>
+    <div style="font-size:10px;color:${T.muted};margin-top:8px">Each comparison uses the same weekdays: Previous Week = 7 days earlier · Previous Month = 28 days earlier · 2 Months Ago = 56 days earlier. The % is the change in campaign orders/day vs that baseline.</div>
   </div>`;
 }
 // ════════════════════════════════════════════════════════════════════════════
@@ -9567,7 +9579,8 @@ function campTrajectory(c){
 // Collapsible wrapper for demoted evidence sections on the campaign detail page.
 function campCollapseSection(title,inner){
   if(!inner)return '';
-  return `<details style="margin-bottom:14px"><summary style="cursor:pointer;font-size:12px;font-weight:800;color:#64748b;padding:10px 14px;background:#FEFDFA;border:1px solid #EDE7D9;border-radius:10px;user-select:none">▸ ${title} <span style="font-weight:500;color:#94a3b8">— show the evidence</span></summary><div style="margin-top:10px">${inner}</div></details>`;
+  const T=campTheme();
+  return `<details style="margin-bottom:14px"><summary style="cursor:pointer;font-size:12px;font-weight:800;color:${T.muted};padding:10px 14px;background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;user-select:none">▸ ${title} <span style="font-weight:500;color:${T.label}">— show the evidence</span></summary><div style="margin-top:10px">${inner}</div></details>`;
 }
 // v111: reverse lookup — given a real campaign, find the most recent SAVED forecast (if any)
 // whose brand/platform/discount depth/cap match and which was saved BEFORE this campaign
@@ -9592,8 +9605,9 @@ function campFcMatchSaved(c){
   return candidates[0];
 }
 function campDetailV2HTML(c,idx){
+  const T=campTheme();
   const st=campStatus(c);
-  const stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#94a3b8',Cancelled:'#EF4444'}[st]||'#94a3b8';
+  const stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:T.label,Cancelled:'#EF4444'}[st]||T.label;
   const b=BMAP[c.brand];const accent=b?.c||'#f59e0b';
   const a=campAnalysisV2(c);
   const aggClr=(typeof AGG_LOGO_CLR!=='undefined'&&AGG_LOGO_CLR[c.aggregator])||accent;
@@ -9601,13 +9615,13 @@ function campDetailV2HTML(c,idx){
   const coFundChip=a.coFundedPct>0?`<span style="font-size:10px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:3px 9px;border-radius:8px;border:1px solid rgba(168,85,247,.3)">🤝 ${Math.round(a.coFundedPct*100)}% platform co-funded</span>`:'';
   const header=`<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:14px">
     <div style="display:flex;align-items:center;gap:12px">
-      <button onclick="selCamp=null;campTab=campReturnTab||'active';renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.25);border-radius:8px;color:#94a3b8;padding:7px 12px;font-size:12px;cursor:pointer;font-weight:600">← Back</button>
+      <button onclick="selCamp=null;campTab=campReturnTab||'active';renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.25);border-radius:8px;color:${T.label};padding:7px 12px;font-size:12px;cursor:pointer;font-weight:600">← Back</button>
       <div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <span style="font-size:19px;font-weight:800;color:${accent}">${c.name||'Campaign'}</span>
           <span style="padding:3px 10px;border-radius:8px;background:${stClr}22;color:${stClr};font-size:10px;font-weight:800;border:1px solid ${stClr}44">${st.toUpperCase()}</span>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap"><span style="display:inline-flex;align-items:center;gap:6px" title="${c.brand} · ${c.aggregator}">${logoImg(c.brand,22)}<span style="color:#64748b">×</span>${logoImg(c.aggregator,22)}</span><span style="font-size:12px;color:#94a3b8">${scopeStr}</span></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap"><span style="display:inline-flex;align-items:center;gap:6px" title="${c.brand} · ${c.aggregator}">${logoImg(c.brand,22)}<span style="color:${T.muted}">×</span>${logoImg(c.aggregator,22)}</span><span style="font-size:12px;color:${T.label}">${scopeStr}</span></div>
       </div>
     </div>
     ${coFundChip}
@@ -9615,7 +9629,7 @@ function campDetailV2HTML(c,idx){
   </div>`;
   if(a.needsCoFundClarity){
     const unres=parseCampComment(c).unresolved.join(', ');
-    return header+`<div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);border-radius:12px;padding:20px"><div style="font-size:14px;font-weight:700;color:#F59E0B;margin-bottom:6px">⚠ Needs clarification before analysis</div><div style="font-size:13px;color:#475569;line-height:1.6">This campaign's comment contains terms we couldn't confidently interpret: <strong style="color:#0F172A">${unres}</strong>. To avoid showing inaccurate profitability, the analysis is paused. Please confirm the scope or co-funding split.</div><div style="font-size:12px;color:#94a3b8;margin-top:10px">Raw comment: "${(c.comments||'').replace(/"/g,'&quot;')}"</div></div>`;
+    return header+`<div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);border-radius:12px;padding:20px"><div style="font-size:14px;font-weight:700;color:#F59E0B;margin-bottom:6px">⚠ Needs clarification before analysis</div><div style="font-size:13px;color:${T.secondary};line-height:1.6">This campaign's comment contains terms we couldn't confidently interpret: <strong style="color:${T.text}">${unres}</strong>. To avoid showing inaccurate profitability, the analysis is paused. Please confirm the scope or co-funding split.</div><div style="font-size:12px;color:${T.label};margin-top:10px">Raw comment: "${(c.comments||'').replace(/"/g,'&quot;')}"</div></div>`;
   }
   if(!a.hasData){
     // For future-dated or just-started campaigns, effEnd = latest (yesterday's data) can be
@@ -9625,7 +9639,7 @@ function campDetailV2HTML(c,idx){
     const msg=futureCampaign
       ? `Campaign runs ${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)}. No sales data yet — data becomes available as orders flow in and the daily sheet is updated.`
       : `No sales data in the campaign window yet (${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)}). Latest data available: ${fmtDisp(latest)}.`;
-    return header+`<div class="card"><div style="text-align:center;padding:30px;color:#64748b">${msg}</div></div>`;
+    return header+`<div class="card"><div style="text-align:center;padding:30px;color:${T.muted}">${msg}</div></div>`;
   }
   // ── v098 consolidated data notes (replaces the stacked colored banners) ──
   const _notes=[]; // {sev:'red'|'amber'|'blue'|'green', t:title, b:body(HTML)}
@@ -9634,7 +9648,7 @@ function campDetailV2HTML(c,idx){
   if(a.baselineCampaigns.length)_notes.push({sev:'amber',t:'Baseline period ran promos too',b:`The comparison window also ran: ${a.baselineCampaigns.map(x=>`<strong>${x.name}</strong> (${fmtShort(x.startDate)}–${fmtShort(x.endDate)})`).join(', ')}. "Normal" here means last month's promo mix, not a promo-free period.`});
   else _notes.push({sev:'green',t:'Clean baseline',b:'No campaigns ran on this brand+platform during the comparison window.'});
   const incrClr=a.incrContribTotal>=0?'#22C55E':'#EF4444';
-  const roiClr=a.discountROI==null?'#64748b':a.discountROI>=1?'#22C55E':a.discountROI>=0.5?'#FBBF24':'#EF4444';
+  const roiClr=a.discountROI==null?T.muted:a.discountROI>=1?'#22C55E':a.discountROI>=0.5?'#FBBF24':'#EF4444';
   const kpiCards=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:14px 0">
     ${campKpiCard('Incremental Contribution'+((a.sameBrandPlatConcurrent&&a.sameBrandPlatConcurrent.length)?' <span style="font-size:8px;color:#FBBF24;font-weight:700">⚭ SHARED</span>':''),`${a.incrContribTotal>=0?'+':''}${fmtAEDx(a.incrContribTotal)}`,`over ${a.cDays} days · ${a.incrContribPerDay>=0?'+':''}${fmtAEDx(a.incrContribPerDay)}/day`,incrClr)}
     ${campKpiCard('Orders Lift',a.ordersLift!=null?`${a.ordersLift>=0?'+':''}${a.ordersLift.toFixed(0)}%`:'—',`+${a.incrOrdersPerDay.toFixed(0)} orders/day vs baseline`,a.ordersLift>=0?'#22C55E':'#EF4444')}
@@ -9653,8 +9667,8 @@ function campDetailV2HTML(c,idx){
   const madeAED=a.incrContribTotal;
   const madeClr=madeAED>=0?'#22C55E':'#EF4444';
   const roiSuppressed=a.dataMismatchSuspected||a.baselineContaminated||a.discountROI==null;
-  const heroRow=(lbl,html)=>`<div style="display:flex;gap:12px;align-items:baseline;margin-bottom:10px"><div style="flex:0 0 78px;font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.7px">${lbl}</div><div style="font-size:13px;color:#334155;line-height:1.65;flex:1;min-width:0">${html}</div></div>`;
-  const heroChip=(t,clr)=>`<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border:1px solid #E7E0D2;background:#FFFFFF;border-radius:999px;font-size:11px;color:#475569;font-variant-numeric:tabular-nums;white-space:nowrap"><span style="width:6px;height:6px;border-radius:50%;background:${clr};display:inline-block"></span>${t}</span>`;
+  const heroRow=(lbl,html)=>`<div style="display:flex;gap:12px;align-items:baseline;margin-bottom:10px"><div style="flex:0 0 78px;font-size:9px;font-weight:800;color:${T.label};text-transform:uppercase;letter-spacing:.7px">${lbl}</div><div style="font-size:13px;color:${T.text2};line-height:1.65;flex:1;min-width:0">${html}</div></div>`;
+  const heroChip=(t,clr)=>`<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border:1px solid ${T.border};background:${T.panelBg};border-radius:999px;font-size:11px;color:${T.secondary};font-variant-numeric:tabular-nums;white-space:nowrap"><span style="width:6px;height:6px;border-radius:50%;background:${clr};display:inline-block"></span>${t}</span>`;
   let heroClr,heroNum,heroNumLbl,heroNumSub,heroRows='';
   if(partLed){
     const pClr=part.contrib>=0?'#22C55E':'#EF4444';heroClr=pClr;
@@ -9670,9 +9684,9 @@ function campDetailV2HTML(c,idx){
     if(pt){
       const sLbl=pt.segLen<7?'H':'Wk';
       const chips=pt.segs.map((s,i)=>heroChip(`${sLbl}${i+1} · ${s.orders} orders (${s.ordersPerDay.toFixed(1)}/d) · ${s.contribPerDay>=0?'+':'−'}AED ${Math.round(Math.abs(s.contribPerDay)).toLocaleString()}/d`,s.contribPerDay>=0?'#22C55E':'#EF4444')).join('');
-      heroRows+=heroRow('Continue?',`<strong style="color:${pt.clr}">${pt.icon} ${pt.verdict}</strong> <span style="color:#94a3b8;font-size:11px">(from this campaign's own orders)</span><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">${chips}</div>`);
+      heroRows+=heroRow('Continue?',`<strong style="color:${pt.clr}">${pt.icon} ${pt.verdict}</strong> <span style="color:${T.label};font-size:11px">(from this campaign's own orders)</span><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">${chips}</div>`);
     }else{
-      heroRows+=heroRow('Continue?',`<span style="color:#94a3b8">Too short to trend — needs 4+ covered days of exact data.</span>`);
+      heroRows+=heroRow('Continue?',`<span style="color:${T.label}">Too short to trend — needs 4+ covered days of exact data.</span>`);
     }
   }else{
     heroClr=madeClr;
@@ -9688,7 +9702,7 @@ function campDetailV2HTML(c,idx){
       const won=actOPD>=be.reqOrdersPerDay;
       w=`You averaged <strong>${actOPD.toFixed(1)} orders/day</strong>${campAOV?` (AOV ${fmtAEDx(campAOV)})`:''} vs baseline <strong>${baseOPD.toFixed(1)}/day</strong>${baseAOV?` (AOV ${fmtAEDx(baseAOV)})`:''}. Break-even at this depth needed <strong>≥${be.reqOrdersPerDay.toFixed(1)} orders/day</strong> — <strong style="color:${won?'#22C55E':'#EF4444'}">${won?'✅ cleared it, worth running.':'❌ missed it, not worth it at this depth.'}</strong>`;
     }
-    else w=`<span style="color:#94a3b8">Break-even not computable for this window (needs baseline orders and a measurable discount depth).</span>`;
+    else w=`<span style="color:${T.label}">Break-even not computable for this window (needs baseline orders and a measurable discount depth).</span>`;
     heroRows+=heroRow('Worth it?',w);
     if(traj){
       const dirty=traj.baselineClean?'':` <span style="color:#F59E0B;cursor:help;font-size:11px" title="No campaign-free pre-window found within 8 weeks — the trend baseline overlaps: ${traj.pollutingCamps.map(x=>(x.name||'unnamed')).join(', ')}. The rising/fading shape is still reliable.">⚠ baseline not clean</span>`;
@@ -9696,15 +9710,15 @@ function campDetailV2HTML(c,idx){
       const chips=traj.segs.map((s,i)=>heroChip(`${traj.segLen>=7&&traj.segs.length>4?fmtShort(s.segStart):sLbl+(i+1)} · ${s.orders} orders · ${s.incrContribPerDay>=0?'+':'−'}AED ${Math.round(Math.abs(s.incrContribPerDay)).toLocaleString()}/d`,s.incrContribPerDay>=0?'#22C55E':'#EF4444')).join('');
       heroRows+=heroRow('Continue?',`<strong style="color:${traj.verdictClr}">${traj.icon} ${traj.verdict}</strong>${dirty}<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">${chips}</div>`);
     }else{
-      heroRows+=heroRow('Continue?',`<span style="color:#94a3b8">Too short to trend — needs 4+ elapsed days.</span>`);
+      heroRows+=heroRow('Continue?',`<span style="color:${T.label}">Too short to trend — needs 4+ elapsed days.</span>`);
     }
   }
   const heroBox=`<div class="card" style="border-left:4px solid ${heroClr};padding:0;overflow:hidden">
     <div style="display:flex;flex-wrap:wrap">
-      <div style="flex:0 0 218px;padding:18px 20px;border-right:1px solid #F1EBDD;display:flex;flex-direction:column;justify-content:center">
-        <div style="font-size:9px;color:#94a3b8;font-weight:800;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">${heroNumLbl}</div>
+      <div style="flex:0 0 218px;padding:18px 20px;border-right:1px solid ${T.border};display:flex;flex-direction:column;justify-content:center">
+        <div style="font-size:9px;color:${T.label};font-weight:800;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">${heroNumLbl}</div>
         <div style="font-size:27px;font-weight:800;color:${heroClr};line-height:1.1;font-variant-numeric:tabular-nums">${heroNum}</div>
-        <div style="font-size:10.5px;color:#94a3b8;margin-top:6px;line-height:1.5">${heroNumSub}</div>
+        <div style="font-size:10.5px;color:${T.label};margin-top:6px;line-height:1.5">${heroNumSub}</div>
       </div>
       <div style="flex:1;min-width:280px;padding:16px 20px 8px">${heroRows}</div>
     </div>
@@ -9721,31 +9735,31 @@ function campDetailV2HTML(c,idx){
     const pClr=part.contrib>=0?'#22C55E':'#EF4444';
     const pt=campParticipationTrend(part);
     const sLbl=pt&&pt.segLen<7?'H':'Wk';
-    const wkRows=pt?pt.segs.map((s,i)=>`<tr><td>${sLbl}${i+1} <span style="color:#64748b;font-size:9px">${fmtShort(s.start)}–${fmtShort(s.end)}</span></td><td style="text-align:right">${s.orders.toLocaleString()}</td><td style="text-align:right">${s.ordersPerDay.toFixed(1)}/d</td><td style="text-align:right">${fmtAEDx(s.disc)}</td><td style="text-align:right;color:${s.contribPerDay>=0?'#22C55E':'#EF4444'};font-weight:700">${s.contribPerDay>=0?'+':'−'}${fmtAEDx(Math.abs(s.contribPerDay))}/d</td></tr>`).join(''):'';
+    const wkRows=pt?pt.segs.map((s,i)=>`<tr><td>${sLbl}${i+1} <span style="color:${T.muted};font-size:9px">${fmtShort(s.start)}–${fmtShort(s.end)}</span></td><td style="text-align:right">${s.orders.toLocaleString()}</td><td style="text-align:right">${s.ordersPerDay.toFixed(1)}/d</td><td style="text-align:right">${fmtAEDx(s.disc)}</td><td style="text-align:right;color:${s.contribPerDay>=0?'#22C55E':'#EF4444'};font-weight:700">${s.contribPerDay>=0?'+':'−'}${fmtAEDx(Math.abs(s.contribPerDay))}/d</td></tr>`).join(''):'';
     partBox=`<div class="card" style="border-left:4px solid ${pClr}">
-      <div class="ct">🎯 This Campaign's Own Orders <span style="font-size:9px;color:#94a3b8;font-weight:500">exact — cross-referenced from the Keeta statement${part.partialCoverage?` · covers ${fmtShort(part.covStart)}–${fmtShort(part.covEnd)} of the campaign window`:''}</span></div>
+      <div class="ct">🎯 This Campaign's Own Orders <span style="font-size:9px;color:${T.label};font-weight:500">exact — cross-referenced from the Keeta statement${part.partialCoverage?` · covers ${fmtShort(part.covStart)}–${fmtShort(part.covEnd)} of the campaign window`:''}</span></div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:10px 0">
         ${campKpiCard('Orders Used It',part.orders.toLocaleString(),part.shareOfBrandOrders!=null?`${part.shareOfBrandOrders.toFixed(0)}% of brand Keeta orders`:'in covered window','#60A5FA')}
-        ${campKpiCard('Gross on Those',fmtAEDx(part.gross),`AOV ${part.orders>0?fmtAEDx(part.gross/part.orders):'—'} gross`,'#94a3b8')}
+        ${campKpiCard('Gross on Those',fmtAEDx(part.gross),`AOV ${part.orders>0?fmtAEDx(part.gross/part.orders):'—'} gross`,T.label)}
         ${campKpiCard('Discount Burned',fmtAEDx(part.disc),`${(part.depth*100).toFixed(0)}% of their gross · exact`,'#C084FC')}
         ${campKpiCard('Their Contribution',`${part.contrib>=0?'+':'−'}${fmtAEDx(Math.abs(part.contrib))}`,'after disc, FD, comm, food',pClr)}
       </div>
       ${wkRows?`<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Period</th><th style="text-align:right">Orders</th><th style="text-align:right">Rate</th><th style="text-align:right">Disc Burned</th><th style="text-align:right">Contribution</th></tr></thead><tbody>${wkRows}</tbody></table></div>`:''}
-      <div style="font-size:11px;color:#64748b;line-height:1.6;margin-top:8px">Reading it: if every one of these customers would have ordered anyway, the promo cost <strong style="color:#EF4444">${fmtAEDx(part.disc)}</strong>. If all of them were brought in by the promo, it earned <strong style="color:${pClr}">${part.contrib>=0?'+':'−'}${fmtAEDx(Math.abs(part.contrib))}</strong>. The truth is between the two — and if the contribution figure is negative, the campaign loses money even in the best case.</div>
+      <div style="font-size:11px;color:${T.muted};line-height:1.6;margin-top:8px">Reading it: if every one of these customers would have ordered anyway, the promo cost <strong style="color:#EF4444">${fmtAEDx(part.disc)}</strong>. If all of them were brought in by the promo, it earned <strong style="color:${pClr}">${part.contrib>=0?'+':'−'}${fmtAEDx(Math.abs(part.contrib))}</strong>. The truth is between the two — and if the contribution figure is negative, the campaign loses money even in the best case.</div>
     </div>`;
   }
   const fc=foodPkgPct(c.brand)*100;
   const cc=commissionRateFor(c.aggregator,c.brand,c.startDate)*100;
   const breakdownBox=`<div class="card"><div class="ct">Contribution Breakdown · ${c.brand} on ${c.aggregator}</div>
-    <div style="font-size:11px;color:#94a3b8;margin-bottom:12px">Revenue = net sales (includes any co-funded portion the platform pays us). Costs: <strong>${cc.toFixed(0)}% commission</strong> on net sales, <strong>${fc.toFixed(0)}% food + packaging</strong> on gross sales (net + discount).</div>
-    <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Metric</th><th style="text-align:right">Campaign (${a.cDays}d)<div style="font-size:9px;color:#64748b;font-weight:500;margin-top:2px">${fmtShort(a.effStart)} – ${fmtShort(a.effEnd)}</div></th><th style="text-align:right">Baseline (${a.bDays}d)<div style="font-size:9px;color:#64748b;font-weight:500;margin-top:2px">${fmtShort(a.bStart)} – ${fmtShort(a.bEnd)}</div></th><th style="text-align:right">Per-day Δ</th></tr></thead><tbody>
+    <div style="font-size:11px;color:${T.label};margin-bottom:12px">Revenue = net sales (includes any co-funded portion the platform pays us). Costs: <strong>${cc.toFixed(0)}% commission</strong> on net sales, <strong>${fc.toFixed(0)}% food + packaging</strong> on gross sales (net + discount).</div>
+    <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Metric</th><th style="text-align:right">Campaign (${a.cDays}d)<div style="font-size:9px;color:${T.muted};font-weight:500;margin-top:2px">${fmtShort(a.effStart)} – ${fmtShort(a.effEnd)}</div></th><th style="text-align:right">Baseline (${a.bDays}d)<div style="font-size:9px;color:${T.muted};font-weight:500;margin-top:2px">${fmtShort(a.bStart)} – ${fmtShort(a.bEnd)}</div></th><th style="text-align:right">Per-day Δ</th></tr></thead><tbody>
       <tr><td>Orders</td><td style="text-align:right">${a.cs.orders.toLocaleString()}</td><td style="text-align:right">${a.bs.orders.toLocaleString()}</td><td style="text-align:right;color:${a.incrOrdersPerDay>=0?'#22C55E':'#EF4444'}">${a.incrOrdersPerDay>=0?'+':''}${a.incrOrdersPerDay.toFixed(0)}</td></tr>
       <tr><td>Net Sales</td><td style="text-align:right">${fmtAEDx(a.cs.sales)}</td><td style="text-align:right">${fmtAEDx(a.bs.sales)}</td><td style="text-align:right;color:${a.incrSalesPerDay>=0?'#22C55E':'#EF4444'}">${a.incrSalesPerDay>=0?'+':''}${fmtAEDx(a.incrSalesPerDay)}</td></tr>
-      <tr><td>Gross Sales</td><td style="text-align:right">${fmtAEDx(a.campGross)}</td><td style="text-align:right">${fmtAEDx(a.baseGross)}</td><td style="text-align:right;color:#94a3b8">—</td></tr>
-      <tr><td>${a.coFundedPct>0?'Merchant Discount Cost <span style="font-size:9px;color:#94a3b8;font-weight:400">(from statement)</span>':'Discount Given'}</td><td style="text-align:right">${fmtAEDx(a.ourDiscCost)}</td><td style="text-align:right">${fmtAEDx(a.bs.disc||0)}</td><td style="text-align:right;color:#94a3b8">—</td></tr>
-      ${a.coFundedPct>0?`<tr style="color:#60A5FA"><td>＋ ${c.aggregator}-funded co-pay <span style="font-size:9px;color:#94a3b8;font-weight:400">(inferred from ${Math.round(a.coFundedPct*100)}% split · off-statement)</span></td><td style="text-align:right">${fmtAEDx(a.aggInferredCoFund)}</td><td style="text-align:right;color:#475569">—</td><td style="text-align:right;color:#94a3b8">—</td></tr>
-      <tr style="color:#475569;font-style:italic;font-size:11px"><td>= Total discount to customer</td><td style="text-align:right">${fmtAEDx(a.totalCustomerDisc)}</td><td style="text-align:right;color:#475569">—</td><td style="text-align:right;color:#94a3b8">—</td></tr>`:''}
-      <tr style="border-top:2px solid rgba(245,158,11,.3);font-weight:800"><td style="color:#f59e0b">Contribution</td><td style="text-align:right;color:#0F172A">${fmtAEDx(a.campContribTotal)}</td><td style="text-align:right;color:#0F172A">${fmtAEDx(a.baseContribTotal)}</td><td style="text-align:right;color:${incrClr}">${a.incrContribPerDay>=0?'+':''}${fmtAEDx(a.incrContribPerDay)}</td></tr>
+      <tr><td>Gross Sales</td><td style="text-align:right">${fmtAEDx(a.campGross)}</td><td style="text-align:right">${fmtAEDx(a.baseGross)}</td><td style="text-align:right;color:${T.label}">—</td></tr>
+      <tr><td>${a.coFundedPct>0?`Merchant Discount Cost <span style="font-size:9px;color:${T.label};font-weight:400">(from statement)</span>`:'Discount Given'}</td><td style="text-align:right">${fmtAEDx(a.ourDiscCost)}</td><td style="text-align:right">${fmtAEDx(a.bs.disc||0)}</td><td style="text-align:right;color:${T.label}">—</td></tr>
+      ${a.coFundedPct>0?`<tr style="color:#60A5FA"><td>＋ ${c.aggregator}-funded co-pay <span style="font-size:9px;color:${T.label};font-weight:400">(inferred from ${Math.round(a.coFundedPct*100)}% split · off-statement)</span></td><td style="text-align:right">${fmtAEDx(a.aggInferredCoFund)}</td><td style="text-align:right;color:${T.secondary}">—</td><td style="text-align:right;color:${T.label}">—</td></tr>
+      <tr style="color:${T.secondary};font-style:italic;font-size:11px"><td>= Total discount to customer</td><td style="text-align:right">${fmtAEDx(a.totalCustomerDisc)}</td><td style="text-align:right;color:${T.secondary}">—</td><td style="text-align:right;color:${T.label}">—</td></tr>`:''}
+      <tr style="border-top:2px solid rgba(245,158,11,.3);font-weight:800"><td style="color:#f59e0b">Contribution</td><td style="text-align:right;color:${T.text}">${fmtAEDx(a.campContribTotal)}</td><td style="text-align:right;color:${T.text}">${fmtAEDx(a.baseContribTotal)}</td><td style="text-align:right;color:${incrClr}">${a.incrContribPerDay>=0?'+':''}${fmtAEDx(a.incrContribPerDay)}</td></tr>
     </tbody></table></div></div>`;
   let scenarioBox='';
   if(a.scenarios.length){
@@ -9756,13 +9770,13 @@ function campDetailV2HTML(c,idx){
       // on separate lines with clear spacing, instead of being crammed onto one wrapping line.
       // The "most profitable" tag moves to its own line below rather than trailing awkwardly.
       const headlineTag=s.headlinePct!=null
-        ?`<div><strong style="color:${s.isActual?'#f59e0b':'#e2e8f0'};font-size:13px">≈ ${s.headlinePct}% headline</strong></div><div style="font-size:11px;color:#64748b;margin-top:2px">${s.depthPct.toFixed(0)}% blended depth</div>`
-        :`<div><strong style="color:${s.isActual?'#f59e0b':'#e2e8f0'};font-size:13px">${s.depthPct.toFixed(0)}% blended depth</strong></div>`;
+        ?`<div><strong style="color:${s.isActual?'#f59e0b':T.text};font-size:13px">≈ ${s.headlinePct}% headline</strong></div><div style="font-size:11px;color:${T.muted};margin-top:2px">${s.depthPct.toFixed(0)}% blended depth</div>`
+        :`<div><strong style="color:${s.isActual?'#f59e0b':T.text};font-size:13px">${s.depthPct.toFixed(0)}% blended depth</strong></div>`;
       const actualTag=s.isActual?`<div style="font-size:10px;color:#f59e0b;font-weight:700;margin-bottom:3px">ACTUAL</div>`:'';
       const bestTag=isBest?`<div style="font-size:10px;color:#22C55E;font-weight:700;margin-top:3px">◀ Most profitable</div>`:'';
       return `<tr style="${isBest?'background:rgba(34,197,94,.06)':''}"><td style="padding-top:12px;padding-bottom:12px">${actualTag}${headlineTag}${bestTag}</td><td style="text-align:right;padding-top:12px;padding-bottom:12px">+${s.incrOrdersPerDay.toFixed(0)}/day</td><td style="text-align:right;padding-top:12px;padding-bottom:12px">${fmtAEDx(s.ourDiscPerDay)}/day</td><td style="text-align:right;color:${cl};font-weight:700;padding-top:12px;padding-bottom:12px">${s.incrContribPerDay>=0?'+':''}${fmtAEDx(s.incrContribPerDay)}/day</td><td style="text-align:right;padding-top:12px;padding-bottom:12px">${s.discountROI!=null?s.discountROI.toFixed(2)+'×':'—'}</td></tr>`;
     }).join('');
-    const beNote=a.breakEvenDepth!=null?`<div style="font-size:12px;color:#475569;margin-top:10px;padding:8px 12px;background:rgba(96,165,250,.06);border-radius:6px">📐 <strong>Break-even discount: ${(a.breakEvenDepth*100).toFixed(0)}% blended depth${a.headlinePct&&a.actualDiscDepth>0?` (≈ ${Math.round(a.breakEvenDepth*(a.headlinePct/100)/a.actualDiscDepth*100)}% headline)`:''}  </strong> — at the order lift this campaign produced, any discount deeper than this loses money on a contribution basis.</div>`:'';
+    const beNote=a.breakEvenDepth!=null?`<div style="font-size:12px;color:${T.secondary};margin-top:10px;padding:8px 12px;background:rgba(96,165,250,.06);border-radius:6px">📐 <strong>Break-even discount: ${(a.breakEvenDepth*100).toFixed(0)}% blended depth${a.headlinePct&&a.actualDiscDepth>0?` (≈ ${Math.round(a.breakEvenDepth*(a.headlinePct/100)/a.actualDiscDepth*100)}% headline)`:''}  </strong> — at the order lift this campaign produced, any discount deeper than this loses money on a contribution basis.</div>`:'';
     // Subheader: show the actual campaign comment and blended depth so context is clear.
     // Only render if the comment has meaningful content (v087) — previously an empty/very
     // short c.comments produced a line reading just "📋 Campaign: · actual blended depth..."
@@ -9770,13 +9784,13 @@ function campDetailV2HTML(c,idx){
     const hasComment=c.comments&&c.comments.trim().length>=8;
     // v089: the previous background rgba(15,23,42,.4) was designed as a dark-theme overlay, but
     // this page uses a LIGHT "warm paper" theme. A semi-transparent dark navy over a light page
-    // renders as medium grey — and the light-slate comment text (#94a3b8) then has almost no
+    // renders as medium grey — and the light-slate comment text (${T.label}) then has almost no
     // contrast against that grey, making the words next to "Campaign:" effectively invisible.
     // Replaced with a solid light background + dark text, consistent with the rest of the page.
-    const commentNote=hasComment?`<div style="font-size:12px;color:#1E293B;font-weight:600;margin-bottom:8px;padding:8px 12px;background:#F1F5F9;border-radius:6px;border-left:3px solid #64748B">📋 Campaign: <em style="color:#334155">"${c.comments}"</em>${a.discPctOfGross!=null?` — <strong style="color:#0F172A">actual blended depth: ${a.discPctOfGross.toFixed(1)}%</strong> of gross (vs ${a.headlinePct!=null?a.headlinePct+'% headline':'stated headline'})`:''}</div>`:(a.discPctOfGross!=null?`<div style="font-size:12px;color:#1E293B;font-weight:600;margin-bottom:8px;padding:8px 12px;background:#F1F5F9;border-radius:6px;border-left:3px solid #64748B">📋 <strong style="color:#0F172A">Actual blended depth: ${a.discPctOfGross.toFixed(1)}%</strong> of gross (vs ${a.headlinePct!=null?a.headlinePct+'% headline':'stated headline'})</div>`:'');
+    const commentNote=hasComment?`<div style="font-size:12px;color:${T.text};font-weight:600;margin-bottom:8px;padding:8px 12px;background:${T.rowBg2};border-radius:6px;border-left:3px solid ${T.muted}">📋 Campaign: <em style="color:${T.text2}">"${c.comments}"</em>${a.discPctOfGross!=null?` — <strong style="color:${T.text}">actual blended depth: ${a.discPctOfGross.toFixed(1)}%</strong> of gross (vs ${a.headlinePct!=null?a.headlinePct+'% headline':'stated headline'})`:''}</div>`:(a.discPctOfGross!=null?`<div style="font-size:12px;color:${T.text};font-weight:600;margin-bottom:8px;padding:8px 12px;background:${T.rowBg2};border-radius:6px;border-left:3px solid ${T.muted}">📋 <strong style="color:${T.text}">Actual blended depth: ${a.discPctOfGross.toFixed(1)}%</strong> of gross (vs ${a.headlinePct!=null?a.headlinePct+'% headline':'stated headline'})</div>`:'');
     scenarioBox=`<div class="card"><div class="ct">💡 Was a different discount better? — Elasticity Scenarios</div>
-      <div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Models what shallower discounts might have produced, assuming order lift scales with discount depth (elasticity <strong>${campElasticity.toFixed(1)}</strong> = ${campElasticity===1?'linear':'curved'}). Headline % = what you'd set on the platform. Blended depth = actual realized discount as % of gross. These are <em>estimates</em>, not measured outcomes.</div>
-      ${commentNote}<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><span style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:700;font-weight:700">Elasticity</span>${[0.7,1.0,1.3].map(e=>`<button onclick="campSetElasticity(${e})" style="padding:3px 10px;border-radius:6px;border:1px solid ${campElasticity===e?'#f59e0b':'rgba(15,23,42,.6)'};background:${campElasticity===e?'rgba(245,158,11,.12)':'transparent'};color:${campElasticity===e?'#f59e0b':'#94a3b8'};font-size:11px;font-weight:600;cursor:pointer">${e===0.7?'Low (0.7)':e===1?'Linear (1.0)':'High (1.3)'}</button>`).join('')}</div>
+      <div style="font-size:11px;color:${T.label};margin-bottom:6px">Models what shallower discounts might have produced, assuming order lift scales with discount depth (elasticity <strong>${campElasticity.toFixed(1)}</strong> = ${campElasticity===1?'linear':'curved'}). Headline % = what you'd set on the platform. Blended depth = actual realized discount as % of gross. These are <em>estimates</em>, not measured outcomes.</div>
+      ${commentNote}<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><span style="font-size:10px;color:${T.muted};text-transform:uppercase;font-weight:700;font-weight:700">Elasticity</span>${[0.7,1.0,1.3].map(e=>`<button onclick="campSetElasticity(${e})" style="padding:3px 10px;border-radius:6px;border:1px solid ${campElasticity===e?'#f59e0b':'rgba(15,23,42,.6)'};background:${campElasticity===e?'rgba(245,158,11,.12)':'transparent'};color:${campElasticity===e?'#f59e0b':T.label};font-size:11px;font-weight:600;cursor:pointer">${e===0.7?'Low (0.7)':e===1?'Linear (1.0)':'High (1.3)'}</button>`).join('')}</div>
       <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Scenario</th><th style="text-align:right">Incr Orders</th><th style="text-align:right">Our Disc Burn</th><th style="text-align:right">Incr Contribution</th><th style="text-align:right">ROI</th></tr></thead><tbody>${rows}</tbody></table></div>${beNote}</div>`;
   }
   // Subtle banner shown only when this campaign's discount is sourced from uploaded order data.
@@ -9823,11 +9837,11 @@ function campDetailV2HTML(c,idx){
     const tableRows=withPerOrder.map(r=>{
       const isCur=r.isCurrent;
       const rowBg=isCur?'background:rgba(96,165,250,.10);':'';
-      const nameClr=isCur?'#3B82F6':'#0F172A';
-      return `<tr style="${rowBg}border-bottom:1px solid #EDE7D9">
-        <td style="padding:14px;font-size:14px;font-weight:700;color:${nameClr}">${isCur?'▶ ':''}${r.campaign.name||'Campaign'}${isCur?' <span style="font-size:12px;color:#3B82F6;font-weight:700">(this campaign)</span>':''}<div style="font-size:12px;color:#64748b;font-weight:600;margin-top:3px">${fmtShort(r.campaign.startDate)} – ${fmtShort(r.campaign.endDate)}</div></td>
-        <td style="padding:14px;text-align:right;font-size:16px;font-weight:700;color:#0F172A">${r.orders.toLocaleString()}</td>
-        <td style="padding:14px;text-align:right;font-size:16px;font-weight:700;color:#0F172A">${r.discPct!=null?r.discPct.toFixed(0)+'%':'—'}</td>
+      const nameClr=isCur?'#3B82F6':T.text;
+      return `<tr style="${rowBg}border-bottom:1px solid ${T.border}">
+        <td style="padding:14px;font-size:14px;font-weight:700;color:${nameClr}">${isCur?'▶ ':''}${r.campaign.name||'Campaign'}${isCur?' <span style="font-size:12px;color:#3B82F6;font-weight:700">(this campaign)</span>':''}<div style="font-size:12px;color:${T.muted};font-weight:600;margin-top:3px">${fmtShort(r.campaign.startDate)} – ${fmtShort(r.campaign.endDate)}</div></td>
+        <td style="padding:14px;text-align:right;font-size:16px;font-weight:700;color:${T.text}">${r.orders.toLocaleString()}</td>
+        <td style="padding:14px;text-align:right;font-size:16px;font-weight:700;color:${T.text}">${r.discPct!=null?r.discPct.toFixed(0)+'%':'—'}</td>
         <td style="padding:14px;text-align:right;font-size:16px;font-weight:700;color:#EF4444">${fmtAEDx(r.discCost)}</td>
         <td style="padding:14px;text-align:right;font-size:16px;font-weight:800;color:${r.contribution>=0?'#22C55E':'#EF4444'}">${r.contribution>=0?'+':''}${fmtAEDx(r.contribution)}</td>
         <td style="padding:14px;text-align:right;font-size:18px;font-weight:800;color:${r.contribPerOrder>=0?'#22C55E':'#EF4444'}">${r.contribPerOrder>=0?'+':''}${fmtAEDx(r.contribPerOrder)}</td>
@@ -9836,27 +9850,27 @@ function campDetailV2HTML(c,idx){
 
     return `<div class="card" style="margin-bottom:14px">
       <div class="ct" style="font-size:16px;margin-bottom:6px">📊 Compare vs Similar Campaigns</div>
-      <div style="font-size:14px;color:#475569;font-weight:500;line-height:1.7;margin-bottom:16px">Same brand, same aggregator — real campaigns compared directly against each other, ranked by contribution per order. This sidesteps the baseline-comparison problem entirely, but has its own caveats below the table.</div>
+      <div style="font-size:14px;color:${T.secondary};font-weight:500;line-height:1.7;margin-bottom:16px">Same brand, same aggregator — real campaigns compared directly against each other, ranked by contribution per order. This sidesteps the baseline-comparison problem entirely, but has its own caveats below the table.</div>
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
-        <thead><tr style="background:#F5F0E5;border-bottom:2px solid #EDE7D9">
-          <th style="text-align:left;padding:12px 14px;font-size:13px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.5px">Campaign</th>
-          <th style="text-align:right;padding:12px 14px;font-size:13px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.5px">Orders</th>
-          <th style="text-align:right;padding:12px 14px;font-size:13px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.5px">Discount %</th>
-          <th style="text-align:right;padding:12px 14px;font-size:13px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.5px">Discount Given</th>
-          <th style="text-align:right;padding:12px 14px;font-size:13px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.5px">Total Contribution</th>
-          <th style="text-align:right;padding:12px 14px;font-size:13px;color:#64748b;font-weight:800;text-transform:uppercase;letter-spacing:.5px">Contribution / Order</th>
+        <thead><tr style="background:${T.rowBg};border-bottom:2px solid ${T.border}">
+          <th style="text-align:left;padding:12px 14px;font-size:13px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.5px">Campaign</th>
+          <th style="text-align:right;padding:12px 14px;font-size:13px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.5px">Orders</th>
+          <th style="text-align:right;padding:12px 14px;font-size:13px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.5px">Discount %</th>
+          <th style="text-align:right;padding:12px 14px;font-size:13px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.5px">Discount Given</th>
+          <th style="text-align:right;padding:12px 14px;font-size:13px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.5px">Total Contribution</th>
+          <th style="text-align:right;padding:12px 14px;font-size:13px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.5px">Contribution / Order</th>
         </tr></thead>
         <tbody>${tableRows}</tbody>
       </table></div>
-      <div style="margin-top:16px;padding:16px 18px;background:#F5F0E5;border-radius:10px;border-left:4px solid #94A3B8">
-        <div style="font-size:15px;font-weight:800;color:#334155;margin-bottom:10px">Read this with caution — six things it doesn't account for:</div>
-        <div style="font-size:14px;color:#475569;line-height:1.9">
-          <strong style="color:#334155">1.</strong> Doesn't show whether discounting helped at all versus running no promotion.<br>
-          <strong style="color:#334155">2.</strong> These campaigns ran in different weeks — demand, weather, and season differ.<br>
-          <strong style="color:#334155">3.</strong> Higher-volume campaigns can build ranking, repeat customers, and reach that this table can't see.<br>
-          <strong style="color:#334155">4.</strong> Different co-funding levels make "our contribution" look better for whichever campaign got the bigger aggregator subsidy.<br>
-          <strong style="color:#334155">5.</strong> Average order size can differ between campaigns, so contribution-per-order isn't perfectly apples-to-apples.<br>
-          <strong style="color:#334155">6.</strong> Short campaigns are small samples — one big order or a slow day can swing the numbers.
+      <div style="margin-top:16px;padding:16px 18px;background:${T.rowBg};border-radius:10px;border-left:4px solid ${T.label}">
+        <div style="font-size:15px;font-weight:800;color:${T.text2};margin-bottom:10px">Read this with caution — six things it doesn't account for:</div>
+        <div style="font-size:14px;color:${T.secondary};line-height:1.9">
+          <strong style="color:${T.text2}">1.</strong> Doesn't show whether discounting helped at all versus running no promotion.<br>
+          <strong style="color:${T.text2}">2.</strong> These campaigns ran in different weeks — demand, weather, and season differ.<br>
+          <strong style="color:${T.text2}">3.</strong> Higher-volume campaigns can build ranking, repeat customers, and reach that this table can't see.<br>
+          <strong style="color:${T.text2}">4.</strong> Different co-funding levels make "our contribution" look better for whichever campaign got the bigger aggregator subsidy.<br>
+          <strong style="color:${T.text2}">5.</strong> Average order size can differ between campaigns, so contribution-per-order isn't perfectly apples-to-apples.<br>
+          <strong style="color:${T.text2}">6.</strong> Short campaigns are small samples — one big order or a slow day can swing the numbers.
         </div>
       </div>
     </div>`;
@@ -9868,14 +9882,14 @@ function campDetailV2HTML(c,idx){
   _notes.sort((x,y)=>_sevRank[x.sev]-_sevRank[y.sev]);
   const _hasCritical=_notes.some(n=>n.sev==='red');
   const _headline=_notes.filter(n=>n.sev==='red'||n.sev==='amber').map(n=>n.t).slice(0,2).join('  ·  ');
-  const notesBar=_notes.length?`<details ${_hasCritical?'open':''} style="margin-bottom:14px;border:1px solid #EDE7D9;border-radius:10px;background:#FEFDFA;overflow:hidden">
+  const notesBar=_notes.length?`<details ${_hasCritical?'open':''} style="margin-bottom:14px;border:1px solid ${T.border};border-radius:10px;background:${T.panelBg};overflow:hidden">
     <summary style="cursor:pointer;list-style:none;user-select:none;display:flex;align-items:center;gap:10px;padding:9px 14px">
-      <span style="font-size:10px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.6px;white-space:nowrap">ℹ Data notes (${_notes.length})</span>
+      <span style="font-size:10px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.6px;white-space:nowrap">ℹ Data notes (${_notes.length})</span>
       <span style="display:flex;gap:4px;flex-shrink:0">${_notes.map(n=>`<span style="width:7px;height:7px;border-radius:50%;background:${_sevClr[n.sev]};display:inline-block"></span>`).join('')}</span>
-      ${_headline?`<span style="font-size:11px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${_headline}</span>`:''}
-      <span style="margin-left:auto;font-size:10px;color:#94a3b8;flex-shrink:0">▾</span>
+      ${_headline?`<span style="font-size:11px;color:${T.label};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${_headline}</span>`:''}
+      <span style="margin-left:auto;font-size:10px;color:${T.label};flex-shrink:0">▾</span>
     </summary>
-    <div style="border-top:1px solid #EDE7D9">${_notes.map(n=>`<div style="display:flex;gap:10px;padding:10px 14px;border-bottom:1px solid #F4EFE4"><span style="flex:0 0 7px;width:7px;height:7px;border-radius:50%;background:${_sevClr[n.sev]};margin-top:5px"></span><div style="min-width:0"><div style="font-size:12px;font-weight:700;color:#0F172A;margin-bottom:2px">${n.t}</div><div style="font-size:12px;color:#475569;line-height:1.6">${n.b}</div></div></div>`).join('')}</div>
+    <div style="border-top:1px solid ${T.border}">${_notes.map(n=>`<div style="display:flex;gap:10px;padding:10px 14px;border-bottom:1px solid #F4EFE4"><span style="flex:0 0 7px;width:7px;height:7px;border-radius:50%;background:${_sevClr[n.sev]};margin-top:5px"></span><div style="min-width:0"><div style="font-size:12px;font-weight:700;color:${T.text};margin-bottom:2px">${n.t}</div><div style="font-size:12px;color:${T.secondary};line-height:1.6">${n.b}</div></div></div>`).join('')}</div>
   </details>`:'';
   // v111: "You forecasted this" callout — shows expected vs. actual right where the real
   // result is already being reviewed, using whichever uplift figure this page already computed.
@@ -9887,9 +9901,10 @@ function campDetailV2HTML(c,idx){
     const expTxt=exp?`${exp.upliftPct>=0?'+':''}${Math.round(exp.upliftPct)}%`:'—';
     const actTxt=actualUplift!=null?`${actualUplift>=0?'+':''}${actualUplift.toFixed(0)}%`:'—';
     const bigMiss=exp&&actualUplift!=null&&Math.abs(exp.upliftPct-actualUplift)>25;
-    fcBanner=`<div style="background:#F3EFE3;border:1px solid #E4DCC8;border-left:3px solid #60A5FA;border-radius:8px;padding:11px 15px;margin-bottom:14px;display:flex;gap:10px;align-items:flex-start">
+    const fcBg=_darkPage?DARK_THEME.card:"#F3EFE3",fcBorder=_darkPage?DARK_THEME.cardBorder:"#E4DCC8",fcTxt=_darkPage?DARK_THEME.textSecondary:"#374151";
+    fcBanner=`<div style="background:${fcBg};border:1px solid ${fcBorder};border-left:3px solid #60A5FA;border-radius:8px;padding:11px 15px;margin-bottom:14px;display:flex;gap:10px;align-items:flex-start">
       <span style="font-size:14px">📋</span>
-      <div style="font-size:12.5px;line-height:1.7;color:#374151">
+      <div style="font-size:12.5px;line-height:1.7;color:${fcTxt}">
         <strong>You forecasted this on ${fmtShort(fcMatch.savedAt.slice(0,10))}</strong> (saved by ${fcMatch.savedByName||fcMatch.savedBy||'—'}): expected <strong style="color:#60A5FA">${expTxt}</strong> uplift — actual result <strong style="color:${actualUplift>=0?'#22C55E':'#EF4444'}">${actTxt}</strong>${bigMiss?' <span style="color:#F59E0B">— notably off from the forecast, worth a look at what changed</span>':''}.
       </div>
     </div>`;
@@ -10062,27 +10077,29 @@ async function runCampAI(idx){
     const resp=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:800,messages:[{role:"user",content:prompt}]})});
     if(!resp.ok)throw new Error('cors');const j=await resp.json();if(j.error)throw new Error(j.error.message);
     const ai=JSON.parse((j.content?.[0]?.text||'').replace(/```json|```/g,'').trim());
-    const vc={STRONG:'#22C55E',AVERAGE:'#FBBF24',UNDERPERFORMING:'#EF4444',INSUFFICIENT_DATA:'#64748b'}[ai.verdict]||'#64748b';
-    content.innerHTML=`<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px"><div style="padding:3px 12px;border-radius:10px;font-size:11px;font-weight:700;background:${vc}22;color:${vc};border:1px solid ${vc}44;white-space:nowrap">${(ai.verdict||'').replace(/_/g,' ')}</div><div style="font-size:13px;color:#0F172A;line-height:1.6">${ai.assessment}</div></div><div class="g2"><div><div style="font-size:10px;color:#f59e0b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">📋 Suggestions</div>${(ai.suggestions||[]).map((s,i)=>`<div style="display:flex;gap:8px;margin-bottom:8px"><div style="background:#f59e0b;color:#000;font-size:10px;font-weight:700;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</div><div style="font-size:12px;color:#0F172A;line-height:1.5">${s}</div></div>`).join('')}</div><div><div style="font-size:10px;color:#22C55E;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">📈 What Works for ${c.brand} on ${c.aggregator}</div><div style="font-size:12px;color:#0F172A;line-height:1.7;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.15);border-radius:6px;padding:10px">${ai.bestPractice}</div></div></div>`;
+    const T=campTheme();
+    const vc={STRONG:'#22C55E',AVERAGE:'#FBBF24',UNDERPERFORMING:'#EF4444',INSUFFICIENT_DATA:T.muted}[ai.verdict]||T.muted;
+    content.innerHTML=`<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px"><div style="padding:3px 12px;border-radius:10px;font-size:11px;font-weight:700;background:${vc}22;color:${vc};border:1px solid ${vc}44;white-space:nowrap">${(ai.verdict||'').replace(/_/g,' ')}</div><div style="font-size:13px;color:${T.text};line-height:1.6">${ai.assessment}</div></div><div class="g2"><div><div style="font-size:10px;color:#f59e0b;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">📋 Suggestions</div>${(ai.suggestions||[]).map((s,i)=>`<div style="display:flex;gap:8px;margin-bottom:8px"><div style="background:#f59e0b;color:#000;font-size:10px;font-weight:700;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</div><div style="font-size:12px;color:${T.text};line-height:1.5">${s}</div></div>`).join('')}</div><div><div style="font-size:10px;color:#22C55E;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">📈 What Works for ${c.brand} on ${c.aggregator}</div><div style="font-size:12px;color:${T.text};line-height:1.7;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.15);border-radius:6px;padding:10px">${ai.bestPractice}</div></div></div>`;
     btn.textContent='↻ Regenerate';btn.disabled=false;btn.onclick=()=>runCampAI(idx);
-  }catch(e){content.innerHTML=e.message==='cors'?`<div style="font-size:12px;color:#475569;font-weight:600"><strong style="color:#f59e0b">AI analysis runs in Claude.ai only.</strong> All campaign metrics above are accurate.</div>`:`<div style="color:#64748b;font-size:12px">Analysis unavailable.</div>`;btn.textContent='↻ Retry';btn.disabled=false;}
+  }catch(e){const T=campTheme();content.innerHTML=e.message==='cors'?`<div style="font-size:12px;color:${T.secondary};font-weight:600"><strong style="color:#f59e0b">AI analysis runs in Claude.ai only.</strong> All campaign metrics above are accurate.</div>`:`<div style="color:${T.muted};font-size:12px">Analysis unavailable.</div>`;btn.textContent='↻ Retry';btn.disabled=false;}
 }
 // Bundle detail: a coordinated multi-segment campaign analyzed as ONE combined effort using
 // real combined discount data (the Disc column already sums them, which is the only honest
 // way to report profitability since per-segment attribution isn't possible).
 function bundleDetailHTML(bundle){
+  const T=campTheme();
   const a=bundleAnalysis(bundle);
   const b=BMAP[bundle.brand];const brandClr=b?.c||'#f59e0b';
-  const profClr=a.profitabilityPct==null?'#64748b':a.profitabilityPct>0?'#22C55E':a.profitabilityPct>-20?'#FBBF24':'#EF4444';
-  const roiClr=a.discountROI==null?'#64748b':a.discountROI>=1?'#22C55E':a.discountROI>=0?'#FBBF24':'#EF4444';
+  const profClr=a.profitabilityPct==null?T.muted:a.profitabilityPct>0?'#22C55E':a.profitabilityPct>-20?'#FBBF24':'#EF4444';
+  const roiClr=a.discountROI==null?T.muted:a.discountROI>=1?'#22C55E':a.discountROI>=0?'#FBBF24':'#EF4444';
   const ordClr=pctClr(a.ordersLift),salClr=pctClr(a.salesLift),aovClr=pctClr(a.aovChange);
   // Header with scope badge (which outlets are being compared)
   const scopeStr=campScopeLabel({brand:bundle.brand,aggregator:bundle.aggregator,outlet:bundle.outlet,startDate:bundle.startDate,endDate:bundle.endDate});
   const isScoped=scopeStr!=="All outlets";
-  const scopeBadge=isScoped?`<div style="margin-top:10px;padding:8px 12px;background:rgba(96,165,250,.08);border-left:3px solid #60A5FA;border-radius:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="font-size:18px">📍</div><div style="flex:1;min-width:200px"><div style="font-size:10px;color:#60A5FA;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Location-Scoped Analysis</div><div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.5">${scopeStr} — compared against the <strong style="color:#0F172A">same outlets only</strong> in the prior period.</div></div></div>`:'';
+  const scopeBadge=isScoped?`<div style="margin-top:10px;padding:8px 12px;background:rgba(96,165,250,.08);border-left:3px solid #60A5FA;border-radius:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="font-size:18px">📍</div><div style="flex:1;min-width:200px"><div style="font-size:10px;color:#60A5FA;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Location-Scoped Analysis</div><div style="font-size:11px;color:${T.label};margin-top:2px;line-height:1.5">${scopeStr} — compared against the <strong style="color:${T.text}">same outlets only</strong> in the prior period.</div></div></div>`:'';
   const header=`<div class="card" style="margin-bottom:12px;border-left:4px solid ${brandClr}"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
-    <div style="flex:1;min-width:280px"><div style="font-size:9px;color:#FBBF24;font-weight:800;letter-spacing:1.5px;text-transform:uppercase">🎯 Coordinated Campaign Bundle</div><div style="font-size:18px;font-weight:800;color:#0F172A;margin-top:4px">${bundle.brand} on ${bundle.aggregator}</div><div style="font-size:11px;color:#94a3b8;margin-top:4px">${fmtCampDateRange(bundle.startDate,bundle.endDate)} · ${a.days} day${a.days>1?'s':''} · ${bundle.outlet||'All'} outlets · ${bundle.campaigns.length} concurrent segments</div>${scopeBadge}</div>
-    <button onclick="selBundle=null;campTab='active';renderCampaigns()" style="background:none;border:1px solid #E2E8F0;border-radius:6px;color:#94a3b8;padding:5px 12px;font-size:11px;cursor:pointer">← Back</button>
+    <div style="flex:1;min-width:280px"><div style="font-size:9px;color:#FBBF24;font-weight:800;letter-spacing:1.5px;text-transform:uppercase">🎯 Coordinated Campaign Bundle</div><div style="font-size:18px;font-weight:800;color:${T.text};margin-top:4px">${bundle.brand} on ${bundle.aggregator}</div><div style="font-size:11px;color:${T.label};margin-top:4px">${fmtCampDateRange(bundle.startDate,bundle.endDate)} · ${a.days} day${a.days>1?'s':''} · ${bundle.outlet||'All'} outlets · ${bundle.campaigns.length} concurrent segments</div>${scopeBadge}</div>
+    <button onclick="selBundle=null;campTab='active';renderCampaigns()" style="background:none;border:1px solid ${T.border};border-radius:6px;color:${T.label};padding:5px 12px;font-size:11px;cursor:pointer">← Back</button>
   </div></div>`;
   // Segments breakdown — what each campaign in the bundle targets
   const isExclSet=new Set(bundle.exclusive||[]);
@@ -10091,12 +10108,12 @@ function bundleDetailHTML(bundle){
     const offer=seg.comments||'';
     let badge='';
     if(isExclSet.has(seg))badge=`<span style="background:rgba(245,158,11,.18);color:#FBBF24;font-size:9px;font-weight:800;padding:2px 7px;border-radius:8px;margin-left:5px;border:1px solid rgba(245,158,11,.4);white-space:nowrap">⚡ EXCLUSIVE</span>`;
-    else if(isPausedSet.has(seg))badge=`<span style="background:rgba(100,116,139,.15);color:#94a3b8;font-size:9px;font-weight:700;padding:2px 7px;border-radius:8px;margin-left:5px;border:1px solid rgba(100,116,139,.3);white-space:nowrap">⏸ Paused when exclusive runs</span>`;
-    return `<tr><td><strong style="font-size:12px;color:#FBBF24">${i+1}. ${seg.name||'(unnamed)'}</strong>${badge}</td><td><span style="font-size:11px;color:#94a3b8">${offer.length>80?offer.slice(0,80)+'…':offer}</span></td><td style="font-size:11px;color:#94a3b8;white-space:nowrap">${fmtCampDateRange(seg.startDate,seg.endDate)}</td></tr>`;
+    else if(isPausedSet.has(seg))badge=`<span style="background:rgba(100,116,139,.15);color:${T.label};font-size:9px;font-weight:700;padding:2px 7px;border-radius:8px;margin-left:5px;border:1px solid rgba(100,116,139,.3);white-space:nowrap">⏸ Paused when exclusive runs</span>`;
+    return `<tr><td><strong style="font-size:12px;color:#FBBF24">${i+1}. ${seg.name||'(unnamed)'}</strong>${badge}</td><td><span style="font-size:11px;color:${T.label}">${offer.length>80?offer.slice(0,80)+'…':offer}</span></td><td style="font-size:11px;color:${T.label};white-space:nowrap">${fmtCampDateRange(seg.startDate,seg.endDate)}</td></tr>`;
   }).join('');
   // Mutual-exclusion notice — surfaces when a segment's comments say it pauses the others
-  const exclNotice=(bundle.exclusive&&bundle.exclusive.length)?`<div style="margin-bottom:10px;padding:10px 14px;background:rgba(245,158,11,.08);border-left:3px solid #FBBF24;border-radius:4px"><div style="display:flex;align-items:flex-start;gap:10px"><div style="font-size:20px;line-height:1">⚡</div><div style="flex:1"><div style="font-size:11px;color:#FBBF24;font-weight:800;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">Mutual Exclusion Detected</div><div style="font-size:11px;color:#0F172A;line-height:1.6">The comments on <strong>${bundle.exclusive.map(c=>'"'+(c.name||'unnamed')+'"').join(', ')}</strong> indicate ${bundle.exclusive.length>1?'they pause':'it pauses'} the other segment${bundle.pausedByExclusive.length>1?'s':''} (${bundle.pausedByExclusive.map(c=>'"'+(c.name||'unnamed')+'"').join(', ')}) to avoid double-discounting. So even though the date ranges overlap, the segments don't all run simultaneously — the platform's Disc total still reflects whichever offer was actually active each day, so the combined profitability math below is still accurate.</div></div></div></div>`:'';
-  const segmentsCard=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#FBBF24">🧩 Bundle Segments — Targeting Different Customer Groups</div>${exclNotice}<div style="font-size:11px;color:#94a3b8;margin-bottom:10px;line-height:1.6">This bundle groups ${bundle.campaigns.length} campaigns on the same brand and platform with overlapping date ranges. They share the discount pool reported by the platform, so they're analyzed as one combined effort below.</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Segment Campaign</th><th>Offer</th><th>Dates</th></tr></thead><tbody>${segmentRows}</tbody></table></div></div>`;
+  const exclNotice=(bundle.exclusive&&bundle.exclusive.length)?`<div style="margin-bottom:10px;padding:10px 14px;background:rgba(245,158,11,.08);border-left:3px solid #FBBF24;border-radius:4px"><div style="display:flex;align-items:flex-start;gap:10px"><div style="font-size:20px;line-height:1">⚡</div><div style="flex:1"><div style="font-size:11px;color:#FBBF24;font-weight:800;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">Mutual Exclusion Detected</div><div style="font-size:11px;color:${T.text};line-height:1.6">The comments on <strong>${bundle.exclusive.map(c=>'"'+(c.name||'unnamed')+'"').join(', ')}</strong> indicate ${bundle.exclusive.length>1?'they pause':'it pauses'} the other segment${bundle.pausedByExclusive.length>1?'s':''} (${bundle.pausedByExclusive.map(c=>'"'+(c.name||'unnamed')+'"').join(', ')}) to avoid double-discounting. So even though the date ranges overlap, the segments don't all run simultaneously — the platform's Disc total still reflects whichever offer was actually active each day, so the combined profitability math below is still accurate.</div></div></div></div>`:'';
+  const segmentsCard=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#FBBF24">🧩 Bundle Segments — Targeting Different Customer Groups</div>${exclNotice}<div style="font-size:11px;color:${T.label};margin-bottom:10px;line-height:1.6">This bundle groups ${bundle.campaigns.length} campaigns on the same brand and platform with overlapping date ranges. They share the discount pool reported by the platform, so they're analyzed as one combined effort below.</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Segment Campaign</th><th>Offer</th><th>Dates</th></tr></thead><tbody>${segmentRows}</tbody></table></div></div>`;
   // Combined KPIs
   const kpiCards=`<div class="card" style="margin-bottom:12px"><div class="ct">Combined Performance</div><div class="g4">
     ${kpiCard('Orders During',a.cs.orders.toLocaleString(),`baseline /day: ${Math.round(a.baseOrders/Math.max(1,a.bDays)).toLocaleString()}`,a.ordersLift)}
@@ -10109,24 +10126,24 @@ function bundleDetailHTML(bundle){
   // Profitability — REAL combined discount
   let profitSection='';
   if(a.discAvailable){
-    profitSection=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#f59e0b">💰 Combined Profitability <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· real shared discount across all ${bundle.campaigns.length} segments</span></div>
+    profitSection=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#f59e0b">💰 Combined Profitability <span style="color:${T.muted};font-weight:400;text-transform:none;letter-spacing:0">· real shared discount across all ${bundle.campaigns.length} segments</span></div>
       <div style="display:flex;align-items:stretch;gap:14px;flex-wrap:wrap;margin-bottom:14px;padding:12px 14px;background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.18);border-radius:8px">
-        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Total Discount (All ${bundle.campaigns.length} Segments)</div><div style="font-size:22px;font-weight:800;color:#EF4444;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAEDTip(a.campDisc)}</div></div>
+        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.8px">Total Discount (All ${bundle.campaigns.length} Segments)</div><div style="font-size:22px;font-weight:800;color:#EF4444;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAEDTip(a.campDisc)}</div></div>
         <div style="width:1px;background:rgba(245,158,11,.2)"></div>
-        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Net Sales Generated</div><div style="font-size:22px;font-weight:800;color:#22C55E;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAEDTip(a.cs.sales)}</div></div>
+        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.8px">Net Sales Generated</div><div style="font-size:22px;font-weight:800;color:#22C55E;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAEDTip(a.cs.sales)}</div></div>
         <div style="width:1px;background:rgba(245,158,11,.2)"></div>
-        <div style="flex:1;min-width:150px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Blended Discount Depth</div><div style="font-size:22px;font-weight:800;color:#FBBF24;font-variant-numeric:tabular-nums;line-height:1.2">${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'%':'—'}</div><div style="font-size:10px;color:#64748b;margin-top:2px">across the whole bundle</div></div>
+        <div style="flex:1;min-width:150px"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.8px">Blended Discount Depth</div><div style="font-size:22px;font-weight:800;color:#FBBF24;font-variant-numeric:tabular-nums;line-height:1.2">${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'%':'—'}</div><div style="font-size:10px;color:${T.muted};margin-top:2px">across the whole bundle</div></div>
       </div>
-      <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px;line-height:1.6">ℹ️ <strong>Why analyze the bundle together?</strong> Each segment targets a different customer group (new, lapsed, regular), so they don't compete for credit on the same orders. The platform reports a single combined discount across them — splitting it per segment would be guesswork. The combined view below is the honest read on whether the bundle paid off overall.</div>
+      <div style="font-size:11px;color:${T.label};margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px;line-height:1.6">ℹ️ <strong>Why analyze the bundle together?</strong> Each segment targets a different customer group (new, lapsed, regular), so they don't compete for credit on the same orders. The platform reports a single combined discount across them — splitting it per segment would be guesswork. The combined view below is the honest read on whether the bundle paid off overall.</div>
       <div class="g4">
         ${kpiCard('Combined Discount',fmtAEDTip(a.campDisc),`AED ${Math.round(a.discPerDay)}/day · ${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'% of sales':'—'}`,null)}
         ${kpiCard('Commission Rate',`${(a.commRate*100).toFixed(0)}%`,`${bundle.aggregator} · ${bundle.brand}`,null)}
-        <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Daily Contribution</div><div style="font-size:21px;font-weight:800;color:${a.contribDiffPerDay>=0?'#22C55E':'#EF4444'};font-variant-numeric:tabular-nums;line-height:1">${a.contribDiffPerDay>=0?'+':''}${fmtAEDTip(a.contribDiffPerDay)}</div><div style="font-size:11px;color:#475569;font-weight:600;margin-top:3px">vs baseline /day</div><div style="font-size:11px;color:${profClr};font-weight:700;margin-top:3px">${fmtPct(a.profitabilityPct)}</div></div>
-        <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Bundle ROI</div><div style="font-size:21px;font-weight:800;color:${roiClr};font-variant-numeric:tabular-nums;line-height:1">${a.discountROI==null?'—':(a.discountROI>=0?'+':'')+a.discountROI.toFixed(2)+'×'}</div><div style="font-size:11px;color:#475569;font-weight:600;margin-top:3px">contrib. per AED disc.</div></div>
+        <div class="sm"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Daily Contribution</div><div style="font-size:21px;font-weight:800;color:${a.contribDiffPerDay>=0?'#22C55E':'#EF4444'};font-variant-numeric:tabular-nums;line-height:1">${a.contribDiffPerDay>=0?'+':''}${fmtAEDTip(a.contribDiffPerDay)}</div><div style="font-size:11px;color:${T.secondary};font-weight:600;margin-top:3px">vs baseline /day</div><div style="font-size:11px;color:${profClr};font-weight:700;margin-top:3px">${fmtPct(a.profitabilityPct)}</div></div>
+        <div class="sm"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Bundle ROI</div><div style="font-size:21px;font-weight:800;color:${roiClr};font-variant-numeric:tabular-nums;line-height:1">${a.discountROI==null?'—':(a.discountROI>=0?'+':'')+a.discountROI.toFixed(2)+'×'}</div><div style="font-size:11px;color:${T.secondary};font-weight:600;margin-top:3px">contrib. per AED disc.</div></div>
       </div>
-      <div style="font-size:11px;color:#475569;font-weight:600;margin-top:10px;line-height:1.6">Contribution = Net Sales × (1 − ${(a.commRate*100).toFixed(0)}% commission) − combined discount. ${a.discountROI!=null&&a.discountROI>=1?`<span style="color:#22C55E">The bundle generated more contribution than it cost — the coordinated strategy paid off.</span>`:a.discountROI!=null&&a.discountROI<0?`<span style="color:#EF4444">Incremental contribution was negative — the bundle lost money overall after the combined discount.</span>`:a.discountROI!=null?`<span style="color:#FBBF24">The bundle returned less than AED 1 of contribution per AED discounted — marginal.</span>`:''}</div></div>`;
+      <div style="font-size:11px;color:${T.secondary};font-weight:600;margin-top:10px;line-height:1.6">Contribution = Net Sales × (1 − ${(a.commRate*100).toFixed(0)}% commission) − combined discount. ${a.discountROI!=null&&a.discountROI>=1?`<span style="color:#22C55E">The bundle generated more contribution than it cost — the coordinated strategy paid off.</span>`:a.discountROI!=null&&a.discountROI<0?`<span style="color:#EF4444">Incremental contribution was negative — the bundle lost money overall after the combined discount.</span>`:a.discountROI!=null?`<span style="color:#FBBF24">The bundle returned less than AED 1 of contribution per AED discounted — marginal.</span>`:''}</div></div>`;
   }else{
-    profitSection=`<div class="card" style="margin-bottom:12px;border-color:rgba(96,165,250,.3)"><div class="ct" style="color:#60A5FA">ℹ️ Discount Data Not Available</div><div style="font-size:12px;color:#94a3b8;line-height:1.6">This bundle predates 1 May 2026 (when we started tracking the Disc column), so combined discount and profitability can't be calculated.</div></div>`;
+    profitSection=`<div class="card" style="margin-bottom:12px;border-color:rgba(96,165,250,.3)"><div class="ct" style="color:#60A5FA">ℹ️ Discount Data Not Available</div><div style="font-size:12px;color:${T.label};line-height:1.6">This bundle predates 1 May 2026 (when we started tracking the Disc column), so combined discount and profitability can't be calculated.</div></div>`;
   }
   return header+segmentsCard+kpiCards+chart+profitSection;
 }
@@ -10169,9 +10186,10 @@ function campNeedsAttentionItems(active,upcoming){
     const end=new Date(dateStr+"T23:59:59");
     return (end-now)/3600000;
   };
+  const T=campTheme();
   const campLabel=c=>{
     const dateRange=(c.startDate&&c.endDate)?`${fmtShort(c.startDate)} – ${fmtShort(c.endDate)}, ${c.endDate.slice(0,4)}`:'';
-    return `${c.name||c.brand+" on "+c.aggregator} <span style="color:#94a3b8;font-weight:600">· ${c.brand} · ${c.aggregator}${dateRange?` · ${dateRange}`:''}</span>`;
+    return `${c.name||c.brand+" on "+c.aggregator} <span style="color:${T.label};font-weight:600">· ${c.brand} · ${c.aggregator}${dateRange?` · ${dateRange}`:''}</span>`;
   };
   active.forEach(c=>{
     if(isRewardsCampaign(c))return;
@@ -10225,13 +10243,15 @@ function undismissRec(key){dismissedRecKeys.delete(key);renderPage(curPage);}
 let showDismissedRecs=false;
 function toggleDismissedRecsPanel(){showDismissedRecs=!showDismissedRecs;renderPage(curPage);}
 function campNeedsAttentionPanel(active,upcoming){
+  const T=campTheme();
   const allItems=campNeedsAttentionItems(active,upcoming);
   const items=allItems.filter(it=>!dismissedRecKeys.has(recKey(it)));
   const dismissedItems=allItems.filter(it=>dismissedRecKeys.has(recKey(it)));
   if(items.length===0&&dismissedItems.length===0)return '';
   const shown=items.slice(0,8);
-  const more=items.length>shown.length?`<div style="font-size:10.5px;color:#94a3b8;padding:4px 0 0 30px">+ ${items.length-shown.length} more</div>`:'';
-  const kindStyle={critical:{bg:'#FEF2F2',border:'#FECACA'},warning:{bg:'#FFFBEB',border:'#FDE68A'},opportunity:{bg:'#F0FDF4',border:'#BBF7D0'}};
+  const more=items.length>shown.length?`<div style="font-size:10.5px;color:${T.label};padding:4px 0 0 30px">+ ${items.length-shown.length} more</div>`:'';
+  const kindStyle=_darkPage?{critical:{bg:'rgba(239,68,68,.10)',border:'rgba(239,68,68,.3)'},warning:{bg:'rgba(245,158,11,.10)',border:'rgba(245,158,11,.3)'},opportunity:{bg:'rgba(34,197,94,.10)',border:'rgba(34,197,94,.3)'}}
+    :{critical:{bg:'#FEF2F2',border:'#FECACA'},warning:{bg:'#FFFBEB',border:'#FDE68A'},opportunity:{bg:'#F0FDF4',border:'#BBF7D0'}};
   const rows=shown.map(it=>{
     const s=kindStyle[it.kind]||kindStyle.warning;
     const cursor=it.action?'cursor:pointer':'';
@@ -10240,27 +10260,27 @@ function campNeedsAttentionPanel(active,upcoming){
     return `<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;border-radius:8px;background:${s.bg};border:1px solid ${s.border}">
       <span ${onclick} style="font-size:16px;flex-shrink:0;margin-top:1px;${cursor}">${it.icon}</span>
       <div ${onclick} style="min-width:0;flex:1;${cursor}">
-        <div style="font-size:12px;font-weight:700;color:#0F172A">${it.title}</div>
-        <div style="font-size:11px;color:#64748b;margin-top:2px;line-height:1.5">${it.reason}</div>
+        <div style="font-size:12px;font-weight:700;color:${T.text}">${it.title}</div>
+        <div style="font-size:11px;color:${T.muted};margin-top:2px;line-height:1.5">${it.reason}</div>
       </div>
-      ${it.action?`<span ${onclick} style="font-size:10px;color:#94a3b8;font-weight:700;white-space:nowrap;margin-top:2px;${cursor}">View →</span>`:''}
-      <span onclick="event.stopPropagation();dismissRec('${key}')" title="Dismiss — won't show again this session unless brought back" style="cursor:pointer;color:#94a3b8;font-size:15px;font-weight:700;padding:0 4px;border-radius:5px;flex-shrink:0" onmouseover="this.style.color='#DC2626'" onmouseout="this.style.color='#94a3b8'">✕</span>
+      ${it.action?`<span ${onclick} style="font-size:10px;color:${T.label};font-weight:700;white-space:nowrap;margin-top:2px;${cursor}">View →</span>`:''}
+      <span onclick="event.stopPropagation();dismissRec('${key}')" title="Dismiss — won't show again this session unless brought back" style="cursor:pointer;color:${T.label};font-size:15px;font-weight:700;padding:0 4px;border-radius:5px;flex-shrink:0" onmouseover="this.style.color='#DC2626'" onmouseout="this.style.color='${T.label}'">✕</span>
     </div>`;
   }).join('');
   const nCrit=items.filter(i=>i.kind==='critical').length;
   const dots=`<span style="display:flex;gap:4px"><span style="width:7px;height:7px;border-radius:50%;background:#EF4444;display:inline-block"></span><span style="width:7px;height:7px;border-radius:50%;background:#F59E0B;display:inline-block"></span><span style="width:7px;height:7px;border-radius:50%;background:#22C55E;display:inline-block"></span></span>`;
-  const dismissedPanel=dismissedItems.length?`<div style="padding:8px 14px 10px;border-top:1px solid #EDE7D9">
-    <div onclick="toggleDismissedRecsPanel()" style="cursor:pointer;font-size:10.5px;color:#94a3b8;font-weight:700;display:flex;align-items:center;gap:5px">${showDismissedRecs?'▾':'▸'} ${dismissedItems.length} dismissed — click to review</div>
-    ${showDismissedRecs?`<div style="margin-top:6px;display:flex;flex-direction:column;gap:5px">${dismissedItems.map(it=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border-radius:6px;background:#F8F6EE;border:1px solid #EDE7D9;opacity:.75"><div style="font-size:11px;color:#64748b">${it.title}</div><span onclick="undismissRec('${recKey(it).replace(/'/g,"\\'").replace(/"/g,'&quot;')}')" style="cursor:pointer;color:#16A34A;font-size:10.5px;font-weight:700;white-space:nowrap">↺ Bring back</span></div>`).join('')}</div>`:''}
+  const dismissedPanel=dismissedItems.length?`<div style="padding:8px 14px 10px;border-top:1px solid ${T.border}">
+    <div onclick="toggleDismissedRecsPanel()" style="cursor:pointer;font-size:10.5px;color:${T.label};font-weight:700;display:flex;align-items:center;gap:5px">${showDismissedRecs?'▾':'▸'} ${dismissedItems.length} dismissed — click to review</div>
+    ${showDismissedRecs?`<div style="margin-top:6px;display:flex;flex-direction:column;gap:5px">${dismissedItems.map(it=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border-radius:6px;background:${T.rowBg};border:1px solid ${T.border};opacity:.75"><div style="font-size:11px;color:${T.muted}">${it.title}</div><span onclick="undismissRec('${recKey(it).replace(/'/g,"\\'").replace(/"/g,'&quot;')}')" style="cursor:pointer;color:#16A34A;font-size:10.5px;font-weight:700;white-space:nowrap">↺ Bring back</span></div>`).join('')}</div>`:''}
   </div>`:'';
-  const emptyState=items.length===0?`<div style="padding:16px 14px;text-align:center;color:#94a3b8;font-size:11.5px">All caught up — nothing needs attention right now.</div>`:'';
-  return `<details ${nCrit>0?'open':''} style="background:#FFFFFF;border:1px solid #EDE7D9;border-radius:10px;margin-bottom:14px;overflow:hidden;box-shadow:0 4px 6px -1px rgba(15,23,42,.06)">
+  const emptyState=items.length===0?`<div style="padding:16px 14px;text-align:center;color:${T.label};font-size:11.5px">All caught up — nothing needs attention right now.</div>`:'';
+  return `<details ${nCrit>0?'open':''} style="background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;margin-bottom:14px;overflow:hidden;box-shadow:0 4px 6px -1px rgba(15,23,42,.06)">
     <summary style="cursor:pointer;list-style:none;user-select:none;padding:10px 14px;display:flex;align-items:center;gap:10px">
-      <span style="font-size:10px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.9px">Recommendations (${items.length})</span>
+      <span style="font-size:10px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.9px">Recommendations (${items.length})</span>
       ${dots}
-      <span style="margin-left:auto;font-size:10px;color:#94a3b8">▾</span>
+      <span style="margin-left:auto;font-size:10px;color:${T.label}">▾</span>
     </summary>
-    <div style="border-top:1px solid #EDE7D9;padding:10px 14px;display:flex;flex-direction:column;gap:8px">${rows}${more}${emptyState}</div>
+    <div style="border-top:1px solid ${T.border};padding:10px 14px;display:flex;flex-direction:column;gap:8px">${rows}${more}${emptyState}</div>
     ${dismissedPanel}
   </details>`;
 }
@@ -10297,23 +10317,23 @@ function campEndSoonPopups(active){
   }
   toShow.slice(0,3).forEach(({c,idx,threshold,key,hoursLeft})=>{ // cap at 3 stacked toasts
     try{sessionStorage.setItem(key,'shown');}catch(e){}
+    const T=campTheme();
     const isCritical=threshold==='24h';
     const accent=isCritical?'#EF4444':'#F59E0B';
-    const bg=isCritical?'rgba(239,68,68,.05)':'rgba(245,158,11,.05)';
     const toast=document.createElement('div');
-    toast.style.cssText=`background:#FFFFFF;border:1px solid ${accent}55;border-left:4px solid ${accent};border-radius:10px;padding:12px 14px;box-shadow:0 12px 30px rgba(15,23,42,.18);animation:endsoonSlideIn .28s ease-out`;
+    toast.style.cssText=`background:${T.panelBg};border:1px solid ${accent}55;border-left:4px solid ${accent};border-radius:10px;padding:12px 14px;box-shadow:0 12px 30px rgba(15,23,42,.18);animation:endsoonSlideIn .28s ease-out`;
     toast.innerHTML=`<div style="display:flex;align-items:flex-start;gap:10px">
       <span style="font-size:18px;flex-shrink:0">${isCritical?'🚨':'⏰'}</span>
       <div style="flex:1;min-width:0">
         <div style="font-size:10px;font-weight:800;color:${accent};text-transform:uppercase;letter-spacing:.7px;margin-bottom:3px">${isCritical?'Ends within 24h':'Ends within 48h'}</div>
-        <div style="font-size:12px;color:#0F172A;font-weight:700;line-height:1.35;margin-bottom:2px">${c.name||c.brand+" on "+c.aggregator}</div>
-        <div style="font-size:11px;color:#475569">${hoursLeft}h remaining · ${fmtDisp(c.endDate)}</div>
+        <div style="font-size:12px;color:${T.text};font-weight:700;line-height:1.35;margin-bottom:2px">${c.name||c.brand+" on "+c.aggregator}</div>
+        <div style="font-size:11px;color:${T.secondary}">${hoursLeft}h remaining · ${fmtDisp(c.endDate)}</div>
         <div style="display:flex;gap:8px;margin-top:8px">
           <button onclick="selectCamp(${idx});this.closest('#endsoon-toasts>div').remove()" style="background:${accent};border:none;color:#fff;padding:5px 11px;font-size:10px;font-weight:700;border-radius:5px;cursor:pointer">Open campaign</button>
-          <button onclick="this.closest('#endsoon-toasts>div').remove()" style="background:transparent;border:1px solid #E2E8F0;color:#64748b;padding:5px 11px;font-size:10px;border-radius:5px;cursor:pointer">Dismiss</button>
+          <button onclick="this.closest('#endsoon-toasts>div').remove()" style="background:transparent;border:1px solid ${T.border};color:${T.muted};padding:5px 11px;font-size:10px;border-radius:5px;cursor:pointer">Dismiss</button>
         </div>
       </div>
-      <button onclick="this.closest('#endsoon-toasts>div').remove()" style="background:transparent;border:none;color:#94a3b8;font-size:16px;line-height:1;cursor:pointer;padding:0 2px;flex-shrink:0" title="Close">×</button>
+      <button onclick="this.closest('#endsoon-toasts>div').remove()" style="background:transparent;border:none;color:${T.label};font-size:16px;line-height:1;cursor:pointer;padding:0 2px;flex-shrink:0" title="Close">×</button>
     </div>`;
     container.appendChild(toast);
     setTimeout(()=>{if(toast.parentNode)toast.style.opacity='0';setTimeout(()=>toast.remove(),300);},15000);
@@ -10341,27 +10361,35 @@ function buildCampCalcTipHTML(a){
   const comm=commissionRateFor(a.aggregator,a.brand,a.effStart);
   const food=foodPkgPct(a.brand);
   const fA=v=>'AED '+Math.abs(Math.round(v)).toLocaleString();
+  // v192: signed version for rows where the direction itself is the point (Incremental) — fA()
+  // above deliberately strips the sign for rows that are always-subtracted costs (Commission,
+  // Food/pkg), but reusing it for Incremental silently destroyed whether the number was a gain
+  // or a loss, leaving only a subtle color difference to tell them apart.
+  const fSigned=v=>(v<0?'−':'')+fA(v);
   const row=(l,v,extra='')=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:1px 0;font-size:11px"><span style="opacity:.72;white-space:nowrap">${l}</span><span style="text-align:right">${v}${extra?` <span style="opacity:.55;font-size:9px">${extra}</span>`:''}</span></div>`;
   const sep='<div style="border-top:1px solid rgba(255,255,255,.18);margin:5px 0 3px"></div>';
   const ic=a.incrContribTotal>=0?'#4ade80':'#f87171';
   const rc=a.discountROI!=null?(a.discountROI>=0?'#4ade80':'#f87171'):'#94a3b8';
+  const baseDisc=a.bs?.disc||0;
   return`<div style="max-width:300px">`
   +`<div style="font-size:12px;font-weight:600;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.2)">${a.brand} × ${a.aggregator} · ${a.cDays}d contribution</div>`
   +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Campaign  ${fmtShort(a.effStart)} → ${fmtShort(a.effEnd)}</div>`
   +row('Net sales',fA(a.cs.sales))
   +row(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(a.cs.sales*comm))
   +row(`Food/pkg ${+(food*100).toFixed(0)}% × gross`,'−'+fA(a.campGross*food))
+  +(a.ourDiscCost>0?row('Merchant discount','−'+fA(a.ourDiscCost)):'')
   +sep+row('<strong>Contribution</strong>','<strong>'+fA(a.campContribTotal)+'</strong>')
   +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin:8px 0 4px">Baseline  ${fmtShort(a.bStart)} → ${fmtShort(a.bEnd)}</div>`
   +row('Net sales',fA(a.bs.sales))
   +row(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(a.bs.sales*comm))
   +row(`Food/pkg ${+(food*100).toFixed(0)}% × gross`,'−'+fA(a.baseGross*food))
+  +(baseDisc>0?row('Merchant discount','−'+fA(baseDisc)):'')
   +sep+row('<strong>Contribution</strong>','<strong>'+fA(a.baseContribTotal)+'</strong>')
   +`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:8px;padding-top:6px">`
-  +row('Incremental',`<strong style="color:${ic}">${a.incrContribTotal>=0?'+':''}${fA(a.incrContribTotal)}</strong>`,'('+fA(a.incrContribPerDay)+'/day)')
-  +(a.ourDiscCost>0?row('Merchant discount',fA(a.ourDiscCost)):'')
+  +row(a.incrContribTotal>=0?'Incremental (increase)':'Incremental (decrease)',`<strong style="color:${ic}">${fSigned(a.incrContribTotal)}</strong>`,'('+fSigned(a.incrContribPerDay)+'/day)')
+  +(a.ourDiscCost>0?row('Merchant discount (campaign)',fA(a.ourDiscCost)):'')
   +(a.ourDiscCost>0&&a.coFundedPct>0?row(`${Math.round(a.coFundedPct*100)}% co-funded`,fA(a.aggInferredCoFund),'by '+a.aggregator):'')
-  +(a.ourDiscCost>0&&a.discountROI!=null?row('ROI',`<strong style="color:${rc}">${a.discountROI.toFixed(2)}×</strong>`,'('+fA(a.incrContribTotal)+' ÷ '+fA(a.ourDiscCost)+')'):'')
+  +(a.ourDiscCost>0&&a.discountROI!=null?row('ROI',`<strong style="color:${rc}">${a.discountROI.toFixed(2)}×</strong>`,'('+fSigned(a.incrContribTotal)+' ÷ '+fA(a.ourDiscCost)+')'):'')
   +(a.ourDiscCost>0&&a.discountROI==null?row('ROI','<span style="opacity:.55">—  baseline or data issue</span>'):'')
   +'</div></div>';
 }
@@ -10369,6 +10397,7 @@ function buildCampCalcTipHTML(a){
 function buildFcCalcTipHTML(sc,brand,agg,discPct,cap,coFundPct,dateStr){
   const comm=commissionRateFor(agg,brand,dateStr);const food=foodPkgPct(brand);
   const fA=v=>'AED '+Math.abs(Math.round(v)).toLocaleString();
+  const fSigned=v=>(v<0?'−':'')+fA(v);
   const row=(l,v,extra='')=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:1px 0;font-size:11px"><span style="opacity:.72;white-space:nowrap">${l}</span><span style="text-align:right">${v}${extra?` <span style="opacity:.55;font-size:9px">${extra}</span>`:''}</span></div>`;
   const sep='<div style="border-top:1px solid rgba(255,255,255,.18);margin:5px 0 3px"></div>';
   const ic=sc.incrContrib>=0?'#4ade80':'#f87171';
@@ -10384,7 +10413,7 @@ function buildFcCalcTipHTML(sc,brand,agg,discPct,cap,coFundPct,dateStr){
   +row(`Food/pkg ${+(food*100).toFixed(0)}% × gross`,'−'+fA(sc.campGross*food))
   +sep+row('<strong>Camp. contribution</strong>','<strong>'+fA(sc.campContrib)+'</strong>')
   +row('Baseline contribution','−'+fA(Math.abs(sc.baseContrib)))
-  +sep+row('<strong>Incremental contribution</strong>',`<strong style="color:${ic}">${sc.incrContrib>=0?'+':''}${fA(sc.incrContrib)}</strong>`)
+  +sep+row(sc.incrContrib>=0?'<strong>Incremental contribution (increase)</strong>':'<strong>Incremental contribution (decrease)</strong>',`<strong style="color:${ic}">${fSigned(sc.incrContrib)}</strong>`)
   +`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:8px;padding-top:6px">`
   +row('Total merchant discount',fA(sc.merchantDisc))
   +(coFundPct>0?row(`${coFundPct}% co-funded by ${agg}`,fA(sc.aggCoDisc)):'')
@@ -10772,37 +10801,38 @@ function campFcMatchActual(fRec){
 }
 
 function campFcHistoryHTML(){
+  const T=campTheme();
   if(campFcHistory===null){
     if(!campFcHistoryLoading)setTimeout(campFcLoadHistory,0);
-    return `<div style="font-size:12px;color:#94a3b8;padding:14px 0">Loading forecast history…</div>`;
+    return `<div style="font-size:12px;color:${T.label};padding:14px 0">Loading forecast history…</div>`;
   }
   if(campFcHistoryError)return `<div style="font-size:12px;color:#EF4444;padding:10px 0">⚠ ${campFcHistoryError}</div>`;
-  if(!campFcHistory.length)return `<div style="font-size:12px;color:#94a3b8;padding:14px 0">No saved forecasts yet — run one above and click "Save this forecast".</div>`;
+  if(!campFcHistory.length)return `<div style="font-size:12px;color:${T.label};padding:14px 0">No saved forecasts yet — run one above and click "Save this forecast".</div>`;
   const rows=campFcHistory.map(f=>{
     const match=campFcMatchActual(f);
     const exp=f.scenarios?.expected;
     const savedDate=fmtShort(f.savedAt.slice(0,10));
-    let actualHTML=`<span style="color:#94a3b8;font-size:11px">No matching campaign run yet</span>`;
+    let actualHTML=`<span style="color:${T.label};font-size:11px">No matching campaign run yet</span>`;
     if(match){
       const running=match.status==='Running';
       if(match.actualUpliftPct!=null){
         const clr=match.actualUpliftPct>=0?'#22C55E':'#EF4444';
         const roiTxt=match.actualROI!=null?` · ROI ${match.actualROI.toFixed(2)}×`:'';
-        actualHTML=`<span style="color:${clr};font-weight:700">${match.actualUpliftPct>=0?'+':''}${match.actualUpliftPct.toFixed(0)}%</span><span style="color:#94a3b8">${roiTxt}${running?' (in progress)':''}</span>`;
+        actualHTML=`<span style="color:${clr};font-weight:700">${match.actualUpliftPct>=0?'+':''}${match.actualUpliftPct.toFixed(0)}%</span><span style="color:${T.label}">${roiTxt}${running?' (in progress)':''}</span>`;
       }else{
-        actualHTML=`<span style="color:#94a3b8;font-size:11px">Campaign matched (${match.c.name||'—'}) — not enough data yet</span>`;
+        actualHTML=`<span style="color:${T.label};font-size:11px">Campaign matched (${match.c.name||'—'}) — not enough data yet</span>`;
       }
     }
-    return `<div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1.4fr 1fr;gap:8px;padding:9px 0;border-bottom:0.5px solid #F1F5F9;font-size:12px;align-items:center">
-      <div><div style="font-weight:700;color:#0F172A">${bPill(f.brand,18)} ${f.brand} <span style="color:#94a3b8">×</span> ${f.agg}</div><div style="font-size:10px;color:#94a3b8;margin-top:2px">${f.discPct}% off${f.cap?' · cap AED '+f.cap:''} · saved ${savedDate} by ${f.savedByName||f.savedBy||'—'}</div></div>
-      <div style="color:#64748b">${f.start} – ${f.end}</div>
+    return `<div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1.4fr 1fr;gap:8px;padding:9px 0;border-bottom:0.5px solid ${T.rowBg2};font-size:12px;align-items:center">
+      <div><div style="font-weight:700;color:${T.text}">${bPill(f.brand,18)} ${f.brand} <span style="color:${T.label}">×</span> ${f.agg}</div><div style="font-size:10px;color:${T.label};margin-top:2px">${f.discPct}% off${f.cap?' · cap AED '+f.cap:''} · saved ${savedDate} by ${f.savedByName||f.savedBy||'—'}</div></div>
+      <div style="color:${T.muted}">${f.start} – ${f.end}</div>
       <div>${exp?`<strong style="color:#60A5FA">${exp.upliftPct>=0?'+':''}${Math.round(exp.upliftPct)}%</strong>`:'—'}</div>
       <div>${actualHTML}</div>
-      <div style="font-size:9px;color:#94a3b8">${f.algoVersion||'—'}</div>
+      <div style="font-size:9px;color:${T.label}">${f.algoVersion||'—'}</div>
     </div>`;
   }).join('');
   return `<div style="margin-top:6px">
-    <div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1.4fr 1fr;gap:8px;padding:5px 0;border-bottom:0.5px solid #E2E8F0;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Dates</div><div>Forecast</div><div>Actual</div><div>Build</div></div>
+    <div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1.4fr 1fr;gap:8px;padding:5px 0;border-bottom:0.5px solid ${T.border};font-size:10px;font-weight:700;color:${T.label};text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Dates</div><div>Forecast</div><div>Actual</div><div>Build</div></div>
     ${rows}
   </div>`;
 }
@@ -10862,6 +10892,7 @@ function campFcExport(){
 function bPill(brand,sz=20){const clr=BMAP[brand]?.c||'#888';return`<span style="display:inline-flex;align-items:center;justify-content:center;width:${sz}px;height:${sz}px;border-radius:5px;background:${clr}22;border:1px solid ${clr}55;font-size:${Math.round(sz*.55)}px;font-weight:800;color:${clr};flex-shrink:0">${brand.slice(0,1)}</span>`;}
 function aPill(agg,sz=20){const clr=AC[agg]||'#888';return`<span style="display:inline-flex;align-items:center;justify-content:center;width:${sz}px;height:${sz}px;border-radius:5px;background:${clr}22;border:1px solid ${clr}55;font-size:${Math.round(sz*.55)}px;font-weight:800;color:${clr};flex-shrink:0">${agg.slice(0,1)}</span>`;}
 function campFcHTML(){
+  const T=campTheme();
   if(!campLoaded)return''; // don't render until campaigns are loaded
   const fA=v=>'AED '+Math.round(Math.abs(v)).toLocaleString();
   const fP=v=>(v>=0?'+':'')+Math.round(v)+'%';
@@ -10870,7 +10901,7 @@ function campFcHTML(){
   const aOpts=AGGS.map(a=>`<option value="${a}"${a===campFcAgg?' selected':''}>${a}</option>`).join('');
   const branches=campFcBrand&&campFcAgg?campFcGetBranches(campFcBrand,campFcAgg):[];
   const allSelected=campFcBranches.size===0;
-  const branchChips=branches.map(b=>{const sel=allSelected||campFcBranches.has(b);return`<span onclick="campFcToggleBranch('${esc(b)}');renderCampaigns()" style="display:inline-flex;align-items:center;gap:3px;font-size:11px;padding:2px 8px;border-radius:999px;cursor:pointer;margin:2px;border:0.5px solid ${sel?accent:'#E2E8F0'};background:${sel?accent+'18':'transparent'};color:${sel?accent:'#94a3b8'}">${b}</span>`;}).join('');
+  const branchChips=branches.map(b=>{const sel=allSelected||campFcBranches.has(b);return`<span onclick="campFcToggleBranch('${esc(b)}');renderCampaigns()" style="display:inline-flex;align-items:center;gap:3px;font-size:11px;padding:2px 8px;border-radius:999px;cursor:pointer;margin:2px;border:0.5px solid ${sel?accent:T.border};background:${sel?accent+'18':'transparent'};color:${sel?accent:T.label}">${b}</span>`;}).join('');
 
   let resultsHTML='';
   if(campFcResult&&!campFcCollapsed){
@@ -10879,31 +10910,31 @@ function campFcHTML(){
       if(!sc)return'';
       const ic=sc.incrContrib>=0?'#22C55E':'#EF4444';
       const tipId=storeTip(buildFcCalcTipHTML(sc,r.brand,r.agg,campFcDiscPct,campFcCap,r.coFP,campFcStart));
-      const roiC=sc.roi==null?'#64748b':sc.roi>=0.5?'#22C55E':sc.roi>=0?'#FBBF24':'#EF4444';
+      const roiC=sc.roi==null?T.muted:sc.roi>=0.5?'#22C55E':sc.roi>=0?'#FBBF24':'#EF4444';
       const roiTxt=sc.roi!=null?sc.roi.toFixed(2)+'×':'—';
-      const mainBorder=isMain?`border:1.5px solid ${accent}`:`border:0.5px solid #E2E8F0`;
-      return`<div style="background:#FFFFFF;border-radius:10px;${mainBorder};padding:20px 22px;flex:1;min-width:0">`
+      const mainBorder=isMain?`border:1.5px solid ${accent}`:`border:0.5px solid ${T.border}`;
+      return`<div style="background:${T.panelBg};border-radius:10px;${mainBorder};padding:20px 22px;flex:1;min-width:0">`
       +(isMain?`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><span style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${accent}">${label}</span><span style="font-size:9px;background:${accent}22;color:${accent};padding:2px 7px;border-radius:999px;font-weight:600">Most likely</span></div>`
-      :`<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#64748b;margin-bottom:14px">${label}</div>`)
-      +`<div style="font-size:13px;color:#64748b;margin-bottom:6px">Uplift vs baseline</div><div style="font-size:30px;font-weight:800;color:${isMain?accent:'#0F172A'};margin-bottom:14px;line-height:1">${fP(sc.upliftPct)}</div>`
-      +`<div style="display:flex;gap:12px;margin-bottom:18px"><div style="flex:1"><div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Incr. orders</div><div style="font-size:20px;font-weight:700;color:#0F172A">${sc.incrOrders.toLocaleString()}</div><div style="font-size:14px;color:#94a3b8">+${Math.round(sc.incrOrdersPerDay)}/day</div></div>`
-      +`<div style="flex:1"><div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Merchant disc.</div><div style="font-size:20px;font-weight:700;color:#F59E0B">${fA(sc.merchantDisc)}</div><div style="font-size:14px;color:#94a3b8">${fA(sc.merchantDiscPerDay)}/day</div></div></div>`
-      +`<div style="border-top:0.5px solid #E2E8F0;padding-top:16px;cursor:help" data-ctip="${tipId}">`
-      +`<div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Incr. contribution <span style="font-size:9px;opacity:.5">ⓘ hover</span></div>`
+      :`<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${T.muted};margin-bottom:14px">${label}</div>`)
+      +`<div style="font-size:13px;color:${T.muted};margin-bottom:6px">Uplift vs baseline</div><div style="font-size:30px;font-weight:800;color:${isMain?accent:T.text};margin-bottom:14px;line-height:1">${fP(sc.upliftPct)}</div>`
+      +`<div style="display:flex;gap:12px;margin-bottom:18px"><div style="flex:1"><div style="font-size:11px;color:${T.muted};font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Incr. orders</div><div style="font-size:20px;font-weight:700;color:${T.text}">${sc.incrOrders.toLocaleString()}</div><div style="font-size:14px;color:${T.label}">+${Math.round(sc.incrOrdersPerDay)}/day</div></div>`
+      +`<div style="flex:1"><div style="font-size:11px;color:${T.muted};font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Merchant disc.</div><div style="font-size:20px;font-weight:700;color:#F59E0B">${fA(sc.merchantDisc)}</div><div style="font-size:14px;color:${T.label}">${fA(sc.merchantDiscPerDay)}/day</div></div></div>`
+      +`<div style="border-top:0.5px solid ${T.border};padding-top:16px;cursor:help" data-ctip="${tipId}">`
+      +`<div style="font-size:11px;color:${T.muted};font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Incr. contribution <span style="font-size:9px;opacity:.5">ⓘ hover</span></div>`
       +`<div style="font-size:26px;font-weight:800;color:${ic};line-height:1">${sc.incrContrib>=0?'+':''}${fA(sc.incrContrib)}</div>`
-      +`<div style="font-size:15px;color:#94a3b8;margin-top:3px">${fA(sc.incrContribPerDay)}/day</div>`
-      +`<div style="margin-top:16px;font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">ROI on discount</div>`
+      +`<div style="font-size:15px;color:${T.label};margin-top:3px">${fA(sc.incrContribPerDay)}/day</div>`
+      +`<div style="margin-top:16px;font-size:11px;color:${T.muted};font-weight:600;text-transform:uppercase;letter-spacing:.5px">ROI on discount</div>`
       +`<div style="font-size:22px;font-weight:800;color:${roiC};line-height:1">${roiTxt}</div>`
       +'</div></div>';
     };
 
     // Comparison table data
     const cmpRow=(label,ord,net,vs1Pct,vs1Label,vs2Pct,vs2Label,note='')=>{
-      const chip=(pct,lbl)=>pct!=null?`<span style="font-size:10px;background:${pct>=0?'rgba(34,197,94,.1)':'rgba(239,68,68,.1)'};color:${pct>=0?'#16a34a':'#dc2626'};padding:2px 8px;border-radius:999px;font-weight:600">${fP(pct)}</span><span style="font-size:11px;color:#94a3b8;margin-left:4px">${lbl}</span>`:'<span style="color:#94a3b8;font-size:10px">—</span>';
-      return`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:9px 0;border-bottom:0.5px solid #F1F5F9;font-size:13px;align-items:center">`
-      +`<div style="color:#475569;font-weight:600">${label}${note?`<div style="font-size:9px;color:#94a3b8;font-weight:400">${note}</div>`:''}</div>`
-      +`<div style="color:#0F172A">${ord!=null?Math.round(ord).toLocaleString():'—'}</div>`
-      +`<div style="color:#0F172A">${net!=null?fA(net):'—'}</div>`
+      const chip=(pct,lbl)=>pct!=null?`<span style="font-size:10px;background:${pct>=0?'rgba(34,197,94,.1)':'rgba(239,68,68,.1)'};color:${pct>=0?'#16a34a':'#dc2626'};padding:2px 8px;border-radius:999px;font-weight:600">${fP(pct)}</span><span style="font-size:11px;color:${T.label};margin-left:4px">${lbl}</span>`:`<span style="color:${T.label};font-size:10px">—</span>`;
+      return`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:9px 0;border-bottom:0.5px solid ${T.rowBg2};font-size:13px;align-items:center">`
+      +`<div style="color:${T.secondary};font-weight:600">${label}${note?`<div style="font-size:9px;color:${T.label};font-weight:400">${note}</div>`:''}</div>`
+      +`<div style="color:${T.text}">${ord!=null?Math.round(ord).toLocaleString():'—'}</div>`
+      +`<div style="color:${T.text}">${net!=null?fA(net):'—'}</div>`
       +`<div>${chip(vs1Pct,vs1Label)}</div>`
       +`<div>${chip(vs2Pct,vs2Label)}</div>`
       +'</div>';
@@ -10955,48 +10986,48 @@ function campFcHTML(){
     // prominently regardless of what the weighted scenarios say. Can't get buried by rosier math.
     const cm=r.closestMatch;
     const realityCheckHTML=cm?(()=>{
-      const roiClr=cm.discountROI==null?'#64748b':cm.discountROI>=0?'#16a34a':'#dc2626';
+      const roiClr=cm.discountROI==null?T.muted:cm.discountROI>=0?'#16a34a':'#dc2626';
       const roiTxt=cm.discountROI!=null?cm.discountROI.toFixed(2)+'×':'n/a';
       const upliftClr=(cm.upliftPct||0)>=0?'#16a34a':'#dc2626';
       const warn=cm.discountROI!=null&&cm.discountROI<0;
       return `<div style="display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border-radius:8px;margin-bottom:12px;background:${warn?'rgba(239,68,68,.08)':'rgba(59,130,246,.08)'};border:1px solid ${warn?'rgba(239,68,68,.35)':'rgba(59,130,246,.3)'}">`
         +`<span style="font-size:16px;flex-shrink:0">${warn?'⚠️':'ℹ️'}</span>`
-        +`<div style="font-size:12.5px;line-height:1.6;color:#1e293b"><strong>Reality check:</strong> the closest recent match — ${cm.c.name||cm.c.comments||'this campaign'} (${cm.c.startDate} – ${cm.c.endDate}, ${cm.discPct}% off${cm.cap?' · cap AED '+cm.cap:''}) — actually delivered <strong style="color:${upliftClr}">${fP(cm.upliftPct)}</strong> uplift with <strong style="color:${roiClr}">${roiTxt} ROI</strong>${warn?' — it lost money on a contribution basis. This match is already the largest single input to the scenarios below.':'.'}</div>`
+        +`<div style="font-size:12.5px;line-height:1.6;color:${T.text}"><strong>Reality check:</strong> the closest recent match — ${cm.c.name||cm.c.comments||'this campaign'} (${cm.c.startDate} – ${cm.c.endDate}, ${cm.discPct}% off${cm.cap?' · cap AED '+cm.cap:''}) — actually delivered <strong style="color:${upliftClr}">${fP(cm.upliftPct)}</strong> uplift with <strong style="color:${roiClr}">${roiTxt} ROI</strong>${warn?' — it lost money on a contribution basis. This match is already the largest single input to the scenarios below.':'.'}</div>`
         +`</div>`;
     })():'';
-    const flagsHTML=flags.map(f=>`<div style="display:flex;align-items:flex-start;gap:8px;font-size:12px;padding:8px 10px;border-radius:6px;margin-bottom:6px;background:${f.lvl==='warn'?'rgba(245,158,11,.08)':'#F8FAFC'};border:0.5px solid ${f.lvl==='warn'?'rgba(245,158,11,.4)':'#E2E8F0'}">`
-      +`<span style="font-size:14px;flex-shrink:0;margin-top:1px">${f.lvl==='warn'?'⚠️':'ℹ️'}</span><span style="color:${f.lvl==='warn'?'#92400e':'#475569'}">${f.msg}</span></div>`).join('');
+    const flagsHTML=flags.map(f=>`<div style="display:flex;align-items:flex-start;gap:8px;font-size:12px;padding:8px 10px;border-radius:6px;margin-bottom:6px;background:${f.lvl==='warn'?'rgba(245,158,11,.08)':T.rowBg};border:0.5px solid ${f.lvl==='warn'?'rgba(245,158,11,.4)':T.border}">`
+      +`<span style="font-size:14px;flex-shrink:0;margin-top:1px">${f.lvl==='warn'?'⚠️':'ℹ️'}</span><span style="color:${f.lvl==='warn'?'#92400e':T.secondary}">${f.msg}</span></div>`).join('');
 
     // v110: Match table — "excluded" is now ONLY for genuine statistical outliers (±150% swings,
     // almost always a data issue). Short campaigns are no longer penalized (that was the bug).
     // Named one-off events get their own distinct "atypical" flag instead of being dimmed the
     // same as an outlier — they're still real data, just down-weighted in the calculation.
     const matchRows=r.matches.slice(0,8).map(m=>{
-      const ic=m.discountROI!=null?(m.discountROI>=0?'#22C55E':'#EF4444'):'#64748b';
+      const ic=m.discountROI!=null?(m.discountROI>=0?'#22C55E':'#EF4444'):T.muted;
       const isOutlier=Math.abs(m.upliftPct||0)>=150;
       const dimmed=isOutlier;
       const flagHTML=isOutlier
         ?'<span style="font-size:8px;color:#EF4444;background:rgba(239,68,68,.1);padding:1px 5px;border-radius:4px;margin-left:4px">⚠ statistical outlier · excluded</span>'
         :(m.isAtypical?'<span style="font-size:8px;color:#F59E0B;background:rgba(245,158,11,.1);padding:1px 5px;border-radius:4px;margin-left:4px">🎪 atypical event · down-weighted</span>':'');
-      return`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr;gap:4px;padding:8px 0;border-bottom:0.5px solid #F1F5F9;font-size:13px;align-items:center${dimmed?';opacity:.45':''}">`
-      +`<div style="color:#475569">${m.c.name||m.c.comments||'—'}${flagHTML}<div style="font-size:11px;color:#94a3b8">${m.c.startDate} – ${m.c.endDate}</div></div>`
-      +`<div style="color:#94a3b8">${m.cDays}d</div>`
+      return`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr;gap:4px;padding:8px 0;border-bottom:0.5px solid ${T.rowBg2};font-size:13px;align-items:center${dimmed?';opacity:.45':''}">`
+      +`<div style="color:${T.secondary}">${m.c.name||m.c.comments||'—'}${flagHTML}<div style="font-size:11px;color:${T.label}">${m.c.startDate} – ${m.c.endDate}</div></div>`
+      +`<div style="color:${T.label}">${m.cDays}d</div>`
       +`<div style="color:${(m.upliftPct||0)>=0?'#16a34a':'#dc2626'};font-weight:600">${m.upliftPct!=null?fP(m.upliftPct):'—'}</div>`
-      +`<div style="color:#0F172A">${m.campOrdersPerDay!=null?Math.round(m.campOrdersPerDay).toLocaleString():'—'}</div>`
-      +`<div style="color:#0F172A">${m.campSalesPerDay!=null?fA(m.campSalesPerDay):'—'}</div>`
+      +`<div style="color:${T.text}">${m.campOrdersPerDay!=null?Math.round(m.campOrdersPerDay).toLocaleString():'—'}</div>`
+      +`<div style="color:${T.text}">${m.campSalesPerDay!=null?fA(m.campSalesPerDay):'—'}</div>`
       +`<div style="color:#F59E0B">${m.ourDiscPerDay!=null&&m.ourDiscPerDay>0?fA(m.ourDiscPerDay):'—'}</div>`
       +`<div><span style="font-size:10px;font-weight:600;color:${ic}">${m.discountROI!=null?m.discountROI.toFixed(2)+'×':'—'}</span></div>`
       +'</div>';}).join('');
 
-    resultsHTML=`<div style="border-top:0.5px solid #E2E8F0;margin-top:14px;padding-top:14px">`
+    resultsHTML=`<div style="border-top:0.5px solid ${T.border};margin-top:14px;padding-top:14px">`
     // Match header
-    +(r.matches.length?`<div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">`
+    +(r.matches.length?`<div style="font-size:11px;font-weight:700;color:${T.secondary};margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">`
     +bPill(r.brand,22)+aPill(r.agg,22)
     +`<span style="background:rgba(34,197,94,.1);color:#16a34a;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">${r.matches.length} historical match${r.matches.length!==1?'es':''}</span>`
-    +`<span style="font-size:10px;color:#94a3b8">· ${campFcDiscPct}% off ±8% · cap AED ${campFcCap} ±6 · <em style="opacity:.7">dimmed = statistical outlier · excluded</em></span></div>`
-    +`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr;gap:4px;padding:5px 0;border-bottom:0.5px solid #E2E8F0;font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Days</div><div>Uplift</div><div>Orders/day</div><div>Sales/day</div><div>Disc/day</div><div>ROI</div></div>`
+    +`<span style="font-size:10px;color:${T.label}">· ${campFcDiscPct}% off ±8% · cap AED ${campFcCap} ±6 · <em style="opacity:.7">dimmed = statistical outlier · excluded</em></span></div>`
+    +`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr;gap:4px;padding:5px 0;border-bottom:0.5px solid ${T.border};font-size:11px;font-weight:600;color:${T.label};text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Days</div><div>Uplift</div><div>Orders/day</div><div>Sales/day</div><div>Disc/day</div><div>ROI</div></div>`
     +matchRows
-    +`<div style="font-size:12px;color:#94a3b8;margin-top:8px">Avg uplift: <strong style="color:#0F172A">${fP(r.matches.reduce((s,m)=>s+(m.upliftPct||0),0)/r.matches.length)}</strong>  ·  Seasonality: <strong style="color:${r.seasonality.pct>=0?'#0F172A':'#dc2626'}">${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong></div>`
+    +`<div style="font-size:12px;color:${T.label};margin-top:8px">Avg uplift: <strong style="color:${T.text}">${fP(r.matches.reduce((s,m)=>s+(m.upliftPct||0),0)/r.matches.length)}</strong>  ·  Seasonality: <strong style="color:${r.seasonality.pct>=0?T.text:'#dc2626'}">${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong></div>`
     :`<div style="font-size:11px;color:#F59E0B;padding:8px;background:rgba(245,158,11,.08);border-radius:6px;margin-bottom:10px">No exact matches — using fallback estimates. Consider selecting a comparable past campaign.</div>`)
     +realityCheckHTML
     // Three scenarios
@@ -11007,10 +11038,10 @@ function campFcHTML(){
     +'</div>'
     // Comparison table
     +`<div style="margin-bottom:12px">`
-    +`<div style="font-size:13px;font-weight:700;color:#475569;margin-bottom:10px">Orders comparison · ${campFcStart} – ${campFcEnd} baseline vs comparable periods</div>`
-    +`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:5px 0;border-bottom:0.5px solid #E2E8F0;font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px"><div>Period</div><div>Avg orders/day</div><div>Avg net/day</div><div>vs prior week</div><div>vs last year</div></div>`
+    +`<div style="font-size:13px;font-weight:700;color:${T.secondary};margin-bottom:10px">Orders comparison · ${campFcStart} – ${campFcEnd} baseline vs comparable periods</div>`
+    +`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:5px 0;border-bottom:0.5px solid ${T.border};font-size:11px;font-weight:600;color:${T.label};text-transform:uppercase;letter-spacing:.5px"><div>Period</div><div>Avg orders/day</div><div>Avg net/day</div><div>vs prior week</div><div>vs last year</div></div>`
     +cmpRow('Current baseline (last 30d)',baseOrd,baseNet,pwPct,'vs prior wk',lyPct,'vs Jul 2025')
-    +(r.expected?(()=>{const xOrd=r.expected.totalOrders/r.nDays,xNet=r.expected.campNet/r.nDays,xPct=pctOf2(xOrd,baseOrd);return`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:8px 0 8px 10px;border-bottom:0.5px solid #BFD8F7;font-size:11px;align-items:center;background:rgba(96,165,250,.07);border-left:3px solid #60A5FA;margin-left:-2px"><div style="color:#0C447C;font-weight:700">Expected forecast · campaign on<div style="font-size:11px;color:#185FA5;font-weight:400">Projected · ${campFcStart} – ${campFcEnd}</div></div><div style="font-size:13px;font-weight:700;color:#0C447C">${Math.round(xOrd).toLocaleString()}</div><div style="font-size:13px;font-weight:700;color:#0C447C">${fA(xNet)}</div><div>${xPct!=null?`<span style="font-size:10px;background:${xPct>=0?'rgba(34,197,94,.1)':'rgba(239,68,68,.1)'};color:${xPct>=0?'#16a34a':'#dc2626'};padding:1px 6px;border-radius:999px;font-weight:600">${fP(xPct)}</span> <span style="font-size:9px;color:#94a3b8">vs baseline</span>`:'—'}</div><div><span style="color:#94a3b8;font-size:10px">—</span></div></div>`;})():'')
+    +(r.expected?(()=>{const xOrd=r.expected.totalOrders/r.nDays,xNet=r.expected.campNet/r.nDays,xPct=pctOf2(xOrd,baseOrd);return`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:8px 0 8px 10px;border-bottom:0.5px solid #BFD8F7;font-size:11px;align-items:center;background:rgba(96,165,250,.07);border-left:3px solid #60A5FA;margin-left:-2px"><div style="color:#0C447C;font-weight:700">Expected forecast · campaign on<div style="font-size:11px;color:#185FA5;font-weight:400">Projected · ${campFcStart} – ${campFcEnd}</div></div><div style="font-size:13px;font-weight:700;color:#0C447C">${Math.round(xOrd).toLocaleString()}</div><div style="font-size:13px;font-weight:700;color:#0C447C">${fA(xNet)}</div><div>${xPct!=null?`<span style="font-size:10px;background:${xPct>=0?'rgba(34,197,94,.1)':'rgba(239,68,68,.1)'};color:${xPct>=0?'#16a34a':'#dc2626'};padding:1px 6px;border-radius:999px;font-weight:600">${fP(xPct)}</span> <span style="font-size:9px;color:${T.label}">vs baseline</span>`:'—'}</div><div><span style="color:${T.label};font-size:10px">—</span></div></div>`;})():'')
     +(r.pwOrders!=null?cmpRow('Prior week ('+subDays(campFcStart,7)+' – '+subDays(campFcStart,1)+')',r.pwOrders,r.pwNet,null,'',null,''):'')
     +(recA!=null?cmpRow('Last campaign: '+(r.recCamp.name||r.recCamp.comments||'—').slice(0,30),recOrd,recNet,recPct,'vs baseline',null,'',r.recCamp.startDate+' – '+r.recCamp.endDate):'')
     +(r.lyOrders!=null?cmpRow('Same dates, last year',r.lyOrders,r.lyNet,null,'',null,'',r.lyHasDisc?'':'Sales only · no discount data'):'')
@@ -11028,19 +11059,19 @@ function campFcHTML(){
 
   // Form
   const today=dk(new Date());
-  const sel=(k,opts,cur)=>`<select onchange="campFcSet('${k}',this.value)" style="width:100%;background:#F1F5F9;border:0.5px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:6px 8px;font-size:12px;font-weight:600"><option value="">—</option>${opts}</select>`;
-  const inp=(k,type,cur,min,max)=>`<input type="${type}" value="${cur}" min="${min}" max="${max}" onchange="campFcSet('${k}',this.value)" style="width:100%;background:#F1F5F9;border:0.5px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:6px 8px;font-size:12px;font-weight:600;box-sizing:border-box">`;
-  const fld=(lbl,html)=>`<div><div style="font-size:10px;font-weight:600;color:#64748b;margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px">${lbl}</div>${html}</div>`;
+  const sel=(k,opts,cur)=>`<select onchange="campFcSet('${k}',this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600"><option value="">—</option>${opts}</select>`;
+  const inp=(k,type,cur,min,max)=>`<input type="${type}" value="${cur}" min="${min}" max="${max}" onchange="campFcSet('${k}',this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600;box-sizing:border-box">`;
+  const fld=(lbl,html)=>`<div><div style="font-size:10px;font-weight:600;color:${T.muted};margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px">${lbl}</div>${html}</div>`;
 
-  const historyPanel=`<div style="background:#FFFFFF;border:0.5px solid #E2E8F0;border-radius:12px;padding:14px 16px;margin-top:14px">
-    <div style="font-size:13px;font-weight:700;color:#0F172A;margin-bottom:4px">📜 Forecast History</div>
-    <div style="font-size:10px;color:#94a3b8;margin-bottom:8px">Every saved forecast, compared against the real campaign once one matching those parameters actually runs.</div>
+  const historyPanel=`<div style="background:${T.panelBg};border:0.5px solid ${T.border};border-radius:12px;padding:14px 16px;margin-top:14px">
+    <div style="font-size:13px;font-weight:700;color:${T.text};margin-bottom:4px">📜 Forecast History</div>
+    <div style="font-size:10px;color:${T.label};margin-bottom:8px">Every saved forecast, compared against the real campaign once one matching those parameters actually runs.</div>
     ${campFcHistoryHTML()}
   </div>`;
-  return`<div style="background:#FFFFFF;border:0.5px solid #E2E8F0;border-radius:12px;padding:14px 16px;margin-bottom:14px;border-left:3px solid ${accent};border-top-left-radius:0;border-bottom-left-radius:0">`
+  return`<div style="background:${T.panelBg};border:0.5px solid ${T.border};border-radius:12px;padding:14px 16px;margin-bottom:14px;border-left:3px solid ${accent};border-top-left-radius:0;border-bottom-left-radius:0">`
   +`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${campFcCollapsed?'0':'12px'}">`
-  +`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">📊</span><div style="font-size:15px;font-weight:800;color:#0F172A">Campaign Forecaster</div><div style="font-size:10px;color:#64748b;margin-left:4px">Estimate what a planned campaign will yield before you launch</div></div>`
-  +`<button onclick="campFcSet('collapsed','${(!campFcCollapsed).toString()}')" style="background:none;border:0.5px solid #E2E8F0;border-radius:6px;color:#94a3b8;padding:3px 10px;font-size:11px;cursor:pointer">${campFcCollapsed?'▼ Expand':'▲ Collapse'}</button></div>`
+  +`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">📊</span><div style="font-size:15px;font-weight:800;color:${T.text}">Campaign Forecaster</div><div style="font-size:10px;color:${T.muted};margin-left:4px">Estimate what a planned campaign will yield before you launch</div></div>`
+  +`<button onclick="campFcSet('collapsed','${(!campFcCollapsed).toString()}')" style="background:none;border:0.5px solid ${T.border};border-radius:6px;color:${T.label};padding:3px 10px;font-size:11px;cursor:pointer">${campFcCollapsed?'▼ Expand':'▲ Collapse'}</button></div>`
   +(campFcCollapsed?'':
     `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:10px">`
     +fld('Brand',sel('brand',bOpts,campFcBrand))
@@ -11049,11 +11080,11 @@ function campFcHTML(){
     +fld('End',inp('end','date',campFcEnd,'2025-01-01','2030-12-31'))
     +fld('Discount %',inp('discPct','number',campFcDiscPct,1,90))
     +fld('Cap AED',inp('cap','number',campFcCap,1,999))
-    +fld('Co-funded?',`<select onchange="campFcSet('coFund',this.value)" style="width:100%;background:#F1F5F9;border:0.5px solid #E2E8F0;border-radius:6px;color:#0F172A;padding:6px 8px;font-size:12px;font-weight:600"><option value="true"${campFcCoFund?' selected':''}>Yes</option><option value="false"${!campFcCoFund?' selected':''}>No</option></select>`)
+    +fld('Co-funded?',`<select onchange="campFcSet('coFund',this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600"><option value="true"${campFcCoFund?' selected':''}>Yes</option><option value="false"${!campFcCoFund?' selected':''}>No</option></select>`)
     +(campFcCoFund?fld('Platform %',inp('coFundPct','number',campFcCoFundPct,1,99)):'')
     +'</div>'
-    +(campFcBrand&&campFcAgg?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:#F8FAFC;border-radius:6px;border:0.5px solid #E2E8F0">`+bPill(campFcBrand,24)+`<span style="font-size:13px;font-weight:700;color:#0F172A">${campFcBrand}</span>`+`<span style="color:#94a3b8;font-size:13px">×</span>`+aPill(campFcAgg,24)+`<span style="font-size:13px;font-weight:700;color:#0F172A">${campFcAgg}</span>`+`<span style="font-size:11px;color:#64748b;margin-left:4px">${campFcDiscPct}% off · cap AED ${campFcCap}${campFcCoFund?' · '+campFcCoFundPct+'% co-funded':''}</span></div>`:'')
-    +(branches.length?`<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">Branches <span style="font-weight:400;text-transform:none">(all selected by default · tap to deselect)</span></div>${branchChips}</div>`:'')
+    +(campFcBrand&&campFcAgg?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:${T.rowBg};border-radius:6px;border:0.5px solid ${T.border}">`+bPill(campFcBrand,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcBrand}</span>`+`<span style="color:${T.label};font-size:13px">×</span>`+aPill(campFcAgg,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcAgg}</span>`+`<span style="font-size:11px;color:${T.muted};margin-left:4px">${campFcDiscPct}% off · cap AED ${campFcCap}${campFcCoFund?' · '+campFcCoFundPct+'% co-funded':''}</span></div>`:'')
+    +(branches.length?`<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:600;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">Branches <span style="font-weight:400;text-transform:none">(all selected by default · tap to deselect)</span></div>${branchChips}</div>`:'')
     +`<button onclick="campFcRun()" style="background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.4);border-radius:6px;color:${accent};padding:6px 18px;font-size:12px;cursor:pointer;font-weight:700">▶ Run Forecast</button>`
     +resultsHTML
   )
@@ -11071,6 +11102,9 @@ async function renderCampaigns(){
     #page-campaigns table.tbl th{color:${DARK_THEME.textMuted}!important;border-color:${DARK_THEME.cardBorder}!important}
     #page-campaigns table.tbl td{color:${DARK_THEME.textPrimary}!important;border-color:${DARK_THEME.cardBorder}!important}
     #page-campaigns table.tbl tr:hover td{background:${DARK_THEME.cardBorder}44!important}
+    #page-campaigns .fpill{background:${DARK_THEME.bg}!important;border-color:${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+    #page-campaigns .fpill.on{border-color:#f59e0b!important;color:#f59e0b!important}
+    #page-campaigns .fchip{background:${DARK_THEME.card}!important}
   </style>`:"";
   if(!campLoaded){
     pg.innerHTML=`${styleOverride}<div style="padding:30px;text-align:center;color:${T.muted};font-size:13px">⏳ Loading campaigns from Google Sheets...</div>`;
