@@ -13,9 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-187";
+const BUILD_VERSION="2026-08-06-188";
 const BUILD_NOTES=[
-  "🆕 Comparison page reorganized into sub-tabs (Summary/Trend/Platforms/Outlets) — picked after showing three layout options as mockups. The Group A/B/C panels and insight banner stay visible always; everything else only renders for the tab you're on, so the page is never one long scroll again.",
+  "🐛 Fixed the Trend chart showing ghost/overlapping text after switching sub-tabs and coming back — the chart wasn't being cleaned up when you left the Trend tab, so its tooltip and listeners stayed attached to a canvas that had already been removed from the page.",
+  "🐛 Fixed the \"What's new\" popup's \"Got it\" button being unresponsive right when it appears — it was firing at the exact same moment as another background data load, both competing for the browser's attention. Spaced them out.",
+  "🎨 Enlarged the initial loading screen — bigger brand logos, bigger text, bigger progress ring, using the space that was empty before.",
+  "🔧 Sidebar: when collapsed, the page content should now actually expand to use the freed-up space instead of leaving it empty on the right.",
   "🎨 Added icons to Overview, Brands, Outlets, Platforms, and Ads Performance tabs.",
   "🆕 Sidebar header now shows a live sync status (green dot + last-synced time) instead of the wordmark.",
   "🔧 Cancellations: raised the server upload size limit and added visible warnings when a save doesn't fully fit — re-upload once more to pick up both fixes."
@@ -3230,17 +3233,17 @@ function injectLoadingScreen(){
   const C=2*Math.PI*42;
   const logoRow=(typeof BR!=="undefined"?BR:[]).map(b=>{
     const src=(typeof LOGOS!=="undefined"&&LOGOS[b.n])||"";
-    return `<div style="display:flex;flex-direction:column;align-items:center;gap:6px">
-      ${src?`<img src="${src}" alt="${b.n}" style="width:54px;height:54px;border-radius:14px;object-fit:cover;background:#FFFFFF;border:1px solid #E2E8F0"/>`:`<div style="width:54px;height:54px;border-radius:14px;background:#FFFFFF;border:1px solid #E2E8F0;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:800;color:#f59e0b">${b.n[0]}</div>`}
-      <div style="font-size:10px;color:#94a3b8;font-weight:600;letter-spacing:.3px">${b.n}</div>
+    return `<div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+      ${src?`<img src="${src}" alt="${b.n}" style="width:76px;height:76px;border-radius:18px;object-fit:cover;background:#FFFFFF;border:1px solid #E2E8F0"/>`:`<div style="width:76px;height:76px;border-radius:18px;background:#FFFFFF;border:1px solid #E2E8F0;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800;color:#f59e0b">${b.n[0]}</div>`}
+      <div style="font-size:13px;color:#64748B;font-weight:700;letter-spacing:.3px">${b.n}</div>
     </div>`;
   }).join("");
   ls.innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;width:100%;padding:40px 20px;text-align:center;background:linear-gradient(135deg,#F8FAFC 0%,#E2E8F0 100%);color:#0F172A;box-sizing:border-box">
-    <div style="font-size:11px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:3px;margin-bottom:6px">Oregano Restaurants UAE</div>
-    <h1 id="ls-greeting" style="font-size:30px;font-weight:800;color:#f59e0b;margin:0 0 6px;letter-spacing:-.5px">${greetLine}</h1>
-    <div style="font-size:12px;color:#94a3b8;margin-bottom:24px">Preparing your performance view across all brands…</div>
-    <div style="display:flex;gap:18px;margin-bottom:34px;flex-wrap:wrap;justify-content:center;max-width:560px">${logoRow}</div>
-    <div style="position:relative;width:180px;height:180px;margin-bottom:18px">
+    <div style="font-size:13px;color:#64748B;text-transform:uppercase;font-weight:700;letter-spacing:3px;margin-bottom:8px">Oregano Restaurants UAE</div>
+    <h1 id="ls-greeting" style="font-size:38px;font-weight:800;color:#f59e0b;margin:0 0 8px;letter-spacing:-.5px">${greetLine}</h1>
+    <div style="font-size:14px;color:#94a3b8;margin-bottom:30px">Preparing your performance view across all brands…</div>
+    <div style="display:flex;gap:24px;margin-bottom:38px;flex-wrap:wrap;justify-content:center;max-width:680px">${logoRow}</div>
+    <div style="position:relative;width:220px;height:220px;margin-bottom:20px">
       <svg viewBox="0 0 100 100" style="width:100%;height:100%;transform:rotate(-90deg)">
         <defs>
           <linearGradient id="pie-grad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -3253,11 +3256,11 @@ function injectLoadingScreen(){
         <circle id="pie-progress-arc" cx="50" cy="50" r="42" stroke="url(#pie-grad)" stroke-width="7" fill="none" stroke-linecap="round" stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${C.toFixed(2)}" style="transition:stroke-dashoffset .45s cubic-bezier(.4,0,.2,1)"/>
       </svg>
       <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
-        <div id="pie-progress-pct" style="font-size:34px;font-weight:800;color:#0F172A;font-variant-numeric:tabular-nums;line-height:1">0%</div>
-        <div style="font-size:9px;color:#94A3B8;text-transform:uppercase;letter-spacing:2.5px;margin-top:4px">Loading</div>
+        <div id="pie-progress-pct" style="font-size:42px;font-weight:800;color:#0F172A;font-variant-numeric:tabular-nums;line-height:1">0%</div>
+        <div style="font-size:11px;color:#94A3B8;text-transform:uppercase;letter-spacing:2.5px;margin-top:5px">Loading</div>
       </div>
     </div>
-    <div id="ptxt" style="font-size:13px;color:#94a3b8;font-weight:600;min-height:18px">Connecting…</div>
+    <div id="ptxt" style="font-size:15px;color:#94a3b8;font-weight:600;min-height:18px">Connecting…</div>
     <div id="perr" style="margin-top:18px;max-width:520px;font-size:12px"></div>
     <div id="pbar" style="display:none"></div>
   </div>`;
@@ -3390,9 +3393,13 @@ async function doLoad(){
   // updated, caches were already invalidated inside — re-render whichever page is open.
   pullOrderDataFromServer().then(changed=>{if(typeof updateSidebarSyncStatus==="function")updateSidebarSyncStatus();if(changed&&typeof curPage!=='undefined'){if(curPage==='campaigns')renderCampaigns();else if(curPage==='discounts')renderDiscounts();else if(curPage==='cancellations')renderCancellations();}});
   // After the dashboard finishes loading, show the "What's new" popup if BUILD_VERSION
-  // changed since the user's last visit. Small delay so it doesn't compete with the
-  // initial dashboard render.
-  setTimeout(()=>{if(typeof showWhatsNewIfNeeded==="function")showWhatsNewIfNeeded();},1500);
+  // changed since the user's last visit. v188: pushed from 1500ms to 2800ms — it was firing
+  // at the EXACT same moment as loadKPIData() below, on top of prewarmCPC/prewarmCampaigns
+  // already mid-flight from 700-800ms. All four competing for the main thread is why the
+  // "Got it" button looked clickable but didn't respond immediately — the click was real, it
+  // was just queued behind other JS work. Giving the heavier background tasks a head start
+  // first means the modal shows once the thread is actually free to handle the click.
+  setTimeout(()=>{if(typeof showWhatsNewIfNeeded==="function")showWhatsNewIfNeeded();},2800);
   if(errs.length){const e=document.getElementById("etoa");if(e){e.textContent="⚠️ Partial: "+errs.join(", ");e.style.display="block";setTimeout(()=>e.style.display="none",6000);}}
   gp("overview");
   // Pre-warm KPI data in the background so the tab opens fast
@@ -3527,6 +3534,7 @@ function buildSidebarNav(){
 #app-sidebar[data-collapsed="1"] .sidebar-brand-txt{display:none}
 #app-sidebar[data-collapsed="1"] #sidebar-toggle{margin-left:0}
 body{margin-left:${collapsed?W_COLLAPSED:W_OPEN}px!important;transition:margin-left .18s ease;box-sizing:border-box}
+#main-app{max-width:none!important;width:100%!important;box-sizing:border-box}
 @media (max-width:640px){
   #app-sidebar .tab{padding:12px 10px!important;font-size:14px!important}
   #app-sidebar[data-collapsed="1"] .tab{padding:12px 4px!important}
@@ -12836,7 +12844,14 @@ function cmpClear(side){const cfg=cmpCfgFor(side);cfg.brands.clear();cfg.platfor
 function cmpCopyAtoB(){cmpB.brands=new Set(cmpA.brands);cmpB.platforms=new Set(cmpA.platforms);cmpB.branches=new Set(cmpA.branches);renderCompare();}
 function cmpSwap(){const t=cmpA;cmpA=cmpB;cmpB=t;renderCompare();}
 function cmpSetMetric(m){cmpMetric=m;renderCompare();}
-function cmpSetSubTab(t){cmpSubTab=t;renderCompare();}
+function cmpSetSubTab(t){
+  // v188: the chart's canvas gets wiped out by the innerHTML replacement below whenever we
+  // leave the Trend tab, but the Chart.js instance itself was never told to clean up — its
+  // tooltip and event listeners stayed attached to a now-detached canvas. That orphaned
+  // instance is what was showing up as ghost/overlapping text the next time Trend was opened.
+  if(cmpSubTab==="trend"&&t!=="trend")destroyChart("cmp-chart");
+  cmpSubTab=t;renderCompare();
+}
 
 // Build a side's config panel
 function cmpPanel(side){
