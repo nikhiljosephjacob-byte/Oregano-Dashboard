@@ -13,8 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-194";
+const BUILD_VERSION="2026-08-06-195";
 const BUILD_NOTES=[
+  "🆕 New Feedback and Reviews page. Upload your monthly Feedbacks-and-Reviews Excel file (admin-only, same as the aggregator statements) and it parses automatically — brand and branch names get cleaned up using the same alias system the order parsers already use, so \"Oregano \"/\"oregano\", \"Al Reem\"/\"Reem Island\", etc. all collapse to one canonical name. Response/follow-up tracking is deliberately left out — that's handled in a separate ops sheet.",
+  "🌙 Two heatmaps: by brand and by outlet, both showing complaint counts per category with darker cells for higher counts. Outlets are sorted worst-rate-first (complaints per 1,000 orders, not raw count) so a quiet outlet with a few complaints doesn't rank above a busy one that's actually doing fine proportionally. Click a brand row to filter the outlet heatmap to just that brand.",
+  "📅 Filter by month (multi-select) or year. KPI strip shows total feedback, trend vs. the immediately-prior period of the same length, top category, and % attributed to internal/kitchen fault.",
   "🌙 Ads Performance dark theme: the full drill-down chain is done — Aggregator → Brand → Outlet, including the large outlet-level performance table with its recommendation/bid columns. That's the core path most visits to this page actually use. Investment Plan and History views are still light-themed, so the page overall stays in light mode until those are done too.",
   "🌙 Ads Performance dark theme: started. This is the largest page in the dashboard — bigger than Compare, Discount Burn, and KPI Tracker combined. Converted the page shell, loading state, and the first two drill-down levels (Aggregator cards, Brand cards) — what most visits to this page actually see. Also fixed two real bugs found along the way: the ROAS radial gauge's background track and the performance-grade badges were hardcoded to light colors regardless of page theme. Outlet-level drill-down, Investment Plan, and History views are still light-themed, so the page stays in light mode overall until those are done too.",
   "🐛 Fixed the campaign contribution tooltip showing a declining campaign as if it were neutral — the negative sign was being silently stripped before display, leaving only a subtle color change to tell a gain from a loss. Now shows \"−AED X\" with an explicit \"(decrease)\" label. Same bug existed in the Forecaster's tooltip too, fixed there as well.",
@@ -570,7 +573,8 @@ const ORDER_SYNC_AGGS=[
   {agg:'careem',  get:()=>careemOrdersData,   set:v=>{careemOrdersData=v;},   lsKey:()=>CAREEM_STORAGE_KEY},
   {agg:'talabat', get:()=>talabatOrdersData,  set:v=>{talabatOrdersData=v;},  lsKey:()=>TALABAT_STORAGE_KEY},
   {agg:'deliveroo',get:()=>deliverooOrdersData,set:v=>{deliverooOrdersData=v;},lsKey:()=>DELIVEROO_STORAGE_KEY},
-  {agg:'noon',    get:()=>noonOrdersData,     set:v=>{noonOrdersData=v;},     lsKey:()=>NOON_STORAGE_KEY}
+  {agg:'noon',    get:()=>noonOrdersData,     set:v=>{noonOrdersData=v;},     lsKey:()=>NOON_STORAGE_KEY},
+  {agg:'feedback',get:()=>feedbackData,       set:v=>{feedbackData=v;},       lsKey:()=>FEEDBACK_STORAGE_KEY}
 ];
 // Fire-and-forget push of one aggregator's parsed data to the server. Called from each
 // saveXToStorage() — admin sessions only (server enforces this regardless).
@@ -1070,6 +1074,134 @@ function clearKeetaData(){
   try{localStorage.removeItem(KEETA_STORAGE_KEY);}catch(e){}
   invalidateAggCaches('keeta');rewarmCampaignAnalyses(); // v113: surgical invalidation + background re-warm
   renderCampaigns();  clearOrderDataOnServer('keeta'); // v112: cleared for EVERYONE (admin only; server enforces)
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FEEDBACK & REVIEWS — monthly "Feedbacks and Reviews" Excel upload
+// ═══════════════════════════════════════════════════════════════
+// feedbackData = { metadata:{uploadDate,date_range,totalRecords}, records:[{month,date,branch,brand,
+// aggregator,orderId,fault,category,text}] }. Deliberately does NOT capture the "CUSTOMER REPLIED"
+// or "RESPONSE / ACTIONS" columns — response tracking lives in a separate ops sheet, not here.
+const FEEDBACK_STORAGE_KEY="feedback_data_v1";
+let feedbackData=null;
+function loadFeedbackFromStorage(){
+  try{const raw=localStorage.getItem(FEEDBACK_STORAGE_KEY);if(raw)feedbackData=JSON.parse(raw);}
+  catch(e){console.log("[Feedback] localStorage load failed:",e.message);feedbackData=null;}
+}
+function saveFeedbackToStorage(){
+  if(!feedbackData)return;
+  trySaveLocalOrderData(FEEDBACK_STORAGE_KEY,feedbackData,"Feedback");
+  syncOrderDataToServer('feedback',feedbackData);
+}
+function clearFeedbackData(){
+  feedbackData=null;
+  try{localStorage.removeItem(FEEDBACK_STORAGE_KEY);}catch(e){}
+  renderFeedback();clearOrderDataOnServer('feedback');
+}
+// Category names are inconsistently spelled/typo'd across monthly files (confirmed directly
+// against all 7 uploaded months) — same class of issue as BRANCH_ALIASES above, same fix shape.
+const FEEDBACK_CATEGORY_ALIASES={
+  "spilled / mshandled":"SPILLED / MISHANDLED","spilled/mishandled":"SPILLED / MISHANDLED",
+  "spilled / mishandled":"SPILLED / MISHANDLED",
+  "missing - cutlery":"CUTLERY MISSING","cutlery missing":"CUTLERY MISSING","missing cutlery":"CUTLERY MISSING",
+  "missing/wrong item":"MISSING / WRONG ITEM","missing / wrong item":"MISSING / WRONG ITEM",
+  "raw food/undercooked/expired item":"RAW FOOD / UNDERCOOKED / EXPIRED ITEM",
+  "raw food / undercooked / expired item":"RAW FOOD / UNDERCOOKED / EXPIRED ITEM",
+  "food expectation-taste":"FOOD EXPECTATION - TASTE","food expectation - taste":"FOOD EXPECTATION - TASTE",
+  "food expectation-cold":"FOOD EXPECTATION - COLD","food expectation - cold":"FOOD EXPECTATION - COLD",
+  "food expectation-portion size":"FOOD EXPECTATION - PORTION SIZE","food expectation - portion size":"FOOD EXPECTATION - PORTION SIZE",
+  "late delivery":"LATE DELIVERY","ordering experience":"ORDERING EXPERIENCE"
+};
+function normFeedbackCategory(s){
+  if(!s)return"UNCATEGORIZED";
+  const raw=String(s).trim();
+  const key=raw.toLowerCase().replace(/\s+/g," ");
+  if(FEEDBACK_CATEGORY_ALIASES[key])return FEEDBACK_CATEGORY_ALIASES[key];
+  return raw.toUpperCase().replace(/\s+/g," ");
+}
+// Branch resolution reuses the SAME BRANCH_ALIASES/resolveBranchName machinery the aggregator
+// parsers already use — this file's branch spelling issues (Villa/The Villa, FYOO-DIP variants,
+// TSQR/Town Square) are the identical class of problem already solved there.
+function resolveFeedbackBranch(rawBranch,brand){
+  if(!rawBranch)return null;
+  const brandBranches=[...new Set((typeof allData!=="undefined"?allData:[]).filter(r=>r.brand===brand).map(r=>r.branch))].filter(b=>b&&b!=="(brand-level)");
+  if(!brandBranches.length)return String(rawBranch).trim();
+  const resolved=typeof resolveBranchName==="function"?resolveBranchName(rawBranch,brandBranches):null;
+  return resolved||String(rawBranch).trim();
+}
+async function parseFeedbackXlsx(file){
+  await loadSheetJS();
+  const ab=await file.arrayBuffer();
+  const wb=XLSX.read(ab,{type:"array",cellDates:true});
+  const sheetName=wb.SheetNames.find(n=>n.toLowerCase().includes("all feedback"))||wb.SheetNames[wb.SheetNames.length-1];
+  const ws=wb.Sheets[sheetName];
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+  // Header lives on row 2 (index 1) in every confirmed file — row 1 just holds the month name.
+  const headerRow=rows[1]||[];
+  const headerIdx={};
+  headerRow.forEach((h,i)=>{headerIdx[String(h).trim()]=i;});
+  const required=["BRANCH","BRAND","AGGREGATOR","ERROR","CATEGORY"];
+  const missing=required.filter(c=>!(c in headerIdx));
+  if(missing.length)throw new Error("Missing required columns: "+missing.join(", ")+" — expected the 'All Feedbacks' sheet format.");
+  const complaintCol=Object.keys(headerIdx).find(h=>h.replace(/\s+/g," ").toUpperCase().includes("COMPLAIN"));
+  const records=[];
+  const skipped={no_date:0,no_branch:0,no_brand:0};
+  for(let i=2;i<rows.length;i++){
+    const r=rows[i];
+    if(!r||!r.length)continue;
+    const rawDate=r[0];
+    if(!rawDate)continue; // blank trailing rows
+    const dateStr=(rawDate instanceof Date)?dk(rawDate):String(rawDate).slice(0,10);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)){skipped.no_date++;continue;}
+    const rawBrand=r[headerIdx["BRAND"]];
+    if(!rawBrand){skipped.no_brand++;continue;}
+    const brand=typeof normBrand==="function"?normBrand(rawBrand):String(rawBrand).trim();
+    const rawBranch=r[headerIdx["BRANCH"]];
+    if(!rawBranch){skipped.no_branch++;continue;}
+    const branch=resolveFeedbackBranch(rawBranch,brand);
+    const aggregator=typeof normAgg==="function"?normAgg(r[headerIdx["AGGREGATOR"]]):String(r[headerIdx["AGGREGATOR"]]||"").trim();
+    const orderId=String(r[headerIdx["Order ID"]]||"").trim();
+    const fault=String(r[headerIdx["ERROR"]]||"").trim(); // Internal Error / Aggregator Error / Customer Error
+    const category=normFeedbackCategory(r[headerIdx["CATEGORY"]]);
+    const text=complaintCol?String(r[headerIdx[complaintCol]]||"").trim():"";
+    records.push({month:dateStr.slice(0,7),date:dateStr,branch,brand,aggregator,orderId,fault,category,text});
+  }
+  if(!records.length)throw new Error("Parsed but found 0 usable rows. Check the file matches the monthly Feedbacks-and-Reviews format.");
+  const dates=records.map(r=>r.date).sort();
+  return{metadata:{date_range:[dates[0],dates[dates.length-1]],totalRecords:records.length,skipped},records};
+}
+function mergeFeedbackData(existing,fresh){
+  // Each upload is "the complete file for that month" — so a re-upload replaces that month's
+  // records wholesale rather than trying to dedupe row-by-row (there's no stable per-row key;
+  // Order ID isn't always present/unique for Google Review rows, which use a reviewer name).
+  const now=new Date().toISOString();
+  if(!existing||!existing.records||!existing.records.length){
+    return{...fresh,metadata:{...fresh.metadata,uploadDate:now}};
+  }
+  const freshMonths=new Set(fresh.records.map(r=>r.month));
+  const kept=existing.records.filter(r=>!freshMonths.has(r.month));
+  const merged=[...kept,...fresh.records];
+  const dates=merged.map(r=>r.date).sort();
+  return{metadata:{date_range:[dates[0],dates[dates.length-1]],totalRecords:merged.length,uploadDate:now},records:merged};
+}
+async function handleFeedbackUpload(filesOrFile){
+  {const _s=getActiveSession();if(!_s||!_s.admin){alert('Feedback-file uploads are admin-only. Ask an admin to upload the file — it will appear for everyone automatically.');return;}}
+  let files=[];
+  if(!filesOrFile)return;
+  if(filesOrFile instanceof File)files=[filesOrFile];
+  else if(filesOrFile.length!==undefined)files=Array.from(filesOrFile);
+  else if(Array.isArray(filesOrFile))files=filesOrFile;
+  if(!files.length)return;
+  const errors=[];
+  for(const file of files){
+    try{
+      const fresh=await parseFeedbackXlsx(file);
+      feedbackData=mergeFeedbackData(feedbackData,fresh);
+      saveFeedbackToStorage();
+    }catch(e){errors.push(`${file.name}: ${e.message}`);}
+  }
+  if(errors.length){const e=document.getElementById("etoa");if(e){e.textContent="⚠️ "+errors.join(" · ");e.style.display="block";setTimeout(()=>e.style.display="none",8000);}}
+  if(typeof renderFeedback==="function")renderFeedback();
 }
 
 // ── Lookup used by allocateCampaignDiscount ──────────────────────────────
@@ -3391,6 +3523,7 @@ async function doLoad(){
   }
   injectCompareTab();
   injectCancellationsTab();
+  injectFeedbackTab();
   tagTabsWithPageIds();
   addTabIcons();
   restructureTabIcons();
@@ -3482,7 +3615,7 @@ function buildSidebarNav(){
     // v183: reorder by data-pg (set by tagTabsWithPageIds, called before this) rather than
     // trusting whatever DOM order the tabs happened to arrive in — Cancellations goes right
     // after KPI Tracker, Admin is pulled out entirely into its own footer section at the bottom.
-    const ORDER=["overview","brands","outlets","platforms","cpc","campaigns","discounts","kpi","cancellations","compare"];
+    const ORDER=["overview","brands","outlets","platforms","cpc","campaigns","discounts","kpi","cancellations","feedback","compare"];
     const byPg={};
     tabs.forEach(t=>{if(t.dataset.pg)byPg[t.dataset.pg]=t;});
     const orderedTabs=ORDER.map(id=>byPg[id]).filter(Boolean);
@@ -4189,8 +4322,8 @@ function mNavGo(page){
 // dark theme one at a time. Adding a page here is the ONLY change needed at the dispatcher —
 // each page's own render function still needs its own scoped style override and theme-aware
 // calls, same as Overview's build.
-const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare","discounts","kpi","campaigns"]);
-function renderPage(p){_darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();else if(p==="cancellations")renderCancellations();}
+const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare","discounts","kpi","campaigns","feedback"]);
+function renderPage(p){_darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();else if(p==="cancellations")renderCancellations();else if(p==="feedback")renderFeedback();}
 function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 // AOV drilldown state
@@ -12875,6 +13008,248 @@ function injectCancellationsTab(){
     const last=tabs[tabs.length-1];
     last.parentNode.insertBefore(btn,last.nextSibling);
   }
+}
+function injectFeedbackTab(){
+  if(document.getElementById("page-feedback"))return; // already injected
+  const anyPage=document.querySelector(".pg");
+  if(anyPage&&anyPage.parentNode){
+    const div=document.createElement("div");
+    div.className="pg";div.id="page-feedback";
+    anyPage.parentNode.appendChild(div);
+  }
+  const tabs2=document.querySelectorAll(".tab");
+  if(tabs2.length){
+    const btn=document.createElement(tabs2[0].tagName.toLowerCase());
+    btn.className="tab";btn.innerHTML="💬 Feedback";
+    btn.onclick=()=>gp("feedback");
+    const last=tabs2[tabs2.length-1];
+    last.parentNode.insertBefore(btn,last.nextSibling);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FEEDBACK & REVIEWS PAGE — brand + outlet heatmaps, delivery-volume-normalized
+// ═══════════════════════════════════════════════════════════════
+let feedbackFilterMonths=new Set(); // empty = all months in the data
+let feedbackFilterYear=null;        // null = all years
+let feedbackFilterBrand=null;       // clicked brand row — filters the outlet heatmap below it
+// Top 5 categories by volume (confirmed against all 7 real months) become heatmap columns;
+// everything else folds into "Other" so the table stays readable, per "simple, not complicated".
+const FEEDBACK_TOP_CATEGORIES=[
+  ["FOOD EXPECTATION - TASTE","Taste"],
+  ["MISSING / WRONG ITEM","Missing"],
+  ["RAW FOOD / UNDERCOOKED / EXPIRED ITEM","Raw/UC"],
+  ["SPILLED / MISHANDLED","Spilled"],
+  ["FOOD EXPECTATION - PORTION SIZE","Portion"]
+];
+function feedbackCatKey(fullCategory){
+  const m=FEEDBACK_TOP_CATEGORIES.find(([full])=>full===fullCategory);
+  return m?m[0]:"OTHER";
+}
+function feedbackTheme(){
+  return{
+    muted:DARK_THEME.textMuted,label:DARK_THEME.textMuted,border:DARK_THEME.cardBorder,
+    text:DARK_THEME.textPrimary,panelBg:DARK_THEME.card,rowBg:DARK_THEME.cardBorder+'44'
+  };
+}
+function feedbackFilteredRecords(){
+  if(!feedbackData||!feedbackData.records)return[];
+  return feedbackData.records.filter(r=>{
+    if(feedbackFilterYear&&!r.date.startsWith(feedbackFilterYear))return false;
+    if(feedbackFilterMonths.size&&!feedbackFilterMonths.has(r.month))return false;
+    return true;
+  });
+}
+function feedbackDateRange(recs){
+  if(!recs.length)return null;
+  const dates=recs.map(r=>r.date).sort();
+  return[dates[0],dates[dates.length-1]];
+}
+// Delivery-volume lookup for the CURRENT filtered window, from the same allData used everywhere
+// else in the dashboard — this is what turns raw complaint counts into a comparable rate.
+function feedbackOrderVolumeMaps(range){
+  const byBranch={},byBrand={};
+  if(!range||typeof allData==="undefined")return{byBranch,byBrand};
+  const[s,e]=range;
+  allData.forEach(r=>{
+    if(r.date<s||r.date>e)return;
+    const bk=r.brand+'|'+r.branch;
+    byBranch[bk]=(byBranch[bk]||0)+(r.orders||0);
+    byBrand[r.brand]=(byBrand[r.brand]||0)+(r.orders||0);
+  });
+  return{byBranch,byBrand};
+}
+function feedbackBuildMatrix(records,groupKey){
+  const matrix={},totals={};
+  records.forEach(r=>{
+    const g=r[groupKey];
+    if(!g)return;
+    if(!matrix[g])matrix[g]={};
+    const ck=feedbackCatKey(r.category);
+    matrix[g][ck]=(matrix[g][ck]||0)+1;
+    totals[g]=(totals[g]||0)+1;
+  });
+  return{matrix,totals};
+}
+function feedbackDominantCategory(rowMatrix){
+  let best=null,bestN=0;
+  for(const[cat,n] of Object.entries(rowMatrix||{})){if(n>bestN){best=cat;bestN=n;}}
+  return best;
+}
+// Cell color intensity is relative to that ROW's own max — the point is to make each row's
+// worst category pop, not to compare absolute counts across differently-sized rows/brands.
+function feedbackCellStyle(count,rowMax){
+  if(!count)return`color:${feedbackTheme().label};background:${DARK_THEME.cardBorder}33`;
+  const ratio=rowMax>0?count/rowMax:0;
+  if(ratio>=0.66)return`color:#3D0C0C;background:#FF6B6B;font-weight:700`;
+  if(ratio>=0.33)return`color:#3D250C;background:#FF8A3D99;font-weight:700`;
+  return`color:${feedbackTheme().label};background:${DARK_THEME.cardBorder}66`;
+}
+function feedbackHeatmapRow(label,rowMatrix,rowTotal,rate,onclick,showRate){
+  const T=feedbackTheme();
+  const rowMax=Math.max(1,...FEEDBACK_TOP_CATEGORIES.map(([full])=>rowMatrix[full]||0));
+  const cells=FEEDBACK_TOP_CATEGORIES.map(([full])=>{
+    const n=rowMatrix[full]||0;
+    return`<td style="text-align:center;padding:6px;border-radius:4px;font-size:9.5px;${feedbackCellStyle(n,rowMax)}">${n||''}</td>`;
+  }).join('');
+  const clickAttr=onclick?`onclick="${onclick}" style="cursor:pointer"`:'';
+  const rateCell=showRate?`<td style="text-align:right;color:${rate>=5?'#FF6B6B':rate>=2?'#FF8A3D':'#2ECC71'};font-weight:700;padding:6px;font-size:10px">${rate.toFixed(1)}</td>`:'';
+  return`<tr ${clickAttr}>
+    <td style="color:${T.text};font-weight:600;padding:3px 8px 3px 0;font-size:10.5px;white-space:nowrap">${label}</td>
+    ${cells}
+    <td style="text-align:right;color:${T.text};font-weight:700;padding:6px 4px;font-size:10.5px">${rowTotal}</td>
+    ${rateCell}
+  </tr>`;
+}
+function feedbackHeatmapHead(showRate){
+  const T=feedbackTheme();
+  const catHeaders=FEEDBACK_TOP_CATEGORIES.map(([,short])=>`<td style="text-align:center;color:${T.muted};padding:3px;font-weight:700;font-size:9px">${short}</td>`).join('');
+  return`<tr><td></td>${catHeaders}<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:9px">Total</td>${showRate?`<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:9px">Rate/1K</td>`:''}</tr>`;
+}
+async function renderFeedback(){
+  const pg=document.getElementById("page-feedback");if(!pg)return;
+  const T=feedbackTheme();
+  const styleOverride=`<style>
+    #page-feedback{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
+    #page-feedback .card{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
+    #page-feedback .ct{color:${DARK_THEME.textPrimary}!important}
+  </style>`;
+  if(!feedbackData||!feedbackData.records||!feedbackData.records.length){
+    pg.innerHTML=`${styleOverride}
+      <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px"><span style="font-size:20px">💬</span><div style="font-size:18px;font-weight:800;color:${T.text}">Feedback and Reviews</div></div>
+      <div class="card" style="padding:30px;text-align:center">
+        <div style="color:${T.muted};font-size:13px;margin-bottom:14px">No feedback data uploaded yet.</div>
+        <button onclick="document.getElementById('feedback-file-input').click()" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);color:#f59e0b;padding:7px 16px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer">⬆ Upload monthly Feedbacks-and-Reviews file</button>
+        <input type="file" id="feedback-file-input" accept=".xlsx,.xls" multiple style="display:none" onchange="handleFeedbackUpload(this.files);this.value='';">
+      </div>`;
+    return;
+  }
+  const allMonths=[...new Set(feedbackData.records.map(r=>r.month))].sort();
+  const allYears=[...new Set(allMonths.map(m=>m.slice(0,4)))].sort();
+  const recs=feedbackFilteredRecords();
+  const range=feedbackDateRange(recs);
+  const{byBranch,byBrand}=feedbackOrderVolumeMaps(range);
+
+  // ── Prior-period comparison (for the trend KPI) — same elapsed length, immediately before ──
+  let trendPct=null;
+  if(range){
+    const days=Math.round((new Date(range[1])-new Date(range[0]))/86400000)+1;
+    const priorEnd=subDays(range[0],1),priorStart=subDays(priorEnd,days-1);
+    const priorCount=feedbackData.records.filter(r=>r.date>=priorStart&&r.date<=priorEnd).length;
+    if(priorCount>0)trendPct=(recs.length-priorCount)/priorCount*100;
+  }
+
+  // ── Category totals (for the "top category" KPI) ──
+  const catTotals={};
+  recs.forEach(r=>{catTotals[r.category]=(catTotals[r.category]||0)+1;});
+  const topCat=Object.entries(catTotals).sort((a,b)=>b[1]-a[1])[0];
+  const internalCount=recs.filter(r=>r.fault==="Internal Error").length;
+  const internalPct=recs.length?internalCount/recs.length*100:0;
+
+  // ── Filter bar ──
+  const monthBtn=m=>{const on=feedbackFilterMonths.has(m);const lbl=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"});return`<button onclick="feedbackToggleMonth('${m}')" style="padding:3px 10px;border-radius:12px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'};color:${on?'#FF8A3D':T.label};font-size:10px;font-weight:700;cursor:pointer">${lbl}</button>`;};
+  const yearBtn=y=>{const on=feedbackFilterYear===y;return`<button onclick="feedbackSetYear('${y}')" style="padding:3px 10px;border-radius:6px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'};color:${on?'#FF8A3D':T.label};font-size:10px;font-weight:700;cursor:pointer">${y}</button>`;};
+  const filterBar=`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;padding:10px 12px;margin-bottom:12px">
+    <span style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Months</span>
+    ${allMonths.map(monthBtn).join('')}
+    <span style="color:${T.border};margin:0 4px">|</span>
+    <span style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Year</span>
+    ${allYears.map(yearBtn).join('')}
+    ${(feedbackFilterMonths.size||feedbackFilterYear)?`<button onclick="feedbackClearFilters()" style="margin-left:auto;background:none;border:1px solid ${T.border};color:${T.muted};padding:3px 10px;border-radius:6px;font-size:10px;cursor:pointer">✕ Clear</button>`:''}
+  </div>`;
+
+  // ── KPI strip ──
+  const kpi=(lbl,val,clr)=>`<div class="card" style="padding:8px 10px;border-left:3px solid ${clr}"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">${lbl}</div><div style="font-size:17px;font-weight:800;color:${clr==='#f59e0b'?T.text:clr}">${val}</div></div>`;
+  const kpiStrip=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+    ${kpi("Total",recs.length.toLocaleString(),"#f59e0b")}
+    ${kpi("Trend",trendPct==null?"—":`${trendPct>=0?'▲':'▼'} ${Math.abs(trendPct).toFixed(0)}%`,trendPct==null?T.muted:trendPct>=0?'#FF6B6B':'#2ECC71')}
+    ${kpi("Top category",topCat?FEEDBACK_TOP_CATEGORIES.find(([f])=>f===topCat[0])?.[1]||topCat[0].split(' ')[0]:"—","#f59e0b")}
+    ${kpi("Internal fault",internalPct.toFixed(0)+"%","#FF8A3D")}
+  </div>`;
+
+  // ── Brand heatmap ──
+  const{matrix:brandMatrix,totals:brandTotals}=feedbackBuildMatrix(recs,"brand");
+  const brandOrder=BR.map(b=>b.n).filter(n=>brandTotals[n]);
+  const brandRows=brandOrder.map(brand=>{
+    const rowM=brandMatrix[brand]||{};
+    const total=brandTotals[brand]||0;
+    const vol=byBrand[brand]||0;
+    const rate=vol>0?total/vol*1000:0;
+    const active=feedbackFilterBrand===brand;
+    const onclick=`feedbackToggleBrandFilter('${brand.replace(/'/g,"\\'")}')`;
+    return feedbackHeatmapRow(`${active?'▸ ':''}${brand}`,rowM,total,rate,onclick,true);
+  }).join('');
+  const brandHeatmap=`<div class="card" style="padding:12px 14px;margin-bottom:12px">
+    <div class="ct" style="margin-bottom:2px">By brand <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a row to filter outlets below</span></div>
+    <table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true)}${brandRows}</table>
+  </div>`;
+
+  // ── Outlet heatmap (worst rate first, filtered by clicked brand if any) ──
+  const outletRecs=feedbackFilterBrand?recs.filter(r=>r.brand===feedbackFilterBrand):recs;
+  const{matrix:outletMatrix,totals:outletTotals}=feedbackBuildMatrix(outletRecs,"branch");
+  const outletRows=Object.keys(outletTotals).map(branch=>{
+    // volume lookup needs the branch's brand — outletRecs may span multiple brands if no brand filter is active
+    const brandForBranch=feedbackFilterBrand||(outletRecs.find(r=>r.branch===branch)||{}).brand;
+    const vol=byBranch[brandForBranch+'|'+branch]||0;
+    const rate=vol>0?outletTotals[branch]/vol*1000:0;
+    return{branch,total:outletTotals[branch],rate,matrix:outletMatrix[branch]};
+  }).sort((a,b)=>b.rate-a.rate);
+  const outletRowsHTML=outletRows.map(o=>feedbackHeatmapRow(o.branch,o.matrix,o.total,o.rate,null,true)).join('');
+  const clearBrandBtn=feedbackFilterBrand?`<button onclick="feedbackToggleBrandFilter('${feedbackFilterBrand.replace(/'/g,"\\'")}')" style="font-size:9px;color:${T.label};background:none;border:1px solid ${T.border};padding:2px 8px;border-radius:5px;cursor:pointer;margin-left:6px">✕ ${feedbackFilterBrand}</button>`:'';
+  const outletHeatmap=`<div class="card" style="padding:12px 14px">
+    <div class="ct" style="margin-bottom:2px;display:flex;align-items:center">By outlet <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0;margin-left:6px">· worst rate first</span>${clearBrandBtn}</div>
+    <table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true)}${outletRowsHTML}</table>
+    ${!outletRows.length?`<div style="text-align:center;color:${T.muted};padding:16px;font-size:11px">No records for this selection.</div>`:''}
+  </div>`;
+
+  const uploadChip=`<button onclick="document.getElementById('feedback-file-input').click()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:4px 10px;border-radius:6px;font-size:10px;cursor:pointer">⬆ Upload month</button><input type="file" id="feedback-file-input" accept=".xlsx,.xls" multiple style="display:none" onchange="handleFeedbackUpload(this.files);this.value='';">`;
+
+  pg.innerHTML=`${styleOverride}
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">💬</span><div style="font-size:18px;font-weight:800;color:${T.text}">Feedback and Reviews</div></div>
+      ${uploadChip}
+    </div>
+    ${filterBar}
+    ${kpiStrip}
+    ${brandHeatmap}
+    ${outletHeatmap}`;
+}
+function feedbackToggleMonth(m){
+  if(feedbackFilterMonths.has(m))feedbackFilterMonths.delete(m);
+  else feedbackFilterMonths.add(m);
+  renderFeedback();
+}
+function feedbackSetYear(y){
+  feedbackFilterYear=feedbackFilterYear===y?null:y;
+  renderFeedback();
+}
+function feedbackClearFilters(){
+  feedbackFilterMonths=new Set();feedbackFilterYear=null;
+  renderFeedback();
+}
+function feedbackToggleBrandFilter(brand){
+  feedbackFilterBrand=feedbackFilterBrand===brand?null:brand;
+  renderFeedback();
 }
 
 // Two independent filter states
