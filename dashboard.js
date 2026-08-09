@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-199";
+const BUILD_VERSION="2026-08-06-200";
 const BUILD_NOTES=[
+  "🐛 Explains the lingering \"Dec\" chip: it's leftover data from before the timezone fix — some January records got mis-tagged as December 2025 by the old parser, and since re-uploads only replace data for the correct month, that stale bucket was never touched. Added a ✕ next to each month chip so you can surgically remove just one month's data (like that stale December bucket) without needing to wipe and redo all 7 months.",
+  "📊 Redesigned \"By Category\" — was a sprawling list of collapsible outlet breakdowns, now a clean single table: category, total, trend, worst outlet, and outlet count. Click any row to pull up the full complaint list for that category (reuses the same drill-down as the category headers).",
   "🖱️ Month selection redesigned: plain click now selects just that month (replacing whatever was selected before); Ctrl/Cmd+click adds it to the selection. No more accidental multi-select. The filter bar now also shows the exact comparison window in plain text — e.g. \"Showing Jun 1 → Jul 31, compared against Apr 1 → May 31\" — so the prior-period math is never a mystery.",
   "🔍 Category headers are now clickable — click \"Taste\", \"Missing\", etc. on either heatmap to see every complaint in that category across all outlets currently in view.",
   "🆕 New \"By Category\" table between By Brand and By Outlet — one collapsible section per category, outlets ranked by count underneath.",
@@ -13331,7 +13333,7 @@ async function renderFeedback(){
   }
 
   // ── Filter bar ──
-  const monthBtn=m=>{const on=feedbackFilterMonths.has(m);const lbl=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"});return`<button onclick="feedbackToggleMonth('${m}',event)" style="padding:3px 10px;border-radius:12px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'};color:${on?'#FF8A3D':T.label};font-size:10px;font-weight:700;cursor:pointer" title="Click to select just this month. Ctrl/Cmd+click to add it to the current selection.">${lbl}</button>`;};
+  const monthBtn=m=>{const on=feedbackFilterMonths.has(m);const lbl=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"});return`<span style="display:inline-flex;align-items:center;border-radius:12px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'}"><button onclick="feedbackToggleMonth('${m}',event)" style="background:none;border:none;color:${on?'#FF8A3D':T.label};font-size:10px;font-weight:700;cursor:pointer;padding:3px 4px 3px 10px" title="Click to select just this month. Ctrl/Cmd+click to add it to the current selection.">${lbl}</button><span onclick="event.stopPropagation();feedbackRemoveMonth('${m}')" style="cursor:pointer;color:${T.label};font-size:11px;font-weight:700;padding:3px 8px 3px 3px" title="Remove all data for ${lbl} — use this to clean up a month that was uploaded incorrectly">✕</span></span>`;};
   const yearBtn=y=>{const on=feedbackFilterYear===y;return`<button onclick="feedbackSetYear('${y}')" style="padding:3px 10px;border-radius:6px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'};color:${on?'#FF8A3D':T.label};font-size:10px;font-weight:700;cursor:pointer">${y}</button>`;};
   const compareLine=(range&&priorRange)?`<div style="font-size:9.5px;color:${T.label};margin-top:6px;padding-top:6px;border-top:1px solid ${T.rowBg}">Showing <strong style="color:${T.text}">${fmtDisp(range[0])} → ${fmtDisp(range[1])}</strong> · compared against <strong style="color:${T.text}">${fmtDisp(priorRange[0])} → ${fmtDisp(priorRange[1])}</strong> (same length, immediately before)</div>`:'';
   const filterBar=`<div style="display:flex;flex-wrap:wrap;background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;padding:10px 12px;margin-bottom:12px">
@@ -13375,25 +13377,30 @@ async function renderFeedback(){
   // ── By Category (category-first, outlets nested underneath) — respects the same brand filter
   // as the outlet heatmap below it, so the two stay consistent when a brand row is clicked ──
   const catFilterRecs=feedbackFilterBrand?recs.filter(r=>r.brand===feedbackFilterBrand):recs;
-  const categorySections=FEEDBACK_TOP_CATEGORIES.map(([full,short])=>{
+  const categoryTableRows=FEEDBACK_TOP_CATEGORIES.map(([full,short])=>{
     const catRecs=catFilterRecs.filter(r=>r.category===full);
-    if(!catRecs.length)return'';
+    if(!catRecs.length)return null;
     const byOutlet={};
     catRecs.forEach(r=>{byOutlet[r.branch]=(byOutlet[r.branch]||0)+1;});
-    const outletRowsForCat=Object.entries(byOutlet).sort((a,b)=>b[1]-a[1]).map(([branch,count])=>
-      `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;border-bottom:1px solid ${T.rowBg}">
-        <span style="font-size:10.5px;color:${T.text}">${branch}</span>
-        <span style="font-size:10.5px;color:${T.muted};font-weight:700">${count}</span>
-      </div>`
-    ).join('');
-    return`<details style="margin-bottom:6px" ${catRecs.length>=15?'open':''}>
-      <summary style="cursor:pointer;font-size:11px;font-weight:700;color:${T.text};padding:7px 10px;background:${T.rowBg};border-radius:6px;list-style:none">▸ ${short} <span style="color:${T.label};font-weight:500">(${catRecs.length} across ${Object.keys(byOutlet).length} outlets)</span></summary>
-      <div style="padding-top:2px">${outletRowsForCat}</div>
-    </details>`;
-  }).join('');
+    const ranked=Object.entries(byOutlet).sort((a,b)=>b[1]-a[1]);
+    const[topOutlet,topCount]=ranked[0];
+    const trend=catTrends[full];
+    const trendHTML=trend==null?`<span style="color:${T.label}">—</span>`:trend>10?`<span style="color:#FF6B6B">▲ ${trend.toFixed(0)}%</span>`:trend<-10?`<span style="color:#2ECC71">▼ ${Math.abs(trend).toFixed(0)}%</span>`:`<span style="color:${T.label}">flat</span>`;
+    return{full,short,total:catRecs.length,outletCount:ranked.length,topOutlet,topCount,trendHTML,trendVal:trend};
+  }).filter(Boolean).sort((a,b)=>b.total-a.total);
+  const categoryRowsHTML=categoryTableRows.map(c=>`<tr onclick="feedbackToggleDrill('__ALL__','${c.full.replace(/'/g,"\\'")}')" style="cursor:pointer">
+    <td style="color:${T.text};font-weight:700;padding:7px 8px 7px 0;font-size:11px">${c.short}</td>
+    <td style="text-align:right;color:${T.text};font-weight:700;padding:7px 8px;font-size:11px">${c.total}</td>
+    <td style="text-align:center;padding:7px 8px;font-size:10.5px;font-weight:700">${c.trendHTML}</td>
+    <td style="padding:7px 8px;font-size:10.5px;color:${T.text}">${c.topOutlet} <span style="color:${T.muted};font-weight:700">(${c.topCount})</span></td>
+    <td style="text-align:right;padding:7px 8px;font-size:10.5px;color:${T.label}">${c.outletCount}</td>
+  </tr>`).join('');
   const categoryHeatmap=`<div class="card" style="padding:12px 14px;margin-bottom:12px">
-    <div class="ct" style="margin-bottom:6px">By category <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· outlets ranked by count within each</span></div>
-    ${categorySections||`<div style="text-align:center;color:${T.muted};padding:16px;font-size:11px">No records for this selection.</div>`}
+    <div class="ct" style="margin-bottom:2px">By category <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a row for every complaint in that category</span></div>
+    ${categoryTableRows.length?`<table style="width:100%;border-collapse:collapse;margin-top:8px">
+      <tr><td></td><td style="text-align:right;color:${T.muted};padding:3px 8px;font-weight:700;font-size:9px">Total</td><td style="text-align:center;color:${T.muted};padding:3px 8px;font-weight:700;font-size:9px">Trend</td><td style="color:${T.muted};padding:3px 8px;font-weight:700;font-size:9px">Worst outlet</td><td style="text-align:right;color:${T.muted};padding:3px 8px;font-weight:700;font-size:9px"># outlets</td></tr>
+      ${categoryRowsHTML}
+    </table>`:`<div style="text-align:center;color:${T.muted};padding:16px;font-size:11px">No records for this selection.</div>`}
   </div>`;
 
   // ── Outlet heatmap (worst rate first, filtered by clicked brand if any) — cells are clickable
@@ -13465,6 +13472,19 @@ function feedbackSetYear(y){
 }
 function feedbackClearFilters(){
   feedbackFilterMonths=new Set();feedbackFilterYear=null;
+  renderFeedback();
+}
+async function feedbackRemoveMonth(month){
+  {const _s=getActiveSession();if(!_s||!_s.admin){alert('Removing a month is admin-only.');return;}}
+  if(!feedbackData||!feedbackData.records)return;
+  const count=feedbackData.records.filter(r=>r.month===month).length;
+  const lbl=new Date(month+"-01T12:00:00").toLocaleDateString("en-AE",{month:"long",year:"numeric"});
+  if(!confirm(`Remove all ${count} record${count!==1?'s':''} tagged ${lbl}? This can't be undone — if this month's data was actually correct, you'd need to re-upload the file to get it back.`))return;
+  feedbackData.records=feedbackData.records.filter(r=>r.month!==month);
+  const dates=feedbackData.records.map(r=>r.date).sort();
+  feedbackData.metadata={...feedbackData.metadata,date_range:dates.length?[dates[0],dates[dates.length-1]]:null,totalRecords:feedbackData.records.length};
+  feedbackFilterMonths.delete(month);
+  await saveFeedbackToStorage();
   renderFeedback();
 }
 function feedbackToggleBrandFilter(brand){
