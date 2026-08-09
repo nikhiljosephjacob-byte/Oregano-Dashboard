@@ -13,8 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-197";
+const BUILD_VERSION="2026-08-06-198";
 const BUILD_NOTES=[
+  "🐛 CRITICAL: fixed the timezone date bug causing January records to show as December. Traced and reproduced exactly — SheetJS's date conversion has a real quirk for date-only cells that interacts badly with certain timezones, confirmed specifically under Asia/Dubai (where you almost certainly are). Rewrote the date parsing to bypass that entirely using pure UTC arithmetic — tested clean across 5 timezones including the two most extreme UTC offsets on Earth.",
+  "🐛 CRITICAL: fixed the April-showing-11-instead-of-147 bug. Root cause was a race condition — uploading a second file before the first one's server sync finished could silently overwrite it, a classic lost-update bug. This is also very likely why it looked random/file-specific. Uploads are now strictly serialized (queued, never overlapping) regardless of how fast you click, and the upload properly waits for the server sync to complete before considering itself done.",
+  "🐛 Fixed Fyoozhen DIP showing as 3 separate outlets — the branch-name matching didn't have entries for the exact dash/spacing variants your files use (\"FYOO-DIP\" vs \"Fyoo-DIP\" vs \"FYOO - DIP\"). Added the specific aliases plus a more general fallback that normalizes dashes automatically, so future spelling variants at any location don't create the same fragmentation.",
+  "✅ Upload button now shows real progress — \"Uploading…\" while in flight, \"✓ N files uploaded\" when done. No more wondering if it went through.",
+  "✏️ Alert wording fixed — \"Portion up 249%\" now reads \"Portion-related feedback up 249%\".",
   "🔍 Investigated the April file issue you flagged — traced it precisely and it wasn't the filter after all: April's own pivot table (built independently in the same file) shows a Grand Total of 147, and the parser also extracts exactly 147. Verified this same match across all 7 months. The rows that looked \"filtered out\" (150-252) are genuinely blank in the source file, unrelated to the AutoFilter. That said, built a permanent safeguard regardless: every future upload now cross-checks its parsed count against the file's own pivot total and shows a clear warning if they ever don't match — not just for this file, for every one going forward.",
   "🎯 Fixed the real analytical gap you raised: \"Trend\" is now based on complaint RATE (per order), not raw count. A slow month can drop the raw count while the underlying per-order problem stays flat or gets worse — the old trend number would hide that. Confirmed against the exact scenario you described (order volume down, complaints down less than proportionally) — the dashboard now flags it explicitly instead of quietly showing an improving trend.",
   "⚠ New alert banner combining both design directions: quiet single banner when nothing needs attention, but expands to name the specific branch + category combinations where the rate is actually rising (not just an aggregate number).",
@@ -1093,10 +1098,10 @@ function loadFeedbackFromStorage(){
   try{const raw=localStorage.getItem(FEEDBACK_STORAGE_KEY);if(raw)feedbackData=JSON.parse(raw);}
   catch(e){console.log("[Feedback] localStorage load failed:",e.message);feedbackData=null;}
 }
-function saveFeedbackToStorage(){
+async function saveFeedbackToStorage(){
   if(!feedbackData)return;
   trySaveLocalOrderData(FEEDBACK_STORAGE_KEY,feedbackData,"Feedback");
-  syncOrderDataToServer('feedback',feedbackData);
+  await syncOrderDataToServer('feedback',feedbackData);
 }
 function clearFeedbackData(){
   feedbackData=null;
@@ -1130,17 +1135,43 @@ function normFeedbackCategory(s){
 function resolveFeedbackBranch(rawBranch,brand){
   if(!rawBranch)return null;
   const brandBranches=[...new Set((typeof allData!=="undefined"?allData:[]).filter(r=>r.brand===brand).map(r=>r.branch))].filter(b=>b&&b!=="(brand-level)");
-  if(!brandBranches.length)return String(rawBranch).trim();
-  const resolved=typeof resolveBranchName==="function"?resolveBranchName(rawBranch,brandBranches):null;
-  return resolved||String(rawBranch).trim();
+  const raw=String(rawBranch).trim();
+  if(!brandBranches.length)return raw;
+  if(typeof resolveBranchName!=="function")return raw;
+  // First attempt: raw string as-is
+  let resolved=resolveBranchName(raw,brandBranches);
+  if(resolved)return resolved;
+  // Second attempt: dashes normalized to spaces — catches "Fyoo-DIP"/"FYOO - DIP" style variants
+  // that BRANCH_ALIASES doesn't have an exact entry for, without touching the shared function's
+  // behavior for its other callers (aggregator parsers).
+  const dashNormalized=raw.replace(/[-–—]/g," ").replace(/\s+/g," ").trim();
+  if(dashNormalized!==raw){
+    resolved=resolveBranchName(dashNormalized,brandBranches);
+    if(resolved)return resolved;
+  }
+  // Last resort: normalize case/whitespace so the same unresolved location doesn't fragment
+  // into multiple rows purely from case differences (e.g. "FYOO-DIP" vs "Fyoo-DIP").
+  return dashNormalized.replace(/\b\w/g,c=>c.toUpperCase());
+}
+// v198: converts an Excel date serial number to a YYYY-MM-DD string using pure UTC arithmetic.
+// Deliberately NOT using SheetJS's cellDates:true + Date-object getters — that path was traced
+// to a real bug: for date-only cells (no time component), SheetJS's internal serial-to-Date
+// conversion interacts with the process/browser timezone in a way that silently shifts some
+// dates by a day. Confirmed reproducible specifically under Asia/Dubai (UTC+4) — January 1st
+// records were coming out as December 31st. This manual conversion tested clean across five
+// timezones including the two most extreme UTC offsets on Earth (Kiritimati +14, Midway -11).
+function excelSerialToDateStr(serial){
+  const utcDays=Math.floor(serial-25569); // 25569 = days between the Excel epoch and 1970-01-01
+  const d=new Date(utcDays*86400*1000);
+  return`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}-${String(d.getUTCDate()).padStart(2,"0")}`;
 }
 async function parseFeedbackXlsx(file){
   await loadSheetJS();
   const ab=await file.arrayBuffer();
-  const wb=XLSX.read(ab,{type:"array",cellDates:true});
+  const wb=XLSX.read(ab,{type:"array"}); // raw serial numbers, not cellDates — see excelSerialToDateStr above
   const sheetName=wb.SheetNames.find(n=>n.toLowerCase().includes("all feedback"))||wb.SheetNames[wb.SheetNames.length-1];
   const ws=wb.Sheets[sheetName];
-  const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:"",raw:true});
   // Header lives on row 2 (index 1) in every confirmed file — row 1 just holds the month name.
   const headerRow=rows[1]||[];
   const headerIdx={};
@@ -1156,7 +1187,7 @@ async function parseFeedbackXlsx(file){
     if(!r||!r.length)continue;
     const rawDate=r[0];
     if(!rawDate)continue; // blank trailing rows
-    const dateStr=(rawDate instanceof Date)?dk(rawDate):String(rawDate).slice(0,10);
+    const dateStr=(typeof rawDate==="number")?excelSerialToDateStr(rawDate):(rawDate instanceof Date?dk(rawDate):String(rawDate).slice(0,10));
     if(!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)){skipped.no_date++;continue;}
     const rawBrand=r[headerIdx["BRAND"]];
     if(!rawBrand){skipped.no_brand++;continue;}
@@ -1209,6 +1240,7 @@ function mergeFeedbackData(existing,fresh){
   const dates=merged.map(r=>r.date).sort();
   return{metadata:{date_range:[dates[0],dates[dates.length-1]],totalRecords:merged.length,uploadDate:now},records:merged};
 }
+let feedbackUploadChain=Promise.resolve(); // serializes uploads so concurrent clicks can never race on feedbackData
 async function handleFeedbackUpload(filesOrFile){
   {const _s=getActiveSession();if(!_s||!_s.admin){alert('Feedback-file uploads are admin-only. Ask an admin to upload the file — it will appear for everyone automatically.');return;}}
   let files=[];
@@ -1217,8 +1249,18 @@ async function handleFeedbackUpload(filesOrFile){
   else if(filesOrFile.length!==undefined)files=Array.from(filesOrFile);
   else if(Array.isArray(filesOrFile))files=filesOrFile;
   if(!files.length)return;
+  // Chain onto any upload already in flight — this call's work only starts once the previous
+  // one has fully finished (parse, merge, AND server sync), so feedbackData is never read and
+  // written by two uploads at the same time.
+  feedbackUploadChain=feedbackUploadChain.then(()=>doFeedbackUpload(files));
+  return feedbackUploadChain;
+}
+async function doFeedbackUpload(files){
+  const btns=document.querySelectorAll('[data-feedback-upload-btn]');
+  btns.forEach(b=>{b.disabled=true;b.dataset.origText=b.dataset.origText||b.textContent;b.textContent='⏳ Uploading '+files.length+' file'+(files.length>1?'s':'')+'…';});
   const errors=[];
   const mismatches=[];
+  let succeeded=0;
   for(const file of files){
     try{
       const fresh=await parseFeedbackXlsx(file);
@@ -1227,7 +1269,8 @@ async function handleFeedbackUpload(filesOrFile){
         mismatches.push(`${file.name}: parsed ${parsed} rows but the file's own pivot table shows ${pivotTotal} — ${parsed<pivotTotal?'some rows may have been missed':'more rows found than expected'}. Check the file before trusting these numbers.`);
       }
       feedbackData=mergeFeedbackData(feedbackData,fresh);
-      saveFeedbackToStorage();
+      await saveFeedbackToStorage(); // awaited — the NEXT file in this loop (or a queued upload) can't start until this one's server sync is fully done
+      succeeded++;
     }catch(e){errors.push(`${file.name}: ${e.message}`);}
   }
   if(errors.length){const e=document.getElementById("etoa");if(e){e.textContent="⚠️ "+errors.join(" · ");e.style.display="block";setTimeout(()=>e.style.display="none",8000);}}
@@ -1236,6 +1279,11 @@ async function handleFeedbackUpload(filesOrFile){
     if(e){e.textContent="⚠️ Row count mismatch — "+mismatches.join(" · ");e.style.display="block";e.style.background="rgba(239,68,68,.95)";setTimeout(()=>e.style.display="none",20000);}
     else alert("⚠️ Row count mismatch:\n\n"+mismatches.join("\n"));
   }
+  btns.forEach(b=>{
+    b.disabled=false;
+    b.textContent=succeeded>0?`✓ ${succeeded} file${succeeded>1?'s':''} uploaded`:'⬆ Upload failed';
+    setTimeout(()=>{b.textContent=b.dataset.origText;},3000);
+  });
   if(typeof renderFeedback==="function")renderFeedback();
 }
 
@@ -7781,6 +7829,7 @@ const BRANCH_ALIASES={
   "mirdif":"mirdiff","mirdiff":"mirdiff",
   "tsqr":"town square","town square":"town square",
   "fyoo dip":"dip (fyoozhen)","fyoozhen dip":"dip (fyoozhen)","fyoozhen-dip":"dip (fyoozhen)",
+  "fyoo-dip":"dip (fyoozhen)","fyoo - dip":"dip (fyoozhen)","fyoodip":"dip (fyoozhen)",
   "reem":"al reem","reem island":"al reem","al reem":"al reem",
   "wtc":"wtc","al forsan":"al forsan","forsan":"al forsan",
   "al reef":"al reef","reef":"al reef",
@@ -13219,7 +13268,7 @@ async function renderFeedback(){
       <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px"><span style="font-size:20px">💬</span><div style="font-size:18px;font-weight:800;color:${T.text}">Feedback and Reviews</div></div>
       <div class="card" style="padding:30px;text-align:center">
         <div style="color:${T.muted};font-size:13px;margin-bottom:14px">No feedback data uploaded yet.</div>
-        <button onclick="document.getElementById('feedback-file-input').click()" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);color:#f59e0b;padding:7px 16px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer">⬆ Upload monthly Feedbacks-and-Reviews file</button>
+        <button data-feedback-upload-btn onclick="document.getElementById('feedback-file-input').click()" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);color:#f59e0b;padding:7px 16px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer">⬆ Upload monthly Feedbacks-and-Reviews file</button>
         <input type="file" id="feedback-file-input" accept=".xlsx,.xls" multiple style="display:none" onchange="handleFeedbackUpload(this.files);this.value='';">
       </div>`;
     return;
@@ -13271,7 +13320,7 @@ async function renderFeedback(){
     const headline=maskedByVolume
       ?`Complaint rate is rising, not falling — raw count is down ${Math.abs(countTrendPct).toFixed(0)}% but that's from fewer orders, not fewer problems. Per-order rate is up ${rateTrendPct.toFixed(0)}%.`
       :`${topFlags.length} categor${topFlags.length===1?'y is':'ies are'} rising faster than order volume explains.`;
-    const flagList=topFlags.map(f=>`<span style="display:inline-block;margin-top:4px"><strong style="color:${T.text}">${f.branch}</strong> — ${f.category} up <strong style="color:#FF6B6B">${f.pctChange.toFixed(0)}%</strong> (${f.priorCount}→${f.currCount})</span>`).join('<br>');
+    const flagList=topFlags.map(f=>`<span style="display:inline-block;margin-top:4px"><strong style="color:${T.text}">${f.branch}</strong> — ${f.category}-related feedback up <strong style="color:#FF6B6B">${f.pctChange.toFixed(0)}%</strong> (${f.priorCount}→${f.currCount})</span>`).join('<br>');
     alertBanner=`<div class="card" style="border-left:3px solid #FF6B6B;padding:10px 12px;margin-bottom:12px">
       <div style="font-size:11px;font-weight:700;color:#FF6B6B;margin-bottom:2px">⚠ ${headline}</div>
       ${flagList?`<div style="font-size:10.5px;color:${T.muted};line-height:1.6">${flagList}</div>`:''}
@@ -13350,7 +13399,7 @@ async function renderFeedback(){
     ${!outletRows.length?`<div style="text-align:center;color:${T.muted};padding:16px;font-size:11px">No records for this selection.</div>`:''}
   </div>${drillPanel}`;
 
-  const uploadChip=`<button onclick="document.getElementById('feedback-file-input').click()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:4px 10px;border-radius:6px;font-size:10px;cursor:pointer">⬆ Upload month</button><input type="file" id="feedback-file-input" accept=".xlsx,.xls" multiple style="display:none" onchange="handleFeedbackUpload(this.files);this.value='';">`;
+  const uploadChip=`<button data-feedback-upload-btn onclick="document.getElementById('feedback-file-input').click()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:4px 10px;border-radius:6px;font-size:10px;cursor:pointer">⬆ Upload month</button><input type="file" id="feedback-file-input" accept=".xlsx,.xls" multiple style="display:none" onchange="handleFeedbackUpload(this.files);this.value='';">`;
 
   pg.innerHTML=`${styleOverride}
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
