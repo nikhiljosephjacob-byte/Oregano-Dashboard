@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-200";
+const BUILD_VERSION="2026-08-06-201";
 const BUILD_NOTES=[
+  "🆕 Trending Terms — reads the actual complaint text to catch the same underlying issue even when it's logged under different words or different categories. Zero cost, runs entirely in the browser (Tier 1 from our discussion — no AI, no API key). Tested against a scenario where \"pink\", \"raw\", and \"undercooked\" were used across 3 different outlets and 2 different categories — correctly caught as one 3-mention pattern rather than three unrelated data points. When something crosses 2+ categories and 3+ outlets, it gets a dedicated callout above the table. Click any row for the actual complaint text behind it.",
+  "🔤 Text across the whole Feedback page is bigger — every size bumped up, smallest labels went from 9px to 10.5px+. Complaint text in the drill-down panels is now bold and set apart from its metadata line, so the actual thing the customer said is what your eye lands on first.",
   "🐛 Explains the lingering \"Dec\" chip: it's leftover data from before the timezone fix — some January records got mis-tagged as December 2025 by the old parser, and since re-uploads only replace data for the correct month, that stale bucket was never touched. Added a ✕ next to each month chip so you can surgically remove just one month's data (like that stale December bucket) without needing to wipe and redo all 7 months.",
   "📊 Redesigned \"By Category\" — was a sprawling list of collapsible outlet breakdowns, now a clean single table: category, total, trend, worst outlet, and outlet count. Click any row to pull up the full complaint list for that category (reuses the same drill-down as the category headers).",
   "🖱️ Month selection redesigned: plain click now selects just that month (replacing whatever was selected before); Ctrl/Cmd+click adds it to the selection. No more accidental multi-select. The filter bar now also shows the exact comparison window in plain text — e.g. \"Showing Jun 1 → Jul 31, compared against Apr 1 → May 31\" — so the prior-period math is never a mystery.",
@@ -13131,6 +13133,48 @@ const FEEDBACK_TOP_CATEGORIES=[
   ["SPILLED / MISHANDLED","Spilled"],
   ["FOOD EXPECTATION - PORTION SIZE","Portion"]
 ];
+// ── Trending Terms — catches the same underlying issue even when it's logged under different
+// words or different categories, without needing an AI call. Deterministic keyword-group
+// matching: several specific words that customers actually use get mapped to one shared theme
+// label. This is the "Tier 1" approach — pure text frequency, not true semantic understanding,
+// so it'll miss wording it doesn't recognize, but it directly catches cross-category patterns
+// like "pink"/"raw"/"undercooked" all being the same real problem regardless of which of the 9
+// fixed categories a given complaint got filed under.
+const FEEDBACK_TERM_GROUPS={
+  'undercooked':'Undercooked / raw','raw':'Undercooked / raw','pink':'Undercooked / raw','uncooked':'Undercooked / raw',
+  'cold':'Cold on arrival','lukewarm':'Cold on arrival','freezing':'Cold on arrival',
+  'missing':'Missing item','forgot':'Missing item','forgotten':'Missing item',
+  'wrong':'Wrong item','mixed':'Wrong item','incorrect':'Wrong item',
+  'late':'Late delivery','delayed':'Late delivery','slow':'Late delivery',
+  'rude':'Rude staff/driver','unprofessional':'Rude staff/driver',
+  'spilled':'Spilled / mishandled','leaking':'Spilled / mishandled','messy':'Spilled / mishandled','spill':'Spilled / mishandled',
+  'small':'Portion size','portion':'Portion size','tiny':'Portion size',
+  'stale':'Stale / expired','expired':'Stale / expired','moldy':'Stale / expired',
+  'burnt':'Burnt / overcooked','burned':'Burnt / overcooked','overcooked':'Burnt / overcooked',
+  'bland':'Taste / seasoning','tasteless':'Taste / seasoning','salty':'Taste / seasoning',
+  'sick':'Food safety concern','poisoning':'Food safety concern','vomit':'Food safety concern','stomach':'Food safety concern'
+};
+function feedbackTokenize(text){
+  return(text||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(w=>w.length>2);
+}
+// Groups records by theme. Each record counts at most once per theme even if multiple matching
+// words appear in the same complaint, so one long complaint can't dominate the count.
+function feedbackExtractThemes(recs){
+  const themeMatches={};
+  recs.forEach(r=>{
+    const words=feedbackTokenize(r.text);
+    const seenThemes=new Set();
+    words.forEach(w=>{
+      const theme=FEEDBACK_TERM_GROUPS[w];
+      if(theme&&!seenThemes.has(theme)){
+        seenThemes.add(theme);
+        if(!themeMatches[theme])themeMatches[theme]=[];
+        themeMatches[theme].push(r);
+      }
+    });
+  });
+  return themeMatches;
+}
 function feedbackCatKey(fullCategory){
   const m=FEEDBACK_TOP_CATEGORIES.find(([full])=>full===fullCategory);
   return m?m[0]:"OTHER";
@@ -13200,14 +13244,14 @@ function feedbackHeatmapRow(label,rowMatrix,rowTotal,ratePct,onclick,showRate,br
   const cells=FEEDBACK_TOP_CATEGORIES.map(([full])=>{
     const n=rowMatrix[full]||0;
     const cellClick=(branch&&n>0)?`feedbackToggleDrill('${branch.replace(/'/g,"\\'")}','${full.replace(/'/g,"\\'")}');event.stopPropagation()`:'';
-    return`<td ${cellClick?`onclick="${cellClick}" style="cursor:pointer;text-align:center;padding:6px;border-radius:4px;font-size:9.5px;${feedbackCellStyle(n,rowMax)}"`:`style="text-align:center;padding:6px;border-radius:4px;font-size:9.5px;${feedbackCellStyle(n,rowMax)}"`}>${n||''}</td>`;
+    return`<td ${cellClick?`onclick="${cellClick}" style="cursor:pointer;text-align:center;padding:6px;border-radius:4px;font-size:12.5px;${feedbackCellStyle(n,rowMax)}"`:`style="text-align:center;padding:6px;border-radius:4px;font-size:12.5px;${feedbackCellStyle(n,rowMax)}"`}>${n||''}</td>`;
   }).join('');
   const clickAttr=onclick?`onclick="${onclick}" style="cursor:pointer"`:'';
-  const rateCell=showRate?`<td style="text-align:right;color:${ratePct>=0.7?'#FF6B6B':ratePct>=0.3?'#FF8A3D':'#2ECC71'};font-weight:700;padding:6px;font-size:10px">${ratePct.toFixed(2)}%</td>`:'';
+  const rateCell=showRate?`<td style="text-align:right;color:${ratePct>=0.7?'#FF6B6B':ratePct>=0.3?'#FF8A3D':'#2ECC71'};font-weight:700;padding:6px;font-size:11.5px">${ratePct.toFixed(2)}%</td>`:'';
   return`<tr ${clickAttr}>
-    <td style="color:${T.text};font-weight:600;padding:3px 8px 3px 0;font-size:10.5px;white-space:nowrap">${label}</td>
+    <td style="color:${T.text};font-weight:600;padding:3px 8px 3px 0;font-size:13.5px;white-space:nowrap">${label}</td>
     ${cells}
-    <td style="text-align:right;color:${T.text};font-weight:700;padding:6px 4px;font-size:10.5px">${rowTotal}</td>
+    <td style="text-align:right;color:${T.text};font-weight:700;padding:6px 4px;font-size:13.5px">${rowTotal}</td>
     ${rateCell}
   </tr>`;
 }
@@ -13216,9 +13260,9 @@ function feedbackHeatmapHead(showRate,catTrends){
   const catHeaders=FEEDBACK_TOP_CATEGORIES.map(([full,short])=>{
     const trend=catTrends&&catTrends[full];
     const arrow=trend==null?'':trend>10?`<span style="color:#FF6B6B" title="Rate up ${trend.toFixed(0)}% vs prior period">↗</span>`:trend<-10?`<span style="color:#2ECC71" title="Rate down ${Math.abs(trend).toFixed(0)}% vs prior period">↘</span>`:'';
-    return`<td onclick="feedbackToggleDrill('__ALL__','${full.replace(/'/g,"\\'")}')" style="text-align:center;color:${T.muted};padding:3px;font-weight:700;font-size:9px;cursor:pointer;text-decoration:underline dotted" title="Click to see every ${short} complaint across all outlets">${short} ${arrow}</td>`;
+    return`<td onclick="feedbackToggleDrill('__ALL__','${full.replace(/'/g,"\\'")}')" style="text-align:center;color:${T.muted};padding:3px;font-weight:700;font-size:10.5px;cursor:pointer;text-decoration:underline dotted" title="Click to see every ${short} complaint across all outlets">${short} ${arrow}</td>`;
   }).join('');
-  return`<tr><td></td>${catHeaders}<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:9px">Total</td>${showRate?`<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:9px">% of orders</td>`:''}</tr>`;
+  return`<tr><td></td>${catHeaders}<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:10.5px">Total</td>${showRate?`<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:10.5px">% of orders</td>`:''}</tr>`;
 }
 // Same-length window immediately before the given range — used for every trend/flag calculation
 // so "trend" always means "vs the period right before this one", not vs a fixed calendar point.
@@ -13254,6 +13298,11 @@ function feedbackComputeFlags(recs,priorRecs,byBranch,priorByBranch,minCount){
   return flags;
 }
 let feedbackDrillKey=null; // "branch|category" of the cell currently expanded to show raw complaint text
+let feedbackThemeDrillKey=null; // trending-term theme name currently expanded to show its matching complaints
+function feedbackToggleThemeDrill(theme){
+  feedbackThemeDrillKey=feedbackThemeDrillKey===theme?null:theme;
+  renderFeedback();
+}
 function feedbackToggleDrill(branch,category){
   const key=branch+'|'+category;
   feedbackDrillKey=feedbackDrillKey===key?null:key;
@@ -13272,8 +13321,8 @@ async function renderFeedback(){
     pg.innerHTML=`${styleOverride}
       <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px"><span style="font-size:20px">💬</span><div style="font-size:18px;font-weight:800;color:${T.text}">Feedback and Reviews</div></div>
       <div class="card" style="padding:30px;text-align:center">
-        <div style="color:${T.muted};font-size:13px;margin-bottom:14px">No feedback data uploaded yet.</div>
-        <button data-feedback-upload-btn onclick="document.getElementById('feedback-file-input').click()" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);color:#f59e0b;padding:7px 16px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer">⬆ Upload monthly Feedbacks-and-Reviews file</button>
+        <div style="color:${T.muted};font-size:14px;margin-bottom:14px">No feedback data uploaded yet.</div>
+        <button data-feedback-upload-btn onclick="document.getElementById('feedback-file-input').click()" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);color:#f59e0b;padding:7px 16px;border-radius:7px;font-size:13.5px;font-weight:700;cursor:pointer">⬆ Upload monthly Feedbacks-and-Reviews file</button>
         <input type="file" id="feedback-file-input" accept=".xlsx,.xls" multiple style="display:none" onchange="handleFeedbackUpload(this.files);this.value='';">
       </div>`;
     return;
@@ -13317,6 +13366,19 @@ async function renderFeedback(){
   const internalCount=recs.filter(r=>r.fault==="Internal Error").length;
   const internalPct=recs.length?internalCount/recs.length*100:0;
 
+  // ── Trending terms — same underlying issue caught across different wording and different
+  // categories, from the actual complaint text rather than the pre-assigned category field ──
+  const currThemes=feedbackExtractThemes(recs);
+  const priorThemes=feedbackExtractThemes(priorRecs);
+  const themeRows=Object.entries(currThemes).map(([theme,matches])=>{
+    const priorCount=(priorThemes[theme]||[]).length;
+    const outlets=new Set(matches.map(m=>m.branch));
+    const cats=new Set(matches.map(m=>m.category));
+    const pctChange=priorCount>0?(matches.length-priorCount)/priorCount*100:null;
+    return{theme,count:matches.length,priorCount,outlets,catCount:cats.size,pctChange,matches};
+  }).filter(t=>t.count>=3).sort((a,b)=>b.count-a.count);
+  const crossCuttingTheme=themeRows.find(t=>t.catCount>=2&&t.outlets.size>=3); // spans multiple categories AND multiple outlets — the pattern a category-only view can't see
+
   // ── Alert banner — compact (Option 1 style) but carries the specific branch+category flags
   // (Option 2's granularity) rather than one vague aggregate line ──
   let alertBanner='';
@@ -13327,29 +13389,73 @@ async function renderFeedback(){
       :`${topFlags.length} categor${topFlags.length===1?'y is':'ies are'} rising faster than order volume explains.`;
     const flagList=topFlags.map(f=>`<span style="display:inline-block;margin-top:4px"><strong style="color:${T.text}">${f.branch}</strong> — ${f.category}-related feedback up <strong style="color:#FF6B6B">${f.pctChange.toFixed(0)}%</strong> (${f.priorCount}→${f.currCount})</span>`).join('<br>');
     alertBanner=`<div class="card" style="border-left:3px solid #FF6B6B;padding:10px 12px;margin-bottom:12px">
-      <div style="font-size:11px;font-weight:700;color:#FF6B6B;margin-bottom:2px">⚠ ${headline}</div>
-      ${flagList?`<div style="font-size:10.5px;color:${T.muted};line-height:1.6">${flagList}</div>`:''}
+      <div style="font-size:12.5px;font-weight:700;color:#FF6B6B;margin-bottom:2px">⚠ ${headline}</div>
+      ${flagList?`<div style="font-size:13.5px;color:${T.muted};line-height:1.6">${flagList}</div>`:''}
+    </div>`;
+  }
+
+  // ── Trending Terms — reads the actual complaint text to catch the same underlying issue
+  // regardless of which category it got logged under. See BUILD_NOTES for how this works. ──
+  let trendingTermsPanel='';
+  if(themeRows.length){
+    const crossCuttingCallout=crossCuttingTheme?`<div style="background:rgba(255,107,107,.08);border:1px solid rgba(255,107,107,.3);border-radius:8px;padding:10px 12px;margin-bottom:10px">
+      <div style="font-size:13.5px;font-weight:800;color:#FF6B6B">⚠ "${crossCuttingTheme.theme}" mentioned ${crossCuttingTheme.count} times — spans ${crossCuttingTheme.outlets.size} outlets and ${crossCuttingTheme.catCount} different categories</div>
+      <div style="font-size:12.5px;color:${T.muted};margin-top:3px">Logged under different categories, but it reads like the same underlying issue. <span onclick="feedbackToggleThemeDrill('${crossCuttingTheme.theme.replace(/'/g,"\\'")}')" style="color:#FF6B6B;cursor:pointer;text-decoration:underline">Read all ${crossCuttingTheme.count} →</span></div>
+    </div>`:'';
+    const themeTableRows=themeRows.slice(0,8).map(t=>{
+      const trendHTML=t.pctChange==null?`<span style="color:${T.label}">new</span>`:t.pctChange>15?`<span style="color:#FF6B6B">▲ ${t.pctChange.toFixed(0)}%</span>`:t.pctChange<-15?`<span style="color:#2ECC71">▼ ${Math.abs(t.pctChange).toFixed(0)}%</span>`:`<span style="color:${T.label}">flat</span>`;
+      return`<tr onclick="feedbackToggleThemeDrill('${t.theme.replace(/'/g,"\\'")}')" style="cursor:pointer">
+        <td style="color:${T.text};font-weight:700;padding:7px 8px 7px 0;font-size:13.5px">${t.theme}</td>
+        <td style="text-align:right;color:${T.text};font-weight:700;padding:7px 8px;font-size:13.5px">${t.count}</td>
+        <td style="text-align:center;padding:7px 8px;font-size:12.5px;font-weight:700">${trendHTML}</td>
+        <td style="text-align:right;padding:7px 8px;font-size:12.5px;color:${T.label}">${t.outlets.size} outlets</td>
+        <td style="text-align:right;padding:7px 8px;font-size:12.5px;color:${T.label}">${t.catCount} categories</td>
+      </tr>`;
+    }).join('');
+    // Drill panel for whichever theme was clicked
+    let themeDrillPanel='';
+    if(feedbackThemeDrillKey){
+      const active=themeRows.find(t=>t.theme===feedbackThemeDrillKey);
+      if(active){
+        const items=active.matches.slice(0,25).map(r=>`<div style="padding:7px 0;border-bottom:1px solid ${T.rowBg};font-size:13.5px"><span style="color:${T.label};font-size:11px">${r.branch} · ${r.date} · ${r.aggregator}</span><br><span style="color:${T.text};font-weight:600">${(r.text||'(no text)').replace(/</g,'&lt;')}</span></div>`).join('');
+        themeDrillPanel=`<div style="margin-top:10px;padding-top:10px;border-top:1px solid ${T.border}">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span style="font-size:13.5px;font-weight:700;color:${T.text}">${active.theme} <span style="color:${T.label};font-weight:400">(${active.matches.length})</span></span>
+            <button onclick="feedbackThemeDrillKey=null;renderFeedback()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:2px 8px;border-radius:5px;font-size:10.5px;cursor:pointer">✕ Close</button>
+          </div>
+          ${items}${active.matches.length>25?`<div style="font-size:10.5px;color:${T.label};padding-top:6px">+ ${active.matches.length-25} more</div>`:''}
+        </div>`;
+      }
+    }
+    trendingTermsPanel=`<div class="card" style="padding:12px 14px;margin-bottom:12px">
+      <div class="ct" style="margin-bottom:6px">Trending terms <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· from complaint text, not category tags · click a row for examples</span></div>
+      ${crossCuttingCallout}
+      <table style="width:100%;border-collapse:collapse">
+        <tr><td></td><td style="text-align:right;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Count</td><td style="text-align:center;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Trend</td><td style="text-align:right;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Spread</td><td></td></tr>
+        ${themeTableRows}
+      </table>
+      ${themeDrillPanel}
     </div>`;
   }
 
   // ── Filter bar ──
-  const monthBtn=m=>{const on=feedbackFilterMonths.has(m);const lbl=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"});return`<span style="display:inline-flex;align-items:center;border-radius:12px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'}"><button onclick="feedbackToggleMonth('${m}',event)" style="background:none;border:none;color:${on?'#FF8A3D':T.label};font-size:10px;font-weight:700;cursor:pointer;padding:3px 4px 3px 10px" title="Click to select just this month. Ctrl/Cmd+click to add it to the current selection.">${lbl}</button><span onclick="event.stopPropagation();feedbackRemoveMonth('${m}')" style="cursor:pointer;color:${T.label};font-size:11px;font-weight:700;padding:3px 8px 3px 3px" title="Remove all data for ${lbl} — use this to clean up a month that was uploaded incorrectly">✕</span></span>`;};
-  const yearBtn=y=>{const on=feedbackFilterYear===y;return`<button onclick="feedbackSetYear('${y}')" style="padding:3px 10px;border-radius:6px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'};color:${on?'#FF8A3D':T.label};font-size:10px;font-weight:700;cursor:pointer">${y}</button>`;};
-  const compareLine=(range&&priorRange)?`<div style="font-size:9.5px;color:${T.label};margin-top:6px;padding-top:6px;border-top:1px solid ${T.rowBg}">Showing <strong style="color:${T.text}">${fmtDisp(range[0])} → ${fmtDisp(range[1])}</strong> · compared against <strong style="color:${T.text}">${fmtDisp(priorRange[0])} → ${fmtDisp(priorRange[1])}</strong> (same length, immediately before)</div>`:'';
+  const monthBtn=m=>{const on=feedbackFilterMonths.has(m);const lbl=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"});return`<span style="display:inline-flex;align-items:center;border-radius:12px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'}"><button onclick="feedbackToggleMonth('${m}',event)" style="background:none;border:none;color:${on?'#FF8A3D':T.label};font-size:11.5px;font-weight:700;cursor:pointer;padding:3px 4px 3px 10px" title="Click to select just this month. Ctrl/Cmd+click to add it to the current selection.">${lbl}</button><span onclick="event.stopPropagation();feedbackRemoveMonth('${m}')" style="cursor:pointer;color:${T.label};font-size:12.5px;font-weight:700;padding:3px 8px 3px 3px" title="Remove all data for ${lbl} — use this to clean up a month that was uploaded incorrectly">✕</span></span>`;};
+  const yearBtn=y=>{const on=feedbackFilterYear===y;return`<button onclick="feedbackSetYear('${y}')" style="padding:3px 10px;border-radius:6px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'};color:${on?'#FF8A3D':T.label};font-size:11.5px;font-weight:700;cursor:pointer">${y}</button>`;};
+  const compareLine=(range&&priorRange)?`<div style="font-size:12.5px;color:${T.label};margin-top:6px;padding-top:6px;border-top:1px solid ${T.rowBg}">Showing <strong style="color:${T.text}">${fmtDisp(range[0])} → ${fmtDisp(range[1])}</strong> · compared against <strong style="color:${T.text}">${fmtDisp(priorRange[0])} → ${fmtDisp(priorRange[1])}</strong> (same length, immediately before)</div>`:'';
   const filterBar=`<div style="display:flex;flex-wrap:wrap;background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;padding:10px 12px;margin-bottom:12px">
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;width:100%">
-      <span style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Months</span>
+      <span style="font-size:10.5px;color:${T.muted};font-weight:700;text-transform:uppercase">Months</span>
       ${allMonths.map(monthBtn).join('')}
       <span style="color:${T.border};margin:0 4px">|</span>
-      <span style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Year</span>
+      <span style="font-size:10.5px;color:${T.muted};font-weight:700;text-transform:uppercase">Year</span>
       ${allYears.map(yearBtn).join('')}
-      ${(feedbackFilterMonths.size||feedbackFilterYear)?`<button onclick="feedbackClearFilters()" style="margin-left:auto;background:none;border:1px solid ${T.border};color:${T.muted};padding:3px 10px;border-radius:6px;font-size:10px;cursor:pointer">✕ Clear</button>`:''}
+      ${(feedbackFilterMonths.size||feedbackFilterYear)?`<button onclick="feedbackClearFilters()" style="margin-left:auto;background:none;border:1px solid ${T.border};color:${T.muted};padding:3px 10px;border-radius:6px;font-size:11.5px;cursor:pointer">✕ Clear</button>`:''}
     </div>
     ${compareLine}
   </div>`;
 
   // ── KPI strip ──
-  const kpi=(lbl,val,clr)=>`<div class="card" style="padding:8px 10px;border-left:3px solid ${clr}"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">${lbl}</div><div style="font-size:17px;font-weight:800;color:${clr==='#f59e0b'?T.text:clr}">${val}</div></div>`;
+  const kpi=(lbl,val,clr)=>`<div class="card" style="padding:8px 10px;border-left:3px solid ${clr}"><div style="font-size:10.5px;color:${T.muted};font-weight:700;text-transform:uppercase">${lbl}</div><div style="font-size:17px;font-weight:800;color:${clr==='#f59e0b'?T.text:clr}">${val}</div></div>`;
   const kpiStrip=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
     ${kpi("Total",recs.length.toLocaleString(),"#f59e0b")}
     ${kpi("Rate trend <span style='opacity:.6;font-weight:500'>· % of orders</span>",rateTrendPct==null?"—":`${rateTrendPct>=0?'▲':'▼'} ${Math.abs(rateTrendPct).toFixed(0)}%`,rateTrendPct==null?T.muted:rateTrendPct>=0?'#FF6B6B':'#2ECC71')}
@@ -13389,18 +13495,18 @@ async function renderFeedback(){
     return{full,short,total:catRecs.length,outletCount:ranked.length,topOutlet,topCount,trendHTML,trendVal:trend};
   }).filter(Boolean).sort((a,b)=>b.total-a.total);
   const categoryRowsHTML=categoryTableRows.map(c=>`<tr onclick="feedbackToggleDrill('__ALL__','${c.full.replace(/'/g,"\\'")}')" style="cursor:pointer">
-    <td style="color:${T.text};font-weight:700;padding:7px 8px 7px 0;font-size:11px">${c.short}</td>
-    <td style="text-align:right;color:${T.text};font-weight:700;padding:7px 8px;font-size:11px">${c.total}</td>
-    <td style="text-align:center;padding:7px 8px;font-size:10.5px;font-weight:700">${c.trendHTML}</td>
-    <td style="padding:7px 8px;font-size:10.5px;color:${T.text}">${c.topOutlet} <span style="color:${T.muted};font-weight:700">(${c.topCount})</span></td>
-    <td style="text-align:right;padding:7px 8px;font-size:10.5px;color:${T.label}">${c.outletCount}</td>
+    <td style="color:${T.text};font-weight:700;padding:7px 8px 7px 0;font-size:12.5px">${c.short}</td>
+    <td style="text-align:right;color:${T.text};font-weight:700;padding:7px 8px;font-size:12.5px">${c.total}</td>
+    <td style="text-align:center;padding:7px 8px;font-size:13.5px;font-weight:700">${c.trendHTML}</td>
+    <td style="padding:7px 8px;font-size:13.5px;color:${T.text}">${c.topOutlet} <span style="color:${T.muted};font-weight:700">(${c.topCount})</span></td>
+    <td style="text-align:right;padding:7px 8px;font-size:13.5px;color:${T.label}">${c.outletCount}</td>
   </tr>`).join('');
   const categoryHeatmap=`<div class="card" style="padding:12px 14px;margin-bottom:12px">
     <div class="ct" style="margin-bottom:2px">By category <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a row for every complaint in that category</span></div>
     ${categoryTableRows.length?`<table style="width:100%;border-collapse:collapse;margin-top:8px">
-      <tr><td></td><td style="text-align:right;color:${T.muted};padding:3px 8px;font-weight:700;font-size:9px">Total</td><td style="text-align:center;color:${T.muted};padding:3px 8px;font-weight:700;font-size:9px">Trend</td><td style="color:${T.muted};padding:3px 8px;font-weight:700;font-size:9px">Worst outlet</td><td style="text-align:right;color:${T.muted};padding:3px 8px;font-weight:700;font-size:9px"># outlets</td></tr>
+      <tr><td></td><td style="text-align:right;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Total</td><td style="text-align:center;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Trend</td><td style="color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Worst outlet</td><td style="text-align:right;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px"># outlets</td></tr>
       ${categoryRowsHTML}
-    </table>`:`<div style="text-align:center;color:${T.muted};padding:16px;font-size:11px">No records for this selection.</div>`}
+    </table>`:`<div style="text-align:center;color:${T.muted};padding:16px;font-size:12.5px">No records for this selection.</div>`}
   </div>`;
 
   // ── Outlet heatmap (worst rate first, filtered by clicked brand if any) — cells are clickable
@@ -13414,7 +13520,7 @@ async function renderFeedback(){
     return{branch,total:outletTotals[branch],ratePct,matrix:outletMatrix[branch]};
   }).sort((a,b)=>b.ratePct-a.ratePct);
   const outletRowsHTML=outletRows.map(o=>feedbackHeatmapRow(o.branch,o.matrix,o.total,o.ratePct,null,true,o.branch)).join('');
-  const clearBrandBtn=feedbackFilterBrand?`<button onclick="feedbackToggleBrandFilter('${feedbackFilterBrand.replace(/'/g,"\\'")}')" style="font-size:9px;color:${T.label};background:none;border:1px solid ${T.border};padding:2px 8px;border-radius:5px;cursor:pointer;margin-left:6px">✕ ${feedbackFilterBrand}</button>`:'';
+  const clearBrandBtn=feedbackFilterBrand?`<button onclick="feedbackToggleBrandFilter('${feedbackFilterBrand.replace(/'/g,"\\'")}')" style="font-size:10.5px;color:${T.label};background:none;border:1px solid ${T.border};padding:2px 8px;border-radius:5px;cursor:pointer;margin-left:6px">✕ ${feedbackFilterBrand}</button>`:'';
   // Drill-down panel — shows raw complaint text for whichever cell (or category header) was last clicked
   let drillPanel='';
   if(feedbackDrillKey){
@@ -13422,24 +13528,24 @@ async function renderFeedback(){
     const allOutlets=dBranch==='__ALL__';
     const matches=outletRecs.filter(r=>(allOutlets||r.branch===dBranch)&&r.category===dCategory);
     if(matches.length){
-      const items=matches.slice(0,25).map(r=>`<div style="padding:6px 0;border-bottom:1px solid ${T.rowBg};font-size:10.5px"><span style="color:${T.label}">${allOutlets?r.branch+' · ':''}${r.date} · ${r.aggregator}</span><br><span style="color:${T.text}">${(r.text||'(no text)').replace(/</g,'&lt;')}</span></div>`).join('');
+      const items=matches.slice(0,25).map(r=>`<div style="padding:7px 0;border-bottom:1px solid ${T.rowBg};font-size:14px"><span style="color:${T.label};font-size:11px">${allOutlets?r.branch+' · ':''}${r.date} · ${r.aggregator}</span><br><span style="color:${T.text};font-weight:600">${(r.text||'(no text)').replace(/</g,'&lt;')}</span></div>`).join('');
       const catShort=FEEDBACK_TOP_CATEGORIES.find(([f])=>f===dCategory)?.[1]||dCategory;
       drillPanel=`<div class="card" style="padding:12px 14px;margin-top:10px">
         <div class="ct" style="margin-bottom:2px;display:flex;align-items:center;justify-content:space-between">
           <span>${allOutlets?catShort+' — all outlets':dBranch+' · '+catShort} <span style="color:${T.label};font-weight:400;text-transform:none">(${matches.length})</span></span>
-          <button onclick="feedbackDrillKey=null;renderFeedback()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:2px 8px;border-radius:5px;font-size:9px;cursor:pointer">✕ Close</button>
+          <button onclick="feedbackDrillKey=null;renderFeedback()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:2px 8px;border-radius:5px;font-size:10.5px;cursor:pointer">✕ Close</button>
         </div>
-        <div style="margin-top:6px">${items}${matches.length>25?`<div style="font-size:9px;color:${T.label};padding-top:6px">+ ${matches.length-25} more</div>`:''}</div>
+        <div style="margin-top:6px">${items}${matches.length>25?`<div style="font-size:10.5px;color:${T.label};padding-top:6px">+ ${matches.length-25} more</div>`:''}</div>
       </div>`;
     }
   }
   const outletHeatmap=`<div class="card" style="padding:12px 14px">
     <div class="ct" style="margin-bottom:2px;display:flex;align-items:center">By outlet <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0;margin-left:6px">· worst rate first · click a cell for examples</span>${clearBrandBtn}</div>
     <table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true,catTrends)}${outletRowsHTML}</table>
-    ${!outletRows.length?`<div style="text-align:center;color:${T.muted};padding:16px;font-size:11px">No records for this selection.</div>`:''}
+    ${!outletRows.length?`<div style="text-align:center;color:${T.muted};padding:16px;font-size:12.5px">No records for this selection.</div>`:''}
   </div>${drillPanel}`;
 
-  const uploadChip=`<button data-feedback-upload-btn onclick="document.getElementById('feedback-file-input').click()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:4px 10px;border-radius:6px;font-size:10px;cursor:pointer">⬆ Upload month</button><input type="file" id="feedback-file-input" accept=".xlsx,.xls" multiple style="display:none" onchange="handleFeedbackUpload(this.files);this.value='';">`;
+  const uploadChip=`<button data-feedback-upload-btn onclick="document.getElementById('feedback-file-input').click()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:4px 10px;border-radius:6px;font-size:11.5px;cursor:pointer">⬆ Upload month</button><input type="file" id="feedback-file-input" accept=".xlsx,.xls" multiple style="display:none" onchange="handleFeedbackUpload(this.files);this.value='';">`;
 
   pg.innerHTML=`${styleOverride}
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
@@ -13448,6 +13554,7 @@ async function renderFeedback(){
     </div>
     ${filterBar}
     ${alertBanner}
+    ${trendingTermsPanel}
     ${kpiStrip}
     ${brandHeatmap}
     ${categoryHeatmap}
