@@ -13,8 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-196";
+const BUILD_VERSION="2026-08-06-197";
 const BUILD_NOTES=[
+  "🔍 Investigated the April file issue you flagged — traced it precisely and it wasn't the filter after all: April's own pivot table (built independently in the same file) shows a Grand Total of 147, and the parser also extracts exactly 147. Verified this same match across all 7 months. The rows that looked \"filtered out\" (150-252) are genuinely blank in the source file, unrelated to the AutoFilter. That said, built a permanent safeguard regardless: every future upload now cross-checks its parsed count against the file's own pivot total and shows a clear warning if they ever don't match — not just for this file, for every one going forward.",
+  "🎯 Fixed the real analytical gap you raised: \"Trend\" is now based on complaint RATE (per order), not raw count. A slow month can drop the raw count while the underlying per-order problem stays flat or gets worse — the old trend number would hide that. Confirmed against the exact scenario you described (order volume down, complaints down less than proportionally) — the dashboard now flags it explicitly instead of quietly showing an improving trend.",
+  "⚠ New alert banner combining both design directions: quiet single banner when nothing needs attention, but expands to name the specific branch + category combinations where the rate is actually rising (not just an aggregate number).",
+  "📊 Rate/1K replaced with a plain % of orders throughout. Category headers on both heatmaps show a small ↗/↘ when that category's rate moved meaningfully. Click any outlet-heatmap cell to see the actual complaint text behind those numbers.",
   "🐛 Fixed the Feedback tab not showing up in the sidebar at all. Root cause: the sidebar identifies each tab by a data attribute, set two different ways — reading the tab's onclick HTML attribute, or (as a fallback) matching its visible text. The Feedback tab's click handler was wired the same way Cancellations already was (which only works because Cancellations has a text-match fallback), but I never added the matching text fallback for \"Feedback\" — so it had no identifier at all, and the sidebar's build step silently dropped any tab it can't identify. Added the missing fallback and verified against a simulation of the exact scenario.",
   "🆕 New Feedback and Reviews page. Upload your monthly Feedbacks-and-Reviews Excel file (admin-only, same as the aggregator statements) and it parses automatically — brand and branch names get cleaned up using the same alias system the order parsers already use, so \"Oregano \"/\"oregano\", \"Al Reem\"/\"Reem Island\", etc. all collapse to one canonical name. Response/follow-up tracking is deliberately left out — that's handled in a separate ops sheet.",
   "🌙 Two heatmaps: by brand and by outlet, both showing complaint counts per category with darker cells for higher counts. Outlets are sorted worst-rate-first (complaints per 1,000 orders, not raw count) so a quiet outlet with a few complaints doesn't rank above a busy one that's actually doing fine proportionally. Click a brand row to filter the outlet heatmap to just that brand.",
@@ -1169,7 +1173,27 @@ async function parseFeedbackXlsx(file){
   }
   if(!records.length)throw new Error("Parsed but found 0 usable rows. Check the file matches the monthly Feedbacks-and-Reviews format.");
   const dates=records.map(r=>r.date).sort();
-  return{metadata:{date_range:[dates[0],dates[dates.length-1]],totalRecords:records.length,skipped},records};
+  // Cross-check against the file's OWN pivot sheet — every monthly file has a Sheet1/Sheet2 tab
+  // with a "Grand Total" row built independently from the same underlying data (usually before
+  // any filter/view changes were applied). If our parsed count doesn't match it, something got
+  // lost — filters, hidden rows, a malformed date, or a future format change — and the person
+  // uploading should know immediately rather than silently trusting a wrong number.
+  let countMismatch=null;
+  try{
+    const pivotName=wb.SheetNames.find(n=>n!==sheetName);
+    if(pivotName){
+      const pivotRows=XLSX.utils.sheet_to_json(wb.Sheets[pivotName],{header:1,defval:""});
+      const gtRow=pivotRows.find(r=>r&&r[0]==="Grand Total");
+      if(gtRow){
+        const nums=gtRow.slice(1).filter(v=>typeof v==="number"&&v>=1);
+        const pivotTotal=nums.length?Math.max(...nums):null;
+        if(pivotTotal!=null&&pivotTotal!==records.length){
+          countMismatch={parsed:records.length,pivotTotal};
+        }
+      }
+    }
+  }catch(e){/* cross-check is a safety net, not a requirement — never block a real upload over it */}
+  return{metadata:{date_range:[dates[0],dates[dates.length-1]],totalRecords:records.length,skipped,countMismatch},records};
 }
 function mergeFeedbackData(existing,fresh){
   // Each upload is "the complete file for that month" — so a re-upload replaces that month's
@@ -1194,14 +1218,24 @@ async function handleFeedbackUpload(filesOrFile){
   else if(Array.isArray(filesOrFile))files=filesOrFile;
   if(!files.length)return;
   const errors=[];
+  const mismatches=[];
   for(const file of files){
     try{
       const fresh=await parseFeedbackXlsx(file);
+      if(fresh.metadata.countMismatch){
+        const{parsed,pivotTotal}=fresh.metadata.countMismatch;
+        mismatches.push(`${file.name}: parsed ${parsed} rows but the file's own pivot table shows ${pivotTotal} — ${parsed<pivotTotal?'some rows may have been missed':'more rows found than expected'}. Check the file before trusting these numbers.`);
+      }
       feedbackData=mergeFeedbackData(feedbackData,fresh);
       saveFeedbackToStorage();
     }catch(e){errors.push(`${file.name}: ${e.message}`);}
   }
   if(errors.length){const e=document.getElementById("etoa");if(e){e.textContent="⚠️ "+errors.join(" · ");e.style.display="block";setTimeout(()=>e.style.display="none",8000);}}
+  if(mismatches.length){
+    const e=document.getElementById("etoa");
+    if(e){e.textContent="⚠️ Row count mismatch — "+mismatches.join(" · ");e.style.display="block";e.style.background="rgba(239,68,68,.95)";setTimeout(()=>e.style.display="none",20000);}
+    else alert("⚠️ Row count mismatch:\n\n"+mismatches.join("\n"));
+  }
   if(typeof renderFeedback==="function")renderFeedback();
 }
 
@@ -13106,15 +13140,16 @@ function feedbackCellStyle(count,rowMax){
   if(ratio>=0.33)return`color:#3D250C;background:#FF8A3D99;font-weight:700`;
   return`color:${feedbackTheme().label};background:${DARK_THEME.cardBorder}66`;
 }
-function feedbackHeatmapRow(label,rowMatrix,rowTotal,rate,onclick,showRate){
+function feedbackHeatmapRow(label,rowMatrix,rowTotal,ratePct,onclick,showRate,branch){
   const T=feedbackTheme();
   const rowMax=Math.max(1,...FEEDBACK_TOP_CATEGORIES.map(([full])=>rowMatrix[full]||0));
   const cells=FEEDBACK_TOP_CATEGORIES.map(([full])=>{
     const n=rowMatrix[full]||0;
-    return`<td style="text-align:center;padding:6px;border-radius:4px;font-size:9.5px;${feedbackCellStyle(n,rowMax)}">${n||''}</td>`;
+    const cellClick=(branch&&n>0)?`feedbackToggleDrill('${branch.replace(/'/g,"\\'")}','${full.replace(/'/g,"\\'")}');event.stopPropagation()`:'';
+    return`<td ${cellClick?`onclick="${cellClick}" style="cursor:pointer;text-align:center;padding:6px;border-radius:4px;font-size:9.5px;${feedbackCellStyle(n,rowMax)}"`:`style="text-align:center;padding:6px;border-radius:4px;font-size:9.5px;${feedbackCellStyle(n,rowMax)}"`}>${n||''}</td>`;
   }).join('');
   const clickAttr=onclick?`onclick="${onclick}" style="cursor:pointer"`:'';
-  const rateCell=showRate?`<td style="text-align:right;color:${rate>=5?'#FF6B6B':rate>=2?'#FF8A3D':'#2ECC71'};font-weight:700;padding:6px;font-size:10px">${rate.toFixed(1)}</td>`:'';
+  const rateCell=showRate?`<td style="text-align:right;color:${ratePct>=0.7?'#FF6B6B':ratePct>=0.3?'#FF8A3D':'#2ECC71'};font-weight:700;padding:6px;font-size:10px">${ratePct.toFixed(2)}%</td>`:'';
   return`<tr ${clickAttr}>
     <td style="color:${T.text};font-weight:600;padding:3px 8px 3px 0;font-size:10.5px;white-space:nowrap">${label}</td>
     ${cells}
@@ -13122,11 +13157,55 @@ function feedbackHeatmapRow(label,rowMatrix,rowTotal,rate,onclick,showRate){
     ${rateCell}
   </tr>`;
 }
-function feedbackHeatmapHead(showRate){
+function feedbackHeatmapHead(showRate,catTrends){
   const T=feedbackTheme();
-  const catHeaders=FEEDBACK_TOP_CATEGORIES.map(([,short])=>`<td style="text-align:center;color:${T.muted};padding:3px;font-weight:700;font-size:9px">${short}</td>`).join('');
-  return`<tr><td></td>${catHeaders}<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:9px">Total</td>${showRate?`<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:9px">Rate/1K</td>`:''}</tr>`;
+  const catHeaders=FEEDBACK_TOP_CATEGORIES.map(([full,short])=>{
+    const trend=catTrends&&catTrends[full];
+    const arrow=trend==null?'':trend>10?`<span style="color:#FF6B6B" title="Rate up ${trend.toFixed(0)}% vs prior period">↗</span>`:trend<-10?`<span style="color:#2ECC71" title="Rate down ${Math.abs(trend).toFixed(0)}% vs prior period">↘</span>`:'';
+    return`<td style="text-align:center;color:${T.muted};padding:3px;font-weight:700;font-size:9px">${short} ${arrow}</td>`;
+  }).join('');
+  return`<tr><td></td>${catHeaders}<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:9px">Total</td>${showRate?`<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:9px">% of orders</td>`:''}</tr>`;
 }
+// Same-length window immediately before the given range — used for every trend/flag calculation
+// so "trend" always means "vs the period right before this one", not vs a fixed calendar point.
+function feedbackPriorPeriodRecords(range){
+  if(!range||!feedbackData)return{recs:[],range:null};
+  const days=Math.round((new Date(range[1])-new Date(range[0]))/86400000)+1;
+  const priorEnd=subDays(range[0],1),priorStart=subDays(priorEnd,days-1);
+  const recs=feedbackData.records.filter(r=>r.date>=priorStart&&r.date<=priorEnd);
+  return{recs,range:[priorStart,priorEnd]};
+}
+// The core fix: flags a (branch, category) cell only when its RATE (complaints ÷ orders) rose
+// vs the prior period — not raw count, which can fall in a slow month while the underlying
+// problem is unchanged or worse. minCount avoids flagging noise from tiny samples (e.g. 1→2).
+function feedbackComputeFlags(recs,priorRecs,byBranch,priorByBranch,minCount){
+  const flags=[];
+  const branches=[...new Set(recs.map(r=>r.branch))];
+  branches.forEach(branch=>{
+    const brand=(recs.find(r=>r.branch===branch)||{}).brand;
+    const currVol=byBranch[brand+'|'+branch]||0;
+    const priorVol=priorByBranch[brand+'|'+branch]||0;
+    if(currVol<=0||priorVol<=0)return;
+    FEEDBACK_TOP_CATEGORIES.forEach(([full,short])=>{
+      const currCount=recs.filter(r=>r.branch===branch&&r.category===full).length;
+      if(currCount<minCount)return;
+      const priorCount=priorRecs.filter(r=>r.branch===branch&&r.category===full).length;
+      const currRate=currCount/currVol,priorRate=priorCount/priorVol;
+      if(priorRate<=0)return;
+      const pctChange=(currRate-priorRate)/priorRate*100;
+      if(pctChange>20)flags.push({branch,category:short,fullCategory:full,currCount,priorCount,pctChange});
+    });
+  });
+  flags.sort((a,b)=>b.pctChange-a.pctChange);
+  return flags;
+}
+let feedbackDrillKey=null; // "branch|category" of the cell currently expanded to show raw complaint text
+function feedbackToggleDrill(branch,category){
+  const key=branch+'|'+category;
+  feedbackDrillKey=feedbackDrillKey===key?null:key;
+  renderFeedback();
+}
+
 async function renderFeedback(){
   const pg=document.getElementById("page-feedback");if(!pg)return;
   const T=feedbackTheme();
@@ -13150,15 +13229,32 @@ async function renderFeedback(){
   const recs=feedbackFilteredRecords();
   const range=feedbackDateRange(recs);
   const{byBranch,byBrand}=feedbackOrderVolumeMaps(range);
+  const currTotalOrders=Object.values(byBrand).reduce((s,v)=>s+v,0);
 
-  // ── Prior-period comparison (for the trend KPI) — same elapsed length, immediately before ──
-  let trendPct=null;
-  if(range){
-    const days=Math.round((new Date(range[1])-new Date(range[0]))/86400000)+1;
-    const priorEnd=subDays(range[0],1),priorStart=subDays(priorEnd,days-1);
-    const priorCount=feedbackData.records.filter(r=>r.date>=priorStart&&r.date<=priorEnd).length;
-    if(priorCount>0)trendPct=(recs.length-priorCount)/priorCount*100;
-  }
+  // ── Prior-period comparison — same elapsed length, immediately before. Trend is RATE-based
+  // (complaints ÷ orders), not raw count: a slow month can drop complaint COUNT purely from
+  // fewer orders while the underlying per-order problem stays flat or gets worse. Comparing
+  // rates isolates the real signal from the volume noise. ──
+  const{recs:priorRecs,range:priorRange}=feedbackPriorPeriodRecords(range);
+  const{byBranch:priorByBranch,byBrand:priorByBrand}=feedbackOrderVolumeMaps(priorRange);
+  const priorTotalOrders=Object.values(priorByBrand).reduce((s,v)=>s+v,0);
+  const currRatePct=currTotalOrders>0?recs.length/currTotalOrders*100:null;
+  const priorRatePct=priorTotalOrders>0?priorRecs.length/priorTotalOrders*100:null;
+  const rateTrendPct=(currRatePct!=null&&priorRatePct!=null&&priorRatePct>0)?(currRatePct-priorRatePct)/priorRatePct*100:null;
+  const countTrendPct=(priorRecs.length>0)?(recs.length-priorRecs.length)/priorRecs.length*100:null;
+  // The specific scenario flagged: raw count reads as improving while the rate is actually worse
+  const maskedByVolume=(countTrendPct!=null&&rateTrendPct!=null&&countTrendPct<0&&rateTrendPct>0);
+
+  // ── Per (branch, category) flags — the granular "which branch, which category" detail ──
+  const flags=feedbackComputeFlags(recs,priorRecs,byBranch,priorByBranch,3);
+  // Category-level trend (aggregated across all branches) for the heatmap header arrows
+  const catTrends={};
+  FEEDBACK_TOP_CATEGORIES.forEach(([full])=>{
+    const currC=recs.filter(r=>r.category===full).length;
+    const priorC=priorRecs.filter(r=>r.category===full).length;
+    const cr=currTotalOrders>0?currC/currTotalOrders:0,pr=priorTotalOrders>0?priorC/priorTotalOrders:0;
+    catTrends[full]=pr>0?(cr-pr)/pr*100:null;
+  });
 
   // ── Category totals (for the "top category" KPI) ──
   const catTotals={};
@@ -13166,6 +13262,21 @@ async function renderFeedback(){
   const topCat=Object.entries(catTotals).sort((a,b)=>b[1]-a[1])[0];
   const internalCount=recs.filter(r=>r.fault==="Internal Error").length;
   const internalPct=recs.length?internalCount/recs.length*100:0;
+
+  // ── Alert banner — compact (Option 1 style) but carries the specific branch+category flags
+  // (Option 2's granularity) rather than one vague aggregate line ──
+  let alertBanner='';
+  if(maskedByVolume||flags.length){
+    const topFlags=flags.slice(0,3);
+    const headline=maskedByVolume
+      ?`Complaint rate is rising, not falling — raw count is down ${Math.abs(countTrendPct).toFixed(0)}% but that's from fewer orders, not fewer problems. Per-order rate is up ${rateTrendPct.toFixed(0)}%.`
+      :`${topFlags.length} categor${topFlags.length===1?'y is':'ies are'} rising faster than order volume explains.`;
+    const flagList=topFlags.map(f=>`<span style="display:inline-block;margin-top:4px"><strong style="color:${T.text}">${f.branch}</strong> — ${f.category} up <strong style="color:#FF6B6B">${f.pctChange.toFixed(0)}%</strong> (${f.priorCount}→${f.currCount})</span>`).join('<br>');
+    alertBanner=`<div class="card" style="border-left:3px solid #FF6B6B;padding:10px 12px;margin-bottom:12px">
+      <div style="font-size:11px;font-weight:700;color:#FF6B6B;margin-bottom:2px">⚠ ${headline}</div>
+      ${flagList?`<div style="font-size:10.5px;color:${T.muted};line-height:1.6">${flagList}</div>`:''}
+    </div>`;
+  }
 
   // ── Filter bar ──
   const monthBtn=m=>{const on=feedbackFilterMonths.has(m);const lbl=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"});return`<button onclick="feedbackToggleMonth('${m}')" style="padding:3px 10px;border-radius:12px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'};color:${on?'#FF8A3D':T.label};font-size:10px;font-weight:700;cursor:pointer">${lbl}</button>`;};
@@ -13183,7 +13294,7 @@ async function renderFeedback(){
   const kpi=(lbl,val,clr)=>`<div class="card" style="padding:8px 10px;border-left:3px solid ${clr}"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">${lbl}</div><div style="font-size:17px;font-weight:800;color:${clr==='#f59e0b'?T.text:clr}">${val}</div></div>`;
   const kpiStrip=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
     ${kpi("Total",recs.length.toLocaleString(),"#f59e0b")}
-    ${kpi("Trend",trendPct==null?"—":`${trendPct>=0?'▲':'▼'} ${Math.abs(trendPct).toFixed(0)}%`,trendPct==null?T.muted:trendPct>=0?'#FF6B6B':'#2ECC71')}
+    ${kpi("Rate trend <span style='opacity:.6;font-weight:500'>· % of orders</span>",rateTrendPct==null?"—":`${rateTrendPct>=0?'▲':'▼'} ${Math.abs(rateTrendPct).toFixed(0)}%`,rateTrendPct==null?T.muted:rateTrendPct>=0?'#FF6B6B':'#2ECC71')}
     ${kpi("Top category",topCat?FEEDBACK_TOP_CATEGORIES.find(([f])=>f===topCat[0])?.[1]||topCat[0].split(' ')[0]:"—","#f59e0b")}
     ${kpi("Internal fault",internalPct.toFixed(0)+"%","#FF8A3D")}
   </div>`;
@@ -13195,33 +13306,49 @@ async function renderFeedback(){
     const rowM=brandMatrix[brand]||{};
     const total=brandTotals[brand]||0;
     const vol=byBrand[brand]||0;
-    const rate=vol>0?total/vol*1000:0;
+    const ratePct=vol>0?total/vol*100:0;
     const active=feedbackFilterBrand===brand;
     const onclick=`feedbackToggleBrandFilter('${brand.replace(/'/g,"\\'")}')`;
-    return feedbackHeatmapRow(`${active?'▸ ':''}${brand}`,rowM,total,rate,onclick,true);
+    return feedbackHeatmapRow(`${active?'▸ ':''}${brand}`,rowM,total,ratePct,onclick,true,null);
   }).join('');
   const brandHeatmap=`<div class="card" style="padding:12px 14px;margin-bottom:12px">
     <div class="ct" style="margin-bottom:2px">By brand <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a row to filter outlets below</span></div>
-    <table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true)}${brandRows}</table>
+    <table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true,catTrends)}${brandRows}</table>
   </div>`;
 
-  // ── Outlet heatmap (worst rate first, filtered by clicked brand if any) ──
+  // ── Outlet heatmap (worst rate first, filtered by clicked brand if any) — cells are clickable
+  // to drill into the raw complaint text for that outlet+category ──
   const outletRecs=feedbackFilterBrand?recs.filter(r=>r.brand===feedbackFilterBrand):recs;
   const{matrix:outletMatrix,totals:outletTotals}=feedbackBuildMatrix(outletRecs,"branch");
   const outletRows=Object.keys(outletTotals).map(branch=>{
-    // volume lookup needs the branch's brand — outletRecs may span multiple brands if no brand filter is active
     const brandForBranch=feedbackFilterBrand||(outletRecs.find(r=>r.branch===branch)||{}).brand;
     const vol=byBranch[brandForBranch+'|'+branch]||0;
-    const rate=vol>0?outletTotals[branch]/vol*1000:0;
-    return{branch,total:outletTotals[branch],rate,matrix:outletMatrix[branch]};
-  }).sort((a,b)=>b.rate-a.rate);
-  const outletRowsHTML=outletRows.map(o=>feedbackHeatmapRow(o.branch,o.matrix,o.total,o.rate,null,true)).join('');
+    const ratePct=vol>0?outletTotals[branch]/vol*100:0;
+    return{branch,total:outletTotals[branch],ratePct,matrix:outletMatrix[branch]};
+  }).sort((a,b)=>b.ratePct-a.ratePct);
+  const outletRowsHTML=outletRows.map(o=>feedbackHeatmapRow(o.branch,o.matrix,o.total,o.ratePct,null,true,o.branch)).join('');
   const clearBrandBtn=feedbackFilterBrand?`<button onclick="feedbackToggleBrandFilter('${feedbackFilterBrand.replace(/'/g,"\\'")}')" style="font-size:9px;color:${T.label};background:none;border:1px solid ${T.border};padding:2px 8px;border-radius:5px;cursor:pointer;margin-left:6px">✕ ${feedbackFilterBrand}</button>`:'';
+  // Drill-down panel — shows raw complaint text for whichever cell was last clicked
+  let drillPanel='';
+  if(feedbackDrillKey){
+    const[dBranch,dCategory]=feedbackDrillKey.split('|');
+    const matches=outletRecs.filter(r=>r.branch===dBranch&&r.category===dCategory);
+    if(matches.length){
+      const items=matches.slice(0,15).map(r=>`<div style="padding:6px 0;border-bottom:1px solid ${T.rowBg};font-size:10.5px"><span style="color:${T.label}">${r.date} · ${r.aggregator}</span><br><span style="color:${T.text}">${(r.text||'(no text)').replace(/</g,'&lt;')}</span></div>`).join('');
+      drillPanel=`<div class="card" style="padding:12px 14px;margin-top:10px">
+        <div class="ct" style="margin-bottom:2px;display:flex;align-items:center;justify-content:space-between">
+          <span>${dBranch} · ${FEEDBACK_TOP_CATEGORIES.find(([f])=>f===dCategory)?.[1]||dCategory} <span style="color:${T.label};font-weight:400;text-transform:none">(${matches.length})</span></span>
+          <button onclick="feedbackDrillKey=null;renderFeedback()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:2px 8px;border-radius:5px;font-size:9px;cursor:pointer">✕ Close</button>
+        </div>
+        <div style="margin-top:6px">${items}${matches.length>15?`<div style="font-size:9px;color:${T.label};padding-top:6px">+ ${matches.length-15} more</div>`:''}</div>
+      </div>`;
+    }
+  }
   const outletHeatmap=`<div class="card" style="padding:12px 14px">
-    <div class="ct" style="margin-bottom:2px;display:flex;align-items:center">By outlet <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0;margin-left:6px">· worst rate first</span>${clearBrandBtn}</div>
-    <table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true)}${outletRowsHTML}</table>
+    <div class="ct" style="margin-bottom:2px;display:flex;align-items:center">By outlet <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0;margin-left:6px">· worst rate first · click a cell for examples</span>${clearBrandBtn}</div>
+    <table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true,catTrends)}${outletRowsHTML}</table>
     ${!outletRows.length?`<div style="text-align:center;color:${T.muted};padding:16px;font-size:11px">No records for this selection.</div>`:''}
-  </div>`;
+  </div>${drillPanel}`;
 
   const uploadChip=`<button onclick="document.getElementById('feedback-file-input').click()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:4px 10px;border-radius:6px;font-size:10px;cursor:pointer">⬆ Upload month</button><input type="file" id="feedback-file-input" accept=".xlsx,.xls" multiple style="display:none" onchange="handleFeedbackUpload(this.files);this.value='';">`;
 
@@ -13231,6 +13358,7 @@ async function renderFeedback(){
       ${uploadChip}
     </div>
     ${filterBar}
+    ${alertBanner}
     ${kpiStrip}
     ${brandHeatmap}
     ${outletHeatmap}`;
