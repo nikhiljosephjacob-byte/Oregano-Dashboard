@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-195";
+const BUILD_VERSION="2026-08-06-196";
 const BUILD_NOTES=[
+  "🐛 Fixed the Feedback tab not showing up in the sidebar at all. Root cause: the sidebar identifies each tab by a data attribute, set two different ways — reading the tab's onclick HTML attribute, or (as a fallback) matching its visible text. The Feedback tab's click handler was wired the same way Cancellations already was (which only works because Cancellations has a text-match fallback), but I never added the matching text fallback for \"Feedback\" — so it had no identifier at all, and the sidebar's build step silently dropped any tab it can't identify. Added the missing fallback and verified against a simulation of the exact scenario.",
   "🆕 New Feedback and Reviews page. Upload your monthly Feedbacks-and-Reviews Excel file (admin-only, same as the aggregator statements) and it parses automatically — brand and branch names get cleaned up using the same alias system the order parsers already use, so \"Oregano \"/\"oregano\", \"Al Reem\"/\"Reem Island\", etc. all collapse to one canonical name. Response/follow-up tracking is deliberately left out — that's handled in a separate ops sheet.",
   "🌙 Two heatmaps: by brand and by outlet, both showing complaint counts per category with darker cells for higher counts. Outlets are sorted worst-rate-first (complaints per 1,000 orders, not raw count) so a quiet outlet with a few complaints doesn't rank above a busy one that's actually doing fine proportionally. Click a brand row to filter the outlet heatmap to just that brand.",
   "📅 Filter by month (multi-select) or year. KPI strip shows total feedback, trend vs. the immediately-prior period of the same length, top category, and % attributed to internal/kitchen fault.",
@@ -4237,7 +4238,7 @@ function multiLineChart(id,labels,series){const ctx=document.getElementById(id)?
 // onclick as a JS property instead, which getAttribute can't see, so those fall back to matching
 // their known label text. Idempotent — skips any tab that already has data-pg set.
 function tagTabsWithPageIds(){
-  const textMap=[[/compare/i,"compare"],[/cancellations/i,"cancellations"],[/admin/i,"admin"],
+  const textMap=[[/compare/i,"compare"],[/cancellations/i,"cancellations"],[/feedback/i,"feedback"],[/admin/i,"admin"],
     [/ads performance/i,"cpc"],[/kpi/i,"kpi"],[/discount burn/i,"discounts"],[/campaigns/i,"campaigns"],
     [/platforms/i,"platforms"],[/outlets/i,"outlets"],[/brands/i,"brands"],[/overview/i,"overview"]];
   document.querySelectorAll(".tab").forEach(t=>{
