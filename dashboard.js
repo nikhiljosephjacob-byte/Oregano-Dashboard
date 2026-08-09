@@ -13,8 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-198";
+const BUILD_VERSION="2026-08-06-199";
 const BUILD_NOTES=[
+  "🖱️ Month selection redesigned: plain click now selects just that month (replacing whatever was selected before); Ctrl/Cmd+click adds it to the selection. No more accidental multi-select. The filter bar now also shows the exact comparison window in plain text — e.g. \"Showing Jun 1 → Jul 31, compared against Apr 1 → May 31\" — so the prior-period math is never a mystery.",
+  "🔍 Category headers are now clickable — click \"Taste\", \"Missing\", etc. on either heatmap to see every complaint in that category across all outlets currently in view.",
+  "🆕 New \"By Category\" table between By Brand and By Outlet — one collapsible section per category, outlets ranked by count underneath.",
   "🐛 CRITICAL: fixed the timezone date bug causing January records to show as December. Traced and reproduced exactly — SheetJS's date conversion has a real quirk for date-only cells that interacts badly with certain timezones, confirmed specifically under Asia/Dubai (where you almost certainly are). Rewrote the date parsing to bypass that entirely using pure UTC arithmetic — tested clean across 5 timezones including the two most extreme UTC offsets on Earth.",
   "🐛 CRITICAL: fixed the April-showing-11-instead-of-147 bug. Root cause was a race condition — uploading a second file before the first one's server sync finished could silently overwrite it, a classic lost-update bug. This is also very likely why it looked random/file-specific. Uploads are now strictly serialized (queued, never overlapping) regardless of how fast you click, and the upload properly waits for the server sync to complete before considering itself done.",
   "🐛 Fixed Fyoozhen DIP showing as 3 separate outlets — the branch-name matching didn't have entries for the exact dash/spacing variants your files use (\"FYOO-DIP\" vs \"Fyoo-DIP\" vs \"FYOO - DIP\"). Added the specific aliases plus a more general fallback that normalizes dashes automatically, so future spelling variants at any location don't create the same fragmentation.",
@@ -13211,7 +13214,7 @@ function feedbackHeatmapHead(showRate,catTrends){
   const catHeaders=FEEDBACK_TOP_CATEGORIES.map(([full,short])=>{
     const trend=catTrends&&catTrends[full];
     const arrow=trend==null?'':trend>10?`<span style="color:#FF6B6B" title="Rate up ${trend.toFixed(0)}% vs prior period">↗</span>`:trend<-10?`<span style="color:#2ECC71" title="Rate down ${Math.abs(trend).toFixed(0)}% vs prior period">↘</span>`:'';
-    return`<td style="text-align:center;color:${T.muted};padding:3px;font-weight:700;font-size:9px">${short} ${arrow}</td>`;
+    return`<td onclick="feedbackToggleDrill('__ALL__','${full.replace(/'/g,"\\'")}')" style="text-align:center;color:${T.muted};padding:3px;font-weight:700;font-size:9px;cursor:pointer;text-decoration:underline dotted" title="Click to see every ${short} complaint across all outlets">${short} ${arrow}</td>`;
   }).join('');
   return`<tr><td></td>${catHeaders}<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:9px">Total</td>${showRate?`<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:9px">% of orders</td>`:''}</tr>`;
 }
@@ -13328,15 +13331,19 @@ async function renderFeedback(){
   }
 
   // ── Filter bar ──
-  const monthBtn=m=>{const on=feedbackFilterMonths.has(m);const lbl=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"});return`<button onclick="feedbackToggleMonth('${m}')" style="padding:3px 10px;border-radius:12px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'};color:${on?'#FF8A3D':T.label};font-size:10px;font-weight:700;cursor:pointer">${lbl}</button>`;};
+  const monthBtn=m=>{const on=feedbackFilterMonths.has(m);const lbl=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"});return`<button onclick="feedbackToggleMonth('${m}',event)" style="padding:3px 10px;border-radius:12px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'};color:${on?'#FF8A3D':T.label};font-size:10px;font-weight:700;cursor:pointer" title="Click to select just this month. Ctrl/Cmd+click to add it to the current selection.">${lbl}</button>`;};
   const yearBtn=y=>{const on=feedbackFilterYear===y;return`<button onclick="feedbackSetYear('${y}')" style="padding:3px 10px;border-radius:6px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'};color:${on?'#FF8A3D':T.label};font-size:10px;font-weight:700;cursor:pointer">${y}</button>`;};
-  const filterBar=`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;padding:10px 12px;margin-bottom:12px">
-    <span style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Months</span>
-    ${allMonths.map(monthBtn).join('')}
-    <span style="color:${T.border};margin:0 4px">|</span>
-    <span style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Year</span>
-    ${allYears.map(yearBtn).join('')}
-    ${(feedbackFilterMonths.size||feedbackFilterYear)?`<button onclick="feedbackClearFilters()" style="margin-left:auto;background:none;border:1px solid ${T.border};color:${T.muted};padding:3px 10px;border-radius:6px;font-size:10px;cursor:pointer">✕ Clear</button>`:''}
+  const compareLine=(range&&priorRange)?`<div style="font-size:9.5px;color:${T.label};margin-top:6px;padding-top:6px;border-top:1px solid ${T.rowBg}">Showing <strong style="color:${T.text}">${fmtDisp(range[0])} → ${fmtDisp(range[1])}</strong> · compared against <strong style="color:${T.text}">${fmtDisp(priorRange[0])} → ${fmtDisp(priorRange[1])}</strong> (same length, immediately before)</div>`:'';
+  const filterBar=`<div style="display:flex;flex-wrap:wrap;background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;padding:10px 12px;margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;width:100%">
+      <span style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Months</span>
+      ${allMonths.map(monthBtn).join('')}
+      <span style="color:${T.border};margin:0 4px">|</span>
+      <span style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Year</span>
+      ${allYears.map(yearBtn).join('')}
+      ${(feedbackFilterMonths.size||feedbackFilterYear)?`<button onclick="feedbackClearFilters()" style="margin-left:auto;background:none;border:1px solid ${T.border};color:${T.muted};padding:3px 10px;border-radius:6px;font-size:10px;cursor:pointer">✕ Clear</button>`:''}
+    </div>
+    ${compareLine}
   </div>`;
 
   // ── KPI strip ──
@@ -13365,6 +13372,30 @@ async function renderFeedback(){
     <table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true,catTrends)}${brandRows}</table>
   </div>`;
 
+  // ── By Category (category-first, outlets nested underneath) — respects the same brand filter
+  // as the outlet heatmap below it, so the two stay consistent when a brand row is clicked ──
+  const catFilterRecs=feedbackFilterBrand?recs.filter(r=>r.brand===feedbackFilterBrand):recs;
+  const categorySections=FEEDBACK_TOP_CATEGORIES.map(([full,short])=>{
+    const catRecs=catFilterRecs.filter(r=>r.category===full);
+    if(!catRecs.length)return'';
+    const byOutlet={};
+    catRecs.forEach(r=>{byOutlet[r.branch]=(byOutlet[r.branch]||0)+1;});
+    const outletRowsForCat=Object.entries(byOutlet).sort((a,b)=>b[1]-a[1]).map(([branch,count])=>
+      `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;border-bottom:1px solid ${T.rowBg}">
+        <span style="font-size:10.5px;color:${T.text}">${branch}</span>
+        <span style="font-size:10.5px;color:${T.muted};font-weight:700">${count}</span>
+      </div>`
+    ).join('');
+    return`<details style="margin-bottom:6px" ${catRecs.length>=15?'open':''}>
+      <summary style="cursor:pointer;font-size:11px;font-weight:700;color:${T.text};padding:7px 10px;background:${T.rowBg};border-radius:6px;list-style:none">▸ ${short} <span style="color:${T.label};font-weight:500">(${catRecs.length} across ${Object.keys(byOutlet).length} outlets)</span></summary>
+      <div style="padding-top:2px">${outletRowsForCat}</div>
+    </details>`;
+  }).join('');
+  const categoryHeatmap=`<div class="card" style="padding:12px 14px;margin-bottom:12px">
+    <div class="ct" style="margin-bottom:6px">By category <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· outlets ranked by count within each</span></div>
+    ${categorySections||`<div style="text-align:center;color:${T.muted};padding:16px;font-size:11px">No records for this selection.</div>`}
+  </div>`;
+
   // ── Outlet heatmap (worst rate first, filtered by clicked brand if any) — cells are clickable
   // to drill into the raw complaint text for that outlet+category ──
   const outletRecs=feedbackFilterBrand?recs.filter(r=>r.brand===feedbackFilterBrand):recs;
@@ -13377,19 +13408,21 @@ async function renderFeedback(){
   }).sort((a,b)=>b.ratePct-a.ratePct);
   const outletRowsHTML=outletRows.map(o=>feedbackHeatmapRow(o.branch,o.matrix,o.total,o.ratePct,null,true,o.branch)).join('');
   const clearBrandBtn=feedbackFilterBrand?`<button onclick="feedbackToggleBrandFilter('${feedbackFilterBrand.replace(/'/g,"\\'")}')" style="font-size:9px;color:${T.label};background:none;border:1px solid ${T.border};padding:2px 8px;border-radius:5px;cursor:pointer;margin-left:6px">✕ ${feedbackFilterBrand}</button>`:'';
-  // Drill-down panel — shows raw complaint text for whichever cell was last clicked
+  // Drill-down panel — shows raw complaint text for whichever cell (or category header) was last clicked
   let drillPanel='';
   if(feedbackDrillKey){
     const[dBranch,dCategory]=feedbackDrillKey.split('|');
-    const matches=outletRecs.filter(r=>r.branch===dBranch&&r.category===dCategory);
+    const allOutlets=dBranch==='__ALL__';
+    const matches=outletRecs.filter(r=>(allOutlets||r.branch===dBranch)&&r.category===dCategory);
     if(matches.length){
-      const items=matches.slice(0,15).map(r=>`<div style="padding:6px 0;border-bottom:1px solid ${T.rowBg};font-size:10.5px"><span style="color:${T.label}">${r.date} · ${r.aggregator}</span><br><span style="color:${T.text}">${(r.text||'(no text)').replace(/</g,'&lt;')}</span></div>`).join('');
+      const items=matches.slice(0,25).map(r=>`<div style="padding:6px 0;border-bottom:1px solid ${T.rowBg};font-size:10.5px"><span style="color:${T.label}">${allOutlets?r.branch+' · ':''}${r.date} · ${r.aggregator}</span><br><span style="color:${T.text}">${(r.text||'(no text)').replace(/</g,'&lt;')}</span></div>`).join('');
+      const catShort=FEEDBACK_TOP_CATEGORIES.find(([f])=>f===dCategory)?.[1]||dCategory;
       drillPanel=`<div class="card" style="padding:12px 14px;margin-top:10px">
         <div class="ct" style="margin-bottom:2px;display:flex;align-items:center;justify-content:space-between">
-          <span>${dBranch} · ${FEEDBACK_TOP_CATEGORIES.find(([f])=>f===dCategory)?.[1]||dCategory} <span style="color:${T.label};font-weight:400;text-transform:none">(${matches.length})</span></span>
+          <span>${allOutlets?catShort+' — all outlets':dBranch+' · '+catShort} <span style="color:${T.label};font-weight:400;text-transform:none">(${matches.length})</span></span>
           <button onclick="feedbackDrillKey=null;renderFeedback()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:2px 8px;border-radius:5px;font-size:9px;cursor:pointer">✕ Close</button>
         </div>
-        <div style="margin-top:6px">${items}${matches.length>15?`<div style="font-size:9px;color:${T.label};padding-top:6px">+ ${matches.length-15} more</div>`:''}</div>
+        <div style="margin-top:6px">${items}${matches.length>25?`<div style="font-size:9px;color:${T.label};padding-top:6px">+ ${matches.length-25} more</div>`:''}</div>
       </div>`;
     }
   }
@@ -13410,11 +13443,20 @@ async function renderFeedback(){
     ${alertBanner}
     ${kpiStrip}
     ${brandHeatmap}
+    ${categoryHeatmap}
     ${outletHeatmap}`;
 }
-function feedbackToggleMonth(m){
-  if(feedbackFilterMonths.has(m))feedbackFilterMonths.delete(m);
-  else feedbackFilterMonths.add(m);
+function feedbackToggleMonth(m,event){
+  const multi=event&&(event.ctrlKey||event.metaKey);
+  if(multi){
+    if(feedbackFilterMonths.has(m))feedbackFilterMonths.delete(m);
+    else feedbackFilterMonths.add(m);
+  }else{
+    // Plain click: select just this month, unless it's already the ONLY thing selected —
+    // then clear the filter entirely (acts as an off switch).
+    const isOnlyThisOne=feedbackFilterMonths.size===1&&feedbackFilterMonths.has(m);
+    feedbackFilterMonths=isOnlyThisOne?new Set():new Set([m]);
+  }
   renderFeedback();
 }
 function feedbackSetYear(y){
