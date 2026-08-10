@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-212";
+const BUILD_VERSION="2026-08-06-213";
 const BUILD_NOTES=[
+  "🎨 Corrected the funding disclosure from last build — top \"Invested\" now shows the true total (17K, everything actually being spent) instead of merchant-only. The merchant/aggregator split moved down into the Contractual line where it's actually relevant, worded clearly (\"required\" added so it's obvious which number is the target).",
   "🔄 Campaigns page restructured: Active/Upcoming/History are now combinable (click to toggle any combination — was exclusive before). Filter bar (Brand/Location/Branch) moved above the status selector, shown once regardless of how many statuses are combined. History's count number is gone (kept the toggle, dropped the number). Forecaster is now its own prominent card, not one pill among equals.",
   "🆕 Campaign contribution tooltip now flags when another promo was running during the baseline period — one line, only shown when relevant, so \"incremental\" doesn't silently mean promo-vs-different-promo.",
   "💰 Fixed a real financial-accuracy bug: aggregator-funded ad spend (e.g. \"funded by Noon\") was being counted as if the merchant paid for it, inflating \"Invested\" figures. Now split — Invested shows your own spend only, with the funded amount shown separately alongside it. Fixed at both the Aggregator card and Brand card levels. Verified against your exact example (15K own + 2K Noon-funded = 17K total).",
@@ -5795,14 +5796,14 @@ function cpcRenderAggLevel(){
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:12px">
-        <div><div style="font-size:11px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Invested</div><div style="font-size:22px;font-weight:800;color:${T.text}">${fmtAEDTip(inv)}</div>${aggFundedAlloc>0?`<div style="font-size:10.5px;color:#22C55E;font-weight:700;margin-top:2px">+ ${fmtAEDTip(aggFundedAlloc)} funded by ${A.name} · total ${fmtAEDTip(inv+aggFundedAlloc)}</div>`:''}</div>
+        <div><div style="font-size:11px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Invested</div><div style="font-size:22px;font-weight:800;color:${T.text}">${fmtAEDTip(inv+aggFundedAlloc)}</div></div>
         <div><div style="font-size:11px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Consumed</div><div style="font-size:22px;font-weight:800;color:${T.text}">${fmtAEDTip(spent)}</div></div>
       </div>
       <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px"><span style="color:${T.label};font-weight:600">Budget used</span><span style="color:${T.muted};font-weight:700">${consum.toFixed(0)}%</span></div>
       <div style="width:100%;height:7px;background:${T.rowBg2};border-radius:4px;overflow:hidden;margin-bottom:14px"><div style="height:100%;width:${Math.min(100,consum)}%;background:${cpcBarColor(consum)}"></div></div>
       ${unmappedNote}
       <div style="font-size:13px;color:${clr};font-weight:700">View ${Object.keys(A.brands).length} brands →</div>
-      ${isViewingCurrent?(()=>{const ct=cpcModel.contractual&&cpcModel.contractual[A.name];if(!ct)return '';const gap=ct.expected-ct.investedSoFar;const metClr=ct.investedSoFar>=ct.expected?'#16A34A':'#D97706';return `<div style="margin-top:14px;padding-top:14px;border-top:1px dashed ${T.border}"><div style="font-size:11px;color:${T.label};font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Contractual (${(ct.pct*100).toFixed(0)}% of ${cpcMonthLabel(ct.priorMonth)} group sales)</div><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:16px;font-weight:800;color:${T.text}">${fmtAEDTip(ct.investedSoFar)}<span style="font-size:12px;color:${T.label};font-weight:600"> / ${fmtAEDTip(ct.expected)}</span></span><span style="font-size:13px;font-weight:800;color:${metClr}">${ct.investedSoFar>=ct.expected?'✓ met':fmtAEDTip(gap)+' short'}</span></div></div>`;})():''}
+      ${isViewingCurrent?(()=>{const ct=cpcModel.contractual&&cpcModel.contractual[A.name];if(!ct)return '';const gap=ct.expected-ct.investedSoFar;const metClr=ct.investedSoFar>=ct.expected?'#16A34A':'#D97706';const fundedNote=aggFundedAlloc>0?`<div style="font-size:10.5px;color:#22C55E;margin-top:4px">Includes ${fmtAEDTip(aggFundedAlloc)} funded by ${A.name} — your own spend is ${fmtAEDTip(inv)}</div>`:'';return `<div style="margin-top:14px;padding-top:14px;border-top:1px dashed ${T.border}"><div style="font-size:11px;color:${T.label};font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Contractual (${(ct.pct*100).toFixed(0)}% of ${cpcMonthLabel(ct.priorMonth)} group sales)</div><div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:16px;font-weight:800;color:${T.text}">${fmtAEDTip(ct.investedSoFar)}<span style="font-size:12px;color:${T.label};font-weight:600"> / ${fmtAEDTip(ct.expected)} required</span></span><span style="font-size:13px;font-weight:800;color:${metClr}">${ct.investedSoFar>=ct.expected?'✓ met':fmtAEDTip(gap)+' short'}</span></div>${fundedNote}</div>`;})():''}
     </div>`;
   }).join('');
   return quickViewBar+cpcActionStrip()+`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${cards}</div>`;
@@ -5884,7 +5885,7 @@ function cpcRenderBrandLevel(ag){
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px">
-        <div><div style="font-size:10px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Budget</div><div style="font-size:18px;font-weight:800;color:${T.text}">${fmtAEDTip(inv)}</div>${aggFundedAlloc>0?`<div style="font-size:9.5px;color:#22C55E;font-weight:700;margin-top:1px">+${fmtAEDTip(aggFundedAlloc)} by ${ag}</div>`:''}</div>
+        <div><div style="font-size:10px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Budget</div><div style="font-size:18px;font-weight:800;color:${T.text}">${fmtAEDTip(inv+aggFundedAlloc)}</div>${aggFundedAlloc>0?`<div style="font-size:9.5px;color:#22C55E;margin-top:1px">incl. ${fmtAEDTip(aggFundedAlloc)} by ${ag}</div>`:''}</div>
         <div><div style="font-size:10px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Consumed</div><div style="font-size:18px;font-weight:800;color:${T.text}">${fmtAEDTip(spent)}</div></div>
       </div>
       <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:5px"><span style="color:${T.label};font-weight:600">Budget used</span><span style="color:${T.muted};font-weight:700">${consum.toFixed(0)}%</span></div>
