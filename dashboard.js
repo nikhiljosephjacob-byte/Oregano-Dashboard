@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-210";
+const BUILD_VERSION="2026-08-06-212";
 const BUILD_NOTES=[
+  "🔄 Campaigns page restructured: Active/Upcoming/History are now combinable (click to toggle any combination — was exclusive before). Filter bar (Brand/Location/Branch) moved above the status selector, shown once regardless of how many statuses are combined. History's count number is gone (kept the toggle, dropped the number). Forecaster is now its own prominent card, not one pill among equals.",
+  "🆕 Campaign contribution tooltip now flags when another promo was running during the baseline period — one line, only shown when relevant, so \"incremental\" doesn't silently mean promo-vs-different-promo.",
   "💰 Fixed a real financial-accuracy bug: aggregator-funded ad spend (e.g. \"funded by Noon\") was being counted as if the merchant paid for it, inflating \"Invested\" figures. Now split — Invested shows your own spend only, with the funded amount shown separately alongside it. Fixed at both the Aggregator card and Brand card levels. Verified against your exact example (15K own + 2K Noon-funded = 17K total).",
   "🆕 Feedback page: Overview/Detail toggle is live. Overview shows the trend chart (complaints + rate by month), the months×category heatmap, and a \"which outlets are driving it\" chart. Click a category name in the heatmap to drive that chart explicitly — no more auto-guessing which category to show.",
   "🎛️ New filter dropdowns for Category, Aggregator, and Outlet added alongside Brand — all four now work the same way whether you click a table row or use the dropdown.",
@@ -7784,7 +7786,15 @@ async function runAskAI(){
 
 // ── CAMPAIGN MANAGER ──────────────────────────────────────────────────────
 const CAMPAIGN_GID="1647275459";
-let campaignData=[],campLoaded=false,campTab='active',selCamp=null;
+let campaignData=[],campLoaded=false,campTab='browse',selCamp=null;
+let campStatusFilter=new Set(['active']); // multi-select: which of active/upcoming/history are shown together in 'browse' mode
+function campToggleStatus(status){
+  if(campStatusFilter.has(status))campStatusFilter.delete(status);
+  else campStatusFilter.add(status);
+  if(!campStatusFilter.size)campStatusFilter.add('active'); // never allow zero selected — nothing to show
+  campTab='browse';
+  renderCampaigns();
+}
 // Campaign analysis cache — campAnalysisV2 scans allData repeatedly, so memoize per campaign.
 // Keyed by campaign index + elasticity + latest date. Cleared when data reloads.
 let campAnalysisCache=new Map();
@@ -7793,7 +7803,7 @@ let campAnalysisCache=new Map();
 // campAnalysisCache; we hook the same points to clear this cache too).
 let _observedRatioCache=new Map();
 let campModelBuilt=false,campModelBuilding=false;
-let campReturnTab='active'; // which tab to return to when leaving the deep-dive
+let campReturnTab='browse'; // which tab to return to when leaving the deep-dive
 // ── CPC INVESTMENTS STATE ──
 const CPC_GID="2056065310";
 let cpcData=[],cpcLoaded=false;
@@ -8608,7 +8618,7 @@ function campCardGrid(camps,showProfit){
         const verdictSym=roi==null?'—':roi>=1?'✅':roi>=0.4?'⚠️':roi>=0?'❌':'🛑';
         const liftClr=a.ordersLift>=0?'#22C55E':'#EF4444';
         // Preserve the existing hover calculation tooltip system exactly as it was.
-        const _ctipId=storeTip(buildCampCalcTipHTML(a));
+        const _ctipId=storeTip(buildCampCalcTipHTML(a,c));
         metricsHTML=`
           <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-top:10px">
             <div data-ctip="${_ctipId}" style="cursor:help"><div style="font-size:9px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Incr. Contribution <span style="opacity:.45;font-size:8px">ⓘ</span></div><div style="font-size:22px;font-weight:800;color:${incrClr}">${a.incrContribTotal>=0?'+':''}${fmtAEDx(a.incrContribTotal)}</div></div>
@@ -9936,7 +9946,7 @@ function campDetailV2HTML(c,idx){
   const coFundChip=a.coFundedPct>0?`<span style="font-size:10px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:3px 9px;border-radius:8px;border:1px solid rgba(168,85,247,.3)">🤝 ${Math.round(a.coFundedPct*100)}% platform co-funded</span>`:'';
   const header=`<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:14px">
     <div style="display:flex;align-items:center;gap:12px">
-      <button onclick="selCamp=null;campTab=campReturnTab||'active';renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.25);border-radius:8px;color:${T.label};padding:7px 12px;font-size:12px;cursor:pointer;font-weight:600">← Back</button>
+      <button onclick="selCamp=null;campTab=campReturnTab||'browse';renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.25);border-radius:8px;color:${T.label};padding:7px 12px;font-size:12px;cursor:pointer;font-weight:600">← Back</button>
       <div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <span style="font-size:19px;font-weight:800;color:${accent}">${c.name||'Campaign'}</span>
@@ -10265,7 +10275,7 @@ function campDetailHTML(c,idx){
   }else if(exclusiveSiblings.length){
     exclBadge=`<div style="margin-top:8px;padding:8px 12px;background:rgba(100,116,139,.08);border-left:3px solid #94a3b8;border-radius:4px;display:flex;align-items:flex-start;gap:10px"><div style="font-size:18px;line-height:1">⏸</div><div style="flex:1;min-width:200px"><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Paused When Exclusive Offer Runs</div><div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.5">Another ${c.brand}/${c.aggregator} campaign — ${exclusiveSiblings.map(x=>'"'+(x.name||'unnamed')+'"').join(', ')} — is marked exclusive and overlaps these dates. During those overlapping days, this campaign was effectively paused, so its standalone lift figures should be read with that in mind.</div></div></div>`;
   }
-  const header=`<div class="card" style="border-color:${accent}44;margin-bottom:12px"><div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px"><div style="flex:1;min-width:280px"><div style="font-size:16px;font-weight:800;color:${accent}">${c.name||'(no name)'}</div><div style="font-size:12px;color:#475569;font-weight:600;margin-top:6px;line-height:2"><span style="color:${accent};font-weight:700">${c.brand}</span> · <span style="color:${AC[c.aggregator]||'#888'};font-weight:700">${c.aggregator}</span> · ${!c.outlet||c.outlet==='All'?'All Outlets':c.outlet}<br>${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)} (${a.days} day${a.days!==1?'s':''})<br><span style="color:#0F172A;line-height:1.6">${c.comments||''}</span>${(c.addons&&c.addons.length)?`<div style="margin-top:10px;padding:8px 12px;background:rgba(232,214,20,0.08);border-left:3px solid #E8D614;border-radius:4px"><div style="font-size:10px;color:#E8D614;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">⊕ Co-funded Add-ons</div>${c.addons.map(ad=>`<div style="font-size:11px;color:#FCD34D;line-height:1.5"><strong>${ad.name}</strong> · ${ad.comments} · ${fmtCampDateRange(ad.startDate,ad.endDate)}</div>`).join('')}</div>`:''}</div>${scopeBadge}${exclBadge}</div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0"><div style="padding:4px 14px;border-radius:12px;font-size:11px;font-weight:700;background:${stClr}22;color:${stClr};border:1px solid ${stClr}44">${st}</div><button onclick="campTab='active';renderCampaigns()" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer">← Back</button></div></div></div>`;
+  const header=`<div class="card" style="border-color:${accent}44;margin-bottom:12px"><div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px"><div style="flex:1;min-width:280px"><div style="font-size:16px;font-weight:800;color:${accent}">${c.name||'(no name)'}</div><div style="font-size:12px;color:#475569;font-weight:600;margin-top:6px;line-height:2"><span style="color:${accent};font-weight:700">${c.brand}</span> · <span style="color:${AC[c.aggregator]||'#888'};font-weight:700">${c.aggregator}</span> · ${!c.outlet||c.outlet==='All'?'All Outlets':c.outlet}<br>${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)} (${a.days} day${a.days!==1?'s':''})<br><span style="color:#0F172A;line-height:1.6">${c.comments||''}</span>${(c.addons&&c.addons.length)?`<div style="margin-top:10px;padding:8px 12px;background:rgba(232,214,20,0.08);border-left:3px solid #E8D614;border-radius:4px"><div style="font-size:10px;color:#E8D614;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">⊕ Co-funded Add-ons</div>${c.addons.map(ad=>`<div style="font-size:11px;color:#FCD34D;line-height:1.5"><strong>${ad.name}</strong> · ${ad.comments} · ${fmtCampDateRange(ad.startDate,ad.endDate)}</div>`).join('')}</div>`:''}</div>${scopeBadge}${exclBadge}</div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0"><div style="padding:4px 14px;border-radius:12px;font-size:11px;font-weight:700;background:${stClr}22;color:${stClr};border:1px solid ${stClr}44">${st}</div><button onclick="campTab='browse';renderCampaigns()" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer">← Back</button></div></div></div>`;
 
   if(st==='Upcoming')return header+`<div class="card"><div style="color:#F59E0B;font-size:13px;padding:4px 0">⏰ Campaign starts ${fmtDisp(c.startDate)} — performance data will appear once live.</div></div>`;
   if(!a.hasData)return header+`<div class="card"><div style="color:#64748b;font-size:12px;padding:4px 0">No sales data found for this campaign period.</div></div>`;
@@ -10420,7 +10430,7 @@ function bundleDetailHTML(bundle){
   const scopeBadge=isScoped?`<div style="margin-top:10px;padding:8px 12px;background:rgba(96,165,250,.08);border-left:3px solid #60A5FA;border-radius:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="font-size:18px">📍</div><div style="flex:1;min-width:200px"><div style="font-size:10px;color:#60A5FA;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Location-Scoped Analysis</div><div style="font-size:11px;color:${T.label};margin-top:2px;line-height:1.5">${scopeStr} — compared against the <strong style="color:${T.text}">same outlets only</strong> in the prior period.</div></div></div>`:'';
   const header=`<div class="card" style="margin-bottom:12px;border-left:4px solid ${brandClr}"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
     <div style="flex:1;min-width:280px"><div style="font-size:9px;color:#FBBF24;font-weight:800;letter-spacing:1.5px;text-transform:uppercase">🎯 Coordinated Campaign Bundle</div><div style="font-size:18px;font-weight:800;color:${T.text};margin-top:4px">${bundle.brand} on ${bundle.aggregator}</div><div style="font-size:11px;color:${T.label};margin-top:4px">${fmtCampDateRange(bundle.startDate,bundle.endDate)} · ${a.days} day${a.days>1?'s':''} · ${bundle.outlet||'All'} outlets · ${bundle.campaigns.length} concurrent segments</div>${scopeBadge}</div>
-    <button onclick="selBundle=null;campTab='active';renderCampaigns()" style="background:none;border:1px solid ${T.border};border-radius:6px;color:${T.label};padding:5px 12px;font-size:11px;cursor:pointer">← Back</button>
+    <button onclick="selBundle=null;campTab='browse';renderCampaigns()" style="background:none;border:1px solid ${T.border};border-radius:6px;color:${T.label};padding:5px 12px;font-size:11px;cursor:pointer">← Back</button>
   </div></div>`;
   // Segments breakdown — what each campaign in the bundle targets
   const isExclSet=new Set(bundle.exclusive||[]);
@@ -10692,7 +10702,7 @@ function initCalcTip(){
   document.addEventListener('mouseout',e=>{if(!e.target.closest('[data-ctip]'))return;el.style.display='none';});
 }
 // Build tooltip HTML for a completed/active campaign card (from campAnalysisV2 result).
-function buildCampCalcTipHTML(a){
+function buildCampCalcTipHTML(a,c){
   const comm=commissionRateFor(a.aggregator,a.brand,a.effStart);
   const food=foodPkgPct(a.brand);
   const fA=v=>'AED '+Math.abs(Math.round(v)).toLocaleString();
@@ -10706,6 +10716,15 @@ function buildCampCalcTipHTML(a){
   const ic=a.incrContribTotal>=0?'#4ade80':'#f87171';
   const rc=a.discountROI!=null?(a.discountROI>=0?'#4ade80':'#f87171'):'#94a3b8';
   const baseDisc=a.bs?.disc||0;
+  // v211: flags when ANOTHER campaign was running during the baseline window — without this,
+  // "incremental" reads as promo-vs-no-promo when it might actually be promo-vs-different-promo,
+  // which changes how the whole comparison should be interpreted. One line, not a new section —
+  // silent when the baseline genuinely had nothing running (the common case).
+  let baselineCampaignNote='';
+  if(c&&typeof campaignData!=='undefined'){
+    const overlapping=campaignData.find(x=>x!==c&&x.brand===a.brand&&x.aggregator===a.aggregator&&!(x.startDate>a.bEnd||x.endDate<a.bStart));
+    if(overlapping)baselineCampaignNote=`<div style="background:rgba(217,72,61,.18);border-left:2px solid #f87171;padding:3px 6px;margin-bottom:3px;font-size:10px;color:#ffb4b0">⚠ Also had a promo: ${overlapping.name||overlapping.brand+' campaign'}</div>`;
+  }
   return`<div style="max-width:300px">`
   +`<div style="font-size:12px;font-weight:600;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.2)">${a.brand} × ${a.aggregator} · ${a.cDays}d contribution</div>`
   +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Campaign  ${fmtShort(a.effStart)} → ${fmtShort(a.effEnd)}</div>`
@@ -10715,6 +10734,7 @@ function buildCampCalcTipHTML(a){
   +(a.ourDiscCost>0?row('Merchant discount','−'+fA(a.ourDiscCost)):'')
   +sep+row('<strong>Contribution</strong>','<strong>'+fA(a.campContribTotal)+'</strong>')
   +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin:8px 0 4px">Baseline  ${fmtShort(a.bStart)} → ${fmtShort(a.bEnd)}</div>`
+  +baselineCampaignNote
   +row('Net sales',fA(a.bs.sales))
   +row(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(a.bs.sales*comm))
   +row(`Food/pkg ${+(food*100).toFixed(0)}% × gross`,'−'+fA(a.baseGross*food))
@@ -11454,15 +11474,29 @@ async function renderCampaigns(){
     // below since their "ending" concept doesn't apply.
     const activeSorted=[...active].sort((a,b)=>(a.endDate||'9999').localeCompare(b.endDate||'9999'));
     // ── Tab pills ──
-    const tabs=[
-      ['active',`🟢 Active`,active.length],
-      ['upcoming',`⏰ Upcoming`,upcoming.length],
-      ['history',`📋 History`,completed.length],
-      ['forecaster',`🔮 Forecaster`,null]
+    // ── Status toggle table (replaces the old exclusive tab pills) — Active/Upcoming/History
+    // are now multi-select: any combination can be shown together. History's count is dropped
+    // per explicit feedback ("no one cares about the count of historical campaigns") while the
+    // toggle itself stays, since it's still useful to combine History with Active/Upcoming.
+    const statusRows=[
+      ['active','🟢 Active',active.length,true],
+      ['upcoming','⏰ Upcoming',upcoming.length,true],
+      ['history','📋 History',completed.length,false] // false = count hidden
     ];
-    if(selCamp)tabs.push(['detail','🔍 Campaign Detail',null]);
-    else if(selBundle)tabs.push(['detail','🎯 Bundle Detail',null]);
-    const tabH=tabs.map(([k,l,n])=>{const act=campTab===k;const cnt=n!=null?` <span style="background:${act?'rgba(245,158,11,.25)':'rgba(100,116,139,.2)'};color:${act?'#FBBF24':T.label};font-size:9px;font-weight:800;padding:1px 6px;border-radius:8px;margin-left:3px">${n}</span>`:'';return `<button onclick="campTab='${k}';renderCampaigns()" style="padding:7px 14px;border-radius:7px;border:1px solid ${act?'#f59e0b':(_darkPage?DARK_THEME.cardBorder:'rgba(15,23,42,.6)')};background:${act?'linear-gradient(180deg,rgba(245,158,11,.18),rgba(245,158,11,.08))':'transparent'};color:${act?'#f59e0b':T.label};font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:3px;transition:all .15s">${l}${cnt}</button>`;}).join('');
+    const statusTable=`<div class="card" style="padding:10px 14px;margin-bottom:12px"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-right:2px">Show</span>
+      ${statusRows.map(([k,l,n,showCount])=>{
+        const on=campStatusFilter.has(k);
+        const cnt=showCount?` <span style="background:${on?'rgba(245,158,11,.3)':'rgba(100,116,139,.2)'};color:${on?'#FBBF24':T.label};font-size:9.5px;font-weight:800;padding:1px 6px;border-radius:8px;margin-left:4px">${n}</span>`:'';
+        return`<button onclick="campToggleStatus('${k}')" style="padding:7px 14px;border-radius:7px;border:1px solid ${on?'#f59e0b':(_darkPage?DARK_THEME.cardBorder:'rgba(15,23,42,.6)')};background:${on?'linear-gradient(180deg,rgba(245,158,11,.18),rgba(245,158,11,.08))':'transparent'};color:${on?'#f59e0b':T.label};font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:3px">${on?'✓ ':''}${l}${cnt}</button>`;
+      }).join('')}
+    </div></div>`;
+    // Forecaster — its own prominent card, not one pill among equals, since it's a genuinely
+    // different kind of tool (planning) rather than a status filter.
+    const forecasterCTA=`<div onclick="campTab='forecaster';renderCampaigns()" style="cursor:pointer;background:linear-gradient(135deg,rgba(245,158,11,.16),rgba(245,158,11,.05));border:1.5px solid ${campTab==='forecaster'?'#f59e0b':'rgba(245,158,11,.4)'};border-radius:12px;padding:16px 20px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:14px" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${campTab==='forecaster'?'#f59e0b':'rgba(245,158,11,.4)'}'">
+      <div style="display:flex;align-items:center;gap:14px"><span style="font-size:30px">🔮</span><div><div style="font-size:16px;font-weight:800;color:#fbbf24">Campaign Forecaster</div><div style="font-size:11.5px;color:${T.label};margin-top:2px">Model a hypothetical discount before you run it — expected lift, ROI, and break-even</div></div></div>
+      <span style="font-size:12px;font-weight:700;color:#f59e0b;white-space:nowrap">${campTab==='forecaster'?'✓ Open':'Open →'}</span>
+    </div>`;
     // Rewards segregation renderer: on Active/History, split the filtered list into "regular" and
     // "rewards" campaigns. Regular go first as the main grid. Rewards appear below in a labelled
     // sub-section so their unusual ROI (very high or very low from ambient loyalty redemption)
@@ -11482,22 +11516,25 @@ async function renderCampaigns(){
     };
     let main='';
     if(campTab==='forecaster'){main=campFcHTML();}
-    else if(campTab==='active'){const f=sortCampCards(applyCampFilters(activeSorted));main=campFilterBar()+renderCampListWithRewardsSplit(f,true,'🟢 Active Campaigns');}
-    else if(campTab==='upcoming'){const f=applyCampFilters(upcoming).slice().sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||''));main=campFilterBar()+`<div style="font-size:11px;color:${T.text==='#0F172A'?'#475569':T.text};font-weight:700;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px">⏰ Upcoming Campaigns (${f.length})</div>`+campCardGrid(f,false);}
-    else if(campTab==='history'){const fcRaw=applyCampFilters(completed);const fc=campQuickFilter!=='all'?sortCampCards(fcRaw):fcRaw.slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));const shown=fc.slice(0,120);main=campFilterBar()+renderCampListWithRewardsSplit(shown,true,`📋 Completed Campaigns${fc.length>120?' · showing 120 most recent of '+fc.length:''}`);}
+    else if(campTab==='browse'){
+      // Filter bar renders ONCE, above the combined sections — not duplicated per status,
+      // which is what would've happened if each section still called it independently.
+      const sections=[];
+      if(campStatusFilter.has('active')){const f=sortCampCards(applyCampFilters(activeSorted));sections.push(renderCampListWithRewardsSplit(f,true,'🟢 Active Campaigns'));}
+      if(campStatusFilter.has('upcoming')){const f=applyCampFilters(upcoming).slice().sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||''));sections.push(`<div style="font-size:11px;color:${T.text==='#0F172A'?'#475569':T.text};font-weight:700;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px">⏰ Upcoming Campaigns (${f.length})</div>`+campCardGrid(f,false));}
+      if(campStatusFilter.has('history')){const fcRaw=applyCampFilters(completed);const fc=campQuickFilter!=='all'?sortCampCards(fcRaw):fcRaw.slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));const shown=fc.slice(0,120);sections.push(renderCampListWithRewardsSplit(shown,true,`📋 Completed Campaigns${fc.length>120?' · showing 120 most recent of '+fc.length:''}`));}
+      main=campFilterBar()+sections.join('<div style="height:26px"></div>');
+    }
     else if(campTab==='detail'&&selBundle){main=bundleDetailHTML(selBundle);}
     else if(campTab==='detail'&&selCamp){main=campDetailV2HTML(selCamp,campaignData.indexOf(selCamp));}
     // Header
-    const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid ${T.border}"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">⚡</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Campaign Manager</div></div><div style="font-size:10px;color:${T.muted};margin-top:2px;letter-spacing:.4px">Performance · Profitability · Coordination</div></div><button onclick="campLoaded=false;selCamp=null;selBundle=null;campTab='active';renderCampaigns()" style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600">↻ Refresh Data</button></div>`;
-    // NEW LAYOUT (v052): compact freshness strip → Needs Attention panel → tabs → main content.
-    // Removed: 4 big stat cards (Running Now / Upcoming / Completed / Total Tracked — pure duplicates
-    // of the tab pill counts) and the 5 big data-source cards (replaced by the freshness strip).
-    // These changes save ~300px of vertical chrome at the top of the page.
-    const attention=(campTab==='active'||campTab==='upcoming'||campTab==='history')?campNeedsAttentionPanel(active,upcoming):'';
-    const kpiStrip=(campTab==='active')?campKPIStrip(active):'';initCalcTip();
-    pg.innerHTML=`${styleOverride}${header}${campDataFreshnessStrip()}${kpiStrip}${attention}<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px">${tabH}</div>${main}`;
-    // Fire non-blocking end-soon toasts on entry to Active tab (once per campaign+threshold per session)
-    if(campTab==='active')setTimeout(()=>campEndSoonPopups(active),150);
+    const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid ${T.border}"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">⚡</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Campaign Manager</div></div><div style="font-size:10px;color:${T.muted};margin-top:2px;letter-spacing:.4px">Performance · Profitability · Coordination</div></div><button onclick="campLoaded=false;selCamp=null;selBundle=null;campTab='browse';renderCampaigns()" style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600">↻ Refresh Data</button></div>`;
+    const attention=(campTab==='browse')?campNeedsAttentionPanel(active,upcoming):'';
+    const kpiStrip=(campTab==='browse'&&campStatusFilter.has('active'))?campKPIStrip(active):'';initCalcTip();
+    const topChrome=campTab==='detail'?'':forecasterCTA+statusTable;
+    pg.innerHTML=`${styleOverride}${header}${campDataFreshnessStrip()}${kpiStrip}${attention}${topChrome}${main}`;
+    // Fire non-blocking end-soon toasts on entry to Active view (once per campaign+threshold per session)
+    if(campTab==='browse'&&campStatusFilter.has('active'))setTimeout(()=>campEndSoonPopups(active),150);
     if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
     if(campTab==='detail'&&selCamp){const c=selCamp;const imp=campImpact(c);if(campStatus(c)!=='Upcoming'&&imp.hasData){const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&(c.brand==='All Brands'||r.brand===c.brand)&&(c.aggregator==='All'||r.aggregator===c.aggregator)));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-camp',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}}
   }catch(err){pg.innerHTML=`${styleOverride}<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Render error</div><div style="color:${T.muted};font-size:12px">${err.message}</div></div>`;}
