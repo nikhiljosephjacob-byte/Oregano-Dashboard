@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-204";
+const BUILD_VERSION="2026-08-06-206";
 const BUILD_NOTES=[
+  "🔍 \"No sales data yet\" on a campaign card now shows exactly what was searched for — brand, aggregator, outlet scope, and date range — instead of a dead-end message. Specifically flags the case where the Outlet field didn't match any real outlet at all (shown as ⚠), which is a genuinely different situation than \"all outlets, just no orders yet.\" For the FTU/Lapsed campaigns you flagged — I traced the code path (hasData requires at least one matching order record for that exact brand+aggregator+outlet+date combination) but couldn't confirm the actual cause without seeing the real field values on those two campaigns. This diagnostic should show it directly next time you hover — if it says \"all outlets\" with 0 records, that's a genuine data gap; if it flags the outlet warning, the campaign's Outlet field needs a look.",
+  "🎨 Color Scheme B applied throughout the Feedback page — the amber-to-red severity ramp you picked. Heatmap cells, rate columns, trend arrows, and the alert banner all now use the same continuous ramp (soft yellow → amber → orange → deep red) instead of the old two-tone red/orange, so \"barely elevated\" actually looks calmer than \"needs action\" instead of both reading as urgent. Filter chip selection colors (month/year \"on\" state) deliberately left unchanged — that's a different signal (what's selected, not how bad something is).",
   "🐛 Fixed the campaign contribution tooltip getting cut off near the bottom of the screen. Root cause: the flip-to-fit logic used a hardcoded guess (~300px tall) to decide whether to reposition above the cursor — but that specific tooltip (Campaign + Baseline + Incremental + ROI sections) genuinely runs taller than that, so the check silently passed and let it run off-screen. Now measures the tooltip's actual rendered size instead of guessing, so it flips correctly regardless of how long any given tooltip's content is. Verified against the exact scenario in your screenshot, plus confirmed normal cases (plenty of room, near the right edge) still behave the same as before.",
   "🐛 Fixed the duplicate-looking month chips from your 2025 upload. Real root cause: the month chip label only ever showed the month name, never the year — so June 2025 and June 2026 both rendered as an identical \"Jun\" chip with no way to tell them apart. Also fixed the actual bug you flagged: the Year toggle wasn't narrowing the month list at all, so selecting 2026 still showed all 14 months instead of just Jan–Jul. Both fixed together — chips now show a year suffix when viewing all years combined, and disappear correctly when you scope to one year. Also patched a related risk: switching years while a now-hidden month from the other year was still selected would have silently kept filtering by it.",
   "🌙 Ads Performance dark theme: DONE — the last of the 4 major pages that needed it. Every view converted: the Aggregator/Brand/Outlet drill-down chain, the full Investment Plan (obligation cards, declining outlets, area strength, historical reference, and all 3 allocation views for Deliveroo/Talabat/Careem-Noon), the full History tab (filter bar, table view, and the two-sided compare view), and the outlet deep-dive modal. Caught two real bugs in my own conversion process along the way — a broken object-literal color reference and a broken ternary branch, both using double quotes in a way my earlier detection method would have missed — found and fixed before shipping, not after. Dark theme rollout across the dashboard is now complete.",
@@ -8601,7 +8603,15 @@ function campCardGrid(camps,showProfit){
           ${a.commWaiver?`<div style="font-size:10.5px;color:#C084FC;margin-top:6px;font-weight:600" title="Noon waived standard commission (${(a.commWaiver.standardRate*100).toFixed(0)}%→${(a.commWaiver.overrideRate*100).toFixed(0)}%) on ${a.commWaiver.discOrders} order(s) that carried a discount, worth AED ${Math.round(a.commWaiver.discNet).toLocaleString()} net · ${a.commWaiver.coveredFully?'full window covered by exact Noon data':'partial — some dates not yet covered by an upload'}">🎁 Commission waiver: +${fmtAEDx(a.commWaiver.bonus)}</div>`:''}
         `;
       }else{
-        metricsHTML=`<div style="display:flex;align-items:center;gap:6px;padding:8px 0;color:${T.label};font-size:12px"><span>⏳</span><span>No sales data yet</span></div>`;
+        // Diagnostic instead of a dead-end message: shows exactly what was searched for, so a
+        // genuine "no orders yet" reads differently from "the outlet field didn't match anything
+        // real" — the outletSet-is-an-empty-Set case specifically flags the latter, since a
+        // correctly-resolved "all outlets" campaign returns null, not an empty Set.
+        const outletDiag=a.outletSet===null?'all outlets':a.outletSet.size===0?'⚠ no outlet matched — check the Outlet field on this campaign':[...a.outletSet].slice(0,3).join(', ')+(a.outletSet.size>3?` +${a.outletSet.size-3} more`:'');
+        metricsHTML=`<div style="padding:8px 0;color:${T.label};font-size:12px">
+          <div style="display:flex;align-items:center;gap:6px"><span>⏳</span><span>No sales data yet</span></div>
+          <div style="font-size:10px;margin-top:4px;line-height:1.5;opacity:.75">Searched ${a.brand} × ${a.aggregator} · ${outletDiag} · ${fmtShort(a.effStart)}–${fmtShort(a.effEnd)} — 0 matching order records</div>
+        </div>`;
       }
     }else{
       const daysToStart=Math.ceil((new Date(c.startDate+'T12:00:00')-new Date())/86400000);
@@ -13286,12 +13296,22 @@ function feedbackDominantCategory(rowMatrix){
 }
 // Cell color intensity is relative to that ROW's own max — the point is to make each row's
 // worst category pop, not to compare absolute counts across differently-sized rows/brands.
+// Color Scheme B — amber-to-red severity ramp (chosen over the original red/orange scheme,
+// which made "elevated" and "on fire" look too similar). Low is genuinely calm-looking (soft
+// yellow), not just a fainter version of the alarm color, so the eye can actually tell "fine"
+// from "worth a look" from "needs action" at a glance.
+function feedbackSeverityColor(ratio){
+  if(ratio>=0.75)return{bg:'#D9483D',text:'#FFF5F2'};
+  if(ratio>=0.5)return{bg:'#F4713A',text:'#3D1A0C'};
+  if(ratio>=0.25)return{bg:'#FFB84D',text:'#3D2A0C'};
+  if(ratio>0)return{bg:'#FFD86655',text:'#F1F5F9'};
+  return null; // caller falls back to the neutral empty-cell style
+}
 function feedbackCellStyle(count,rowMax){
   if(!count)return`color:${feedbackTheme().label};background:${DARK_THEME.cardBorder}33`;
   const ratio=rowMax>0?count/rowMax:0;
-  if(ratio>=0.66)return`color:#3D0C0C;background:#FF6B6B;font-weight:700`;
-  if(ratio>=0.33)return`color:#3D250C;background:#FF8A3D99;font-weight:700`;
-  return`color:${feedbackTheme().label};background:${DARK_THEME.cardBorder}66`;
+  const sev=feedbackSeverityColor(ratio);
+  return`color:${sev.text};background:${sev.bg};font-weight:700`;
 }
 function feedbackHeatmapRow(label,rowMatrix,rowTotal,ratePct,onclick,showRate,branch){
   const T=feedbackTheme();
@@ -13302,7 +13322,7 @@ function feedbackHeatmapRow(label,rowMatrix,rowTotal,ratePct,onclick,showRate,br
     return`<td ${cellClick?`onclick="${cellClick}" style="cursor:pointer;text-align:center;padding:6px;border-radius:4px;font-size:12.5px;${feedbackCellStyle(n,rowMax)}"`:`style="text-align:center;padding:6px;border-radius:4px;font-size:12.5px;${feedbackCellStyle(n,rowMax)}"`}>${n||''}</td>`;
   }).join('');
   const clickAttr=onclick?`onclick="${onclick}" style="cursor:pointer"`:'';
-  const rateCell=showRate?`<td style="text-align:right;color:${ratePct>=0.7?'#FF6B6B':ratePct>=0.3?'#FF8A3D':'#2ECC71'};font-weight:700;padding:6px;font-size:11.5px">${ratePct.toFixed(2)}%</td>`:'';
+  const rateCell=showRate?`<td style="text-align:right;color:${ratePct>=0.7?'#D9483D':ratePct>=0.3?'#FFB84D':'#2ECC71'};font-weight:700;padding:6px;font-size:11.5px">${ratePct.toFixed(2)}%</td>`:'';
   return`<tr ${clickAttr}>
     <td style="color:${T.text};font-weight:600;padding:3px 8px 3px 0;font-size:13.5px;white-space:nowrap">${label}</td>
     ${cells}
@@ -13314,7 +13334,7 @@ function feedbackHeatmapHead(showRate,catTrends){
   const T=feedbackTheme();
   const catHeaders=FEEDBACK_TOP_CATEGORIES.map(([full,short])=>{
     const trend=catTrends&&catTrends[full];
-    const arrow=trend==null?'':trend>10?`<span style="color:#FF6B6B" title="Rate up ${trend.toFixed(0)}% vs prior period">↗</span>`:trend<-10?`<span style="color:#2ECC71" title="Rate down ${Math.abs(trend).toFixed(0)}% vs prior period">↘</span>`:'';
+    const arrow=trend==null?'':trend>10?`<span style="color:#D9483D" title="Rate up ${trend.toFixed(0)}% vs prior period">↗</span>`:trend<-10?`<span style="color:#2ECC71" title="Rate down ${Math.abs(trend).toFixed(0)}% vs prior period">↘</span>`:'';
     return`<td onclick="feedbackToggleDrill('__ALL__','${full.replace(/'/g,"\\'")}')" style="text-align:center;color:${T.muted};padding:3px;font-weight:700;font-size:10.5px;cursor:pointer;text-decoration:underline dotted" title="Click to see every ${short} complaint across all outlets">${short} ${arrow}</td>`;
   }).join('');
   return`<tr><td></td>${catHeaders}<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:10.5px">Total</td>${showRate?`<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:10.5px">% of orders</td>`:''}</tr>`;
@@ -13446,9 +13466,9 @@ async function renderFeedback(){
     const headline=maskedByVolume
       ?`Complaint rate is rising, not falling — raw count is down ${Math.abs(countTrendPct).toFixed(0)}% but that's from fewer orders, not fewer problems. Per-order rate is up ${rateTrendPct.toFixed(0)}%.`
       :`${topFlags.length} categor${topFlags.length===1?'y is':'ies are'} rising faster than order volume explains.`;
-    const flagList=topFlags.map(f=>`<span style="display:inline-block;margin-top:4px"><strong style="color:${T.text}">${f.branch}</strong> — ${f.category}-related feedback up <strong style="color:#FF6B6B">${f.pctChange.toFixed(0)}%</strong> (${f.priorCount}→${f.currCount})</span>`).join('<br>');
-    alertBanner=`<div class="card" style="border-left:3px solid #FF6B6B;padding:10px 12px;margin-bottom:12px">
-      <div style="font-size:12.5px;font-weight:700;color:#FF6B6B;margin-bottom:2px">⚠ ${headline}</div>
+    const flagList=topFlags.map(f=>`<span style="display:inline-block;margin-top:4px"><strong style="color:${T.text}">${f.branch}</strong> — ${f.category}-related feedback up <strong style="color:#D9483D">${f.pctChange.toFixed(0)}%</strong> (${f.priorCount}→${f.currCount})</span>`).join('<br>');
+    alertBanner=`<div class="card" style="border-left:3px solid #D9483D;padding:10px 12px;margin-bottom:12px">
+      <div style="font-size:12.5px;font-weight:700;color:#D9483D;margin-bottom:2px">⚠ ${headline}</div>
       ${flagList?`<div style="font-size:13.5px;color:${T.muted};line-height:1.6">${flagList}</div>`:''}
     </div>`;
   }
@@ -13458,11 +13478,11 @@ async function renderFeedback(){
   let trendingTermsPanel='';
   if(themeRows.length){
     const crossCuttingCallout=crossCuttingTheme?`<div style="background:rgba(255,107,107,.08);border:1px solid rgba(255,107,107,.3);border-radius:8px;padding:10px 12px;margin-bottom:10px">
-      <div style="font-size:13.5px;font-weight:800;color:#FF6B6B">⚠ "${crossCuttingTheme.theme}" mentioned ${crossCuttingTheme.count} times — spans ${crossCuttingTheme.outlets.size} outlets and ${crossCuttingTheme.catCount} different categories</div>
-      <div style="font-size:12.5px;color:${T.muted};margin-top:3px">Logged under different categories, but it reads like the same underlying issue. <span onclick="feedbackToggleThemeDrill('${crossCuttingTheme.theme.replace(/'/g,"\\'")}')" style="color:#FF6B6B;cursor:pointer;text-decoration:underline">Read all ${crossCuttingTheme.count} →</span></div>
+      <div style="font-size:13.5px;font-weight:800;color:#D9483D">⚠ "${crossCuttingTheme.theme}" mentioned ${crossCuttingTheme.count} times — spans ${crossCuttingTheme.outlets.size} outlets and ${crossCuttingTheme.catCount} different categories</div>
+      <div style="font-size:12.5px;color:${T.muted};margin-top:3px">Logged under different categories, but it reads like the same underlying issue. <span onclick="feedbackToggleThemeDrill('${crossCuttingTheme.theme.replace(/'/g,"\\'")}')" style="color:#D9483D;cursor:pointer;text-decoration:underline">Read all ${crossCuttingTheme.count} →</span></div>
     </div>`:'';
     const themeTableRows=themeRows.slice(0,8).map(t=>{
-      const trendHTML=t.pctChange==null?`<span style="color:${T.label}">new</span>`:t.pctChange>15?`<span style="color:#FF6B6B">▲ ${t.pctChange.toFixed(0)}%</span>`:t.pctChange<-15?`<span style="color:#2ECC71">▼ ${Math.abs(t.pctChange).toFixed(0)}%</span>`:`<span style="color:${T.label}">flat</span>`;
+      const trendHTML=t.pctChange==null?`<span style="color:${T.label}">new</span>`:t.pctChange>15?`<span style="color:#D9483D">▲ ${t.pctChange.toFixed(0)}%</span>`:t.pctChange<-15?`<span style="color:#2ECC71">▼ ${Math.abs(t.pctChange).toFixed(0)}%</span>`:`<span style="color:${T.label}">flat</span>`;
       return`<tr onclick="feedbackToggleThemeDrill('${t.theme.replace(/'/g,"\\'")}')" style="cursor:pointer">
         <td style="color:${T.text};font-weight:700;padding:7px 8px 7px 0;font-size:13.5px">${t.theme}</td>
         <td style="text-align:right;color:${T.text};font-weight:700;padding:7px 8px;font-size:13.5px">${t.count}</td>
@@ -13517,9 +13537,9 @@ async function renderFeedback(){
   const kpi=(lbl,val,clr)=>`<div class="card" style="padding:8px 10px;border-left:3px solid ${clr}"><div style="font-size:10.5px;color:${T.muted};font-weight:700;text-transform:uppercase">${lbl}</div><div style="font-size:17px;font-weight:800;color:${clr==='#f59e0b'?T.text:clr}">${val}</div></div>`;
   const kpiStrip=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
     ${kpi("Total",recs.length.toLocaleString(),"#f59e0b")}
-    ${kpi("Rate trend <span style='opacity:.6;font-weight:500'>· % of orders</span>",rateTrendPct==null?"—":`${rateTrendPct>=0?'▲':'▼'} ${Math.abs(rateTrendPct).toFixed(0)}%`,rateTrendPct==null?T.muted:rateTrendPct>=0?'#FF6B6B':'#2ECC71')}
+    ${kpi("Rate trend <span style='opacity:.6;font-weight:500'>· % of orders</span>",rateTrendPct==null?"—":`${rateTrendPct>=0?'▲':'▼'} ${Math.abs(rateTrendPct).toFixed(0)}%`,rateTrendPct==null?T.muted:rateTrendPct>=0?'#D9483D':'#2ECC71')}
     ${kpi("Top category",topCat?FEEDBACK_TOP_CATEGORIES.find(([f])=>f===topCat[0])?.[1]||topCat[0].split(' ')[0]:"—","#f59e0b")}
-    ${kpi("Internal fault",internalPct.toFixed(0)+"%","#FF8A3D")}
+    ${kpi("Internal fault",internalPct.toFixed(0)+"%","#FFB84D")}
   </div>`;
 
   // ── Brand heatmap ──
@@ -13550,7 +13570,7 @@ async function renderFeedback(){
     const ranked=Object.entries(byOutlet).sort((a,b)=>b[1]-a[1]);
     const[topOutlet,topCount]=ranked[0];
     const trend=catTrends[full];
-    const trendHTML=trend==null?`<span style="color:${T.label}">—</span>`:trend>10?`<span style="color:#FF6B6B">▲ ${trend.toFixed(0)}%</span>`:trend<-10?`<span style="color:#2ECC71">▼ ${Math.abs(trend).toFixed(0)}%</span>`:`<span style="color:${T.label}">flat</span>`;
+    const trendHTML=trend==null?`<span style="color:${T.label}">—</span>`:trend>10?`<span style="color:#D9483D">▲ ${trend.toFixed(0)}%</span>`:trend<-10?`<span style="color:#2ECC71">▼ ${Math.abs(trend).toFixed(0)}%</span>`:`<span style="color:${T.label}">flat</span>`;
     return{full,short,total:catRecs.length,outletCount:ranked.length,topOutlet,topCount,trendHTML,trendVal:trend};
   }).filter(Boolean).sort((a,b)=>b.total-a.total);
   const categoryRowsHTML=categoryTableRows.map(c=>`<tr onclick="feedbackToggleDrill('__ALL__','${c.full.replace(/'/g,"\\'")}')" style="cursor:pointer">
