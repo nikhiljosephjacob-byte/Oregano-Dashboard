@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-202";
+const BUILD_VERSION="2026-08-06-203";
 const BUILD_NOTES=[
+  "🐛 Fixed the duplicate-looking month chips from your 2025 upload. Real root cause: the month chip label only ever showed the month name, never the year — so June 2025 and June 2026 both rendered as an identical \"Jun\" chip with no way to tell them apart. Also fixed the actual bug you flagged: the Year toggle wasn't narrowing the month list at all, so selecting 2026 still showed all 14 months instead of just Jan–Jul. Both fixed together — chips now show a year suffix when viewing all years combined, and disappear correctly when you scope to one year. Also patched a related risk: switching years while a now-hidden month from the other year was still selected would have silently kept filtering by it.",
   "🌙 Ads Performance dark theme: DONE — the last of the 4 major pages that needed it. Every view converted: the Aggregator/Brand/Outlet drill-down chain, the full Investment Plan (obligation cards, declining outlets, area strength, historical reference, and all 3 allocation views for Deliveroo/Talabat/Careem-Noon), the full History tab (filter bar, table view, and the two-sided compare view), and the outlet deep-dive modal. Caught two real bugs in my own conversion process along the way — a broken object-literal color reference and a broken ternary branch, both using double quotes in a way my earlier detection method would have missed — found and fixed before shipping, not after. Dark theme rollout across the dashboard is now complete.",
   "🆕 Trending Terms — reads the actual complaint text to catch the same underlying issue even when it's logged under different words or different categories. Zero cost, runs entirely in the browser (Tier 1 from our discussion — no AI, no API key). Tested against a scenario where \"pink\", \"raw\", and \"undercooked\" were used across 3 different outlets and 2 different categories — correctly caught as one 3-mention pattern rather than three unrelated data points. When something crosses 2+ categories and 3+ outlets, it gets a dedicated callout above the table. Click any row for the actual complaint text behind it.",
   "🔤 Text across the whole Feedback page is bigger — every size bumped up, smallest labels went from 9px to 10.5px+. Complaint text in the drill-down panels is now bold and set apart from its metadata line, so the actual thing the customer said is what your eye lands on first.",
@@ -13366,8 +13367,12 @@ async function renderFeedback(){
       </div>`;
     return;
   }
-  const allMonths=[...new Set(feedbackData.records.map(r=>r.month))].sort();
-  const allYears=[...new Set(allMonths.map(m=>m.slice(0,4)))].sort();
+  const allMonthsRaw=[...new Set(feedbackData.records.map(r=>r.month))].sort();
+  const allYears=[...new Set(allMonthsRaw.map(m=>m.slice(0,4)))].sort();
+  // Month chips are scoped to the selected year — previously showed every month across every
+  // year regardless of the year filter, which both looked like duplicates ("Jun" appearing
+  // twice with no way to tell which year) and defeated the point of the year toggle.
+  const allMonths=feedbackFilterYear?allMonthsRaw.filter(m=>m.startsWith(feedbackFilterYear)):allMonthsRaw;
   const recs=feedbackFilteredRecords();
   const range=feedbackDateRange(recs);
   const{byBranch,byBrand}=feedbackOrderVolumeMaps(range);
@@ -13478,7 +13483,7 @@ async function renderFeedback(){
   }
 
   // ── Filter bar ──
-  const monthBtn=m=>{const on=feedbackFilterMonths.has(m);const lbl=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"});return`<span style="display:inline-flex;align-items:center;border-radius:12px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'}"><button onclick="feedbackToggleMonth('${m}',event)" style="background:none;border:none;color:${on?'#FF8A3D':T.label};font-size:11.5px;font-weight:700;cursor:pointer;padding:3px 4px 3px 10px" title="Click to select just this month. Ctrl/Cmd+click to add it to the current selection.">${lbl}</button><span onclick="event.stopPropagation();feedbackRemoveMonth('${m}')" style="cursor:pointer;color:${T.label};font-size:12.5px;font-weight:700;padding:3px 8px 3px 3px" title="Remove all data for ${lbl} — use this to clean up a month that was uploaded incorrectly">✕</span></span>`;};
+  const monthBtn=m=>{const on=feedbackFilterMonths.has(m);const lbl=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",feedbackFilterYear?{month:"short"}:{month:"short",year:"2-digit"});return`<span style="display:inline-flex;align-items:center;border-radius:12px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'}"><button onclick="feedbackToggleMonth('${m}',event)" style="background:none;border:none;color:${on?'#FF8A3D':T.label};font-size:11.5px;font-weight:700;cursor:pointer;padding:3px 4px 3px 10px" title="Click to select just this month. Ctrl/Cmd+click to add it to the current selection.">${lbl}</button><span onclick="event.stopPropagation();feedbackRemoveMonth('${m}')" style="cursor:pointer;color:${T.label};font-size:12.5px;font-weight:700;padding:3px 8px 3px 3px" title="Remove all data for ${lbl} — use this to clean up a month that was uploaded incorrectly">✕</span></span>`;};
   const yearBtn=y=>{const on=feedbackFilterYear===y;return`<button onclick="feedbackSetYear('${y}')" style="padding:3px 10px;border-radius:6px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'};color:${on?'#FF8A3D':T.label};font-size:11.5px;font-weight:700;cursor:pointer">${y}</button>`;};
   const compareLine=(range&&priorRange)?`<div style="font-size:12.5px;color:${T.label};margin-top:6px;padding-top:6px;border-top:1px solid ${T.rowBg}">Showing <strong style="color:${T.text}">${fmtDisp(range[0])} → ${fmtDisp(range[1])}</strong> · compared against <strong style="color:${T.text}">${fmtDisp(priorRange[0])} → ${fmtDisp(priorRange[1])}</strong> (same length, immediately before)</div>`:'';
   const filterBar=`<div style="display:flex;flex-wrap:wrap;background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;padding:10px 12px;margin-bottom:12px">
@@ -13614,6 +13619,12 @@ function feedbackToggleMonth(m,event){
 }
 function feedbackSetYear(y){
   feedbackFilterYear=feedbackFilterYear===y?null:y;
+  // Prune any selected months that belong to a different year — otherwise they stay active as
+  // an invisible filter (no longer shown as a chip, since the chip list is now scoped to the
+  // new year) while still silently restricting the data.
+  if(feedbackFilterYear){
+    feedbackFilterMonths=new Set([...feedbackFilterMonths].filter(m=>m.startsWith(feedbackFilterYear)));
+  }
   renderFeedback();
 }
 function feedbackClearFilters(){
