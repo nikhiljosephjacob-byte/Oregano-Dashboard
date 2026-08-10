@@ -13,8 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-208";
+const BUILD_VERSION="2026-08-06-210";
 const BUILD_NOTES=[
+  "💰 Fixed a real financial-accuracy bug: aggregator-funded ad spend (e.g. \"funded by Noon\") was being counted as if the merchant paid for it, inflating \"Invested\" figures. Now split — Invested shows your own spend only, with the funded amount shown separately alongside it. Fixed at both the Aggregator card and Brand card levels. Verified against your exact example (15K own + 2K Noon-funded = 17K total).",
+  "🆕 Feedback page: Overview/Detail toggle is live. Overview shows the trend chart (complaints + rate by month), the months×category heatmap, and a \"which outlets are driving it\" chart. Click a category name in the heatmap to drive that chart explicitly — no more auto-guessing which category to show.",
+  "🎛️ New filter dropdowns for Category, Aggregator, and Outlet added alongside Brand — all four now work the same way whether you click a table row or use the dropdown.",
   "🆕 New \"By Aggregator\" table — Aggregator × Category, worst rate first, same style as Brand/Category/Outlet. Between By Category and By Outlet.",
   "📏 \"What's new\" popup was too long — capped to the 8 most recent updates, and entries are short bullets from now on instead of full explanations",
   "🔍 Campaign cards showing \"No sales data yet\" now show what was searched for (brand, aggregator, outlet, dates) instead of a dead end",
@@ -5748,8 +5751,14 @@ function cpcRenderAggLevel(){
     // numbers on the default landing page when nothing is actually running this month).
     const monthRows=A.rows.filter(r=>r.month===targetMonth);
     const hasData=monthRows.length>0;
-    const inv=hasData?monthRows.reduce((s,r)=>s+(r.budgetAlloc||0),0):0;
-    const spent=hasData?monthRows.reduce((s,r)=>s+(r.budgetSpent||0),0):0;
+    // v210: split merchant-funded vs aggregator-funded spend — a row whose remarks say
+    // "funded by <this aggregator>" means the AGGREGATOR paid for that budget line, not the
+    // merchant, so it shouldn't count toward what looks like Oregano's own investment.
+    const fundedRe=new RegExp('funded\\s+by\\s+'+A.name,'i');
+    const isAggFunded=r=>fundedRe.test(r.remarks||'');
+    const inv=hasData?monthRows.filter(r=>!isAggFunded(r)).reduce((s,r)=>s+(r.budgetAlloc||0),0):0;
+    const spent=hasData?monthRows.filter(r=>!isAggFunded(r)).reduce((s,r)=>s+(r.budgetSpent||0),0):0;
+    const aggFundedAlloc=hasData?monthRows.filter(isAggFunded).reduce((s,r)=>s+(r.budgetAlloc||0),0):0;
     const sales=hasData?monthRows.reduce((s,r)=>s+(r.sales||0),0):0;
     const roas=spent>0?sales/spent:null;
     const consum=inv>0?(spent/inv)*100:0;
@@ -5784,7 +5793,7 @@ function cpcRenderAggLevel(){
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:12px">
-        <div><div style="font-size:11px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Invested</div><div style="font-size:22px;font-weight:800;color:${T.text}">${fmtAEDTip(inv)}</div></div>
+        <div><div style="font-size:11px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Invested</div><div style="font-size:22px;font-weight:800;color:${T.text}">${fmtAEDTip(inv)}</div>${aggFundedAlloc>0?`<div style="font-size:10.5px;color:#22C55E;font-weight:700;margin-top:2px">+ ${fmtAEDTip(aggFundedAlloc)} funded by ${A.name} · total ${fmtAEDTip(inv+aggFundedAlloc)}</div>`:''}</div>
         <div><div style="font-size:11px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Consumed</div><div style="font-size:22px;font-weight:800;color:${T.text}">${fmtAEDTip(spent)}</div></div>
       </div>
       <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px"><span style="color:${T.label};font-weight:600">Budget used</span><span style="color:${T.muted};font-weight:700">${consum.toFixed(0)}%</span></div>
@@ -5841,8 +5850,11 @@ function cpcRenderBrandLevel(ag){
     // For past months: skip brands with no data entirely (an empty card adds nothing).
     // For the current month: keep the card so the user sees "you haven't set up campaigns yet".
     if(!hasData&&!isViewingCurrent)return '';
-    const inv=hasData?monthRows.reduce((s,r)=>s+r.budgetAlloc,0):0;
-    const spent=hasData?monthRows.reduce((s,r)=>s+r.budgetSpent,0):0;
+    const fundedRe=new RegExp('funded\\s+by\\s+'+ag,'i');
+    const isAggFunded=r=>fundedRe.test(r.remarks||'');
+    const inv=hasData?monthRows.filter(r=>!isAggFunded(r)).reduce((s,r)=>s+r.budgetAlloc,0):0;
+    const spent=hasData?monthRows.filter(r=>!isAggFunded(r)).reduce((s,r)=>s+r.budgetSpent,0):0;
+    const aggFundedAlloc=hasData?monthRows.filter(isAggFunded).reduce((s,r)=>s+r.budgetAlloc,0):0;
     const sales=hasData?monthRows.reduce((s,r)=>s+r.sales,0):0;
     const roas=spent>0?sales/spent:null;const be=cpcBE(B.name,ag);const verdict=cpcVerdict(roas,be);
     const consum=inv>0?(spent/inv)*100:0;
@@ -5870,7 +5882,7 @@ function cpcRenderBrandLevel(ag){
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px">
-        <div><div style="font-size:10px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Budget</div><div style="font-size:18px;font-weight:800;color:${T.text}">${fmtAEDTip(inv)}</div></div>
+        <div><div style="font-size:10px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Budget</div><div style="font-size:18px;font-weight:800;color:${T.text}">${fmtAEDTip(inv)}</div>${aggFundedAlloc>0?`<div style="font-size:9.5px;color:#22C55E;font-weight:700;margin-top:1px">+${fmtAEDTip(aggFundedAlloc)} by ${ag}</div>`:''}</div>
         <div><div style="font-size:10px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.5px;margin-bottom:2px">Consumed</div><div style="font-size:18px;font-weight:800;color:${T.text}">${fmtAEDTip(spent)}</div></div>
       </div>
       <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:5px"><span style="color:${T.label};font-weight:600">Budget used</span><span style="color:${T.muted};font-weight:700">${consum.toFixed(0)}%</span></div>
@@ -13190,7 +13202,25 @@ function injectFeedbackTab(){
 // ═══════════════════════════════════════════════════════════════
 let feedbackFilterMonths=new Set(); // empty = all months in the data
 let feedbackFilterYear=null;        // null = all years
-let feedbackFilterBrand=null;       // clicked brand row — filters the outlet heatmap below it
+let feedbackFilterBrand=null;       // clicked brand row — filters the tables below it
+let feedbackFilterCategory=null;    // top filter chip — narrows every table to one category
+let feedbackFilterAggregator=null;  // top filter chip — narrows every table to one aggregator
+let feedbackFilterOutlet=null;      // top filter chip — narrows every table to one outlet
+let feedbackZoomMode='overview';    // 'overview' (trend chart + months×category heatmap) or 'detail' (the tables)
+let feedbackOutletChartCategory=null; // which category the "which outlet is driving it" chart shows — set explicitly by clicking a category row, not auto-detected
+function feedbackSetZoom(mode){feedbackZoomMode=mode;renderFeedback();}
+function feedbackToggleFilterDim(dim,val){
+  // v209: explicit switch, not dynamic window[key] assignment — confirmed via testing that
+  // `let`-declared variables (unlike `var`) don't attach to the global object, so a dynamic
+  // window['feedbackFilterCategory']=val would silently fail to update the actual variable.
+  switch(dim){
+    case'Category':feedbackFilterCategory=(feedbackFilterCategory===val)?null:val;break;
+    case'Aggregator':feedbackFilterAggregator=(feedbackFilterAggregator===val)?null:val;break;
+    case'Outlet':feedbackFilterOutlet=(feedbackFilterOutlet===val)?null:val;break;
+    case'Brand':feedbackFilterBrand=(feedbackFilterBrand===val)?null:val;break;
+  }
+  renderFeedback();
+}
 // Top 5 categories by volume (confirmed against all 7 real months) become heatmap columns;
 // everything else folds into "Other" so the table stays readable, per "simple, not complicated".
 const FEEDBACK_TOP_CATEGORIES=[
@@ -13257,6 +13287,24 @@ function feedbackFilteredRecords(){
   return feedbackData.records.filter(r=>{
     if(feedbackFilterYear&&!r.date.startsWith(feedbackFilterYear))return false;
     if(feedbackFilterMonths.size&&!feedbackFilterMonths.has(r.month))return false;
+    if(feedbackFilterCategory&&r.category!==feedbackFilterCategory)return false;
+    if(feedbackFilterAggregator&&r.aggregator!==feedbackFilterAggregator)return false;
+    if(feedbackFilterOutlet&&r.branch!==feedbackFilterOutlet)return false;
+    return true;
+  });
+}
+// Respects the dimension filters (Category/Aggregator/Outlet/Brand) and the Year filter, but
+// deliberately NOT the specific month selection — the Overview trend chart and heatmap are
+// meant to show the full trajectory within whatever year is chosen, not narrow down to just
+// the months currently picked for Detail mode (that would defeat the point of "zoom out").
+function feedbackDimFilteredRecords(){
+  if(!feedbackData||!feedbackData.records)return[];
+  return feedbackData.records.filter(r=>{
+    if(feedbackFilterYear&&!r.date.startsWith(feedbackFilterYear))return false;
+    if(feedbackFilterCategory&&r.category!==feedbackFilterCategory)return false;
+    if(feedbackFilterAggregator&&r.aggregator!==feedbackFilterAggregator)return false;
+    if(feedbackFilterOutlet&&r.branch!==feedbackFilterOutlet)return false;
+    if(feedbackFilterBrand&&r.brand!==feedbackFilterBrand)return false;
     return true;
   });
 }
@@ -13377,6 +13425,143 @@ function feedbackComputeFlags(recs,priorRecs,byBranch,priorByBranch,minCount){
 }
 let feedbackDrillKey=null; // "branch|category" of the cell currently expanded to show raw complaint text
 let feedbackThemeDrillKey=null; // trending-term theme name currently expanded to show its matching complaints
+let feedbackOverviewDrillKey=null; // "month|category" for the Overview heatmap's cell drill-down
+function feedbackToggleOverviewDrill(month,cat){
+  const key=month+'|'+cat;
+  feedbackOverviewDrillKey=feedbackOverviewDrillKey===key?null:key;
+  renderFeedback();
+}
+function feedbackToggleOutletChartCategory(cat){
+  feedbackOutletChartCategory=feedbackOutletChartCategory===cat?null:cat;
+  renderFeedback();
+}
+// Builds the Overview section: trend chart (drawn separately via feedbackDrawOverviewCharts,
+// since Chart.js needs the canvas to exist in the DOM first) + months×category heatmap +
+// outlet-driver chart. All three respect the dimension filters but show the FULL month range.
+function feedbackOverviewDrillPanel(T,dimRecs){
+  if(!feedbackOverviewDrillKey)return'';
+  const[month,cat]=feedbackOverviewDrillKey.split('|');
+  const matches=dimRecs.filter(r=>r.month===month&&r.category===cat);
+  if(!matches.length)return'';
+  const catShort=FEEDBACK_TOP_CATEGORIES.find(([f])=>f===cat)?.[1]||cat;
+  const items=matches.slice(0,25).map(r=>`<div style="padding:7px 0;border-bottom:1px solid ${T.rowBg};font-size:13.5px"><span style="color:${T.label};font-size:11px">${r.branch} · ${r.date} · ${r.aggregator}</span><br><span style="color:${T.text};font-weight:600">${(r.text||'(no text)').replace(/</g,'&lt;')}</span></div>`).join('');
+  return`<div style="margin-top:10px;padding-top:10px;border-top:1px solid ${T.border}">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <span style="font-size:12.5px;font-weight:700;color:${T.text}">${catShort} · ${new Date(month+"-01T12:00:00").toLocaleDateString("en-AE",{month:"long",year:"numeric"})} <span style="color:${T.label};font-weight:400">(${matches.length})</span></span>
+      <button onclick="feedbackOverviewDrillKey=null;renderFeedback()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:2px 8px;border-radius:5px;font-size:10px;cursor:pointer">✕ Close</button>
+    </div>
+    ${items}${matches.length>25?`<div style="font-size:10px;color:${T.label};padding-top:6px">+ ${matches.length-25} more</div>`:''}
+  </div>`;
+}
+function feedbackBuildOverview(T){
+  const dimRecs=feedbackDimFilteredRecords();
+  const allMonthsFull=[...new Set(feedbackData.records.map(r=>r.month))].sort()
+    .filter(m=>!feedbackFilterYear||m.startsWith(feedbackFilterYear));
+  if(!allMonthsFull.length)return{html:`<div class="card"><div style="color:${T.muted};padding:16px;text-align:center">No data for this selection.</div></div>`,months:[]};
+
+  // Months × category heatmap — category ROW headers are clickable and explicitly set which
+  // category the outlet-driver chart below shows (not auto-detected).
+  const catCountByMonth=cat=>{const m={};allMonthsFull.forEach(mo=>m[mo]=0);dimRecs.forEach(r=>{if(r.category===cat)m[r.date.slice(0,7)]=(m[r.date.slice(0,7)]||0)+1;});return m;};
+  const heatRows=FEEDBACK_TOP_CATEGORIES.map(([full,short])=>{
+    const byMonth=catCountByMonth(full);
+    const vals=allMonthsFull.map(m=>byMonth[m]||0);
+    const max=Math.max(...vals,1);
+    const active=feedbackOutletChartCategory===full;
+    const cells=allMonthsFull.map((m,i)=>{
+      const v=vals[i];const ratio=v/max;
+      const sev=v?feedbackSeverityColor(ratio):null;
+      const bg=sev?sev.bg:`${T.rowBg2||T.rowBg}`;
+      const txt=sev?sev.text:T.muted;
+      return`<td onclick="feedbackToggleOverviewDrill('${m}','${full.replace(/'/g,"\\'")}')" style="text-align:center;padding:9px 4px;border-radius:5px;cursor:pointer;color:${txt};background:${bg};font-weight:700;font-size:11.5px">${v||''}</td>`;
+    }).join('');
+    return`<tr><td onclick="feedbackToggleOutletChartCategory('${full.replace(/'/g,"\\'")}')" style="cursor:pointer;padding:6px 10px 6px 0;font-weight:800;color:${active?'#FF8A3D':T.text};font-size:12.5px;white-space:nowrap">${active?'▸ ':''}${short}</td>${cells}</tr>`;
+  }).join('');
+  const monthHeads=allMonthsFull.map(m=>`<td style="text-align:center;color:${T.muted};font-weight:700;font-size:10.5px;padding:4px">${new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"})}</td>`).join('');
+  const heatmapHtml=`<div class="card" style="margin-bottom:12px">
+    <div class="ct" style="margin-bottom:2px">Every month, every category ${feedbackFilterYear?'('+feedbackFilterYear+')':'(all years)'} <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a cell for examples · click a category name to drive the chart below</span></div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:8px"><tr><td></td>${monthHeads}</tr>${heatRows}</table></div>
+    ${feedbackOverviewDrillPanel(T,dimRecs)}
+  </div>`;
+
+  // Outlet-driver chart — shows whichever category was clicked; defaults to the one with the
+  // biggest month-1-to-month-N change if nothing has been clicked yet.
+  let chartCat=feedbackOutletChartCategory;
+  if(!chartCat){
+    let best=null,bestDelta=-Infinity;
+    FEEDBACK_TOP_CATEGORIES.forEach(([full])=>{
+      const byMonth=catCountByMonth(full);
+      const vals=allMonthsFull.map(m=>byMonth[m]||0);
+      const delta=vals[vals.length-1]-vals[0];
+      if(delta>bestDelta){bestDelta=delta;best=full;}
+    });
+    chartCat=best;
+  }
+  const chartCatShort=FEEDBACK_TOP_CATEGORIES.find(([f])=>f===chartCat)?.[1]||chartCat;
+  const catOutletRecs=dimRecs.filter(r=>r.category===chartCat);
+  const byOutletForChart={};
+  catOutletRecs.forEach(r=>{byOutletForChart[r.branch]=(byOutletForChart[r.branch]||0)+1;});
+  const outletRanked=Object.entries(byOutletForChart).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const outletChartHtml=`<div class="card">
+    <div class="ct" style="margin-bottom:2px">Which outlets are driving <strong style="color:#FF8A3D">${chartCatShort}</strong> <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">${feedbackOutletChartCategory?'· click the category again to go back to auto':'· auto-showing the fastest-moving category — click a category name above to pick one'}</span></div>
+    <div style="position:relative;height:${Math.max(140,outletRanked.length*26)}px"><canvas id="feedback-outlet-chart"></canvas></div>
+  </div>`;
+
+  const trendHtml=`<div class="card" style="margin-bottom:12px">
+    <div class="ct" style="margin-bottom:2px">Total complaints and rate, by month <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a bar to select that month for Detail</span></div>
+    <div style="position:relative;height:200px"><canvas id="feedback-trend-chart"></canvas></div>
+  </div>`;
+
+  return{html:trendHtml+heatmapHtml+outletChartHtml,months:allMonthsFull,dimRecs,outletRanked,chartCatShort};
+}
+// Draws the two Chart.js charts — called via setTimeout after pg.innerHTML is set, since the
+// canvases need to exist in the DOM first. Destroys any previous instance to avoid the same
+// orphaned-chart bug found and fixed on the Compare page earlier.
+function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
+  const trendCtx=document.getElementById('feedback-trend-chart');
+  if(trendCtx){
+    destroyChart('feedback-trend-chart');
+    const counts=months.map(m=>dimRecs.filter(r=>r.month===m).length);
+    const orderVol=months.map(m=>{
+      let s=0;
+      allData.forEach(r=>{
+        if(r.date.slice(0,7)!==m)return;
+        if(feedbackFilterBrand&&r.brand!==feedbackFilterBrand)return;
+        if(feedbackFilterOutlet&&r.branch!==feedbackFilterOutlet)return;
+        if(feedbackFilterAggregator&&r.aggregator!==feedbackFilterAggregator)return;
+        s+=(r.orders||0);
+      });
+      return s;
+    });
+    const rates=counts.map((c,i)=>orderVol[i]>0?+(c/orderVol[i]*100).toFixed(2):0);
+    const selected=feedbackFilterMonths.size?months.map(m=>feedbackFilterMonths.has(m)):months.map(()=>true);
+    charts['feedback-trend-chart']=new Chart(trendCtx,{
+      data:{labels:months.map(m=>new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"})),
+        datasets:[
+          {type:'bar',label:'Complaints',data:counts,backgroundColor:selected.map(s=>s?'#FF8A3Dcc':'#FF8A3D33'),borderRadius:4,order:2},
+          {type:'line',label:'Rate % of orders',data:rates,borderColor:'#D9483D',backgroundColor:'#D9483D',borderWidth:2,pointRadius:4,tension:.3,yAxisID:'y1',order:1}
+        ]},
+      options:{responsive:true,maintainAspectRatio:false,
+        onClick:(e,els)=>{if(els.length){feedbackToggleMonth(months[els[0].index],e.native);}},
+        plugins:{legend:{display:true,labels:{color:_darkPage?DARK_THEME.textMuted:'#64748b',font:{size:11}}}},
+        scales:{y:{grid:{color:_darkPage?'rgba(255,255,255,.06)':'#F1F5F9'},ticks:{color:_darkPage?DARK_THEME.textMuted:'#64748b',font:{size:10}}},
+          y1:{position:'right',grid:{display:false},ticks:{color:'#D9483D',font:{size:10},callback:v=>v+'%'}},
+          x:{grid:{display:false},ticks:{color:_darkPage?DARK_THEME.textMuted:'#64748b',font:{size:10}}}}}
+    });
+  }
+  const outletCtx=document.getElementById('feedback-outlet-chart');
+  if(outletCtx){
+    destroyChart('feedback-outlet-chart');
+    charts['feedback-outlet-chart']=new Chart(outletCtx,{
+      type:'bar',
+      data:{labels:outletRanked.map(r=>r[0]),datasets:[{data:outletRanked.map(r=>r[1]),backgroundColor:'#D9483D99',borderRadius:4}]},
+      options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+        onClick:(e,els)=>{if(els.length){feedbackFilterOutlet=outletRanked[els[0].index][0];renderFeedback();}},
+        plugins:{legend:{display:false}},
+        scales:{x:{grid:{color:_darkPage?'rgba(255,255,255,.06)':'#F1F5F9'},ticks:{color:_darkPage?DARK_THEME.textMuted:'#64748b',font:{size:10}}},
+          y:{grid:{display:false},ticks:{color:_darkPage?DARK_THEME.textPrimary:'#0F172A',font:{size:12,weight:700}}}}}
+    });
+  }
+}
 function feedbackToggleThemeDrill(theme){
   feedbackThemeDrillKey=feedbackThemeDrillKey===theme?null:theme;
   renderFeedback();
@@ -13524,6 +13709,25 @@ async function renderFeedback(){
   const monthBtn=m=>{const on=feedbackFilterMonths.has(m);const lbl=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",feedbackFilterYear?{month:"short"}:{month:"short",year:"2-digit"});return`<span style="display:inline-flex;align-items:center;border-radius:12px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'}"><button onclick="feedbackToggleMonth('${m}',event)" style="background:none;border:none;color:${on?'#FF8A3D':T.label};font-size:11.5px;font-weight:700;cursor:pointer;padding:3px 4px 3px 10px" title="Click to select just this month. Ctrl/Cmd+click to add it to the current selection.">${lbl}</button><span onclick="event.stopPropagation();feedbackRemoveMonth('${m}')" style="cursor:pointer;color:${T.label};font-size:12.5px;font-weight:700;padding:3px 8px 3px 3px" title="Remove all data for ${lbl} — use this to clean up a month that was uploaded incorrectly">✕</span></span>`;};
   const yearBtn=y=>{const on=feedbackFilterYear===y;return`<button onclick="feedbackSetYear('${y}')" style="padding:3px 10px;border-radius:6px;border:1px solid ${on?'#FF8A3D':T.border};background:${on?'rgba(255,138,61,.15)':'transparent'};color:${on?'#FF8A3D':T.label};font-size:11.5px;font-weight:700;cursor:pointer">${y}</button>`;};
   const compareLine=(range&&priorRange)?`<div style="font-size:12.5px;color:${T.label};margin-top:6px;padding-top:6px;border-top:1px solid ${T.rowBg}">Showing <strong style="color:${T.text}">${fmtDisp(range[0])} → ${fmtDisp(range[1])}</strong> · compared against <strong style="color:${T.text}">${fmtDisp(priorRange[0])} → ${fmtDisp(priorRange[1])}</strong> (same length, immediately before)</div>`:'';
+  // Second filter row: Category/Aggregator/Outlet/Brand — dropdowns rather than chip rows since
+  // Outlet alone can have 15+ options. Brand here sets the SAME feedbackFilterBrand state that
+  // clicking a Brand table row already uses, so both entry points stay in sync.
+  const allCats=[...new Set(feedbackData.records.map(r=>r.category))].filter(c=>FEEDBACK_TOP_CATEGORIES.some(([f])=>f===c)).sort();
+  const allAggs=[...new Set(feedbackData.records.map(r=>r.aggregator))].filter(Boolean).sort();
+  const allOutletsList=[...new Set(feedbackData.records.map(r=>r.branch))].filter(Boolean).sort();
+  const allBrandsList=BR.map(b=>b.n).filter(n=>feedbackData.records.some(r=>r.brand===n));
+  const dimSelect=(label,dim,opts,curVal,labelFn)=>{
+    const optsHtml=['<option value="">All</option>',...opts.map(o=>`<option value="${o.replace(/"/g,'&quot;')}" ${curVal===o?'selected':''}>${labelFn?labelFn(o):o}</option>`)].join('');
+    return`<div style="display:flex;flex-direction:column;gap:2px"><label style="font-size:9.5px;color:${T.muted};text-transform:uppercase;font-weight:700">${label}</label><select onchange="feedbackToggleFilterDim('${dim}',this.value||null)" style="background:${T.panelBg};border:1px solid ${T.border};border-radius:6px;color:${T.text};padding:5px 8px;font-size:11.5px;min-width:130px;color-scheme:dark">${optsHtml}</select></div>`;
+  };
+  const dimFilterRow=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px;padding-top:10px;border-top:1px solid ${T.rowBg}">
+    ${dimSelect('Category','Category',allCats.map(c=>FEEDBACK_TOP_CATEGORIES.find(([f])=>f===c)[0]),feedbackFilterCategory,c=>FEEDBACK_TOP_CATEGORIES.find(([f])=>f===c)[1])}
+    ${dimSelect('Aggregator','Aggregator',allAggs,feedbackFilterAggregator)}
+    ${dimSelect('Outlet','Outlet',allOutletsList,feedbackFilterOutlet)}
+    ${dimSelect('Brand','Brand',allBrandsList,feedbackFilterBrand)}
+    ${(feedbackFilterCategory||feedbackFilterAggregator||feedbackFilterOutlet||feedbackFilterBrand)?`<button onclick="feedbackFilterCategory=null;feedbackFilterAggregator=null;feedbackFilterOutlet=null;feedbackFilterBrand=null;renderFeedback()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:5px 12px;border-radius:6px;font-size:11.5px;cursor:pointer;align-self:center">✕ Clear these</button>`:''}
+  </div>`;
+  const zoomToggle=`<div style="display:inline-flex;background:${T.rowBg2||T.rowBg};border:1px solid ${T.border};border-radius:8px;padding:3px;margin-left:auto"><button onclick="feedbackSetZoom('overview')" style="padding:6px 16px;border-radius:6px;border:none;font-size:12.5px;font-weight:800;cursor:pointer;background:${feedbackZoomMode==='overview'?'#FF8A3D':'transparent'};color:${feedbackZoomMode==='overview'?'#3D250C':T.label}">Overview</button><button onclick="feedbackSetZoom('detail')" style="padding:6px 16px;border-radius:6px;border:none;font-size:12.5px;font-weight:800;cursor:pointer;background:${feedbackZoomMode==='detail'?'#FF8A3D':'transparent'};color:${feedbackZoomMode==='detail'?'#3D250C':T.label}">Detail</button></div>`;
   const filterBar=`<div style="display:flex;flex-wrap:wrap;background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;padding:10px 12px;margin-bottom:12px">
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;width:100%">
       <span style="font-size:10.5px;color:${T.muted};font-weight:700;text-transform:uppercase">Months</span>
@@ -13531,8 +13735,10 @@ async function renderFeedback(){
       <span style="color:${T.border};margin:0 4px">|</span>
       <span style="font-size:10.5px;color:${T.muted};font-weight:700;text-transform:uppercase">Year</span>
       ${allYears.map(yearBtn).join('')}
-      ${(feedbackFilterMonths.size||feedbackFilterYear)?`<button onclick="feedbackClearFilters()" style="margin-left:auto;background:none;border:1px solid ${T.border};color:${T.muted};padding:3px 10px;border-radius:6px;font-size:11.5px;cursor:pointer">✕ Clear</button>`:''}
+      ${(feedbackFilterMonths.size||feedbackFilterYear)?`<button onclick="feedbackClearFilters()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:3px 10px;border-radius:6px;font-size:11.5px;cursor:pointer">✕ Clear</button>`:''}
+      ${zoomToggle}
     </div>
+    ${dimFilterRow}
     ${compareLine}
   </div>`;
 
@@ -13648,6 +13854,15 @@ async function renderFeedback(){
 
   const uploadChip=`<button data-feedback-upload-btn onclick="document.getElementById('feedback-file-input').click()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:4px 10px;border-radius:6px;font-size:11.5px;cursor:pointer">⬆ Upload month</button><input type="file" id="feedback-file-input" accept=".xlsx,.xls" multiple style="display:none" onchange="handleFeedbackUpload(this.files);this.value='';">`;
 
+  const overview=feedbackBuildOverview(T);
+  const overviewSection=`<div id="feedback-overview-wrap" style="display:${feedbackZoomMode==='overview'?'block':'none'}">${overview.html}</div>`;
+  const detailSection=`<div id="feedback-detail-wrap" style="display:${feedbackZoomMode==='detail'?'block':'none'}">
+    ${brandHeatmap}
+    ${categoryHeatmap}
+    ${aggregatorHeatmap}
+    ${outletHeatmap}
+  </div>`;
+
   pg.innerHTML=`${styleOverride}
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
       <div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">💬</span><div style="font-size:18px;font-weight:800;color:${T.text}">Feedback and Reviews</div></div>
@@ -13657,10 +13872,12 @@ async function renderFeedback(){
     ${alertBanner}
     ${trendingTermsPanel}
     ${kpiStrip}
-    ${brandHeatmap}
-    ${categoryHeatmap}
-    ${aggregatorHeatmap}
-    ${outletHeatmap}`;
+    ${overviewSection}
+    ${detailSection}`;
+
+  if(feedbackZoomMode==='overview'&&overview.months.length){
+    setTimeout(()=>feedbackDrawOverviewCharts(overview.months,overview.dimRecs,overview.outletRanked,overview.chartCatShort),0);
+  }
 }
 function feedbackToggleMonth(m,event){
   const multi=event&&(event.ctrlKey||event.metaKey);
