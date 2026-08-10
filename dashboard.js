@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-203";
+const BUILD_VERSION="2026-08-06-204";
 const BUILD_NOTES=[
+  "🐛 Fixed the campaign contribution tooltip getting cut off near the bottom of the screen. Root cause: the flip-to-fit logic used a hardcoded guess (~300px tall) to decide whether to reposition above the cursor — but that specific tooltip (Campaign + Baseline + Incremental + ROI sections) genuinely runs taller than that, so the check silently passed and let it run off-screen. Now measures the tooltip's actual rendered size instead of guessing, so it flips correctly regardless of how long any given tooltip's content is. Verified against the exact scenario in your screenshot, plus confirmed normal cases (plenty of room, near the right edge) still behave the same as before.",
   "🐛 Fixed the duplicate-looking month chips from your 2025 upload. Real root cause: the month chip label only ever showed the month name, never the year — so June 2025 and June 2026 both rendered as an identical \"Jun\" chip with no way to tell them apart. Also fixed the actual bug you flagged: the Year toggle wasn't narrowing the month list at all, so selecting 2026 still showed all 14 months instead of just Jan–Jul. Both fixed together — chips now show a year suffix when viewing all years combined, and disappear correctly when you scope to one year. Also patched a related risk: switching years while a now-hidden month from the other year was still selected would have silently kept filtering by it.",
   "🌙 Ads Performance dark theme: DONE — the last of the 4 major pages that needed it. Every view converted: the Aggregator/Brand/Outlet drill-down chain, the full Investment Plan (obligation cards, declining outlets, area strength, historical reference, and all 3 allocation views for Deliveroo/Talabat/Careem-Noon), the full History tab (filter bar, table view, and the two-sided compare view), and the outlet deep-dive modal. Caught two real bugs in my own conversion process along the way — a broken object-literal color reference and a broken ternary branch, both using double quotes in a way my earlier detection method would have missed — found and fixed before shipping, not after. Dark theme rollout across the dashboard is now complete.",
   "🆕 Trending Terms — reads the actual complaint text to catch the same underlying issue even when it's logged under different words or different categories. Zero cost, runs entirely in the browser (Tier 1 from our discussion — no AI, no API key). Tested against a scenario where \"pink\", \"raw\", and \"undercooked\" were used across 3 different outlets and 2 different categories — correctly caught as one 3-mention pattern rather than three unrelated data points. When something crosses 2+ categories and 3+ outlets, it gets a dedicated callout above the table. Click any row for the actual complaint text behind it.",
@@ -10647,7 +10648,21 @@ function initCalcTip(){
   const el=document.createElement('div');el.id='_ctip';
   el.style.cssText='position:fixed;z-index:9999;background:#0F172A;color:#E2E8F0;border-radius:8px;padding:10px 14px;pointer-events:none;display:none;max-width:320px;border:1px solid rgba(255,255,255,.15);font-family:system-ui,sans-serif;line-height:1.5';
   document.body.appendChild(el);
-  const pos=(e)=>{const x=e.clientX+14,y=e.clientY-10,bw=window.innerWidth,bh=window.innerHeight;el.style.left=(x+330>bw?bw-340:x)+'px';el.style.top=(y+300>bh?Math.max(4,y-280):y)+'px';};
+  // v204: previously guessed the tooltip was ~330×300px to decide whether it needed to flip
+  // above the cursor near a viewport edge — that guess was too small for longer tooltips (like
+  // campaign contribution, which has Campaign + Baseline + Incremental + ROI sections and can
+  // run 400px+ tall), so the overflow check silently passed and let it run off the bottom of the
+  // window. Now measures el.offsetWidth/offsetHeight — the tooltip's REAL rendered size, already
+  // reflecting whatever content is currently in it — so the flip decision is correct no matter
+  // how long any given tooltip's content turns out to be.
+  const pos=(e)=>{
+    const bw=window.innerWidth,bh=window.innerHeight;
+    const tw=el.offsetWidth,th=el.offsetHeight;
+    let x=e.clientX+14,y=e.clientY-10;
+    if(x+tw>bw)x=Math.max(4,bw-tw-8);
+    if(y+th>bh)y=Math.max(4,e.clientY-th-10); // flip to render above the cursor instead
+    el.style.left=x+'px';el.style.top=y+'px';
+  };
   document.addEventListener('mouseover',e=>{const t=e.target.closest('[data-ctip]');if(!t)return;const h=calcTipData[t.dataset.ctip];if(!h)return;el.innerHTML=h;el.style.display='block';pos(e);});
   document.addEventListener('mousemove',e=>{if(el.style.display==='none')return;if(!e.target.closest('[data-ctip]'))return;pos(e);});
   document.addEventListener('mouseout',e=>{if(!e.target.closest('[data-ctip]'))return;el.style.display='none';});
