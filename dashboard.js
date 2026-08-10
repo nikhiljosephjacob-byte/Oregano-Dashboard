@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-207";
+const BUILD_VERSION="2026-08-06-208";
 const BUILD_NOTES=[
+  "🆕 New \"By Aggregator\" table — Aggregator × Category, worst rate first, same style as Brand/Category/Outlet. Between By Category and By Outlet.",
   "📏 \"What's new\" popup was too long — capped to the 8 most recent updates, and entries are short bullets from now on instead of full explanations",
   "🔍 Campaign cards showing \"No sales data yet\" now show what was searched for (brand, aggregator, outlet, dates) instead of a dead end",
   "🎨 Feedback page: new amber-to-red color scheme — calm now looks calm, not just \"less red\"",
@@ -13267,16 +13268,17 @@ function feedbackDateRange(recs){
 // Delivery-volume lookup for the CURRENT filtered window, from the same allData used everywhere
 // else in the dashboard — this is what turns raw complaint counts into a comparable rate.
 function feedbackOrderVolumeMaps(range){
-  const byBranch={},byBrand={};
-  if(!range||typeof allData==="undefined")return{byBranch,byBrand};
+  const byBranch={},byBrand={},byAggregator={};
+  if(!range||typeof allData==="undefined")return{byBranch,byBrand,byAggregator};
   const[s,e]=range;
   allData.forEach(r=>{
     if(r.date<s||r.date>e)return;
     const bk=r.brand+'|'+r.branch;
     byBranch[bk]=(byBranch[bk]||0)+(r.orders||0);
     byBrand[r.brand]=(byBrand[r.brand]||0)+(r.orders||0);
+    if(r.aggregator)byAggregator[r.aggregator]=(byAggregator[r.aggregator]||0)+(r.orders||0);
   });
-  return{byBranch,byBrand};
+  return{byBranch,byBrand,byAggregator};
 }
 function feedbackBuildMatrix(records,groupKey){
   const matrix={},totals={};
@@ -13411,7 +13413,7 @@ async function renderFeedback(){
   const allMonths=feedbackFilterYear?allMonthsRaw.filter(m=>m.startsWith(feedbackFilterYear)):allMonthsRaw;
   const recs=feedbackFilteredRecords();
   const range=feedbackDateRange(recs);
-  const{byBranch,byBrand}=feedbackOrderVolumeMaps(range);
+  const{byBranch,byBrand,byAggregator}=feedbackOrderVolumeMaps(range);
   const currTotalOrders=Object.values(byBrand).reduce((s,v)=>s+v,0);
 
   // ── Prior-period comparison — same elapsed length, immediately before. Trend is RATE-based
@@ -13589,6 +13591,25 @@ async function renderFeedback(){
     </table>`:`<div style="text-align:center;color:${T.muted};padding:16px;font-size:12.5px">No records for this selection.</div>`}
   </div>`;
 
+  // ── By Aggregator (Aggregator × Category, worst rate first) — respects the same brand filter
+  // as the other tables, matches the same heatmap structure as By Brand/Outlet exactly ──
+  const aggFilterRecs=feedbackFilterBrand?recs.filter(r=>r.brand===feedbackFilterBrand):recs;
+  const{matrix:aggMatrix,totals:aggTotals}=feedbackBuildMatrix(aggFilterRecs,"aggregator");
+  const aggOrder=Object.keys(aggTotals).map(agg=>{
+    const vol=byAggregator[agg]||0;
+    const ratePct=vol>0?aggTotals[agg]/vol*100:0;
+    return{agg,ratePct};
+  }).sort((a,b)=>b.ratePct-a.ratePct);
+  const aggRows=aggOrder.map(({agg,ratePct})=>{
+    const rowM=aggMatrix[agg]||{};
+    const total=aggTotals[agg]||0;
+    return feedbackHeatmapRow(agg,rowM,total,ratePct,null,true,null);
+  }).join('');
+  const aggregatorHeatmap=`<div class="card" style="padding:12px 14px;margin-bottom:12px">
+    <div class="ct" style="margin-bottom:2px">By aggregator <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· worst rate first</span></div>
+    ${aggOrder.length?`<table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true,catTrends)}${aggRows}</table>`:`<div style="text-align:center;color:${T.muted};padding:16px;font-size:12.5px">No records for this selection.</div>`}
+  </div>`;
+
   // ── Outlet heatmap (worst rate first, filtered by clicked brand if any) — cells are clickable
   // to drill into the raw complaint text for that outlet+category ──
   const outletRecs=feedbackFilterBrand?recs.filter(r=>r.brand===feedbackFilterBrand):recs;
@@ -13638,6 +13659,7 @@ async function renderFeedback(){
     ${kpiStrip}
     ${brandHeatmap}
     ${categoryHeatmap}
+    ${aggregatorHeatmap}
     ${outletHeatmap}`;
 }
 function feedbackToggleMonth(m,event){
