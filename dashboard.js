@@ -13,8 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-214";
+const BUILD_VERSION="2026-08-06-215";
 const BUILD_NOTES=[
+  "🐛 Fixed the \"which outlets are driving [category]\" chart not updating when you filter by month — it was using the full-history dataset by mistake. Now respects the month filter correctly; verified it gives different rankings for different months.",
+  "🐛 Fixed duplicate Source/Aggregator dropdown entries (\"Dine In\" vs \"dine in\") — case wasn't being normalized for anything outside the 5 real delivery aggregators. Note: this fixes future uploads; existing duplicates need the affected months re-uploaded to clear.",
+  "🐛 Fixed the Category filter only offering the 5 heatmap columns — categories like Cutlery Missing were completely unfilterable. Now every category in your data is selectable (the heatmap itself still only shows the top 5 columns — Outlet/Brand tables and totals work correctly for any category either way).",
+  "✏️ Renamed \"Aggregator\" to \"Source\" on the Feedback page only — the field includes review platforms and order types too, not just delivery aggregators.",
   "📱 Mobile fixes on the newest UI: 5 Feedback page tables (Trending Terms, Brand, Category, Aggregator, Outlet) were missing horizontal-scroll wrapping — on a narrow screen they'd have either squished illegibly or broken the page layout. Also fixed the KPI strip's rigid 4-column grid (now reflows to fewer columns on narrow screens) and the Forecaster card on Campaigns (now wraps instead of squishing its description text).",
   "🎨 Corrected the funding disclosure from last build — top \"Invested\" now shows the true total (17K, everything actually being spent) instead of merchant-only. The merchant/aggregator split moved down into the Contractual line where it's actually relevant, worded clearly (\"required\" added so it's obvious which number is the target).",
   "🔄 Campaigns page restructured: Active/Upcoming/History are now combinable (click to toggle any combination — was exclusive before). Filter bar (Brand/Location/Branch) moved above the status selector, shown once regardless of how many statuses are combined. History's count number is gone (kept the toggle, dropped the number). Forecaster is now its own prominent card, not one pill among equals.",
@@ -1150,6 +1154,21 @@ function normFeedbackCategory(s){
   if(FEEDBACK_CATEGORY_ALIASES[key])return FEEDBACK_CATEGORY_ALIASES[key];
   return raw.toUpperCase().replace(/\s+/g," ");
 }
+// v215: AGG_NORM (shared with the order parsers) only recognizes the 5 real delivery
+// aggregators — this page's source field also has review platforms and order types (Google
+// Review, TripAdvisor, Dine In, Chatfood) that fall outside that table entirely, so they were
+// passing through with whatever capitalization the sheet happened to use, letting "Dine In" and
+// "dine in" appear as two separate dropdown options. Known aggregators still resolve through the
+// existing table; everything else gets a consistent Title Case so case alone can't fragment a
+// single source into duplicates.
+const FEEDBACK_SOURCE_CASE_EXCEPTIONS={'tripadvisor':'TripAdvisor'};
+function normFeedbackSource(s){
+  if(!s)return'';
+  const raw=String(s).trim();
+  if(typeof AGG_NORM!=="undefined"&&AGG_NORM[raw.toLowerCase()])return AGG_NORM[raw.toLowerCase()];
+  const titled=raw.toLowerCase().replace(/\b\w+/g,w=>FEEDBACK_SOURCE_CASE_EXCEPTIONS[w]||w.charAt(0).toUpperCase()+w.slice(1));
+  return titled;
+}
 // Branch resolution reuses the SAME BRANCH_ALIASES/resolveBranchName machinery the aggregator
 // parsers already use — this file's branch spelling issues (Villa/The Villa, FYOO-DIP variants,
 // TSQR/Town Square) are the identical class of problem already solved there.
@@ -1216,7 +1235,7 @@ async function parseFeedbackXlsx(file){
     const rawBranch=r[headerIdx["BRANCH"]];
     if(!rawBranch){skipped.no_branch++;continue;}
     const branch=resolveFeedbackBranch(rawBranch,brand);
-    const aggregator=typeof normAgg==="function"?normAgg(r[headerIdx["AGGREGATOR"]]):String(r[headerIdx["AGGREGATOR"]]||"").trim();
+    const aggregator=normFeedbackSource(r[headerIdx["AGGREGATOR"]]);
     const orderId=String(r[headerIdx["Order ID"]]||"").trim();
     const fault=String(r[headerIdx["ERROR"]]||"").trim(); // Internal Error / Aggregator Error / Customer Error
     const category=normFeedbackCategory(r[headerIdx["CATEGORY"]]);
@@ -13536,12 +13555,17 @@ function feedbackBuildOverview(T){
     chartCat=best;
   }
   const chartCatShort=FEEDBACK_TOP_CATEGORIES.find(([f])=>f===chartCat)?.[1]||chartCat;
-  const catOutletRecs=dimRecs.filter(r=>r.category===chartCat);
+  // v215: this chart must respect the month filter (unlike the trend chart/heatmap above it,
+  // which deliberately show the full trajectory) — feedbackFilteredRecords() respects month,
+  // dimRecs deliberately doesn't. Using dimRecs here was the bug: the outlet ranking never
+  // changed when a specific month was selected.
+  const catOutletRecs=feedbackFilteredRecords().filter(r=>r.category===chartCat);
   const byOutletForChart={};
   catOutletRecs.forEach(r=>{byOutletForChart[r.branch]=(byOutletForChart[r.branch]||0)+1;});
   const outletRanked=Object.entries(byOutletForChart).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const monthScopeLabel=feedbackFilterMonths.size?'for the selected month'+(feedbackFilterMonths.size>1?'s':''):'across all months';
   const outletChartHtml=`<div class="card">
-    <div class="ct" style="margin-bottom:2px">Which outlets are driving <strong style="color:#FF8A3D">${chartCatShort}</strong> <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">${feedbackOutletChartCategory?'· click the category again to go back to auto':'· auto-showing the fastest-moving category — click a category name above to pick one'}</span></div>
+    <div class="ct" style="margin-bottom:2px">Which outlets are driving <strong style="color:#FF8A3D">${chartCatShort}</strong> <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">${monthScopeLabel} · ${feedbackOutletChartCategory?'click the category again to go back to auto':'auto-showing the fastest-moving category — click a category name above to pick one'}</span></div>
     <div style="position:relative;height:${Math.max(140,outletRanked.length*26)}px"><canvas id="feedback-outlet-chart"></canvas></div>
   </div>`;
 
@@ -13751,7 +13775,7 @@ async function renderFeedback(){
   // Second filter row: Category/Aggregator/Outlet/Brand — dropdowns rather than chip rows since
   // Outlet alone can have 15+ options. Brand here sets the SAME feedbackFilterBrand state that
   // clicking a Brand table row already uses, so both entry points stay in sync.
-  const allCats=[...new Set(feedbackData.records.map(r=>r.category))].filter(c=>FEEDBACK_TOP_CATEGORIES.some(([f])=>f===c)).sort();
+  const allCats=[...new Set(feedbackData.records.map(r=>r.category))].filter(Boolean).sort();
   const allAggs=[...new Set(feedbackData.records.map(r=>r.aggregator))].filter(Boolean).sort();
   const allOutletsList=[...new Set(feedbackData.records.map(r=>r.branch))].filter(Boolean).sort();
   const allBrandsList=BR.map(b=>b.n).filter(n=>feedbackData.records.some(r=>r.brand===n));
@@ -13759,9 +13783,16 @@ async function renderFeedback(){
     const optsHtml=['<option value="">All</option>',...opts.map(o=>`<option value="${o.replace(/"/g,'&quot;')}" ${curVal===o?'selected':''}>${labelFn?labelFn(o):o}</option>`)].join('');
     return`<div style="display:flex;flex-direction:column;gap:2px"><label style="font-size:9.5px;color:${T.muted};text-transform:uppercase;font-weight:700">${label}</label><select onchange="feedbackToggleFilterDim('${dim}',this.value||null)" style="background:${T.panelBg};border:1px solid ${T.border};border-radius:6px;color:${T.text};padding:5px 8px;font-size:11.5px;min-width:130px;color-scheme:dark">${optsHtml}</select></div>`;
   };
+  // Categories outside the top-5 heatmap columns (e.g. Cutlery Missing) still need a readable
+  // label — falls back to Title Case of the raw category constant when there's no short-label.
+  const catLabel=full=>{
+    const m=FEEDBACK_TOP_CATEGORIES.find(([f])=>f===full);
+    if(m)return m[1];
+    return full.toLowerCase().replace(/\b\w/g,c=>c.toUpperCase());
+  };
   const dimFilterRow=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:10px;padding-top:10px;border-top:1px solid ${T.rowBg}">
-    ${dimSelect('Category','Category',allCats.map(c=>FEEDBACK_TOP_CATEGORIES.find(([f])=>f===c)[0]),feedbackFilterCategory,c=>FEEDBACK_TOP_CATEGORIES.find(([f])=>f===c)[1])}
-    ${dimSelect('Aggregator','Aggregator',allAggs,feedbackFilterAggregator)}
+    ${dimSelect('Category','Category',allCats,feedbackFilterCategory,catLabel)}
+    ${dimSelect('Source','Aggregator',allAggs,feedbackFilterAggregator)}
     ${dimSelect('Outlet','Outlet',allOutletsList,feedbackFilterOutlet)}
     ${dimSelect('Brand','Brand',allBrandsList,feedbackFilterBrand)}
     ${(feedbackFilterCategory||feedbackFilterAggregator||feedbackFilterOutlet||feedbackFilterBrand)?`<button onclick="feedbackFilterCategory=null;feedbackFilterAggregator=null;feedbackFilterOutlet=null;feedbackFilterBrand=null;renderFeedback()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:5px 12px;border-radius:6px;font-size:11.5px;cursor:pointer;align-self:center">✕ Clear these</button>`:''}
@@ -13851,7 +13882,7 @@ async function renderFeedback(){
     return feedbackHeatmapRow(agg,rowM,total,ratePct,null,true,null);
   }).join('');
   const aggregatorHeatmap=`<div class="card" style="padding:12px 14px;margin-bottom:12px">
-    <div class="ct" style="margin-bottom:2px">By aggregator <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· worst rate first</span></div>
+    <div class="ct" style="margin-bottom:2px">By source <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· worst rate first</span></div>
     ${aggOrder.length?`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true,catTrends)}${aggRows}</table></div>`:`<div style="text-align:center;color:${T.muted};padding:16px;font-size:12.5px">No records for this selection.</div>`}
   </div>`;
 
