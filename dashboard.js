@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-224";
+const BUILD_VERSION="2026-08-06-225";
 const BUILD_NOTES=[
+  "🐛 Fixed the Platforms page Monthly Performance table not scrolling horizontally when multiple brands/aggregators are selected — the table had width:100% fighting against its own overflow-x:auto wrapper, so it compressed instead of scrolling. Removed the width constraint so it now sizes to its actual content and scrolls correctly.",
+  "🆕 Added Year and Month filters (multi-select, same click/Ctrl-click pattern as the Feedback page) to the Monthly Performance table — narrow to 2025, 2026, both, or specific months. CSV export respects the same filter as what's on screen.",
   "🐛 Fixed Trending Terms drill-down going blank when narrowed to a specific month — the panel was searching the same count≥3-filtered list used for the summary table, so a theme that dropped below 3 mentions for a single month (very easy when you'd been looking at the whole year) would silently show nothing. Now looks up the underlying complaints directly, independent of that display threshold.",
   "🐛 Found and fixed why Jan-May 2025 uploads failed — verified against your actual files: those 5 months genuinely don't have an ERROR (fault classification) column at all, unlike later months. The dashboard was treating that column as required and rejecting the whole file over it. Made it optional — fault just comes back blank for records from months that never captured it, everything else parses normally. Verified January 2025 now parses all 186 records, matching the file's own pivot table total exactly. Please re-upload your 5 files.",
   "⚠️ Heads up: since Jan-May 2025 never captured fault classification, the \"Internal Fault %\" KPI will read artificially low for those months (not because faults were genuinely rare, but because the data was never recorded) — worth keeping in mind if comparing that metric across all of 2025.",
@@ -4913,6 +4915,37 @@ function renderOutlets(){
 // section isn't empty on first view, but nothing here is meant to be exhaustive by default —
 // it's meant to be picked, the same way Comparison's Group C works.
 let platMultiAggs=new Set(),platMultiBrands=new Set(BR.map(b=>b.n));
+let platMonthlyFilterMonths=new Set(); // empty = all months
+let platMonthlyFilterYears=new Set(); // empty = all years
+function platToggleMonthlyMonth(m,event){
+  const multi=event&&(event.ctrlKey||event.metaKey);
+  if(multi){
+    if(platMonthlyFilterMonths.has(m))platMonthlyFilterMonths.delete(m);
+    else platMonthlyFilterMonths.add(m);
+  }else{
+    const onlyThis=platMonthlyFilterMonths.size===1&&platMonthlyFilterMonths.has(m);
+    platMonthlyFilterMonths=onlyThis?new Set():new Set([m]);
+  }
+  renderPlatforms();
+}
+function platToggleMonthlyYear(y,event){
+  const multi=event&&(event.ctrlKey||event.metaKey);
+  if(multi){
+    if(platMonthlyFilterYears.has(y))platMonthlyFilterYears.delete(y);
+    else platMonthlyFilterYears.add(y);
+  }else{
+    const onlyThis=platMonthlyFilterYears.size===1&&platMonthlyFilterYears.has(y);
+    platMonthlyFilterYears=onlyThis?new Set():new Set([y]);
+  }
+  // Prune month selections that no longer belong to any selected year — same fix applied to the
+  // Feedback page earlier, otherwise a stale month selection keeps silently filtering even after
+  // it's no longer visible as a chip.
+  if(platMonthlyFilterYears.size){
+    platMonthlyFilterMonths=new Set([...platMonthlyFilterMonths].filter(m=>[...platMonthlyFilterYears].some(y2=>m.startsWith(y2))));
+  }
+  renderPlatforms();
+}
+function platClearMonthlyFilters(){platMonthlyFilterMonths=new Set();platMonthlyFilterYears=new Set();renderPlatforms();}
 function platMultiAggsInit(){if(platMultiAggs.size===0){platMultiAggs=new Set([selPlatform,AGGS.find(a=>a!==selPlatform)].filter(Boolean));}}
 function platToggleMultiAgg(ag){if(platMultiAggs.has(ag))platMultiAggs.delete(ag);else platMultiAggs.add(ag);renderPlatforms();}
 function platToggleMultiBrand(b){if(platMultiBrands.has(b))platMultiBrands.delete(b);else platMultiBrands.add(b);renderPlatforms();}
@@ -4968,12 +5001,31 @@ function platMonthlyTableCard(){
     seriesMap[b.n+"|"+a]=s;
     Object.keys(s).forEach(m=>allMonths.add(m));
   }));
-  const months=[...allMonths].sort();
+  const allMonthsRaw=[...allMonths].sort();
+  const availableYears=[...new Set(allMonthsRaw.map(m=>m.slice(0,4)))].sort();
+  const months=allMonthsRaw.filter(m=>
+    (!platMonthlyFilterYears.size||platMonthlyFilterYears.has(m.slice(0,4)))&&
+    (!platMonthlyFilterMonths.size||platMonthlyFilterMonths.has(m))
+  );
+
+  const monthlyYearBtn=y=>{const on=platMonthlyFilterYears.has(y);return`<button onclick="platToggleMonthlyYear('${y}',event)" style="padding:4px 12px;border-radius:12px;border:1px solid ${on?'#FF8A3D':T2.pillBorder};background:${on?'rgba(255,138,61,.15)':'transparent'};color:${on?'#FF8A3D':T2.pillInactiveTxt};font-size:11px;font-weight:700;cursor:pointer;margin:0 4px 4px 0">${y}</button>`;};
+  const monthlyMonthBtn=m=>{const on=platMonthlyFilterMonths.has(m);const lbl=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short",year:"2-digit"});return`<button onclick="platToggleMonthlyMonth('${m}',event)" title="Click to select just this month. Ctrl/Cmd+click to add it to the current selection." style="padding:4px 10px;border-radius:12px;border:1px solid ${on?'#FF8A3D':T2.pillBorder};background:${on?'rgba(255,138,61,.15)':'transparent'};color:${on?'#FF8A3D':T2.pillInactiveTxt};font-size:11px;font-weight:700;cursor:pointer;margin:0 4px 4px 0">${lbl}</button>`;};
+  const monthlyFilterUI=`<div style="margin:6px 0 4px">
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <span style="font-size:11px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase;letter-spacing:.5px">Year</span>
+      ${availableYears.map(monthlyYearBtn).join('')}
+      <span style="color:${T2.headerBorder};margin:0 4px">|</span>
+      <span style="font-size:11px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase;letter-spacing:.5px">Month</span>
+      ${allMonthsRaw.filter(m=>!platMonthlyFilterYears.size||platMonthlyFilterYears.has(m.slice(0,4))).map(monthlyMonthBtn).join('')}
+      ${(platMonthlyFilterMonths.size||platMonthlyFilterYears.size)?`<button onclick="platClearMonthlyFilters()" style="background:none;border:1px solid ${T2.pillBorder};color:${T2.mutedTxt};padding:3px 10px;border-radius:6px;font-size:10.5px;cursor:pointer;margin-left:4px">✕ Clear</button>`:''}
+    </div>
+  </div>`;
 
   if(!months.length){
     return`<div class="card" style="margin-top:12px"><div class="ct">📊 Monthly Performance — Brand × Aggregator</div>
       <div style="font-size:11px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px">Aggregators</div><div>${aggPills}</div>
       <div style="font-size:11px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 4px">Brands</div><div>${brandPills}</div>
+      ${monthlyFilterUI}
       <div style="text-align:center;padding:30px;color:${T2.mutedTxt};font-size:12px">No data found for this combination.</div></div>`;
   }
 
@@ -5022,9 +5074,10 @@ function platMonthlyTableCard(){
       <button onclick="platExportMonthly()" style="background:#0F172A;color:#fff;border:none;border-radius:8px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer">⬇ Export CSV</button>
     </div>
     <div style="font-size:11px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px">Aggregators</div><div>${aggPills}</div>
-    <div style="font-size:11px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 10px">Brands</div><div>${brandPills}</div>
+    <div style="font-size:11px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:6px 0 4px">Brands</div><div>${brandPills}</div>
+    ${monthlyFilterUI}
     <div style="overflow-x:auto;margin-top:8px">
-      <table style="width:100%;border-collapse:collapse">
+      <table style="border-collapse:collapse">
         <thead>
           <tr style="border-bottom:1px solid ${T2.headerBorderLight}"><th></th>${brandGroupHeaders}</tr>
           <tr style="border-bottom:2px solid ${T2.headerBorder}"><th style="padding:6px 16px;text-align:left;font-size:10px;color:${T2.mutedTxt};font-weight:700;text-transform:uppercase">Month</th>${aggSubHeaders}</tr>
@@ -5045,7 +5098,10 @@ function platExportMonthly(){
   activeBrands.forEach(b=>activeAggs.forEach(a=>{
     const s=platMonthlySeries(b.n,a);seriesMap[b.n+"|"+a]=s;Object.keys(s).forEach(m=>allMonths.add(m));
   }));
-  const months=[...allMonths].sort();
+  const months=[...allMonths].sort().filter(m=>
+    (!platMonthlyFilterYears.size||platMonthlyFilterYears.has(m.slice(0,4)))&&
+    (!platMonthlyFilterMonths.size||platMonthlyFilterMonths.has(m))
+  );
   const header=["Month"];
   activeBrands.forEach(b=>activeAggs.forEach(a=>{header.push(`${b.n} ${a} Sales (AED)`,`${b.n} ${a} MoM %`,`${b.n} ${a} Orders`,`${b.n} ${a} AOV (AED)`,`${b.n} ${a} Discount (AED)`,`${b.n} ${a} Discount %`);}));
   const rows=months.map((m,mi)=>{
