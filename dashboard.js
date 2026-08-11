@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-221";
+const BUILD_VERSION="2026-08-06-222";
 const BUILD_NOTES=[
+  "🎨 Heatmap coloring switched to column-relative (confirmed direction) — each month now colors by comparing categories against each other within that same month, not against each category's own history. Verified against your exact August example: Missing now correctly shows as the 2nd-highest problem that month.",
+  "🐛 Upload failures now show a persistent banner instead of an auto-hiding toast — with a 12-file batch upload, a partial failure (e.g. 5 of 12 files) could get completely missed since the button still showed a checkmark and the error message vanished after a few seconds. This stays visible until dismissed and lists every failure by filename. If you re-upload your Jan-May 2025 files, any failure this time will be impossible to miss.",
   "🐛 Fixed % view showing every cell as green — the color thresholds were calibrated against synthetic test data (0.6%-0.8% range), but your real rates run far lower (0.01%-0.31%), so everything fell into the lowest tier. Rewrote to color relative to the highest rate anywhere in the table instead of fixed percentages, so it adapts automatically to your actual data instead of a guessed constant.",
   "🆕 Heatmap now shows every category in your data, not just the original 5 — Cutlery Missing and others now get their own row.",
   "🆕 Click a month header to sort all rows by that month's value (highest first) — works in both Count and % modes.",
@@ -1344,11 +1346,12 @@ async function doFeedbackUpload(files){
       succeeded++;
     }catch(e){errors.push(`${file.name}: ${e.message}`);}
   }
-  if(errors.length){const e=document.getElementById("etoa");if(e){e.textContent="⚠️ "+errors.join(" · ");e.style.display="block";setTimeout(()=>e.style.display="none",8000);}}
-  if(mismatches.length){
-    const e=document.getElementById("etoa");
-    if(e){e.textContent="⚠️ Row count mismatch — "+mismatches.join(" · ");e.style.display="block";e.style.background="rgba(239,68,68,.95)";setTimeout(()=>e.style.display="none",20000);}
-    else alert("⚠️ Row count mismatch:\n\n"+mismatches.join("\n"));
+  // v222: persistent banner instead of an auto-hiding toast — with a multi-file batch (e.g.
+  // uploading all 12 months of a year together), a partial failure could get missed entirely:
+  // the toast auto-hid after a few seconds, and the button still showed a checkmark ("✓ 7 files
+  // uploaded") even when 5 of 12 had silently failed. This stays on screen until dismissed.
+  if(errors.length||mismatches.length){
+    feedbackUploadResult={total:files.length,succeeded,errors,mismatches};
   }
   btns.forEach(b=>{
     b.disabled=false;
@@ -13301,6 +13304,7 @@ let feedbackZoomMode='overview';    // 'overview' (trend chart + months×categor
 let feedbackShowCustom=false;       // top-section Option C: presets shown by default, granular month chips + dimension filters hidden behind this
 let feedbackHeatmapMode='count';    // 'count' or 'rate' — which face of the flip heatmap is showing
 let feedbackHeatmapSortMonth=null;  // clicking a month header sorts category rows by that month's value; click again to clear
+let feedbackUploadResult=null;      // {total,succeeded,errors,mismatches} from the last upload batch — persists until dismissed, not auto-hidden
 function feedbackToggleMonthSort(month){
   feedbackHeatmapSortMonth=feedbackHeatmapSortMonth===month?null:month;
   renderFeedback();
@@ -13649,7 +13653,13 @@ function feedbackBuildOverview(T){
     const rates=allMonthsFull.map((m,i)=>{const vol=ordersByMonth[m]||0;return vol>0?counts[i]/vol*100:0;});
     return{full,short:catShortLabel(full),counts,rates,total:counts.reduce((s,v)=>s+v,0)};
   });
-  const tableMaxRate=Math.max(...catData.flatMap(c=>c.rates),0.0001); // table-wide, not row-relative — rates ARE comparable across categories, unlike raw counts
+  // v222: column-relative coloring (confirmed direction, replacing row-relative) — for each
+  // month, color is relative to the HIGHEST value across ALL categories in that same month, not
+  // relative to each category's own historical range. Answers "what's this month's biggest
+  // problem" rather than "is this category worse than its own usual" — applied to both count and
+  // rate so the two modes stay consistent with each other.
+  const colMaxCount=allMonthsFull.map((m,i)=>Math.max(...catData.map(c=>c.counts[i]),1));
+  const colMaxRate=allMonthsFull.map((m,i)=>Math.max(...catData.map(c=>c.rates[i]),0.0001));
   // Sort rows by whichever month was clicked (respecting current count/rate mode), highest
   // first — default order (by total volume) otherwise.
   let sortedCatData=catData;
@@ -13664,16 +13674,15 @@ function feedbackBuildOverview(T){
     sortedCatData=[...catData].sort((a,b)=>b.total-a.total);
   }
   const heatRows=sortedCatData.map(({full,short,counts,rates})=>{
-    const rowMax=Math.max(...counts,1);
     const active=feedbackOutletChartCategory===full;
     const cells=allMonthsFull.map((m,colIdx)=>{
       const v=counts[colIdx];
-      const countRatio=v/rowMax;
+      const countRatio=v/colMaxCount[colIdx];
       const countSev=v?feedbackSeverityColor(countRatio):null;
       const countBg=countSev?countSev.bg:`${T.rowBg2||T.rowBg}`;
       const countTxt=countSev?countSev.text:T.muted;
       const rate=rates[colIdx];
-      const rateRatio=rate/tableMaxRate;
+      const rateRatio=rate/colMaxRate[colIdx];
       const rateSev=v?feedbackSeverityColor(rateRatio):null;
       const rateBg=rateSev?rateSev.bg:`${T.rowBg2||T.rowBg}`;
       const rateTxt=rateSev?rateSev.text:T.muted;
@@ -13823,8 +13832,23 @@ async function renderFeedback(){
     #page-feedback .cell-face.back{position:absolute;top:0;left:0;width:100%;height:100%;transform:rotateY(180deg);box-sizing:border-box}
   </style>`;
   if(!feedbackData||!feedbackData.records||!feedbackData.records.length){
+    const emptyStateBanner=(()=>{
+      if(!feedbackUploadResult)return'';
+      const{total,succeeded,errors,mismatches}=feedbackUploadResult;
+      const items=[...errors.map(e=>({kind:'error',text:e})),...mismatches.map(m=>({kind:'mismatch',text:m}))];
+      return`<div class="card" style="border-left:3px solid #DE4A42;padding:12px 14px;margin-bottom:14px;text-align:left">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+          <div style="font-size:13px;font-weight:800;color:#DE4A42">⚠ Upload result: ${succeeded} of ${total} file${total!==1?'s':''} succeeded</div>
+          <button onclick="feedbackUploadResult=null;renderFeedback()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:3px 10px;border-radius:6px;font-size:11px;cursor:pointer;white-space:nowrap">✕ Dismiss</button>
+        </div>
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:5px">
+          ${items.map(it=>`<div style="font-size:11.5px;color:${T.text};line-height:1.5;padding:6px 8px;background:${T.rowBg};border-radius:5px">${it.kind==='mismatch'?'📊 ':'❌ '}${it.text.replace(/</g,'&lt;')}</div>`).join('')}
+        </div>
+      </div>`;
+    })();
     pg.innerHTML=`${styleOverride}
       <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px"><span style="font-size:20px">💬</span><div style="font-size:18px;font-weight:800;color:${T.text}">Feedback and Reviews</div></div>
+      ${emptyStateBanner}
       <div class="card" style="padding:30px;text-align:center">
         <div style="color:${T.muted};font-size:14px;margin-bottom:14px">No feedback data uploaded yet.</div>
         <button data-feedback-upload-btn onclick="document.getElementById('feedback-file-input').click()" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);color:#f59e0b;padding:7px 16px;border-radius:7px;font-size:13.5px;font-weight:700;cursor:pointer">⬆ Upload monthly Feedbacks-and-Reviews file</button>
@@ -14128,11 +14152,27 @@ async function renderFeedback(){
     ${outletHeatmap}
   </div>`;
 
+  const uploadResultBanner=(()=>{
+    if(!feedbackUploadResult)return'';
+    const{total,succeeded,errors,mismatches}=feedbackUploadResult;
+    const failed=total-succeeded;
+    const items=[...errors.map(e=>({kind:'error',text:e})),...mismatches.map(m=>({kind:'mismatch',text:m}))];
+    return`<div class="card" style="border-left:3px solid #DE4A42;padding:12px 14px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+        <div style="font-size:13px;font-weight:800;color:#DE4A42">⚠ Upload result: ${succeeded} of ${total} file${total!==1?'s':''} succeeded${failed>0?`, ${failed} failed`:''}${mismatches.length?`, ${mismatches.length} row-count mismatch${mismatches.length!==1?'es':''}`:''}</div>
+        <button onclick="feedbackUploadResult=null;renderFeedback()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:3px 10px;border-radius:6px;font-size:11px;cursor:pointer;white-space:nowrap">✕ Dismiss</button>
+      </div>
+      <div style="margin-top:8px;display:flex;flex-direction:column;gap:5px">
+        ${items.map(it=>`<div style="font-size:11.5px;color:${T.text};line-height:1.5;padding:6px 8px;background:${T.rowBg};border-radius:5px">${it.kind==='mismatch'?'📊 ':'❌ '}${it.text.replace(/</g,'&lt;')}</div>`).join('')}
+      </div>
+    </div>`;
+  })();
   pg.innerHTML=`${styleOverride}
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
       <div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">💬</span><div style="font-size:18px;font-weight:800;color:${T.text}">Feedback and Reviews</div></div>
       ${uploadChip}
     </div>
+    ${uploadResultBanner}
     ${filterBar}
     ${alertBanner}
     ${trendingTermsPanel}
