@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-219";
+const BUILD_VERSION="2026-08-06-220";
 const BUILD_NOTES=[
+  "🆕 Count/% flip animation is live on the Overview heatmap — toggle in the top-right of the heatmap card, cells flip in a left-to-right wave (staggered per column). Rate view uses fixed percentage thresholds rather than reusing count's row-relative coloring, since rates cluster narrowly and would otherwise all look equally severe. Switching any other filter while in % mode correctly stays flipped, doesn't snap back to Count.",
   "🆕 Feedback page top section redesigned (Option C) — This month / Last 3 months / This year / All time presets up front, with the granular month-by-month chips and Category/Source/Outlet/Brand filters tucked behind a \"Custom\" toggle instead of always being expanded.",
   "🐛 Source duplicates still showing after last build's fix — that one relied on a one-time migration that could get silently undone if another browser still on older code re-synced stale data. Rebuilt as a normalization pass that runs on every render instead, guaranteeing no duplicates regardless of sync timing. Also merged \"TripAdvisor Review\" into \"TripAdvisor\" as one source, per direct instruction.",
   "🐛 Fixed the Source dropdown still showing duplicates after last build's fix — that fix only applied to new uploads, so existing data needed a re-upload to actually clean up, which is a lot of friction for a naming issue. Added a one-time automatic migration that retroactively fixes already-stored data — no re-upload needed. Also found and fixed a separate gap: Feedback data was only ever loading from the server, never from your own browser's local backup, which the other 5 data sources all correctly do.",
@@ -13295,6 +13296,25 @@ let feedbackFilterAggregator=null;  // top filter chip — narrows every table t
 let feedbackFilterOutlet=null;      // top filter chip — narrows every table to one outlet
 let feedbackZoomMode='overview';    // 'overview' (trend chart + months×category heatmap) or 'detail' (the tables)
 let feedbackShowCustom=false;       // top-section Option C: presets shown by default, granular month chips + dimension filters hidden behind this
+let feedbackHeatmapMode='count';    // 'count' or 'rate' — which face of the flip heatmap is showing
+function feedbackSetHeatmapMode(mode){
+  if(mode===feedbackHeatmapMode)return;
+  feedbackHeatmapMode=mode;
+  // Flip in place via CSS class toggle rather than a full re-render — re-rendering would rebuild
+  // the DOM and lose the animation entirely, since there'd be no "before" state to transition
+  // from. The cells are already built with both faces; this just triggers the transform.
+  document.querySelectorAll('#feedback-heatmap-flip .cell-flip').forEach(el=>{
+    el.classList.toggle('flipped',mode==='rate');
+  });
+  const btnCount=document.getElementById('feedback-heatmap-mode-count');
+  const btnRate=document.getElementById('feedback-heatmap-mode-rate');
+  if(btnCount&&btnRate){
+    btnCount.style.background=mode==='count'?'#EA8C3A':'transparent';
+    btnCount.style.color=mode==='count'?'#fff':btnCount.dataset.mutedColor;
+    btnRate.style.background=mode==='rate'?'#EA8C3A':'transparent';
+    btnRate.style.color=mode==='rate'?'#fff':btnRate.dataset.mutedColor;
+  }
+}
 function feedbackToggleCustom(){feedbackShowCustom=!feedbackShowCustom;renderFeedback();}
 function feedbackSetPreset(preset){
   const allMonthsRaw=[...new Set(feedbackData.records.map(r=>r.month))].sort();
@@ -13479,6 +13499,18 @@ function feedbackSeverityColor(ratio){
   if(ratio>0)return{bg:'#4CAF6E',text:'#FFFFFF'};
   return null; // caller falls back to the neutral empty-cell style
 }
+// Fixed absolute thresholds for the %-of-orders view — confirmed via prototype testing that
+// reusing row-relative-max here flattens differentiation, since rates naturally cluster in a
+// narrow range (e.g. 0.6%-0.8%) unlike counts which can swing widely within a row. A % has
+// inherent standalone meaning, unlike a raw count which only makes sense relative to volume, so
+// fixed bands are the right call here specifically.
+function feedbackSeverityColorRate(pct){
+  if(pct>=0.8)return{bg:'#DE4A42',text:'#FFFFFF'};
+  if(pct>=0.7)return{bg:'#EA8C3A',text:'#FFFFFF'};
+  if(pct>=0.5)return{bg:'#F0C239',text:'#3D2E00'};
+  if(pct>0)return{bg:'#4CAF6E',text:'#FFFFFF'};
+  return null;
+}
 function feedbackCellStyle(count,rowMax){
   if(!count)return`color:${feedbackTheme().label};background:${DARK_THEME.cardBorder}33`;
   const ratio=rowMax>0?count/rowMax:0;
@@ -13583,24 +13615,58 @@ function feedbackBuildOverview(T){
   // Months × category heatmap — category ROW headers are clickable and explicitly set which
   // category the outlet-driver chart below shows (not auto-detected).
   const catCountByMonth=cat=>{const m={};allMonthsFull.forEach(mo=>m[mo]=0);dimRecs.forEach(r=>{if(r.category===cat)m[r.date.slice(0,7)]=(m[r.date.slice(0,7)]||0)+1;});return m;};
+  // Order volume per month (for the rate face) — respects the same Brand/Outlet/Aggregator
+  // dimension filters as dimRecs, applied to allData instead since orders don't have a category.
+  const ordersByMonth={};
+  allMonthsFull.forEach(m=>{ordersByMonth[m]=0;});
+  if(typeof allData!=="undefined"){
+    allData.forEach(r=>{
+      const m=r.date&&r.date.slice(0,7);
+      if(!(m in ordersByMonth))return;
+      if(feedbackFilterBrand&&r.brand!==feedbackFilterBrand)return;
+      if(feedbackFilterOutlet&&r.branch!==feedbackFilterOutlet)return;
+      if(feedbackFilterAggregator&&r.aggregator!==feedbackFilterAggregator)return;
+      ordersByMonth[m]+=(r.orders||0);
+    });
+  }
   const heatRows=FEEDBACK_TOP_CATEGORIES.map(([full,short])=>{
     const byMonth=catCountByMonth(full);
     const vals=allMonthsFull.map(m=>byMonth[m]||0);
     const max=Math.max(...vals,1);
     const active=feedbackOutletChartCategory===full;
-    const cells=allMonthsFull.map((m,i)=>{
-      const v=vals[i];const ratio=v/max;
-      const sev=v?feedbackSeverityColor(ratio):null;
-      const bg=sev?sev.bg:`${T.rowBg2||T.rowBg}`;
-      const txt=sev?sev.text:T.muted;
-      return`<td onclick="feedbackToggleOverviewDrill('${m}','${full.replace(/'/g,"\\'")}')" style="text-align:center;padding:9px 4px;border-radius:5px;cursor:pointer;color:${txt};background:${bg};font-weight:700;font-size:11.5px">${v||''}</td>`;
+    const cells=allMonthsFull.map((m,colIdx)=>{
+      const v=vals[colIdx];
+      const ratio=v/max;
+      const countSev=v?feedbackSeverityColor(ratio):null;
+      const countBg=countSev?countSev.bg:`${T.rowBg2||T.rowBg}`;
+      const countTxt=countSev?countSev.text:T.muted;
+      const vol=ordersByMonth[m]||0;
+      const rate=vol>0?v/vol*100:0;
+      const rateSev=v?feedbackSeverityColorRate(rate):null;
+      const rateBg=rateSev?rateSev.bg:`${T.rowBg2||T.rowBg}`;
+      const rateTxt=rateSev?rateSev.text:T.muted;
+      const delayMs=colIdx*45; // wind sweep: left to right, 45ms per column step
+      const flippedNow=feedbackHeatmapMode==='rate'?' flipped':'';
+      const onclick=`feedbackToggleOverviewDrill('${m}','${full.replace(/'/g,"\\'")}')`;
+      return`<td style="padding:3px"><div class="cell-scene" onclick="${onclick}" style="cursor:pointer"><div class="cell-flip${flippedNow}" style="transition-delay:${delayMs}ms">
+        <div class="cell-face front" style="background:${countBg};color:${countTxt}">${v||''}</div>
+        <div class="cell-face back" style="background:${rateBg};color:${rateTxt}">${v?rate.toFixed(2)+'%':''}</div>
+      </div></div></td>`;
     }).join('');
-    return`<tr><td onclick="feedbackToggleOutletChartCategory('${full.replace(/'/g,"\\'")}')" style="cursor:pointer;padding:6px 10px 6px 0;font-weight:800;color:${active?'#FF8A3D':T.text};font-size:12.5px;white-space:nowrap">${active?'▸ ':''}${short}</td>${cells}</tr>`;
+    return`<tr><td onclick="feedbackToggleOutletChartCategory('${full.replace(/'/g,"\\'")}')" style="cursor:pointer;padding:6px 10px 6px 0;font-weight:800;color:${active?'#FF8A3D':T.text};font-size:12.5px;white-space:nowrap;vertical-align:middle">${active?'▸ ':''}${short}</td>${cells}</tr>`;
   }).join('');
   const monthHeads=allMonthsFull.map(m=>`<td style="text-align:center;color:${T.muted};font-weight:700;font-size:10.5px;padding:4px">${new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"})}</td>`).join('');
+  const mutedColorHex=T.muted;
+  const heatmapModeToggle=`<div style="display:inline-flex;background:${T.rowBg2||T.rowBg};border:1px solid ${T.border};border-radius:7px;padding:3px;margin-left:auto">
+    <button id="feedback-heatmap-mode-count" data-muted-color="${mutedColorHex}" onclick="feedbackSetHeatmapMode('count')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackHeatmapMode==='count'?'#EA8C3A':'transparent'};color:${feedbackHeatmapMode==='count'?'#fff':mutedColorHex}">Count</button>
+    <button id="feedback-heatmap-mode-rate" data-muted-color="${mutedColorHex}" onclick="feedbackSetHeatmapMode('rate')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackHeatmapMode==='rate'?'#EA8C3A':'transparent'};color:${feedbackHeatmapMode==='rate'?'#fff':mutedColorHex}">%</button>
+  </div>`;
   const heatmapHtml=`<div class="card" style="margin-bottom:12px">
-    <div class="ct" style="margin-bottom:2px">Every month, every category ${feedbackFilterYear?'('+feedbackFilterYear+')':'(all years)'} <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a cell for examples · click a category name to drive the chart below</span></div>
-    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:8px"><tr><td></td>${monthHeads}</tr>${heatRows}</table></div>
+    <div style="display:flex;align-items:center;margin-bottom:2px">
+      <div class="ct">Every month, every category ${feedbackFilterYear?'('+feedbackFilterYear+')':'(all years)'} <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a cell for examples · click a category name to drive the chart below</span></div>
+      ${heatmapModeToggle}
+    </div>
+    <div id="feedback-heatmap-flip" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:8px"><tr><td></td>${monthHeads}</tr>${heatRows}</table></div>
     ${feedbackOverviewDrillPanel(T,dimRecs)}
   </div>`;
 
@@ -13714,6 +13780,11 @@ async function renderFeedback(){
     #page-feedback{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
     #page-feedback .card{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
     #page-feedback .ct{color:${DARK_THEME.textPrimary}!important}
+    #page-feedback .cell-scene{perspective:600px}
+    #page-feedback .cell-flip{position:relative;transform-style:preserve-3d;transition:transform .5s cubic-bezier(.4,.2,.2,1)}
+    #page-feedback .cell-flip.flipped{transform:rotateY(180deg)}
+    #page-feedback .cell-face{backface-visibility:hidden;-webkit-backface-visibility:hidden;border-radius:5px;padding:9px 4px;text-align:center;font-weight:700;font-size:11.5px}
+    #page-feedback .cell-face.back{position:absolute;top:0;left:0;width:100%;height:100%;transform:rotateY(180deg);box-sizing:border-box}
   </style>`;
   if(!feedbackData||!feedbackData.records||!feedbackData.records.length){
     pg.innerHTML=`${styleOverride}
