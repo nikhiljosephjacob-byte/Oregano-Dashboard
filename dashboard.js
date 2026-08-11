@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-222";
+const BUILD_VERSION="2026-08-06-223";
 const BUILD_NOTES=[
+  "🐛 Found and fixed why Jan-May 2025 uploads failed — verified against your actual files: those 5 months genuinely don't have an ERROR (fault classification) column at all, unlike later months. The dashboard was treating that column as required and rejecting the whole file over it. Made it optional — fault just comes back blank for records from months that never captured it, everything else parses normally. Verified January 2025 now parses all 186 records, matching the file's own pivot table total exactly. Please re-upload your 5 files.",
+  "⚠️ Heads up: since Jan-May 2025 never captured fault classification, the \"Internal Fault %\" KPI will read artificially low for those months (not because faults were genuinely rare, but because the data was never recorded) — worth keeping in mind if comparing that metric across all of 2025.",
   "🎨 Heatmap coloring switched to column-relative (confirmed direction) — each month now colors by comparing categories against each other within that same month, not against each category's own history. Verified against your exact August example: Missing now correctly shows as the 2nd-highest problem that month.",
   "🐛 Upload failures now show a persistent banner instead of an auto-hiding toast — with a 12-file batch upload, a partial failure (e.g. 5 of 12 files) could get completely missed since the button still showed a checkmark and the error message vanished after a few seconds. This stays visible until dismissed and lists every failure by filename. If you re-upload your Jan-May 2025 files, any failure this time will be impossible to miss.",
   "🐛 Fixed % view showing every cell as green — the color thresholds were calibrated against synthetic test data (0.6%-0.8% range), but your real rates run far lower (0.01%-0.31%), so everything fell into the lowest tier. Rewrote to color relative to the highest rate anywhere in the table instead of fixed percentages, so it adapts automatically to your actual data instead of a guessed constant.",
@@ -1249,7 +1251,7 @@ async function parseFeedbackXlsx(file){
   const headerRow=rows[1]||[];
   const headerIdx={};
   headerRow.forEach((h,i)=>{headerIdx[String(h).trim()]=i;});
-  const required=["BRANCH","BRAND","AGGREGATOR","ERROR","CATEGORY"];
+  const required=["BRANCH","BRAND","AGGREGATOR","CATEGORY"]; // v223: ERROR removed from required — confirmed via direct inspection that early-2025 files (Jan-May) genuinely don't have this column at all (CUSTOMER REPLIED / RESPONSE-ACTIONS instead), while later files do. Real format difference across time periods, not a parse failure — the file still has everything needed to be useful.
   const missing=required.filter(c=>!(c in headerIdx));
   if(missing.length)throw new Error("Missing required columns: "+missing.join(", ")+" — expected the 'All Feedbacks' sheet format.");
   const complaintCol=Object.keys(headerIdx).find(h=>h.replace(/\s+/g," ").toUpperCase().includes("COMPLAIN"));
