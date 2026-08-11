@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-215";
+const BUILD_VERSION="2026-08-06-216";
 const BUILD_NOTES=[
+  "🎨 New color scheme applied consistently across the whole Feedback page (Overview and Detail alike) — a real green-orange-red traffic light: heatmap cells, rate columns, trend arrows, the alert banner, and the Internal Fault KPI all use the same 4-color palette now. Chosen after 3 rounds — the amber-heavy version was too orange, a lighter pastel version was too washed out, this is the confirmed middle ground.",
   "🐛 Fixed the \"which outlets are driving [category]\" chart not updating when you filter by month — it was using the full-history dataset by mistake. Now respects the month filter correctly; verified it gives different rankings for different months.",
   "🐛 Fixed duplicate Source/Aggregator dropdown entries (\"Dine In\" vs \"dine in\") — case wasn't being normalized for anything outside the 5 real delivery aggregators. Note: this fixes future uploads; existing duplicates need the affected months re-uploaded to clear.",
   "🐛 Fixed the Category filter only offering the 5 heatmap columns — categories like Cutlery Missing were completely unfilterable. Now every category in your data is selectable (the heatmap itself still only shows the top 5 columns — Outlet/Brand tables and totals work correctly for any category either way).",
@@ -13405,15 +13406,15 @@ function feedbackDominantCategory(rowMatrix){
 }
 // Cell color intensity is relative to that ROW's own max — the point is to make each row's
 // worst category pop, not to compare absolute counts across differently-sized rows/brands.
-// Color Scheme B — amber-to-red severity ramp (chosen over the original red/orange scheme,
-// which made "elevated" and "on fire" look too similar). Low is genuinely calm-looking (soft
-// yellow), not just a fainter version of the alarm color, so the eye can actually tell "fine"
-// from "worth a look" from "needs action" at a glance.
+// "Option 2" — a genuine green→amber→orange→red traffic light, bold saturation. Chosen after
+// two rounds: the original amber-to-red scheme read as too orange overall; a lighter pastel
+// version of this same red-orange-green spectrum then read as too washed out. This is the
+// confirmed middle ground — real color, but not as heavy as the original.
 function feedbackSeverityColor(ratio){
-  if(ratio>=0.75)return{bg:'#D9483D',text:'#FFF5F2'};
-  if(ratio>=0.5)return{bg:'#F4713A',text:'#3D1A0C'};
-  if(ratio>=0.25)return{bg:'#FFB84D',text:'#3D2A0C'};
-  if(ratio>0)return{bg:'#FFD86655',text:'#F1F5F9'};
+  if(ratio>=0.75)return{bg:'#DE4A42',text:'#FFFFFF'};
+  if(ratio>=0.5)return{bg:'#EA8C3A',text:'#FFFFFF'};
+  if(ratio>=0.25)return{bg:'#F0C239',text:'#3D2E00'};
+  if(ratio>0)return{bg:'#4CAF6E',text:'#FFFFFF'};
   return null; // caller falls back to the neutral empty-cell style
 }
 function feedbackCellStyle(count,rowMax){
@@ -13431,7 +13432,7 @@ function feedbackHeatmapRow(label,rowMatrix,rowTotal,ratePct,onclick,showRate,br
     return`<td ${cellClick?`onclick="${cellClick}" style="cursor:pointer;text-align:center;padding:6px;border-radius:4px;font-size:12.5px;${feedbackCellStyle(n,rowMax)}"`:`style="text-align:center;padding:6px;border-radius:4px;font-size:12.5px;${feedbackCellStyle(n,rowMax)}"`}>${n||''}</td>`;
   }).join('');
   const clickAttr=onclick?`onclick="${onclick}" style="cursor:pointer"`:'';
-  const rateCell=showRate?`<td style="text-align:right;color:${ratePct>=0.7?'#D9483D':ratePct>=0.3?'#FFB84D':'#2ECC71'};font-weight:700;padding:6px;font-size:11.5px">${ratePct.toFixed(2)}%</td>`:'';
+  const rateCell=showRate?`<td style="text-align:right;color:${ratePct>=0.7?'#DE4A42':ratePct>=0.3?'#EA8C3A':'#4CAF6E'};font-weight:700;padding:6px;font-size:11.5px">${ratePct.toFixed(2)}%</td>`:'';
   return`<tr ${clickAttr}>
     <td style="color:${T.text};font-weight:600;padding:3px 8px 3px 0;font-size:13.5px;white-space:nowrap">${label}</td>
     ${cells}
@@ -13443,7 +13444,7 @@ function feedbackHeatmapHead(showRate,catTrends){
   const T=feedbackTheme();
   const catHeaders=FEEDBACK_TOP_CATEGORIES.map(([full,short])=>{
     const trend=catTrends&&catTrends[full];
-    const arrow=trend==null?'':trend>10?`<span style="color:#D9483D" title="Rate up ${trend.toFixed(0)}% vs prior period">↗</span>`:trend<-10?`<span style="color:#2ECC71" title="Rate down ${Math.abs(trend).toFixed(0)}% vs prior period">↘</span>`:'';
+    const arrow=trend==null?'':trend>10?`<span style="color:#DE4A42" title="Rate up ${trend.toFixed(0)}% vs prior period">↗</span>`:trend<-10?`<span style="color:#4CAF6E" title="Rate down ${Math.abs(trend).toFixed(0)}% vs prior period">↘</span>`:'';
     return`<td onclick="feedbackToggleDrill('__ALL__','${full.replace(/'/g,"\\'")}')" style="text-align:center;color:${T.muted};padding:3px;font-weight:700;font-size:10.5px;cursor:pointer;text-decoration:underline dotted" title="Click to see every ${short} complaint across all outlets">${short} ${arrow}</td>`;
   }).join('');
   return`<tr><td></td>${catHeaders}<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:10.5px">Total</td>${showRate?`<td style="text-align:right;color:${T.muted};padding:3px 4px;font-weight:700;font-size:10.5px">% of orders</td>`:''}</tr>`;
@@ -13601,13 +13602,13 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
       data:{labels:months.map(m=>new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"})),
         datasets:[
           {type:'bar',label:'Complaints',data:counts,backgroundColor:selected.map(s=>s?'#FF8A3Dcc':'#FF8A3D33'),borderRadius:4,order:2},
-          {type:'line',label:'Rate % of orders',data:rates,borderColor:'#D9483D',backgroundColor:'#D9483D',borderWidth:2,pointRadius:4,tension:.3,yAxisID:'y1',order:1}
+          {type:'line',label:'Rate % of orders',data:rates,borderColor:'#DE4A42',backgroundColor:'#DE4A42',borderWidth:2,pointRadius:4,tension:.3,yAxisID:'y1',order:1}
         ]},
       options:{responsive:true,maintainAspectRatio:false,
         onClick:(e,els)=>{if(els.length){feedbackToggleMonth(months[els[0].index],e.native);}},
         plugins:{legend:{display:true,labels:{color:_darkPage?DARK_THEME.textMuted:'#64748b',font:{size:11}}}},
         scales:{y:{grid:{color:_darkPage?'rgba(255,255,255,.06)':'#F1F5F9'},ticks:{color:_darkPage?DARK_THEME.textMuted:'#64748b',font:{size:10}}},
-          y1:{position:'right',grid:{display:false},ticks:{color:'#D9483D',font:{size:10},callback:v=>v+'%'}},
+          y1:{position:'right',grid:{display:false},ticks:{color:'#DE4A42',font:{size:10},callback:v=>v+'%'}},
           x:{grid:{display:false},ticks:{color:_darkPage?DARK_THEME.textMuted:'#64748b',font:{size:10}}}}}
     });
   }
@@ -13616,7 +13617,7 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
     destroyChart('feedback-outlet-chart');
     charts['feedback-outlet-chart']=new Chart(outletCtx,{
       type:'bar',
-      data:{labels:outletRanked.map(r=>r[0]),datasets:[{data:outletRanked.map(r=>r[1]),backgroundColor:'#D9483D99',borderRadius:4}]},
+      data:{labels:outletRanked.map(r=>r[0]),datasets:[{data:outletRanked.map(r=>r[1]),backgroundColor:'#DE4A4299',borderRadius:4}]},
       options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
         onClick:(e,els)=>{if(els.length){feedbackFilterOutlet=outletRanked[els[0].index][0];renderFeedback();}},
         plugins:{legend:{display:false}},
@@ -13717,9 +13718,9 @@ async function renderFeedback(){
     const headline=maskedByVolume
       ?`Complaint rate is rising, not falling — raw count is down ${Math.abs(countTrendPct).toFixed(0)}% but that's from fewer orders, not fewer problems. Per-order rate is up ${rateTrendPct.toFixed(0)}%.`
       :`${topFlags.length} categor${topFlags.length===1?'y is':'ies are'} rising faster than order volume explains.`;
-    const flagList=topFlags.map(f=>`<span style="display:inline-block;margin-top:4px"><strong style="color:${T.text}">${f.branch}</strong> — ${f.category}-related feedback up <strong style="color:#D9483D">${f.pctChange.toFixed(0)}%</strong> (${f.priorCount}→${f.currCount})</span>`).join('<br>');
-    alertBanner=`<div class="card" style="border-left:3px solid #D9483D;padding:10px 12px;margin-bottom:12px">
-      <div style="font-size:12.5px;font-weight:700;color:#D9483D;margin-bottom:2px">⚠ ${headline}</div>
+    const flagList=topFlags.map(f=>`<span style="display:inline-block;margin-top:4px"><strong style="color:${T.text}">${f.branch}</strong> — ${f.category}-related feedback up <strong style="color:#DE4A42">${f.pctChange.toFixed(0)}%</strong> (${f.priorCount}→${f.currCount})</span>`).join('<br>');
+    alertBanner=`<div class="card" style="border-left:3px solid #DE4A42;padding:10px 12px;margin-bottom:12px">
+      <div style="font-size:12.5px;font-weight:700;color:#DE4A42;margin-bottom:2px">⚠ ${headline}</div>
       ${flagList?`<div style="font-size:13.5px;color:${T.muted};line-height:1.6">${flagList}</div>`:''}
     </div>`;
   }
@@ -13729,11 +13730,11 @@ async function renderFeedback(){
   let trendingTermsPanel='';
   if(themeRows.length){
     const crossCuttingCallout=crossCuttingTheme?`<div style="background:rgba(255,107,107,.08);border:1px solid rgba(255,107,107,.3);border-radius:8px;padding:10px 12px;margin-bottom:10px">
-      <div style="font-size:13.5px;font-weight:800;color:#D9483D">⚠ "${crossCuttingTheme.theme}" mentioned ${crossCuttingTheme.count} times — spans ${crossCuttingTheme.outlets.size} outlets and ${crossCuttingTheme.catCount} different categories</div>
-      <div style="font-size:12.5px;color:${T.muted};margin-top:3px">Logged under different categories, but it reads like the same underlying issue. <span onclick="feedbackToggleThemeDrill('${crossCuttingTheme.theme.replace(/'/g,"\\'")}')" style="color:#D9483D;cursor:pointer;text-decoration:underline">Read all ${crossCuttingTheme.count} →</span></div>
+      <div style="font-size:13.5px;font-weight:800;color:#DE4A42">⚠ "${crossCuttingTheme.theme}" mentioned ${crossCuttingTheme.count} times — spans ${crossCuttingTheme.outlets.size} outlets and ${crossCuttingTheme.catCount} different categories</div>
+      <div style="font-size:12.5px;color:${T.muted};margin-top:3px">Logged under different categories, but it reads like the same underlying issue. <span onclick="feedbackToggleThemeDrill('${crossCuttingTheme.theme.replace(/'/g,"\\'")}')" style="color:#DE4A42;cursor:pointer;text-decoration:underline">Read all ${crossCuttingTheme.count} →</span></div>
     </div>`:'';
     const themeTableRows=themeRows.slice(0,8).map(t=>{
-      const trendHTML=t.pctChange==null?`<span style="color:${T.label}">new</span>`:t.pctChange>15?`<span style="color:#D9483D">▲ ${t.pctChange.toFixed(0)}%</span>`:t.pctChange<-15?`<span style="color:#2ECC71">▼ ${Math.abs(t.pctChange).toFixed(0)}%</span>`:`<span style="color:${T.label}">flat</span>`;
+      const trendHTML=t.pctChange==null?`<span style="color:${T.label}">new</span>`:t.pctChange>15?`<span style="color:#DE4A42">▲ ${t.pctChange.toFixed(0)}%</span>`:t.pctChange<-15?`<span style="color:#4CAF6E">▼ ${Math.abs(t.pctChange).toFixed(0)}%</span>`:`<span style="color:${T.label}">flat</span>`;
       return`<tr onclick="feedbackToggleThemeDrill('${t.theme.replace(/'/g,"\\'")}')" style="cursor:pointer">
         <td style="color:${T.text};font-weight:700;padding:7px 8px 7px 0;font-size:13.5px">${t.theme}</td>
         <td style="text-align:right;color:${T.text};font-weight:700;padding:7px 8px;font-size:13.5px">${t.count}</td>
@@ -13816,9 +13817,9 @@ async function renderFeedback(){
   const kpi=(lbl,val,clr)=>`<div class="card" style="padding:8px 10px;border-left:3px solid ${clr}"><div style="font-size:10.5px;color:${T.muted};font-weight:700;text-transform:uppercase">${lbl}</div><div style="font-size:17px;font-weight:800;color:${clr==='#f59e0b'?T.text:clr}">${val}</div></div>`;
   const kpiStrip=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px">
     ${kpi("Total",recs.length.toLocaleString(),"#f59e0b")}
-    ${kpi("Rate trend <span style='opacity:.6;font-weight:500'>· % of orders</span>",rateTrendPct==null?"—":`${rateTrendPct>=0?'▲':'▼'} ${Math.abs(rateTrendPct).toFixed(0)}%`,rateTrendPct==null?T.muted:rateTrendPct>=0?'#D9483D':'#2ECC71')}
+    ${kpi("Rate trend <span style='opacity:.6;font-weight:500'>· % of orders</span>",rateTrendPct==null?"—":`${rateTrendPct>=0?'▲':'▼'} ${Math.abs(rateTrendPct).toFixed(0)}%`,rateTrendPct==null?T.muted:rateTrendPct>=0?'#DE4A42':'#4CAF6E')}
     ${kpi("Top category",topCat?FEEDBACK_TOP_CATEGORIES.find(([f])=>f===topCat[0])?.[1]||topCat[0].split(' ')[0]:"—","#f59e0b")}
-    ${kpi("Internal fault",internalPct.toFixed(0)+"%","#FFB84D")}
+    ${kpi("Internal fault",internalPct.toFixed(0)+"%","#EA8C3A")}
   </div>`;
 
   // ── Brand heatmap ──
@@ -13849,7 +13850,7 @@ async function renderFeedback(){
     const ranked=Object.entries(byOutlet).sort((a,b)=>b[1]-a[1]);
     const[topOutlet,topCount]=ranked[0];
     const trend=catTrends[full];
-    const trendHTML=trend==null?`<span style="color:${T.label}">—</span>`:trend>10?`<span style="color:#D9483D">▲ ${trend.toFixed(0)}%</span>`:trend<-10?`<span style="color:#2ECC71">▼ ${Math.abs(trend).toFixed(0)}%</span>`:`<span style="color:${T.label}">flat</span>`;
+    const trendHTML=trend==null?`<span style="color:${T.label}">—</span>`:trend>10?`<span style="color:#DE4A42">▲ ${trend.toFixed(0)}%</span>`:trend<-10?`<span style="color:#4CAF6E">▼ ${Math.abs(trend).toFixed(0)}%</span>`:`<span style="color:${T.label}">flat</span>`;
     return{full,short,total:catRecs.length,outletCount:ranked.length,topOutlet,topCount,trendHTML,trendVal:trend};
   }).filter(Boolean).sort((a,b)=>b.total-a.total);
   const categoryRowsHTML=categoryTableRows.map(c=>`<tr onclick="feedbackToggleDrill('__ALL__','${c.full.replace(/'/g,"\\'")}')" style="cursor:pointer">
