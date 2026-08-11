@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-213";
+const BUILD_VERSION="2026-08-06-214";
 const BUILD_NOTES=[
+  "📱 Mobile fixes on the newest UI: 5 Feedback page tables (Trending Terms, Brand, Category, Aggregator, Outlet) were missing horizontal-scroll wrapping — on a narrow screen they'd have either squished illegibly or broken the page layout. Also fixed the KPI strip's rigid 4-column grid (now reflows to fewer columns on narrow screens) and the Forecaster card on Campaigns (now wraps instead of squishing its description text).",
   "🎨 Corrected the funding disclosure from last build — top \"Invested\" now shows the true total (17K, everything actually being spent) instead of merchant-only. The merchant/aggregator split moved down into the Contractual line where it's actually relevant, worded clearly (\"required\" added so it's obvious which number is the target).",
   "🔄 Campaigns page restructured: Active/Upcoming/History are now combinable (click to toggle any combination — was exclusive before). Filter bar (Brand/Location/Branch) moved above the status selector, shown once regardless of how many statuses are combined. History's count number is gone (kept the toggle, dropped the number). Forecaster is now its own prominent card, not one pill among equals.",
   "🆕 Campaign contribution tooltip now flags when another promo was running during the baseline period — one line, only shown when relevant, so \"incremental\" doesn't silently mean promo-vs-different-promo.",
@@ -11494,8 +11495,8 @@ async function renderCampaigns(){
     </div></div>`;
     // Forecaster — its own prominent card, not one pill among equals, since it's a genuinely
     // different kind of tool (planning) rather than a status filter.
-    const forecasterCTA=`<div onclick="campTab='forecaster';renderCampaigns()" style="cursor:pointer;background:linear-gradient(135deg,rgba(245,158,11,.16),rgba(245,158,11,.05));border:1.5px solid ${campTab==='forecaster'?'#f59e0b':'rgba(245,158,11,.4)'};border-radius:12px;padding:16px 20px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:14px" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${campTab==='forecaster'?'#f59e0b':'rgba(245,158,11,.4)'}'">
-      <div style="display:flex;align-items:center;gap:14px"><span style="font-size:30px">🔮</span><div><div style="font-size:16px;font-weight:800;color:#fbbf24">Campaign Forecaster</div><div style="font-size:11.5px;color:${T.label};margin-top:2px">Model a hypothetical discount before you run it — expected lift, ROI, and break-even</div></div></div>
+    const forecasterCTA=`<div onclick="campTab='forecaster';renderCampaigns()" style="cursor:pointer;background:linear-gradient(135deg,rgba(245,158,11,.16),rgba(245,158,11,.05));border:1.5px solid ${campTab==='forecaster'?'#f59e0b':'rgba(245,158,11,.4)'};border-radius:12px;padding:16px 20px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${campTab==='forecaster'?'#f59e0b':'rgba(245,158,11,.4)'}'">
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><span style="font-size:30px">🔮</span><div><div style="font-size:16px;font-weight:800;color:#fbbf24">Campaign Forecaster</div><div style="font-size:11.5px;color:${T.label};margin-top:2px">Model a hypothetical discount before you run it — expected lift, ROI, and break-even</div></div></div>
       <span style="font-size:12px;font-weight:700;color:#f59e0b;white-space:nowrap">${campTab==='forecaster'?'✓ Open':'Open →'}</span>
     </div>`;
     // Rewards segregation renderer: on Active/History, split the filtered list into "regular" and
@@ -13735,10 +13736,10 @@ async function renderFeedback(){
     trendingTermsPanel=`<div class="card" style="padding:12px 14px;margin-bottom:12px">
       <div class="ct" style="margin-bottom:6px">Trending terms <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· from complaint text, not category tags · click a row for examples</span></div>
       ${crossCuttingCallout}
-      <table style="width:100%;border-collapse:collapse">
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
         <tr><td></td><td style="text-align:right;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Count</td><td style="text-align:center;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Trend</td><td style="text-align:right;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Spread</td><td></td></tr>
         ${themeTableRows}
-      </table>
+      </table></div>
       ${themeDrillPanel}
     </div>`;
   }
@@ -13782,7 +13783,7 @@ async function renderFeedback(){
 
   // ── KPI strip ──
   const kpi=(lbl,val,clr)=>`<div class="card" style="padding:8px 10px;border-left:3px solid ${clr}"><div style="font-size:10.5px;color:${T.muted};font-weight:700;text-transform:uppercase">${lbl}</div><div style="font-size:17px;font-weight:800;color:${clr==='#f59e0b'?T.text:clr}">${val}</div></div>`;
-  const kpiStrip=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+  const kpiStrip=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px">
     ${kpi("Total",recs.length.toLocaleString(),"#f59e0b")}
     ${kpi("Rate trend <span style='opacity:.6;font-weight:500'>· % of orders</span>",rateTrendPct==null?"—":`${rateTrendPct>=0?'▲':'▼'} ${Math.abs(rateTrendPct).toFixed(0)}%`,rateTrendPct==null?T.muted:rateTrendPct>=0?'#D9483D':'#2ECC71')}
     ${kpi("Top category",topCat?FEEDBACK_TOP_CATEGORIES.find(([f])=>f===topCat[0])?.[1]||topCat[0].split(' ')[0]:"—","#f59e0b")}
@@ -13803,7 +13804,7 @@ async function renderFeedback(){
   }).join('');
   const brandHeatmap=`<div class="card" style="padding:12px 14px;margin-bottom:12px">
     <div class="ct" style="margin-bottom:2px">By brand <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a row to filter outlets below</span></div>
-    <table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true,catTrends)}${brandRows}</table>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true,catTrends)}${brandRows}</table></div>
   </div>`;
 
   // ── By Category (category-first, outlets nested underneath) — respects the same brand filter
@@ -13829,7 +13830,7 @@ async function renderFeedback(){
   </tr>`).join('');
   const categoryHeatmap=`<div class="card" style="padding:12px 14px;margin-bottom:12px">
     <div class="ct" style="margin-bottom:2px">By category <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a row for every complaint in that category</span></div>
-    ${categoryTableRows.length?`<table style="width:100%;border-collapse:collapse;margin-top:8px">
+    ${categoryTableRows.length?`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:8px">
       <tr><td></td><td style="text-align:right;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Total</td><td style="text-align:center;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Trend</td><td style="color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Worst outlet</td><td style="text-align:right;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px"># outlets</td></tr>
       ${categoryRowsHTML}
     </table>`:`<div style="text-align:center;color:${T.muted};padding:16px;font-size:12.5px">No records for this selection.</div>`}
@@ -13851,7 +13852,7 @@ async function renderFeedback(){
   }).join('');
   const aggregatorHeatmap=`<div class="card" style="padding:12px 14px;margin-bottom:12px">
     <div class="ct" style="margin-bottom:2px">By aggregator <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· worst rate first</span></div>
-    ${aggOrder.length?`<table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true,catTrends)}${aggRows}</table>`:`<div style="text-align:center;color:${T.muted};padding:16px;font-size:12.5px">No records for this selection.</div>`}
+    ${aggOrder.length?`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true,catTrends)}${aggRows}</table></div>`:`<div style="text-align:center;color:${T.muted};padding:16px;font-size:12.5px">No records for this selection.</div>`}
   </div>`;
 
   // ── Outlet heatmap (worst rate first, filtered by clicked brand if any) — cells are clickable
@@ -13886,7 +13887,7 @@ async function renderFeedback(){
   }
   const outletHeatmap=`<div class="card" style="padding:12px 14px">
     <div class="ct" style="margin-bottom:2px;display:flex;align-items:center">By outlet <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0;margin-left:6px">· worst rate first · click a cell for examples</span>${clearBrandBtn}</div>
-    <table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true,catTrends)}${outletRowsHTML}</table>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:8px">${feedbackHeatmapHead(true,catTrends)}${outletRowsHTML}</table></div>
     ${!outletRows.length?`<div style="text-align:center;color:${T.muted};padding:16px;font-size:12.5px">No records for this selection.</div>`:''}
   </div>${drillPanel}`;
 
