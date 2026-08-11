@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-223";
+const BUILD_VERSION="2026-08-06-224";
 const BUILD_NOTES=[
+  "🐛 Fixed Trending Terms drill-down going blank when narrowed to a specific month — the panel was searching the same count≥3-filtered list used for the summary table, so a theme that dropped below 3 mentions for a single month (very easy when you'd been looking at the whole year) would silently show nothing. Now looks up the underlying complaints directly, independent of that display threshold.",
   "🐛 Found and fixed why Jan-May 2025 uploads failed — verified against your actual files: those 5 months genuinely don't have an ERROR (fault classification) column at all, unlike later months. The dashboard was treating that column as required and rejecting the whole file over it. Made it optional — fault just comes back blank for records from months that never captured it, everything else parses normally. Verified January 2025 now parses all 186 records, matching the file's own pivot table total exactly. Please re-upload your 5 files.",
   "⚠️ Heads up: since Jan-May 2025 never captured fault classification, the \"Internal Fault %\" KPI will read artificially low for those months (not because faults were genuinely rare, but because the data was never recorded) — worth keeping in mind if comparing that metric across all of 2025.",
   "🎨 Heatmap coloring switched to column-relative (confirmed direction) — each month now colors by comparing categories against each other within that same month, not against each category's own history. Verified against your exact August example: Missing now correctly shows as the 2nd-highest problem that month.",
@@ -13947,18 +13948,21 @@ async function renderFeedback(){
         <td style="text-align:right;padding:7px 8px;font-size:12.5px;color:${T.label}">${t.catCount} categories</td>
       </tr>`;
     }).join('');
-    // Drill panel for whichever theme was clicked
+    // Drill panel for whichever theme was clicked — looks up from currThemes (the full,
+    // unfiltered extraction) rather than themeRows (which drops anything under count>=3 to keep
+    // the summary table free of noise). Narrowing to a single month easily pushes a theme below
+    // that threshold; the drill should still work even when the summary row is no longer shown.
     let themeDrillPanel='';
     if(feedbackThemeDrillKey){
-      const active=themeRows.find(t=>t.theme===feedbackThemeDrillKey);
-      if(active){
-        const items=active.matches.slice(0,25).map(r=>`<div style="padding:7px 0;border-bottom:1px solid ${T.rowBg};font-size:13.5px"><span style="color:${T.label};font-size:11px">${r.branch} · ${r.date} · ${r.aggregator}</span><br><span style="color:${T.text};font-weight:600">${(r.text||'(no text)').replace(/</g,'&lt;')}</span></div>`).join('');
+      const activeMatches=currThemes[feedbackThemeDrillKey];
+      if(activeMatches&&activeMatches.length){
+        const items=activeMatches.slice(0,25).map(r=>`<div style="padding:7px 0;border-bottom:1px solid ${T.rowBg};font-size:13.5px"><span style="color:${T.label};font-size:11px">${r.branch} · ${r.date} · ${r.aggregator}</span><br><span style="color:${T.text};font-weight:600">${(r.text||'(no text)').replace(/</g,'&lt;')}</span></div>`).join('');
         themeDrillPanel=`<div style="margin-top:10px;padding-top:10px;border-top:1px solid ${T.border}">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-            <span style="font-size:13.5px;font-weight:700;color:${T.text}">${active.theme} <span style="color:${T.label};font-weight:400">(${active.matches.length})</span></span>
+            <span style="font-size:13.5px;font-weight:700;color:${T.text}">${feedbackThemeDrillKey} <span style="color:${T.label};font-weight:400">(${activeMatches.length})</span></span>
             <button onclick="feedbackThemeDrillKey=null;renderFeedback()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:2px 8px;border-radius:5px;font-size:10.5px;cursor:pointer">✕ Close</button>
           </div>
-          ${items}${active.matches.length>25?`<div style="font-size:10.5px;color:${T.label};padding-top:6px">+ ${active.matches.length-25} more</div>`:''}
+          ${items}${activeMatches.length>25?`<div style="font-size:10.5px;color:${T.label};padding-top:6px">+ ${activeMatches.length-25} more</div>`:''}
         </div>`;
       }
     }
