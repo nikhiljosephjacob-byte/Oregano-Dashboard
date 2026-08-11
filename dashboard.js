@@ -13,8 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-216";
+const BUILD_VERSION="2026-08-06-218";
 const BUILD_NOTES=[
+  "🐛 Source duplicates still showing after last build's fix — that one relied on a one-time migration that could get silently undone if another browser still on older code re-synced stale data. Rebuilt as a normalization pass that runs on every render instead, guaranteeing no duplicates regardless of sync timing. Also merged \"TripAdvisor Review\" into \"TripAdvisor\" as one source, per direct instruction.",
+  "🐛 Fixed the Source dropdown still showing duplicates after last build's fix — that fix only applied to new uploads, so existing data needed a re-upload to actually clean up, which is a lot of friction for a naming issue. Added a one-time automatic migration that retroactively fixes already-stored data — no re-upload needed. Also found and fixed a separate gap: Feedback data was only ever loading from the server, never from your own browser's local backup, which the other 5 data sources all correctly do.",
+  "✅ Confirmed \"TripAdvisor\" vs \"TripAdvisor Review\" are genuinely different sources, not a duplicate — left as-is.",
   "🎨 New color scheme applied consistently across the whole Feedback page (Overview and Detail alike) — a real green-orange-red traffic light: heatmap cells, rate columns, trend arrows, the alert banner, and the Internal Fault KPI all use the same 4-color palette now. Chosen after 3 rounds — the amber-heavy version was too orange, a lighter pastel version was too washed out, this is the confirmed middle ground.",
   "🐛 Fixed the \"which outlets are driving [category]\" chart not updating when you filter by month — it was using the full-history dataset by mistake. Now respects the month filter correctly; verified it gives different rankings for different months.",
   "🐛 Fixed duplicate Source/Aggregator dropdown entries (\"Dine In\" vs \"dine in\") — case wasn't being normalized for anything outside the 5 real delivery aggregators. Note: this fixes future uploads; existing duplicates need the affected months re-uploaded to clear.",
@@ -1124,6 +1127,25 @@ function loadFeedbackFromStorage(){
   try{const raw=localStorage.getItem(FEEDBACK_STORAGE_KEY);if(raw)feedbackData=JSON.parse(raw);}
   catch(e){console.log("[Feedback] localStorage load failed:",e.message);feedbackData=null;}
 }
+// v217: retroactively re-normalizes source names on data that was already stored before the
+// normFeedbackSource fix existed — without this, "Dine In"/"dine in" duplicates from earlier
+// uploads would stay broken forever unless the affected months were manually re-uploaded, which
+// is a lot of friction for what's really just a naming fix. Runs once (tracked via a metadata
+// flag) and syncs the result so every user sees the cleanup, not just whoever's browser ran it.
+async function feedbackMigrateSourceNames(){
+  if(!feedbackData||!feedbackData.records||!feedbackData.records.length)return;
+  if(feedbackData.metadata?.sourceNormalizedV2)return;
+  let changed=0;
+  feedbackData.records.forEach(r=>{
+    const fixed=normFeedbackSource(r.aggregator);
+    if(fixed&&fixed!==r.aggregator){r.aggregator=fixed;changed++;}
+  });
+  feedbackData.metadata={...feedbackData.metadata,sourceNormalizedV2:true};
+  if(changed>0){
+    console.log(`[Feedback] Retroactively normalized ${changed} source names on existing data.`);
+    await saveFeedbackToStorage();
+  }
+}
 async function saveFeedbackToStorage(){
   if(!feedbackData)return;
   trySaveLocalOrderData(FEEDBACK_STORAGE_KEY,feedbackData,"Feedback");
@@ -1163,10 +1185,13 @@ function normFeedbackCategory(s){
 // existing table; everything else gets a consistent Title Case so case alone can't fragment a
 // single source into duplicates.
 const FEEDBACK_SOURCE_CASE_EXCEPTIONS={'tripadvisor':'TripAdvisor'};
+// v218: merge "TripAdvisor Review" into "TripAdvisor" — explicit instruction, treat as one source
+const FEEDBACK_SOURCE_MERGE={'tripadvisor review':'TripAdvisor'};
 function normFeedbackSource(s){
   if(!s)return'';
   const raw=String(s).trim();
   if(typeof AGG_NORM!=="undefined"&&AGG_NORM[raw.toLowerCase()])return AGG_NORM[raw.toLowerCase()];
+  if(FEEDBACK_SOURCE_MERGE[raw.toLowerCase()])return FEEDBACK_SOURCE_MERGE[raw.toLowerCase()];
   const titled=raw.toLowerCase().replace(/\b\w+/g,w=>FEEDBACK_SOURCE_CASE_EXCEPTIONS[w]||w.charAt(0).toUpperCase()+w.slice(1));
   return titled;
 }
@@ -3588,6 +3613,8 @@ async function doLoad(){
   loadTalabatFromStorage();
   loadDeliverooFromStorage();
   loadNoonFromStorage();
+  loadFeedbackFromStorage(); // v217: was defined but never actually called — feedbackData was only ever populated via server sync, never from localStorage on boot
+  feedbackMigrateSourceNames(); // one-time retroactive cleanup of source-name duplicates on already-stored data
   // v172: no separate load call needed — cancellations now load automatically as part of each
   // aggregator's own loadKeetaFromStorage()/etc. call above, since they live on that same
   // object now (and sync to/from the server the same way too).
@@ -3660,7 +3687,7 @@ async function doLoad(){
   buildSidebarNav();
   // v112: pull the shared aggregator order data from the server (all users). If anything
   // updated, caches were already invalidated inside — re-render whichever page is open.
-  pullOrderDataFromServer().then(changed=>{if(typeof updateSidebarSyncStatus==="function")updateSidebarSyncStatus();if(changed&&typeof curPage!=='undefined'){if(curPage==='campaigns')renderCampaigns();else if(curPage==='discounts')renderDiscounts();else if(curPage==='cancellations')renderCancellations();}});
+  pullOrderDataFromServer().then(changed=>{if(typeof updateSidebarSyncStatus==="function")updateSidebarSyncStatus();feedbackMigrateSourceNames();if(changed&&typeof curPage!=='undefined'){if(curPage==='campaigns')renderCampaigns();else if(curPage==='discounts')renderDiscounts();else if(curPage==='cancellations')renderCancellations();else if(curPage==='feedback')renderFeedback();}});
   // After the dashboard finishes loading, show the "What's new" popup if BUILD_VERSION
   // changed since the user's last visit. v188: pushed from 1500ms to 2800ms — it was firing
   // at the EXACT same moment as loadKPIData() below, on top of prewarmCPC/prewarmCampaigns
@@ -13639,6 +13666,15 @@ function feedbackToggleDrill(branch,category){
 async function renderFeedback(){
   const pg=document.getElementById("page-feedback");if(!pg)return;
   const T=feedbackTheme();
+  // v218: normalize source names on every render, not just once — a one-time migration can get
+  // silently undone if another browser still running older code re-syncs stale data. This
+  // guarantees the page never shows a duplicate regardless of sync timing.
+  if(feedbackData&&feedbackData.records){
+    feedbackData.records.forEach(r=>{
+      const fixed=normFeedbackSource(r.aggregator);
+      if(fixed&&fixed!==r.aggregator)r.aggregator=fixed;
+    });
+  }
   const styleOverride=`<style>
     #page-feedback{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
     #page-feedback .card{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
