@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-218";
+const BUILD_VERSION="2026-08-06-219";
 const BUILD_NOTES=[
+  "🆕 Feedback page top section redesigned (Option C) — This month / Last 3 months / This year / All time presets up front, with the granular month-by-month chips and Category/Source/Outlet/Brand filters tucked behind a \"Custom\" toggle instead of always being expanded.",
   "🐛 Source duplicates still showing after last build's fix — that one relied on a one-time migration that could get silently undone if another browser still on older code re-synced stale data. Rebuilt as a normalization pass that runs on every render instead, guaranteeing no duplicates regardless of sync timing. Also merged \"TripAdvisor Review\" into \"TripAdvisor\" as one source, per direct instruction.",
   "🐛 Fixed the Source dropdown still showing duplicates after last build's fix — that fix only applied to new uploads, so existing data needed a re-upload to actually clean up, which is a lot of friction for a naming issue. Added a one-time automatic migration that retroactively fixes already-stored data — no re-upload needed. Also found and fixed a separate gap: Feedback data was only ever loading from the server, never from your own browser's local backup, which the other 5 data sources all correctly do.",
   "✅ Confirmed \"TripAdvisor\" vs \"TripAdvisor Review\" are genuinely different sources, not a duplicate — left as-is.",
@@ -13293,6 +13294,40 @@ let feedbackFilterCategory=null;    // top filter chip — narrows every table t
 let feedbackFilterAggregator=null;  // top filter chip — narrows every table to one aggregator
 let feedbackFilterOutlet=null;      // top filter chip — narrows every table to one outlet
 let feedbackZoomMode='overview';    // 'overview' (trend chart + months×category heatmap) or 'detail' (the tables)
+let feedbackShowCustom=false;       // top-section Option C: presets shown by default, granular month chips + dimension filters hidden behind this
+function feedbackToggleCustom(){feedbackShowCustom=!feedbackShowCustom;renderFeedback();}
+function feedbackSetPreset(preset){
+  const allMonthsRaw=[...new Set(feedbackData.records.map(r=>r.month))].sort();
+  if(!allMonthsRaw.length)return;
+  const latest=allMonthsRaw[allMonthsRaw.length-1];
+  if(preset==='thisMonth'){
+    feedbackFilterYear=null;feedbackFilterMonths=new Set([latest]);
+  }else if(preset==='last3'){
+    feedbackFilterYear=null;feedbackFilterMonths=new Set(allMonthsRaw.slice(-3));
+  }else if(preset==='thisYear'){
+    feedbackFilterMonths=new Set();feedbackFilterYear=latest.slice(0,4);
+  }else if(preset==='allTime'){
+    feedbackFilterMonths=new Set();feedbackFilterYear=null;
+  }
+  renderFeedback();
+}
+function feedbackActivePreset(){
+  // Detects which preset (if any) the current filter state matches, so the right button can
+  // show as active — including when the user reached that state via Custom controls instead of
+  // clicking the preset button directly.
+  if(!feedbackData||!feedbackData.records)return null;
+  const allMonthsRaw=[...new Set(feedbackData.records.map(r=>r.month))].sort();
+  if(!allMonthsRaw.length)return null;
+  const latest=allMonthsRaw[allMonthsRaw.length-1];
+  if(!feedbackFilterYear&&feedbackFilterMonths.size===1&&feedbackFilterMonths.has(latest))return'thisMonth';
+  if(!feedbackFilterYear&&feedbackFilterMonths.size===3){
+    const last3=allMonthsRaw.slice(-3);
+    if(last3.every(m=>feedbackFilterMonths.has(m)))return'last3';
+  }
+  if(feedbackFilterYear===latest.slice(0,4)&&!feedbackFilterMonths.size)return'thisYear';
+  if(!feedbackFilterYear&&!feedbackFilterMonths.size)return'allTime';
+  return null;
+}
 let feedbackOutletChartCategory=null; // which category the "which outlet is driving it" chart shows — set explicitly by clicking a category row, not auto-detected
 function feedbackSetZoom(mode){feedbackZoomMode=mode;renderFeedback();}
 function feedbackToggleFilterDim(dim,val){
@@ -13835,17 +13870,33 @@ async function renderFeedback(){
     ${(feedbackFilterCategory||feedbackFilterAggregator||feedbackFilterOutlet||feedbackFilterBrand)?`<button onclick="feedbackFilterCategory=null;feedbackFilterAggregator=null;feedbackFilterOutlet=null;feedbackFilterBrand=null;renderFeedback()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:5px 12px;border-radius:6px;font-size:11.5px;cursor:pointer;align-self:center">✕ Clear these</button>`:''}
   </div>`;
   const zoomToggle=`<div style="display:inline-flex;background:${T.rowBg2||T.rowBg};border:1px solid ${T.border};border-radius:8px;padding:3px;margin-left:auto"><button onclick="feedbackSetZoom('overview')" style="padding:6px 16px;border-radius:6px;border:none;font-size:12.5px;font-weight:800;cursor:pointer;background:${feedbackZoomMode==='overview'?'#FF8A3D':'transparent'};color:${feedbackZoomMode==='overview'?'#3D250C':T.label}">Overview</button><button onclick="feedbackSetZoom('detail')" style="padding:6px 16px;border-radius:6px;border:none;font-size:12.5px;font-weight:800;cursor:pointer;background:${feedbackZoomMode==='detail'?'#FF8A3D':'transparent'};color:${feedbackZoomMode==='detail'?'#3D250C':T.label}">Detail</button></div>`;
-  const filterBar=`<div style="display:flex;flex-wrap:wrap;background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;padding:10px 12px;margin-bottom:12px">
-    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;width:100%">
-      <span style="font-size:10.5px;color:${T.muted};font-weight:700;text-transform:uppercase">Months</span>
-      ${allMonths.map(monthBtn).join('')}
-      <span style="color:${T.border};margin:0 4px">|</span>
-      <span style="font-size:10.5px;color:${T.muted};font-weight:700;text-transform:uppercase">Year</span>
-      ${allYears.map(yearBtn).join('')}
-      ${(feedbackFilterMonths.size||feedbackFilterYear)?`<button onclick="feedbackClearFilters()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:3px 10px;border-radius:6px;font-size:11.5px;cursor:pointer">✕ Clear</button>`:''}
+  // Option C: presets front and center for the common case, granular month-by-month + dimension
+  // filters tucked behind "Custom" — confirmed direction after the original always-expanded
+  // 14-chip + 4-dropdown layout was flagged as needing optimization.
+  const activePreset=feedbackActivePreset();
+  const presetBtn=(key,label)=>{const on=activePreset===key;return`<button onclick="feedbackSetPreset('${key}')" style="padding:7px 16px;border-radius:7px;border:1px solid ${on?'#EA8C3A':T.border};background:${on?'#EA8C3A':'transparent'};color:${on?'#fff':T.label};font-size:12.5px;font-weight:700;cursor:pointer">${label}</button>`;};
+  const presetRow=`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;width:100%">
+      ${presetBtn('thisMonth','This month')}
+      ${presetBtn('last3','Last 3 months')}
+      ${presetBtn('thisYear','This year')}
+      ${presetBtn('allTime','All time')}
+      <span onclick="feedbackToggleCustom()" style="cursor:pointer;font-size:12px;color:${feedbackShowCustom?'#FF8A3D':T.muted};text-decoration:underline;margin-left:4px;font-weight:600">${feedbackShowCustom?'▾':'▸'} Custom</span>
       ${zoomToggle}
-    </div>
-    ${dimFilterRow}
+    </div>`;
+  const customPanel=feedbackShowCustom?`<div style="width:100%;margin-top:10px;padding-top:10px;border-top:1px solid ${T.rowBg}">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span style="font-size:10.5px;color:${T.muted};font-weight:700;text-transform:uppercase">Months</span>
+        ${allMonths.map(monthBtn).join('')}
+        <span style="color:${T.border};margin:0 4px">|</span>
+        <span style="font-size:10.5px;color:${T.muted};font-weight:700;text-transform:uppercase">Year</span>
+        ${allYears.map(yearBtn).join('')}
+        ${(feedbackFilterMonths.size||feedbackFilterYear)?`<button onclick="feedbackClearFilters()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:3px 10px;border-radius:6px;font-size:11.5px;cursor:pointer">✕ Clear</button>`:''}
+      </div>
+      ${dimFilterRow}
+    </div>`:'';
+  const filterBar=`<div style="display:flex;flex-wrap:wrap;background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;padding:10px 12px;margin-bottom:12px">
+    ${presetRow}
+    ${customPanel}
     ${compareLine}
   </div>`;
 
