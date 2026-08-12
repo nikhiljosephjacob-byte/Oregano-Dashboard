@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-237";
+const BUILD_VERSION="2026-08-06-239";
 const BUILD_NOTES=[
+  "🆕 Discount Discrepancy table generalized from Keeta-only to all 5 aggregators, and rebuilt as a live interactive table on the Discount Burn page (not just an export) — sortable by any column, filterable by outlet, respects the page's existing Brand/Aggregator/Region filters, plus a CSV download for whatever's currently shown. Automatically includes only aggregators that actually have a statement file uploaded. Tested with a multi-aggregator scenario to confirm aggregators without exact data are correctly excluded rather than showing misleading zeros.",
+  "🆕 New \"Keeta Discrepancy by Outlet\" export on Discount Burn Analysis — since the remaining uncategorized gap is now confirmed to be a genuine disagreement between the sheet's daily numbers and Keeta's own statement file (not a matching bug), this exports a brand × outlet CSV comparing both sources directly, sorted by largest gap first, so it's traceable to specific locations rather than one aggregate number. Shareable with anyone for investigation, no dashboard access needed.",
   "🐛 Fixed the remaining \"Oregano × Keeta\" uncategorized burn — the last fix covered 4 of 6 items in August's \"25% OFF Select Items\" list, missing Aglio e Olio Pasta (85 orders) and Pesto Pasta (50 orders) entirely. Added both with real values (AED 11.75 and 12.75) derived from the actual statement. Also caught a related stale rule: Lasagna di Carne (July item, not in August's list) still had no expiry — confirmed via real data it's no longer discounted (5 of 7 August orders show AED 0), capped it at July 31.",
   "🐛 Resolved the Alfredo discrepancy from last build — it was a different dish (\"Gnocchi Alfredo Con Pollo\") accidentally caught by my own loose search, not a real data problem. Re-checked with an exact item match: 109 orders, all clean multiples of AED 12.75. Added Oregano's Alfredo Pasta → 25% OFF Select Items rule for August with this confirmed value.",
   "🐛 Added the missing August OFU item rules using real values pulled from your actual Keeta statement — found single-item orders for each promo item, computed the true menu discount (merchant-funded minus AED 2 FD). 3 of 4 backed by 34-49 consistent samples each; Wicked Wings' \"Solo Meal\" only had 1 matching order in this window, worth re-checking once more data comes in. Held off on Oregano's Alfredo→25% OFF Select Items mapping — its data wasn't clean like the other 4 (one value didn't fit the expected pattern), so flagging it rather than guessing.",
@@ -12220,6 +12222,123 @@ function discountCampaignTableHTML(d){
 // CSV export of current Discount Burn view. Downloads a file with the summary metrics
 // and the full campaign breakdown table. Values are already in the report — we just
 // serialize what the user sees.
+// v238: brand × outlet discrepancy export for Keeta specifically — compares the Google Sheet's
+// own daily discount records against the Keeta exact statement file, live from the dashboard's
+// actual loaded data (both sides), so the comparison is accurate rather than a manual guess.
+// Confirmed via direct investigation that the gap on the Discount Burn tile isn't a matching
+// bug anymore — it's a genuine disagreement between what the sheet reports and what Keeta's own
+// statement shows for the same dates. This export breaks that disagreement down per outlet so
+// it's traceable to specific locations/days rather than one aggregate brand-level number.
+// v239: generalized from Keeta-only to all 5 aggregators, and rebuilt as an interactive
+// on-page table (not just a CSV export) — confirmed all 5 aggregators' exact records share the
+// same field structure (brand, outlet, date, menu_disc), so one computation function covers all.
+let discRecFilterOutlet='all';   // separate from the page's Region filter — outlet-level, not DXB/AUH
+let discRecSortCol='gap';        // which column the table is currently sorted by
+let discRecSortDir='desc';
+const DISC_REC_AGGS=['Deliveroo','Talabat','Careem','Noon','Keeta'];
+function discRecExactData(agg){
+  return{Keeta:keetaOrdersData,Careem:careemOrdersData,Talabat:talabatOrdersData,Deliveroo:deliverooOrdersData,Noon:noonOrdersData}[agg]||null;
+}
+// Core computation, shared by the on-page table and the CSV export — compares the sheet's own
+// daily discount records (allData) against each aggregator's exact statement file, per
+// brand × aggregator × outlet, for whichever aggregators actually have exact data loaded.
+function discRecComputeRows(){
+  const{dateStart,dateEnd,brands,branch}=discountFilters;
+  if(!dateStart||!dateEnd)return[];
+  const brandSet=new Set(brands);
+  const inBranchFilter=outlet=>{
+    if(branch==="DXB")return !AUH_OUTLETS.has(outlet);
+    if(branch==="AUH")return AUH_OUTLETS.has(outlet);
+    if(branch!=="All")return outlet===branch;
+    return true;
+  };
+  const aggsWithData=DISC_REC_AGGS.filter(a=>{const d=discRecExactData(a);return d&&d.records&&d.records.length;});
+  if(!aggsWithData.length)return[];
+  const aggDataSet=new Set(discountFilters.aggregators.length?discountFilters.aggregators:aggsWithData);
+  const sheetByKey={};
+  allData.forEach(r=>{
+    if(!aggDataSet.has(r.aggregator))return;
+    if(!aggsWithData.includes(r.aggregator))return; // only compare aggs that HAVE exact data to compare against
+    if(r.date<dateStart||r.date>dateEnd)return;
+    if(brands.length>0&&!brandSet.has(r.brand))return;
+    if(!inBranchFilter(r.branch))return;
+    if(discRecFilterOutlet!=='all'&&r.branch!==discRecFilterOutlet)return;
+    const k=`${r.brand}|${r.aggregator}|${r.branch}`;
+    sheetByKey[k]=(sheetByKey[k]||0)+(r.disc||0);
+  });
+  const fileByKey={};
+  aggsWithData.forEach(agg=>{
+    if(!aggDataSet.has(agg))return;
+    const data=discRecExactData(agg);
+    data.records.forEach(rec=>{
+      if(rec.date<dateStart||rec.date>dateEnd)return;
+      if(brands.length>0&&!brandSet.has(rec.brand))return;
+      if(!inBranchFilter(rec.outlet))return;
+      if(discRecFilterOutlet!=='all'&&rec.outlet!==discRecFilterOutlet)return;
+      const k=`${rec.brand}|${agg}|${rec.outlet}`;
+      fileByKey[k]=(fileByKey[k]||0)+(rec.menu_disc||0);
+    });
+  });
+  const allKeys=new Set([...Object.keys(sheetByKey),...Object.keys(fileByKey)]);
+  const rows=[...allKeys].map(k=>{
+    const[brand,aggregator,outlet]=k.split("|");
+    const sheetTotal=sheetByKey[k]||0;
+    const fileTotal=fileByKey[k]||0;
+    const gap=sheetTotal-fileTotal;
+    const gapPct=sheetTotal>0?(gap/sheetTotal*100):0;
+    return{brand,aggregator,outlet,sheetTotal,fileTotal,gap,gapPct};
+  });
+  return rows;
+}
+function discRecSortRows(rows){
+  const col=discRecSortCol,dir=discRecSortDir==='asc'?1:-1;
+  return[...rows].sort((a,b)=>{
+    let av=a[col],bv=b[col];
+    if(col==='gap'){av=Math.abs(a.gap);bv=Math.abs(b.gap);}
+    if(typeof av==='string')return dir*av.localeCompare(bv);
+    return dir*(av-bv);
+  });
+}
+function discRecSetSort(col){
+  if(discRecSortCol===col){discRecSortDir=discRecSortDir==='asc'?'desc':'asc';}
+  else{discRecSortCol=col;discRecSortDir='desc';}
+  renderDiscounts();
+}
+function discRecSetOutlet(v){discRecFilterOutlet=v;renderDiscounts();}
+function discRecExportCSV(){
+  const{dateStart,dateEnd}=discountFilters;
+  if(!dateStart||!dateEnd){alert("Please select a valid date range first.");return;}
+  const rows=discRecSortRows(discRecComputeRows());
+  if(!rows.length){alert("No exact data loaded for any aggregator — this comparison needs at least one aggregator's statement file uploaded.");return;}
+  const esc=v=>{
+    const s=String(v==null?'':v);
+    return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;
+  };
+  const aggsWithData=DISC_REC_AGGS.filter(a=>{const d=discRecExactData(a);return d&&d.records&&d.records.length;});
+  const out=[];
+  out.push(["Discount Discrepancy — Sheet vs Statement File, by Brand × Aggregator × Outlet"]);
+  out.push(["Generated",new Date().toLocaleString("en-AE",{dateStyle:"medium",timeStyle:"short"})]);
+  out.push(["Date Range",`${dateStart} to ${dateEnd}`]);
+  out.push(["Aggregators with exact data loaded",aggsWithData.length?aggsWithData.join(", "):"none"]);
+  out.push([]);
+  out.push(["Note: \"Sheet total\" = the Google Sheet's own daily discount figure for that brand+aggregator+outlet. \"Statement file total\" = the actual merchant-funded discount from that aggregator's own order-level export for the same window (menu discount only; Keeta's AED 2 FD cost already excluded, matching the established formula). A gap here means the two sources disagree — not a dashboard attribution issue, since both numbers are read directly from their respective sources with no estimation involved. Only aggregators with an exact statement file loaded are included — others have no second source to compare against."]);
+  out.push([]);
+  out.push(["Brand","Aggregator","Outlet","Sheet Total (AED)","Statement File Total (AED)","Gap (AED)","Gap (%)"]);
+  rows.forEach(r=>{
+    out.push([r.brand,r.aggregator,r.outlet,Math.round(r.sheetTotal),Math.round(r.fileTotal),Math.round(r.gap),r.gapPct.toFixed(1)]);
+  });
+  const totalSheet=rows.reduce((s,r)=>s+r.sheetTotal,0);
+  const totalFile=rows.reduce((s,r)=>s+r.fileTotal,0);
+  out.push([]);
+  out.push(["TOTAL",'','',Math.round(totalSheet),Math.round(totalFile),Math.round(totalSheet-totalFile),totalSheet>0?((totalSheet-totalFile)/totalSheet*100).toFixed(1):"0"]);
+  const csv=out.map(r=>r.map(esc).join(",")).join("\n");
+  const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;a.download=`Discount_Discrepancy_${dateStart}_to_${dateEnd}.csv`;
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 function discountExportCSV(){
   const d=computeDiscountBurn();
   if(!d){alert("Please select a valid date range first.");return;}
@@ -12485,6 +12604,60 @@ function discountUncategorizedBreakdownHTML(d){
     </table></div>
   </div>`;
 }
+// v239: interactive brand × aggregator × outlet discrepancy table — sortable, filterable by
+// outlet, filterable CSV export. Confirmed the underlying gap here is a genuine sheet-vs-
+// statement disagreement, not a dashboard attribution bug (both totals are read directly from
+// their respective sources, no estimation involved) — this table makes that comparison directly
+// explorable rather than requiring a download for every question.
+function discRecTableHTML(){
+  const T=discTheme();
+  const fmt=n=>`AED ${Math.round(n||0).toLocaleString()}`;
+  const aggsWithData=DISC_REC_AGGS.filter(a=>{const d=discRecExactData(a);return d&&d.records&&d.records.length;});
+  if(!aggsWithData.length){
+    return`<div class="card" style="padding:14px 16px;margin-bottom:14px">
+      <div class="ct" style="margin-bottom:6px">🔍 Discount Discrepancy — Sheet vs Statement Files</div>
+      <div style="font-size:12px;color:${T.muted}">No aggregator statement files uploaded yet — this table compares the sheet's own daily numbers against each aggregator's exact order-level export. Upload at least one (Keeta, Careem, Talabat, Deliveroo, or Noon) to see the comparison.</div>
+    </div>`;
+  }
+  const rawRows=discRecComputeRows();
+  const rows=discRecSortRows(rawRows).filter(r=>Math.abs(r.gap)>1); // hide rounding-noise rows
+  const allOutlets=[...new Set(rawRows.map(r=>r.outlet))].filter(Boolean).sort();
+  const outletOptions=`<option value="all">All outlets</option>${allOutlets.map(o=>`<option value="${o.replace(/"/g,'&quot;')}" ${discRecFilterOutlet===o?'selected':''}>${o}</option>`).join('')}`;
+  const sortArrow=col=>discRecSortCol===col?(discRecSortDir==='asc'?' ▲':' ▼'):'';
+  const th=(label,col,align)=>`<th onclick="discRecSetSort('${col}')" style="text-align:${align||'left'};padding:8px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px;cursor:pointer;white-space:nowrap">${label}${sortArrow(col)}</th>`;
+  const bodyRows=rows.slice(0,200).map(r=>{
+    const gapColor=Math.abs(r.gapPct)>15?'#DE4A42':Math.abs(r.gapPct)>5?'#F0C239':T.muted;
+    return`<tr style="border-bottom:1px solid ${T.rowBg}">
+      <td style="padding:6px 8px;font-size:12px;color:${T.text}">${r.brand}</td>
+      <td style="padding:6px 8px;font-size:12px;color:${T.text}">${r.aggregator}</td>
+      <td style="padding:6px 8px;font-size:12px;color:${T.text}">${r.outlet}</td>
+      <td style="padding:6px 8px;font-size:12px;color:${T.text};text-align:right">${fmt(r.sheetTotal)}</td>
+      <td style="padding:6px 8px;font-size:12px;color:${T.text};text-align:right">${fmt(r.fileTotal)}</td>
+      <td style="padding:6px 8px;font-size:12px;font-weight:700;color:${gapColor};text-align:right">${fmt(r.gap)}</td>
+      <td style="padding:6px 8px;font-size:12px;font-weight:700;color:${gapColor};text-align:right">${r.gapPct.toFixed(1)}%</td>
+    </tr>`;
+  }).join('');
+  return`<div class="card" style="padding:14px 16px;margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+      <div class="ct" style="margin-bottom:0">🔍 Discount Discrepancy — Sheet vs Statement Files <span style="color:${T.muted};font-weight:400;text-transform:none;letter-spacing:0">· ${aggsWithData.join(', ')}</span></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select onchange="discRecSetOutlet(this.value)" style="background:${T.rowBg};border:1px solid ${T.border};border-radius:6px;color:${T.text};padding:5px 8px;font-size:11px">${outletOptions}</select>
+        <button onclick="discRecExportCSV()" style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);border-radius:6px;color:#F59E0B;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap">⬇ Download CSV</button>
+      </div>
+    </div>
+    <div style="font-size:11px;color:${T.muted};line-height:1.5;margin-bottom:10px">
+      Compares the Google Sheet's own daily discount figure against each aggregator's exact statement file, per brand × aggregator × outlet. A gap here means the two sources disagree for that combination — both numbers are read directly, no estimation. Click a column header to sort. Rows under AED 1 gap are hidden.
+    </div>
+    ${rows.length?`<div style="overflow-x:auto;max-height:500px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="background:${T.rowBg};border-bottom:2px solid ${T.border}">
+        ${th('Brand','brand')}${th('Aggregator','aggregator')}${th('Outlet','outlet')}${th('Sheet Total','sheetTotal','right')}${th('Statement Total','fileTotal','right')}${th('Gap','gap','right')}${th('Gap %','gapPct','right')}
+      </tr></thead>
+      <tbody>${bodyRows}</tbody>
+    </table></div>
+    ${rows.length>200?`<div style="text-align:center;color:${T.muted};font-size:11px;padding-top:8px">Showing top 200 of ${rows.length} rows — download the CSV for the full list.</div>`:''}`
+    :`<div style="text-align:center;color:${T.muted};font-size:12px;padding:20px">No discrepancy above AED 1 for this selection — the sheet and statement files agree.</div>`}
+  </div>`;
+}
 async function renderDiscounts(){
   const pg=document.getElementById("page-discounts");
   if(!pg)return;
@@ -12522,7 +12695,7 @@ async function renderDiscounts(){
     pg.innerHTML=`${styleOverride}${header}${filterBar}<div class="card" style="text-align:center;padding:30px;color:${T.muted}">No sales data matches these filters. Try widening the aggregator/brand/region selection or picking a different date range.</div>`;
     return;
   }
-  pg.innerHTML=`${styleOverride}${header}${filterBar}${discountKpiRowHTML(data)}${discountUnmappedKeetaItemsWarning()}${discountTrendChartHTML(data)}${discountUncategorizedBreakdownHTML(data)}${discountCoFundAuditTableHTML(data)}${discountCampaignTableHTML(data)}`;
+  pg.innerHTML=`${styleOverride}${header}${filterBar}${discountKpiRowHTML(data)}${discountUnmappedKeetaItemsWarning()}${discountTrendChartHTML(data)}${discountUncategorizedBreakdownHTML(data)}${discRecTableHTML()}${discountCoFundAuditTableHTML(data)}${discountCampaignTableHTML(data)}`;
   // Render trend chart after DOM is in place
   if(data.trend&&data.trend.length>0){
     const axisClr=_darkPage?DARK_THEME.textMuted:"#64748b";
