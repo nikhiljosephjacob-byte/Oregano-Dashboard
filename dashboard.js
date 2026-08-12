@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-231";
+const BUILD_VERSION="2026-08-06-232";
 const BUILD_NOTES=[
+  "🐛 Found and fixed the actual Keeta uncategorized-burn cause, using your console diagnostic + real file — 4 residual campaign rules (Lollorosso, Smokeys, Wicked Wings, Fyoozhen) were written in July with endDate:null (\"never expires\"), so they kept silently matching and overriding August's real campaigns with July's stale names. Verified: ran the rules against real August dates and got back the exact stale names your diagnostic flagged. Capped all 4 at July 31 — confirmed July's own attribution (including the Smokeys same-day cutover) is completely unaffected, and August now correctly falls through to estimation instead of wrong data. Still need the actual August campaign names/caps/dates from you to add the correct rules — this stops the bleeding but doesn't restore exact attribution for August yet.",
   "🐛 Fixed Detail page table cells having no gap between them (color sat directly on the td, so adjacent cells' backgrounds touched) — moved color to an inner div with the outer td providing padding, matching how the Overview heatmap was already built.",
   "🐛 Fixed switching Within Month/Category's Own Trend unexpectedly animating the trend chart above it — traced it to the toggle triggering a full page re-render, which rebuilds the trend chart's canvas from scratch and triggers Chart.js's creation animation even though the chart's own data never changed. Extracted the heatmap table into its own function so the toggle now only rebuilds the heatmap directly, leaving the trend chart completely untouched.",
   "🔍 Added a diagnostic for Keeta campaigns showing as \"estimated\" instead of \"exact\" — traced the code and found the matching logic requires an EXACT string match between the campaign name in your sheet and Keeta's own campaign name on each order. If they don't match — even slightly — it silently falls back to a less-precise estimate. Now checks whether Keeta actually has order data for that brand+date range under a DIFFERENT name, and logs it clearly to the browser console (F12 → Console, look for \"[Keeta attribution]\") so a naming mismatch is visible instead of silent. This doesn't fix the underlying gap yet — I don't have visibility into your actual Keeta data to confirm the real cause — but it should tell us definitively whether this is a naming issue or something else next time it happens.",
@@ -592,14 +593,21 @@ const KEETA_RESIDUAL_RULES=[
   // ── June: Keeta Week overlay on Oregano ──
   {brand:"Oregano",     campaign:"30% OFF CAP 20", startDate:"2026-06-24",endDate:"2026-06-30"},
   // ── July: menu-wide caps per brand ──
-  {brand:"Lollorosso",  campaign:"50% OFF CAP 30", startDate:"2026-07-01",endDate:null},
+  // v232: capped with endDate:"2026-07-31" — these previously had endDate:null ("never
+  // expires"), which meant they kept matching and silently overriding August orders with
+  // July's campaign names even after the real campaigns had rotated. Confirmed directly: ran
+  // these rules against real August dates and got back the exact stale names the console
+  // diagnostic flagged (e.g. Lollorosso Aug 5 → "50% OFF CAP 30", the July rule, not whatever
+  // Lollorosso's real August campaign is). August's correct residual rules still need adding —
+  // holding off on guessing those without confirming the exact campaign/cap/dates first.
+  {brand:"Lollorosso",  campaign:"50% OFF CAP 30", startDate:"2026-07-01",endDate:"2026-07-31"},
   // Smokeys switched CAP 20 → CAP 30 mid-day on Jul 8 (confirmed: ~5 PM) — a genuine same-day
   // overlap. endTime/startTime below are ONLY checked on the exact boundary date; every other
   // date behaves exactly as before (pure date comparison).
   {brand:"Smokeys",     campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:"2026-07-08",endTime:"17:00"},
-  {brand:"Smokeys",     campaign:"50% OFF CAP 30", startDate:"2026-07-08",startTime:"17:00",endDate:null},
-  {brand:"Wicked Wings",campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:null},
-  {brand:"Fyoozhen",    campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:null}
+  {brand:"Smokeys",     campaign:"50% OFF CAP 30", startDate:"2026-07-08",startTime:"17:00",endDate:"2026-07-31"},
+  {brand:"Wicked Wings",campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:"2026-07-31"},
+  {brand:"Fyoozhen",    campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:"2026-07-31"}
 ];
 
 // v140: now accepts an optional `timeStr` ("HH:MM") for same-day cutovers — a rule whose
