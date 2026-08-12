@@ -13,8 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-225";
+const BUILD_VERSION="2026-08-06-229";
 const BUILD_NOTES=[
+  "🆕 Feedback Overview/Detail restructured — Alert banner and Trending Terms now Overview-only (pattern-detection tools belong with the zoom-out view); Detail is just KPI strip + the four tables, nothing repeated.",
+  "🆕 Trend chart converted from always-on combo (bar+line together) to a proper Count/% toggle, matching the heatmap — exact count labeled above each bar in Count mode; rate + that month's order volume labeled in % mode.",
+  "🆕 Heatmap coloring is now a continuous gradient (not 4 discrete tiers) — hue family picked by rank, lightness varies smoothly within it. New \"Within month / Category's own trend\" toggle, defaulting to Category's own trend per your preference.",
+  "🎬 Trend chart bars now animate when switching Count/% (Chart.js native transition) — caught and fixed a real bug while building this: the toggle was calling a full page re-render, which destroys and recreates the canvas every time, leaving no \"before\" state to animate from. Fixed by redrawing the chart directly instead, with a staleness check so it still safely recreates if a full rebuild happens from anywhere else (month click, filter change).",
+  "ℹ️ Compare-mode (Within month/Own trend) switches with a full re-render for now — colors update correctly but don't smoothly morph. The animated version would need the same direct-redraw treatment as the trend chart; can add it as a follow-up if wanted.",
   "🐛 Fixed the Platforms page Monthly Performance table not scrolling horizontally when multiple brands/aggregators are selected — the table had width:100% fighting against its own overflow-x:auto wrapper, so it compressed instead of scrolling. Removed the width constraint so it now sizes to its actual content and scrolls correctly.",
   "🆕 Added Year and Month filters (multi-select, same click/Ctrl-click pattern as the Feedback page) to the Monthly Performance table — narrow to 2025, 2026, both, or specific months. CSV export respects the same filter as what's on screen.",
   "🐛 Fixed Trending Terms drill-down going blank when narrowed to a specific month — the panel was searching the same count≥3-filtered list used for the summary table, so a theme that dropped below 3 mentions for a single month (very easy when you'd been looking at the whole year) would silently show nothing. Now looks up the underlying complaints directly, independent of that display threshold.",
@@ -13362,6 +13367,34 @@ let feedbackFilterOutlet=null;      // top filter chip — narrows every table t
 let feedbackZoomMode='overview';    // 'overview' (trend chart + months×category heatmap) or 'detail' (the tables)
 let feedbackShowCustom=false;       // top-section Option C: presets shown by default, granular month chips + dimension filters hidden behind this
 let feedbackHeatmapMode='count';    // 'count' or 'rate' — which face of the flip heatmap is showing
+let feedbackCompareMode='row';      // 'column' (vs other categories this month) or 'row' (vs this category's own history) — defaults to row per confirmed preference
+let feedbackTrendChartMode='count'; // 'count' or 'rate' — which the trend chart currently shows
+let feedbackLastOverviewContext=null; // cached {months,dimRecs,outletRanked,chartCatShort} from the last full render, so mode toggles can redraw the chart directly
+function feedbackSetTrendChartMode(mode){
+  if(mode===feedbackTrendChartMode)return;
+  feedbackTrendChartMode=mode;
+  const btnCount=document.getElementById('feedback-trend-mode-count');
+  const btnRate=document.getElementById('feedback-trend-mode-rate');
+  if(btnCount&&btnRate){
+    const mutedColor=btnCount.dataset.mutedColor;
+    btnCount.style.background=mode==='count'?'#EA8C3A':'transparent';
+    btnCount.style.color=mode==='count'?'#fff':mutedColor;
+    btnRate.style.background=mode==='rate'?'#EA8C3A':'transparent';
+    btnRate.style.color=mode==='rate'?'#fff':mutedColor;
+  }
+  // v228: redraw the chart directly using the cached context instead of calling renderFeedback()
+  // — a full re-render rebuilds the whole page's HTML, which destroys and recreates the canvas
+  // element every time, leaving Chart.js's .update() with no real "before" state to animate from.
+  if(feedbackLastOverviewContext){
+    const c=feedbackLastOverviewContext;
+    feedbackDrawOverviewCharts(c.months,c.dimRecs,c.outletRanked,c.chartCatShort);
+  }
+}
+function feedbackSetCompareMode(mode){
+  if(mode===feedbackCompareMode)return;
+  feedbackCompareMode=mode;
+  renderFeedback();
+}
 let feedbackHeatmapSortMonth=null;  // clicking a month header sorts category rows by that month's value; click again to clear
 let feedbackUploadResult=null;      // {total,succeeded,errors,mismatches} from the last upload batch — persists until dismissed, not auto-hidden
 function feedbackToggleMonthSort(month){
@@ -13584,6 +13617,27 @@ function feedbackCellStyle(count,rowMax){
   const sev=feedbackSeverityColor(ratio);
   return`color:${sev.text};background:${sev.bg};font-weight:700`;
 }
+// v228: continuous gradient for the Overview heatmap specifically — confirmed direction after
+// testing showed the 4-tier discrete system made a category's entire range look like 1-2 flat
+// colors. Hue family (red/orange/amber/green) is picked by rank percentile among whatever's
+// being compared (which category ranks where); lightness/saturation vary continuously within
+// that family based on ratio. Kept separate from feedbackSeverityColor/feedbackCellStyle above,
+// which the Detail tables (Brand/Category/Aggregator/Outlet) still use unchanged — those have a
+// different structure and weren't part of this request.
+function feedbackFamilyHue(rank,totalCount){
+  if(totalCount<=1)return 4;
+  const pct=rank/(totalCount-1);
+  if(pct<=0.25)return 4;   // red
+  if(pct<=0.5)return 28;   // orange
+  if(pct<=0.75)return 45;  // amber
+  return 142;              // green
+}
+function feedbackGradientColor(hue,ratio){
+  const minL=75,maxL=32; // lightest (still colored, never washes to white) -> darkest
+  const lightness=minL-(ratio*(minL-maxL));
+  const saturation=55+ratio*15;
+  return{bg:`hsl(${hue},${saturation}%,${lightness}%)`,text:lightness>48?'#1A1A1A':'#FFFFFF'};
+}
 function feedbackHeatmapRow(label,rowMatrix,rowTotal,ratePct,onclick,showRate,branch){
   const T=feedbackTheme();
   const rowMax=Math.max(1,...FEEDBACK_TOP_CATEGORIES.map(([full])=>rowMatrix[full]||0));
@@ -13710,13 +13764,31 @@ function feedbackBuildOverview(T){
     const byMonth=catCountByMonth(full);
     const counts=allMonthsFull.map(m=>byMonth[m]||0);
     const rates=allMonthsFull.map((m,i)=>{const vol=ordersByMonth[m]||0;return vol>0?counts[i]/vol*100:0;});
-    return{full,short:catShortLabel(full),counts,rates,total:counts.reduce((s,v)=>s+v,0)};
+    return{full,short:catShortLabel(full),counts,rates,total:counts.reduce((s,v)=>s+v,0),
+      rowMaxCount:Math.max(...counts,1),rowMaxRate:Math.max(...rates,0.0001)};
   });
-  // v222: column-relative coloring (confirmed direction, replacing row-relative) — for each
-  // month, color is relative to the HIGHEST value across ALL categories in that same month, not
-  // relative to each category's own historical range. Answers "what's this month's biggest
-  // problem" rather than "is this category worse than its own usual" — applied to both count and
-  // rate so the two modes stay consistent with each other.
+  // v228: rank-based gradient replacing the old flat column-relative 4-tier system. ROW mode
+  // (Category's Own Trend, the default): one hue family per category, fixed by its rank among
+  // all categories' totals — lightness varies continuously within that family by the month's
+  // position in that category's own range. COLUMN mode (Within Month): hue family recomputed
+  // per month, ranking categories against each other for that specific month.
+  const rankByTotalCount=[...catData].sort((a,b)=>b.total-a.total).map(c=>c.full);
+  const rankByTotalRate=[...catData].sort((a,b)=>{
+    const aTot=a.rates.reduce((s,v)=>s+v,0),bTot=b.rates.reduce((s,v)=>s+v,0);
+    return bTot-aTot;
+  }).map(c=>c.full);
+  const rowFamilyHueCount={};rankByTotalCount.forEach((full,i)=>{rowFamilyHueCount[full]=feedbackFamilyHue(i,rankByTotalCount.length);});
+  const rowFamilyHueRate={};rankByTotalRate.forEach((full,i)=>{rowFamilyHueRate[full]=feedbackFamilyHue(i,rankByTotalRate.length);});
+  const colFamilyHueCount=allMonthsFull.map((m,mi)=>{
+    const ranked=[...catData].sort((a,b)=>b.counts[mi]-a.counts[mi]);
+    const map={};ranked.forEach((c,i)=>{map[c.full]=feedbackFamilyHue(i,ranked.length);});
+    return map;
+  });
+  const colFamilyHueRate=allMonthsFull.map((m,mi)=>{
+    const ranked=[...catData].sort((a,b)=>b.rates[mi]-a.rates[mi]);
+    const map={};ranked.forEach((c,i)=>{map[c.full]=feedbackFamilyHue(i,ranked.length);});
+    return map;
+  });
   const colMaxCount=allMonthsFull.map((m,i)=>Math.max(...catData.map(c=>c.counts[i]),1));
   const colMaxRate=allMonthsFull.map((m,i)=>Math.max(...catData.map(c=>c.rates[i]),0.0001));
   // Sort rows by whichever month was clicked (respecting current count/rate mode), highest
@@ -13732,25 +13804,27 @@ function feedbackBuildOverview(T){
   }else{
     sortedCatData=[...catData].sort((a,b)=>b.total-a.total);
   }
-  const heatRows=sortedCatData.map(({full,short,counts,rates})=>{
+  const heatRows=sortedCatData.map(({full,short,counts,rates,rowMaxCount,rowMaxRate})=>{
     const active=feedbackOutletChartCategory===full;
     const cells=allMonthsFull.map((m,colIdx)=>{
       const v=counts[colIdx];
-      const countRatio=v/colMaxCount[colIdx];
-      const countSev=v?feedbackSeverityColor(countRatio):null;
+      const countRatio=v/(feedbackCompareMode==='row'?rowMaxCount:colMaxCount[colIdx]);
+      const countHue=feedbackCompareMode==='row'?rowFamilyHueCount[full]:colFamilyHueCount[colIdx][full];
+      const countSev=v?feedbackGradientColor(countHue,countRatio):null;
       const countBg=countSev?countSev.bg:`${T.rowBg2||T.rowBg}`;
       const countTxt=countSev?countSev.text:T.muted;
       const rate=rates[colIdx];
-      const rateRatio=rate/colMaxRate[colIdx];
-      const rateSev=v?feedbackSeverityColor(rateRatio):null;
+      const rateRatio=rate/(feedbackCompareMode==='row'?rowMaxRate:colMaxRate[colIdx]);
+      const rateHue=feedbackCompareMode==='row'?rowFamilyHueRate[full]:colFamilyHueRate[colIdx][full];
+      const rateSev=v?feedbackGradientColor(rateHue,rateRatio):null;
       const rateBg=rateSev?rateSev.bg:`${T.rowBg2||T.rowBg}`;
       const rateTxt=rateSev?rateSev.text:T.muted;
       const delayMs=colIdx*45; // wind sweep: left to right, 45ms per column step
       const flippedNow=feedbackHeatmapMode==='rate'?' flipped':'';
       const onclick=`feedbackToggleOverviewDrill('${m}','${full.replace(/'/g,"\\'")}')`;
       return`<td style="padding:3px"><div class="cell-scene" onclick="${onclick}" style="cursor:pointer"><div class="cell-flip${flippedNow}" style="transition-delay:${delayMs}ms">
-        <div class="cell-face front" style="background:${countBg};color:${countTxt}">${v||''}</div>
-        <div class="cell-face back" style="background:${rateBg};color:${rateTxt}">${v?rate.toFixed(2)+'%':''}</div>
+        <div class="cell-face front" data-cat="${full.replace(/"/g,'&quot;')}" data-month="${m}" style="background:${countBg};color:${countTxt}">${v||''}</div>
+        <div class="cell-face back" data-cat="${full.replace(/"/g,'&quot;')}" data-month="${m}" style="background:${rateBg};color:${rateTxt}">${v?rate.toFixed(2)+'%':''}</div>
       </div></div></td>`;
     }).join('');
     return`<tr><td onclick="feedbackToggleOutletChartCategory('${full.replace(/'/g,"\\'")}')" style="cursor:pointer;padding:6px 10px 6px 0;font-weight:800;color:${active?'#FF8A3D':T.text};font-size:12.5px;white-space:nowrap;vertical-align:middle">${active?'▸ ':''}${short}</td>${cells}</tr>`;
@@ -13761,15 +13835,25 @@ function feedbackBuildOverview(T){
     return`<td onclick="feedbackToggleMonthSort('${m}')" style="text-align:center;color:${sortedByThis?'#FF8A3D':T.muted};font-weight:700;font-size:10.5px;padding:4px;cursor:pointer" title="Click to sort rows by ${lbl}">${lbl}${sortedByThis?' ▾':''}</td>`;
   }).join('');
   const mutedColorHex=T.muted;
-  const heatmapModeToggle=`<div style="display:inline-flex;background:${T.rowBg2||T.rowBg};border:1px solid ${T.border};border-radius:7px;padding:3px;margin-left:auto">
-    <button id="feedback-heatmap-mode-count" data-muted-color="${mutedColorHex}" onclick="feedbackSetHeatmapMode('count')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackHeatmapMode==='count'?'#EA8C3A':'transparent'};color:${feedbackHeatmapMode==='count'?'#fff':mutedColorHex}">Count</button>
-    <button id="feedback-heatmap-mode-rate" data-muted-color="${mutedColorHex}" onclick="feedbackSetHeatmapMode('rate')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackHeatmapMode==='rate'?'#EA8C3A':'transparent'};color:${feedbackHeatmapMode==='rate'?'#fff':mutedColorHex}">%</button>
+  const heatmapModeToggle=`<div style="display:flex;gap:8px;align-items:center">
+    <div style="display:inline-flex;background:${T.rowBg2||T.rowBg};border:1px solid ${T.border};border-radius:7px;padding:3px">
+      <button id="feedback-compare-col" onclick="feedbackSetCompareMode('column')" style="padding:4px 10px;border-radius:5px;border:none;font-size:10.5px;font-weight:800;cursor:pointer;background:${feedbackCompareMode==='column'?'#EA8C3A':'transparent'};color:${feedbackCompareMode==='column'?'#fff':mutedColorHex}">Within month</button>
+      <button id="feedback-compare-row" onclick="feedbackSetCompareMode('row')" style="padding:4px 10px;border-radius:5px;border:none;font-size:10.5px;font-weight:800;cursor:pointer;background:${feedbackCompareMode==='row'?'#EA8C3A':'transparent'};color:${feedbackCompareMode==='row'?'#fff':mutedColorHex}">Category's own trend</button>
+    </div>
+    <div style="display:inline-flex;background:${T.rowBg2||T.rowBg};border:1px solid ${T.border};border-radius:7px;padding:3px">
+      <button id="feedback-heatmap-mode-count" data-muted-color="${mutedColorHex}" onclick="feedbackSetHeatmapMode('count')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackHeatmapMode==='count'?'#EA8C3A':'transparent'};color:${feedbackHeatmapMode==='count'?'#fff':mutedColorHex}">Count</button>
+      <button id="feedback-heatmap-mode-rate" data-muted-color="${mutedColorHex}" onclick="feedbackSetHeatmapMode('rate')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackHeatmapMode==='rate'?'#EA8C3A':'transparent'};color:${feedbackHeatmapMode==='rate'?'#fff':mutedColorHex}">%</button>
+    </div>
   </div>`;
+  const compareModeExplainer=feedbackCompareMode==='column'
+    ?'Colors compare categories against each other within the same month — shows what\'s biggest right now.'
+    :'Colors compare each category against its own history — shows if a specific problem is getting better or worse over time.';
   const heatmapHtml=`<div class="card" style="margin-bottom:12px">
-    <div style="display:flex;align-items:center;margin-bottom:2px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;flex-wrap:wrap;gap:8px">
       <div class="ct">Every month, every category ${feedbackFilterYear?'('+feedbackFilterYear+')':'(all years)'} <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a cell for examples · click a category name to drive the chart below · click a month to sort</span></div>
       ${heatmapModeToggle}
     </div>
+    <div id="feedback-compare-explainer" style="font-size:10.5px;color:${T.label};margin-bottom:8px">${compareModeExplainer}</div>
     <div id="feedback-heatmap-flip" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:8px"><tr><td></td>${monthHeads}</tr>${heatRows}</table></div>
     ${feedbackOverviewDrillPanel(T,dimRecs)}
   </div>`;
@@ -13802,8 +13886,15 @@ function feedbackBuildOverview(T){
     <div style="position:relative;height:${Math.max(140,outletRanked.length*26)}px"><canvas id="feedback-outlet-chart"></canvas></div>
   </div>`;
 
+  const trendMutedColor=T.muted;
   const trendHtml=`<div class="card" style="margin-bottom:12px">
-    <div class="ct" style="margin-bottom:2px">Total complaints and rate, by month <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a bar to select that month for Detail</span></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;flex-wrap:wrap;gap:8px">
+      <div class="ct">Total complaints and rate, by month <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a bar to select that month for Detail</span></div>
+      <div style="display:inline-flex;background:${T.rowBg2||T.rowBg};border:1px solid ${T.border};border-radius:7px;padding:3px">
+        <button id="feedback-trend-mode-count" data-muted-color="${trendMutedColor}" onclick="feedbackSetTrendChartMode('count')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackTrendChartMode==='count'?'#EA8C3A':'transparent'};color:${feedbackTrendChartMode==='count'?'#fff':trendMutedColor}">Count</button>
+        <button id="feedback-trend-mode-rate" data-muted-color="${trendMutedColor}" onclick="feedbackSetTrendChartMode('rate')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackTrendChartMode==='rate'?'#EA8C3A':'transparent'};color:${feedbackTrendChartMode==='rate'?'#fff':trendMutedColor}">%</button>
+      </div>
+    </div>
     <div style="position:relative;height:200px"><canvas id="feedback-trend-chart"></canvas></div>
   </div>`;
 
@@ -13815,7 +13906,6 @@ function feedbackBuildOverview(T){
 function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
   const trendCtx=document.getElementById('feedback-trend-chart');
   if(trendCtx){
-    destroyChart('feedback-trend-chart');
     const counts=months.map(m=>dimRecs.filter(r=>r.month===m).length);
     const orderVol=months.map(m=>{
       let s=0;
@@ -13830,19 +13920,59 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
     });
     const rates=counts.map((c,i)=>orderVol[i]>0?+(c/orderVol[i]*100).toFixed(2):0);
     const selected=feedbackFilterMonths.size?months.map(m=>feedbackFilterMonths.has(m)):months.map(()=>true);
-    charts['feedback-trend-chart']=new Chart(trendCtx,{
-      data:{labels:months.map(m=>new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"})),
-        datasets:[
-          {type:'bar',label:'Complaints',data:counts,backgroundColor:selected.map(s=>s?'#FF8A3Dcc':'#FF8A3D33'),borderRadius:4,order:2},
-          {type:'line',label:'Rate % of orders',data:rates,borderColor:'#DE4A42',backgroundColor:'#DE4A42',borderWidth:2,pointRadius:4,tension:.3,yAxisID:'y1',order:1}
-        ]},
-      options:{responsive:true,maintainAspectRatio:false,
-        onClick:(e,els)=>{if(els.length){feedbackToggleMonth(months[els[0].index],e.native);}},
-        plugins:{legend:{display:true,labels:{color:_darkPage?DARK_THEME.textMuted:'#64748b',font:{size:11}}}},
-        scales:{y:{grid:{color:_darkPage?'rgba(255,255,255,.06)':'#F1F5F9'},ticks:{color:_darkPage?DARK_THEME.textMuted:'#64748b',font:{size:10}}},
-          y1:{position:'right',grid:{display:false},ticks:{color:'#DE4A42',font:{size:10},callback:v=>v+'%'}},
-          x:{grid:{display:false},ticks:{color:_darkPage?DARK_THEME.textMuted:'#64748b',font:{size:10}}}}}
-    });
+    const newData=feedbackTrendChartMode==='count'?counts:rates;
+    const barColors=selected.map(s=>s?'#FF8A3Dcc':'#FF8A3D33');
+    // v228: custom labels above each bar — exact count in Count mode; rate + that month's order
+    // volume in % mode, so a high/low rate always shows the volume it's backed by right there.
+    const valueLabelsPlugin={
+      id:'feedbackValueLabels',
+      afterDatasetsDraw(chart){
+        const{ctx}=chart;
+        ctx.save();
+        ctx.font='700 10px sans-serif';
+        ctx.textAlign='center';
+        chart.data.labels.forEach((_,i)=>{
+          const meta=chart.getDatasetMeta(0);
+          const bar=meta.data[i];
+          if(!bar)return;
+          if(feedbackTrendChartMode==='count'){
+            ctx.fillStyle=_darkPage?DARK_THEME.textPrimary:'#0F172A';
+            ctx.fillText(counts[i],bar.x,bar.y-6);
+          }else{
+            ctx.fillStyle='#DE4A42';
+            ctx.fillText(rates[i]+'%',bar.x,bar.y-18);
+            ctx.fillStyle=_darkPage?DARK_THEME.textMuted:'#64748b';
+            ctx.font='600 9px sans-serif';
+            ctx.fillText(orderVol[i].toLocaleString()+' orders',bar.x,bar.y-6);
+            ctx.font='700 10px sans-serif';
+          }
+        });
+        ctx.restore();
+      }
+    };
+    const existing=charts['feedback-trend-chart'];
+    const isStale=existing&&existing.canvas!==trendCtx; // canvas element changed = page was rebuilt elsewhere, this instance is detached
+    if(isStale){destroyChart('feedback-trend-chart');}
+    if(charts['feedback-trend-chart']&&!isStale){
+      // In-place update instead of destroy+recreate — lets Chart.js animate the bar
+      // height/axis-scale transition instead of snapping instantly.
+      charts['feedback-trend-chart'].data.datasets[0].data=newData;
+      charts['feedback-trend-chart'].data.datasets[0].backgroundColor=barColors;
+      charts['feedback-trend-chart'].update();
+    }else{
+      charts['feedback-trend-chart']=new Chart(trendCtx,{
+        type:'bar',
+        data:{labels:months.map(m=>new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"})),
+          datasets:[{data:newData,backgroundColor:barColors,borderRadius:4}]},
+        options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:28}},
+          animation:{duration:500,easing:'easeOutQuart'},
+          onClick:(e,els)=>{if(els.length){feedbackToggleMonth(months[els[0].index],e.native);}},
+          plugins:{legend:{display:false}},
+          scales:{y:{grid:{color:_darkPage?'rgba(255,255,255,.06)':'#F1F5F9'},ticks:{color:_darkPage?DARK_THEME.textMuted:'#64748b',font:{size:10}}},
+            x:{grid:{display:false},ticks:{color:_darkPage?DARK_THEME.textMuted:'#64748b',font:{size:10}}}}},
+        plugins:[valueLabelsPlugin]
+      });
+    }
   }
   const outletCtx=document.getElementById('feedback-outlet-chart');
   if(outletCtx){
@@ -14206,7 +14336,11 @@ async function renderFeedback(){
   const uploadChip=`<button data-feedback-upload-btn onclick="document.getElementById('feedback-file-input').click()" style="background:none;border:1px solid ${T.border};color:${T.muted};padding:4px 10px;border-radius:6px;font-size:11.5px;cursor:pointer">⬆ Upload month</button><input type="file" id="feedback-file-input" accept=".xlsx,.xls" multiple style="display:none" onchange="handleFeedbackUpload(this.files);this.value='';">`;
 
   const overview=feedbackBuildOverview(T);
-  const overviewSection=`<div id="feedback-overview-wrap" style="display:${feedbackZoomMode==='overview'?'block':'none'}">${overview.html}</div>`;
+  const overviewSection=`<div id="feedback-overview-wrap" style="display:${feedbackZoomMode==='overview'?'block':'none'}">
+    ${alertBanner}
+    ${trendingTermsPanel}
+    ${overview.html}
+  </div>`;
   const detailSection=`<div id="feedback-detail-wrap" style="display:${feedbackZoomMode==='detail'?'block':'none'}">
     ${brandHeatmap}
     ${categoryHeatmap}
@@ -14236,14 +14370,12 @@ async function renderFeedback(){
     </div>
     ${uploadResultBanner}
     ${filterBar}
-    ${alertBanner}
-    ${trendingTermsPanel}
     ${kpiStrip}
     ${overviewSection}
     ${detailSection}`;
 
   if(feedbackZoomMode==='overview'&&overview.months.length){
-    setTimeout(()=>feedbackDrawOverviewCharts(overview.months,overview.dimRecs,overview.outletRanked,overview.chartCatShort),0);
+    setTimeout(()=>{feedbackLastOverviewContext={months:overview.months,dimRecs:overview.dimRecs,outletRanked:overview.outletRanked,chartCatShort:overview.chartCatShort};feedbackDrawOverviewCharts(overview.months,overview.dimRecs,overview.outletRanked,overview.chartCatShort);},0);
   }
 }
 function feedbackToggleMonth(m,event){
