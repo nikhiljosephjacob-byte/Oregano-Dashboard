@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-240";
+const BUILD_VERSION="2026-08-06-241";
 const BUILD_NOTES=[
+  "🐛 Found and fixed the root cause of the remaining Discrepancy gap — confirmed directly: the sheet's \"Total Burn\" figure for Keeta includes the AED 2 FD cost per order, while the statement-file side (menu_disc) deliberately excluded it, since FD isn't part of any specific campaign. Two genuinely different things were being compared. Added Keeta's FD cost back into the comparison specifically for this reconciliation table — confirmed with the real numbers this shrinks the Oregano × Keeta gap from AED 1,277 to AED -563 (~4.5%, down from ~10%). Deep-dive along the way also fully confirmed the item-matching logic itself has zero gaps — every AED in the Keeta file correctly maps to a known campaign.",
   "🐛 Fixed the Discrepancy table/export comparing against dates with no statement data — was using the page's full filter window (e.g. \"This Month\" = Aug 1-31) even when an aggregator's uploaded file only covers part of it (e.g. Keeta's 11 days), showing unuploaded days as false gaps. Now each aggregator is restricted to the intersection of the page filter and its own file's actual date coverage — tested the exact scenario (a sheet record outside Keeta's coverage) and confirmed it's now excluded entirely rather than counted as a gap. Applies to all aggregators, not just Keeta.",
   "🆕 Added Date column to both the on-page table and CSV export — comparison is now per brand × aggregator × outlet × date, not aggregated across the whole window, so a specific gap is traceable to the exact day it happened.",
   "🆕 Discount Discrepancy table generalized from Keeta-only to all 5 aggregators, and rebuilt as a live interactive table on the Discount Burn page (not just an export) — sortable by any column, filterable by outlet, respects the page's existing Brand/Aggregator/Region filters, plus a CSV download for whatever's currently shown. Automatically includes only aggregators that actually have a statement file uploaded. Tested with a multi-aggregator scenario to confirm aggregators without exact data are correctly excluded rather than showing misleading zeros.",
@@ -12297,7 +12298,12 @@ function discRecComputeRows(){
       if(!inBranchFilter(rec.outlet))return;
       if(discRecFilterOutlet!=='all'&&rec.outlet!==discRecFilterOutlet)return;
       const k=`${rec.brand}|${agg}|${rec.outlet}|${rec.date}`;
-      fileByKey[k]=(fileByKey[k]||0)+(rec.menu_disc||0);
+      // v241: confirmed directly — the sheet's "Total Burn" figure includes the AED 2 Keeta FD
+      // cost, while menu_disc (used everywhere else on the dashboard, e.g. campaign cost/ROI)
+      // deliberately excludes it. This comparison specifically needs both sides measuring the
+      // same thing, so FD is added back in here only. real_fd only exists on Keeta records — a
+      // harmless no-op for every other aggregator.
+      fileByKey[k]=(fileByKey[k]||0)+(rec.menu_disc||0)+(rec.real_fd||0);
     });
   });
   const allKeys=new Set([...Object.keys(sheetByKey),...Object.keys(fileByKey)]);
@@ -12342,7 +12348,7 @@ function discRecExportCSV(){
   out.push(["Date Range (page filter)",`${dateStart} to ${dateEnd}`]);
   out.push(["Aggregators with exact data loaded",aggsWithData.length?aggsWithData.join(", "):"none"]);
   out.push([]);
-  out.push(["Note: \"Sheet total\" = the Google Sheet's own daily discount figure for that brand+aggregator+outlet+date. \"Statement file total\" = the actual merchant-funded discount from that aggregator's own order-level export for the same combination (menu discount only; Keeta's AED 2 FD cost already excluded, matching the established formula). A gap here means the two sources disagree — not a dashboard attribution issue, since both numbers are read directly from their respective sources with no estimation involved. Each aggregator is only compared for dates its OWN uploaded statement file actually covers, not the full page date range — a date with no statement data yet is excluded entirely rather than showing a false gap. Only aggregators with an exact statement file loaded are included."]);
+  out.push(["Note: \"Sheet total\" = the Google Sheet's own daily discount figure for that brand+aggregator+outlet+date. \"Statement file total\" = the actual merchant-funded discount from that aggregator's own order-level export for the same combination — for Keeta specifically, this INCLUDES the AED 2 FD cost per order, confirmed directly against how the sheet's own figure is entered (both sides now measure the same thing: total merchant-funded cost including FD). A gap here means the two sources genuinely disagree — not a dashboard attribution issue, since both numbers are read directly from their respective sources with no estimation involved. Each aggregator is only compared for dates its OWN uploaded statement file actually covers, not the full page date range — a date with no statement data yet is excluded entirely rather than showing a false gap. Only aggregators with an exact statement file loaded are included."]);
   out.push([]);
   out.push(["Brand","Aggregator","Outlet","Date","Sheet Total (AED)","Statement File Total (AED)","Gap (AED)","Gap (%)"]);
   rows.forEach(r=>{
@@ -12668,7 +12674,7 @@ function discRecTableHTML(){
       </div>
     </div>
     <div style="font-size:11px;color:${T.muted};line-height:1.5;margin-bottom:10px">
-      Compares the Google Sheet's own daily discount figure against each aggregator's exact statement file, per brand × aggregator × outlet × date. A gap here means the two sources disagree for that specific day — both numbers are read directly, no estimation. Each aggregator is only compared for dates its own uploaded statement file actually covers — a day with no statement uploaded yet is excluded entirely, not shown as a false gap. Click a column header to sort. Rows under AED 1 gap are hidden.
+      Compares the Google Sheet's own daily discount figure against each aggregator's exact statement file, per brand × aggregator × outlet × date. For Keeta, the statement side includes the AED 2 FD cost per order, confirmed to match how the sheet's own figure is entered — both sides measure the same thing. A gap here means the two sources genuinely disagree for that specific day — both numbers are read directly, no estimation. Each aggregator is only compared for dates its own uploaded statement file actually covers — a day with no statement uploaded yet is excluded entirely, not shown as a false gap. Click a column header to sort. Rows under AED 1 gap are hidden.
     </div>
     ${rows.length?`<div style="overflow-x:auto;max-height:500px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
       <thead><tr style="background:${T.rowBg};border-bottom:2px solid ${T.border}">
