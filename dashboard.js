@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-230";
+const BUILD_VERSION="2026-08-06-231";
 const BUILD_NOTES=[
+  "🐛 Fixed Detail page table cells having no gap between them (color sat directly on the td, so adjacent cells' backgrounds touched) — moved color to an inner div with the outer td providing padding, matching how the Overview heatmap was already built.",
+  "🐛 Fixed switching Within Month/Category's Own Trend unexpectedly animating the trend chart above it — traced it to the toggle triggering a full page re-render, which rebuilds the trend chart's canvas from scratch and triggers Chart.js's creation animation even though the chart's own data never changed. Extracted the heatmap table into its own function so the toggle now only rebuilds the heatmap directly, leaving the trend chart completely untouched.",
   "🔍 Added a diagnostic for Keeta campaigns showing as \"estimated\" instead of \"exact\" — traced the code and found the matching logic requires an EXACT string match between the campaign name in your sheet and Keeta's own campaign name on each order. If they don't match — even slightly — it silently falls back to a less-precise estimate. Now checks whether Keeta actually has order data for that brand+date range under a DIFFERENT name, and logs it clearly to the browser console (F12 → Console, look for \"[Keeta attribution]\") so a naming mismatch is visible instead of silent. This doesn't fix the underlying gap yet — I don't have visibility into your actual Keeta data to confirm the real cause — but it should tell us definitively whether this is a naming issue or something else next time it happens.",
   "🆕 Feedback Overview/Detail restructured — Alert banner and Trending Terms now Overview-only (pattern-detection tools belong with the zoom-out view); Detail is just KPI strip + the four tables, nothing repeated.",
   "🆕 Trend chart converted from always-on combo (bar+line together) to a proper Count/% toggle, matching the heatmap — exact count labeled above each bar in Count mode; rate + that month's order volume labeled in % mode.",
@@ -13407,7 +13409,31 @@ function feedbackSetTrendChartMode(mode){
 function feedbackSetCompareMode(mode){
   if(mode===feedbackCompareMode)return;
   feedbackCompareMode=mode;
-  renderFeedback();
+  const btnCol=document.getElementById('feedback-compare-col');
+  const btnRow=document.getElementById('feedback-compare-row');
+  const mutedColor=(btnCol&&btnCol.dataset.mutedColor)||(feedbackLastOverviewContext&&feedbackLastOverviewContext.T&&feedbackLastOverviewContext.T.muted);
+  if(btnCol&&btnRow){
+    btnCol.style.background=mode==='column'?'#EA8C3A':'transparent';
+    btnCol.style.color=mode==='column'?'#fff':mutedColor;
+    btnRow.style.background=mode==='row'?'#EA8C3A':'transparent';
+    btnRow.style.color=mode==='row'?'#fff':mutedColor;
+  }
+  const explainer=document.getElementById('feedback-compare-explainer');
+  if(explainer){
+    explainer.textContent=mode==='column'
+      ?"Colors compare categories against each other within the same month — shows what's biggest right now."
+      :"Colors compare each category against its own history — shows if a specific problem is getting better or worse over time.";
+  }
+  // v231: rebuild JUST the heatmap table using the cached context, instead of a full
+  // renderFeedback() — confirmed bug: a full re-render was rebuilding the whole page including
+  // the trend chart's canvas, which the trend chart's staleness check correctly detected as "the
+  // canvas changed", triggering a destroy+recreate and its creation animation, even though the
+  // trend chart's own data never changed.
+  const flipHolder=document.getElementById('feedback-heatmap-flip');
+  if(flipHolder&&feedbackLastOverviewContext){
+    const c=feedbackLastOverviewContext;
+    flipHolder.innerHTML=feedbackBuildHeatmapTable(c.months,c.dimRecs,c.ordersByMonth,c.T);
+  }
 }
 let feedbackHeatmapSortMonth=null;  // clicking a month header sorts category rows by that month's value; click again to clear
 let feedbackUploadResult=null;      // {total,succeeded,errors,mismatches} from the last upload batch — persists until dismissed, not auto-hidden
@@ -13658,7 +13684,10 @@ function feedbackHeatmapRow(label,rowMatrix,rowTotal,ratePct,onclick,showRate,br
   const cells=FEEDBACK_TOP_CATEGORIES.map(([full])=>{
     const n=rowMatrix[full]||0;
     const cellClick=(branch&&n>0)?`feedbackToggleDrill('${branch.replace(/'/g,"\\'")}','${full.replace(/'/g,"\\'")}');event.stopPropagation()`:'';
-    return`<td ${cellClick?`onclick="${cellClick}" style="cursor:pointer;text-align:center;padding:6px;border-radius:4px;font-size:12.5px;${feedbackCellStyle(n,rowMax)}"`:`style="text-align:center;padding:6px;border-radius:4px;font-size:12.5px;${feedbackCellStyle(n,rowMax)}"`}>${n||''}</td>`;
+    // v231: color moved to an inner div with the outer td just providing padding — previously
+    // the color was directly on the td, so adjacent cells' backgrounds touched with no visible
+    // gap between them, unlike the Overview heatmap which already used this two-layer structure.
+    return`<td style="padding:3px"><div ${cellClick?`onclick="${cellClick}" style="cursor:pointer;`:'style="'}text-align:center;padding:7px 4px;border-radius:5px;font-size:12.5px;${feedbackCellStyle(n,rowMax)}">${n||''}</div></td>`;
   }).join('');
   const clickAttr=onclick?`onclick="${onclick}" style="cursor:pointer"`:'';
   const rateCell=showRate?`<td style="text-align:right;color:${ratePct>=0.7?'#DE4A42':ratePct>=0.3?'#EA8C3A':'#4CAF6E'};font-weight:700;padding:6px;font-size:11.5px">${ratePct.toFixed(2)}%</td>`:'';
@@ -13741,39 +13770,18 @@ function feedbackOverviewDrillPanel(T,dimRecs){
     ${items}${matches.length>25?`<div style="font-size:10px;color:${T.label};padding-top:6px">+ ${matches.length-25} more</div>`:''}
   </div>`;
 }
-function feedbackBuildOverview(T){
-  const dimRecs=feedbackDimFilteredRecords();
-  const allMonthsFull=[...new Set(feedbackData.records.map(r=>r.month))].sort()
-    .filter(m=>!feedbackFilterYear||m.startsWith(feedbackFilterYear));
-  if(!allMonthsFull.length)return{html:`<div class="card"><div style="color:${T.muted};padding:16px;text-align:center">No data for this selection.</div></div>`,months:[]};
-
-  // Months × category heatmap — category ROW headers are clickable and explicitly set which
-  // category the outlet-driver chart below shows (not auto-detected).
+// v231: extracted from feedbackBuildOverview so compare-mode switches can rebuild JUST this
+// table (via #feedback-heatmap-flip.innerHTML) instead of requiring a full renderFeedback(),
+// which was rebuilding the whole page — including the trend chart's canvas — and causing an
+// unwanted "recreate from scratch" animation on a chart that hadn't actually changed.
+function feedbackBuildHeatmapTable(allMonthsFull,dimRecs,ordersByMonth,T){
   const catCountByMonth=cat=>{const m={};allMonthsFull.forEach(mo=>m[mo]=0);dimRecs.forEach(r=>{if(r.category===cat)m[r.date.slice(0,7)]=(m[r.date.slice(0,7)]||0)+1;});return m;};
-  // Order volume per month (for the rate face) — respects the same Brand/Outlet/Aggregator
-  // dimension filters as dimRecs, applied to allData instead since orders don't have a category.
-  const ordersByMonth={};
-  allMonthsFull.forEach(m=>{ordersByMonth[m]=0;});
-  if(typeof allData!=="undefined"){
-    allData.forEach(r=>{
-      const m=r.date&&r.date.slice(0,7);
-      if(!(m in ordersByMonth))return;
-      if(feedbackFilterBrand&&r.brand!==feedbackFilterBrand)return;
-      if(feedbackFilterOutlet&&r.branch!==feedbackFilterOutlet)return;
-      if(feedbackFilterAggregator&&r.aggregator!==feedbackFilterAggregator)return;
-      ordersByMonth[m]+=(r.orders||0);
-    });
-  }
-  // v221: every category present in the data, not just the 5 heatmap-column originals — short
-  // labels reused where they exist, Title Case fallback for the rest (Cutlery Missing, etc.)
   const allCatsPresent=[...new Set(dimRecs.map(r=>r.category))].filter(Boolean);
   const catShortLabel=full=>{
     const m=FEEDBACK_TOP_CATEGORIES.find(([f])=>f===full);
     if(m)return m[1];
     return full.toLowerCase().replace(/\b\w/g,c=>c.toUpperCase());
   };
-  // Two-pass build: first compute every category's values across every month, so the table-wide
-  // max (needed for rate coloring) is known before any cell HTML is generated.
   const catData=allCatsPresent.map(full=>{
     const byMonth=catCountByMonth(full);
     const counts=allMonthsFull.map(m=>byMonth[m]||0);
@@ -13781,11 +13789,6 @@ function feedbackBuildOverview(T){
     return{full,short:catShortLabel(full),counts,rates,total:counts.reduce((s,v)=>s+v,0),
       rowMaxCount:Math.max(...counts,1),rowMaxRate:Math.max(...rates,0.0001)};
   });
-  // v228: rank-based gradient replacing the old flat column-relative 4-tier system. ROW mode
-  // (Category's Own Trend, the default): one hue family per category, fixed by its rank among
-  // all categories' totals — lightness varies continuously within that family by the month's
-  // position in that category's own range. COLUMN mode (Within Month): hue family recomputed
-  // per month, ranking categories against each other for that specific month.
   const rankByTotalCount=[...catData].sort((a,b)=>b.total-a.total).map(c=>c.full);
   const rankByTotalRate=[...catData].sort((a,b)=>{
     const aTot=a.rates.reduce((s,v)=>s+v,0),bTot=b.rates.reduce((s,v)=>s+v,0);
@@ -13805,8 +13808,6 @@ function feedbackBuildOverview(T){
   });
   const colMaxCount=allMonthsFull.map((m,i)=>Math.max(...catData.map(c=>c.counts[i]),1));
   const colMaxRate=allMonthsFull.map((m,i)=>Math.max(...catData.map(c=>c.rates[i]),0.0001));
-  // Sort rows by whichever month was clicked (respecting current count/rate mode), highest
-  // first — default order (by total volume) otherwise.
   let sortedCatData=catData;
   if(feedbackHeatmapSortMonth&&allMonthsFull.includes(feedbackHeatmapSortMonth)){
     const mi=allMonthsFull.indexOf(feedbackHeatmapSortMonth);
@@ -13833,7 +13834,7 @@ function feedbackBuildOverview(T){
       const rateSev=v?feedbackGradientColor(rateHue,rateRatio):null;
       const rateBg=rateSev?rateSev.bg:`${T.rowBg2||T.rowBg}`;
       const rateTxt=rateSev?rateSev.text:T.muted;
-      const delayMs=colIdx*45; // wind sweep: left to right, 45ms per column step
+      const delayMs=colIdx*45;
       const flippedNow=feedbackHeatmapMode==='rate'?' flipped':'';
       const onclick=`feedbackToggleOverviewDrill('${m}','${full.replace(/'/g,"\\'")}')`;
       return`<td style="padding:3px"><div class="cell-scene" onclick="${onclick}" style="cursor:pointer"><div class="cell-flip${flippedNow}" style="transition-delay:${delayMs}ms">
@@ -13848,11 +13849,42 @@ function feedbackBuildOverview(T){
     const lbl=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"});
     return`<td onclick="feedbackToggleMonthSort('${m}')" style="text-align:center;color:${sortedByThis?'#FF8A3D':T.muted};font-weight:700;font-size:10.5px;padding:4px;cursor:pointer" title="Click to sort rows by ${lbl}">${lbl}${sortedByThis?' ▾':''}</td>`;
   }).join('');
+  return`<table style="width:100%;border-collapse:collapse;margin-top:8px"><tr><td></td>${monthHeads}</tr>${heatRows}</table>`;
+}
+function feedbackBuildOverview(T){
+  const dimRecs=feedbackDimFilteredRecords();
+  const allMonthsFull=[...new Set(feedbackData.records.map(r=>r.month))].sort()
+    .filter(m=>!feedbackFilterYear||m.startsWith(feedbackFilterYear));
+  if(!allMonthsFull.length)return{html:`<div class="card"><div style="color:${T.muted};padding:16px;text-align:center">No data for this selection.</div></div>`,months:[]};
+
+  // Months × category heatmap — category ROW headers are clickable and explicitly set which
+  // category the outlet-driver chart below shows (not auto-detected).
+  const catCountByMonth=cat=>{const m={};allMonthsFull.forEach(mo=>m[mo]=0);dimRecs.forEach(r=>{if(r.category===cat)m[r.date.slice(0,7)]=(m[r.date.slice(0,7)]||0)+1;});return m;};
+  // Order volume per month (for the rate face) — respects the same Brand/Outlet/Aggregator
+  // dimension filters as dimRecs, applied to allData instead since orders don't have a category.
+  const ordersByMonth={};
+  allMonthsFull.forEach(m=>{ordersByMonth[m]=0;});
+  if(typeof allData!=="undefined"){
+    allData.forEach(r=>{
+      const m=r.date&&r.date.slice(0,7);
+      if(!(m in ordersByMonth))return;
+      if(feedbackFilterBrand&&r.brand!==feedbackFilterBrand)return;
+      if(feedbackFilterOutlet&&r.branch!==feedbackFilterOutlet)return;
+      if(feedbackFilterAggregator&&r.aggregator!==feedbackFilterAggregator)return;
+      ordersByMonth[m]+=(r.orders||0);
+    });
+  }
+  // v231: heatmap table building extracted to feedbackBuildHeatmapTable() below, so
+  // feedbackSetCompareMode can call it directly and update just #feedback-heatmap-flip's
+  // innerHTML, instead of requiring a full renderFeedback() that rebuilds the entire page
+  // (including the trend chart's canvas, which was the cause of the unwanted chart animation
+  // when switching compare mode — confirmed and fixed).
+  const heatTableInner=feedbackBuildHeatmapTable(allMonthsFull,dimRecs,ordersByMonth,T);
   const mutedColorHex=T.muted;
   const heatmapModeToggle=`<div style="display:flex;gap:8px;align-items:center">
     <div style="display:inline-flex;background:${T.rowBg2||T.rowBg};border:1px solid ${T.border};border-radius:7px;padding:3px">
-      <button id="feedback-compare-col" onclick="feedbackSetCompareMode('column')" style="padding:4px 10px;border-radius:5px;border:none;font-size:10.5px;font-weight:800;cursor:pointer;background:${feedbackCompareMode==='column'?'#EA8C3A':'transparent'};color:${feedbackCompareMode==='column'?'#fff':mutedColorHex}">Within month</button>
-      <button id="feedback-compare-row" onclick="feedbackSetCompareMode('row')" style="padding:4px 10px;border-radius:5px;border:none;font-size:10.5px;font-weight:800;cursor:pointer;background:${feedbackCompareMode==='row'?'#EA8C3A':'transparent'};color:${feedbackCompareMode==='row'?'#fff':mutedColorHex}">Category's own trend</button>
+      <button id="feedback-compare-col" data-muted-color="${mutedColorHex}" onclick="feedbackSetCompareMode('column')" style="padding:4px 10px;border-radius:5px;border:none;font-size:10.5px;font-weight:800;cursor:pointer;background:${feedbackCompareMode==='column'?'#EA8C3A':'transparent'};color:${feedbackCompareMode==='column'?'#fff':mutedColorHex}">Within month</button>
+      <button id="feedback-compare-row" data-muted-color="${mutedColorHex}" onclick="feedbackSetCompareMode('row')" style="padding:4px 10px;border-radius:5px;border:none;font-size:10.5px;font-weight:800;cursor:pointer;background:${feedbackCompareMode==='row'?'#EA8C3A':'transparent'};color:${feedbackCompareMode==='row'?'#fff':mutedColorHex}">Category's own trend</button>
     </div>
     <div style="display:inline-flex;background:${T.rowBg2||T.rowBg};border:1px solid ${T.border};border-radius:7px;padding:3px">
       <button id="feedback-heatmap-mode-count" data-muted-color="${mutedColorHex}" onclick="feedbackSetHeatmapMode('count')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackHeatmapMode==='count'?'#EA8C3A':'transparent'};color:${feedbackHeatmapMode==='count'?'#fff':mutedColorHex}">Count</button>
@@ -13868,12 +13900,18 @@ function feedbackBuildOverview(T){
       ${heatmapModeToggle}
     </div>
     <div id="feedback-compare-explainer" style="font-size:10.5px;color:${T.label};margin-bottom:8px">${compareModeExplainer}</div>
-    <div id="feedback-heatmap-flip" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:8px"><tr><td></td>${monthHeads}</tr>${heatRows}</table></div>
+    <div id="feedback-heatmap-flip" style="overflow-x:auto">${heatTableInner}</div>
     ${feedbackOverviewDrillPanel(T,dimRecs)}
   </div>`;
 
   // Outlet-driver chart — shows whichever category was clicked; defaults to the one with the
   // biggest month-1-to-month-N change if nothing has been clicked yet.
+  const allCatsPresent=[...new Set(dimRecs.map(r=>r.category))].filter(Boolean);
+  const catShortLabel=full=>{
+    const m=FEEDBACK_TOP_CATEGORIES.find(([f])=>f===full);
+    if(m)return m[1];
+    return full.toLowerCase().replace(/\b\w/g,c=>c.toUpperCase());
+  };
   let chartCat=feedbackOutletChartCategory;
   if(!chartCat){
     let best=null,bestDelta=-Infinity;
@@ -13912,7 +13950,7 @@ function feedbackBuildOverview(T){
     <div style="position:relative;height:200px"><canvas id="feedback-trend-chart"></canvas></div>
   </div>`;
 
-  return{html:trendHtml+heatmapHtml+outletChartHtml,months:allMonthsFull,dimRecs,outletRanked,chartCatShort};
+  return{html:trendHtml+heatmapHtml+outletChartHtml,months:allMonthsFull,dimRecs,outletRanked,chartCatShort,ordersByMonth,T};
 }
 // Draws the two Chart.js charts — called via setTimeout after pg.innerHTML is set, since the
 // canvases need to exist in the DOM first. Destroys any previous instance to avoid the same
@@ -14389,7 +14427,7 @@ async function renderFeedback(){
     ${detailSection}`;
 
   if(feedbackZoomMode==='overview'&&overview.months.length){
-    setTimeout(()=>{feedbackLastOverviewContext={months:overview.months,dimRecs:overview.dimRecs,outletRanked:overview.outletRanked,chartCatShort:overview.chartCatShort};feedbackDrawOverviewCharts(overview.months,overview.dimRecs,overview.outletRanked,overview.chartCatShort);},0);
+    setTimeout(()=>{feedbackLastOverviewContext={months:overview.months,dimRecs:overview.dimRecs,outletRanked:overview.outletRanked,chartCatShort:overview.chartCatShort,ordersByMonth:overview.ordersByMonth,T:overview.T};feedbackDrawOverviewCharts(overview.months,overview.dimRecs,overview.outletRanked,overview.chartCatShort);},0);
   }
 }
 function feedbackToggleMonth(m,event){
