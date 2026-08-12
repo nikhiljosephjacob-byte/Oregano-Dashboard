@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-239";
+const BUILD_VERSION="2026-08-06-240";
 const BUILD_NOTES=[
+  "🐛 Fixed the Discrepancy table/export comparing against dates with no statement data — was using the page's full filter window (e.g. \"This Month\" = Aug 1-31) even when an aggregator's uploaded file only covers part of it (e.g. Keeta's 11 days), showing unuploaded days as false gaps. Now each aggregator is restricted to the intersection of the page filter and its own file's actual date coverage — tested the exact scenario (a sheet record outside Keeta's coverage) and confirmed it's now excluded entirely rather than counted as a gap. Applies to all aggregators, not just Keeta.",
+  "🆕 Added Date column to both the on-page table and CSV export — comparison is now per brand × aggregator × outlet × date, not aggregated across the whole window, so a specific gap is traceable to the exact day it happened.",
   "🆕 Discount Discrepancy table generalized from Keeta-only to all 5 aggregators, and rebuilt as a live interactive table on the Discount Burn page (not just an export) — sortable by any column, filterable by outlet, respects the page's existing Brand/Aggregator/Region filters, plus a CSV download for whatever's currently shown. Automatically includes only aggregators that actually have a statement file uploaded. Tested with a multi-aggregator scenario to confirm aggregators without exact data are correctly excluded rather than showing misleading zeros.",
   "🆕 New \"Keeta Discrepancy by Outlet\" export on Discount Burn Analysis — since the remaining uncategorized gap is now confirmed to be a genuine disagreement between the sheet's daily numbers and Keeta's own statement file (not a matching bug), this exports a brand × outlet CSV comparing both sources directly, sorted by largest gap first, so it's traceable to specific locations rather than one aggregate number. Shareable with anyone for investigation, no dashboard access needed.",
   "🐛 Fixed the remaining \"Oregano × Keeta\" uncategorized burn — the last fix covered 4 of 6 items in August's \"25% OFF Select Items\" list, missing Aglio e Olio Pasta (85 orders) and Pesto Pasta (50 orders) entirely. Added both with real values (AED 11.75 and 12.75) derived from the actual statement. Also caught a related stale rule: Lasagna di Carne (July item, not in August's list) still had no expiry — confirmed via real data it's no longer discounted (5 of 7 August orders show AED 0), capped it at July 31.",
@@ -12255,15 +12257,34 @@ function discRecComputeRows(){
   const aggsWithData=DISC_REC_AGGS.filter(a=>{const d=discRecExactData(a);return d&&d.records&&d.records.length;});
   if(!aggsWithData.length)return[];
   const aggDataSet=new Set(discountFilters.aggregators.length?discountFilters.aggregators:aggsWithData);
+  // v240: cross-reference ONLY against dates the uploaded statement file actually covers — per
+  // aggregator, not the page's full filter window. Without this, "This Month" (Aug 1-31)
+  // compared against a Keeta file covering only Aug 1-11 would show Aug 12-31's full sheet
+  // burn as "gap" even though there's simply no statement data yet for those days — not a real
+  // discrepancy, just data that hasn't been uploaded. Confirmed this was inflating the Oregano
+  // × Keeta gap specifically (AED 12,534 sheet total spans the full month; the Keeta file only
+  // has 11 days of data to compare it against).
+  const effectiveWindow={};
+  aggsWithData.forEach(agg=>{
+    const data=discRecExactData(agg);
+    const dr=data.metadata&&data.metadata.date_range;
+    const fileStart=dr&&dr[0]?dr[0]:dateStart;
+    const fileEnd=dr&&dr[1]?dr[1]:dateEnd;
+    effectiveWindow[agg]={start:fileStart>dateStart?fileStart:dateStart,end:fileEnd<dateEnd?fileEnd:dateEnd};
+  });
+  const inWindow=(agg,date)=>{
+    const w=effectiveWindow[agg];
+    return w&&date>=w.start&&date<=w.end;
+  };
   const sheetByKey={};
   allData.forEach(r=>{
     if(!aggDataSet.has(r.aggregator))return;
     if(!aggsWithData.includes(r.aggregator))return; // only compare aggs that HAVE exact data to compare against
-    if(r.date<dateStart||r.date>dateEnd)return;
+    if(!inWindow(r.aggregator,r.date))return; // restricted to that aggregator's actual data coverage, not the full page window
     if(brands.length>0&&!brandSet.has(r.brand))return;
     if(!inBranchFilter(r.branch))return;
     if(discRecFilterOutlet!=='all'&&r.branch!==discRecFilterOutlet)return;
-    const k=`${r.brand}|${r.aggregator}|${r.branch}`;
+    const k=`${r.brand}|${r.aggregator}|${r.branch}|${r.date}`;
     sheetByKey[k]=(sheetByKey[k]||0)+(r.disc||0);
   });
   const fileByKey={};
@@ -12271,22 +12292,22 @@ function discRecComputeRows(){
     if(!aggDataSet.has(agg))return;
     const data=discRecExactData(agg);
     data.records.forEach(rec=>{
-      if(rec.date<dateStart||rec.date>dateEnd)return;
+      if(!inWindow(agg,rec.date))return;
       if(brands.length>0&&!brandSet.has(rec.brand))return;
       if(!inBranchFilter(rec.outlet))return;
       if(discRecFilterOutlet!=='all'&&rec.outlet!==discRecFilterOutlet)return;
-      const k=`${rec.brand}|${agg}|${rec.outlet}`;
+      const k=`${rec.brand}|${agg}|${rec.outlet}|${rec.date}`;
       fileByKey[k]=(fileByKey[k]||0)+(rec.menu_disc||0);
     });
   });
   const allKeys=new Set([...Object.keys(sheetByKey),...Object.keys(fileByKey)]);
   const rows=[...allKeys].map(k=>{
-    const[brand,aggregator,outlet]=k.split("|");
+    const[brand,aggregator,outlet,date]=k.split("|");
     const sheetTotal=sheetByKey[k]||0;
     const fileTotal=fileByKey[k]||0;
     const gap=sheetTotal-fileTotal;
     const gapPct=sheetTotal>0?(gap/sheetTotal*100):0;
-    return{brand,aggregator,outlet,sheetTotal,fileTotal,gap,gapPct};
+    return{brand,aggregator,outlet,date,sheetTotal,fileTotal,gap,gapPct};
   });
   return rows;
 }
@@ -12316,21 +12337,21 @@ function discRecExportCSV(){
   };
   const aggsWithData=DISC_REC_AGGS.filter(a=>{const d=discRecExactData(a);return d&&d.records&&d.records.length;});
   const out=[];
-  out.push(["Discount Discrepancy — Sheet vs Statement File, by Brand × Aggregator × Outlet"]);
+  out.push(["Discount Discrepancy — Sheet vs Statement File, by Brand × Aggregator × Outlet × Date"]);
   out.push(["Generated",new Date().toLocaleString("en-AE",{dateStyle:"medium",timeStyle:"short"})]);
-  out.push(["Date Range",`${dateStart} to ${dateEnd}`]);
+  out.push(["Date Range (page filter)",`${dateStart} to ${dateEnd}`]);
   out.push(["Aggregators with exact data loaded",aggsWithData.length?aggsWithData.join(", "):"none"]);
   out.push([]);
-  out.push(["Note: \"Sheet total\" = the Google Sheet's own daily discount figure for that brand+aggregator+outlet. \"Statement file total\" = the actual merchant-funded discount from that aggregator's own order-level export for the same window (menu discount only; Keeta's AED 2 FD cost already excluded, matching the established formula). A gap here means the two sources disagree — not a dashboard attribution issue, since both numbers are read directly from their respective sources with no estimation involved. Only aggregators with an exact statement file loaded are included — others have no second source to compare against."]);
+  out.push(["Note: \"Sheet total\" = the Google Sheet's own daily discount figure for that brand+aggregator+outlet+date. \"Statement file total\" = the actual merchant-funded discount from that aggregator's own order-level export for the same combination (menu discount only; Keeta's AED 2 FD cost already excluded, matching the established formula). A gap here means the two sources disagree — not a dashboard attribution issue, since both numbers are read directly from their respective sources with no estimation involved. Each aggregator is only compared for dates its OWN uploaded statement file actually covers, not the full page date range — a date with no statement data yet is excluded entirely rather than showing a false gap. Only aggregators with an exact statement file loaded are included."]);
   out.push([]);
-  out.push(["Brand","Aggregator","Outlet","Sheet Total (AED)","Statement File Total (AED)","Gap (AED)","Gap (%)"]);
+  out.push(["Brand","Aggregator","Outlet","Date","Sheet Total (AED)","Statement File Total (AED)","Gap (AED)","Gap (%)"]);
   rows.forEach(r=>{
-    out.push([r.brand,r.aggregator,r.outlet,Math.round(r.sheetTotal),Math.round(r.fileTotal),Math.round(r.gap),r.gapPct.toFixed(1)]);
+    out.push([r.brand,r.aggregator,r.outlet,r.date,Math.round(r.sheetTotal),Math.round(r.fileTotal),Math.round(r.gap),r.gapPct.toFixed(1)]);
   });
   const totalSheet=rows.reduce((s,r)=>s+r.sheetTotal,0);
   const totalFile=rows.reduce((s,r)=>s+r.fileTotal,0);
   out.push([]);
-  out.push(["TOTAL",'','',Math.round(totalSheet),Math.round(totalFile),Math.round(totalSheet-totalFile),totalSheet>0?((totalSheet-totalFile)/totalSheet*100).toFixed(1):"0"]);
+  out.push(["TOTAL",'','','',Math.round(totalSheet),Math.round(totalFile),Math.round(totalSheet-totalFile),totalSheet>0?((totalSheet-totalFile)/totalSheet*100).toFixed(1):"0"]);
   const csv=out.map(r=>r.map(esc).join(",")).join("\n");
   const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
   const url=URL.createObjectURL(blob);
@@ -12631,6 +12652,7 @@ function discRecTableHTML(){
       <td style="padding:6px 8px;font-size:12px;color:${T.text}">${r.brand}</td>
       <td style="padding:6px 8px;font-size:12px;color:${T.text}">${r.aggregator}</td>
       <td style="padding:6px 8px;font-size:12px;color:${T.text}">${r.outlet}</td>
+      <td style="padding:6px 8px;font-size:12px;color:${T.text};white-space:nowrap">${r.date}</td>
       <td style="padding:6px 8px;font-size:12px;color:${T.text};text-align:right">${fmt(r.sheetTotal)}</td>
       <td style="padding:6px 8px;font-size:12px;color:${T.text};text-align:right">${fmt(r.fileTotal)}</td>
       <td style="padding:6px 8px;font-size:12px;font-weight:700;color:${gapColor};text-align:right">${fmt(r.gap)}</td>
@@ -12646,11 +12668,11 @@ function discRecTableHTML(){
       </div>
     </div>
     <div style="font-size:11px;color:${T.muted};line-height:1.5;margin-bottom:10px">
-      Compares the Google Sheet's own daily discount figure against each aggregator's exact statement file, per brand × aggregator × outlet. A gap here means the two sources disagree for that combination — both numbers are read directly, no estimation. Click a column header to sort. Rows under AED 1 gap are hidden.
+      Compares the Google Sheet's own daily discount figure against each aggregator's exact statement file, per brand × aggregator × outlet × date. A gap here means the two sources disagree for that specific day — both numbers are read directly, no estimation. Each aggregator is only compared for dates its own uploaded statement file actually covers — a day with no statement uploaded yet is excluded entirely, not shown as a false gap. Click a column header to sort. Rows under AED 1 gap are hidden.
     </div>
     ${rows.length?`<div style="overflow-x:auto;max-height:500px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
       <thead><tr style="background:${T.rowBg};border-bottom:2px solid ${T.border}">
-        ${th('Brand','brand')}${th('Aggregator','aggregator')}${th('Outlet','outlet')}${th('Sheet Total','sheetTotal','right')}${th('Statement Total','fileTotal','right')}${th('Gap','gap','right')}${th('Gap %','gapPct','right')}
+        ${th('Brand','brand')}${th('Aggregator','aggregator')}${th('Outlet','outlet')}${th('Date','date')}${th('Sheet Total','sheetTotal','right')}${th('Statement Total','fileTotal','right')}${th('Gap','gap','right')}${th('Gap %','gapPct','right')}
       </tr></thead>
       <tbody>${bodyRows}</tbody>
     </table></div>
