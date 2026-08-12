@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-236";
+const BUILD_VERSION="2026-08-06-237";
 const BUILD_NOTES=[
+  "🐛 Fixed the remaining \"Oregano × Keeta\" uncategorized burn — the last fix covered 4 of 6 items in August's \"25% OFF Select Items\" list, missing Aglio e Olio Pasta (85 orders) and Pesto Pasta (50 orders) entirely. Added both with real values (AED 11.75 and 12.75) derived from the actual statement. Also caught a related stale rule: Lasagna di Carne (July item, not in August's list) still had no expiry — confirmed via real data it's no longer discounted (5 of 7 August orders show AED 0), capped it at July 31.",
   "🐛 Resolved the Alfredo discrepancy from last build — it was a different dish (\"Gnocchi Alfredo Con Pollo\") accidentally caught by my own loose search, not a real data problem. Re-checked with an exact item match: 109 orders, all clean multiples of AED 12.75. Added Oregano's Alfredo Pasta → 25% OFF Select Items rule for August with this confirmed value.",
   "🐛 Added the missing August OFU item rules using real values pulled from your actual Keeta statement — found single-item orders for each promo item, computed the true menu discount (merchant-funded minus AED 2 FD). 3 of 4 backed by 34-49 consistent samples each; Wicked Wings' \"Solo Meal\" only had 1 matching order in this window, worth re-checking once more data comes in. Held off on Oregano's Alfredo→25% OFF Select Items mapping — its data wasn't clean like the other 4 (one value didn't fit the expected pattern), so flagging it rather than guessing.",
   "🐛 Keeta rules corrected using your sheet screenshots + full console log — found a SECOND stale-rule gap beyond the one already fixed: Fyoozhen/Smokeys/Wicked Wings each rotated to a new cap mid-July (Jul 16), which the rules never captured at all. Added the missing rotation and confirmed August rules for all 4 brands, plus Oregano's Keeta City Level window (Aug 10-13). Tested all 14 brand/date combinations from both screenshots — all pass. Held off adding the new August OFU item rules (Blackened Chicken, SMK Combo 1, etc.) — caught that a placeholder value there would silently zero out their attribution and misroute it to the residual campaign instead; need the real AED discount amounts first.",
@@ -574,7 +575,7 @@ const KEETA_ITEM_RULES=[
   {brand:"Oregano",item:"Alfredo Pasta",         campaign:"OFU Item Keeta",       expected:15.30,startDate:"2026-07-01",endDate:"2026-07-31"},
   {brand:"Oregano",item:"Milanese Pasta",        campaign:"25% OFF Select Items", expected:13.25,startDate:"2026-07-01",endDate:null},
   {brand:"Oregano",item:"Bolognese Pasta",       campaign:"25% OFF Select Items", expected:13.75,startDate:"2026-07-01",endDate:null},
-  {brand:"Oregano",item:"Lasagna di Carne",      campaign:"25% OFF Select Items", expected:15.50,startDate:"2026-07-01",endDate:null},
+  {brand:"Oregano",item:"Lasagna di Carne",      campaign:"25% OFF Select Items", expected:15.50,startDate:"2026-07-01",endDate:"2026-07-31"}, // confirmed via real Aug data: 5 of 7 August orders show AED 0 discount — no longer part of the promo, absent from the sheet's Aug item list too
   {brand:"Oregano",item:"Pepperoni Pizza (R)",   campaign:"25% OFF Select Items", expected:12.75,startDate:"2026-07-01",endDate:null},
   {brand:"Oregano",item:"Match Day Solo Meal",   campaign:"Keeta World Cup",      expected:84.50,startDate:"2026-07-01",endDate:"2026-07-19"},
   {brand:"Oregano",item:"Match Day Pizza Party", campaign:"Keeta World Cup",      expected:89.00,startDate:"2026-07-01",endDate:"2026-07-19"},
@@ -606,7 +607,14 @@ const KEETA_ITEM_RULES=[
   // ("Gnocchi Alfredo Con Pollo") that happens to also contain the word "Alfredo"; the production
   // matching logic below already uses the full string, so it was never actually at risk of this.
   // 109 exact matches, all clean multiples of AED 12.75 (103 at 1x, 5 at 2x, 1 at 3x).
-  {brand:"Oregano",item:"Alfredo Pasta",         campaign:"25% OFF Select Items",expected:12.75,startDate:"2026-08-01",endDate:null}
+  {brand:"Oregano",item:"Alfredo Pasta",         campaign:"25% OFF Select Items",expected:12.75,startDate:"2026-08-01",endDate:null},
+  // Two more August "25% OFF Select Items" items — confirmed from the sheet's full list
+  // (Bolognese, Aglio e Olio, Pesto, Pepperoni (R), Alfredo, Milanese) but missing from the
+  // rules until now, which is the direct cause of the "Oregano × Keeta" uncategorized burn
+  // still showing after the last fix. Both very common (85 and 50 occurrences) and both clean:
+  // Aglio e Olio 52/53 orders at AED 11.75 (1 at exactly 2x); Pesto 33/33 orders all at AED 12.75.
+  {brand:"Oregano",item:"Aglio e Olio Pasta",    campaign:"25% OFF Select Items",expected:11.75,startDate:"2026-08-01",endDate:null},
+  {brand:"Oregano",item:"Pesto Pasta",           campaign:"25% OFF Select Items",expected:12.75,startDate:"2026-08-01",endDate:null}
 ];
 
 // ══ Keeta residual campaign rules ══
