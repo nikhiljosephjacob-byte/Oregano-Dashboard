@@ -13,16 +13,19 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-232";
+const BUILD_VERSION="2026-08-06-236";
 const BUILD_NOTES=[
-  "🐛 Found and fixed the actual Keeta uncategorized-burn cause, using your console diagnostic + real file — 4 residual campaign rules (Lollorosso, Smokeys, Wicked Wings, Fyoozhen) were written in July with endDate:null (\"never expires\"), so they kept silently matching and overriding August's real campaigns with July's stale names. Verified: ran the rules against real August dates and got back the exact stale names your diagnostic flagged. Capped all 4 at July 31 — confirmed July's own attribution (including the Smokeys same-day cutover) is completely unaffected, and August now correctly falls through to estimation instead of wrong data. Still need the actual August campaign names/caps/dates from you to add the correct rules — this stops the bleeding but doesn't restore exact attribution for August yet.",
-  "🐛 Fixed Detail page table cells having no gap between them (color sat directly on the td, so adjacent cells' backgrounds touched) — moved color to an inner div with the outer td providing padding, matching how the Overview heatmap was already built.",
-  "🐛 Fixed switching Within Month/Category's Own Trend unexpectedly animating the trend chart above it — traced it to the toggle triggering a full page re-render, which rebuilds the trend chart's canvas from scratch and triggers Chart.js's creation animation even though the chart's own data never changed. Extracted the heatmap table into its own function so the toggle now only rebuilds the heatmap directly, leaving the trend chart completely untouched.",
-  "🔍 Added a diagnostic for Keeta campaigns showing as \"estimated\" instead of \"exact\" — traced the code and found the matching logic requires an EXACT string match between the campaign name in your sheet and Keeta's own campaign name on each order. If they don't match — even slightly — it silently falls back to a less-precise estimate. Now checks whether Keeta actually has order data for that brand+date range under a DIFFERENT name, and logs it clearly to the browser console (F12 → Console, look for \"[Keeta attribution]\") so a naming mismatch is visible instead of silent. This doesn't fix the underlying gap yet — I don't have visibility into your actual Keeta data to confirm the real cause — but it should tell us definitively whether this is a naming issue or something else next time it happens.",
-  "🆕 Feedback Overview/Detail restructured — Alert banner and Trending Terms now Overview-only (pattern-detection tools belong with the zoom-out view); Detail is just KPI strip + the four tables, nothing repeated.",
-  "🆕 Trend chart converted from always-on combo (bar+line together) to a proper Count/% toggle, matching the heatmap — exact count labeled above each bar in Count mode; rate + that month's order volume labeled in % mode.",
-  "🆕 Heatmap coloring is now a continuous gradient (not 4 discrete tiers) — hue family picked by rank, lightness varies smoothly within it. New \"Within month / Category's own trend\" toggle, defaulting to Category's own trend per your preference.",
-  "🎬 Trend chart bars now animate when switching Count/% (Chart.js native transition) — caught and fixed a real bug while building this: the toggle was calling a full page re-render, which destroys and recreates the canvas every time, leaving no \"before\" state to animate from. Fixed by redrawing the chart directly instead, with a staleness check so it still safely recreates if a full rebuild happens from anywhere else (month click, filter change).",
+  "🐛 Resolved the Alfredo discrepancy from last build — it was a different dish (\"Gnocchi Alfredo Con Pollo\") accidentally caught by my own loose search, not a real data problem. Re-checked with an exact item match: 109 orders, all clean multiples of AED 12.75. Added Oregano's Alfredo Pasta → 25% OFF Select Items rule for August with this confirmed value.",
+  "🐛 Added the missing August OFU item rules using real values pulled from your actual Keeta statement — found single-item orders for each promo item, computed the true menu discount (merchant-funded minus AED 2 FD). 3 of 4 backed by 34-49 consistent samples each; Wicked Wings' \"Solo Meal\" only had 1 matching order in this window, worth re-checking once more data comes in. Held off on Oregano's Alfredo→25% OFF Select Items mapping — its data wasn't clean like the other 4 (one value didn't fit the expected pattern), so flagging it rather than guessing.",
+  "🐛 Keeta rules corrected using your sheet screenshots + full console log — found a SECOND stale-rule gap beyond the one already fixed: Fyoozhen/Smokeys/Wicked Wings each rotated to a new cap mid-July (Jul 16), which the rules never captured at all. Added the missing rotation and confirmed August rules for all 4 brands, plus Oregano's Keeta City Level window (Aug 10-13). Tested all 14 brand/date combinations from both screenshots — all pass. Held off adding the new August OFU item rules (Blackened Chicken, SMK Combo 1, etc.) — caught that a placeholder value there would silently zero out their attribution and misroute it to the residual campaign instead; need the real AED discount amounts first.",
+  "📝 What's New popup was getting long again — trimmed recent entries back to short one-line bullets, as originally intended.",
+  "🐛 Fixed Keeta uncategorized burn — 4 stale July campaign rules had no expiry and were still overriding August data. Capped them; still need your exact August campaign details to restore full accuracy.",
+  "🐛 Fixed Detail page table cells touching with no gap between them.",
+  "🐛 Fixed switching Within Month/Own Trend unexpectedly animating the trend chart above it.",
+  "🔍 Added a console diagnostic for Keeta campaigns falling back to \"estimated\" — shows exactly why (F12 → Console).",
+  "🆕 Feedback page: Alert banner + Trending Terms now Overview-only; Detail is just tables, nothing repeated.",
+  "🆕 Feedback trend chart: proper Count/% toggle with value labels, and bars now animate on switch.",
+  "🆕 Feedback heatmap: continuous gradient coloring (not 4 flat tiers), new Within Month/Own Trend toggle.",
   "ℹ️ Compare-mode (Within month/Own trend) switches with a full re-render for now — colors update correctly but don't smoothly morph. The animated version would need the same direct-redraw treatment as the trend chart; can add it as a follow-up if wanted.",
   "🐛 Fixed the Platforms page Monthly Performance table not scrolling horizontally when multiple brands/aggregators are selected — the table had width:100% fighting against its own overflow-x:auto wrapper, so it compressed instead of scrolling. Removed the width constraint so it now sizes to its actual content and scrolls correctly.",
   "🆕 Added Year and Month filters (multi-select, same click/Ctrl-click pattern as the Feedback page) to the Monthly Performance table — narrow to 2025, 2026, both, or specific months. CSV export respects the same filter as what's on screen.",
@@ -560,28 +563,50 @@ const KEETA_ITEM_RULES=[
   {brand:"Oregano",item:"Pepperoni Pizza (R)",   campaign:"25% OFF Select Items",         expected:12.75,startDate:"2026-06-12",endDate:"2026-06-23"},
   {brand:"Oregano",item:"Match Day Pizza Party", campaign:"25% OFF Select Items",         expected:89.00,startDate:"2026-06-12",endDate:"2026-06-23"},
   {brand:"Oregano",item:"Match Day Solo Meal",   campaign:"25% OFF Select Items",         expected:84.00,startDate:"2026-06-12",endDate:"2026-06-23"},
-  // ── Oregano · July rotation (Jul 1 →) ──
+  // ── Oregano · July rotation (Jul 1-31) ──
   //   OFU Item Keeta            = single Alfredo, 60:40 co-funded by Keeta
   //   25% OFF Select Items      = 4 select pastas / pepperoni pizza
-  //   Keeta World Cup           = 2 Match Day combos (Solo + Pizza Party)
-  {brand:"Oregano",item:"Alfredo Pasta",         campaign:"OFU Item Keeta",       expected:15.30,startDate:"2026-07-01",endDate:null},
+  //   Keeta World Cup           = 2 Match Day combos (Solo + Pizza Party), confirmed ran Jul 1-19 per sheet
+  // v233: all endDate:null → "2026-07-31" (World Cup rules → confirmed "2026-07-19" specifically) —
+  // these never expired, so they were still matching in August, contributing to the same stale-
+  // override bug as the residual rules below. Oregano's August OFU item changed to Blackened
+  // Chicken (new rule further down), so Alfredo's rule genuinely ends in July, not continues.
+  {brand:"Oregano",item:"Alfredo Pasta",         campaign:"OFU Item Keeta",       expected:15.30,startDate:"2026-07-01",endDate:"2026-07-31"},
   {brand:"Oregano",item:"Milanese Pasta",        campaign:"25% OFF Select Items", expected:13.25,startDate:"2026-07-01",endDate:null},
   {brand:"Oregano",item:"Bolognese Pasta",       campaign:"25% OFF Select Items", expected:13.75,startDate:"2026-07-01",endDate:null},
   {brand:"Oregano",item:"Lasagna di Carne",      campaign:"25% OFF Select Items", expected:15.50,startDate:"2026-07-01",endDate:null},
   {brand:"Oregano",item:"Pepperoni Pizza (R)",   campaign:"25% OFF Select Items", expected:12.75,startDate:"2026-07-01",endDate:null},
-  {brand:"Oregano",item:"Match Day Solo Meal",   campaign:"Keeta World Cup",      expected:84.50,startDate:"2026-07-01",endDate:null},
-  {brand:"Oregano",item:"Match Day Pizza Party", campaign:"Keeta World Cup",      expected:89.00,startDate:"2026-07-01",endDate:null},
-  // ── Lollorosso · July (Jul 1 →) ──
+  {brand:"Oregano",item:"Match Day Solo Meal",   campaign:"Keeta World Cup",      expected:84.50,startDate:"2026-07-01",endDate:"2026-07-19"},
+  {brand:"Oregano",item:"Match Day Pizza Party", campaign:"Keeta World Cup",      expected:89.00,startDate:"2026-07-01",endDate:"2026-07-19"},
+  // ── Lollorosso · July (Jul 1-31) ──
   //   OFU Item Keeta            = 2 Grilled Chicken with Roasted Potato (single dish)
-  {brand:"Lollorosso",item:"2 Grilled Chicken with Roasted Potato - 550 Calories",campaign:"OFU Item Keeta",expected:27.50,startDate:"2026-07-01",endDate:null},
-  // ── Smokeys · July (Jul 1 →) ──
-  //   Keeta World Cup           = 2 Match Day combos
-  {brand:"Smokeys",item:"Match Day Combo for 1", campaign:"Keeta World Cup",expected:50.00,startDate:"2026-07-01",endDate:null},
-  {brand:"Smokeys",item:"Match Day Combo for 2", campaign:"Keeta World Cup",expected:89.00,startDate:"2026-07-01",endDate:null},
-  // ── Wicked Wings · July (Jul 1 →) ──
-  //   Keeta World Cup           = 2 Match Day combos (Solo + Trio)
-  {brand:"Wicked Wings",item:"Match Day Solo Meal",campaign:"Keeta World Cup",expected:84.50,startDate:"2026-07-01",endDate:null},
-  {brand:"Wicked Wings",item:"Match Day Trio Meal",campaign:"Keeta World Cup",expected:87.50,startDate:"2026-07-01",endDate:null}
+  {brand:"Lollorosso",item:"2 Grilled Chicken with Roasted Potato - 550 Calories",campaign:"OFU Item Keeta",expected:27.50,startDate:"2026-07-01",endDate:"2026-07-31"},
+  // ── Smokeys · July (Jul 1-19) ──
+  //   Keeta World Cup           = 2 Match Day combos, confirmed ran Jul 1-19 per sheet
+  {brand:"Smokeys",item:"Match Day Combo for 1", campaign:"Keeta World Cup",expected:50.00,startDate:"2026-07-01",endDate:"2026-07-19"},
+  {brand:"Smokeys",item:"Match Day Combo for 2", campaign:"Keeta World Cup",expected:89.00,startDate:"2026-07-01",endDate:"2026-07-19"},
+  // ── Wicked Wings · July (Jul 1-19) ──
+  //   Keeta World Cup           = 2 Match Day combos (Solo + Trio), confirmed ran Jul 1-19 per sheet
+  {brand:"Wicked Wings",item:"Match Day Solo Meal",campaign:"Keeta World Cup",expected:84.50,startDate:"2026-07-01",endDate:"2026-07-19"},
+  {brand:"Wicked Wings",item:"Match Day Trio Meal",campaign:"Keeta World Cup",expected:87.50,startDate:"2026-07-01",endDate:"2026-07-19"},
+  // ── August OFU item rules ──
+  // "expected" values derived directly from your real Keeta statement (Keeta_Aug_1--11__2026.xlsx)
+  // — found single-item orders matching each promo item, read "Promotion funded by merchant",
+  // subtracted the AED 2 FD cost per the established formula, confirmed each value was perfectly
+  // consistent across every matching order (not just an average of noisy figures).
+  {brand:"Oregano",item:"Blackened Chicken",     campaign:"OFU Item Keeta",   expected:17.36,startDate:"2026-08-01",endDate:null}, // 34 matching orders, all AED 17.36
+  {brand:"Lollorosso",item:"2 Grilled Chicken",  campaign:"40% OFF OFU Keeta",expected:22.00,startDate:"2026-08-01",endDate:null}, // 49 matching orders, all AED 22.00 (some 2x = AED 44)
+  {brand:"Smokeys",item:"Combo 1",               campaign:"40% OFF OFU Keeta",expected:23.60,startDate:"2026-08-01",endDate:null}, // 46 matching orders, all AED 23.60 — note: actual Keeta item name is "Combo 1", not "SMK Combo 1" (that prefix is sheet-only)
+  // ⚠️ Only 1 matching order found for Wicked Wings "Solo Meal" in the Aug 1-11 window — real
+  // data, not a guess, but a much smaller sample than the other three. Worth re-checking once
+  // more August data is available to confirm AED 72.00 holds up.
+  {brand:"Wicked Wings",item:"Solo Meal",        campaign:"40% OFF OFU Keeta",expected:72.00,startDate:"2026-08-01",endDate:null},
+  // Confirmed clean once matched on the EXACT item string "Alfredo Pasta" instead of a loose
+  // substring — the earlier "10.2" outlier was a false positive from a different dish
+  // ("Gnocchi Alfredo Con Pollo") that happens to also contain the word "Alfredo"; the production
+  // matching logic below already uses the full string, so it was never actually at risk of this.
+  // 109 exact matches, all clean multiples of AED 12.75 (103 at 1x, 5 at 2x, 1 at 3x).
+  {brand:"Oregano",item:"Alfredo Pasta",         campaign:"25% OFF Select Items",expected:12.75,startDate:"2026-08-01",endDate:null}
 ];
 
 // ══ Keeta residual campaign rules ══
@@ -593,21 +618,32 @@ const KEETA_RESIDUAL_RULES=[
   // ── June: Keeta Week overlay on Oregano ──
   {brand:"Oregano",     campaign:"30% OFF CAP 20", startDate:"2026-06-24",endDate:"2026-06-30"},
   // ── July: menu-wide caps per brand ──
-  // v232: capped with endDate:"2026-07-31" — these previously had endDate:null ("never
-  // expires"), which meant they kept matching and silently overriding August orders with
-  // July's campaign names even after the real campaigns had rotated. Confirmed directly: ran
-  // these rules against real August dates and got back the exact stale names the console
-  // diagnostic flagged (e.g. Lollorosso Aug 5 → "50% OFF CAP 30", the July rule, not whatever
-  // Lollorosso's real August campaign is). August's correct residual rules still need adding —
-  // holding off on guessing those without confirming the exact campaign/cap/dates first.
+  // v233: fixed a SECOND stale-rule issue found via the full console log + July sheet screenshot
+  // — Fyoozhen, Smokeys, and Wicked Wings each rotated to a NEW cap mid-July (Jul 16), which
+  // these rules never captured at all (they only had the Jul 1 rate, uncapped). Confirmed
+  // directly from the console log: e.g. Fyoozhen Jul 16-31 showed Keeta's data as "50% OFF CAP
+  // 20" (the stale Jul 1 rule) when the sheet already said "25% OFF CAP 20" for that window.
   {brand:"Lollorosso",  campaign:"50% OFF CAP 30", startDate:"2026-07-01",endDate:"2026-07-31"},
-  // Smokeys switched CAP 20 → CAP 30 mid-day on Jul 8 (confirmed: ~5 PM) — a genuine same-day
-  // overlap. endTime/startTime below are ONLY checked on the exact boundary date; every other
-  // date behaves exactly as before (pure date comparison).
+  // Smokeys switched CAP 20 → CAP 30 mid-day on Jul 8 (confirmed: ~5 PM), then to a differently-
+  // named campaign entirely on Jul 16. endTime/startTime below are ONLY checked on the exact
+  // boundary date; every other date behaves exactly as before (pure date comparison).
   {brand:"Smokeys",     campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:"2026-07-08",endTime:"17:00"},
-  {brand:"Smokeys",     campaign:"50% OFF CAP 30", startDate:"2026-07-08",startTime:"17:00",endDate:"2026-07-31"},
-  {brand:"Wicked Wings",campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:"2026-07-31"},
-  {brand:"Fyoozhen",    campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:"2026-07-31"}
+  {brand:"Smokeys",     campaign:"50% OFF CAP 30", startDate:"2026-07-08",startTime:"17:00",endDate:"2026-07-15"},
+  {brand:"Wicked Wings",campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:"2026-07-15"},
+  {brand:"Fyoozhen",    campaign:"50% OFF CAP 20", startDate:"2026-07-01",endDate:"2026-07-15"},
+  // ── Jul 16-31: second rotation, confirmed from sheet — same campaign names continue into
+  // August unchanged for Smokeys/Wicked Wings/Fyoozhen, so these rules extend straight through
+  // rather than needing a separate August-dated entry. ──
+  {brand:"Smokeys",     campaign:"30% OFF CAP 20", startDate:"2026-07-16",endDate:"2026-08-31"},
+  {brand:"Wicked Wings",campaign:"30% OFF CAP 20", startDate:"2026-07-16",endDate:"2026-08-31"},
+  {brand:"Fyoozhen",    campaign:"25% OFF CAP 20", startDate:"2026-07-16",endDate:"2026-08-31"},
+  // ── August: Lollorosso's cap changed from 30 to 25, confirmed from sheet — new rule, not an
+  // extension of the July one above (which stays correctly capped at Jul 31). ──
+  {brand:"Lollorosso",  campaign:"50% OFF CAP 25", startDate:"2026-08-01",endDate:null},
+  // ── Oregano: time-limited "Keeta City Level Campaign 20% OFF" overlay, confirmed from sheet
+  // (two separate windows shown: Aug 10-13 in one screenshot, Aug 17-20 "Upcoming" in another —
+  // only the confirmed Aug 10-13 one is added here; add the second when it's actually live). ──
+  {brand:"Oregano",     campaign:"Keeta City Level Campaign 20% OFF", startDate:"2026-08-10",endDate:"2026-08-13"}
 ];
 
 // v140: now accepts an optional `timeStr` ("HH:MM") for same-day cutovers — a rule whose
