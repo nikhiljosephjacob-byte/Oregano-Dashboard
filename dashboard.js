@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-243";
+const BUILD_VERSION="2026-08-06-244";
 const BUILD_NOTES=[
+  "🐛 Fixed the DIP/DIP (Fyoozhen) bug properly — turned out to be TWO separate bugs, both now fixed and checked across the whole dashboard as requested. (1) resolveBranchName was blindly stripping a trailing \")\" even when it was the meaningful closing half of \"DIP (Fyoozhen)\", mangling it before the lookup ever ran — fixed at the root, benefiting all 11 call sites of this function, not just the new table. (2) A global outlet list across ALL brands is unsafe when brands share a generic name — confirmed Oregano/Lollorosso/Smokeys all have a plain \"DIP\" while Fyoozhen's is separate; a global list let the wrong brand's \"DIP\" win. Fixed by resolving each record only against its OWN brand's outlets. Checked every other usage of this function across the dashboard: found the same bug in the CPC History page's outlet filter/comparison (3 more places), fixed those too. Tested the complete 4-brand scenario end to end — all resolve correctly now with zero cross-brand contamination.",
   "🐛 Fixed a real bug in the Discrepancy table/export — \"DIP\" and \"DIP (Fyoozhen)\" were being treated as two separate outlets, since the sheet and the statement files spell it differently. Every 100% gap in the reported file was this exact signature: the same real burn split into a same-day, same-amount ghost pair with opposite signs, cancelling out to nothing when actually reconciled. Fixed by resolving outlet names through the same canonical-outlet logic already used elsewhere on the dashboard, on both sides of the comparison. Tested against the exact DIP/DIP (Fyoozhen) case and a handful of other outlets to confirm no unintended false merges.",
   "🐛 Applied the confirmed Keeta FD fix to the ORIGINAL Uncategorized Burn tile too — v241 only fixed the newer Discrepancy-by-outlet table; this tile uses a separate calculation path (allocateCampaignDiscount) that needed the same adjustment. Added Keeta's FD cost back in specifically for this comparison — not to merchantBurn itself, which must stay FD-free since it also feeds campaign ROI calculations elsewhere. Fixed both the brand-level total and the per-day breakdown so the individual date chips stay consistent with the corrected top figure.",
   "🐛 Found and fixed the root cause of the remaining Discrepancy gap — confirmed directly: the sheet's \"Total Burn\" figure for Keeta includes the AED 2 FD cost per order, while the statement-file side (menu_disc) deliberately excluded it, since FD isn't part of any specific campaign. Two genuinely different things were being compared. Added Keeta's FD cost back into the comparison specifically for this reconciliation table — confirmed with the real numbers this shrinks the Oregano × Keeta gap from AED 1,277 to AED -563 (~4.5%, down from ~10%). Deep-dive along the way also fully confirmed the item-matching logic itself has zero gaps — every AED in the Keeta file correctly maps to a known campaign.",
@@ -7329,10 +7330,15 @@ function cpcHistUnmappedBrandRows(){
 // this, selecting "Al Quoz" from the dropdown wouldn't match rows still tagged "AQ" in the raw
 // data. Canonicalizes independent of refresh timing — works even before BRANCH_ALIASES updates
 // get picked up by the next data parse.
-function cpcHistCanonicalOutlet(raw){
+// v244: same brand-scoping fix applied to discRecComputeRows — a global outlet list across all
+// brands is unsafe when two brands share a generic name (confirmed: Oregano/Lollorosso/Smokeys
+// all have plain "DIP", Fyoozhen has "DIP (Fyoozhen)"). Accepts an optional brand for a properly
+// scoped resolution; falls back to the old global behavior only if no brand is available.
+function cpcHistCanonicalOutlet(raw,brand){
   if(!raw)return raw;
-  const allCanonicalOutlets=[...new Set(allData.map(r=>r.branch).filter(b=>b&&b!=="(brand-level)"))];
-  return resolveBranchName(raw,allCanonicalOutlets)||raw;
+  const pool=brand?allData.filter(r=>r.brand===brand):allData;
+  const canonicalOutlets=[...new Set(pool.map(r=>r.branch).filter(b=>b&&b!=="(brand-level)"))];
+  return resolveBranchName(raw,canonicalOutlets)||raw;
 }
 
 function cpcRenderHistory(){
@@ -7346,11 +7352,10 @@ function cpcRenderHistory(){
     // Outlets list depends on the currently selected brand (avoids showing irrelevant outlets),
     // canonicalized so abbreviations like "AQ" collapse into "Al Quoz" instead of appearing twice.
     const outletPool=cpcHistFilters.brand!=="all"?cpcData.filter(r=>r.brand===cpcHistFilters.brand):cpcData;
-    const allCanonicalOutlets=[...new Set(allData.map(r=>r.branch).filter(b=>b&&b!=="(brand-level)"))];
     const outletSeen=new Map();
     outletPool.forEach(r=>{
       if(!r.branch)return;
-      const resolved=resolveBranchName(r.branch,allCanonicalOutlets)||r.branch;
+      const resolved=cpcHistCanonicalOutlet(r.branch,r.brand);
       const key=resolved.toLowerCase();
       if(!outletSeen.has(key))outletSeen.set(key,resolved);
     });
@@ -7406,7 +7411,7 @@ function cpcHistFilteredRows(){
     (cpcHistFilters.month==="all"||r.month===cpcHistFilters.month)&&
     (cpcHistFilters.brand==="all"||r.brand===cpcHistFilters.brand)&&
     (cpcHistFilters.aggregator==="all"||r.aggregator===cpcHistFilters.aggregator)&&
-    (cpcHistFilters.outlet==="all"||cpcHistCanonicalOutlet(r.branch)===cpcHistFilters.outlet)&&
+    (cpcHistFilters.outlet==="all"||cpcHistCanonicalOutlet(r.branch,r.brand)===cpcHistFilters.outlet)&&
     (cpcHistFilters.adType==="all"||r.adType===cpcHistFilters.adType)
   );
 }
@@ -7453,9 +7458,8 @@ function cpcHistCompareView(months){
   const outletsOpt=(side)=>{
     const f=side==="A"?cpcCompA:cpcCompB;
     const pool=f.brand!=="all"?cpcData.filter(r=>r.brand===f.brand):cpcData;
-    const allCanon=[...new Set(allData.map(r=>r.branch).filter(b=>b&&b!=="(brand-level)"))];
     const seen=new Map();
-    pool.forEach(r=>{if(!r.branch)return;const resolved=resolveBranchName(r.branch,allCanon)||r.branch;const k=resolved.toLowerCase();if(!seen.has(k))seen.set(k,resolved);});
+    pool.forEach(r=>{if(!r.branch)return;const resolved=cpcHistCanonicalOutlet(r.branch,r.brand);const k=resolved.toLowerCase();if(!seen.has(k))seen.set(k,resolved);});
     return[...seen.values()].sort();
   };
   const sel=(side,label,key,opts,curVal)=>{
@@ -7477,7 +7481,7 @@ function cpcHistCompareView(months){
   // Single-pass aggregation per side: one forEach building a Map<brand|ag, totals> instead of
   // O(keys × rows) repeated filtering.
   const aggregate=(f)=>{
-    const matches=r=>(f.month==="all"||r.month===f.month)&&(f.brand==="all"||r.brand===f.brand)&&(f.aggregator==="all"||r.aggregator===f.aggregator)&&(f.outlet==="all"||cpcHistCanonicalOutlet(r.branch)===f.outlet)&&(f.adType==="all"||r.adType===f.adType);
+    const matches=r=>(f.month==="all"||r.month===f.month)&&(f.brand==="all"||r.brand===f.brand)&&(f.aggregator==="all"||r.aggregator===f.aggregator)&&(f.outlet==="all"||cpcHistCanonicalOutlet(r.branch,r.brand)===f.outlet)&&(f.adType==="all"||r.adType===f.adType);
     const map=new Map();
     for(const r of cpcData){
       if(!matches(r))continue;
@@ -8147,9 +8151,22 @@ function isPlausibleBranchToken(token){
 }
 function resolveBranchName(token,brandBranches){
   if(!token)return null;
-  // Strip leading/trailing punctuation BEFORE the alias lookup so tokens like "Reem)" /
-  // "(Marina" still hit the alias map.
-  const tl=token.trim().replace(/^[\s()[\].,;:]+|[\s()[\].,;:]+$/g,"").toLowerCase().replace(/^\s*(only\s+)?(at\s+|in\s+)?/,"").replace(/\s+outlets?$/,"").replace(/\s+branch(es)?$/,"").trim();
+  // v244: fixed a real, widespread bug — the previous version blindly stripped a trailing ")"
+  // (or leading "(") even when it was the closing half of a MEANINGFUL, balanced "(Brand)"
+  // suffix like "DIP (Fyoozhen)", mangling it into "dip (fyoozhen" before the alias lookup ever
+  // ran. That broken string then fuzzy-matched the wrong outlet ("DIP" instead of the correct
+  // "DIP (Fyoozhen)") via a reverse substring check. Confirmed directly: traced through every
+  // step of the original regex and reproduced the exact mismatch. Fix: only strip parens when
+  // they're genuinely UNBALANCED in the token (the "Reem)" / "(Marina" stray-punctuation case
+  // this was originally built for) — a balanced "(...)" is left alone, since removing it can
+  // only ever destroy a meaningful qualifier, never a stray character.
+  let pre=token.trim();
+  const openCount=(pre.match(/\(/g)||[]).length,closeCount=(pre.match(/\)/g)||[]).length;
+  if(openCount!==closeCount){
+    // Genuinely unbalanced — safe to strip a stray leading/trailing paren, matching original intent
+    pre=pre.replace(/^[()]+|[()]+$/g,"");
+  }
+  const tl=pre.replace(/^[\s[\].,;:]+|[\s[\].,;:]+$/g,"").toLowerCase().replace(/^\s*(only\s+)?(at\s+|in\s+)?/,"").replace(/\s+outlets?$/,"").replace(/\s+branch(es)?$/,"").trim();
   if(!tl)return null;
   const canonical=BRANCH_ALIASES[tl]||tl;
   // Exact match first against the brand's actual branches
@@ -12290,15 +12307,24 @@ function discRecComputeRows(){
   const{dateStart,dateEnd,brands,branch}=discountFilters;
   if(!dateStart||!dateEnd)return[];
   const brandSet=new Set(brands);
-  // v243: confirmed real bug — "DIP" (from aggregator statement files) and "DIP (Fyoozhen)"
-  // (from the sheet) were being treated as two separate outlets, since the grouping key used
-  // raw outlet strings with no normalization. Every "100% gap" pair in the reported CSV was this
-  // exact signature: the same underlying burn split into a same-day, same-amount ghost pair with
-  // opposite signs. Fixed by resolving both sides through the same canonical-outlet function
-  // already used elsewhere on the dashboard (cpcHistCanonicalOutlet), computed once here for
-  // performance rather than recalculating the canonical list on every record.
-  const canonicalOutlets=[...new Set(allData.map(r=>r.branch).filter(b=>b&&b!=="(brand-level)"))];
-  const normOutlet=raw=>resolveBranchName(raw,canonicalOutlets)||raw;
+  // v244: fixed a second, deeper issue found while re-verifying v243 — a GLOBAL outlet list
+  // across all brands is unsafe whenever two different brands happen to share a generic outlet
+  // name. Confirmed directly: Oregano/Lollorosso/Smokeys all have a plain "DIP" outlet, while
+  // Fyoozhen's is "DIP (Fyoozhen)" — with a global list, Fyoozhen's statement-file "DIP" record
+  // exact-matches the OTHER brands' generic "DIP" entry before ever reaching the fuzzy match
+  // that would correctly resolve it to "DIP (Fyoozhen)". Fixed by building a PER-BRAND outlet
+  // map instead, so each record only ever resolves against its own brand's known outlets —
+  // "DIP" means something different depending on whose record it's on.
+  const outletsByBrand={};
+  allData.forEach(r=>{
+    if(!r.branch||r.branch==="(brand-level)")return;
+    if(!outletsByBrand[r.brand])outletsByBrand[r.brand]=new Set();
+    outletsByBrand[r.brand].add(r.branch);
+  });
+  const normOutlet=(rawBrand,rawOutlet)=>{
+    const list=outletsByBrand[rawBrand]?[...outletsByBrand[rawBrand]]:[];
+    return resolveBranchName(rawOutlet,list)||rawOutlet;
+  };
   const inBranchFilter=outlet=>{
     if(branch==="DXB")return !AUH_OUTLETS.has(outlet);
     if(branch==="AUH")return AUH_OUTLETS.has(outlet);
@@ -12333,7 +12359,7 @@ function discRecComputeRows(){
     if(!aggsWithData.includes(r.aggregator))return; // only compare aggs that HAVE exact data to compare against
     if(!inWindow(r.aggregator,r.date))return; // restricted to that aggregator's actual data coverage, not the full page window
     if(brands.length>0&&!brandSet.has(r.brand))return;
-    const branchNorm=normOutlet(r.branch);
+    const branchNorm=normOutlet(r.brand,r.branch);
     if(!inBranchFilter(branchNorm))return;
     if(discRecFilterOutlet!=='all'&&branchNorm!==discRecFilterOutlet)return;
     const k=`${r.brand}|${r.aggregator}|${branchNorm}|${r.date}`;
@@ -12346,7 +12372,7 @@ function discRecComputeRows(){
     data.records.forEach(rec=>{
       if(!inWindow(agg,rec.date))return;
       if(brands.length>0&&!brandSet.has(rec.brand))return;
-      const outletNorm=normOutlet(rec.outlet);
+      const outletNorm=normOutlet(rec.brand,rec.outlet);
       if(!inBranchFilter(outletNorm))return;
       if(discRecFilterOutlet!=='all'&&outletNorm!==discRecFilterOutlet)return;
       const k=`${rec.brand}|${agg}|${outletNorm}|${rec.date}`;
