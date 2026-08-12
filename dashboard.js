@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-229";
+const BUILD_VERSION="2026-08-06-230";
 const BUILD_NOTES=[
+  "🔍 Added a diagnostic for Keeta campaigns showing as \"estimated\" instead of \"exact\" — traced the code and found the matching logic requires an EXACT string match between the campaign name in your sheet and Keeta's own campaign name on each order. If they don't match — even slightly — it silently falls back to a less-precise estimate. Now checks whether Keeta actually has order data for that brand+date range under a DIFFERENT name, and logs it clearly to the browser console (F12 → Console, look for \"[Keeta attribution]\") so a naming mismatch is visible instead of silent. This doesn't fix the underlying gap yet — I don't have visibility into your actual Keeta data to confirm the real cause — but it should tell us definitively whether this is a naming issue or something else next time it happens.",
   "🆕 Feedback Overview/Detail restructured — Alert banner and Trending Terms now Overview-only (pattern-detection tools belong with the zoom-out view); Detail is just KPI strip + the four tables, nothing repeated.",
   "🆕 Trend chart converted from always-on combo (bar+line together) to a proper Count/% toggle, matching the heatmap — exact count labeled above each bar in Count mode; rate + that month's order volume labeled in % mode.",
   "🆕 Heatmap coloring is now a continuous gradient (not 4 discrete tiers) — hue family picked by rank, lightness varies smoothly within it. New \"Within month / Category's own trend\" toggle, defaulting to Category's own trend per your preference.",
@@ -1394,7 +1395,20 @@ function getKeetaExactDisc(c,start,end){
     dailyAlloc[rec.date]=(dailyAlloc[rec.date]||0)+rec.menu_disc;
     matched++;
   }
-  if(!matched)return null;
+  if(!matched){
+    // v230: diagnostic for the silent-fallback case that was reported — if the campaign name
+    // itself didn't match anything, check whether Keeta HAS records for this brand+date range
+    // under a DIFFERENT campaign name. A name mismatch here (rather than genuinely missing
+    // data) would explain a campaign showing "estimated" despite clearly running in the sheet.
+    const sameWindow=keetaOrdersData.records.filter(rec=>rec.brand===c.brand&&rec.date>=start&&rec.date<=end&&(!myScope||myScope.has(rec.outlet)));
+    if(sameWindow.length){
+      const otherNames=[...new Set(sameWindow.map(rec=>rec.campaign).filter(Boolean))];
+      window._keetaMismatchLog=window._keetaMismatchLog||[];
+      window._keetaMismatchLog.push({sheetName:c.name,brand:c.brand,window:`${start}→${end}`,keetaHasRecords:sameWindow.length,keetaCampaignNamesFound:otherNames});
+      if(otherNames.length)console.warn(`[Keeta attribution] Sheet campaign "${c.name}" (${c.brand}, ${start}→${end}) found no exact match, but Keeta HAS ${sameWindow.length} order(s) in this window under different name(s): ${otherNames.join(', ')} — likely a naming mismatch, not missing data.`);
+    }
+    return null;
+  }
   // Coverage diagnostics for the UI badge / banner
   const daysIn=(s,e)=>Math.max(0,Math.round((new Date(e+"T12:00:00")-new Date(s+"T12:00:00"))/86400000)+1);
   const totalDays=daysIn(start,end);
