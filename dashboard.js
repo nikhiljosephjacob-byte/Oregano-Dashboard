@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-241";
+const BUILD_VERSION="2026-08-06-243";
 const BUILD_NOTES=[
+  "🐛 Fixed a real bug in the Discrepancy table/export — \"DIP\" and \"DIP (Fyoozhen)\" were being treated as two separate outlets, since the sheet and the statement files spell it differently. Every 100% gap in the reported file was this exact signature: the same real burn split into a same-day, same-amount ghost pair with opposite signs, cancelling out to nothing when actually reconciled. Fixed by resolving outlet names through the same canonical-outlet logic already used elsewhere on the dashboard, on both sides of the comparison. Tested against the exact DIP/DIP (Fyoozhen) case and a handful of other outlets to confirm no unintended false merges.",
+  "🐛 Applied the confirmed Keeta FD fix to the ORIGINAL Uncategorized Burn tile too — v241 only fixed the newer Discrepancy-by-outlet table; this tile uses a separate calculation path (allocateCampaignDiscount) that needed the same adjustment. Added Keeta's FD cost back in specifically for this comparison — not to merchantBurn itself, which must stay FD-free since it also feeds campaign ROI calculations elsewhere. Fixed both the brand-level total and the per-day breakdown so the individual date chips stay consistent with the corrected top figure.",
   "🐛 Found and fixed the root cause of the remaining Discrepancy gap — confirmed directly: the sheet's \"Total Burn\" figure for Keeta includes the AED 2 FD cost per order, while the statement-file side (menu_disc) deliberately excluded it, since FD isn't part of any specific campaign. Two genuinely different things were being compared. Added Keeta's FD cost back into the comparison specifically for this reconciliation table — confirmed with the real numbers this shrinks the Oregano × Keeta gap from AED 1,277 to AED -563 (~4.5%, down from ~10%). Deep-dive along the way also fully confirmed the item-matching logic itself has zero gaps — every AED in the Keeta file correctly maps to a known campaign.",
   "🐛 Fixed the Discrepancy table/export comparing against dates with no statement data — was using the page's full filter window (e.g. \"This Month\" = Aug 1-31) even when an aggregator's uploaded file only covers part of it (e.g. Keeta's 11 days), showing unuploaded days as false gaps. Now each aggregator is restricted to the intersection of the page filter and its own file's actual date coverage — tested the exact scenario (a sheet record outside Keeta's coverage) and confirmed it's now excluded entirely rather than counted as a gap. Applies to all aggregators, not just Keeta.",
   "🆕 Added Date column to both the on-page table and CSV export — comparison is now per brand × aggregator × outlet × date, not aggregated across the whole window, so a specific gap is traceable to the exact day it happened.",
@@ -11920,6 +11922,30 @@ function computeDiscountBurn(){
       const k=`${x.campaign.brand}|${x.campaign.aggregator}`;
       attribByBA[k]=(attribByBA[k]||0)+x.merchantBurn;
     }
+    // v242: confirmed directly with Nikhil — the sheet's "Total Burn" figure for Keeta includes
+    // the AED 2 FD cost per order, while merchantBurn (campaignBreakdown, used here AND for
+    // campaign ROI calculations elsewhere) deliberately excludes it, since FD isn't part of any
+    // specific campaign's cost. Adding it back in HERE ONLY — a local adjustment to this
+    // comparison, not to merchantBurn/campaignBreakdown itself, which must stay FD-free for
+    // campaign cost/ROI purposes elsewhere on the dashboard. Same fix already applied to the
+    // newer Discrepancy-by-outlet table; this brings the original Uncategorized Burn tile in
+    // line with it.
+    if(keetaOrdersData&&keetaOrdersData.records&&keetaOrdersData.records.length){
+      const brandSetLocal=new Set(brands);
+      const fdByBrand={};
+      keetaOrdersData.records.forEach(rec=>{
+        if(rec.date<dateStart||rec.date>dateEnd)return;
+        if(brands.length>0&&!brandSetLocal.has(rec.brand))return;
+        if(branch==="DXB"&&AUH_OUTLETS.has(rec.outlet))return;
+        if(branch==="AUH"&&!AUH_OUTLETS.has(rec.outlet))return;
+        if(branch!=="All"&&branch!=="DXB"&&branch!=="AUH"&&rec.outlet!==branch)return;
+        fdByBrand[rec.brand]=(fdByBrand[rec.brand]||0)+(rec.real_fd||0);
+      });
+      Object.entries(fdByBrand).forEach(([brand,fd])=>{
+        const k=`${brand}|Keeta`;
+        if(k in totalByBA)attribByBA[k]=(attribByBA[k]||0)+fd;
+      });
+    }
     const out=[];
     for(const k of Object.keys(totalByBA)){
       const total=totalByBA[k],rawAttributed=attribByBA[k]||0;
@@ -11938,6 +11964,21 @@ function computeDiscountBurn(){
     // was the root cause of the v104 diagnostic showing small gaps smeared across every date.
     const _dDisc={};for(const r of matches){if(!(r.disc>0))continue;const bk=r.brand+'|'+r.aggregator;if(!_dDisc[bk])_dDisc[bk]={};_dDisc[bk][r.date]=(_dDisc[bk][r.date]||0)+r.disc;}
     const _dAttr={};for(const cb of campaignBreakdown){const bk=cb.campaign.brand+'|'+cb.campaign.aggregator;if(!_dAttr[bk])_dAttr[bk]={};for(const[ds,amt] of Object.entries(cb.dailyAlloc||{})){_dAttr[bk][ds]=(_dAttr[bk][ds]||0)+amt;}}
+    // Same Keeta FD adjustment as attribByBA above, applied per-day so the individual date chips
+    // stay consistent with the corrected brand-level total instead of silently disagreeing with it.
+    if(keetaOrdersData&&keetaOrdersData.records&&keetaOrdersData.records.length){
+      keetaOrdersData.records.forEach(rec=>{
+        if(rec.date<dateStart||rec.date>dateEnd)return;
+        if(brands.length>0&&!new Set(brands).has(rec.brand))return;
+        if(branch==="DXB"&&AUH_OUTLETS.has(rec.outlet))return;
+        if(branch==="AUH"&&!AUH_OUTLETS.has(rec.outlet))return;
+        if(branch!=="All"&&branch!=="DXB"&&branch!=="AUH"&&rec.outlet!==branch)return;
+        const bk=`${rec.brand}|Keeta`;
+        if(!(bk in totalByBA))return;
+        if(!_dAttr[bk])_dAttr[bk]={};
+        _dAttr[bk][rec.date]=(_dAttr[bk][rec.date]||0)+(rec.real_fd||0);
+      });
+    }
     // v115 boundary-mismatch detector: a big uncategorized day sitting DIRECTLY adjacent to a
     // campaign's start or end date is the classic signature of a sheet-date mismatch (aggregator
     // activated the promo a day early, or kept it burning past the entered end date). Attach a
@@ -12249,6 +12290,15 @@ function discRecComputeRows(){
   const{dateStart,dateEnd,brands,branch}=discountFilters;
   if(!dateStart||!dateEnd)return[];
   const brandSet=new Set(brands);
+  // v243: confirmed real bug — "DIP" (from aggregator statement files) and "DIP (Fyoozhen)"
+  // (from the sheet) were being treated as two separate outlets, since the grouping key used
+  // raw outlet strings with no normalization. Every "100% gap" pair in the reported CSV was this
+  // exact signature: the same underlying burn split into a same-day, same-amount ghost pair with
+  // opposite signs. Fixed by resolving both sides through the same canonical-outlet function
+  // already used elsewhere on the dashboard (cpcHistCanonicalOutlet), computed once here for
+  // performance rather than recalculating the canonical list on every record.
+  const canonicalOutlets=[...new Set(allData.map(r=>r.branch).filter(b=>b&&b!=="(brand-level)"))];
+  const normOutlet=raw=>resolveBranchName(raw,canonicalOutlets)||raw;
   const inBranchFilter=outlet=>{
     if(branch==="DXB")return !AUH_OUTLETS.has(outlet);
     if(branch==="AUH")return AUH_OUTLETS.has(outlet);
@@ -12283,9 +12333,10 @@ function discRecComputeRows(){
     if(!aggsWithData.includes(r.aggregator))return; // only compare aggs that HAVE exact data to compare against
     if(!inWindow(r.aggregator,r.date))return; // restricted to that aggregator's actual data coverage, not the full page window
     if(brands.length>0&&!brandSet.has(r.brand))return;
-    if(!inBranchFilter(r.branch))return;
-    if(discRecFilterOutlet!=='all'&&r.branch!==discRecFilterOutlet)return;
-    const k=`${r.brand}|${r.aggregator}|${r.branch}|${r.date}`;
+    const branchNorm=normOutlet(r.branch);
+    if(!inBranchFilter(branchNorm))return;
+    if(discRecFilterOutlet!=='all'&&branchNorm!==discRecFilterOutlet)return;
+    const k=`${r.brand}|${r.aggregator}|${branchNorm}|${r.date}`;
     sheetByKey[k]=(sheetByKey[k]||0)+(r.disc||0);
   });
   const fileByKey={};
@@ -12295,9 +12346,10 @@ function discRecComputeRows(){
     data.records.forEach(rec=>{
       if(!inWindow(agg,rec.date))return;
       if(brands.length>0&&!brandSet.has(rec.brand))return;
-      if(!inBranchFilter(rec.outlet))return;
-      if(discRecFilterOutlet!=='all'&&rec.outlet!==discRecFilterOutlet)return;
-      const k=`${rec.brand}|${agg}|${rec.outlet}|${rec.date}`;
+      const outletNorm=normOutlet(rec.outlet);
+      if(!inBranchFilter(outletNorm))return;
+      if(discRecFilterOutlet!=='all'&&outletNorm!==discRecFilterOutlet)return;
+      const k=`${rec.brand}|${agg}|${outletNorm}|${rec.date}`;
       // v241: confirmed directly — the sheet's "Total Burn" figure includes the AED 2 Keeta FD
       // cost, while menu_disc (used everywhere else on the dashboard, e.g. campaign cost/ROI)
       // deliberately excludes it. This comparison specifically needs both sides measuring the
