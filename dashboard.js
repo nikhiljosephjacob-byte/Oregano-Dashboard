@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-256";
+const BUILD_VERSION="2026-08-06-257";
 const BUILD_NOTES=[
+  "🆕 Rebuilt the Campaign Forecaster input form using the approved Option A layout — grouped into distinct visual sections (\"Forecast from an upcoming campaign,\" \"What & when,\" \"Campaign shape\") instead of one long flat list of fields. Additional comments moved into a collapsed accordion instead of always taking up space. Results, history, and all the underlying math are unchanged — this is a layout-only change.",
   "🐛 Fixed the sticky filter bar overlapping the app's own fixed header — it was pinning to top:0px, which put it BEHIND the header, so only the portion below the header's height ever showed (exactly why it looked like locking started mid-bar). Now offsets below the real header height, and added a much more visible shadow/border while pinned so it's obviously \"floating\" above the page.",
   "🐛 Fixed the sales-line animation playing before you'd scrolled down to see it — it started at chart-creation time regardless of visibility. Now waits for the chart to actually scroll into view (40% visible) before playing, still only once per visit.",
   "🆕 Campaign Forecaster: added the \"forecast from an upcoming campaign\" quick-pick — the futuristic feature originally requested. Click an upcoming campaign pulled straight from the sheet and it fills the whole form, including a best-guess campaign structure (visible and correctable, not silent). Caught and fixed a real extraction bug while building this — discount% could be missed when it lived in the campaign name but comments had other text. This completes all of #7.",
@@ -11867,6 +11868,10 @@ function campFcHTML(){
     <div style="font-size:10px;color:${T.label};margin-bottom:8px">Every saved forecast, compared against the real campaign once one matching those parameters actually runs.</div>
     ${campFcHistoryHTML()}
   </div>`;
+  const sectionCard=(icon,title,inner)=>`<div style="background:${T.rowBg};border:0.5px solid ${T.border};border-radius:8px;padding:12px 14px;margin-bottom:10px">
+    <div style="font-size:11px;font-weight:800;color:${accent};margin-bottom:8px">${icon} ${title}</div>
+    ${inner}
+  </div>`;
   return`<div style="background:${T.panelBg};border:0.5px solid ${T.border};border-radius:12px;padding:14px 16px;margin-bottom:14px;border-left:3px solid ${accent};border-top-left-radius:0;border-bottom-left-radius:0">`
   +`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${campFcCollapsed?'0':'12px'}">`
   +`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">📊</span><div style="font-size:15px;font-weight:800;color:${T.text}">Campaign Forecaster</div><div style="font-size:10px;color:${T.muted};margin-left:4px">Estimate what a planned campaign will yield before you launch</div></div>`
@@ -11878,38 +11883,45 @@ function campFcHTML(){
       const chip=(c,i)=>{
         const dates=`${fmtShort(c.startDate)}-${fmtShort(c.endDate)}`;
         const label=`${c.brand} × ${c.aggregator} · ${c.name||c.comments||'Campaign'} · ${dates}`;
-        return`<button onclick="campFcApplyUpcoming(${i})" style="padding:6px 12px;border-radius:7px;border:0.5px solid ${T.border};background:${T.rowBg};color:${T.text};font-size:11.5px;cursor:pointer;font-weight:600;margin:3px 4px 3px 0">${label}</button>`;
+        return`<button onclick="campFcApplyUpcoming(${i})" style="padding:6px 12px;border-radius:7px;border:0.5px solid ${T.border};background:${T.inputBg};color:${T.text};font-size:11.5px;cursor:pointer;font-weight:600;margin:3px 4px 3px 0">${label}</button>`;
       };
-      return`<div style="background:${T.rowBg};border:0.5px solid ${T.border};border-radius:8px;padding:10px 12px;margin-bottom:12px">
-        <div style="font-size:10px;font-weight:700;color:${T.muted};text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Forecast from an upcoming campaign <span style="font-weight:400;text-transform:none">(pulled from the sheet — fills the form below, including a best-guess campaign structure worth checking before you run it)</span></div>
-        <div>${upcoming.map(chip).join('')}</div>
-      </div>`;
+      return sectionCard('📅','Forecast from an upcoming campaign',
+        `<div style="font-size:10px;color:${T.muted};margin-bottom:6px">Pulled from the sheet — fills the form below, including a best-guess campaign structure worth checking before you run it.</div>
+        <div>${upcoming.map(chip).join('')}</div>`);
     })()
   )
   +(campFcCollapsed?'':
-    `<div style="margin-bottom:10px">`
-    +fld('Campaign structure',`<select onchange="campFcSet('type',this.value);renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600">
-      <option value="menu"${campFcType==='menu'?' selected':''}>Menu-wide % off, capped</option>
-      <option value="selectItems"${campFcType==='selectItems'?' selected':''}>% off select items</option>
-      <option value="bogo"${campFcType==='bogo'?' selected':''}>BOGO / free item with purchase</option>
-      <option value="ofu"${campFcType==='ofu'?' selected':''}>Single item offer (OFU-style)</option>
-      <option value="platformEvent"${campFcType==='platformEvent'?' selected':''}>Platform-wide event (e.g. Keeta Week)</option>
-    </select>`)
-    +(CAMP_FC_TYPE_NAMES[campFcType]?`<div style="font-size:10px;color:${T.muted};margin-top:5px">Discount cost is derived from real historical ${CAMP_FC_TYPE_NAMES[campFcType]} campaigns for this brand + aggregator, not a formula — see matched campaigns below once you run this.</div>`:'')
-    +'</div>'
-    +`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:10px">`
-    +fld('Brand',sel('brand',bOpts,campFcBrand))
-    +fld('Aggregator',sel('agg',aOpts,campFcAgg))
-    +fld('Start',inp('start','date',campFcStart,'2025-01-01','2030-12-31'))
-    +fld('End',inp('end','date',campFcEnd,'2025-01-01','2030-12-31'))
-    +(campFcType!=='bogo'?fld('Discount %',inp('discPct','number',campFcDiscPct,1,90)):'')
-    +(campFcType==='menu'?fld('Cap AED',inp('cap','number',campFcCap,1,999)):'')
-    +fld('Co-funded?',`<select onchange="campFcSet('coFund',this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600"><option value="true"${campFcCoFund?' selected':''}>Yes</option><option value="false"${!campFcCoFund?' selected':''}>No</option></select>`)
-    +(campFcCoFund?fld('Platform %',inp('coFundPct','number',campFcCoFundPct,1,99)):'')
-    +'</div>'
-    +(campFcBrand&&campFcAgg?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:${T.rowBg};border-radius:6px;border:0.5px solid ${T.border}">`+bPill(campFcBrand,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcBrand}</span>`+`<span style="color:${T.label};font-size:13px">×</span>`+aPill(campFcAgg,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcAgg}</span>`+`<span style="font-size:11px;color:${T.muted};margin-left:4px">${campFcTypeLabel(campFcType,campFcDiscPct,campFcCap)}${campFcCoFund?' · '+campFcCoFundPct+'% co-funded':''}</span></div>`:'')
+    sectionCard('📋','What &amp; when',
+      `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px">`
+      +fld('Brand',sel('brand',bOpts,campFcBrand))
+      +fld('Aggregator',sel('agg',aOpts,campFcAgg))
+      +fld('Start',inp('start','date',campFcStart,'2025-01-01','2030-12-31'))
+      +fld('End',inp('end','date',campFcEnd,'2025-01-01','2030-12-31'))
+      +'</div>')
+  )
+  +(campFcCollapsed?'':
+    sectionCard('🎯','Campaign shape',
+      `<div style="margin-bottom:8px">`
+      +fld('Structure',`<select onchange="campFcSet('type',this.value);renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600">
+        <option value="menu"${campFcType==='menu'?' selected':''}>Menu-wide % off, capped</option>
+        <option value="selectItems"${campFcType==='selectItems'?' selected':''}>% off select items</option>
+        <option value="bogo"${campFcType==='bogo'?' selected':''}>BOGO / free item with purchase</option>
+        <option value="ofu"${campFcType==='ofu'?' selected':''}>Single item offer (OFU-style)</option>
+        <option value="platformEvent"${campFcType==='platformEvent'?' selected':''}>Platform-wide event (e.g. Keeta Week)</option>
+      </select>`)
+      +(CAMP_FC_TYPE_NAMES[campFcType]?`<div style="font-size:10px;color:${T.muted};margin-top:5px">Discount cost is derived from real historical ${CAMP_FC_TYPE_NAMES[campFcType]} campaigns for this brand + aggregator, not a formula — see matched campaigns below once you run this.</div>`:'')
+      +'</div>'
+      +`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px">`
+      +(campFcType!=='bogo'?fld('Discount %',inp('discPct','number',campFcDiscPct,1,90)):'')
+      +(campFcType==='menu'?fld('Cap AED',inp('cap','number',campFcCap,1,999)):'')
+      +fld('Co-funded?',`<select onchange="campFcSet('coFund',this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600"><option value="true"${campFcCoFund?' selected':''}>Yes</option><option value="false"${!campFcCoFund?' selected':''}>No</option></select>`)
+      +(campFcCoFund?fld('Platform %',inp('coFundPct','number',campFcCoFundPct,1,99)):'')
+      +'</div>')
+  )
+  +(campFcCollapsed?'':
+    `${(campFcBrand&&campFcAgg?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:${T.rowBg};border-radius:6px;border:0.5px solid ${T.border}">`+bPill(campFcBrand,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcBrand}</span>`+`<span style="color:${T.label};font-size:13px">×</span>`+aPill(campFcAgg,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcAgg}</span>`+`<span style="font-size:11px;color:${T.muted};margin-left:4px">${campFcTypeLabel(campFcType,campFcDiscPct,campFcCap)}${campFcCoFund?' · '+campFcCoFundPct+'% co-funded':''}</span></div>`:'')}`
     +(branches.length?`<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:600;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">Branches <span style="font-weight:400;text-transform:none">(all selected by default · tap to deselect)</span></div>${branchChips}</div>`:'')
-    +`<div style="margin-bottom:10px">${fld('Additional comments <span style="font-weight:400;text-transform:none">(optional — e.g. select locations only, aggregator-specific terms)</span>',`<textarea onchange="campFcSet('comments',this.value)" placeholder="e.g. live in select locations only, or BOGO exclusive to Noon with no commission charged on these orders" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 8px;font-size:12px;min-height:44px;font-family:inherit;box-sizing:border-box;resize:vertical">${campFcComments}</textarea>`)}</div>`
+    +`<div style="background:${T.rowBg};border:0.5px solid ${T.border};border-radius:8px;padding:10px 14px;margin-bottom:10px"><details><summary style="font-size:11px;font-weight:700;color:${T.muted};cursor:pointer;list-style:none">💬 Additional comments <span style="font-weight:400;text-transform:none">(optional)</span></summary><textarea onchange="campFcSet('comments',this.value)" placeholder="e.g. live in select locations only, or BOGO exclusive to Noon with no commission charged on these orders" style="width:100%;margin-top:8px;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 8px;font-size:12px;min-height:44px;font-family:inherit;box-sizing:border-box;resize:vertical">${campFcComments}</textarea></details></div>`
     +`<button onclick="campFcRun()" style="background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.4);border-radius:6px;color:${accent};padding:6px 18px;font-size:12px;cursor:pointer;font-weight:700">▶ Run Forecast</button>`
     +resultsHTML
   )
