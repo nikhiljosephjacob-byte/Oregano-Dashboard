@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-261";
+const BUILD_VERSION="2026-08-13-262";
 const BUILD_NOTES=[
+  "🐛 Fixed the Feedback trend chart's line animation not doing any of the three things asked: not starting after the bars, not repeating when scrolled back into view, not moving on the Count/% toggle. Root cause of all three was the same: bars had zero animation duration (nothing for the line to follow), and a \"played once ever\" flag permanently blocked the line from re-arming — it only ever looked like it replayed when switching to a different sidebar page and back, since that path happens to destroy and rebuild the whole chart; plain scroll-away/scroll-back within the page never did. Rebuilt so bars have a real animation and the line is chained to Chart.js's onComplete (fires right when the bars actually finish, not a guessed delay), replaced the play-once flag with a persistent observer that replays on every real visibility crossing, and routed the Count/% toggle through the same replay path. Verified the call sequencing (bars→line, replay-on-revisit, replay-on-toggle, no overlapping replays) with isolated logic tests before shipping — recommend a visual check after deploy since I can't screenshot the live animation from here.",
   "🔍 Replaced the v260 flat \"AED 2/order\" Deliveract FD guess with real measured rates — cross-checked full Keeta statements (Apr 1–Aug 9, ~24k orders) day-by-day against the sheet's own Keeta figures. Turns out the leakage was never flat: it ramped from ~AED 0.05-0.30/order in April to ~AED 1.8-2.3/order (near the full AED 2 ceiling) by early August as order volume migrated Grubtech→Deliveract, before the Aug 10 fix. The old flat guess over-corrected April-June by 85%+ and slightly under-corrected early August. Confirmed Fyoozhen/Wicked Wings still show no real bias (just noise) — correctly excluded. New table uses exact measured monthly rates per brand, with August split at the Aug 10 cutover so the fix date isn't diluted. Root cause is a gradual POS migration, not a single switch-flip — worth knowing if this pattern shows up again with a future integration change.",
   "🆕 Taught the dashboard about the Deliveract POS integration issue — confirmed by Nikhil: Deliveract was incorrectly including the AED 2 FD in POS discount reports for Lollorosso/Oregano/Smokeys until fixed mid-day on Aug 10 (not Wicked Wings, not integrated; not Fyoozhen, confirmed unaffected). Both the Discrepancy table and the original Uncategorized Burn tile now subtract AED 2/order from the sheet-side figure for these brands before that date. Tested the adjustment logic across all brand/date combinations before shipping — I don't have live sheet data to confirm this actually closes the gap, so worth checking the discrepancy report after this deploys.",
   "🐛 Fixed the incorrect \"discount data before May 2026\" message — confirmed with Nikhil it's actually available from Jan 2026 for all brands/aggregators. Corrected both the date check and the message text.",
@@ -4584,7 +4585,7 @@ function restructureTabIcons(){
     t.innerHTML=`<span class="tab-icon" style="flex-shrink:0;display:inline-flex;justify-content:center;width:18px">${icon}</span><span class="tab-label">${label}</span>`;
   });
 }
-function gp(page){if(page!=='feedback')_feedbackTrendSnakePlayed=false;curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>{t.classList.toggle("act",t.dataset.pg===page);});document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
+function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>{t.classList.toggle("act",t.dataset.pg===page);});document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
 
 // ── MOBILE NAV DRAWER ──
 // Slides in from the left on tap of hamburger. Overlay dims the page. Any tap on a nav item or
@@ -14000,13 +14001,13 @@ let feedbackFilterCategory=null;    // top filter chip — narrows every table t
 let feedbackFilterAggregator=null;  // top filter chip — narrows every table to one aggregator
 let feedbackFilterOutlet=null;      // top filter chip — narrows every table to one outlet
 let feedbackZoomMode='overview';    // 'overview' (trend chart + months×category heatmap) or 'detail' (the tables)
-// v251: tracks whether the trend chart's snake-draw line animation has already played during
-// this visit to the Feedback page — persists across chart re-creation (gp() destroys and
-// recreates all charts on every navigation, even re-clicking the same tab), reset only when
-// navigating away to a different page. Confirmed with Nikhil this was replaying repeatedly
-// instead of playing once and staying put.
-let _feedbackTrendSnakePlayed=false;
-let _feedbackTrendObserver=null; // v259: tracked so any previous observer can be disconnected before a new one is created
+// v261: replaced by a per-chart-instance IntersectionObserver that replays on every real
+// visibility crossing (see feedbackDrawOverviewCharts) — Nikhil confirmed the "play once and
+// stay put" behavior below was actually the wrong fix for the real ask: the line should replay
+// every time the chart scrolls back into view, not just once per Feedback visit. The original
+// v251 concern (re-clicking the same tab shouldn't re-trigger it) is still satisfied since a
+// fresh chart+observer pair only fires once for its own first genuine visibility crossing.
+let _feedbackTrendObserver=null; // tracked so any previous observer can be disconnected before a new one is created
 let feedbackShowCustom=false;       // top-section Option C: presets shown by default, granular month chips + dimension filters hidden behind this
 let feedbackHeatmapMode='count';    // 'count' or 'rate' — which face of the flip heatmap is showing
 let feedbackCompareMode='row';      // 'column' (vs other categories this month) or 'row' (vs this category's own history) — defaults to row per confirmed preference
@@ -14615,19 +14616,13 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
     });
     const axisColor=_darkPage?'#D5DCEA':'#334155';
     const lineColor='#5AB4E8';
-    // v248: snake-draw plugin — clips the line dataset (index 1) to a growing rect from the
-    // left edge, so it visibly draws itself left to right. Only applied to fresh chart
-    // creation below, not in-place updates (mode toggle) — the line's own values don't change
-    // between Count/% modes, so there's nothing meaningful to re-animate there.
+    // v261: snake-draw plugin — clips the line dataset (index 1) to a growing rect from the
+    // left edge, so it visibly draws itself left to right. Same plugin as before; what changed
+    // is WHEN and HOW OFTEN it's triggered — see the comment block below.
     const snakeClipPlugin={
       id:'feedbackSnakeClip',
       beforeDatasetDraw(chart,args){
         if(args.index!==1)return;
-        // v249: fixed — this defaulted to 1 (fully visible) when _snakeProgress was undefined,
-        // which is exactly its state during the initial bar animation before startLineSnake
-        // ever runs. That made the line fully visible from frame one instead of hidden, so the
-        // "snake" animation was just glitching a reset rather than doing a clean reveal. Must
-        // default to 0 (hidden) so the line stays invisible until explicitly animated in.
         const progress=chart._snakeProgress!==undefined?chart._snakeProgress:0;
         const area=chart.chartArea;const ctx=chart.ctx;
         ctx.save();ctx.beginPath();
@@ -14637,42 +14632,78 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
       afterDatasetDraw(chart,args){if(args.index!==1)return;chart.ctx.restore();}
     };
     function startLineSnake(chart){
-      const LINE_DURATION=2400;
+      const LINE_DURATION=1400;
       if(chart._snakeAnimId)cancelAnimationFrame(chart._snakeAnimId);
+      chart._snakeAnimating=true;
       chart._snakeProgress=0;
       const start=performance.now();
       function step(now){
         const t=Math.min(1,(now-start)/LINE_DURATION);
         chart._snakeProgress=1-Math.pow(1-t,3); // ease-out
         chart.draw();
-        if(t<1)chart._snakeAnimId=requestAnimationFrame(step);
+        if(t<1){chart._snakeAnimId=requestAnimationFrame(step);}
+        else{chart._snakeAnimating=false;}
       }
       chart._snakeAnimId=requestAnimationFrame(step);
+    }
+    // v261: rebuilt the whole bars→line sequence around the three real gaps Nikhil reported,
+    // none of which the v256-v259 version actually delivered:
+    //  1. "Not starting post the bar graph animation" — there was no bar animation to start
+    //     after (duration:0, v256). Bars now animate for real (BAR_ANIM_MS) and the line is
+    //     chained to animation.onComplete, which Chart.js fires after every finished animation
+    //     cycle — creation, this toggle, AND the replay below — so the line genuinely starts
+    //     when the bars finish, not on an independent timer that happens to be close.
+    //  2. "Not repeating when scrolled and visible" — _feedbackTrendSnakePlayed permanently
+    //     blocked re-arming the observer once true, so plain scroll-away/scroll-back within the
+    //     same chart instance could never replay (it only ever appeared to work when Nikhil
+    //     switched to a different sidebar page and back, because THAT path fully destroys and
+    //     recreates the chart — a coincidence, not real scroll-visibility behavior). Replaced
+    //     with one observer per chart instance that's never disconnected until the chart itself
+    //     is destroyed, so every real visibility crossing replays it. Guarded by
+    //     chart._snakeAnimating so fast scroll jitter at the 20% threshold can't stack replays.
+    //  3. "Not moving when I shift between % and Count" — the toggle branch wrote new bar data
+    //     straight in and called update() under the chart-level duration:0, so nothing moved.
+    //     Now funnels through the same replayTrend() helper as creation and re-scroll.
+    const BAR_ANIM_MS=650;
+    function replayTrend(chart,barData,barColors,lineData){
+      // Snaps bars to 0 with no animation first so the grow-in is visible even when the target
+      // values are unchanged from last time (e.g. scrolling away and back with no filter
+      // change) — a plain update() wouldn't animate at all in that case since old===new.
+      chart._snakeProgress=0;
+      chart.data.datasets[0].data=barData.map(()=>0);
+      chart.data.datasets[0].backgroundColor=barColors;
+      chart.data.datasets[1].data=lineData;
+      chart.update('none');
+      chart.data.datasets[0].data=barData;
+      chart.update(); // animated 0→real, triggers onComplete below → startLineSnake
     }
     const existing=charts['feedback-trend-chart'];
     const isStale=existing&&existing.canvas!==trendCtx; // canvas element changed = page was rebuilt elsewhere, this instance is detached
     if(isStale){destroyChart('feedback-trend-chart');}
     if(charts['feedback-trend-chart']&&!isStale){
-      // In-place update instead of destroy+recreate — lets Chart.js animate the bar
-      // height/axis-scale transition instead of snapping instantly. Line data (order volume)
-      // doesn't change between Count/% modes, so it's left untouched here — no re-animation.
-      charts['feedback-trend-chart'].data.datasets[0].data=newData;
-      charts['feedback-trend-chart'].data.datasets[0].backgroundColor=barColors;
-      charts['feedback-trend-chart'].data.datasets[1].data=orderVol;
-      charts['feedback-trend-chart'].update();
+      // Count/% toggle — same chart instance, new bar values. Replays the full sequence.
+      replayTrend(charts['feedback-trend-chart'],newData,barColors,orderVol);
     }else{
-      const alreadyPlayed=_feedbackTrendSnakePlayed;
+      if(_feedbackTrendObserver){_feedbackTrendObserver.disconnect();_feedbackTrendObserver=null;}
       const chart=new Chart(trendCtx,{
         type:'bar',
         data:{labels:monthLabels,datasets:[
-          {label:'Complaints',data:newData,backgroundColor:barColors,borderRadius:4,order:2,yAxisID:'y'},
+          {label:'Complaints',data:newData.map(()=>0),backgroundColor:barColors,borderRadius:4,order:2,yAxisID:'y'},
           {type:'line',label:'Total orders',data:orderVol,borderColor:lineColor,backgroundColor:lineColor,pointRadius:4,pointHoverRadius:6,pointBackgroundColor:lineColor,pointBorderColor:_darkPage?DARK_THEME.card:'#fff',pointBorderWidth:2,borderWidth:2,tension:.3,order:1,yAxisID:'y1'}
         ]},
         options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:12}},
           interaction:{mode:'index',intersect:false},
-          // v256: bars now appear instantly (no native animation) — the snake reveal is
-          // handled entirely by visibility below, not by chart-creation timing.
-          animation:{duration:0},
+          animation:{
+            duration:BAR_ANIM_MS,
+            easing:'easeOutQuart',
+            onComplete:(animCtx)=>{
+              // Fires after every completed animation cycle (creation, the toggle branch above,
+              // and the observer-triggered replay below) — this IS the "starts after the bar
+              // animation" link, not a guessed delay, so it can't drift out of sync if
+              // BAR_ANIM_MS is ever changed later.
+              if(!animCtx.chart._snakeAnimating)startLineSnake(animCtx.chart);
+            }
+          },
           onClick:(e,els)=>{if(els.length){feedbackToggleMonth(months[els[0].index],e.native);}},
           plugins:{legend:{display:false},
             tooltip:{callbacks:{
@@ -14687,28 +14718,18 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
           }},
         plugins:[snakeClipPlugin]
       });
-      if(alreadyPlayed){
-        // Already played this visit — line is just fully visible from the start
-        chart._snakeProgress=1;chart.draw();
-      }else{
-        // v259: disconnect any previous observer first — if renderFeedback() fires more than
-        // once during page setup (each creating a fresh chart+observer), an earlier, transient
-        // render's observer could otherwise fire first and mark the animation as "played"
-        // before the user ever saw the actual, final chart — exactly the reported symptom of
-        // the animation not showing when scrolling down to look at it.
-        if(_feedbackTrendObserver)_feedbackTrendObserver.disconnect();
-        chart._snakeProgress=0;chart.draw();
-        const obs=new IntersectionObserver((entries)=>{
-          if(entries[0].isIntersecting&&!_feedbackTrendSnakePlayed){
-            _feedbackTrendSnakePlayed=true;
-            startLineSnake(chart);
-            obs.disconnect();
-          }
-        },{threshold:0.2});
-        obs.observe(trendCtx);
-        _feedbackTrendObserver=obs;
-      }
+      chart._snakeProgress=0;
       charts['feedback-trend-chart']=chart;
+      // Fires the first reveal (bars 0→real, then the line via onComplete above) as soon as the
+      // chart is at least 20% visible, and every time it crosses back into view after that —
+      // never disconnected until a fresh chart replaces this one.
+      const obs=new IntersectionObserver((entries)=>{
+        if(!entries[0].isIntersecting)return;
+        if(chart._snakeAnimating)return;
+        replayTrend(chart,newData,barColors,orderVol);
+      },{threshold:0.2});
+      obs.observe(trendCtx);
+      _feedbackTrendObserver=obs;
     }
   }
   const outletCtx=document.getElementById('feedback-outlet-chart');
