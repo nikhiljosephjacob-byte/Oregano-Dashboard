@@ -13,8 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-251";
+const BUILD_VERSION="2026-08-06-255";
 const BUILD_NOTES=[
+  "🆕 Campaign Forecaster: added the \"forecast from an upcoming campaign\" quick-pick — the futuristic feature originally requested. Click an upcoming campaign pulled straight from the sheet and it fills the whole form, including a best-guess campaign structure (visible and correctable, not silent). Caught and fixed a real extraction bug while building this — discount% could be missed when it lived in the campaign name but comments had other text. This completes all of #7.",
+  "🆕 Campaign Forecaster: added platform-wide event (Keeta Week, City Level Campaign, Flash Sale, Showcase) as the 4th and final campaign structure, completing the set. Caught and fixed a real false-positive risk while building this — an early version of the matching pattern would have matched ordinary prose like \"this week\" inside an unrelated comment; tested and corrected before shipping.",
+  "🆕 Campaign Forecaster: added single-item OFU-style as a campaign structure, same real-history approach — matches \"OFU\" and \"Offers for You\" language. Also refactored the type-label text (summary chip, saved history) into one shared function instead of repeating per-type logic in multiple places, ahead of the next type.",
+  "🆕 Campaign Forecaster: added BOGO / free item with purchase as a campaign structure — same real-history approach as select-items, refactored the matching logic into one shared helper so each new type reuses it rather than duplicating. Discount % field hides itself for BOGO since it doesn't apply.",
   "🐛 Fixed the What's New popup showing long paragraphs again — trimmed entries back to short bullets, and added a hard length cap so this can't silently regress a third time.",
   "🐛 Fixed the sales-line animation replaying repeatedly instead of once — every re-navigation was recreating the chart from scratch. Now animates once per visit to Feedback, then stays put.",
   "🐛 Fixed the sticky filter bar not actually sticking after a re-render (e.g. a filter click) while already scrolled down — now applies the correct pinned state immediately, not just on the next scroll.",
@@ -11058,6 +11062,43 @@ function campFcSet(k,v){
 }
 function campFcToggleBranch(b){if(campFcBranches.has(b))campFcBranches.delete(b);else campFcBranches.add(b);}
 
+// v254: "forecast from an upcoming campaign" — the feature Nikhil originally asked for as a
+// futuristic idea. Finds campaigns whose start date is still in the future (campStatus computes
+// this from real dates, not the sheet's status text, so it's reliable even if that's stale).
+function campFcUpcomingCampaigns(){
+  if(!campLoaded)return[];
+  return campaignData.filter(c=>campStatus(c)==='Upcoming').sort((a,b)=>a.startDate.localeCompare(b.startDate));
+}
+// Applies one upcoming campaign's real data to the form — brand, aggregator, dates, discount%,
+// cap, co-fund split (via the same parseCampComment used elsewhere), and an INFERRED structure
+// type. The inference is visible (sets the dropdown, doesn't hide it), not automatic-and-silent
+// — confirmed limitation is the sheet doesn't label a campaign's structure explicitly, so this
+// is a best-effort guess from free text that should be checked, not blindly trusted, before
+// running the forecast.
+function campFcApplyUpcoming(idx){
+  const upcoming=campFcUpcomingCampaigns();
+  const c=upcoming[idx];
+  if(!c)return;
+  campFcBrand=c.brand==='All Brands'?(BR[0]&&BR[0].n)||campFcBrand:c.brand;
+  campFcAgg=c.aggregator&&c.aggregator!=='All'?c.aggregator:campFcAgg;
+  campFcBranches=new Set();
+  campFcStart=c.startDate;
+  campFcEnd=c.endDate;
+  // v254: check name+comments combined, not comments-over-name — confirmed via testing that
+  // picking comments whenever it's non-empty (even without a %) misses a % that's only in the
+  // name, e.g. "Keeta City Level Campaign 20% OFF" with comments like "cap 20, co-funded 60:40".
+  const hp=parseInt((`${c.name||''} ${c.comments||''}`.match(/(\d{1,3})\s*%/)||[])[1]||'0');
+  if(hp)campFcDiscPct=hp;
+  const capM=(c.comments||'').match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i);
+  if(capM)campFcCap=parseInt(capM[1]);
+  const parsed=parseCampComment(c);
+  if(parsed.coFundedPctOfDiscount!=null){campFcCoFund=parsed.coFundedPctOfDiscount>0;campFcCoFundPct=Math.round(parsed.coFundedPctOfDiscount*100)||campFcCoFundPct;}
+  campFcType=campFcInferType(c);
+  campFcComments=c.comments||'';
+  campFcCollapsed=false;
+  renderCampaigns();
+}
+
 function campFcGetBranches(brand,agg){
   return[...new Set(allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)').map(r=>r.branch))].sort();
 }
@@ -11116,11 +11157,28 @@ const CAMP_FC_ATYPICAL_RE=/\b(fest(?:ival)?|world\s*cup|eid|ramadan|national\s*d
 // for a manual "% of order these items represent" guess when the real number already exists
 // in what actually happened. Matched on "select items" language in the name/comments rather
 // than a cap, since this campaign shape doesn't use a menu-wide cap concept.
-const CAMP_FC_SELECT_ITEMS_RE=/select\s*items?/i;
-function campFcFindSelectItemsMatches(brand,agg,discPct){
+// v250: generic historical-matching helper — same real-performance approach for any campaign
+// type matched by name/comments text rather than a formula (discPct/cap). Reuses
+// campAnalysisV2's baseline/allocation/contribution math unchanged, since that doesn't care
+// what SHAPE a campaign is, only its actual dates and brand/aggregator scope. Confirmed with
+// Nikhil directly for select-items: these campaign types rarely overlap with other promos
+// (avoiding double-discount contamination), which is what makes their historical performance a
+// reliable forecasting basis. Shared by every non-formula campaign type below.
+// v252: shared type-label text, used by the summary chip (live state) and the history panel
+// (saved forecast fields) — one definition per type instead of repeating the same ternary logic
+// in multiple places as more types get added.
+const CAMP_FC_TYPE_NAMES={selectItems:'select items',bogo:'BOGO',ofu:'OFU-style',platformEvent:'platform-wide event'};
+function campFcTypeLabel(type,discPct,cap){
+  if(type==='bogo')return'BOGO';
+  if(type==='selectItems')return discPct+'% off · select items';
+  if(type==='ofu')return discPct+'% off · OFU-style';
+  if(type==='platformEvent')return discPct+'% off · platform event';
+  return discPct+'% off'+(cap?' · cap AED '+cap:'');
+}
+function campFcFindHistoryMatches(brand,agg,pattern,discPct){
   if(!campLoaded)return[];
   const done=campaignData.filter(c=>campStatus(c)==='Completed'&&c.brand===brand&&c.aggregator===agg
-    &&CAMP_FC_SELECT_ITEMS_RE.test(`${c.name||''} ${c.comments||''}`));
+    &&pattern.test(`${c.name||''} ${c.comments||''}`));
   const out=[];
   for(const c of done){
     const hp=parseInt(((c.comments||c.name||'').match(/(\d{1,3})\s*%/)||[])[1]||'0');
@@ -11132,6 +11190,49 @@ function campFcFindSelectItemsMatches(brand,agg,discPct){
   }
   out.sort((a,b)=>b.c.startDate.localeCompare(a.c.startDate));
   return out;
+}
+const CAMP_FC_SELECT_ITEMS_RE=/select\s*items?/i;
+function campFcFindSelectItemsMatches(brand,agg,discPct){
+  return campFcFindHistoryMatches(brand,agg,CAMP_FC_SELECT_ITEMS_RE,discPct);
+}
+// v251: BOGO / free-item-with-purchase — matches "BOGO", "buy one get one" (with common
+// separators/spacing variants), "buy 1 get 1", and "free item with purchase" style language.
+const CAMP_FC_BOGO_RE=/\bbogo\b|buy\s*(?:one|1)\s*get\s*(?:one|1)|free\s+item\s+(?:with|on)\s+purchase/i;
+function campFcFindBogoMatches(brand,agg){
+  return campFcFindHistoryMatches(brand,agg,CAMP_FC_BOGO_RE,null); // BOGO campaigns don't carry a discount% in the same sense, so no discPct filter
+}
+// v252: single-item OFU-style — matches "OFU" as its own token (avoiding false hits inside an
+// unrelated word) and "Offers/Offer for You" language. Real patterns confirmed from this
+// brand's actual campaign history: "OFU Item Keeta", "Offers for You 50% OFF 1 Item".
+const CAMP_FC_OFU_RE=/\bofu\b|offers?\s+for\s+you/i;
+function campFcFindOfuMatches(brand,agg,discPct){
+  return campFcFindHistoryMatches(brand,agg,CAMP_FC_OFU_RE,discPct);
+}
+// v253: platform-wide event — grounded in the actual recurring event names seen in this
+// brand's real campaign history: "Keeta Week", "Keeta City Level Campaign", "Keeta Flash
+// Sale", "Showcase 50% OFF". Deliberately NOT a generalized "[word] week" pattern — tested that
+// and confirmed it false-matches ordinary prose like "this week" inside a comment, which would
+// silently pollute the historical match set with unrelated campaigns. Matches "Keeta Week"
+// specifically (the one confirmed instance) rather than guessing at other aggregators' naming.
+const CAMP_FC_PLATFORM_EVENT_RE=/\bcity\s+level\s+campaign\b|\bflash\s+sale\b|\bshowcase\b|\bkeeta\s+week\b/i;
+function campFcFindPlatformEventMatches(brand,agg,discPct){
+  return campFcFindHistoryMatches(brand,agg,CAMP_FC_PLATFORM_EVENT_RE,discPct);
+}
+// v254: infers a campaign's structure type from its name/comments text, reusing the exact same
+// patterns already used for matching that type's history — so "what type does this look like"
+// and "what history counts as this type" never drift apart. Checked most-specific-first (OFU
+// and BOGO are narrow, specific phrases; platform-event and select-items are broader).
+// Confirmed limitation, flagged to Nikhil up front: the sheet doesn't explicitly label a
+// campaign's structure, so this is a best-effort guess from free text, not always reliable —
+// used only to PRE-fill the dropdown when applying an upcoming campaign, never silently, so
+// it's always visible and correctable before running the forecast.
+function campFcInferType(c){
+  const text=`${c.name||''} ${c.comments||''}`;
+  if(CAMP_FC_OFU_RE.test(text))return'ofu';
+  if(CAMP_FC_BOGO_RE.test(text))return'bogo';
+  if(CAMP_FC_PLATFORM_EVENT_RE.test(text))return'platformEvent';
+  if(CAMP_FC_SELECT_ITEMS_RE.test(text))return'selectItems';
+  return'menu';
 }
 function campFcFindMatches(brand,agg,discPct,cap){
   if(!campLoaded)return[];
@@ -11251,12 +11352,14 @@ function campFcWeekOfMonthPos(dateStr){
   return'mid-month';
 }
 
-// v250: companion to campFcRunScenario for select-items campaigns — the menu-wide formula
-// (discPct % of AOV, capped) doesn't apply here, since the discount only touches whatever
-// fraction of the order those specific items happen to be. Rather than asking for a manual
-// estimate of that fraction, this derives the real historical merchant-discount-per-order from
-// matched past "select items" campaigns directly and applies it to the projected order volume —
-// what actually happened, not a formula guess.
+// v250 (select-items), v251 (also covers BOGO) — companion to campFcRunScenario for any
+// campaign shape the menu-wide formula (discPct % of AOV, capped) doesn't fit. Select-items
+// discounts only touch whatever fraction of the order those items happen to be; BOGO's cost is
+// the free item's value, not a % of the order at all. Rather than a manual estimate for either,
+// this derives the real historical merchant-discount-per-order from matched past campaigns of
+// that type and applies it to the projected order volume — what actually happened, not a
+// formula guess. Name kept as-is (not renamed to something generic) to avoid touching every
+// call site for a cosmetic rename; the function itself works identically for both types.
 function campFcRunScenarioSelectItems(baseline,uplift,histDiscPerOrder,coFundPct,agg,brand,nDays,dateStr){
   if(!baseline||histDiscPerOrder==null)return null;
   const grossAOV=baseline.grossAOV||60;
@@ -11322,7 +11425,11 @@ function campFcRun(){
   const nDays=Math.max(1,Math.round((new Date(campFcEnd+'T12:00:00')-new Date(campFcStart+'T12:00:00'))/86400000)+1);
   const baseline=campFcBaseline(brand,agg,campFcBranches,nDays);
   if(!baseline){alert('No sales data found for '+brand+' on '+agg+'. Upload data first.');return;}
-  const matches=campFcType==='selectItems'?campFcFindSelectItemsMatches(brand,agg,campFcDiscPct):campFcFindMatches(brand,agg,campFcDiscPct,campFcCap);
+  const matches=campFcType==='selectItems'?campFcFindSelectItemsMatches(brand,agg,campFcDiscPct)
+    :campFcType==='bogo'?campFcFindBogoMatches(brand,agg)
+    :campFcType==='ofu'?campFcFindOfuMatches(brand,agg,campFcDiscPct)
+    :campFcType==='platformEvent'?campFcFindPlatformEventMatches(brand,agg,campFcDiscPct)
+    :campFcFindMatches(brand,agg,campFcDiscPct,campFcCap);
   const seas=campFcSeasonality(brand,agg,campFcStart);
   // v110: the closest available real-world evidence — same brand/agg/discount depth, most
   // recent, not a named one-off event — surfaced prominently as a "reality check" regardless
@@ -11348,10 +11455,11 @@ function campFcRun(){
   }else{cU*=seas.factor;eU*=seas.factor;oU*=seas.factor;}
   const coFP=campFcCoFund?campFcCoFundPct:0;
   let runSc;
-  if(campFcType==='selectItems'){
+  if(campFcType==='selectItems'||campFcType==='bogo'||campFcType==='ofu'||campFcType==='platformEvent'){
     // Recency-weighted median discount-per-order across matched historical campaigns — same
     // weighting spirit as the uplift percentiles above, applied to what the discount actually
-    // cost per order rather than a formula estimate.
+    // cost per order rather than a formula estimate. Same math for select-items and BOGO —
+    // both derive their discount cost from real history rather than a formula.
     const discWeighted=matches.filter(m=>m.ourDiscPerDay!=null&&m.campOrdersPerDay>0).map(m=>{
       const daysAgo=Math.max(1,daysBetweenInclusive(m.c.endDate,campFcStart));
       const recencyW=Math.exp(-daysAgo/45);
@@ -11430,7 +11538,7 @@ async function campFcSaveForecast(){
   const r=campFcResult;
   const trim=sc=>sc?{upliftPct:sc.upliftPct,totalOrders:sc.totalOrders,incrOrders:sc.incrOrders,incrOrdersPerDay:sc.incrOrdersPerDay,campNet:sc.campNet,merchantDisc:sc.merchantDisc,merchantDiscPerDay:sc.merchantDiscPerDay,incrContrib:sc.incrContrib,incrContribPerDay:sc.incrContribPerDay,roi:sc.roi}:null;
   const payload={
-    brand:r.brand,agg:r.agg,discPct:campFcDiscPct,cap:campFcType==='menu'?campFcCap:null,
+    brand:r.brand,agg:r.agg,discPct:campFcType==='bogo'?null:campFcDiscPct,cap:campFcType==='menu'?campFcCap:null,
     type:campFcType,comments:campFcComments||null,
     coFund:campFcCoFund,coFundPct:campFcCoFund?campFcCoFundPct:null,
     start:campFcStart,end:campFcEnd,branches:[...campFcBranches],
@@ -11513,7 +11621,7 @@ function campFcHistoryHTML(){
       }
     }
     return `<div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1.4fr 1fr;gap:8px;padding:9px 0;border-bottom:0.5px solid ${T.rowBg2};font-size:12px;align-items:center">
-      <div><div style="font-weight:700;color:${T.text}">${bPill(f.brand,18)} ${f.brand} <span style="color:${T.label}">×</span> ${f.agg}</div><div style="font-size:10px;color:${T.label};margin-top:2px">${f.discPct}% off${f.cap?' · cap AED '+f.cap:f.type==='selectItems'?' · select items':''} · saved ${savedDate} by ${f.savedByName||f.savedBy||'—'}</div></div>
+      <div><div style="font-weight:700;color:${T.text}">${bPill(f.brand,18)} ${f.brand} <span style="color:${T.label}">×</span> ${f.agg}</div><div style="font-size:10px;color:${T.label};margin-top:2px">${campFcTypeLabel(f.type||'menu',f.discPct,f.cap)} · saved ${savedDate} by ${f.savedByName||f.savedBy||'—'}</div></div>
       <div style="color:${T.muted}">${f.start} – ${f.end}</div>
       <div>${exp?`<strong style="color:#60A5FA">${exp.upliftPct>=0?'+':''}${Math.round(exp.upliftPct)}%</strong>`:'—'}</div>
       <div>${actualHTML}</div>
@@ -11762,24 +11870,42 @@ function campFcHTML(){
   +`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">📊</span><div style="font-size:15px;font-weight:800;color:${T.text}">Campaign Forecaster</div><div style="font-size:10px;color:${T.muted};margin-left:4px">Estimate what a planned campaign will yield before you launch</div></div>`
   +`<button onclick="campFcSet('collapsed','${(!campFcCollapsed).toString()}')" style="background:none;border:0.5px solid ${T.border};border-radius:6px;color:${T.label};padding:3px 10px;font-size:11px;cursor:pointer">${campFcCollapsed?'▼ Expand':'▲ Collapse'}</button></div>`
   +(campFcCollapsed?'':
+    (()=>{
+      const upcoming=campFcUpcomingCampaigns();
+      if(!upcoming.length)return'';
+      const chip=(c,i)=>{
+        const dates=`${fmtShort(c.startDate)}-${fmtShort(c.endDate)}`;
+        const label=`${c.brand} × ${c.aggregator} · ${c.name||c.comments||'Campaign'} · ${dates}`;
+        return`<button onclick="campFcApplyUpcoming(${i})" style="padding:6px 12px;border-radius:7px;border:0.5px solid ${T.border};background:${T.rowBg};color:${T.text};font-size:11.5px;cursor:pointer;font-weight:600;margin:3px 4px 3px 0">${label}</button>`;
+      };
+      return`<div style="background:${T.rowBg};border:0.5px solid ${T.border};border-radius:8px;padding:10px 12px;margin-bottom:12px">
+        <div style="font-size:10px;font-weight:700;color:${T.muted};text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Forecast from an upcoming campaign <span style="font-weight:400;text-transform:none">(pulled from the sheet — fills the form below, including a best-guess campaign structure worth checking before you run it)</span></div>
+        <div>${upcoming.map(chip).join('')}</div>
+      </div>`;
+    })()
+  )
+  +(campFcCollapsed?'':
     `<div style="margin-bottom:10px">`
     +fld('Campaign structure',`<select onchange="campFcSet('type',this.value);renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600">
       <option value="menu"${campFcType==='menu'?' selected':''}>Menu-wide % off, capped</option>
       <option value="selectItems"${campFcType==='selectItems'?' selected':''}>% off select items</option>
+      <option value="bogo"${campFcType==='bogo'?' selected':''}>BOGO / free item with purchase</option>
+      <option value="ofu"${campFcType==='ofu'?' selected':''}>Single item offer (OFU-style)</option>
+      <option value="platformEvent"${campFcType==='platformEvent'?' selected':''}>Platform-wide event (e.g. Keeta Week)</option>
     </select>`)
-    +(campFcType==='selectItems'?`<div style="font-size:10px;color:${T.muted};margin-top:5px">Discount cost is derived from real historical "select items" campaigns for this brand + aggregator, not a formula — see matched campaigns below once you run this.</div>`:'')
+    +(CAMP_FC_TYPE_NAMES[campFcType]?`<div style="font-size:10px;color:${T.muted};margin-top:5px">Discount cost is derived from real historical ${CAMP_FC_TYPE_NAMES[campFcType]} campaigns for this brand + aggregator, not a formula — see matched campaigns below once you run this.</div>`:'')
     +'</div>'
     +`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:10px">`
     +fld('Brand',sel('brand',bOpts,campFcBrand))
     +fld('Aggregator',sel('agg',aOpts,campFcAgg))
     +fld('Start',inp('start','date',campFcStart,'2025-01-01','2030-12-31'))
     +fld('End',inp('end','date',campFcEnd,'2025-01-01','2030-12-31'))
-    +fld('Discount %',inp('discPct','number',campFcDiscPct,1,90))
+    +(campFcType!=='bogo'?fld('Discount %',inp('discPct','number',campFcDiscPct,1,90)):'')
     +(campFcType==='menu'?fld('Cap AED',inp('cap','number',campFcCap,1,999)):'')
     +fld('Co-funded?',`<select onchange="campFcSet('coFund',this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600"><option value="true"${campFcCoFund?' selected':''}>Yes</option><option value="false"${!campFcCoFund?' selected':''}>No</option></select>`)
     +(campFcCoFund?fld('Platform %',inp('coFundPct','number',campFcCoFundPct,1,99)):'')
     +'</div>'
-    +(campFcBrand&&campFcAgg?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:${T.rowBg};border-radius:6px;border:0.5px solid ${T.border}">`+bPill(campFcBrand,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcBrand}</span>`+`<span style="color:${T.label};font-size:13px">×</span>`+aPill(campFcAgg,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcAgg}</span>`+`<span style="font-size:11px;color:${T.muted};margin-left:4px">${campFcDiscPct}% off${campFcType==='menu'?' · cap AED '+campFcCap:' · select items'}${campFcCoFund?' · '+campFcCoFundPct+'% co-funded':''}</span></div>`:'')
+    +(campFcBrand&&campFcAgg?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:${T.rowBg};border-radius:6px;border:0.5px solid ${T.border}">`+bPill(campFcBrand,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcBrand}</span>`+`<span style="color:${T.label};font-size:13px">×</span>`+aPill(campFcAgg,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcAgg}</span>`+`<span style="font-size:11px;color:${T.muted};margin-left:4px">${campFcTypeLabel(campFcType,campFcDiscPct,campFcCap)}${campFcCoFund?' · '+campFcCoFundPct+'% co-funded':''}</span></div>`:'')
     +(branches.length?`<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:600;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">Branches <span style="font-weight:400;text-transform:none">(all selected by default · tap to deselect)</span></div>${branchChips}</div>`:'')
     +`<div style="margin-bottom:10px">${fld('Additional comments <span style="font-weight:400;text-transform:none">(optional — e.g. select locations only, aggregator-specific terms)</span>',`<textarea onchange="campFcSet('comments',this.value)" placeholder="e.g. live in select locations only, or BOGO exclusive to Noon with no commission charged on these orders" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 8px;font-size:12px;min-height:44px;font-family:inherit;box-sizing:border-box;resize:vertical">${campFcComments}</textarea>`)}</div>`
     +`<button onclick="campFcRun()" style="background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.4);border-radius:6px;color:${accent};padding:6px 18px;font-size:12px;cursor:pointer;font-weight:700">▶ Run Forecast</button>`
