@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-246";
+const BUILD_VERSION="2026-08-06-247";
 const BUILD_NOTES=[
+  "🐛 Found the ACTUAL root cause of the Feedback re-upload issue, confirmed from your screenshot — localStorage quota was truncating the local copy down to zero records (metadata only), but that truncated copy kept the exact same upload timestamp as the full server copy. The pull-from-server check only compared timestamps, saw a match, and never noticed records were missing — so the page stayed stuck on an empty local copy indefinitely, even though the real data was safely on the server the whole time. Now also checks whether the local copy is structurally incomplete (fewer records than the server has) and pulls the full version regardless of what the timestamps say. Also closed a related gap in the reverse direction, so an incomplete local copy can never accidentally push up and overwrite good server data. Tested both fixes directly against the exact scenario from your screenshot.",
+  "🆕 Feedback page filter bar is now sticky — stays visible at the top while scrolling through the page instead of scrolling away.",
   "🔍 Investigated the \"Feedback keeps needing re-upload\" issue — confirmed feedback IS correctly registered in the server sync system, same as every other aggregator, so that's not the gap. Found two real silent-failure paths instead: (1) if your session isn't logged in as admin when uploading, the sync to the shared server was skipped with ZERO warning — the upload would look successful but only ever exist on that one browser. (2) sync failures showed a toast that auto-hid after 10 seconds, easy to miss entirely. Fixed both — sync now warns clearly if it can't reach the shared server for either reason, and failure warnings stay up until you dismiss them instead of disappearing on their own. Also made large-payload warnings visible (Feedback data is the most likely dataset to hit a size limit, given it carries full complaint text per record). Next time this happens, you should get a clear, persistent warning that tells us exactly why — reply with what it says and we can fix the actual cause.",
   "🐛 Found the real Talabat/Smokeys/Jumeirah bug using your actual file — the file itself has a typo (\"Jumierah\", letters transposed), missing from both the Talabat parser's own outlet map AND the general branch-alias table. Confirmed against your real file: with the fix, zero restaurant names remain unmapped. Also confirmed the discount was correctly in \"Voucher Funded by you\" (AED 13.50 × 2 orders) — the parser itself was already reading the right column; the outlet just wasn't resolving.",
   "🐛 Reverted the Keeta FD fix from the last two builds — confirmed this was based on incorrect information. The sheet's daily discount figure comes from your POS export (food discount only) via the Uploader tool, never included FD in the first place. Reverted both the Discrepancy table and the original Uncategorized Burn tile back to comparing menu-discount-only on both sides.",
@@ -841,7 +843,19 @@ async function pullOrderDataFromServer(){
       const local=cfg.get();
       const localTs=local?.metadata?.uploadDate||null;
       const serverTs=server.metadata?.uploadDate||server.updatedAt||null;
-      if(!local||(serverTs&&(!localTs||serverTs>localTs))){
+      // v247: confirmed root cause of "Feedback keeps needing re-upload" — trySaveLocalOrderData
+      // (quota workaround) can save a local copy with NO records at all (metadata only) when the
+      // full object doesn't fit in this browser's localStorage. That truncated copy keeps the
+      // SAME upload timestamp as the full server copy, so the old timestamp-only check below
+      // never noticed anything was missing and never pulled the full version back down — the
+      // page stayed stuck showing an empty/incomplete local copy indefinitely, even though the
+      // full data was correctly on the server the whole time. Now also pulls whenever the local
+      // copy is missing records entirely, or has meaningfully fewer than the server, regardless
+      // of what the timestamps say.
+      const localRecordCount=local?.records?.length||0;
+      const serverRecordCount=server.records?.length||0;
+      const localIncomplete=serverRecordCount>0&&localRecordCount<serverRecordCount;
+      if(!local||localIncomplete||(serverTs&&(!localTs||serverTs>localTs))){
         const obj={metadata:server.metadata,records:server.records};
         if(server.orderDetail)obj.orderDetail=server.orderDetail;
         // v175: prefer server cancellations, but if the server's copy doesn't have any (e.g. an
@@ -853,7 +867,7 @@ async function pullOrderDataFromServer(){
         try{localStorage.setItem(cfg.lsKey(),JSON.stringify(obj));}catch(e){}
         changed=true;
         invalidateAggCaches(cfg.agg); // v113: surgical — only this aggregator's analyses go cold
-        console.log(`[sync] ${cfg.agg} updated from server (${server.records.length} records, by ${server.updatedBy||'—'})`);
+        console.log(`[sync] ${cfg.agg} updated from server (${server.records.length} records, by ${server.updatedBy||'—'}${localIncomplete?' — local copy was incomplete ('+localRecordCount+' vs '+serverRecordCount+' records)':''})`);
       }
     }
     // v114: reverse direction — if this user is an ADMIN and their browser holds data the
@@ -863,7 +877,7 @@ async function pullOrderDataFromServer(){
     if(sess.admin){
       for(const cfg of ORDER_SYNC_AGGS){
         const local=cfg.get();
-        if(!local||!local.records)continue;
+        if(!local||!local.records||!local.records.length)continue; // v247: !local.records alone doesn't catch records:[] (empty array is truthy) — guarded explicitly so an incomplete local copy can never push up and overwrite a good server copy
         const server=data[cfg.agg];
         const localTs=local.metadata?.uploadDate||null;
         const serverTs=server?(server.metadata?.uploadDate||server.updatedAt||null):null;
@@ -14584,7 +14598,7 @@ async function renderFeedback(){
       </div>
       ${dimFilterRow}
     </div>`:'';
-  const filterBar=`<div style="display:flex;flex-wrap:wrap;background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;padding:10px 12px;margin-bottom:12px">
+  const filterBar=`<div style="display:flex;flex-wrap:wrap;background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;padding:10px 12px;margin-bottom:12px;position:sticky;top:0;z-index:20">
     ${presetRow}
     ${customPanel}
     ${compareLine}
