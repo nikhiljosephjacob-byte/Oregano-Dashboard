@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-255";
+const BUILD_VERSION="2026-08-06-256";
 const BUILD_NOTES=[
+  "🐛 Fixed the sticky filter bar overlapping the app's own fixed header — it was pinning to top:0px, which put it BEHIND the header, so only the portion below the header's height ever showed (exactly why it looked like locking started mid-bar). Now offsets below the real header height, and added a much more visible shadow/border while pinned so it's obviously \"floating\" above the page.",
+  "🐛 Fixed the sales-line animation playing before you'd scrolled down to see it — it started at chart-creation time regardless of visibility. Now waits for the chart to actually scroll into view (40% visible) before playing, still only once per visit.",
   "🆕 Campaign Forecaster: added the \"forecast from an upcoming campaign\" quick-pick — the futuristic feature originally requested. Click an upcoming campaign pulled straight from the sheet and it fills the whole form, including a best-guess campaign structure (visible and correctable, not silent). Caught and fixed a real extraction bug while building this — discount% could be missed when it lived in the campaign name but comments had other text. This completes all of #7.",
   "🆕 Campaign Forecaster: added platform-wide event (Keeta Week, City Level Campaign, Flash Sale, Showcase) as the 4th and final campaign structure, completing the set. Caught and fixed a real false-positive risk while building this — an early version of the matching pattern would have matched ordinary prose like \"this week\" inside an unrelated comment; tested and corrected before shipping.",
   "🆕 Campaign Forecaster: added single-item OFU-style as a campaign structure, same real-history approach — matches \"OFU\" and \"Offers for You\" language. Also refactored the type-label text (summary chip, saved history) into one shared function instead of repeating per-type logic in multiple places, ahead of the next type.",
@@ -14596,7 +14598,9 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
         ]},
         options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:12}},
           interaction:{mode:'index',intersect:false},
-          animation:alreadyPlayed?{duration:0}:{duration:500,easing:'easeOutQuart',onComplete:function(){_feedbackTrendSnakePlayed=true;startLineSnake(this);}},
+          // v256: bars now appear instantly (no native animation) — the snake reveal is
+          // handled entirely by visibility below, not by chart-creation timing.
+          animation:{duration:0},
           onClick:(e,els)=>{if(els.length){feedbackToggleMonth(months[els[0].index],e.native);}},
           plugins:{legend:{display:false},
             tooltip:{callbacks:{
@@ -14611,8 +14615,23 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
           }},
         plugins:[snakeClipPlugin]
       });
-      // Already played this visit — skip the snake reveal, line is just fully visible from the start
-      if(alreadyPlayed){chart._snakeProgress=1;chart.draw();}
+      if(alreadyPlayed){
+        // Already played this visit — line is just fully visible from the start
+        chart._snakeProgress=1;chart.draw();
+      }else{
+        // v256: defer the line reveal until the canvas actually scrolls into view, not at
+        // creation time — confirmed with Nikhil the chart sits below the fold on this page, so
+        // starting immediately meant the animation finished before he'd even scrolled to it.
+        chart._snakeProgress=0;chart.draw();
+        const obs=new IntersectionObserver((entries)=>{
+          if(entries[0].isIntersecting&&!_feedbackTrendSnakePlayed){
+            _feedbackTrendSnakePlayed=true;
+            startLineSnake(chart);
+            obs.disconnect();
+          }
+        },{threshold:0.4});
+        obs.observe(trendCtx);
+      }
       charts['feedback-trend-chart']=chart;
     }
   }
@@ -14650,6 +14669,24 @@ let _feedbackStickyScrollHandler=null;
 function feedbackSetupStickyFilterBar(){
   const bar=document.getElementById('feedback-filter-bar');
   if(!bar)return;
+  // v256: fixed the real bug behind "only starts from the month selections, not the top" —
+  // pinning to top:0px puts this bar BEHIND the app's own fixed header (confirmed elsewhere in
+  // this file, containing #nav-logo), so only the portion below the header's height was ever
+  // visible while pinned. Detects the actual fixed header and its real height at runtime,
+  // reusing the same DOM-walk-up approach already used for the sidebar-offset fix, rather than
+  // guessing a hardcoded pixel value.
+  const findFixedHeaderBottom=()=>{
+    try{
+      let el=document.getElementById('nav-logo');
+      for(let i=0;i<6&&el;i++){
+        el=el.parentElement;
+        if(!el)break;
+        const cs=getComputedStyle(el);
+        if(cs.position==='fixed'||cs.position==='sticky')return el.getBoundingClientRect().bottom;
+      }
+    }catch(e){}
+    return 0;
+  };
   // Remove any previous listener before attaching a new one — renderFeedback() replaces the
   // DOM node on every call, so the old closure's element reference would otherwise go stale
   // while the listener itself kept accumulating on window across re-renders.
@@ -14668,13 +14705,19 @@ function feedbackSetupStickyFilterBar(){
   const pin=()=>{
     if(pinned)return;
     const rect=bar.getBoundingClientRect();
+    const headerBottom=findFixedHeaderBottom();
     placeholder.style.display='block';
     placeholder.style.height=rect.height+'px';
     bar.style.position='fixed';
-    bar.style.top='0px';
+    bar.style.top=headerBottom+'px';
     bar.style.left=rect.left+'px';
     bar.style.width=rect.width+'px';
     bar.style.zIndex='20';
+    // v256: much more prominent visual distinction while pinned — the previous z-index-only
+    // approach wasn't obviously different from the bar's normal in-flow appearance while
+    // scrolling. A visible shadow + brighter border makes it read as "floating above the page."
+    bar.style.boxShadow='0 6px 16px rgba(0,0,0,.35)';
+    bar.style.borderColor='rgba(255,138,61,.5)';
     pinned=true;
   };
   const unpin=()=>{
@@ -14684,6 +14727,8 @@ function feedbackSetupStickyFilterBar(){
     bar.style.left='';
     bar.style.width='';
     bar.style.zIndex='';
+    bar.style.boxShadow='';
+    bar.style.borderColor='';
     placeholder.style.display='none';
     pinned=false;
   };
