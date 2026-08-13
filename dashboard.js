@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-248";
+const BUILD_VERSION="2026-08-06-249";
 const BUILD_NOTES=[
+  "🐛 Fixed the sales-line animation — a transcription error on my part when building the real version: the line's hidden/visible fallback defaulted to \"visible\" instead of \"hidden\" while waiting for the bar animation to finish, so it was fully drawn from frame one and just glitched a reset rather than actually sequencing after the bars.",
+  "🐛 Fixed the sticky filter bar — CSS position:sticky wasn't holding (confirmed by Nikhil), and the app shell's ancestor overflow settings outside this file made it hard to verify why. Replaced with a JS-based pin that measures real scroll position directly and switches to fixed positioning when needed, which works regardless of which ancestor is the actual scroll container.",
   "🆕 Built the approved sales-line design into the real Feedback trend chart — order volume now overlays as a blue line on a second axis, hover any point for the exact count, bars animate up first then the line snake-draws left to right after. Removed the old \"numbers above bars\" labels per the approved design — the brighter axis numbers plus hover tooltips now do that job. Added year labels (shown only at January) since the chart spans two years. Respects the same Brand/Outlet/Aggregator filters already applied to the rest of the page.",
   "🐛 Found the ACTUAL root cause of the Feedback re-upload issue, confirmed from your screenshot — localStorage quota was truncating the local copy down to zero records (metadata only), but that truncated copy kept the exact same upload timestamp as the full server copy. The pull-from-server check only compared timestamps, saw a match, and never noticed records were missing — so the page stayed stuck on an empty local copy indefinitely, even though the real data was safely on the server the whole time. Now also checks whether the local copy is structurally incomplete (fewer records than the server has) and pulls the full version regardless of what the timestamps say. Also closed a related gap in the reverse direction, so an incomplete local copy can never accidentally push up and overwrite good server data. Tested both fixes directly against the exact scenario from your screenshot.",
   "🆕 Feedback page filter bar is now sticky — stays visible at the top while scrolling through the page instead of scrolling away.",
@@ -14327,7 +14329,12 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
       id:'feedbackSnakeClip',
       beforeDatasetDraw(chart,args){
         if(args.index!==1)return;
-        const progress=chart._snakeProgress!==undefined?chart._snakeProgress:1;
+        // v249: fixed — this defaulted to 1 (fully visible) when _snakeProgress was undefined,
+        // which is exactly its state during the initial bar animation before startLineSnake
+        // ever runs. That made the line fully visible from frame one instead of hidden, so the
+        // "snake" animation was just glitching a reset rather than doing a clean reveal. Must
+        // default to 0 (hidden) so the line stays invisible until explicitly animated in.
+        const progress=chart._snakeProgress!==undefined?chart._snakeProgress:0;
         const area=chart.chartArea;const ctx=chart.ctx;
         ctx.save();ctx.beginPath();
         ctx.rect(area.left,area.top-10,(area.right-area.left)*progress,area.height+20);
@@ -14410,6 +14417,67 @@ function feedbackToggleDrill(branch,category){
   renderFeedback();
 }
 
+// v249: JS-based sticky pin, replacing the CSS position:sticky attempt from v247 — confirmed
+// by Nikhil that CSS sticky wasn't working, and the app shell's ancestor chain (outside this
+// file) makes it hard to verify why from here alone. This measures the filter bar's real
+// position directly and toggles position:fixed when it would scroll out of view, which works
+// regardless of which ancestor element is the actual scroll container. A placeholder holds the
+// layout's place so content doesn't jump when the bar leaves normal flow.
+let _feedbackStickyScrollHandler=null;
+function feedbackSetupStickyFilterBar(){
+  const bar=document.getElementById('feedback-filter-bar');
+  if(!bar)return;
+  // Remove any previous listener before attaching a new one — renderFeedback() replaces the
+  // DOM node on every call, so the old closure's element reference would otherwise go stale
+  // while the listener itself kept accumulating on window across re-renders.
+  if(_feedbackStickyScrollHandler)window.removeEventListener('scroll',_feedbackStickyScrollHandler,true);
+  const placeholder=document.createElement('div');
+  placeholder.style.display='none';
+  bar.parentNode.insertBefore(placeholder,bar);
+  let pinned=false;
+  let naturalTop=null;
+  const measure=()=>{
+    if(pinned)return naturalTop; // don't re-measure while pinned — bar is out of flow, rect would be wrong
+    const rect=bar.getBoundingClientRect();
+    naturalTop=rect.top+window.scrollY;
+    return naturalTop;
+  };
+  const pin=()=>{
+    if(pinned)return;
+    const rect=bar.getBoundingClientRect();
+    placeholder.style.display='block';
+    placeholder.style.height=rect.height+'px';
+    bar.style.position='fixed';
+    bar.style.top='0px';
+    bar.style.left=rect.left+'px';
+    bar.style.width=rect.width+'px';
+    bar.style.zIndex='20';
+    pinned=true;
+  };
+  const unpin=()=>{
+    if(!pinned)return;
+    bar.style.position='';
+    bar.style.top='';
+    bar.style.left='';
+    bar.style.width='';
+    bar.style.zIndex='';
+    placeholder.style.display='none';
+    pinned=false;
+  };
+  measure();
+  _feedbackStickyScrollHandler=()=>{
+    if(!document.getElementById('feedback-filter-bar')){
+      // page navigated away — clean up so this handler doesn't keep firing forever
+      window.removeEventListener('scroll',_feedbackStickyScrollHandler,true);
+      _feedbackStickyScrollHandler=null;
+      return;
+    }
+    const top=measure();
+    if(top!=null&&window.scrollY>top)pin();
+    else unpin();
+  };
+  window.addEventListener('scroll',_feedbackStickyScrollHandler,{capture:true,passive:true});
+}
 async function renderFeedback(){
   const pg=document.getElementById("page-feedback");if(!pg)return;
   const T=feedbackTheme();
@@ -14629,7 +14697,7 @@ async function renderFeedback(){
       </div>
       ${dimFilterRow}
     </div>`:'';
-  const filterBar=`<div style="display:flex;flex-wrap:wrap;background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;padding:10px 12px;margin-bottom:12px;position:sticky;top:0;z-index:20">
+  const filterBar=`<div id="feedback-filter-bar" style="display:flex;flex-wrap:wrap;background:${T.panelBg};border:1px solid ${T.border};border-radius:10px;padding:10px 12px;margin-bottom:12px">
     ${presetRow}
     ${customPanel}
     ${compareLine}
@@ -14789,6 +14857,7 @@ async function renderFeedback(){
   if(feedbackZoomMode==='overview'&&overview.months.length){
     setTimeout(()=>{feedbackLastOverviewContext={months:overview.months,dimRecs:overview.dimRecs,outletRanked:overview.outletRanked,chartCatShort:overview.chartCatShort,ordersByMonth:overview.ordersByMonth,T:overview.T};feedbackDrawOverviewCharts(overview.months,overview.dimRecs,overview.outletRanked,overview.chartCatShort);},0);
   }
+  setTimeout(feedbackSetupStickyFilterBar,0);
 }
 function feedbackToggleMonth(m,event){
   const multi=event&&(event.ctrlKey||event.metaKey);
