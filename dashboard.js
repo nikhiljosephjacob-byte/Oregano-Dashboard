@@ -13,8 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-257";
+const BUILD_VERSION="2026-08-06-259";
 const BUILD_NOTES=[
+  "🆕 Taught the dashboard about the Deliveract POS integration issue — confirmed by Nikhil: Deliveract was incorrectly including the AED 2 FD in POS discount reports for Lollorosso/Oregano/Smokeys until fixed mid-day on Aug 10 (not Wicked Wings, not integrated; not Fyoozhen, confirmed unaffected). Both the Discrepancy table and the original Uncategorized Burn tile now subtract AED 2/order from the sheet-side figure for these brands before that date. Tested the adjustment logic across all brand/date combinations before shipping — I don't have live sheet data to confirm this actually closes the gap, so worth checking the discrepancy report after this deploys.",
+  "🐛 Fixed the incorrect \"discount data before May 2026\" message — confirmed with Nikhil it's actually available from Jan 2026 for all brands/aggregators. Corrected both the date check and the message text.",
+  "🆕 Campaign Forecaster now warns when the form has changed since the last run (\"click Run Forecast again to update\") — addresses the most likely cause of \"projections aren't changing\": the form updates instantly but results only recompute when Run Forecast is clicked. Traced the full computation chain (baseline, matching, weighted percentiles, scenarios) and confirmed it's correctly parameterized by brand/agg/type throughout — no caching or stale-value bug found there.",
+  "🐛 Fixed a likely cause of the sales-line animation not playing when scrolled to — if the page re-rendered more than once during setup, an earlier transient render's visibility-observer could fire first and mark the animation \"played\" before the real, final chart was ever seen. Now disconnects any previous observer before creating a new one.",
+  "🐛 Rebuilt the sticky filter bar using native CSS position:sticky instead of JS-driven position:fixed toggling — the JS toggle was the actual cause of the reported \"jump,\" since switching between two positioning modes at a scroll threshold is an inherently visible state change. Native sticky has no such switch, matching how Excel/Sheets freeze panes actually work (always in place, never transitioning).",
   "🆕 Rebuilt the Campaign Forecaster input form using the approved Option A layout — grouped into distinct visual sections (\"Forecast from an upcoming campaign,\" \"What & when,\" \"Campaign shape\") instead of one long flat list of fields. Additional comments moved into a collapsed accordion instead of always taking up space. Results, history, and all the underlying math are unchanged — this is a layout-only change.",
   "🐛 Fixed the sticky filter bar overlapping the app's own fixed header — it was pinning to top:0px, which put it BEHIND the header, so only the portion below the header's height ever showed (exactly why it looked like locking started mid-bar). Now offsets below the real header height, and added a much more visible shadow/border while pinned so it's obviously \"floating\" above the page.",
   "🐛 Fixed the sales-line animation playing before you'd scrolled down to see it — it started at chart-creation time regardless of visibility. Now waits for the chart to actually scroll into view (40% visible) before playing, still only once per visit.",
@@ -8142,6 +8147,25 @@ function campStatus(c){
 // to oranges. campOutlets() resolves the outlet field on a campaign record to the set of actual
 // branch names from allData that the campaign applies to.
 const AUH_OUTLETS=new Set(["Al Forsan","Al Reem","Reem Island","WTC","Al Reef"]); // Abu Dhabi branches
+// v260: Deliveract POS integration adjustment — confirmed directly by Nikhil. During the
+// Grubtech-to-Deliveract POS integration switch, Deliveract was incorrectly pushing the AED 2
+// FD into POS discount reports for Lollorosso/Oregano/Smokeys specifically (Wicked Wings isn't
+// integrated at all, so unaffected; Fyoozhen was confirmed unaffected), inflating the
+// sheet-side discount figure by AED 2 per order for those three brands. Fixed mid-day on Aug
+// 10 — treating Aug 10 itself as already clean (not adjusted) since "mid-day" means most of
+// that day was already correct, and under-adjusting a mixed day is safer than over-adjusting
+// into a new artificial gap in the other direction. This is a POS-level issue (affects what got
+// reported to the sheet before it was even uploaded), not aggregator-specific, so the
+// adjustment applies uniformly across every aggregator being compared. Global (not scoped to
+// one function) so both the Discrepancy-by-outlet table and the original Uncategorized Burn
+// tile apply it consistently, rather than one reflecting the correction and the other not.
+const DELIVERACT_FD_BRANDS=new Set(['Lollorosso','Oregano','Smokeys']);
+const DELIVERACT_FD_CUTOFF='2026-08-10'; // affected: date < cutoff; clean: date >= cutoff
+function deliveractFdAdjustment(brand,date,orders){
+  if(!DELIVERACT_FD_BRANDS.has(brand))return 0;
+  if(date>=DELIVERACT_FD_CUTOFF)return 0;
+  return 2*(orders||0);
+}
 
 // ── BRANCH ALIAS RESOLVER ──
 // Common shortenings/typos users put in campaign comments. Maps a lowercased alias
@@ -11519,12 +11543,19 @@ function campFcRun(){
     cleanWindowCompare,weekOfMonthMismatch,
     lyOrders:lyRecs.length?lyRecs.reduce((s,r)=>s+r.orders,0)/lyDays:null,
     lyNet:lyRecs.length?lyRecs.reduce((s,r)=>s+r.sales,0)/lyDays:null,
-    lyHasDisc:lyStart>='2026-05-01',
+    lyHasDisc:lyStart>='2026-01-01',
     pwOrders:pwRecs.length?pwRecs.reduce((s,r)=>s+r.orders,0)/pwDays:null,
     pwNet:pwRecs.length?pwRecs.reduce((s,r)=>s+r.sales,0)/pwDays:null,
     recCamp,conc,closestMatch,
     coFP,coFundPct:campFcCoFundPct,
-    generatedAt:new Date().toISOString()
+    generatedAt:new Date().toISOString(),
+    // v258: snapshot of the exact inputs this result came from — compared against current form
+    // state on every render so a "these results are from a different setup, re-run to update"
+    // banner can show. Addresses the most likely explanation for "projections aren't changing":
+    // the form updates immediately when you change a field, but the results below it don't
+    // recompute until Run Forecast is clicked again — this makes that gap visible instead of
+    // silently showing stale numbers that look unchanged.
+    inputSnapshot:{brand,agg,start:campFcStart,end:campFcEnd,type:campFcType,discPct:campFcDiscPct,cap:campFcCap,coFund:campFcCoFund,coFundPct:campFcCoFundPct,branches:[...campFcBranches].sort().join(',')}
   };
   renderCampaigns();
 }
@@ -11706,6 +11737,9 @@ function campFcHTML(){
   let resultsHTML='';
   if(campFcResult&&!campFcCollapsed){
     const r=campFcResult;
+    const curSnapshot={brand:campFcBrand,agg:campFcAgg,start:campFcStart,end:campFcEnd,type:campFcType,discPct:campFcDiscPct,cap:campFcCap,coFund:campFcCoFund,coFundPct:campFcCoFundPct,branches:[...campFcBranches].sort().join(',')};
+    const isStale=r.inputSnapshot&&Object.keys(curSnapshot).some(k=>curSnapshot[k]!==r.inputSnapshot[k]);
+    const staleBanner=isStale?`<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.4);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#F59E0B;font-weight:600">⚠️ The form has changed since these results were generated — click Run Forecast again to update them.</div>`:'';
     const scCard=(label,sc,isMain)=>{
       if(!sc)return'';
       const ic=sc.incrContrib>=0?'#22C55E':'#EF4444';
@@ -11751,7 +11785,7 @@ function campFcHTML(){
     // Flags
     const flags=[];
     if(r.conc.length){flags.push({lvl:'warn',msg:`<strong>Concurrent campaign:</strong> "${r.conc[0].name||r.conc[0].comments||'—'}" overlaps this window on ${r.brand} × ${r.agg}. Forecast does not adjust for campaign-on-campaign dilution.`});}
-    if(!r.lyHasDisc){flags.push({lvl:'info',msg:`Discount data before May 2026 not available. Year-over-year comparison shows sales only — no burn figures from last July to compare.`});}
+    if(!r.lyHasDisc){flags.push({lvl:'info',msg:`Discount data before Jan 2026 not available. Year-over-year comparison shows sales only — no burn figures from last year to compare.`});}
     if(r.seasonality.pct!==0){flags.push({lvl:'info',msg:`Seasonality correction applied: <strong>${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong> vs periods when historical matches ran (${r.matches.length} campaign${r.matches.length!==1?'s':''}).`});}
     if(!r.matches.length){flags.push({lvl:'warn',msg:`No exact historical matches found for ${r.brand} × ${r.agg} at ${campFcDiscPct}% off (±8%) cap AED ${campFcCap} (±6). Fallback uplifts used: conservative 10%, expected 20%, optimistic 35%. Find and select a comparable past campaign for better accuracy.`});}
     // v154: genuine clean-baseline comparison, when one exists. Doesn't change the scenario
@@ -11820,6 +11854,7 @@ function campFcHTML(){
       +'</div>';}).join('');
 
     resultsHTML=`<div style="border-top:0.5px solid ${T.border};margin-top:14px;padding-top:14px">`
+    +staleBanner
     // Match header
     +(r.matches.length?`<div style="font-size:11px;font-weight:700;color:${T.secondary};margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">`
     +bPill(r.brand,22)+aPill(r.agg,22)
@@ -12202,7 +12237,8 @@ function computeDiscountBurn(){
     const totalByBA={},attribByBA={};
     for(const r of matches){
       const k=`${r.brand}|${r.aggregator}`;
-      totalByBA[k]=(totalByBA[k]||0)+(r.disc||0);
+      const adj=deliveractFdAdjustment(r.brand,r.date,r.orders);
+      totalByBA[k]=(totalByBA[k]||0)+(r.disc||0)-adj;
     }
     for(const x of campaignBreakdown){
       const k=`${x.campaign.brand}|${x.campaign.aggregator}`;
@@ -12224,7 +12260,7 @@ function computeDiscountBurn(){
     // across campaign days. An even split creates false 'uncategorized' noise on almost every
     // day whenever real daily burn isn't flat (e.g. weekends run higher than weekdays) — this
     // was the root cause of the v104 diagnostic showing small gaps smeared across every date.
-    const _dDisc={};for(const r of matches){if(!(r.disc>0))continue;const bk=r.brand+'|'+r.aggregator;if(!_dDisc[bk])_dDisc[bk]={};_dDisc[bk][r.date]=(_dDisc[bk][r.date]||0)+r.disc;}
+    const _dDisc={};for(const r of matches){if(!(r.disc>0))continue;const bk=r.brand+'|'+r.aggregator;if(!_dDisc[bk])_dDisc[bk]={};const adj=deliveractFdAdjustment(r.brand,r.date,r.orders);_dDisc[bk][r.date]=(_dDisc[bk][r.date]||0)+r.disc-adj;}
     const _dAttr={};for(const cb of campaignBreakdown){const bk=cb.campaign.brand+'|'+cb.campaign.aggregator;if(!_dAttr[bk])_dAttr[bk]={};for(const[ds,amt] of Object.entries(cb.dailyAlloc||{})){_dAttr[bk][ds]=(_dAttr[bk][ds]||0)+amt;}}
     // v115 boundary-mismatch detector: a big uncategorized day sitting DIRECTLY adjacent to a
     // campaign's start or end date is the classic signature of a sheet-date mismatch (aggregator
@@ -12583,6 +12619,8 @@ function discRecComputeRows(){
     const w=effectiveWindow[agg];
     return w&&date>=w.start&&date<=w.end;
   };
+  // v260: Deliveract POS integration adjustment — see deliveractFdAdjustment() definition for
+  // full context. Confirmed directly by Nikhil.
   const sheetByKey={};
   allData.forEach(r=>{
     if(!aggDataSet.has(r.aggregator))return;
@@ -12593,7 +12631,8 @@ function discRecComputeRows(){
     if(!inBranchFilter(branchNorm))return;
     if(discRecFilterOutlet!=='all'&&branchNorm!==discRecFilterOutlet)return;
     const k=`${r.brand}|${r.aggregator}|${branchNorm}|${r.date}`;
-    sheetByKey[k]=(sheetByKey[k]||0)+(r.disc||0);
+    const adj=deliveractFdAdjustment(r.brand,r.date,r.orders);
+    sheetByKey[k]=(sheetByKey[k]||0)+(r.disc||0)-adj;
   });
   const fileByKey={};
   aggsWithData.forEach(agg=>{
@@ -12656,6 +12695,7 @@ function discRecExportCSV(){
   out.push(["Aggregators with exact data loaded",aggsWithData.length?aggsWithData.join(", "):"none"]);
   out.push([]);
   out.push(["Note: \"Sheet total\" = the Google Sheet's own daily discount figure for that brand+aggregator+outlet+date (sourced from your POS export via the Uploader tool — food/menu discount only, no FD). \"Statement file total\" = the actual merchant-funded discount from that aggregator's own order-level export for the same combination, also menu discount only. A gap here means the two sources genuinely disagree — not a dashboard attribution issue, since both numbers are read directly from their respective sources with no estimation involved. Each aggregator is only compared for dates its OWN uploaded statement file actually covers, not the full page date range — a date with no statement data yet is excluded entirely rather than showing a false gap. Only aggregators with an exact statement file loaded are included."]);
+  out.push(["Note: Sheet totals for Lollorosso, Oregano, and Smokeys before 10 Aug 2026 have AED 2/order subtracted — confirmed the Grubtech-to-Deliveract POS integration switch was incorrectly including the FD in POS discount reports for these brands until fixed mid-day on the 10th. Not applied to Wicked Wings (not integrated) or Fyoozhen (confirmed unaffected)."]);
   out.push([]);
   out.push(["Brand","Aggregator","Outlet","Date","Sheet Total (AED)","Statement File Total (AED)","Gap (AED)","Gap (%)"]);
   rows.forEach(r=>{
@@ -12981,7 +13021,7 @@ function discRecTableHTML(){
       </div>
     </div>
     <div style="font-size:11px;color:${T.muted};line-height:1.5;margin-bottom:10px">
-      Compares the Google Sheet's own daily discount figure (from your POS export via the Uploader tool, food/menu discount only) against each aggregator's exact statement file, per brand × aggregator × outlet × date. A gap here means the two sources genuinely disagree for that specific day — both numbers are read directly, no estimation. Each aggregator is only compared for dates its own uploaded statement file actually covers — a day with no statement uploaded yet is excluded entirely, not shown as a false gap. Click a column header to sort. Rows under AED 1 gap are hidden.
+      Compares the Google Sheet's own daily discount figure (from your POS export via the Uploader tool, food/menu discount only) against each aggregator's exact statement file, per brand × aggregator × outlet × date. A gap here means the two sources genuinely disagree for that specific day — both numbers are read directly, no estimation. Each aggregator is only compared for dates its own uploaded statement file actually covers — a day with no statement uploaded yet is excluded entirely, not shown as a false gap. Sheet totals for Lollorosso/Oregano/Smokeys before 10 Aug have AED 2/order subtracted (confirmed Deliveract POS integration issue, fixed mid-day on the 10th). Click a column header to sort. Rows under AED 1 gap are hidden.
     </div>
     ${rows.length?`<div style="overflow-x:auto;max-height:500px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
       <thead><tr style="background:${T.rowBg};border-bottom:2px solid ${T.border}">
@@ -13947,6 +13987,7 @@ let feedbackZoomMode='overview';    // 'overview' (trend chart + months×categor
 // navigating away to a different page. Confirmed with Nikhil this was replaying repeatedly
 // instead of playing once and staying put.
 let _feedbackTrendSnakePlayed=false;
+let _feedbackTrendObserver=null; // v259: tracked so any previous observer can be disconnected before a new one is created
 let feedbackShowCustom=false;       // top-section Option C: presets shown by default, granular month chips + dimension filters hidden behind this
 let feedbackHeatmapMode='count';    // 'count' or 'rate' — which face of the flip heatmap is showing
 let feedbackCompareMode='row';      // 'column' (vs other categories this month) or 'row' (vs this category's own history) — defaults to row per confirmed preference
@@ -14631,9 +14672,12 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
         // Already played this visit — line is just fully visible from the start
         chart._snakeProgress=1;chart.draw();
       }else{
-        // v256: defer the line reveal until the canvas actually scrolls into view, not at
-        // creation time — confirmed with Nikhil the chart sits below the fold on this page, so
-        // starting immediately meant the animation finished before he'd even scrolled to it.
+        // v259: disconnect any previous observer first — if renderFeedback() fires more than
+        // once during page setup (each creating a fresh chart+observer), an earlier, transient
+        // render's observer could otherwise fire first and mark the animation as "played"
+        // before the user ever saw the actual, final chart — exactly the reported symptom of
+        // the animation not showing when scrolling down to look at it.
+        if(_feedbackTrendObserver)_feedbackTrendObserver.disconnect();
         chart._snakeProgress=0;chart.draw();
         const obs=new IntersectionObserver((entries)=>{
           if(entries[0].isIntersecting&&!_feedbackTrendSnakePlayed){
@@ -14641,8 +14685,9 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
             startLineSnake(chart);
             obs.disconnect();
           }
-        },{threshold:0.4});
+        },{threshold:0.2});
         obs.observe(trendCtx);
+        _feedbackTrendObserver=obs;
       }
       charts['feedback-trend-chart']=chart;
     }
@@ -14677,16 +14722,18 @@ function feedbackToggleDrill(branch,category){
 // position directly and toggles position:fixed when it would scroll out of view, which works
 // regardless of which ancestor element is the actual scroll container. A placeholder holds the
 // layout's place so content doesn't jump when the bar leaves normal flow.
-let _feedbackStickyScrollHandler=null;
+let _feedbackStickyObserver=null; // v259: tracks the sentinel-based observer so it can be disconnected before a new one is created on re-render
 function feedbackSetupStickyFilterBar(){
   const bar=document.getElementById('feedback-filter-bar');
   if(!bar)return;
-  // v256: fixed the real bug behind "only starts from the month selections, not the top" —
-  // pinning to top:0px puts this bar BEHIND the app's own fixed header (confirmed elsewhere in
-  // this file, containing #nav-logo), so only the portion below the header's height was ever
-  // visible while pinned. Detects the actual fixed header and its real height at runtime,
-  // reusing the same DOM-walk-up approach already used for the sidebar-offset fix, rather than
-  // guessing a hardcoded pixel value.
+  // v259: rebuilt using native CSS position:sticky instead of JS-driven position:fixed
+  // toggling -- that JS approach was the actual cause of the reported "jump": switching between
+  // static and fixed positioning at a scroll threshold is inherently a discrete state change,
+  // which can visibly snap even when the math is correct. Excel/Sheets freeze panes never
+  // "transitions" at all -- the frozen row is natively always in the same place. Native sticky
+  // gives the same property: the browser handles it with no JS state-switching, so there's
+  // nothing that CAN visibly jump. Reuses the same header-height detection from v256 (that part
+  // was correct -- the bug was in HOW positioning was applied, not the offset value).
   const findFixedHeaderBottom=()=>{
     try{
       let el=document.getElementById('nav-logo');
@@ -14699,70 +14746,33 @@ function feedbackSetupStickyFilterBar(){
     }catch(e){}
     return 0;
   };
-  // Remove any previous listener before attaching a new one — renderFeedback() replaces the
-  // DOM node on every call, so the old closure's element reference would otherwise go stale
-  // while the listener itself kept accumulating on window across re-renders.
-  if(_feedbackStickyScrollHandler)window.removeEventListener('scroll',_feedbackStickyScrollHandler,true);
-  const placeholder=document.createElement('div');
-  placeholder.style.display='none';
-  bar.parentNode.insertBefore(placeholder,bar);
-  let pinned=false;
-  let naturalTop=null;
-  const measure=()=>{
-    if(pinned)return naturalTop; // don't re-measure while pinned — bar is out of flow, rect would be wrong
-    const rect=bar.getBoundingClientRect();
-    naturalTop=rect.top+window.scrollY;
-    return naturalTop;
-  };
-  const pin=()=>{
-    if(pinned)return;
-    const rect=bar.getBoundingClientRect();
-    const headerBottom=findFixedHeaderBottom();
-    placeholder.style.display='block';
-    placeholder.style.height=rect.height+'px';
-    bar.style.position='fixed';
-    bar.style.top=headerBottom+'px';
-    bar.style.left=rect.left+'px';
-    bar.style.width=rect.width+'px';
-    bar.style.zIndex='20';
-    // v256: much more prominent visual distinction while pinned — the previous z-index-only
-    // approach wasn't obviously different from the bar's normal in-flow appearance while
-    // scrolling. A visible shadow + brighter border makes it read as "floating above the page."
-    bar.style.boxShadow='0 6px 16px rgba(0,0,0,.35)';
-    bar.style.borderColor='rgba(255,138,61,.5)';
-    pinned=true;
-  };
-  const unpin=()=>{
-    if(!pinned)return;
-    bar.style.position='';
-    bar.style.top='';
-    bar.style.left='';
-    bar.style.width='';
-    bar.style.zIndex='';
-    bar.style.boxShadow='';
-    bar.style.borderColor='';
-    placeholder.style.display='none';
-    pinned=false;
-  };
-  measure();
-  const checkAndApply=()=>{
-    if(!document.getElementById('feedback-filter-bar')){
-      // page navigated away — clean up so this handler doesn't keep firing forever
-      window.removeEventListener('scroll',_feedbackStickyScrollHandler,true);
-      _feedbackStickyScrollHandler=null;
-      return;
+  bar.style.position='sticky';
+  bar.style.top=findFixedHeaderBottom()+'px';
+  bar.style.zIndex='20';
+
+  // Sentinel-based "add a shadow once actually stuck" -- a 1px marker placed immediately before
+  // the bar. Once it scrolls above the viewport, the bar (which stays at `top`) is by definition
+  // now stuck, so add the visual distinction. This only ever touches box-shadow/border-color --
+  // properties Chrome/Firefox never include in layout, so toggling them cannot itself cause a jump.
+  if(_feedbackStickyObserver)_feedbackStickyObserver.disconnect();
+  let sentinel=document.getElementById('feedback-filter-sentinel');
+  if(!sentinel){
+    sentinel=document.createElement('div');
+    sentinel.id='feedback-filter-sentinel';
+    sentinel.style.cssText='height:1px';
+  }
+  bar.parentNode.insertBefore(sentinel,bar);
+  const obs=new IntersectionObserver(([entry])=>{
+    if(entry.isIntersecting){
+      bar.style.boxShadow='';
+      bar.style.borderColor='';
+    }else{
+      bar.style.boxShadow='0 6px 16px rgba(0,0,0,.35)';
+      bar.style.borderColor='rgba(255,138,61,.5)';
     }
-    const top=measure();
-    if(top!=null&&window.scrollY>top)pin();
-    else unpin();
-  };
-  _feedbackStickyScrollHandler=checkAndApply;
-  window.addEventListener('scroll',_feedbackStickyScrollHandler,{capture:true,passive:true});
-  // v251: apply the correct pinned state immediately, not just on the next scroll event — every
-  // re-render (filter click, mode toggle, gp() re-navigation) creates a fresh, unpinned bar
-  // element. Without this, staying scrolled down through a re-render left the bar unpinned
-  // until the user scrolled again, which is exactly what looked like "not sticking."
-  checkAndApply();
+  },{threshold:0,rootMargin:`-${findFixedHeaderBottom()+1}px 0px 0px 0px`});
+  obs.observe(sentinel);
+  _feedbackStickyObserver=obs;
 }
 async function renderFeedback(){
   const pg=document.getElementById("page-feedback");if(!pg)return;
