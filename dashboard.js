@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-245";
+const BUILD_VERSION="2026-08-06-246";
 const BUILD_NOTES=[
+  "🔍 Investigated the \"Feedback keeps needing re-upload\" issue — confirmed feedback IS correctly registered in the server sync system, same as every other aggregator, so that's not the gap. Found two real silent-failure paths instead: (1) if your session isn't logged in as admin when uploading, the sync to the shared server was skipped with ZERO warning — the upload would look successful but only ever exist on that one browser. (2) sync failures showed a toast that auto-hid after 10 seconds, easy to miss entirely. Fixed both — sync now warns clearly if it can't reach the shared server for either reason, and failure warnings stay up until you dismiss them instead of disappearing on their own. Also made large-payload warnings visible (Feedback data is the most likely dataset to hit a size limit, given it carries full complaint text per record). Next time this happens, you should get a clear, persistent warning that tells us exactly why — reply with what it says and we can fix the actual cause.",
   "🐛 Found the real Talabat/Smokeys/Jumeirah bug using your actual file — the file itself has a typo (\"Jumierah\", letters transposed), missing from both the Talabat parser's own outlet map AND the general branch-alias table. Confirmed against your real file: with the fix, zero restaurant names remain unmapped. Also confirmed the discount was correctly in \"Voucher Funded by you\" (AED 13.50 × 2 orders) — the parser itself was already reading the right column; the outlet just wasn't resolving.",
   "🐛 Reverted the Keeta FD fix from the last two builds — confirmed this was based on incorrect information. The sheet's daily discount figure comes from your POS export (food discount only) via the Uploader tool, never included FD in the first place. Reverted both the Discrepancy table and the original Uncategorized Burn tile back to comparing menu-discount-only on both sides.",
   "🐛 Fixed the DIP/DIP (Fyoozhen) bug properly — turned out to be TWO separate bugs, both now fixed and checked across the whole dashboard as requested. (1) resolveBranchName was blindly stripping a trailing \")\" even when it was the meaningful closing half of \"DIP (Fyoozhen)\", mangling it before the lookup ever ran — fixed at the root, benefiting all 11 call sites of this function, not just the new table. (2) A global outlet list across ALL brands is unsafe when brands share a generic name — confirmed Oregano/Lollorosso/Smokeys all have a plain \"DIP\" while Fyoozhen's is separate; a global list let the wrong brand's \"DIP\" win. Fixed by resolving each record only against its OWN brand's outlets. Checked every other usage of this function across the dashboard: found the same bug in the CPC History page's outlet filter/comparison (3 more places), fixed those too. Tested the complete 4-brand scenario end to end — all resolve correctly now with zero cross-brand contamination.",
@@ -716,12 +717,21 @@ function showSyncWarning(msg,severity){
       // inline here so a routine, expected message doesn't look like something's broken.
       e.style.background="rgba(59,130,246,.12)";e.style.border="1px solid rgba(59,130,246,.4)";e.style.color="#60A5FA";
       e.textContent="ℹ️ "+msg;
+      e.style.display="block";
+      setTimeout(()=>e.style.display="none",7000);
     }else{
+      // v246: real sync failures no longer auto-hide — this was very likely the actual cause of
+      // Feedback data appearing to "disappear" across dashboard versions. The server push can
+      // fail silently (size limit, session state, etc.) with only this toast as the signal, and
+      // a 10-second auto-hide is easy to miss if you're not staring at the screen at that exact
+      // moment. Now stays up until clicked away, with a visible "click to dismiss" hint appended
+      // so it's clear it needs manual dismissal rather than looking stuck.
       e.style.background="";e.style.border="";e.style.color=""; // reset to shell default (real warning)
-      e.textContent="⚠️ "+msg;
+      e.textContent="⚠️ "+msg+" (click to dismiss)";
+      e.style.cursor="pointer";
+      e.onclick=()=>{e.style.display="none";};
+      e.style.display="block";
     }
-    e.style.display="block";
-    setTimeout(()=>e.style.display="none",severity==="info"?7000:10000);
   }catch(err){}
 }
 // v179: graceful degradation for localStorage quota failures. Total browser localStorage quota
@@ -749,7 +759,15 @@ function trySaveLocalOrderData(key,dataObj,label){
 async function syncOrderDataToServer(agg,dataObj){
   try{
     const sess=getActiveSession();
-    if(!sess||!sess.sessionId||!sess.admin||!dataObj)return;
+    if(!dataObj)return;
+    if(!sess||!sess.sessionId){
+      showSyncWarning(`${agg}: not saved to the shared server — you don't appear to be logged in. This upload is only on THIS browser right now; it'll look fine here but won't be there next time you're on a different device, or after the dashboard is redeployed. Log in and re-upload to fix.`);
+      return;
+    }
+    if(!sess.admin){
+      showSyncWarning(`${agg}: not saved to the shared server — your session isn't an admin session, and only admin uploads sync to the shared copy. This upload is only on THIS browser right now. Log in as admin and re-upload to fix.`);
+      return;
+    }
     // v134: this was built (v112) before orderDetail existed and only ever sent
     // {metadata,records} — silently stripping the per-order Finance-export detail (v131/v132)
     // on every push to the shared server. Root cause of "the download button works right after
@@ -760,7 +778,11 @@ async function syncOrderDataToServer(agg,dataObj){
     if(dataObj.cancellations)payload.cancellations=dataObj.cancellations;
     const body=JSON.stringify(payload);
     const sizeKB=Math.round(body.length/1024);
-    if(sizeKB>2000)console.log(`[sync] ${agg} payload is ${sizeKB}KB — large, watch for size-related rejections`);
+    // v246: upgraded from console-only to visible — Feedback data (full complaint text per
+    // record, accumulating across many months) is the most likely dataset to actually hit a
+    // server-side size limit, and a console-only warning is invisible unless DevTools happens to
+    // already be open at upload time.
+    if(sizeKB>2000)showSyncWarning(`${agg} upload is ${sizeKB}KB — large. If this fails to save to the shared server, that's likely why; consider uploading in smaller batches (e.g. a few months at a time) if you hit a size-related error.`,"info");
     const res=await fetch(`/api/orderdata/${agg}`,{method:'POST',headers:{'Content-Type':'application/json','X-Session-Id':sess.sessionId},body});
     if(!res.ok){const d=await res.json().catch(()=>({}));showSyncWarning(`${agg} failed to save to the shared server (${d.error||res.status}, ${sizeKB}KB payload) — it'll look fine until the next reload, then revert. Re-upload after fixing, or ask Claude to raise the size limit if this keeps happening.`);}
     else console.log(`[sync] ${agg} pushed to server (${sizeKB}KB)`);
