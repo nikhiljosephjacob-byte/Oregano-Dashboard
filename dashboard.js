@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-244";
+const BUILD_VERSION="2026-08-06-245";
 const BUILD_NOTES=[
+  "🐛 Found the real Talabat/Smokeys/Jumeirah bug using your actual file — the file itself has a typo (\"Jumierah\", letters transposed), missing from both the Talabat parser's own outlet map AND the general branch-alias table. Confirmed against your real file: with the fix, zero restaurant names remain unmapped. Also confirmed the discount was correctly in \"Voucher Funded by you\" (AED 13.50 × 2 orders) — the parser itself was already reading the right column; the outlet just wasn't resolving.",
+  "🐛 Reverted the Keeta FD fix from the last two builds — confirmed this was based on incorrect information. The sheet's daily discount figure comes from your POS export (food discount only) via the Uploader tool, never included FD in the first place. Reverted both the Discrepancy table and the original Uncategorized Burn tile back to comparing menu-discount-only on both sides.",
   "🐛 Fixed the DIP/DIP (Fyoozhen) bug properly — turned out to be TWO separate bugs, both now fixed and checked across the whole dashboard as requested. (1) resolveBranchName was blindly stripping a trailing \")\" even when it was the meaningful closing half of \"DIP (Fyoozhen)\", mangling it before the lookup ever ran — fixed at the root, benefiting all 11 call sites of this function, not just the new table. (2) A global outlet list across ALL brands is unsafe when brands share a generic name — confirmed Oregano/Lollorosso/Smokeys all have a plain \"DIP\" while Fyoozhen's is separate; a global list let the wrong brand's \"DIP\" win. Fixed by resolving each record only against its OWN brand's outlets. Checked every other usage of this function across the dashboard: found the same bug in the CPC History page's outlet filter/comparison (3 more places), fixed those too. Tested the complete 4-brand scenario end to end — all resolve correctly now with zero cross-brand contamination.",
   "🐛 Fixed a real bug in the Discrepancy table/export — \"DIP\" and \"DIP (Fyoozhen)\" were being treated as two separate outlets, since the sheet and the statement files spell it differently. Every 100% gap in the reported file was this exact signature: the same real burn split into a same-day, same-amount ghost pair with opposite signs, cancelling out to nothing when actually reconciled. Fixed by resolving outlet names through the same canonical-outlet logic already used elsewhere on the dashboard, on both sides of the comparison. Tested against the exact DIP/DIP (Fyoozhen) case and a handful of other outlets to confirm no unintended false merges.",
   "🐛 Applied the confirmed Keeta FD fix to the ORIGINAL Uncategorized Burn tile too — v241 only fixed the newer Discrepancy-by-outlet table; this tile uses a separate calculation path (allocateCampaignDiscount) that needed the same adjustment. Added Keeta's FD cost back in specifically for this comparison — not to merchantBurn itself, which must stay FD-free since it also feeds campaign ROI calculations elsewhere. Fixed both the brand-level total and the per-day breakdown so the individual date chips stay consistent with the corrected top figure.",
@@ -2429,7 +2431,7 @@ const TALABAT_OUTLET_MAP={
   "forsan - al forsan village":"Al Forsan","al forsan village":"Al Forsan",
   "madinat khalifa-a":"Al Forsan","madinat khalifa - a":"Al Forsan",
   "al khalidiyah":"WTC",
-  "jumeirah":"Jumeirah","jumeirah 1":"Jumeirah",
+  "jumeirah":"Jumeirah","jumeirah 1":"Jumeirah","jumierah":"Jumeirah",
   "mirdif":"Mirdiff",
   "nad al sheba 1":"NAS","nad al sheba 4":"NAS",
   "reem island":"Al Reem",
@@ -8110,7 +8112,7 @@ const BRANCH_ALIASES={
   "nas":"nas","nad al sheba":"nas",
   "marina":"marina","dso":"dso","dubai silicon oasis":"dso",
   "furjan":"furjan","al quoz":"al quoz","quoz":"al quoz","qouz":"al quoz","al qouz":"al quoz","aq":"al quoz",
-  "dip":"dip","villa":"villa","jumeirah":"jumeirah","jumearah":"jumeirah","wasl":"jumeirah","al wasl":"jumeirah",
+  "dip":"dip","villa":"villa","jumeirah":"jumeirah","jumearah":"jumeirah","jumierah":"jumeirah","wasl":"jumeirah","al wasl":"jumeirah",
   "ts":"town square","fj":"furjan","al furjan":"furjan"
 };
 // Tokens that frequently appear inside "Except X, Y, Z" lists but are NOT branch names —
@@ -11939,30 +11941,6 @@ function computeDiscountBurn(){
       const k=`${x.campaign.brand}|${x.campaign.aggregator}`;
       attribByBA[k]=(attribByBA[k]||0)+x.merchantBurn;
     }
-    // v242: confirmed directly with Nikhil — the sheet's "Total Burn" figure for Keeta includes
-    // the AED 2 FD cost per order, while merchantBurn (campaignBreakdown, used here AND for
-    // campaign ROI calculations elsewhere) deliberately excludes it, since FD isn't part of any
-    // specific campaign's cost. Adding it back in HERE ONLY — a local adjustment to this
-    // comparison, not to merchantBurn/campaignBreakdown itself, which must stay FD-free for
-    // campaign cost/ROI purposes elsewhere on the dashboard. Same fix already applied to the
-    // newer Discrepancy-by-outlet table; this brings the original Uncategorized Burn tile in
-    // line with it.
-    if(keetaOrdersData&&keetaOrdersData.records&&keetaOrdersData.records.length){
-      const brandSetLocal=new Set(brands);
-      const fdByBrand={};
-      keetaOrdersData.records.forEach(rec=>{
-        if(rec.date<dateStart||rec.date>dateEnd)return;
-        if(brands.length>0&&!brandSetLocal.has(rec.brand))return;
-        if(branch==="DXB"&&AUH_OUTLETS.has(rec.outlet))return;
-        if(branch==="AUH"&&!AUH_OUTLETS.has(rec.outlet))return;
-        if(branch!=="All"&&branch!=="DXB"&&branch!=="AUH"&&rec.outlet!==branch)return;
-        fdByBrand[rec.brand]=(fdByBrand[rec.brand]||0)+(rec.real_fd||0);
-      });
-      Object.entries(fdByBrand).forEach(([brand,fd])=>{
-        const k=`${brand}|Keeta`;
-        if(k in totalByBA)attribByBA[k]=(attribByBA[k]||0)+fd;
-      });
-    }
     const out=[];
     for(const k of Object.keys(totalByBA)){
       const total=totalByBA[k],rawAttributed=attribByBA[k]||0;
@@ -11981,21 +11959,6 @@ function computeDiscountBurn(){
     // was the root cause of the v104 diagnostic showing small gaps smeared across every date.
     const _dDisc={};for(const r of matches){if(!(r.disc>0))continue;const bk=r.brand+'|'+r.aggregator;if(!_dDisc[bk])_dDisc[bk]={};_dDisc[bk][r.date]=(_dDisc[bk][r.date]||0)+r.disc;}
     const _dAttr={};for(const cb of campaignBreakdown){const bk=cb.campaign.brand+'|'+cb.campaign.aggregator;if(!_dAttr[bk])_dAttr[bk]={};for(const[ds,amt] of Object.entries(cb.dailyAlloc||{})){_dAttr[bk][ds]=(_dAttr[bk][ds]||0)+amt;}}
-    // Same Keeta FD adjustment as attribByBA above, applied per-day so the individual date chips
-    // stay consistent with the corrected brand-level total instead of silently disagreeing with it.
-    if(keetaOrdersData&&keetaOrdersData.records&&keetaOrdersData.records.length){
-      keetaOrdersData.records.forEach(rec=>{
-        if(rec.date<dateStart||rec.date>dateEnd)return;
-        if(brands.length>0&&!new Set(brands).has(rec.brand))return;
-        if(branch==="DXB"&&AUH_OUTLETS.has(rec.outlet))return;
-        if(branch==="AUH"&&!AUH_OUTLETS.has(rec.outlet))return;
-        if(branch!=="All"&&branch!=="DXB"&&branch!=="AUH"&&rec.outlet!==branch)return;
-        const bk=`${rec.brand}|Keeta`;
-        if(!(bk in totalByBA))return;
-        if(!_dAttr[bk])_dAttr[bk]={};
-        _dAttr[bk][rec.date]=(_dAttr[bk][rec.date]||0)+(rec.real_fd||0);
-      });
-    }
     // v115 boundary-mismatch detector: a big uncategorized day sitting DIRECTLY adjacent to a
     // campaign's start or end date is the classic signature of a sheet-date mismatch (aggregator
     // activated the promo a day early, or kept it burning past the entered end date). Attach a
@@ -12376,12 +12339,11 @@ function discRecComputeRows(){
       if(!inBranchFilter(outletNorm))return;
       if(discRecFilterOutlet!=='all'&&outletNorm!==discRecFilterOutlet)return;
       const k=`${rec.brand}|${agg}|${outletNorm}|${rec.date}`;
-      // v241: confirmed directly — the sheet's "Total Burn" figure includes the AED 2 Keeta FD
-      // cost, while menu_disc (used everywhere else on the dashboard, e.g. campaign cost/ROI)
-      // deliberately excludes it. This comparison specifically needs both sides measuring the
-      // same thing, so FD is added back in here only. real_fd only exists on Keeta records — a
-      // harmless no-op for every other aggregator.
-      fileByKey[k]=(fileByKey[k]||0)+(rec.menu_disc||0)+(rec.real_fd||0);
+      // v245: reverted the v241 FD add-back — confirmed directly with Nikhil that this was based
+      // on incorrect information. The sheet's daily discount figure comes from the POS export
+      // (food/menu discount only, no FD), uploaded via the established Uploader tool — it was
+      // never including FD in the first place. menu_disc alone is the correct comparison.
+      fileByKey[k]=(fileByKey[k]||0)+(rec.menu_disc||0);
     });
   });
   const allKeys=new Set([...Object.keys(sheetByKey),...Object.keys(fileByKey)]);
@@ -12426,7 +12388,7 @@ function discRecExportCSV(){
   out.push(["Date Range (page filter)",`${dateStart} to ${dateEnd}`]);
   out.push(["Aggregators with exact data loaded",aggsWithData.length?aggsWithData.join(", "):"none"]);
   out.push([]);
-  out.push(["Note: \"Sheet total\" = the Google Sheet's own daily discount figure for that brand+aggregator+outlet+date. \"Statement file total\" = the actual merchant-funded discount from that aggregator's own order-level export for the same combination — for Keeta specifically, this INCLUDES the AED 2 FD cost per order, confirmed directly against how the sheet's own figure is entered (both sides now measure the same thing: total merchant-funded cost including FD). A gap here means the two sources genuinely disagree — not a dashboard attribution issue, since both numbers are read directly from their respective sources with no estimation involved. Each aggregator is only compared for dates its OWN uploaded statement file actually covers, not the full page date range — a date with no statement data yet is excluded entirely rather than showing a false gap. Only aggregators with an exact statement file loaded are included."]);
+  out.push(["Note: \"Sheet total\" = the Google Sheet's own daily discount figure for that brand+aggregator+outlet+date (sourced from your POS export via the Uploader tool — food/menu discount only, no FD). \"Statement file total\" = the actual merchant-funded discount from that aggregator's own order-level export for the same combination, also menu discount only. A gap here means the two sources genuinely disagree — not a dashboard attribution issue, since both numbers are read directly from their respective sources with no estimation involved. Each aggregator is only compared for dates its OWN uploaded statement file actually covers, not the full page date range — a date with no statement data yet is excluded entirely rather than showing a false gap. Only aggregators with an exact statement file loaded are included."]);
   out.push([]);
   out.push(["Brand","Aggregator","Outlet","Date","Sheet Total (AED)","Statement File Total (AED)","Gap (AED)","Gap (%)"]);
   rows.forEach(r=>{
@@ -12752,7 +12714,7 @@ function discRecTableHTML(){
       </div>
     </div>
     <div style="font-size:11px;color:${T.muted};line-height:1.5;margin-bottom:10px">
-      Compares the Google Sheet's own daily discount figure against each aggregator's exact statement file, per brand × aggregator × outlet × date. For Keeta, the statement side includes the AED 2 FD cost per order, confirmed to match how the sheet's own figure is entered — both sides measure the same thing. A gap here means the two sources genuinely disagree for that specific day — both numbers are read directly, no estimation. Each aggregator is only compared for dates its own uploaded statement file actually covers — a day with no statement uploaded yet is excluded entirely, not shown as a false gap. Click a column header to sort. Rows under AED 1 gap are hidden.
+      Compares the Google Sheet's own daily discount figure (from your POS export via the Uploader tool, food/menu discount only) against each aggregator's exact statement file, per brand × aggregator × outlet × date. A gap here means the two sources genuinely disagree for that specific day — both numbers are read directly, no estimation. Each aggregator is only compared for dates its own uploaded statement file actually covers — a day with no statement uploaded yet is excluded entirely, not shown as a false gap. Click a column header to sort. Rows under AED 1 gap are hidden.
     </div>
     ${rows.length?`<div style="overflow-x:auto;max-height:500px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
       <thead><tr style="background:${T.rowBg};border-bottom:2px solid ${T.border}">
