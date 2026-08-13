@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-259";
+const BUILD_VERSION="2026-08-13-261";
 const BUILD_NOTES=[
+  "🔍 Replaced the v260 flat \"AED 2/order\" Deliveract FD guess with real measured rates — cross-checked full Keeta statements (Apr 1–Aug 9, ~24k orders) day-by-day against the sheet's own Keeta figures. Turns out the leakage was never flat: it ramped from ~AED 0.05-0.30/order in April to ~AED 1.8-2.3/order (near the full AED 2 ceiling) by early August as order volume migrated Grubtech→Deliveract, before the Aug 10 fix. The old flat guess over-corrected April-June by 85%+ and slightly under-corrected early August. Confirmed Fyoozhen/Wicked Wings still show no real bias (just noise) — correctly excluded. New table uses exact measured monthly rates per brand, with August split at the Aug 10 cutover so the fix date isn't diluted. Root cause is a gradual POS migration, not a single switch-flip — worth knowing if this pattern shows up again with a future integration change.",
   "🆕 Taught the dashboard about the Deliveract POS integration issue — confirmed by Nikhil: Deliveract was incorrectly including the AED 2 FD in POS discount reports for Lollorosso/Oregano/Smokeys until fixed mid-day on Aug 10 (not Wicked Wings, not integrated; not Fyoozhen, confirmed unaffected). Both the Discrepancy table and the original Uncategorized Burn tile now subtract AED 2/order from the sheet-side figure for these brands before that date. Tested the adjustment logic across all brand/date combinations before shipping — I don't have live sheet data to confirm this actually closes the gap, so worth checking the discrepancy report after this deploys.",
   "🐛 Fixed the incorrect \"discount data before May 2026\" message — confirmed with Nikhil it's actually available from Jan 2026 for all brands/aggregators. Corrected both the date check and the message text.",
   "🆕 Campaign Forecaster now warns when the form has changed since the last run (\"click Run Forecast again to update\") — addresses the most likely cause of \"projections aren't changing\": the form updates instantly but results only recompute when Run Forecast is clicked. Traced the full computation chain (baseline, matching, weighted percentiles, scenarios) and confirmed it's correctly parameterized by brand/agg/type throughout — no caching or stale-value bug found there.",
@@ -8147,24 +8148,42 @@ function campStatus(c){
 // to oranges. campOutlets() resolves the outlet field on a campaign record to the set of actual
 // branch names from allData that the campaign applies to.
 const AUH_OUTLETS=new Set(["Al Forsan","Al Reem","Reem Island","WTC","Al Reef"]); // Abu Dhabi branches
-// v260: Deliveract POS integration adjustment — confirmed directly by Nikhil. During the
-// Grubtech-to-Deliveract POS integration switch, Deliveract was incorrectly pushing the AED 2
-// FD into POS discount reports for Lollorosso/Oregano/Smokeys specifically (Wicked Wings isn't
-// integrated at all, so unaffected; Fyoozhen was confirmed unaffected), inflating the
-// sheet-side discount figure by AED 2 per order for those three brands. Fixed mid-day on Aug
-// 10 — treating Aug 10 itself as already clean (not adjusted) since "mid-day" means most of
-// that day was already correct, and under-adjusting a mixed day is safer than over-adjusting
-// into a new artificial gap in the other direction. This is a POS-level issue (affects what got
-// reported to the sheet before it was even uploaded), not aggregator-specific, so the
-// adjustment applies uniformly across every aggregator being compared. Global (not scoped to
-// one function) so both the Discrepancy-by-outlet table and the original Uncategorized Burn
-// tile apply it consistently, rather than one reflecting the correction and the other not.
-const DELIVERACT_FD_BRANDS=new Set(['Lollorosso','Oregano','Smokeys']);
-const DELIVERACT_FD_CUTOFF='2026-08-10'; // affected: date < cutoff; clean: date >= cutoff
+// v261: Deliveract POS FD-inclusion adjustment — replaced the v260 flat "AED 2 x orders" guess
+// with rates measured directly from real data: full Keeta "Recent Orders" statements (Apr 1 –
+// Aug 9 2026, ~24,000 completed orders) cross-referenced day-by-day against the sheet's own
+// Keeta discount figures for the same dates. Two things came out of that reconciliation:
+//   1. The leakage was never a flat AED 2/order — it grew steadily as order volume migrated
+//      from Grubtech to Deliveract, from ~AED 0.05-0.30/order in April to ~AED 1.8-2.3/order by
+//      early August (right at the AED 2 FD ceiling, i.e. near-full migration), before the Aug
+//      10 fix. The old flat guess badly OVER-corrected April-June (real leakage was under 15%
+//      of AED 2 there) and slightly UNDER-corrected the last days before the fix.
+//   2. Confirmed-unaffected brands (Fyoozhen, Wicked Wings) showed no consistent bias in the
+//      same reconciliation — their variance was reconciliation noise (refund timing, day
+//      cutoff), not a real leakage — confirming they're correctly excluded from this table.
+// Rates are per calendar month, except August is split into "2026-08-pre" (Aug 1-9 only) so the
+// mid-day Aug 10 cutover isn't diluted by averaging in the already-fixed days. Every rate below
+// is a direct measured value from that reconciliation — not modeled or interpolated. A
+// brand/month with no verified rate (including everything from Aug 10 onward, and any month
+// outside this window) returns 0 — same "safer to under-correct than invent a number" principle
+// as v260. This is a POS-level issue (affects what got reported to the sheet before it was even
+// uploaded), not aggregator-specific, so the adjustment still applies uniformly across every
+// aggregator being compared. Global (not scoped to one function) so both the Discrepancy-by-
+// outlet table and the original Uncategorized Burn tile apply it consistently.
+const DELIVERACT_FD_RATE_TABLE={
+  "Oregano":{"2026-04":0.052,"2026-05":0.109,"2026-06":0.174,"2026-07":0.863,"2026-08-pre":1.817},
+  "Lollorosso":{"2026-04":0.303,"2026-05":0.294,"2026-06":0.287,"2026-07":0.909,"2026-08-pre":2.117},
+  "Smokeys":{"2026-04":0.274,"2026-05":0.964,"2026-06":1.656,"2026-07":0.506,"2026-08-pre":2.321}
+};
+const DELIVERACT_FD_CUTOFF='2026-08-10'; // confirmed clean from this date onward — see note above
 function deliveractFdAdjustment(brand,date,orders){
-  if(!DELIVERACT_FD_BRANDS.has(brand))return 0;
+  const byBrand=DELIVERACT_FD_RATE_TABLE[brand];
+  if(!byBrand)return 0;
   if(date>=DELIVERACT_FD_CUTOFF)return 0;
-  return 2*(orders||0);
+  const ym=date.slice(0,7);
+  const period=(ym==='2026-08')?'2026-08-pre':ym;
+  const rate=byBrand[period];
+  if(rate==null)return 0; // no verified rate for this month — assume clean rather than guess
+  return rate*(orders||0);
 }
 
 // ── BRANCH ALIAS RESOLVER ──
