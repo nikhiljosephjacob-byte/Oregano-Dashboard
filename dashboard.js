@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-247";
+const BUILD_VERSION="2026-08-06-248";
 const BUILD_NOTES=[
+  "🆕 Built the approved sales-line design into the real Feedback trend chart — order volume now overlays as a blue line on a second axis, hover any point for the exact count, bars animate up first then the line snake-draws left to right after. Removed the old \"numbers above bars\" labels per the approved design — the brighter axis numbers plus hover tooltips now do that job. Added year labels (shown only at January) since the chart spans two years. Respects the same Brand/Outlet/Aggregator filters already applied to the rest of the page.",
   "🐛 Found the ACTUAL root cause of the Feedback re-upload issue, confirmed from your screenshot — localStorage quota was truncating the local copy down to zero records (metadata only), but that truncated copy kept the exact same upload timestamp as the full server copy. The pull-from-server check only compared timestamps, saw a match, and never noticed records were missing — so the page stayed stuck on an empty local copy indefinitely, even though the real data was safely on the server the whole time. Now also checks whether the local copy is structurally incomplete (fewer records than the server has) and pulls the full version regardless of what the timestamps say. Also closed a related gap in the reverse direction, so an incomplete local copy can never accidentally push up and overwrite good server data. Tested both fixes directly against the exact scenario from your screenshot.",
   "🆕 Feedback page filter bar is now sticky — stays visible at the top while scrolling through the page instead of scrolling away.",
   "🔍 Investigated the \"Feedback keeps needing re-upload\" issue — confirmed feedback IS correctly registered in the server sync system, same as every other aggregator, so that's not the gap. Found two real silent-failure paths instead: (1) if your session isn't logged in as admin when uploading, the sync to the shared server was skipped with ZERO warning — the upload would look successful but only ever exist on that one browser. (2) sync failures showed a toast that auto-hid after 10 seconds, easy to miss entirely. Fixed both — sync now warns clearly if it can't reach the shared server for either reason, and failure warnings stay up until you dismiss them instead of disappearing on their own. Also made large-payload warnings visible (Feedback data is the most likely dataset to hit a size limit, given it carries full complaint text per record). Next time this happens, you should get a clear, persistent warning that tells us exactly why — reply with what it says and we can fix the actual cause.",
@@ -14276,8 +14277,13 @@ function feedbackBuildOverview(T){
         <button id="feedback-trend-mode-rate" data-muted-color="${trendMutedColor}" onclick="feedbackSetTrendChartMode('rate')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackTrendChartMode==='rate'?'#EA8C3A':'transparent'};color:${feedbackTrendChartMode==='rate'?'#fff':trendMutedColor}">%</button>
       </div>
     </div>
-    <div style="position:relative;height:200px"><canvas id="feedback-trend-chart"></canvas></div>
+    <div style="display:flex;gap:14px;margin:6px 0 4px">
+      <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${T.label}"><span style="width:10px;height:10px;border-radius:2px;background:#FF8A3D"></span>Complaints</span>
+      <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${T.label}"><span style="width:16px;height:2px;background:#5AB4E8;border-radius:1px"></span>Total orders <span style="color:${T.muted}">(hover a point)</span></span>
+    </div>
+    <div style="position:relative;height:220px"><canvas id="feedback-trend-chart"></canvas></div>
   </div>`;
+
 
   return{html:trendHtml+heatmapHtml+outletChartHtml,months:allMonthsFull,dimRecs,outletRanked,chartCatShort,ordersByMonth,T};
 }
@@ -14303,56 +14309,81 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
     const selected=feedbackFilterMonths.size?months.map(m=>feedbackFilterMonths.has(m)):months.map(()=>true);
     const newData=feedbackTrendChartMode==='count'?counts:rates;
     const barColors=selected.map(s=>s?'#FF8A3Dcc':'#FF8A3D33');
-    // v228: custom labels above each bar — exact count in Count mode; rate + that month's order
-    // volume in % mode, so a high/low rate always shows the volume it's backed by right there.
-    const valueLabelsPlugin={
-      id:'feedbackValueLabels',
-      afterDatasetsDraw(chart){
-        const{ctx}=chart;
-        ctx.save();
-        ctx.font='700 10px sans-serif';
-        ctx.textAlign='center';
-        chart.data.labels.forEach((_,i)=>{
-          const meta=chart.getDatasetMeta(0);
-          const bar=meta.data[i];
-          if(!bar)return;
-          if(feedbackTrendChartMode==='count'){
-            ctx.fillStyle=_darkPage?DARK_THEME.textPrimary:'#0F172A';
-            ctx.fillText(counts[i],bar.x,bar.y-6);
-          }else{
-            ctx.fillStyle='#DE4A42';
-            ctx.fillText(rates[i]+'%',bar.x,bar.y-18);
-            ctx.fillStyle=_darkPage?DARK_THEME.textMuted:'#64748b';
-            ctx.font='600 9px sans-serif';
-            ctx.fillText(orderVol[i].toLocaleString()+' orders',bar.x,bar.y-6);
-            ctx.font='700 10px sans-serif';
-          }
-        });
-        ctx.restore();
-      }
+    // v248: month labels — two-line, year shown as a second line only at January (year
+    // boundary), so a chart spanning multiple years is disambiguated without cluttering every
+    // single tick with a repeated year.
+    const monthLabels=months.map(m=>{
+      const short=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"});
+      const isJan=m.endsWith("-01");
+      return isJan?[short,m.slice(0,4)]:[short];
+    });
+    const axisColor=_darkPage?'#D5DCEA':'#334155';
+    const lineColor='#5AB4E8';
+    // v248: snake-draw plugin — clips the line dataset (index 1) to a growing rect from the
+    // left edge, so it visibly draws itself left to right. Only applied to fresh chart
+    // creation below, not in-place updates (mode toggle) — the line's own values don't change
+    // between Count/% modes, so there's nothing meaningful to re-animate there.
+    const snakeClipPlugin={
+      id:'feedbackSnakeClip',
+      beforeDatasetDraw(chart,args){
+        if(args.index!==1)return;
+        const progress=chart._snakeProgress!==undefined?chart._snakeProgress:1;
+        const area=chart.chartArea;const ctx=chart.ctx;
+        ctx.save();ctx.beginPath();
+        ctx.rect(area.left,area.top-10,(area.right-area.left)*progress,area.height+20);
+        ctx.clip();
+      },
+      afterDatasetDraw(chart,args){if(args.index!==1)return;chart.ctx.restore();}
     };
+    function startLineSnake(chart){
+      const LINE_DURATION=2400;
+      if(chart._snakeAnimId)cancelAnimationFrame(chart._snakeAnimId);
+      chart._snakeProgress=0;
+      const start=performance.now();
+      function step(now){
+        const t=Math.min(1,(now-start)/LINE_DURATION);
+        chart._snakeProgress=1-Math.pow(1-t,3); // ease-out
+        chart.draw();
+        if(t<1)chart._snakeAnimId=requestAnimationFrame(step);
+      }
+      chart._snakeAnimId=requestAnimationFrame(step);
+    }
     const existing=charts['feedback-trend-chart'];
     const isStale=existing&&existing.canvas!==trendCtx; // canvas element changed = page was rebuilt elsewhere, this instance is detached
     if(isStale){destroyChart('feedback-trend-chart');}
     if(charts['feedback-trend-chart']&&!isStale){
       // In-place update instead of destroy+recreate — lets Chart.js animate the bar
-      // height/axis-scale transition instead of snapping instantly.
+      // height/axis-scale transition instead of snapping instantly. Line data (order volume)
+      // doesn't change between Count/% modes, so it's left untouched here — no re-animation.
       charts['feedback-trend-chart'].data.datasets[0].data=newData;
       charts['feedback-trend-chart'].data.datasets[0].backgroundColor=barColors;
+      charts['feedback-trend-chart'].data.datasets[1].data=orderVol;
       charts['feedback-trend-chart'].update();
     }else{
-      charts['feedback-trend-chart']=new Chart(trendCtx,{
+      const chart=new Chart(trendCtx,{
         type:'bar',
-        data:{labels:months.map(m=>new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"})),
-          datasets:[{data:newData,backgroundColor:barColors,borderRadius:4}]},
-        options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:28}},
-          animation:{duration:500,easing:'easeOutQuart'},
+        data:{labels:monthLabels,datasets:[
+          {label:'Complaints',data:newData,backgroundColor:barColors,borderRadius:4,order:2,yAxisID:'y'},
+          {type:'line',label:'Total orders',data:orderVol,borderColor:lineColor,backgroundColor:lineColor,pointRadius:4,pointHoverRadius:6,pointBackgroundColor:lineColor,pointBorderColor:_darkPage?DARK_THEME.card:'#fff',pointBorderWidth:2,borderWidth:2,tension:.3,order:1,yAxisID:'y1'}
+        ]},
+        options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:12}},
+          interaction:{mode:'index',intersect:false},
+          animation:{duration:500,easing:'easeOutQuart',onComplete:function(){startLineSnake(this);}},
           onClick:(e,els)=>{if(els.length){feedbackToggleMonth(months[els[0].index],e.native);}},
-          plugins:{legend:{display:false}},
-          scales:{y:{grid:{color:_darkPage?'rgba(255,255,255,.06)':'#F1F5F9'},ticks:{color:_darkPage?DARK_THEME.textMuted:'#64748b',font:{size:10}}},
-            x:{grid:{display:false},ticks:{color:_darkPage?DARK_THEME.textMuted:'#64748b',font:{size:10}}}}},
-        plugins:[valueLabelsPlugin]
+          plugins:{legend:{display:false},
+            tooltip:{callbacks:{
+              title:items=>{const i=items[0].dataIndex;const mo=months[i];return new Date(mo+"-01T12:00:00").toLocaleDateString("en-AE",{month:"long",year:"numeric"});},
+              label:c=>c.dataset.label==='Total orders'?'Total orders: '+c.parsed.y.toLocaleString():'Complaints: '+c.parsed.y+(feedbackTrendChartMode==='rate'?'%':'')
+            }}
+          },
+          scales:{
+            y:{position:'left',grid:{color:_darkPage?'rgba(255,255,255,.06)':'#F1F5F9'},ticks:{color:axisColor,font:{size:12,weight:'600'},callback:v=>feedbackTrendChartMode==='rate'?v+'%':v}},
+            y1:{position:'right',grid:{display:false},ticks:{color:lineColor,font:{size:12,weight:'600'},callback:v=>v>=1000?(v/1000)+'k':v}},
+            x:{grid:{display:false},ticks:{color:axisColor,font:{size:12,weight:'600'}}}
+          }},
+        plugins:[snakeClipPlugin]
       });
+      charts['feedback-trend-chart']=chart;
     }
   }
   const outletCtx=document.getElementById('feedback-outlet-chart');
