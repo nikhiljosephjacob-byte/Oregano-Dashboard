@@ -13,15 +13,16 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-06-249";
+const BUILD_VERSION="2026-08-06-251";
 const BUILD_NOTES=[
-  "🐛 Fixed the sales-line animation — a transcription error on my part when building the real version: the line's hidden/visible fallback defaulted to \"visible\" instead of \"hidden\" while waiting for the bar animation to finish, so it was fully drawn from frame one and just glitched a reset rather than actually sequencing after the bars.",
-  "🐛 Fixed the sticky filter bar — CSS position:sticky wasn't holding (confirmed by Nikhil), and the app shell's ancestor overflow settings outside this file made it hard to verify why. Replaced with a JS-based pin that measures real scroll position directly and switches to fixed positioning when needed, which works regardless of which ancestor is the actual scroll container.",
-  "🆕 Built the approved sales-line design into the real Feedback trend chart — order volume now overlays as a blue line on a second axis, hover any point for the exact count, bars animate up first then the line snake-draws left to right after. Removed the old \"numbers above bars\" labels per the approved design — the brighter axis numbers plus hover tooltips now do that job. Added year labels (shown only at January) since the chart spans two years. Respects the same Brand/Outlet/Aggregator filters already applied to the rest of the page.",
-  "🐛 Found the ACTUAL root cause of the Feedback re-upload issue, confirmed from your screenshot — localStorage quota was truncating the local copy down to zero records (metadata only), but that truncated copy kept the exact same upload timestamp as the full server copy. The pull-from-server check only compared timestamps, saw a match, and never noticed records were missing — so the page stayed stuck on an empty local copy indefinitely, even though the real data was safely on the server the whole time. Now also checks whether the local copy is structurally incomplete (fewer records than the server has) and pulls the full version regardless of what the timestamps say. Also closed a related gap in the reverse direction, so an incomplete local copy can never accidentally push up and overwrite good server data. Tested both fixes directly against the exact scenario from your screenshot.",
-  "🆕 Feedback page filter bar is now sticky — stays visible at the top while scrolling through the page instead of scrolling away.",
-  "🔍 Investigated the \"Feedback keeps needing re-upload\" issue — confirmed feedback IS correctly registered in the server sync system, same as every other aggregator, so that's not the gap. Found two real silent-failure paths instead: (1) if your session isn't logged in as admin when uploading, the sync to the shared server was skipped with ZERO warning — the upload would look successful but only ever exist on that one browser. (2) sync failures showed a toast that auto-hid after 10 seconds, easy to miss entirely. Fixed both — sync now warns clearly if it can't reach the shared server for either reason, and failure warnings stay up until you dismiss them instead of disappearing on their own. Also made large-payload warnings visible (Feedback data is the most likely dataset to hit a size limit, given it carries full complaint text per record). Next time this happens, you should get a clear, persistent warning that tells us exactly why — reply with what it says and we can fix the actual cause.",
-  "🐛 Found the real Talabat/Smokeys/Jumeirah bug using your actual file — the file itself has a typo (\"Jumierah\", letters transposed), missing from both the Talabat parser's own outlet map AND the general branch-alias table. Confirmed against your real file: with the fix, zero restaurant names remain unmapped. Also confirmed the discount was correctly in \"Voucher Funded by you\" (AED 13.50 × 2 orders) — the parser itself was already reading the right column; the outlet just wasn't resolving.",
+  "🐛 Fixed the What's New popup showing long paragraphs again — trimmed entries back to short bullets, and added a hard length cap so this can't silently regress a third time.",
+  "🐛 Fixed the sales-line animation replaying repeatedly instead of once — every re-navigation was recreating the chart from scratch. Now animates once per visit to Feedback, then stays put.",
+  "🐛 Fixed the sticky filter bar not actually sticking after a re-render (e.g. a filter click) while already scrolled down — now applies the correct pinned state immediately, not just on the next scroll.",
+  "🆕 Campaign Forecaster: added \"% off select items\" as a new campaign structure, using real historical performance from past matching campaigns instead of a manual estimate. Added a free-text comments field too.",
+  "🐛 Fixed the sales-line animation not sequencing after the bars — a transcription error left it fully visible from frame one instead of hidden.",
+  "🐛 Replaced the sticky filter bar's CSS approach with a JS-based one, since CSS position:sticky wasn't holding.",
+  "🆕 Built the sales-line design into the real Feedback trend chart — order volume overlays as a blue line, bars animate then the line draws in after, year labels shown at January boundaries.",
+  "🔍 Found two silent Feedback-sync failure modes (not logged in as admin skips the save with zero warning; failure toasts auto-hid after 10s) and made both visible with persistent warnings.",
   "🐛 Reverted the Keeta FD fix from the last two builds — confirmed this was based on incorrect information. The sheet's daily discount figure comes from your POS export (food discount only) via the Uploader tool, never included FD in the first place. Reverted both the Discrepancy table and the original Uncategorized Burn tile back to comparing menu-discount-only on both sides.",
   "🐛 Fixed the DIP/DIP (Fyoozhen) bug properly — turned out to be TWO separate bugs, both now fixed and checked across the whole dashboard as requested. (1) resolveBranchName was blindly stripping a trailing \")\" even when it was the meaningful closing half of \"DIP (Fyoozhen)\", mangling it before the lookup ever ran — fixed at the root, benefiting all 11 call sites of this function, not just the new table. (2) A global outlet list across ALL brands is unsafe when brands share a generic name — confirmed Oregano/Lollorosso/Smokeys all have a plain \"DIP\" while Fyoozhen's is separate; a global list let the wrong brand's \"DIP\" win. Fixed by resolving each record only against its OWN brand's outlets. Checked every other usage of this function across the dashboard: found the same bug in the CPC History page's outlet filter/comparison (3 more places), fixed those too. Tested the complete 4-brand scenario end to end — all resolve correctly now with zero cross-brand contamination.",
   "🐛 Fixed a real bug in the Discrepancy table/export — \"DIP\" and \"DIP (Fyoozhen)\" were being treated as two separate outlets, since the sheet and the statement files spell it differently. Every 100% gap in the reported file was this exact signature: the same real burn split into a same-day, same-amount ghost pair with opposite signs, cancelling out to nothing when actually reconciled. Fixed by resolving outlet names through the same canonical-outlet logic already used elsewhere on the dashboard, on both sides of the comparison. Tested against the exact DIP/DIP (Fyoozhen) case and a handful of other outlets to confirm no unintended false merges.",
@@ -317,7 +318,8 @@ function showWhatsNewIfNeeded(){
   const overlay=document.createElement("div");
   overlay.id="whatsnew-modal";
   overlay.style.cssText="position:fixed;inset:0;background:rgba(15,23,42,.78);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:99999;padding:20px";
-  const items=BUILD_NOTES.slice(0,8).map(n=>`<li style="margin-bottom:10px;line-height:1.55">${n}</li>`).join("");
+  const trimNote=n=>n.length>220?n.slice(0,217)+'…':n;
+  const items=BUILD_NOTES.slice(0,8).map(n=>`<li style="margin-bottom:10px;line-height:1.55">${trimNote(n)}</li>`).join("");
   overlay.innerHTML=`
     <div style="background:#FFFFFF;border:1px solid #22C55E80;border-radius:12px;padding:24px 28px;max-width:540px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(15,23,42,.6);animation:fadeInUp .3s ease">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-shrink:0">
@@ -4569,7 +4571,7 @@ function restructureTabIcons(){
     t.innerHTML=`<span class="tab-icon" style="flex-shrink:0;display:inline-flex;justify-content:center;width:18px">${icon}</span><span class="tab-label">${label}</span>`;
   });
 }
-function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>{t.classList.toggle("act",t.dataset.pg===page);});document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
+function gp(page){if(page!=='feedback')_feedbackTrendSnakePlayed=false;curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>{t.classList.toggle("act",t.dataset.pg===page);});document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
 
 // ── MOBILE NAV DRAWER ──
 // Slides in from the left on tap of hamburger. Overlay dims the page. Any tap on a nav item or
@@ -11035,6 +11037,10 @@ function buildFcCalcTipHTML(sc,brand,agg,discPct,cap,coFundPct,dateStr){
 // ═══════════════════════════════════════════════════════════════════
 let campFcBrand='',campFcAgg='',campFcStart='',campFcEnd='';
 let campFcDiscPct=30,campFcCap=20,campFcCoFund=true,campFcCoFundPct=50;
+// v250: campaign structure type — 'menu' is the original, unchanged model. 'selectItems' is the
+// new type, using real historical per-order discount data instead of a discPct/cap formula.
+let campFcType='menu';
+let campFcComments='';
 let campFcBranches=new Set(),campFcResult=null,campFcCollapsed=false;
 
 function campFcSet(k,v){
@@ -11046,6 +11052,8 @@ function campFcSet(k,v){
   else if(k==='cap')campFcCap=+v;
   else if(k==='coFund')campFcCoFund=v==='true';
   else if(k==='coFundPct')campFcCoFundPct=+v;
+  else if(k==='type')campFcType=v;
+  else if(k==='comments')campFcComments=v;
   else if(k==='collapsed'){campFcCollapsed=(v==='true');renderCampaigns();}
 }
 function campFcToggleBranch(b){if(campFcBranches.has(b))campFcBranches.delete(b);else campFcBranches.add(b);}
@@ -11099,6 +11107,32 @@ function campFcBaseline(brand,agg,branches,days){
 // This flags them (isAtypical) so campFcRun can down-weight rather than silently exclude them —
 // the info is still visible in the match table, just not allowed to dominate the estimate.
 const CAMP_FC_ATYPICAL_RE=/\b(fest(?:ival)?|world\s*cup|eid|ramadan|national\s*day|new\s*year|christmas|black\s*friday|anniversary|carnival|activation|launch\s*party|grand\s*opening)\b/i;
+// v250: "% off select items" historical matching — same real-performance approach as
+// campFcFindMatches (menu-wide), reusing campAnalysisV2's baseline/allocation/contribution
+// logic unchanged, since that math doesn't care what SHAPE a campaign is, only its actual
+// dates and brand/aggregator scope. Confirmed with Nikhil directly: these campaigns rarely
+// overlap with other promos (avoiding double-discount contamination), which is exactly what
+// makes their historical performance a reliable basis for forecasting future ones — no need
+// for a manual "% of order these items represent" guess when the real number already exists
+// in what actually happened. Matched on "select items" language in the name/comments rather
+// than a cap, since this campaign shape doesn't use a menu-wide cap concept.
+const CAMP_FC_SELECT_ITEMS_RE=/select\s*items?/i;
+function campFcFindSelectItemsMatches(brand,agg,discPct){
+  if(!campLoaded)return[];
+  const done=campaignData.filter(c=>campStatus(c)==='Completed'&&c.brand===brand&&c.aggregator===agg
+    &&CAMP_FC_SELECT_ITEMS_RE.test(`${c.name||''} ${c.comments||''}`));
+  const out=[];
+  for(const c of done){
+    const hp=parseInt(((c.comments||c.name||'').match(/(\d{1,3})\s*%/)||[])[1]||'0');
+    if(discPct&&hp&&Math.abs(hp-discPct)>8)continue; // only filter by discount% if both sides have one to compare
+    const a=campAnalysisV2(c);
+    if(!a.hasData||!a.hasBaseline||a.ordersLift==null)continue;
+    const isAtypical=CAMP_FC_ATYPICAL_RE.test(`${c.name||''} ${c.comments||''}`);
+    out.push({c,discPct:hp,cap:null,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales,campOrdersPerDay:a.cs.orders/a.cDays,campSalesPerDay:a.cs.sales/a.cDays,isAtypical});
+  }
+  out.sort((a,b)=>b.c.startDate.localeCompare(a.c.startDate));
+  return out;
+}
 function campFcFindMatches(brand,agg,discPct,cap){
   if(!campLoaded)return[];
   const done=campaignData.filter(c=>campStatus(c)==='Completed'&&c.brand===brand&&c.aggregator===agg);
@@ -11217,6 +11251,36 @@ function campFcWeekOfMonthPos(dateStr){
   return'mid-month';
 }
 
+// v250: companion to campFcRunScenario for select-items campaigns — the menu-wide formula
+// (discPct % of AOV, capped) doesn't apply here, since the discount only touches whatever
+// fraction of the order those specific items happen to be. Rather than asking for a manual
+// estimate of that fraction, this derives the real historical merchant-discount-per-order from
+// matched past "select items" campaigns directly and applies it to the projected order volume —
+// what actually happened, not a formula guess.
+function campFcRunScenarioSelectItems(baseline,uplift,histDiscPerOrder,coFundPct,agg,brand,nDays,dateStr){
+  if(!baseline||histDiscPerOrder==null)return null;
+  const grossAOV=baseline.grossAOV||60;
+  const allOrd=(baseline.dailyOrders*(1+uplift))*nDays;
+  const totalDisc=allOrd*histDiscPerOrder;
+  const merchantDisc=totalDisc*(1-coFundPct/100);
+  const aggCoDisc=totalDisc*(coFundPct/100);
+  // Net AOV for select-items campaigns can't assume the full discount applies to every order the
+  // same way a menu-wide cap does — approximate using the historical average net-per-order
+  // implied by histDiscPerOrder against gross, same spirit as the menu-wide model's netAOV.
+  const netAOV=grossAOV-histDiscPerOrder;
+  const campNet=allOrd*netAOV,campGross=allOrd*grossAOV;
+  const campContrib=brandContribution(agg,brand,campNet,campGross,dateStr);
+  const baseNet=baseline.dailyNet*nDays,baseGross=baseline.dailyGross*nDays;
+  const baseContrib=brandContribution(agg,brand,baseNet,baseGross,dateStr);
+  const incrContrib=campContrib-baseContrib;
+  const roi=merchantDisc>0?incrContrib/merchantDisc:null;
+  const incrOrd=Math.round(baseline.dailyOrders*uplift*nDays);
+  return{upliftPct:uplift*100,totalOrders:Math.round(allOrd),incrOrders:incrOrd,incrOrdersPerDay:baseline.dailyOrders*uplift,
+    campNet,campGross,baseNet,baseGross,campContrib,baseContrib,
+    incrNet:campNet-baseNet,incrNetPerDay:(campNet-baseNet)/nDays,
+    merchantDisc,merchantDiscPerDay:merchantDisc/nDays,aggCoDisc,totalDisc,
+    incrContrib,incrContribPerDay:incrContrib/nDays,roi,effDisc:histDiscPerOrder,grossAOV,netAOV};
+}
 function campFcRunScenario(baseline,uplift,discPct,cap,coFundPct,agg,brand,nDays,dateStr){
   if(!baseline)return null;
   const grossAOV=baseline.grossAOV||60;
@@ -11258,7 +11322,7 @@ function campFcRun(){
   const nDays=Math.max(1,Math.round((new Date(campFcEnd+'T12:00:00')-new Date(campFcStart+'T12:00:00'))/86400000)+1);
   const baseline=campFcBaseline(brand,agg,campFcBranches,nDays);
   if(!baseline){alert('No sales data found for '+brand+' on '+agg+'. Upload data first.');return;}
-  const matches=campFcFindMatches(brand,agg,campFcDiscPct,campFcCap);
+  const matches=campFcType==='selectItems'?campFcFindSelectItemsMatches(brand,agg,campFcDiscPct):campFcFindMatches(brand,agg,campFcDiscPct,campFcCap);
   const seas=campFcSeasonality(brand,agg,campFcStart);
   // v110: the closest available real-world evidence — same brand/agg/discount depth, most
   // recent, not a named one-off event — surfaced prominently as a "reality check" regardless
@@ -11283,7 +11347,22 @@ function campFcRun(){
     }
   }else{cU*=seas.factor;eU*=seas.factor;oU*=seas.factor;}
   const coFP=campFcCoFund?campFcCoFundPct:0;
-  const runSc=u=>campFcRunScenario(baseline,u,campFcDiscPct,campFcCap,coFP,agg,brand,nDays,campFcStart);
+  let runSc;
+  if(campFcType==='selectItems'){
+    // Recency-weighted median discount-per-order across matched historical campaigns — same
+    // weighting spirit as the uplift percentiles above, applied to what the discount actually
+    // cost per order rather than a formula estimate.
+    const discWeighted=matches.filter(m=>m.ourDiscPerDay!=null&&m.campOrdersPerDay>0).map(m=>{
+      const daysAgo=Math.max(1,daysBetweenInclusive(m.c.endDate,campFcStart));
+      const recencyW=Math.exp(-daysAgo/45);
+      const typeW=m.isAtypical?0.3:1;
+      return{u:m.ourDiscPerDay/m.campOrdersPerDay,w:recencyW*typeW};
+    });
+    const histDiscPerOrder=discWeighted.length?campFcWeightedPercentile(discWeighted,50):null;
+    runSc=u=>campFcRunScenarioSelectItems(baseline,u,histDiscPerOrder,coFP,agg,brand,nDays,campFcStart);
+  }else{
+    runSc=u=>campFcRunScenario(baseline,u,campFcDiscPct,campFcCap,coFP,agg,brand,nDays,campFcStart);
+  }
   // Last year comparison
   const lyStart=(parseInt(campFcStart.slice(0,4))-1)+campFcStart.slice(4);
   const lyEnd=(parseInt(campFcEnd.slice(0,4))-1)+campFcEnd.slice(4);
@@ -11351,7 +11430,8 @@ async function campFcSaveForecast(){
   const r=campFcResult;
   const trim=sc=>sc?{upliftPct:sc.upliftPct,totalOrders:sc.totalOrders,incrOrders:sc.incrOrders,incrOrdersPerDay:sc.incrOrdersPerDay,campNet:sc.campNet,merchantDisc:sc.merchantDisc,merchantDiscPerDay:sc.merchantDiscPerDay,incrContrib:sc.incrContrib,incrContribPerDay:sc.incrContribPerDay,roi:sc.roi}:null;
   const payload={
-    brand:r.brand,agg:r.agg,discPct:campFcDiscPct,cap:campFcCap,
+    brand:r.brand,agg:r.agg,discPct:campFcDiscPct,cap:campFcType==='menu'?campFcCap:null,
+    type:campFcType,comments:campFcComments||null,
     coFund:campFcCoFund,coFundPct:campFcCoFund?campFcCoFundPct:null,
     start:campFcStart,end:campFcEnd,branches:[...campFcBranches],
     baseline:{dailyOrders:r.baseline.dailyOrders,dailyNet:r.baseline.dailyNet,grossAOV:r.baseline.grossAOV},
@@ -11433,7 +11513,7 @@ function campFcHistoryHTML(){
       }
     }
     return `<div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1.4fr 1fr;gap:8px;padding:9px 0;border-bottom:0.5px solid ${T.rowBg2};font-size:12px;align-items:center">
-      <div><div style="font-weight:700;color:${T.text}">${bPill(f.brand,18)} ${f.brand} <span style="color:${T.label}">×</span> ${f.agg}</div><div style="font-size:10px;color:${T.label};margin-top:2px">${f.discPct}% off${f.cap?' · cap AED '+f.cap:''} · saved ${savedDate} by ${f.savedByName||f.savedBy||'—'}</div></div>
+      <div><div style="font-weight:700;color:${T.text}">${bPill(f.brand,18)} ${f.brand} <span style="color:${T.label}">×</span> ${f.agg}</div><div style="font-size:10px;color:${T.label};margin-top:2px">${f.discPct}% off${f.cap?' · cap AED '+f.cap:f.type==='selectItems'?' · select items':''} · saved ${savedDate} by ${f.savedByName||f.savedBy||'—'}</div></div>
       <div style="color:${T.muted}">${f.start} – ${f.end}</div>
       <div>${exp?`<strong style="color:#60A5FA">${exp.upliftPct>=0?'+':''}${Math.round(exp.upliftPct)}%</strong>`:'—'}</div>
       <div>${actualHTML}</div>
@@ -11682,18 +11762,26 @@ function campFcHTML(){
   +`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">📊</span><div style="font-size:15px;font-weight:800;color:${T.text}">Campaign Forecaster</div><div style="font-size:10px;color:${T.muted};margin-left:4px">Estimate what a planned campaign will yield before you launch</div></div>`
   +`<button onclick="campFcSet('collapsed','${(!campFcCollapsed).toString()}')" style="background:none;border:0.5px solid ${T.border};border-radius:6px;color:${T.label};padding:3px 10px;font-size:11px;cursor:pointer">${campFcCollapsed?'▼ Expand':'▲ Collapse'}</button></div>`
   +(campFcCollapsed?'':
-    `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:10px">`
+    `<div style="margin-bottom:10px">`
+    +fld('Campaign structure',`<select onchange="campFcSet('type',this.value);renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600">
+      <option value="menu"${campFcType==='menu'?' selected':''}>Menu-wide % off, capped</option>
+      <option value="selectItems"${campFcType==='selectItems'?' selected':''}>% off select items</option>
+    </select>`)
+    +(campFcType==='selectItems'?`<div style="font-size:10px;color:${T.muted};margin-top:5px">Discount cost is derived from real historical "select items" campaigns for this brand + aggregator, not a formula — see matched campaigns below once you run this.</div>`:'')
+    +'</div>'
+    +`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:10px">`
     +fld('Brand',sel('brand',bOpts,campFcBrand))
     +fld('Aggregator',sel('agg',aOpts,campFcAgg))
     +fld('Start',inp('start','date',campFcStart,'2025-01-01','2030-12-31'))
     +fld('End',inp('end','date',campFcEnd,'2025-01-01','2030-12-31'))
     +fld('Discount %',inp('discPct','number',campFcDiscPct,1,90))
-    +fld('Cap AED',inp('cap','number',campFcCap,1,999))
+    +(campFcType==='menu'?fld('Cap AED',inp('cap','number',campFcCap,1,999)):'')
     +fld('Co-funded?',`<select onchange="campFcSet('coFund',this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600"><option value="true"${campFcCoFund?' selected':''}>Yes</option><option value="false"${!campFcCoFund?' selected':''}>No</option></select>`)
     +(campFcCoFund?fld('Platform %',inp('coFundPct','number',campFcCoFundPct,1,99)):'')
     +'</div>'
-    +(campFcBrand&&campFcAgg?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:${T.rowBg};border-radius:6px;border:0.5px solid ${T.border}">`+bPill(campFcBrand,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcBrand}</span>`+`<span style="color:${T.label};font-size:13px">×</span>`+aPill(campFcAgg,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcAgg}</span>`+`<span style="font-size:11px;color:${T.muted};margin-left:4px">${campFcDiscPct}% off · cap AED ${campFcCap}${campFcCoFund?' · '+campFcCoFundPct+'% co-funded':''}</span></div>`:'')
+    +(campFcBrand&&campFcAgg?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:${T.rowBg};border-radius:6px;border:0.5px solid ${T.border}">`+bPill(campFcBrand,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcBrand}</span>`+`<span style="color:${T.label};font-size:13px">×</span>`+aPill(campFcAgg,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcAgg}</span>`+`<span style="font-size:11px;color:${T.muted};margin-left:4px">${campFcDiscPct}% off${campFcType==='menu'?' · cap AED '+campFcCap:' · select items'}${campFcCoFund?' · '+campFcCoFundPct+'% co-funded':''}</span></div>`:'')
     +(branches.length?`<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:600;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">Branches <span style="font-weight:400;text-transform:none">(all selected by default · tap to deselect)</span></div>${branchChips}</div>`:'')
+    +`<div style="margin-bottom:10px">${fld('Additional comments <span style="font-weight:400;text-transform:none">(optional — e.g. select locations only, aggregator-specific terms)</span>',`<textarea onchange="campFcSet('comments',this.value)" placeholder="e.g. live in select locations only, or BOGO exclusive to Noon with no commission charged on these orders" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 8px;font-size:12px;min-height:44px;font-family:inherit;box-sizing:border-box;resize:vertical">${campFcComments}</textarea>`)}</div>`
     +`<button onclick="campFcRun()" style="background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.4);border-radius:6px;color:${accent};padding:6px 18px;font-size:12px;cursor:pointer;font-weight:700">▶ Run Forecast</button>`
     +resultsHTML
   )
@@ -13713,6 +13801,12 @@ let feedbackFilterCategory=null;    // top filter chip — narrows every table t
 let feedbackFilterAggregator=null;  // top filter chip — narrows every table to one aggregator
 let feedbackFilterOutlet=null;      // top filter chip — narrows every table to one outlet
 let feedbackZoomMode='overview';    // 'overview' (trend chart + months×category heatmap) or 'detail' (the tables)
+// v251: tracks whether the trend chart's snake-draw line animation has already played during
+// this visit to the Feedback page — persists across chart re-creation (gp() destroys and
+// recreates all charts on every navigation, even re-clicking the same tab), reset only when
+// navigating away to a different page. Confirmed with Nikhil this was replaying repeatedly
+// instead of playing once and staying put.
+let _feedbackTrendSnakePlayed=false;
 let feedbackShowCustom=false;       // top-section Option C: presets shown by default, granular month chips + dimension filters hidden behind this
 let feedbackHeatmapMode='count';    // 'count' or 'rate' — which face of the flip heatmap is showing
 let feedbackCompareMode='row';      // 'column' (vs other categories this month) or 'row' (vs this category's own history) — defaults to row per confirmed preference
@@ -14367,6 +14461,7 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
       charts['feedback-trend-chart'].data.datasets[1].data=orderVol;
       charts['feedback-trend-chart'].update();
     }else{
+      const alreadyPlayed=_feedbackTrendSnakePlayed;
       const chart=new Chart(trendCtx,{
         type:'bar',
         data:{labels:monthLabels,datasets:[
@@ -14375,7 +14470,7 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
         ]},
         options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:12}},
           interaction:{mode:'index',intersect:false},
-          animation:{duration:500,easing:'easeOutQuart',onComplete:function(){startLineSnake(this);}},
+          animation:alreadyPlayed?{duration:0}:{duration:500,easing:'easeOutQuart',onComplete:function(){_feedbackTrendSnakePlayed=true;startLineSnake(this);}},
           onClick:(e,els)=>{if(els.length){feedbackToggleMonth(months[els[0].index],e.native);}},
           plugins:{legend:{display:false},
             tooltip:{callbacks:{
@@ -14390,6 +14485,8 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
           }},
         plugins:[snakeClipPlugin]
       });
+      // Already played this visit — skip the snake reveal, line is just fully visible from the start
+      if(alreadyPlayed){chart._snakeProgress=1;chart.draw();}
       charts['feedback-trend-chart']=chart;
     }
   }
@@ -14465,7 +14562,7 @@ function feedbackSetupStickyFilterBar(){
     pinned=false;
   };
   measure();
-  _feedbackStickyScrollHandler=()=>{
+  const checkAndApply=()=>{
     if(!document.getElementById('feedback-filter-bar')){
       // page navigated away — clean up so this handler doesn't keep firing forever
       window.removeEventListener('scroll',_feedbackStickyScrollHandler,true);
@@ -14476,7 +14573,13 @@ function feedbackSetupStickyFilterBar(){
     if(top!=null&&window.scrollY>top)pin();
     else unpin();
   };
+  _feedbackStickyScrollHandler=checkAndApply;
   window.addEventListener('scroll',_feedbackStickyScrollHandler,{capture:true,passive:true});
+  // v251: apply the correct pinned state immediately, not just on the next scroll event — every
+  // re-render (filter click, mode toggle, gp() re-navigation) creates a fresh, unpinned bar
+  // element. Without this, staying scrolled down through a re-render left the bar unpinned
+  // until the user scrolled again, which is exactly what looked like "not sticking."
+  checkAndApply();
 }
 async function renderFeedback(){
   const pg=document.getElementById("page-feedback");if(!pg)return;
