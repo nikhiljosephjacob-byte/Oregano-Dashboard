@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-264";
+const BUILD_VERSION="2026-08-13-265";
 const BUILD_NOTES=[
+  "🆕 Both Compare page tables are now exportable — ⬇ Export CSV on the Brand × Platform Breakdown, and another on the Outlet drill-down once you've expanded a row. Same columns you see on screen (including the Ad Spend A/B/Δ added a couple builds ago), plus a plain-text % column instead of the color-coded pill so it's usable straight in Excel/Sheets. Filenames carry both date windows so exports from different comparisons don't overwrite each other. Verified the row math and both empty-state guards (no dates set, no row expanded) against the actual functions before shipping.",
   "🐛 Corrected the Compare page Ad Spend columns (v263) — removed the 🔗 \"pooled, not tracked per outlet\" caveat on Careem/Noon. Confirmed by Nikhil: the sheet does carry a real per-outlet spend split for those platforms; \"pooled\" only means the budget CAP is set at brand level (matches how the Ads Performance page already treats it elsewhere — per-outlet budget is indicative, per-outlet results are exact). The outlet drill-down's totals strip now sums the per-outlet Ad Spend rows directly instead of falling back to the brand-level figure, matching how Orders/Sales totals already work — which also doubles as a check that the outlet rows add up to the Breakdown table's brand total.",
   "🆕 Added Ad Spend to both Compare page tables — Brand × Platform Breakdown and the per-outlet drill-down — showing A/B/Δ for whichever brand(s)/outlet(s)/aggregator(s) and date windows are being compared. Pulls from the same Ad Investments data as the Ads Performance page, pro-rated by how much of each campaign row's own date range actually overlaps each side's comparison window (not the row's full spend credited to every window it touches). Careem and Noon run a single pooled ad budget per brand rather than independent per-outlet budgets — flagged with 🔗 in both tables so a pooled figure isn't mistaken for a real per-outlet split. Shows — instead of AED 0 when there's simply no ad data for that brand/aggregator, so a genuine zero-spend period isn't confused with missing data. Verified the pro-ration math (partial overlap, no overlap, outlet match/mismatch, pooled flag, single-day window) with unit tests against the actual function before shipping.",
   "🐛 Fixed the Feedback trend chart's line animation not doing any of the three things asked: not starting after the bars, not repeating when scrolled back into view, not moving on the Count/% toggle. Root cause of all three was the same: bars had zero animation duration (nothing for the line to follow), and a \"played once ever\" flag permanently blocked the line from re-arming — it only ever looked like it replayed when switching to a different sidebar page and back, since that path happens to destroy and rebuild the whole chart; plain scroll-away/scroll-back within the page never did. Rebuilt so bars have a real animation and the line is chained to Chart.js's onComplete (fires right when the bars actually finish, not a guessed delay), replaced the play-once flag with a persistent observer that replays on every real visibility crossing, and routed the Count/% toggle through the same replay path. Verified the call sequencing (bars→line, replay-on-revisit, replay-on-toggle, no overlapping replays) with isolated logic tests before shipping — recommend a visual check after deploy since I can't screenshot the live animation from here.",
@@ -15400,6 +15401,64 @@ function cmpAdSpendOverlap(cfg,brand,agg,branch){
   }
   return{spent,pooled,hasData};
 }
+// v265: CSV export for the two Compare page tables. Recomputes from cmpA/cmpB/cmpExpandedRow
+// (the persisted global filter state) rather than reading renderCompare()'s local tableRows/
+// branchRows — those are scoped to that one render call and don't exist by the time a button
+// click fires this. Same recompute-on-export pattern already used by platExportMonthly() and
+// discountExportCSV() elsewhere in this file. Reuses the generic cpcExportCSV(filename,header,
+// rows) writer so the actual CSV/blob/download mechanics aren't duplicated a third time.
+function cmpExportBreakdownCSV(){
+  if(!cmpA.start||!cmpB.start){alert("Set both comparison windows first.");return;}
+  const dA=cmpData(cmpA),dB=cmpData(cmpB);
+  const keys=new Set([...dA,...dB].map(r=>`${r.brand}|${r.aggregator}`));
+  const tableRows=[...keys].map(k=>{
+    const[brand,ag]=k.split("|");
+    const a=sumR(dA.filter(r=>r.brand===brand&&r.aggregator===ag));
+    const b=sumR(dB.filter(r=>r.brand===brand&&r.aggregator===ag));
+    const adA=cmpAdSpendOverlap(cmpA,brand,ag,null),adB=cmpAdSpendOverlap(cmpB,brand,ag,null);
+    return{brand,ag,a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),adA,adB,adDiff:pctOf(adB.spent,adA.spent)};
+  }).filter(r=>r.a.orders>0||r.b.orders>0);
+  if(!tableRows.length){alert("No data in either window to export.");return;}
+  const header=["Brand · Platform","A Orders","B Orders","Δ Ord","A Net Sales (AED)","B Net Sales (AED)","Δ Net Sales","A Ad Spend (AED)","B Ad Spend (AED)","Δ Ad Spend"];
+  const rows=tableRows.map(r=>[
+    `${r.brand} · ${r.ag}`,
+    r.a.orders,r.b.orders,r.oDiff==null?"":r.oDiff.toFixed(1)+"%",
+    r.a.sales.toFixed(2),r.b.sales.toFixed(2),r.sDiff==null?"":r.sDiff.toFixed(1)+"%",
+    r.adA.hasData?r.adA.spent.toFixed(2):"",r.adB.hasData?r.adB.spent.toFixed(2):"",
+    (r.adA.hasData||r.adB.hasData)&&r.adDiff!=null?r.adDiff.toFixed(1)+"%":""
+  ]);
+  const fname=`compare_breakdown_${cmpA.start}_${cmpA.end||cmpA.start}_vs_${cmpB.start}_${cmpB.end||cmpB.start}.csv`;
+  cpcExportCSV(fname,header,rows);
+}
+function cmpExportOutletCSV(){
+  if(!cmpExpandedRow){alert("Expand a Brand × Platform row first to see outlet data to export.");return;}
+  const[xBrand,xAg]=cmpExpandedRow.split("|");
+  const dA=cmpData(cmpA),dB=cmpData(cmpB);
+  const brSet=new Set([
+    ...dA.filter(r=>r.brand===xBrand&&r.aggregator===xAg).map(r=>r.branch),
+    ...dB.filter(r=>r.brand===xBrand&&r.aggregator===xAg).map(r=>r.branch)
+  ]);
+  brSet.delete("(brand-level)");
+  const branchRows=[...brSet].map(branch=>{
+    const a=sumR(dA.filter(r=>r.brand===xBrand&&r.aggregator===xAg&&r.branch===branch));
+    const b=sumR(dB.filter(r=>r.brand===xBrand&&r.aggregator===xAg&&r.branch===branch));
+    const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
+    const adA=cmpAdSpendOverlap(cmpA,xBrand,xAg,branch),adB=cmpAdSpendOverlap(cmpB,xBrand,xAg,branch);
+    return{branch,a,b,aov_a,aov_b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a),adA,adB,adDiff:pctOf(adB.spent,adA.spent)};
+  }).filter(r=>r.a.orders>0||r.b.orders>0);
+  if(!branchRows.length){alert("No outlet data in either window for this combination.");return;}
+  const header=["Outlet","A Orders","B Orders","Δ Ord","A Net Sales (AED)","B Net Sales (AED)","Δ Net Sales","A AOV (AED)","B AOV (AED)","Δ AOV","A Ad Spend (AED)","B Ad Spend (AED)","Δ Ad Spend"];
+  const rows=branchRows.map(r=>[
+    r.branch,
+    r.a.orders,r.b.orders,r.oDiff==null?"":r.oDiff.toFixed(1)+"%",
+    r.a.sales.toFixed(2),r.b.sales.toFixed(2),r.sDiff==null?"":r.sDiff.toFixed(1)+"%",
+    r.a.orders>0?r.aov_a.toFixed(2):"",r.b.orders>0?r.aov_b.toFixed(2):"",r.aDiff==null?"":r.aDiff.toFixed(1)+"%",
+    r.adA.hasData?r.adA.spent.toFixed(2):"",r.adB.hasData?r.adB.spent.toFixed(2):"",
+    (r.adA.hasData||r.adB.hasData)&&r.adDiff!=null?r.adDiff.toFixed(1)+"%":""
+  ]);
+  const fname=`compare_outlets_${xBrand}_${xAg}_${cmpA.start}_${cmpA.end||cmpA.start}_vs_${cmpB.start}_${cmpB.end||cmpB.start}.csv`.replace(/\s+/g,"_");
+  cpcExportCSV(fname,header,rows);
+}
 function cmpLabel(cfg){
   const parts=[];
   parts.push(cfg.brands.size?[...cfg.brands].join("+"):"All brands");
@@ -16192,7 +16251,7 @@ function renderCompare(){
       :'';
     const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:12px;color:${cmpBtnTxt};margin-bottom:10px;padding:8px 12px;background:rgba(245,158,11,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><span><span style="color:#60A5FA">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAEDTip(totA.sales)}</span><span><span style="color:#F59E0B">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAEDTip(totB.sales)}</span><span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span>${adSpendLine}</div></div>`;
     outletDrillCard=branchRows.length
-      ?`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown <span style="color:${cmpMutedTxt};font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid ${cmpBtnBorder};color:${cmpBtnTxt};padding:4px 10px;font-size:11px;border-radius:5px;cursor:pointer" title="Close drill-down">✕ close</button></div>${totsLine}${sortableTable("cmp-outlet-tbl",oHeads,oRows,4)}</div>`
+      ?`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown <span style="color:${cmpMutedTxt};font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></span><span style="display:flex;gap:8px;align-items:center"><button onclick="cmpExportOutletCSV()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap">⬇ Export CSV</button><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid ${cmpBtnBorder};color:${cmpBtnTxt};padding:4px 10px;font-size:11px;border-radius:5px;cursor:pointer" title="Close drill-down">✕ close</button></span></div>${totsLine}${sortableTable("cmp-outlet-tbl",oHeads,oRows,4)}</div>`
       :`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown</span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid ${cmpBtnBorder};color:${cmpBtnTxt};padding:4px 10px;font-size:11px;border-radius:5px;cursor:pointer">✕ close</button></div><div style="color:${cmpMutedTxt};font-size:13px;padding:8px 0">No outlets with activity in either window for this combination.</div></div>`;
   }
 
@@ -16295,7 +16354,7 @@ function renderCompare(){
       `<span style="color:#60A5FA">${p.a.orders>0?'AED '+(p.a.sales/p.a.orders).toFixed(1):'—'}</span>`,`<span style="color:#F59E0B">${p.b.orders>0?'AED '+(p.b.sales/p.b.orders).toFixed(1):'—'}</span>`,
       `<span style="color:${pctClr(p.aDiff)};font-weight:700">${fmtPct(p.aDiff)}</span>`
     ]))}</div>`;
-  const outletsTabHTML=`<div class="card"><div class="ct">Brand × Platform Breakdown <span style="color:${cmpMutedTxt};font-weight:400;text-transform:none;letter-spacing:0">· click a row to drill down to outlets</span></div>${sortableTable("cmp-tbl",tHeads,tRows,4)}</div>
+  const outletsTabHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:2px"><div class="ct" style="margin-bottom:0">Brand × Platform Breakdown <span style="color:${cmpMutedTxt};font-weight:400;text-transform:none;letter-spacing:0">· click a row to drill down to outlets</span></div><button onclick="cmpExportBreakdownCSV()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap">⬇ Export CSV</button></div>${sortableTable("cmp-tbl",tHeads,tRows,4)}</div>
     ${outletDrillCard}`;
   const activeTabHTML=cmpSubTab==="trend"?trendTabHTML:cmpSubTab==="platforms"?platformsTabHTML:cmpSubTab==="outlets"?outletsTabHTML:summaryTabHTML;
 
