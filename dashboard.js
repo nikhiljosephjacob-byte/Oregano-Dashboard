@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-262";
+const BUILD_VERSION="2026-08-13-264";
 const BUILD_NOTES=[
+  "🐛 Corrected the Compare page Ad Spend columns (v263) — removed the 🔗 \"pooled, not tracked per outlet\" caveat on Careem/Noon. Confirmed by Nikhil: the sheet does carry a real per-outlet spend split for those platforms; \"pooled\" only means the budget CAP is set at brand level (matches how the Ads Performance page already treats it elsewhere — per-outlet budget is indicative, per-outlet results are exact). The outlet drill-down's totals strip now sums the per-outlet Ad Spend rows directly instead of falling back to the brand-level figure, matching how Orders/Sales totals already work — which also doubles as a check that the outlet rows add up to the Breakdown table's brand total.",
+  "🆕 Added Ad Spend to both Compare page tables — Brand × Platform Breakdown and the per-outlet drill-down — showing A/B/Δ for whichever brand(s)/outlet(s)/aggregator(s) and date windows are being compared. Pulls from the same Ad Investments data as the Ads Performance page, pro-rated by how much of each campaign row's own date range actually overlaps each side's comparison window (not the row's full spend credited to every window it touches). Careem and Noon run a single pooled ad budget per brand rather than independent per-outlet budgets — flagged with 🔗 in both tables so a pooled figure isn't mistaken for a real per-outlet split. Shows — instead of AED 0 when there's simply no ad data for that brand/aggregator, so a genuine zero-spend period isn't confused with missing data. Verified the pro-ration math (partial overlap, no overlap, outlet match/mismatch, pooled flag, single-day window) with unit tests against the actual function before shipping.",
   "🐛 Fixed the Feedback trend chart's line animation not doing any of the three things asked: not starting after the bars, not repeating when scrolled back into view, not moving on the Count/% toggle. Root cause of all three was the same: bars had zero animation duration (nothing for the line to follow), and a \"played once ever\" flag permanently blocked the line from re-arming — it only ever looked like it replayed when switching to a different sidebar page and back, since that path happens to destroy and rebuild the whole chart; plain scroll-away/scroll-back within the page never did. Rebuilt so bars have a real animation and the line is chained to Chart.js's onComplete (fires right when the bars actually finish, not a guessed delay), replaced the play-once flag with a persistent observer that replays on every real visibility crossing, and routed the Count/% toggle through the same replay path. Verified the call sequencing (bars→line, replay-on-revisit, replay-on-toggle, no overlapping replays) with isolated logic tests before shipping — recommend a visual check after deploy since I can't screenshot the live animation from here.",
   "🔍 Replaced the v260 flat \"AED 2/order\" Deliveract FD guess with real measured rates — cross-checked full Keeta statements (Apr 1–Aug 9, ~24k orders) day-by-day against the sheet's own Keeta figures. Turns out the leakage was never flat: it ramped from ~AED 0.05-0.30/order in April to ~AED 1.8-2.3/order (near the full AED 2 ceiling) by early August as order volume migrated Grubtech→Deliveract, before the Aug 10 fix. The old flat guess over-corrected April-June by 85%+ and slightly under-corrected early August. Confirmed Fyoozhen/Wicked Wings still show no real bias (just noise) — correctly excluded. New table uses exact measured monthly rates per brand, with August split at the Aug 10 cutover so the fix date isn't diluted. Root cause is a gradual POS migration, not a single switch-flip — worth knowing if this pattern shows up again with a future integration change.",
   "🆕 Taught the dashboard about the Deliveract POS integration issue — confirmed by Nikhil: Deliveract was incorrectly including the AED 2 FD in POS discount reports for Lollorosso/Oregano/Smokeys until fixed mid-day on Aug 10 (not Wicked Wings, not integrated; not Fyoozhen, confirmed unaffected). Both the Discrepancy table and the original Uncategorized Burn tile now subtract AED 2/order from the sheet-side figure for these brands before that date. Tested the adjustment logic across all brand/date combinations before shipping — I don't have live sheet data to confirm this actually closes the gap, so worth checking the discrepancy report after this deploys.",
@@ -15363,6 +15365,41 @@ function cmpComputeDisc(cfg){
   const source=cfg.branches.size===0?"brand_level":(anyExact&&!anyEstimated?"exact":(anyEstimated&&anyExact?"mixed":"estimated"));
   return{total,source};
 }
+// v262: answers "how much was spent advertising this brand/aggregator(/outlet) during THIS
+// comparison window" — pro-rates each Ad Investments row's total spend across however much of
+// its own start→end date range actually overlaps cfg's window (same overlap-days approach as
+// cmpCampaignImbalance above), rather than crediting the row's full spend to every window it
+// merely touches. branch=null matches spend across ALL outlets for that brand+aggregator (used
+// by the Breakdown table); a real outlet name narrows to that outlet's own rows (used by the
+// Outlet drill-down table). Some aggregators (confirmed: Careem, Noon) run a single pooled
+// budget per brand rather than independently-controlled per-outlet budgets — `pooled` flags
+// this so the UI can label it instead of implying a real per-outlet split that doesn't exist.
+// `hasData` distinguishes "genuinely AED 0 spent" from "no Ad Investments rows for this
+// brand/aggregator at all" so the table can show — instead of a misleading AED 0.
+// v263: pooled budgetType means Careem/Noon can't set an independent budget CAP per outlet —
+// it does NOT mean per-outlet spend is inaccurate. Confirmed by Nikhil: the sheet carries a
+// real per-outlet split for these aggregators too (matches how the Ads Performance page
+// already treats it — "per-outlet budget figures are indicative; per-outlet results are
+// exact"). So `pooled` is kept here as data (useful context if a future view needs it) but
+// deliberately NOT surfaced as a caveat on the Compare page — the branch-matched spend below
+// is trusted as-is, same as any other aggregator.
+function cmpAdSpendOverlap(cfg,brand,agg,branch){
+  if(!cfg.start)return{spent:0,pooled:false,hasData:false};
+  const winEnd=cfg.end||cfg.start;
+  let spent=0,hasData=false,pooled=false;
+  for(const r of cpcData){
+    if(r.brand!==brand||r.aggregator!==agg)continue;
+    if(branch!=null&&r.branch!==branch)continue;
+    if(!r.startDate||!r.endDate)continue;
+    const lo=r.startDate>cfg.start?r.startDate:cfg.start;
+    const hi=r.endDate<winEnd?r.endDate:winEnd;
+    if(lo>hi)continue;
+    spent+=(r.dailyBurn||0)*daysBetweenInclusive(lo,hi);
+    hasData=true;
+    if(r.budgetType==='combined')pooled=true;
+  }
+  return{spent,pooled,hasData};
+}
 function cmpLabel(cfg){
   const parts=[];
   parts.push(cfg.brands.size?[...cfg.brands].join("+"):"All brands");
@@ -16073,7 +16110,8 @@ function renderCompare(){
     const[brand,ag]=k.split("|");
     const a=sumR(dA.filter(r=>r.brand===brand&&r.aggregator===ag));
     const b=sumR(dB.filter(r=>r.brand===brand&&r.aggregator===ag));
-    return{brand,ag,a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales)};
+    const adA=cmpAdSpendOverlap(cmpA,brand,ag,null),adB=cmpAdSpendOverlap(cmpB,brand,ag,null);
+    return{brand,ag,a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),adA,adB,adDiff:pctOf(adB.spent,adA.spent)};
   }).filter(r=>r.a.orders>0||r.b.orders>0);
   // Make each row clickable to expand into per-outlet drill-down (rendered as a separate card
   // below the table). A small chevron in the brand cell shows the state; the row gets a subtle
@@ -16091,12 +16129,15 @@ function renderCompare(){
         `<span style="color:${pctClr(r.oDiff)};font-weight:700">${fmtPct(r.oDiff)}</span>`,
         `<span style="color:#60A5FA">${fmtAEDTip(r.a.sales)}</span>`,
         `<span style="color:#F59E0B">${fmtAEDTip(r.b.sales)}</span>`,
-        `<span style="color:${pctClr(r.sDiff)};font-weight:700">${fmtPct(r.sDiff)}</span>`
+        `<span style="color:${pctClr(r.sDiff)};font-weight:700">${fmtPct(r.sDiff)}</span>`,
+        `<span style="color:#60A5FA">${r.adA.hasData?fmtAEDTip(r.adA.spent):'—'}</span>`,
+        `<span style="color:#F59E0B">${r.adB.hasData?fmtAEDTip(r.adB.spent):'—'}</span>`,
+        `<span style="color:${cmpSubTxt};font-weight:700">${(r.adA.hasData||r.adB.hasData)?fmtPct(r.adDiff):'—'}</span>`
       ],
-      sortVals:[r.brand,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff]
+      sortVals:[r.brand,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff,r.adA.spent,r.adB.spent,r.adDiff??0]
     };
   });
-  const tHeads=["Brand · Platform","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales"];
+  const tHeads=["Brand · Platform","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A Ad Spend","B Ad Spend","Δ Ad Spend"];
 
   // Outlet drill-down card content (rendered below the breakdown table when a row is expanded)
   let outletDrillCard='';
@@ -16114,10 +16155,12 @@ function renderCompare(){
       const a=sumR(dA.filter(r=>r.brand===xBrand&&r.aggregator===xAg&&r.branch===branch));
       const b=sumR(dB.filter(r=>r.brand===xBrand&&r.aggregator===xAg&&r.branch===branch));
       const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
-      return{branch,a,b,aov_a,aov_b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a)};
+      const adA=cmpAdSpendOverlap(cmpA,xBrand,xAg,branch),adB=cmpAdSpendOverlap(cmpB,xBrand,xAg,branch);
+      return{branch,a,b,aov_a,aov_b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a),adA,adB,adDiff:pctOf(adB.spent,adA.spent)};
     }).filter(r=>r.a.orders>0||r.b.orders>0);
-    const oHeads=["Outlet","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A AOV","B AOV","Δ AOV"];
-    const oRows=branchRows.map(r=>({
+    const oHeads=["Outlet","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A AOV","B AOV","Δ AOV","A Ad Spend","B Ad Spend","Δ Ad Spend"];
+    const oRows=branchRows.map(r=>{
+      return{
       cells:[
         `<strong style="color:${_darkPage?DARK_THEME.textPrimary:'#0F172A'};font-size:13px">${r.branch}</strong>`,
         `<span style="color:${CMP_A_CLR}">${r.a.orders.toLocaleString()}</span>`,
@@ -16128,15 +16171,26 @@ function renderCompare(){
         `<span style="color:${pctClr(r.sDiff)};font-weight:700">${fmtPct(r.sDiff)}</span>`,
         `<span style="color:#60A5FA">${r.a.orders>0?'AED '+r.aov_a.toFixed(1):'—'}</span>`,
         `<span style="color:#F59E0B">${r.b.orders>0?'AED '+r.aov_b.toFixed(1):'—'}</span>`,
-        `<span style="color:${pctClr(r.aDiff)};font-weight:700">${fmtPct(r.aDiff)}</span>`
+        `<span style="color:${pctClr(r.aDiff)};font-weight:700">${fmtPct(r.aDiff)}</span>`,
+        `<span style="color:#60A5FA">${r.adA.hasData?fmtAEDTip(r.adA.spent):'—'}</span>`,
+        `<span style="color:#F59E0B">${r.adB.hasData?fmtAEDTip(r.adB.spent):'—'}</span>`,
+        `<span style="color:${cmpSubTxt};font-weight:700">${(r.adA.hasData||r.adB.hasData)?fmtPct(r.adDiff):'—'}</span>`
       ],
-      sortVals:[r.branch,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff,r.aov_a,r.aov_b,r.aDiff]
-    }));
-    // Totals strip (optional but helpful — confirms drill-down sums to the parent brand × platform row)
-    const totA=branchRows.reduce((s,r)=>({orders:s.orders+r.a.orders,sales:s.sales+r.a.sales}),{orders:0,sales:0});
-    const totB=branchRows.reduce((s,r)=>({orders:s.orders+r.b.orders,sales:s.sales+r.b.sales}),{orders:0,sales:0});
+      sortVals:[r.branch,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff,r.aov_a,r.aov_b,r.aDiff,r.adA.spent,r.adB.spent,r.adDiff??0]
+    };});
+    // Totals strip (optional but helpful — confirms drill-down sums to the parent brand × platform row).
+    // Ad spend sums this table's own per-outlet rows, same pattern as orders/sales below — per-outlet
+    // spend is confirmed accurate even for Careem/Noon (their budget CAP is pooled per brand, but the
+    // sheet still carries a real per-outlet spend split), so this also doubles as an implicit check that
+    // the outlet rows add up to the brand total shown on the Breakdown table above.
+    const totA=branchRows.reduce((s,r)=>({orders:s.orders+r.a.orders,sales:s.sales+r.a.sales,ad:s.ad+(r.adA.hasData?r.adA.spent:0)}),{orders:0,sales:0,ad:0});
+    const totB=branchRows.reduce((s,r)=>({orders:s.orders+r.b.orders,sales:s.sales+r.b.sales,ad:s.ad+(r.adB.hasData?r.adB.spent:0)}),{orders:0,sales:0,ad:0});
     const totODiff=pctOf(totB.orders,totA.orders),totSDiff=pctOf(totB.sales,totA.sales);
-    const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:12px;color:${cmpBtnTxt};margin-bottom:10px;padding:8px 12px;background:rgba(245,158,11,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center"><span><span style="color:#60A5FA">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAEDTip(totA.sales)}</span><span><span style="color:#F59E0B">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAEDTip(totB.sales)}</span><span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span></div></div>`;
+    const anyAdData=branchRows.some(r=>r.adA.hasData||r.adB.hasData);
+    const adSpendLine=anyAdData
+      ?`<span><span style="color:${cmpMutedTxt}">Ad Spend:</span> <span style="color:#60A5FA">${fmtAEDTip(totA.ad)}</span> vs <span style="color:#F59E0B">${fmtAEDTip(totB.ad)}</span></span>`
+      :'';
+    const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:12px;color:${cmpBtnTxt};margin-bottom:10px;padding:8px 12px;background:rgba(245,158,11,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><span><span style="color:#60A5FA">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAEDTip(totA.sales)}</span><span><span style="color:#F59E0B">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAEDTip(totB.sales)}</span><span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span>${adSpendLine}</div></div>`;
     outletDrillCard=branchRows.length
       ?`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown <span style="color:${cmpMutedTxt};font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid ${cmpBtnBorder};color:${cmpBtnTxt};padding:4px 10px;font-size:11px;border-radius:5px;cursor:pointer" title="Close drill-down">✕ close</button></div>${totsLine}${sortableTable("cmp-outlet-tbl",oHeads,oRows,4)}</div>`
       :`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown</span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid ${cmpBtnBorder};color:${cmpBtnTxt};padding:4px 10px;font-size:11px;border-radius:5px;cursor:pointer">✕ close</button></div><div style="color:${cmpMutedTxt};font-size:13px;padding:8px 0">No outlets with activity in either window for this combination.</div></div>`;
