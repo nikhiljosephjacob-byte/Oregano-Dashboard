@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-265";
+const BUILD_VERSION="2026-08-13-266";
 const BUILD_NOTES=[
+  "🐛 Labeled the two independent bid recommendation lines on the Deliveroo Outlet Performance table — \"Budget pacing\" (raise bid to burn through this month's allocated budget before it goes unused) vs \"Historical optimal\" (raise/lower bid to whatever balanced ROAS & volume best over the last 6 months). Nikhil flagged these stacking together with no explanation read as one system contradicting itself — e.g. pacing saying raise to AED 3.16 right above historical saying raise to only AED 1.60. Same two systems as before, same numbers — just labeled so it's clear they're answering different questions (this month's budget utilization vs. long-run performance) rather than disagreeing with each other.",
   "🆕 Both Compare page tables are now exportable — ⬇ Export CSV on the Brand × Platform Breakdown, and another on the Outlet drill-down once you've expanded a row. Same columns you see on screen (including the Ad Spend A/B/Δ added a couple builds ago), plus a plain-text % column instead of the color-coded pill so it's usable straight in Excel/Sheets. Filenames carry both date windows so exports from different comparisons don't overwrite each other. Verified the row math and both empty-state guards (no dates set, no row expanded) against the actual functions before shipping.",
   "🐛 Corrected the Compare page Ad Spend columns (v263) — removed the 🔗 \"pooled, not tracked per outlet\" caveat on Careem/Noon. Confirmed by Nikhil: the sheet does carry a real per-outlet spend split for those platforms; \"pooled\" only means the budget CAP is set at brand level (matches how the Ads Performance page already treats it elsewhere — per-outlet budget is indicative, per-outlet results are exact). The outlet drill-down's totals strip now sums the per-outlet Ad Spend rows directly instead of falling back to the brand-level figure, matching how Orders/Sales totals already work — which also doubles as a check that the outlet rows add up to the Breakdown table's brand total.",
   "🆕 Added Ad Spend to both Compare page tables — Brand × Platform Breakdown and the per-outlet drill-down — showing A/B/Δ for whichever brand(s)/outlet(s)/aggregator(s) and date windows are being compared. Pulls from the same Ad Investments data as the Ads Performance page, pro-rated by how much of each campaign row's own date range actually overlaps each side's comparison window (not the row's full spend credited to every window it touches). Careem and Noon run a single pooled ad budget per brand rather than independent per-outlet budgets — flagged with 🔗 in both tables so a pooled figure isn't mistaken for a real per-outlet split. Shows — instead of AED 0 when there's simply no ad data for that brand/aggregator, so a genuine zero-spend period isn't confused with missing data. Verified the pro-ration math (partial overlap, no overlap, outlet match/mismatch, pooled flag, single-day window) with unit tests against the actual function before shipping.",
@@ -7818,11 +7819,11 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
             }else if(inv.additional<=0){
               const pace=cpcPacingRec(ag,d,t.calcBid);
               if(pace&&pace.goodROI){
-                parts.push(`<div style="font-size:10px;color:#F59E0B;font-weight:800" title="Only ~${pace.pacePct}% of the budget will be spent by month-end at the current burn — ~AED ${pace.projUnspent} would go unused. ROAS ${d.roi?d.roi.toFixed(1):'—'}×${pace.strongCTO?` and CTO ${d.cto.toFixed(0)}%`:''} support buying more impressions.${pace.capped?' Suggested bid is capped at 2× as a step — raise, re-check pace in 3–4 days, then step again if still underpacing.':''}">⚡ underpacing ${pace.pacePct}%${pace.suggestedBid?` — raise bid to AED ${pace.suggestedBid.toFixed(2)}`:' — raise bid / visibility'}</div>`);
+                parts.push(`<div style="font-size:10px;color:#F59E0B;font-weight:800" title="Only ~${pace.pacePct}% of the budget will be spent by month-end at the current burn — ~AED ${pace.projUnspent} would go unused. ROAS ${d.roi?d.roi.toFixed(1):'—'}×${pace.strongCTO?` and CTO ${d.cto.toFixed(0)}%`:''} support buying more impressions.${pace.capped?' Suggested bid is capped at 2× as a step — raise, re-check pace in 3–4 days, then step again if still underpacing.':''}">⚡ Budget pacing: underpacing ${pace.pacePct}%${pace.suggestedBid?` — raise bid to AED ${pace.suggestedBid.toFixed(2)}`:' — raise bid / visibility'}</div>`);
               }else if(pace){
-                parts.push(`<div style="font-size:10px;color:${T.label}" title="Only ~${pace.pacePct}% of the budget will be spent by month-end, and ROI here is modest — rather than forcing spend into a weak outlet, consider reallocating ~AED ${pace.projUnspent} to higher-ROAS outlets.">underpacing ${pace.pacePct}% · reallocate ~${fmtAEDTip(pace.projUnspent)}</div>`);
+                parts.push(`<div style="font-size:10px;color:${T.label}" title="Only ~${pace.pacePct}% of the budget will be spent by month-end, and ROI here is modest — rather than forcing spend into a weak outlet, consider reallocating ~AED ${pace.projUnspent} to higher-ROAS outlets.">Budget pacing: underpacing ${pace.pacePct}% · reallocate ~${fmtAEDTip(pace.projUnspent)}</div>`);
               }else{
-                parts.push(`<div style="font-size:10px;color:#22C55E">✓ on pace</div>`);
+                parts.push(`<div style="font-size:10px;color:#22C55E">✓ Budget pacing: on pace</div>`);
               }
             }
           }else if(inv.mode==="restart"){
@@ -7844,7 +7845,7 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
         // were "supposed to move to" but couldn't tell whether the arrow meant "your current bid
         // is going down" or "we suggest a lower bid than what you have now".
         const fromTxt=bidOpt.curBid!=null?` <span style="color:${T.label};font-weight:400">(from ${bidOpt.curBid.toFixed(2)})</span>`:'';
-        parts.push(`<div style="font-size:10px;color:${bClr}" title="Best balance of ROAS & volume was ${cpcMonthLabel(bidOpt.bestMonth)} at this bid.">${action} bid to AED ${bidOpt.suggestedBid.toFixed(2)}${fromTxt}</div>`);
+        parts.push(`<div style="font-size:10px;color:${bClr}" title="Best balance of ROAS & volume was ${cpcMonthLabel(bidOpt.bestMonth)} at this bid. Independent of this month's budget pacing above — this looks at 6 months of history, not what's needed to spend out the current budget.">Historical optimal: ${action} bid to AED ${bidOpt.suggestedBid.toFixed(2)}${fromTxt}</div>`);
       }
       if(parts.length)recCell=parts.join('');
     }
