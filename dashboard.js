@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-268";
+const BUILD_VERSION="2026-08-13-270";
 const BUILD_NOTES=[
+  "🆕 Campaign contribution popups rebuilt around a table format with a new \"Last N days\" comparison, for both the standard popup (Careem/Deliveroo/Talabat/Noon, and non-concurrent Keeta) and the Keeta own-order-economics popup fixed last build. N is dynamic — min(7, days actually elapsed) — not a fixed 7: a campaign 4 days in compares against 4 days, both for the recent window and its \"days before campaign\" baseline, confirmed directly by Nikhil. When a young campaign's full elapsed length is already ≤7 days, the \"Last N days\" section is identical to \"Campaign to date\" — shows one explanatory line instead of a duplicate block. Every baseline column (month-ago AND the new pre-campaign one) now gets its own concurrent-campaign check — previously only the month-ago baseline had this. Keeta popup also gained a \"same days last month\" comparison, correctly showing a not-applicable message (not a misleading AED 0) when the specific campaign's item-rule didn't exist yet a month back. Added a `terms` field to KEETA_ITEM_RULES so a campaign's actual deal (% off, co-fund split) can be surfaced as a comment when known — populated for Oregano's OFU item campaign in both July (Alfredo Pasta, 50%/60:40) and August (Blackened Chicken, 40%/70:30, confirmed directly by Nikhil), since the same campaign NAME carries different terms month to month and comparing them blind is misleading. Verified the core date-window logic (redundant-window detection, N-day capping, pre-campaign baseline alignment) against the real extracted function with both Nikhil's example and a real August campaign from the Keeta upload — both correctly flagged as redundant at exactly 4 elapsed days.",
+  "🐛 Fixed the campaign contribution popup not showing for Keeta campaigns — Nikhil flagged this and it turned out to be every Keeta card, not an edge case. Keeta campaigns almost always run concurrently with another campaign for the same brand (e.g. Lollorosso's item promo + its CAP residual, both always active together), which routes them to a separate rendering branch (\"Own-Orders Contrib.\") that computes exact per-order economics instead of a campaign-vs-baseline comparison — and that branch simply never wired up the hover tooltip at all. Added a matching tooltip (buildCampParticipationTipHTML) showing the real breakdown: orders, gross, discount, FD cost, net, then whichever cost tier the data actually supports (Keeta Earnings exact / commission exact / flat-rate estimate) — labeled honestly rather than implying more precision than the underlying statement coverage has.",
   "🐛 Reversed the Deliveroo co-fund discount formula — Deliveroo-only, confirmed directly by Nikhil and backed by real statement evidence (found actual 'Marketing contribution' credit lines in weekly Deliveroo statements, landing 1-3 weeks after the campaign in a LATER statement, e.g. a 35% BOGOF credit that never touched the campaign-week figure at all). This confirms Deliveroo charges the FULL discount to us upfront — the statement/sheet value during the campaign IS the total, not a merchant-only portion. If a Deliveroo campaign declares '50-50', our actual burn is now 50% of that statement value (was: 100%, with an inferred equal Deliveroo top-up on top — nearly double-counting). '70-30' (brand:platform) → our burn is 70%. Explicitly NOT touched for Careem/Keeta/Noon/Talabat — no evidence either way for them, so they keep the previous inference. Also caught and fixed a versioning slip from the last build: I'd tagged two unrelated fixes 'v142' without checking, colliding with genuine pre-existing v142 history elsewhere in this file — renumbered mine to v199/v200.",
   "🆕 Keeta exact campaign profitability now uses real_earnings — Keeta's own stated per-order bottom-line payout — instead of reconstructing it from real_commission alone. Validated Nikhil's fresh Apr 1–Aug 13 statements (30,127 orders): the AED 6 minimum commission floor already wired in (v139) checked out at 98.5% exact match against Basic commission. But digging into a second column, 'Top-up to minimum', found it's a SEPARATE mechanism — a positive credit back to the merchant on ~5% of orders under certain promos, not the same as the commission floor — and confirmed the v139 calc was also silently missing the Online payment fee (~2%) entirely, since it only ever subtracted commission. Rather than model each Keeta-side adjustment individually and risk missing a future one, now sums Earnings directly, verified to reconcile to Original price − merchant/Keeta promo − Basic commission − Online payment fee + Top-up to minimum + Compensation from Keeta on 99.86% of orders across all 6 files. Falls back to the v139 realCommission calc for records uploaded before this build, then to the flat contractual-rate estimate for anything older — same layered safety net as before, just one more accurate tier on top.",
   "🐛 Labeled the two independent bid recommendation lines on the Deliveroo Outlet Performance table — \"Budget pacing\" (raise bid to burn through this month's allocated budget before it goes unused) vs \"Historical optimal\" (raise/lower bid to whatever balanced ROAS & volume best over the last 6 months). Nikhil flagged these stacking together with no explanation read as one system contradicting itself — e.g. pacing saying raise to AED 3.16 right above historical saying raise to only AED 1.60. Same two systems as before, same numbers — just labeled so it's clear they're answering different questions (this month's budget utilization vs. long-run performance) rather than disagreeing with each other.",
@@ -610,7 +612,7 @@ const KEETA_ITEM_RULES=[
   // these never expired, so they were still matching in August, contributing to the same stale-
   // override bug as the residual rules below. Oregano's August OFU item changed to Blackened
   // Chicken (new rule further down), so Alfredo's rule genuinely ends in July, not continues.
-  {brand:"Oregano",item:"Alfredo Pasta",         campaign:"OFU Item Keeta",       expected:15.30,startDate:"2026-07-01",endDate:"2026-07-31"},
+  {brand:"Oregano",item:"Alfredo Pasta",         campaign:"OFU Item Keeta",       expected:15.30,startDate:"2026-07-01",endDate:"2026-07-31",terms:"50% off · 60:40 co-funded (Oregano:Keeta)"},
   {brand:"Oregano",item:"Milanese Pasta",        campaign:"25% OFF Select Items", expected:13.25,startDate:"2026-07-01",endDate:null},
   {brand:"Oregano",item:"Bolognese Pasta",       campaign:"25% OFF Select Items", expected:13.75,startDate:"2026-07-01",endDate:null},
   {brand:"Oregano",item:"Lasagna di Carne",      campaign:"25% OFF Select Items", expected:15.50,startDate:"2026-07-01",endDate:"2026-07-31"}, // confirmed via real Aug data: 5 of 7 August orders show AED 0 discount — no longer part of the promo, absent from the sheet's Aug item list too
@@ -633,7 +635,7 @@ const KEETA_ITEM_RULES=[
   // — found single-item orders matching each promo item, read "Promotion funded by merchant",
   // subtracted the AED 2 FD cost per the established formula, confirmed each value was perfectly
   // consistent across every matching order (not just an average of noisy figures).
-  {brand:"Oregano",item:"Blackened Chicken",     campaign:"OFU Item Keeta",   expected:17.36,startDate:"2026-08-01",endDate:null}, // 34 matching orders, all AED 17.36
+  {brand:"Oregano",item:"Blackened Chicken",     campaign:"OFU Item Keeta",   expected:17.36,startDate:"2026-08-01",endDate:null,terms:"40% off · 70:30 co-funded (Oregano:Keeta)"}, // 34 matching orders, all AED 17.36 — terms confirmed directly by Nikhil
   {brand:"Lollorosso",item:"2 Grilled Chicken",  campaign:"40% OFF OFU Keeta",expected:22.00,startDate:"2026-08-01",endDate:null}, // 49 matching orders, all AED 22.00 (some 2x = AED 44)
   {brand:"Smokeys",item:"Combo 1",               campaign:"40% OFF OFU Keeta",expected:23.60,startDate:"2026-08-01",endDate:null}, // 46 matching orders, all AED 23.60 — note: actual Keeta item name is "Combo 1", not "SMK Combo 1" (that prefix is sheet-only)
   // ⚠️ Only 1 matching order found for Wicked Wings "Solo Meal" in the Aug 1-11 window — real
@@ -709,6 +711,20 @@ function keetaResidualCampaignFor(brand,date,timeStr){
   return null;
 }
 const KEETA_FD_COST=2.0; // AED per order — Keeta free-delivery share embedded in merchant-funded column
+// v270: same campaign NAME can carry different terms month to month — e.g. "OFU Item Keeta" was
+// 50% off/60:40 co-funded in July (Alfredo Pasta) and 40% off/70:30 in August (Blackened
+// Chicken) for Oregano, confirmed directly by Nikhil. Comparing two periods under the same
+// campaign name without surfacing this is misleading — this looks up whichever KEETA_ITEM_RULES
+// entry actually matched for that brand/campaign/date and returns its `terms` string if one was
+// recorded. Returns null (not a guess) when terms aren't confirmed for that particular rule.
+function keetaCampaignTerms(brand,campaign,date){
+  for(const r of KEETA_ITEM_RULES){
+    if(r.brand!==brand||r.campaign!==campaign||!r.terms)continue;
+    if(date<r.startDate||(r.endDate&&date>r.endDate))continue;
+    return r.terms;
+  }
+  return null;
+}
 // ════════════════════════════════════════════════════════════════════════════
 // v112 SHARED ORDER-DATA SYNC — one source of truth for uploaded aggregator files
 // ════════════════════════════════════════════════════════════════════════════
@@ -8935,10 +8951,16 @@ function campCardGrid(camps,showProfit){
         const part=campParticipationV1(c);
         const pClr=part.contrib>=0?'#22C55E':'#EF4444';
         const verdictSym=part.contrib>=0?'✅':'❌';
+        // v269: this branch never wired up data-ctip at all — confirmed as the reason "the same
+        // popup is not showing for Keeta campaigns" (Nikhil). Every Keeta item-campaign hits
+        // this branch, not just occasionally, since Keeta campaigns routinely run concurrently
+        // for the same brand (e.g. Lollorosso's item promo + its CAP residual, always both
+        // active at once) — so this wasn't an edge case, it silently affected every Keeta card.
+        const _ctipId=storeTip(buildCampParticipationTipHTML(part,c));
         metricsHTML=`
           <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-top:10px">
-            <div><div style="font-size:9px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Own-Orders Contrib. 📊</div><div style="font-size:22px;font-weight:800;color:${pClr}">${part.contrib>=0?'+':'−'}${fmtAEDx(Math.abs(part.contrib))}</div></div>
-            <div style="text-align:right"><div style="font-size:9px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Orders</div><div style="font-size:15px;font-weight:700;color:${pClr}">${part.orders.toLocaleString()}</div><div style="font-size:11px;font-weight:700;color:${pClr};margin-top:2px" title="${part.contrib>=0?'Campaign orders profitable':'Campaign orders lose money'} · ⚭ brand-level figure shared with ${a.sameBrandPlatConcurrent.length} concurrent campaign(s)">${verdictSym} ${part.shareOfBrandOrders!=null?part.shareOfBrandOrders.toFixed(0)+'% of brand':''}</div></div>
+            <div data-ctip="${_ctipId}" style="cursor:help"><div style="font-size:9px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Own-Orders Contrib. 📊 <span style="opacity:.45;font-size:8px">ⓘ</span></div><div style="font-size:22px;font-weight:800;color:${pClr}">${part.contrib>=0?'+':'−'}${fmtAEDx(Math.abs(part.contrib))}</div></div>
+            <div data-ctip="${_ctipId}" style="cursor:help;text-align:right"><div style="font-size:9px;color:${T.label};text-transform:uppercase;font-weight:700;letter-spacing:.6px;margin-bottom:3px">Orders</div><div style="font-size:15px;font-weight:700;color:${pClr}">${part.orders.toLocaleString()}</div><div style="font-size:11px;font-weight:700;color:${pClr};margin-top:2px" title="${part.contrib>=0?'Campaign orders profitable':'Campaign orders lose money'} · ⚭ brand-level figure shared with ${a.sameBrandPlatConcurrent.length} concurrent campaign(s)">${verdictSym} ${part.shareOfBrandOrders!=null?part.shareOfBrandOrders.toFixed(0)+'% of brand':''}</div></div>
           </div>`;
       }else if(a.hasData){
         const incrClr=a.incrContribTotal>=0?'#22C55E':'#EF4444';
@@ -9855,6 +9877,65 @@ let campElasticity=1.0;
 // Cached wrapper around campAnalysisV2. Key includes campaign identity + elasticity + latest so
 // changing elasticity or reloading data invalidates correctly. This is what makes the list fast:
 // the same campaign isn't re-analyzed on every re-render or filter toggle.
+// v270: "Last N days" (N = min(7, days actually elapsed in the campaign so far)) vs the SAME N
+// days immediately before the campaign started. Separate from campAnalysisV2's full-campaign vs
+// 28-days-ago baseline above — this is a shorter, more recent read requested by Nikhil so a
+// still-running campaign's latest performance isn't hidden inside a full-campaign average that
+// may span many more days. N shrinks for a young campaign rather than padding to a fake 7 —
+// confirmed directly: a campaign 4 days in compares against 4 days, not 7. When N already equals
+// the campaign's full elapsed length, this window is identical to the "Campaign to date" figure
+// already shown — isRedundant flags that so the UI shows one explanatory line instead of a
+// second identical block.
+function campRecentWindowAnalysis(c){
+  const today=dk(new Date());
+  const yesterday=subDays(today,1);
+  const campEnd=(c.endDate&&c.endDate<yesterday)?c.endDate:yesterday;
+  if(campEnd<c.startDate)return null; // hasn't started yet, or starts today (no completed days)
+  const elapsedDays=daysBetweenInclusive(c.startDate,campEnd);
+  const N=Math.min(7,elapsedDays);
+  if(N===elapsedDays)return{isRedundant:true,N,elapsedDays};
+  const recentStart=subDays(campEnd,N-1);
+  const preEnd=subDays(c.startDate,1);
+  const preStart=subDays(preEnd,N-1);
+
+  const outletSet=campOutlets(c);
+  const flt=r=>{if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;if(outletSet&&!outletSet.has(r.branch))return false;return true;};
+  const brandRecs=c.brand==='All Brands'?allData:indexedRecords(c.brand,c.aggregator);
+  const rR=brandRecs.filter(r=>r.date>=recentStart&&r.date<=campEnd&&flt(r));
+  const pR=brandRecs.filter(r=>r.date>=preStart&&r.date<=preEnd&&flt(r));
+  const rs=sumR(rR),ps=sumR(pR);
+  if(!(rs.orders>0||rs.sales>0)||!(ps.orders>0||ps.sales>0))return{isRedundant:false,N,noData:true,recentStart,recentEnd:campEnd,preStart,preEnd};
+
+  const parsed=parseCampComment(c);
+  const coFundedPct=parsed.coFundedPctOfDiscount||0;
+  const dref=c.startDate;
+  const brandForCost=c.brand==='All Brands'?'Oregano':c.brand;
+  const contribFor2=recs=>{
+    const byBrand={};
+    recs.forEach(r=>{const b=r.brand;if(!byBrand[b])byBrand[b]={net:0,disc:0};byBrand[b].net+=r.sales;byBrand[b].disc+=(r.disc||0);});
+    let contribution=0,gross=0,net=0,disc=0;
+    for(const b in byBrand){const o=byBrand[b];const g=o.net+o.disc;contribution+=brandContribution(c.aggregator,b,o.net,g,dref);gross+=g;net+=o.net;disc+=o.disc;}
+    return{contribution,gross,net,disc};
+  };
+  const rC=contribFor2(rR), pC=contribFor2(pR);
+  const allocR=allocateCampaignDiscount(c,recentStart,campEnd);
+  const allocatedDiscR=allocR.allocatedDisc;
+  if(allocatedDiscR>0&&!allocR.hadOverlap){
+    const correctedGross=rC.net+allocatedDiscR;
+    rC.gross=correctedGross;
+    rC.contribution=brandContribution(c.aggregator,brandForCost,rC.net,correctedGross,dref);
+  }
+  const isDeliveroo=c.aggregator==='Deliveroo';
+  const ourDiscCostR=isDeliveroo?allocatedDiscR*(1-coFundedPct):allocatedDiscR;
+  const incrContribTotal=rC.contribution-pC.contribution;
+  const discountROI=ourDiscCostR>0?(incrContribTotal/ourDiscCostR):null;
+  // Was another campaign (same brand+aggregator) running during the PRE-CAMPAIGN window? Same
+  // check campAnalysisV2 already does for its own 28-days-ago baseline, applied here too.
+  const preConcurrent=campaignData.find(x=>x!==c&&x.brand===c.brand&&x.aggregator===c.aggregator&&!isRewardsCampaign(x)&&x.startDate<=preEnd&&x.endDate>=preStart);
+  return{isRedundant:false,N,noData:false,recentStart,recentEnd:campEnd,preStart,preEnd,
+    rs,ps,campGross:rC.gross,baseGross:pC.gross,campContribTotal:rC.contribution,baseContribTotal:pC.contribution,
+    incrContribTotal,ourDiscCost:ourDiscCostR,discountROI,preConcurrent};
+}
 function campAnalysisCached(c){
   const key=`${c.aggregator}|${c.brand}|${c.startDate}|${c.endDate}|${c.name}|${campElasticity}|${latest}`;
   if(campAnalysisCache.has(key))return campAnalysisCache.get(key);
@@ -10042,6 +10123,64 @@ function campOutletBreakdownHTML(c,a){
 // discount cost, and what they contributed after discount + AED2 FD + commission + food cost.
 // Unlike the brand-level incremental figure, this is fully SEPARABLE per campaign — two
 // concurrent campaigns get two different, non-overlapping numbers.
+// v270: shared aggregation core, extracted from campParticipationV1's own loop so the SAME
+// exact-statement logic can be reused for the "same days last month" and "last N days"
+// comparison windows below, instead of duplicating (and risking drift from) this loop three
+// more times. Behavior is identical to what campParticipationV1 did inline before this build.
+function keetaCampWindowStats(c,startDate,endDate,myScope){
+  if(!keetaOrdersData||!keetaOrdersData.records)return null;
+  let orders=0,gross=0,disc=0,realCommission=0,realFD=0,realEarnings=0,hasRealCostData=true,hasRealEarnings=true;
+  for(const rec of keetaOrdersData.records){
+    if(rec.brand!==c.brand)continue;
+    if(rec.campaign!==c.name)continue;
+    if(rec.date<startDate||rec.date>endDate)continue;
+    if(myScope&&!myScope.has(rec.outlet))continue;
+    orders+=rec.orders;gross+=rec.gross;disc+=rec.menu_disc;
+    if(rec.real_commission===undefined)hasRealCostData=false;
+    if(rec.real_earnings===undefined)hasRealEarnings=false;
+    realCommission+=(rec.real_commission||0);realFD+=(rec.real_fd||0);realEarnings+=(rec.real_earnings||0);
+  }
+  if(!(orders>0&&gross>0))return null;
+  const brandForCost=c.brand==='All Brands'?'Oregano':c.brand;
+  const fd=hasRealCostData?realFD:orders*KEETA_FD_COST;
+  const net=gross-disc-fd;
+  const contrib=hasRealEarnings?(realEarnings-gross*foodPkgPct(brandForCost))
+    :hasRealCostData?(net-realCommission-gross*foodPkgPct(brandForCost))
+    :brandContribution('Keeta',brandForCost,net,gross,c.startDate);
+  return{orders,gross,disc,fd,net,contrib,brandForCost,hasRealCostData,hasRealEarnings,realCommission:hasRealCostData?realCommission:null,realEarnings:hasRealEarnings?realEarnings:null};
+}
+// v270: "same days last month" for a Keeta campaign — shifts the campaign's own covered window
+// back one calendar month and reruns the exact same aggregation. Comes back null (not a
+// misleading AED 0) when this specific campaign's item-rule didn't exist yet a month ago — the
+// rule's own startDate simply won't match any records that far back, which IS the correct
+// "not applicable" signal, not a data gap to paper over.
+function campParticipationSameMonthAgo(c,part){
+  if(!part)return null;
+  const s=new Date(part.covStart+"T12:00:00");s.setMonth(s.getMonth()-1);
+  const e=new Date(part.covEnd+"T12:00:00");e.setMonth(e.getMonth()-1);
+  const myScope=campOutlets(c);
+  return keetaCampWindowStats(c,dk(s),dk(e),myScope);
+}
+// v270: "Last N days" (N = min(7, days actually elapsed since campaign start), trailing, capped
+// at the covered window's own end) vs the SAME N days immediately before the campaign started.
+// N shrinks for a young campaign instead of padding out to a fake 7 — confirmed directly by
+// Nikhil: a campaign 4 days in should compare against 4 days, not 7. When N already equals the
+// full covered window (campaign hasn't run longer than 7 days total), this IS the same window
+// campParticipationV1 already shows — isRedundant flags that so the UI can show one line
+// explaining why, instead of a second identical block.
+function campParticipationRecentWindow(c,part){
+  if(!part)return null;
+  const elapsedDays=daysBetweenInclusive(part.covStart,part.covEnd);
+  const N=Math.min(7,elapsedDays);
+  if(N===elapsedDays)return{isRedundant:true,N,elapsedDays};
+  const recentStart=subDays(part.covEnd,N-1);
+  const preEnd=subDays(c.startDate,1);
+  const preStart=subDays(preEnd,N-1);
+  const myScope=campOutlets(c);
+  const recent=keetaCampWindowStats(c,recentStart,part.covEnd,myScope);
+  const pre=keetaCampWindowStats(c,preStart,preEnd,myScope);
+  return{isRedundant:false,N,recentStart,recentEnd:part.covEnd,preStart,preEnd,recent,pre};
+}
 const _campPartCache=new Map();
 function campParticipationV1(c){
   if(c.aggregator!=='Keeta')return null; // exact per-campaign feed exists for Keeta only (for now)
@@ -10053,59 +10192,29 @@ function campParticipationV1(c){
   const key=`${campaignData.indexOf(c)}|${c.name}|${a.effStart}|${a.effEnd}|${keetaOrdersData.metadata.generated_at||keetaOrdersData.metadata.uploaded_at||''}`;
   if(_campPartCache.has(key))return _campPartCache.get(key);
   const myScope=campOutlets(c);
-  let orders=0,gross=0,disc=0,realCommission=0,realFD=0,realEarnings=0,hasRealCostData=true,hasRealEarnings=true;const daily={};
-  for(const rec of keetaOrdersData.records){
-    if(rec.brand!==c.brand)continue;
-    if(rec.campaign!==c.name)continue;
-    if(rec.date<a.effStart||rec.date>a.effEnd)continue;
-    if(myScope&&!myScope.has(rec.outlet))continue;
-    orders+=rec.orders;gross+=rec.gross;disc+=rec.menu_disc;
-    // v139: real_commission/real_fd only exist on records parsed under this build or later —
-    // a record from a not-yet-re-uploaded (pre-v139) file simply won't have the field at all.
-    // Silently treating a missing field as 0 would make commission cost look like ZERO for
-    // that record, wildly INFLATING contribution instead of just being slightly stale — so any
-    // record missing the field flips hasRealCostData off, and the whole calculation falls back
-    // to the previous (flat-rate) approach rather than risk a half-correct blend. v199:
-    // real_earnings gets the identical same-build-or-later guard.
-    if(rec.real_commission===undefined)hasRealCostData=false;
-    if(rec.real_earnings===undefined)hasRealEarnings=false;
-    realCommission+=(rec.real_commission||0);realFD+=(rec.real_fd||0);realEarnings+=(rec.real_earnings||0);
-    const d=daily[rec.date]||(daily[rec.date]={orders:0,gross:0,disc:0});
-    d.orders+=rec.orders;d.gross+=rec.gross;d.disc+=rec.menu_disc;
-  }
+  const covStart=a.effStart>dr[0]?a.effStart:dr[0];
+  const covEnd=a.effEnd<dr[1]?a.effEnd:dr[1];
+  const stats=keetaCampWindowStats(c,covStart,covEnd,myScope);
   let out=null;
-  if(orders>0&&gross>0){
-    const brandForCost=c.brand==='All Brands'?'Oregano':c.brand;
-    // v139: STRUCTURAL FIX — was `fd=orders*KEETA_FD_COST` (assumed every order incurred the
-    // AED2 free-delivery cost) and `contrib=brandContribution(...)` (re-derived commission via
-    // a flat contractual rate). Both replaced with the REAL per-order figures read directly
-    // from the Keeta statement: realFD correctly excludes orders where the customer paid their
-    // own delivery (below minimum order value), and realCommission is Keeta's own stated
-    // commission summed directly — which already reflects the AED 6 floor on low-AOV orders
-    // exactly, with no need to approximate it from an aggregate net figure. Falls back to the
-    // old flat-rate approach when the underlying data predates this build (see above).
-    const fd=hasRealCostData?realFD:orders*KEETA_FD_COST;
-    const net=gross-disc-fd;       // merchant revenue on participating orders (co-fund inherent: statement discount is merchant share only)
-    // v199: realCommission alone (v139) was missing two more Keeta-side adjustments — the
-    // Online payment fee (~2% of every order, never subtracted here at all) and Top-up to
-    // minimum (a positive credit on ~5% of orders under certain promos). Rather than track each
-    // adjustment individually, prefer realEarnings — Keeta's own stated bottom-line payout,
-    // verified against the underlying statement to already net out ALL of these correctly (see
-    // the parser comment above this function's data source). Falls back to the v139
-    // realCommission-based calc for records uploaded between v139 and this build, then to the
-    // flat contractual-rate estimate for anything older than that.
-    const contrib=hasRealEarnings?(realEarnings-gross*foodPkgPct(brandForCost))
-      :hasRealCostData?(net-realCommission-gross*foodPkgPct(brandForCost))
-      :brandContribution('Keeta',brandForCost,net,gross,c.startDate);
-    const covStart=a.effStart>dr[0]?a.effStart:dr[0];
-    const covEnd=a.effEnd<dr[1]?a.effEnd:dr[1];
+  if(stats){
     const partialCoverage=covStart>a.effStart||covEnd<a.effEnd;
     // Share of brand's Keeta orders within the covered window (sheet daily data), same outlet scope
     let brandOrders=0;
     const recs=c.brand==='All Brands'?allData.filter(r=>r.aggregator==='Keeta'):indexedRecords(c.brand,'Keeta');
     for(const r of recs){if(r.date>=covStart&&r.date<=covEnd&&(!myScope||myScope.has(r.branch)))brandOrders+=r.orders;}
-    const shareOfBrandOrders=brandOrders>0?orders/brandOrders*100:null;
-    out={orders,gross,disc,fd,net,contrib,depth:disc/gross,daily,covStart,covEnd,partialCoverage,shareOfBrandOrders,brandForCost,hasRealCostData,hasRealEarnings,realCommission:hasRealCostData?realCommission:null,realEarnings:hasRealEarnings?realEarnings:null};
+    const shareOfBrandOrders=brandOrders>0?stats.orders/brandOrders*100:null;
+    // v270: per-date breakdown for campParticipationTrend() below — kept as a separate pass here
+    // (not folded into keetaCampWindowStats) since the other 3 comparison windows added this
+    // build never need day-by-day granularity, only the window's totals.
+    const daily={};
+    for(const rec of keetaOrdersData.records){
+      if(rec.brand!==c.brand||rec.campaign!==c.name)continue;
+      if(rec.date<covStart||rec.date>covEnd)continue;
+      if(myScope&&!myScope.has(rec.outlet))continue;
+      const d=daily[rec.date]||(daily[rec.date]={orders:0,gross:0,disc:0});
+      d.orders+=rec.orders;d.gross+=rec.gross;d.disc+=rec.menu_disc;
+    }
+    out={...stats,depth:stats.disc/stats.gross,daily,covStart,covEnd,partialCoverage,shareOfBrandOrders};
   }
   _campPartCache.set(key,out);
   return out;
@@ -11056,6 +11165,83 @@ function initCalcTip(){
   document.addEventListener('mouseout',e=>{if(!e.target.closest('[data-ctip]'))return;el.style.display='none';});
 }
 // Build tooltip HTML for a completed/active campaign card (from campAnalysisV2 result).
+// v269: companion to buildCampCalcTipHTML below, for the OTHER Keeta card branch — own-order
+// economics from campParticipationV1() rather than a campaign-vs-baseline incremental comparison
+// (there's no baseline here; concurrent campaigns make a brand-level baseline meaningless, which
+// is exactly why this branch exists — see the comment at its call site). Shows whichever cost
+// tier campParticipationV1 actually used (Keeta Earnings, exact commission, or flat-rate
+// estimate) rather than always assuming the best-case tier, so the tooltip never claims more
+// precision than the underlying data actually has.
+function buildCampParticipationTipHTML(part,c){
+  const food=foodPkgPct(part.brandForCost);
+  const fA=v=>'AED '+Math.abs(Math.round(v)).toLocaleString();
+  const row=(l,v,extra='')=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:1px 0;font-size:11px"><span style="opacity:.72;white-space:nowrap">${l}</span><span style="text-align:right">${v}${extra?` <span style="opacity:.55;font-size:9px">${extra}</span>`:''}</span></div>`;
+  const sep='<div style="border-top:1px solid rgba(255,255,255,.18);margin:5px 0 3px"></div>';
+  const tierNote=part.hasRealEarnings?'Keeta-exact · Earnings':part.hasRealCostData?'Keeta-exact · Commission':'Estimated · flat rate';
+  const termsNow=keetaCampaignTerms(c.brand,c.name,part.covEnd);
+  const termsBanner=l=>l?`<div style="font-size:9.5px;line-height:1.4;opacity:.8;margin-bottom:6px">🏷 ${l}</div>`:'';
+
+  // ── "Same days last month" ──
+  const smAgo=campParticipationSameMonthAgo(c,part);
+  const _smAgoEnd=(()=>{const e=new Date(part.covEnd+"T12:00:00");e.setMonth(e.getMonth()-1);return dk(e);})();
+  const termsAgo=smAgo?keetaCampaignTerms(c.brand,c.name,_smAgoEnd):null;
+  let smAgoHTML;
+  if(smAgo){
+    const smFood=smAgo.gross*food;
+    smAgoHTML=termsBanner(termsAgo)
+      +row('Orders',smAgo.orders.toLocaleString())+row('Gross sales',fA(smAgo.gross))
+      +row('Merchant disc.','−'+fA(smAgo.disc))+row('Keeta earnings',fA(smAgo.hasRealEarnings?smAgo.realEarnings:smAgo.net))
+      +row(`Food/pkg ${(food*100).toFixed(0)}%`,'−'+fA(smFood))+sep
+      +row('<strong>Contribution</strong>','<strong>'+fA(smAgo.contrib)+'</strong>');
+  }else{
+    smAgoHTML=`<div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5;padding:4px 0">Not shown — this campaign's terms didn't exist a month ago (started ${fmtShort(c.startDate)}).</div>`;
+  }
+
+  // ── "Last N days" vs "N days before campaign" ──
+  const rw=campParticipationRecentWindow(c,part);
+  let recentBlockHTML;
+  if(!rw){
+    recentBlockHTML='';
+  }else if(rw.isRedundant){
+    recentBlockHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px"><div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days vs before campaign</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — this campaign has only run ${rw.elapsedDays} day${rw.elapsedDays===1?'':'s'} so far, same as "Campaign to date" above.</div></div>`;
+  }else if(!rw.recent||!rw.pre){
+    recentBlockHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px"><div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days vs before campaign</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — no orders in one of the two windows to compare.</div></div>`;
+  }else{
+    const rFood=rw.recent.gross*food,pFood=rw.pre.gross*food;
+    const incr=rw.recent.contrib-rw.pre.contrib;
+    const incrClr=incr>=0?'#4ade80':'#f87171';
+    recentBlockHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px">
+      <div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days vs before campaign</div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+      <tr><td></td><td style="text-align:right;padding:0 4px;opacity:.55;font-size:9px">${fmtShort(rw.recentStart)}→${fmtShort(rw.recentEnd)}</td><td style="text-align:right;padding:0 4px;opacity:.55;font-size:9px">${fmtShort(rw.preStart)}→${fmtShort(rw.preEnd)}</td></tr>
+      <tr><td style="padding:2px 0;opacity:.72">Orders</td><td style="text-align:right">${rw.recent.orders.toLocaleString()}</td><td style="text-align:right">${rw.pre.orders.toLocaleString()}</td></tr>
+      <tr><td style="padding:2px 0;opacity:.72">Gross sales</td><td style="text-align:right">${fA(rw.recent.gross)}</td><td style="text-align:right">${fA(rw.pre.gross)}</td></tr>
+      <tr><td style="padding:2px 0;opacity:.72">Merchant disc.</td><td style="text-align:right">−${fA(rw.recent.disc)}</td><td style="text-align:right">−${fA(rw.pre.disc)}</td></tr>
+      <tr><td style="padding:2px 0;opacity:.72">Food/pkg ${(food*100).toFixed(0)}%</td><td style="text-align:right">−${fA(rFood)}</td><td style="text-align:right">−${fA(pFood)}</td></tr>
+      <tr><td colspan="3" style="border-top:1px solid rgba(255,255,255,.18)"></td></tr>
+      <tr style="font-weight:700"><td style="padding:3px 0">Contribution</td><td style="text-align:right">${fA(rw.recent.contrib)}</td><td style="text-align:right">${fA(rw.pre.contrib)}</td></tr>
+      </table>
+      <div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0 0"><span style="opacity:.72">Incremental</span><span style="color:${incrClr};font-weight:700">${incr>=0?'+':'−'}${fA(incr)}</span></div>
+    </div>`;
+  }
+
+  return`<div style="max-width:340px">`
+  +`<div style="font-size:12px;font-weight:600;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.2)">${c.brand} × Keeta · own-order economics</div>`
+  +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">${fmtShort(part.covStart)} → ${fmtShort(part.covEnd)} · ${tierNote}</div>`
+  +termsBanner(termsNow)
+  +row('Orders (this campaign only)',part.orders.toLocaleString())
+  +row('Gross sales',fA(part.gross))
+  +row('Merchant discount','−'+fA(part.disc))
+  +(part.fd>0?row('Free delivery cost','−'+fA(part.fd)):'')
+  +row('Net sales',fA(part.net))
+  +(part.hasRealEarnings?row('Keeta Earnings (exact)',fA(part.realEarnings),'nets out commission, fees, FD floor & any top-up'):part.hasRealCostData?row('Commission (exact)','−'+fA(part.realCommission)):row(`Commission ${(commissionRateFor('Keeta',part.brandForCost,c.startDate)*100).toFixed(0)}%`,'−'+fA(part.net*commissionRateFor('Keeta',part.brandForCost,c.startDate)),'estimated — no exact statement data'))
+  +row(`Food/pkg ${(food*100).toFixed(0)}% × gross`,'−'+fA(part.gross*food))
+  +sep+row('<strong>Contribution</strong>','<strong>'+fA(part.contrib)+'</strong>')
+  +`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px"><div style="font-weight:700;color:#F59E0B;font-size:10px;margin-bottom:6px">Same days, last month</div>${smAgoHTML}</div>`
+  +recentBlockHTML
+  +`<div style="font-size:9px;opacity:.55;margin-top:8px;line-height:1.5">⚭ ${part.shareOfBrandOrders!=null?part.shareOfBrandOrders.toFixed(0)+'% of ':''}${c.brand}'s Keeta orders this window ran under a concurrent campaign too, so a campaign-vs-baseline incremental comparison isn't meaningful for the main figure above — this is exact economics for just this campaign's own participating orders instead.${part.partialCoverage?' Statement coverage is partial for this window.':''}</div>`
+  +`</div>`;
+}
 function buildCampCalcTipHTML(a,c){
   const comm=commissionRateFor(a.aggregator,a.brand,a.effStart);
   const food=foodPkgPct(a.brand);
@@ -11070,37 +11256,77 @@ function buildCampCalcTipHTML(a,c){
   const ic=a.incrContribTotal>=0?'#4ade80':'#f87171';
   const rc=a.discountROI!=null?(a.discountROI>=0?'#4ade80':'#f87171'):'#94a3b8';
   const baseDisc=a.bs?.disc||0;
-  // v211: flags when ANOTHER campaign was running during the baseline window — without this,
-  // "incremental" reads as promo-vs-no-promo when it might actually be promo-vs-different-promo,
-  // which changes how the whole comparison should be interpreted. One line, not a new section —
-  // silent when the baseline genuinely had nothing running (the common case).
-  let baselineCampaignNote='';
-  if(c&&typeof campaignData!=='undefined'){
-    const overlapping=campaignData.find(x=>x!==c&&x.brand===a.brand&&x.aggregator===a.aggregator&&!(x.startDate>a.bEnd||x.endDate<a.bStart));
-    if(overlapping)baselineCampaignNote=`<div style="background:rgba(217,72,61,.18);border-left:2px solid #f87171;padding:3px 6px;margin-bottom:3px;font-size:10px;color:#ffb4b0">⚠ Also had a promo: ${overlapping.name||overlapping.brand+' campaign'}</div>`;
+  // v270: table format — row labels appear once, values run across columns, instead of repeating
+  // "Net sales"/"Commission"/etc. once per section. Rebuilt from the original two-stacked-section
+  // layout for this and the "Last N days" pair added below.
+  const tCell=v=>`<td style="text-align:right;padding:2px 4px">${v}</td>`;
+  const tRow=(l,...vals)=>`<tr><td style="padding:2px 0;opacity:.72;white-space:nowrap">${l}</td>${vals.map(tCell).join('')}</tr>`;
+  const tHead=(label,clr,dateStr)=>`<td style="text-align:right;padding:0 4px 2px;border-top:2px solid ${clr}"><div style="font-weight:700;color:${clr};font-size:10px">${label}</div><div style="opacity:.55;font-size:9px">${dateStr}</div></td>`;
+  // Concurrent-campaign check, reusable for ANY baseline window (was only ever applied to the
+  // month-ago baseline before this build — now applied to the pre-campaign baseline too).
+  const concurrentNote=(wStart,wEnd)=>{
+    if(!c||typeof campaignData==='undefined')return null;
+    const x=campaignData.find(o=>o!==c&&o.brand===a.brand&&o.aggregator===a.aggregator&&!isRewardsCampaign(o)&&!(o.startDate>wEnd||o.endDate<wStart));
+    return x?(x.name||x.brand+' campaign'):null;
+  };
+  const monthAgoNote=concurrentNote(a.bStart,a.bEnd);
+
+  const mainTable=`<table style="width:100%;border-collapse:collapse;font-size:11px">
+    <tr><td></td>${tHead('Campaign to date','#F59E0B',fmtShort(a.effStart)+'→'+fmtShort(a.effEnd))}${tHead('Same dates, last month','#F59E0B',fmtShort(a.bStart)+'→'+fmtShort(a.bEnd))}</tr>
+    <tr><td colspan="3" style="border-top:1px solid rgba(255,255,255,.18);padding-top:3px"></td></tr>
+    ${tRow('Net sales',fA(a.cs.sales),fA(a.bs.sales))}
+    ${tRow(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(a.cs.sales*comm),'−'+fA(a.bs.sales*comm))}
+    ${tRow(`Food/pkg ${+(food*100).toFixed(0)}%`,'−'+fA(a.campGross*food),'−'+fA(a.baseGross*food))}
+    ${(a.ourDiscCost>0||baseDisc>0)?tRow('Merchant disc.',a.ourDiscCost>0?'−'+fA(a.ourDiscCost):'−AED 0',baseDisc>0?'−'+fA(baseDisc):'−AED 0'):''}
+    <tr><td colspan="3" style="border-top:1px solid rgba(255,255,255,.18)"></td></tr>
+    <tr style="font-weight:700"><td style="padding:3px 0">Contribution</td><td style="text-align:right">${fA(a.campContribTotal)}</td><td style="text-align:right">${fA(a.baseContribTotal)}</td></tr>
+    </table>`
+    +(monthAgoNote?`<div style="margin-top:6px;padding:5px 7px;background:rgba(217,72,61,.15);border-left:2px solid #f87171;border-radius:0 4px 4px 0;font-size:9.5px;line-height:1.4;color:#ffb4b0">⚠ "Same dates, last month" also had a promo running: ${monthAgoNote} — this baseline isn't a clean no-promo comparison.</div>`:'');
+
+  const mainSummary=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:8px;padding-top:6px">`
+    +row(a.incrContribTotal>=0?'Incremental (increase)':'Incremental (decrease)',`<strong style="color:${ic}">${fSigned(a.incrContribTotal)}</strong>`,'('+fSigned(a.incrContribPerDay)+'/day)')
+    +(a.ourDiscCost>0?row('Merchant discount (campaign)',fA(a.ourDiscCost)):'')
+    +(a.ourDiscCost>0&&a.coFundedPct>0?row(`${Math.round(a.coFundedPct*100)}% co-funded`,fA(a.aggInferredCoFund),'by '+a.aggregator):'')
+    +(a.ourDiscCost>0&&a.discountROI!=null?row('ROI',`<strong style="color:${rc}">${a.discountROI.toFixed(2)}×</strong>`,'('+fSigned(a.incrContribTotal)+' ÷ '+fA(a.ourDiscCost)+')'):'')
+    +(a.ourDiscCost>0&&a.discountROI==null?row('ROI','<span style="opacity:.55">—  baseline or data issue</span>'):'')
+    +'</div>';
+
+  // ── "Last N days" pair ──
+  const rw=c?campRecentWindowAnalysis(c):null;
+  let recentHTML='';
+  if(rw){
+    if(rw.isRedundant){
+      recentHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px"><div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — this campaign has only run ${rw.elapsedDays} day${rw.elapsedDays===1?'':'s'} so far, same as "Campaign to date" above.</div></div>`;
+    }else if(rw.noData){
+      recentHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px"><div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — no orders in one of the two windows to compare.</div></div>`;
+    }else{
+      const preNote=concurrentNote(rw.preStart,rw.preEnd);
+      const rIc=rw.incrContribTotal>=0?'#4ade80':'#f87171';
+      const rRc=rw.discountROI!=null?(rw.discountROI>=0?'#4ade80':'#f87171'):'#94a3b8';
+      recentHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px">
+        <div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days</div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <tr><td></td>${tHead(`Last ${rw.N} days`,'#38BDF8',fmtShort(rw.recentStart)+'→'+fmtShort(rw.recentEnd))}${tHead('Same days, week before','#38BDF8',fmtShort(rw.preStart)+'→'+fmtShort(rw.preEnd))}</tr>
+        <tr><td colspan="3" style="border-top:1px solid rgba(255,255,255,.18);padding-top:3px"></td></tr>
+        ${tRow('Net sales',fA(rw.rs.sales),fA(rw.ps.sales))}
+        ${tRow(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(rw.rs.sales*comm),'−'+fA(rw.ps.sales*comm))}
+        ${tRow(`Food/pkg ${+(food*100).toFixed(0)}%`,'−'+fA(rw.campGross*food),'−'+fA(rw.baseGross*food))}
+        ${(rw.ourDiscCost>0||(rw.ps.disc||0)>0)?tRow('Merchant disc.',rw.ourDiscCost>0?'−'+fA(rw.ourDiscCost):'−AED 0',(rw.ps.disc||0)>0?'−'+fA(rw.ps.disc):'−AED 0'):''}
+        <tr><td colspan="3" style="border-top:1px solid rgba(255,255,255,.18)"></td></tr>
+        <tr style="font-weight:700"><td style="padding:3px 0">Contribution</td><td style="text-align:right">${fA(rw.campContribTotal)}</td><td style="text-align:right">${fA(rw.baseContribTotal)}</td></tr>
+        </table>
+        ${preNote?`<div style="margin-top:6px;padding:5px 7px;background:rgba(217,72,61,.15);border-left:2px solid #f87171;border-radius:0 4px 4px 0;font-size:9.5px;line-height:1.4;color:#ffb4b0">⚠ "Week before" also had a promo running: ${preNote} — this baseline isn't a clean no-promo comparison.</div>`:''}
+        <div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0 0"><span style="opacity:.72">Incremental</span><span style="color:${rIc};font-weight:700">${fSigned(rw.incrContribTotal)}</span></div>
+        ${rw.ourDiscCost>0?`<div style="display:flex;justify-content:space-between;font-size:11px;padding:1px 0"><span style="opacity:.72">Merchant disc.</span><span>${fA(rw.ourDiscCost)}</span></div>`:''}
+        ${rw.ourDiscCost>0&&rw.discountROI!=null?`<div style="display:flex;justify-content:space-between;font-size:11px;padding:1px 0"><span style="opacity:.72">ROI</span><span style="color:${rRc};font-weight:700">${rw.discountROI.toFixed(2)}×</span></div>`:''}
+      </div>`;
+    }
   }
-  return`<div style="max-width:300px">`
-  +`<div style="font-size:12px;font-weight:600;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.2)">${a.brand} × ${a.aggregator} · ${a.cDays}d contribution</div>`
-  +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Campaign  ${fmtShort(a.effStart)} → ${fmtShort(a.effEnd)}</div>`
-  +row('Net sales',fA(a.cs.sales))
-  +row(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(a.cs.sales*comm))
-  +row(`Food/pkg ${+(food*100).toFixed(0)}% × gross`,'−'+fA(a.campGross*food))
-  +(a.ourDiscCost>0?row('Merchant discount','−'+fA(a.ourDiscCost)):'')
-  +sep+row('<strong>Contribution</strong>','<strong>'+fA(a.campContribTotal)+'</strong>')
-  +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin:8px 0 4px">Baseline  ${fmtShort(a.bStart)} → ${fmtShort(a.bEnd)}</div>`
-  +baselineCampaignNote
-  +row('Net sales',fA(a.bs.sales))
-  +row(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(a.bs.sales*comm))
-  +row(`Food/pkg ${+(food*100).toFixed(0)}% × gross`,'−'+fA(a.baseGross*food))
-  +(baseDisc>0?row('Merchant discount','−'+fA(baseDisc)):'')
-  +sep+row('<strong>Contribution</strong>','<strong>'+fA(a.baseContribTotal)+'</strong>')
-  +`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:8px;padding-top:6px">`
-  +row(a.incrContribTotal>=0?'Incremental (increase)':'Incremental (decrease)',`<strong style="color:${ic}">${fSigned(a.incrContribTotal)}</strong>`,'('+fSigned(a.incrContribPerDay)+'/day)')
-  +(a.ourDiscCost>0?row('Merchant discount (campaign)',fA(a.ourDiscCost)):'')
-  +(a.ourDiscCost>0&&a.coFundedPct>0?row(`${Math.round(a.coFundedPct*100)}% co-funded`,fA(a.aggInferredCoFund),'by '+a.aggregator):'')
-  +(a.ourDiscCost>0&&a.discountROI!=null?row('ROI',`<strong style="color:${rc}">${a.discountROI.toFixed(2)}×</strong>`,'('+fSigned(a.incrContribTotal)+' ÷ '+fA(a.ourDiscCost)+')'):'')
-  +(a.ourDiscCost>0&&a.discountROI==null?row('ROI','<span style="opacity:.55">—  baseline or data issue</span>'):'')
-  +'</div></div>';
+
+  return`<div style="max-width:360px">`
+  +`<div style="font-size:12px;font-weight:600;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.2)">${a.brand} × ${a.aggregator} · campaign contribution</div>`
+  +mainTable+mainSummary+recentHTML
+  +'</div>';
 }
 // Build tooltip HTML for a forecaster scenario card.
 function buildFcCalcTipHTML(sc,brand,agg,discPct,cap,coFundPct,dateStr){
