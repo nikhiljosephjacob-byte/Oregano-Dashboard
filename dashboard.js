@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-270";
+const BUILD_VERSION="2026-08-13-271";
 const BUILD_NOTES=[
+  "🐛 Fixed \"same days last month\" and \"before campaign\" both requiring an EXACT campaign name match — Nikhil caught this on Lollorosso's residual campaign, which was \"50% OFF CAP 30\" in July and \"50% OFF CAP 25\" in August (confirmed in KEETA_RESIDUAL_RULES). Comparing August's campaign against July under an exact-name filter found nothing, even though the same functional promo (Lollorosso's whole-menu Keeta discount) ran continuously the entire time — it wasn't that no campaign existed a month ago, it's that the cap changing renamed it. Item-specific campaigns (OFU, Select Items) don't have this problem since their names stay constant month to month, only the underlying item changes — those were already working correctly and are untouched. Residual/menu-wide campaigns now resolve to whatever ACTUALLY ran during the historical window via keetaResidualCampaignFor(), and the popup shows that name explicitly (\"Running then: 50% OFF CAP 30\") when it differs from the current campaign, so the comparison is legible rather than silently swapping data sources. Verified against the real rules table: August CAP 25 correctly resolves to July's CAP 30 for both comparison windows, and — matching Nikhil's own forward-looking example — a hypothetical September 30%/CAP 30 campaign correctly resolves against August's CAP 25 with no hardcoding involved.",
   "🆕 Campaign contribution popups rebuilt around a table format with a new \"Last N days\" comparison, for both the standard popup (Careem/Deliveroo/Talabat/Noon, and non-concurrent Keeta) and the Keeta own-order-economics popup fixed last build. N is dynamic — min(7, days actually elapsed) — not a fixed 7: a campaign 4 days in compares against 4 days, both for the recent window and its \"days before campaign\" baseline, confirmed directly by Nikhil. When a young campaign's full elapsed length is already ≤7 days, the \"Last N days\" section is identical to \"Campaign to date\" — shows one explanatory line instead of a duplicate block. Every baseline column (month-ago AND the new pre-campaign one) now gets its own concurrent-campaign check — previously only the month-ago baseline had this. Keeta popup also gained a \"same days last month\" comparison, correctly showing a not-applicable message (not a misleading AED 0) when the specific campaign's item-rule didn't exist yet a month back. Added a `terms` field to KEETA_ITEM_RULES so a campaign's actual deal (% off, co-fund split) can be surfaced as a comment when known — populated for Oregano's OFU item campaign in both July (Alfredo Pasta, 50%/60:40) and August (Blackened Chicken, 40%/70:30, confirmed directly by Nikhil), since the same campaign NAME carries different terms month to month and comparing them blind is misleading. Verified the core date-window logic (redundant-window detection, N-day capping, pre-campaign baseline alignment) against the real extracted function with both Nikhil's example and a real August campaign from the Keeta upload — both correctly flagged as redundant at exactly 4 elapsed days.",
   "🐛 Fixed the campaign contribution popup not showing for Keeta campaigns — Nikhil flagged this and it turned out to be every Keeta card, not an edge case. Keeta campaigns almost always run concurrently with another campaign for the same brand (e.g. Lollorosso's item promo + its CAP residual, both always active together), which routes them to a separate rendering branch (\"Own-Orders Contrib.\") that computes exact per-order economics instead of a campaign-vs-baseline comparison — and that branch simply never wired up the hover tooltip at all. Added a matching tooltip (buildCampParticipationTipHTML) showing the real breakdown: orders, gross, discount, FD cost, net, then whichever cost tier the data actually supports (Keeta Earnings exact / commission exact / flat-rate estimate) — labeled honestly rather than implying more precision than the underlying statement coverage has.",
   "🐛 Reversed the Deliveroo co-fund discount formula — Deliveroo-only, confirmed directly by Nikhil and backed by real statement evidence (found actual 'Marketing contribution' credit lines in weekly Deliveroo statements, landing 1-3 weeks after the campaign in a LATER statement, e.g. a 35% BOGOF credit that never touched the campaign-week figure at all). This confirms Deliveroo charges the FULL discount to us upfront — the statement/sheet value during the campaign IS the total, not a merchant-only portion. If a Deliveroo campaign declares '50-50', our actual burn is now 50% of that statement value (was: 100%, with an inferred equal Deliveroo top-up on top — nearly double-counting). '70-30' (brand:platform) → our burn is 70%. Explicitly NOT touched for Careem/Keeta/Noon/Talabat — no evidence either way for them, so they keep the previous inference. Also caught and fixed a versioning slip from the last build: I'd tagged two unrelated fixes 'v142' without checking, colliding with genuine pre-existing v142 history elsewhere in this file — renumbered mine to v199/v200.",
@@ -711,6 +712,22 @@ function keetaResidualCampaignFor(brand,date,timeStr){
   return null;
 }
 const KEETA_FD_COST=2.0; // AED per order — Keeta free-delivery share embedded in merchant-funded column
+// v271: fixes a real bug Nikhil caught — "same days last month" and "N days before campaign"
+// both required c.name to match EXACTLY, but residual (menu-wide, catch-all) campaigns get
+// renamed every time their declared %/cap changes — confirmed in KEETA_RESIDUAL_RULES: Lollorosso
+// was "50% OFF CAP 30" in July, "50% OFF CAP 25" in August. Comparing this month's residual
+// against last month's under an exact-name filter finds nothing, even though the SAME functional
+// campaign slot (Lollorosso's whole-menu Keeta promo) was continuously running the entire time —
+// it's not that no campaign existed, it's that this bug filtered it out. Item-specific campaigns
+// (OFU, Select Items) don't have this problem — their names stay constant across months, only the
+// underlying item/terms change (handled separately via KEETA_ITEM_RULES.terms above).
+function keetaIsResidualCampaign(c){
+  return keetaResidualCampaignFor(c.brand,c.startDate)===c.name;
+}
+function keetaHistoricalCampaignName(c,historicalDate){
+  if(keetaIsResidualCampaign(c))return keetaResidualCampaignFor(c.brand,historicalDate)||c.name;
+  return c.name; // item-specific campaigns keep their own name — same slot, terms may differ (see keetaCampaignTerms)
+}
 // v270: same campaign NAME can carry different terms month to month — e.g. "OFU Item Keeta" was
 // 50% off/60:40 co-funded in July (Alfredo Pasta) and 40% off/70:30 in August (Blackened
 // Chicken) for Oregano, confirmed directly by Nikhil. Comparing two periods under the same
@@ -10127,12 +10144,13 @@ function campOutletBreakdownHTML(c,a){
 // exact-statement logic can be reused for the "same days last month" and "last N days"
 // comparison windows below, instead of duplicating (and risking drift from) this loop three
 // more times. Behavior is identical to what campParticipationV1 did inline before this build.
-function keetaCampWindowStats(c,startDate,endDate,myScope){
+function keetaCampWindowStats(c,startDate,endDate,myScope,campaignNameOverride){
   if(!keetaOrdersData||!keetaOrdersData.records)return null;
+  const targetName=campaignNameOverride||c.name;
   let orders=0,gross=0,disc=0,realCommission=0,realFD=0,realEarnings=0,hasRealCostData=true,hasRealEarnings=true;
   for(const rec of keetaOrdersData.records){
     if(rec.brand!==c.brand)continue;
-    if(rec.campaign!==c.name)continue;
+    if(rec.campaign!==targetName)continue;
     if(rec.date<startDate||rec.date>endDate)continue;
     if(myScope&&!myScope.has(rec.outlet))continue;
     orders+=rec.orders;gross+=rec.gross;disc+=rec.menu_disc;
@@ -10147,7 +10165,7 @@ function keetaCampWindowStats(c,startDate,endDate,myScope){
   const contrib=hasRealEarnings?(realEarnings-gross*foodPkgPct(brandForCost))
     :hasRealCostData?(net-realCommission-gross*foodPkgPct(brandForCost))
     :brandContribution('Keeta',brandForCost,net,gross,c.startDate);
-  return{orders,gross,disc,fd,net,contrib,brandForCost,hasRealCostData,hasRealEarnings,realCommission:hasRealCostData?realCommission:null,realEarnings:hasRealEarnings?realEarnings:null};
+  return{orders,gross,disc,fd,net,contrib,brandForCost,hasRealCostData,hasRealEarnings,realCommission:hasRealCostData?realCommission:null,realEarnings:hasRealEarnings?realEarnings:null,matchedName:targetName};
 }
 // v270: "same days last month" for a Keeta campaign — shifts the campaign's own covered window
 // back one calendar month and reruns the exact same aggregation. Comes back null (not a
@@ -10158,8 +10176,11 @@ function campParticipationSameMonthAgo(c,part){
   if(!part)return null;
   const s=new Date(part.covStart+"T12:00:00");s.setMonth(s.getMonth()-1);
   const e=new Date(part.covEnd+"T12:00:00");e.setMonth(e.getMonth()-1);
+  const histStart=dk(s),histEnd=dk(e);
+  const histName=keetaHistoricalCampaignName(c,histEnd);
   const myScope=campOutlets(c);
-  return keetaCampWindowStats(c,dk(s),dk(e),myScope);
+  const stats=keetaCampWindowStats(c,histStart,histEnd,myScope,histName);
+  return stats?{...stats,histStart,histEnd}:null;
 }
 // v270: "Last N days" (N = min(7, days actually elapsed since campaign start), trailing, capped
 // at the covered window's own end) vs the SAME N days immediately before the campaign started.
@@ -10177,8 +10198,9 @@ function campParticipationRecentWindow(c,part){
   const preEnd=subDays(c.startDate,1);
   const preStart=subDays(preEnd,N-1);
   const myScope=campOutlets(c);
+  const preHistName=keetaHistoricalCampaignName(c,preEnd);
   const recent=keetaCampWindowStats(c,recentStart,part.covEnd,myScope);
-  const pre=keetaCampWindowStats(c,preStart,preEnd,myScope);
+  const pre=keetaCampWindowStats(c,preStart,preEnd,myScope,preHistName);
   return{isRedundant:false,N,recentStart,recentEnd:part.covEnd,preStart,preEnd,recent,pre};
 }
 const _campPartCache=new Map();
@@ -11183,18 +11205,23 @@ function buildCampParticipationTipHTML(part,c){
 
   // ── "Same days last month" ──
   const smAgo=campParticipationSameMonthAgo(c,part);
-  const _smAgoEnd=(()=>{const e=new Date(part.covEnd+"T12:00:00");e.setMonth(e.getMonth()-1);return dk(e);})();
-  const termsAgo=smAgo?keetaCampaignTerms(c.brand,c.name,_smAgoEnd):null;
   let smAgoHTML;
   if(smAgo){
     const smFood=smAgo.gross*food;
-    smAgoHTML=termsBanner(termsAgo)
+    const nameDiffers=smAgo.matchedName&&smAgo.matchedName!==c.name;
+    const termsAgo=keetaCampaignTerms(c.brand,smAgo.matchedName,smAgo.histEnd);
+    const nameNote=nameDiffers?`<div style="font-size:9.5px;line-height:1.4;color:#94a3b8;margin-bottom:6px">Running then: <strong style="color:#F59E0B">${smAgo.matchedName}</strong> <span style="opacity:.7">(this month: ${c.name})</span></div>`:'';
+    smAgoHTML=nameNote+termsBanner(termsAgo)
       +row('Orders',smAgo.orders.toLocaleString())+row('Gross sales',fA(smAgo.gross))
       +row('Merchant disc.','−'+fA(smAgo.disc))+row('Keeta earnings',fA(smAgo.hasRealEarnings?smAgo.realEarnings:smAgo.net))
       +row(`Food/pkg ${(food*100).toFixed(0)}%`,'−'+fA(smFood))+sep
       +row('<strong>Contribution</strong>','<strong>'+fA(smAgo.contrib)+'</strong>');
   }else{
-    smAgoHTML=`<div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5;padding:4px 0">Not shown — this campaign's terms didn't exist a month ago (started ${fmtShort(c.startDate)}).</div>`;
+    // v271: this message now only fires when NO campaign occupied the slot a month ago (a
+    // genuinely new item promo, or the brand wasn't running anything then) — residual/menu-wide
+    // campaigns resolve to whatever was ACTUALLY running that month via
+    // keetaHistoricalCampaignName() above, even if its name (e.g. the cap value) differed.
+    smAgoHTML=`<div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5;padding:4px 0">Not shown — no matching campaign found for ${c.brand} a month ago${keetaIsResidualCampaign(c)?'':` (this campaign's own item/terms started ${fmtShort(c.startDate)})`}.</div>`;
   }
 
   // ── "Last N days" vs "N days before campaign" ──
@@ -11210,6 +11237,8 @@ function buildCampParticipationTipHTML(part,c){
     const rFood=rw.recent.gross*food,pFood=rw.pre.gross*food;
     const incr=rw.recent.contrib-rw.pre.contrib;
     const incrClr=incr>=0?'#4ade80':'#f87171';
+    const preNameDiffers=rw.pre.matchedName&&rw.pre.matchedName!==c.name;
+    const preNameNote=preNameDiffers?`<div style="font-size:9.5px;line-height:1.4;color:#94a3b8;margin:4px 0 0">Running before: <strong style="color:#38BDF8">${rw.pre.matchedName}</strong></div>`:'';
     recentBlockHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px">
       <div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days vs before campaign</div>
       <table style="width:100%;border-collapse:collapse;font-size:11px">
@@ -11221,6 +11250,7 @@ function buildCampParticipationTipHTML(part,c){
       <tr><td colspan="3" style="border-top:1px solid rgba(255,255,255,.18)"></td></tr>
       <tr style="font-weight:700"><td style="padding:3px 0">Contribution</td><td style="text-align:right">${fA(rw.recent.contrib)}</td><td style="text-align:right">${fA(rw.pre.contrib)}</td></tr>
       </table>
+      ${preNameNote}
       <div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0 0"><span style="opacity:.72">Incremental</span><span style="color:${incrClr};font-weight:700">${incr>=0?'+':'−'}${fA(incr)}</span></div>
     </div>`;
   }
