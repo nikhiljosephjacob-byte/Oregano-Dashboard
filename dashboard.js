@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-271";
+const BUILD_VERSION="2026-08-13-272";
 const BUILD_NOTES=[
+  "🐛 Two real bugs in the \"Last N days\" comparison, both caught directly by Nikhil on the same Deliveroo campaign screenshot. (1) The section was fully suppressed whenever a campaign hadn't run longer than 7 days — reasoned that the campaign side would just duplicate \"Campaign to date\" above, but that's wrong: the BASELINE (week before) is a different, often more relevant comparison than month-ago even then — a weekend campaign should be checkable against the immediately preceding weekend, not hidden just because the campaign itself is young. Removed the suppression; now shows a one-line note when the campaign side duplicates the figure above, but always shows the actual comparison. (2) The baseline itself was wrong — anchored to \"N days immediately before campaign START\" instead of a clean 7-day shift of the recent window. Nikhil's own example caught this exactly: a 14→16 Aug (Fri-Sun) campaign was comparing against 11-13 Aug (Tue-Thu, not even weekday-aligned) instead of 7-9 Aug (the same Fri-Sun the week before). Fixed to mirror campAnalysisV2's own weekday-aligned baseline principle. Verified against the real extracted function: the exact screenshot scenario now correctly resolves to a 7-9 Aug baseline with real sales/discount data, not a suppressed message.",
   "🐛 Fixed \"same days last month\" and \"before campaign\" both requiring an EXACT campaign name match — Nikhil caught this on Lollorosso's residual campaign, which was \"50% OFF CAP 30\" in July and \"50% OFF CAP 25\" in August (confirmed in KEETA_RESIDUAL_RULES). Comparing August's campaign against July under an exact-name filter found nothing, even though the same functional promo (Lollorosso's whole-menu Keeta discount) ran continuously the entire time — it wasn't that no campaign existed a month ago, it's that the cap changing renamed it. Item-specific campaigns (OFU, Select Items) don't have this problem since their names stay constant month to month, only the underlying item changes — those were already working correctly and are untouched. Residual/menu-wide campaigns now resolve to whatever ACTUALLY ran during the historical window via keetaResidualCampaignFor(), and the popup shows that name explicitly (\"Running then: 50% OFF CAP 30\") when it differs from the current campaign, so the comparison is legible rather than silently swapping data sources. Verified against the real rules table: August CAP 25 correctly resolves to July's CAP 30 for both comparison windows, and — matching Nikhil's own forward-looking example — a hypothetical September 30%/CAP 30 campaign correctly resolves against August's CAP 25 with no hardcoding involved.",
   "🆕 Campaign contribution popups rebuilt around a table format with a new \"Last N days\" comparison, for both the standard popup (Careem/Deliveroo/Talabat/Noon, and non-concurrent Keeta) and the Keeta own-order-economics popup fixed last build. N is dynamic — min(7, days actually elapsed) — not a fixed 7: a campaign 4 days in compares against 4 days, both for the recent window and its \"days before campaign\" baseline, confirmed directly by Nikhil. When a young campaign's full elapsed length is already ≤7 days, the \"Last N days\" section is identical to \"Campaign to date\" — shows one explanatory line instead of a duplicate block. Every baseline column (month-ago AND the new pre-campaign one) now gets its own concurrent-campaign check — previously only the month-ago baseline had this. Keeta popup also gained a \"same days last month\" comparison, correctly showing a not-applicable message (not a misleading AED 0) when the specific campaign's item-rule didn't exist yet a month back. Added a `terms` field to KEETA_ITEM_RULES so a campaign's actual deal (% off, co-fund split) can be surfaced as a comment when known — populated for Oregano's OFU item campaign in both July (Alfredo Pasta, 50%/60:40) and August (Blackened Chicken, 40%/70:30, confirmed directly by Nikhil), since the same campaign NAME carries different terms month to month and comparing them blind is misleading. Verified the core date-window logic (redundant-window detection, N-day capping, pre-campaign baseline alignment) against the real extracted function with both Nikhil's example and a real August campaign from the Keeta upload — both correctly flagged as redundant at exactly 4 elapsed days.",
   "🐛 Fixed the campaign contribution popup not showing for Keeta campaigns — Nikhil flagged this and it turned out to be every Keeta card, not an edge case. Keeta campaigns almost always run concurrently with another campaign for the same brand (e.g. Lollorosso's item promo + its CAP residual, both always active together), which routes them to a separate rendering branch (\"Own-Orders Contrib.\") that computes exact per-order economics instead of a campaign-vs-baseline comparison — and that branch simply never wired up the hover tooltip at all. Added a matching tooltip (buildCampParticipationTipHTML) showing the real breakdown: orders, gross, discount, FD cost, net, then whichever cost tier the data actually supports (Keeta Earnings exact / commission exact / flat-rate estimate) — labeled honestly rather than implying more precision than the underlying statement coverage has.",
@@ -9899,10 +9900,10 @@ let campElasticity=1.0;
 // 28-days-ago baseline above — this is a shorter, more recent read requested by Nikhil so a
 // still-running campaign's latest performance isn't hidden inside a full-campaign average that
 // may span many more days. N shrinks for a young campaign rather than padding to a fake 7 —
-// confirmed directly: a campaign 4 days in compares against 4 days, not 7. When N already equals
-// the campaign's full elapsed length, this window is identical to the "Campaign to date" figure
-// already shown — isRedundant flags that so the UI shows one explanatory line instead of a
-// second identical block.
+// confirmed directly: a campaign 4 days in compares against 4 days, not 7. v272: when N already
+// equals the campaign's full elapsed length, the CAMPAIGN side duplicates "Campaign to date"
+// above, but the section still renders — the week-before BASELINE is a different, often more
+// relevant comparison than month-ago even then (a weekend campaign vs. the prior weekend, e.g.).
 function campRecentWindowAnalysis(c){
   const today=dk(new Date());
   const yesterday=subDays(today,1);
@@ -9910,10 +9911,26 @@ function campRecentWindowAnalysis(c){
   if(campEnd<c.startDate)return null; // hasn't started yet, or starts today (no completed days)
   const elapsedDays=daysBetweenInclusive(c.startDate,campEnd);
   const N=Math.min(7,elapsedDays);
-  if(N===elapsedDays)return{isRedundant:true,N,elapsedDays};
+  // v272: REMOVED the old "N===elapsedDays -> suppress the whole section" behavior — Nikhil
+  // caught this directly. It conflated two different things: the CAMPAIGN side of this window
+  // can equal "Campaign to date" above when the campaign hasn't run past 7 days, but the
+  // BASELINE (N days immediately before the campaign started) is always a different, and often
+  // more relevant, comparison than the month-ago baseline — e.g. a weekend campaign should be
+  // checkable against the immediately preceding weekend, not hidden entirely just because the
+  // campaign itself is young. `sameAsFullCampaign` is kept (renamed from `isRedundant`) purely
+  // as a display flag so the UI can note the overlap without hiding the comparison.
+  const sameAsFullCampaign=(N===elapsedDays);
   const recentStart=subDays(campEnd,N-1);
-  const preEnd=subDays(c.startDate,1);
-  const preStart=subDays(preEnd,N-1);
+  // v273: FIXED — was anchoring the baseline to "N days immediately before campaign START"
+  // (contiguous, no gap), which not only misaligned weekdays but produced the wrong window
+  // entirely whenever the campaign had been running longer than N days. Nikhil's own example
+  // caught this exactly: campaign 14→16 Aug (Fri-Sun) should compare against 7→9 Aug (the SAME
+  // Fri-Sun the week before) — a clean 7-day shift of the RECENT window itself, not the 3 days
+  // immediately preceding the 14th (11-13 Aug, which isn't even weekday-aligned). Matches the
+  // same "same weekdays, exactly 7 days earlier" principle campAnalysisV2's own month-ago
+  // baseline already follows for its window.
+  const preStart=subDays(recentStart,7);
+  const preEnd=subDays(campEnd,7);
 
   const outletSet=campOutlets(c);
   const flt=r=>{if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;if(c.aggregator&&c.aggregator!=='All'&&r.aggregator!==c.aggregator)return false;if(outletSet&&!outletSet.has(r.branch))return false;return true;};
@@ -9921,7 +9938,7 @@ function campRecentWindowAnalysis(c){
   const rR=brandRecs.filter(r=>r.date>=recentStart&&r.date<=campEnd&&flt(r));
   const pR=brandRecs.filter(r=>r.date>=preStart&&r.date<=preEnd&&flt(r));
   const rs=sumR(rR),ps=sumR(pR);
-  if(!(rs.orders>0||rs.sales>0)||!(ps.orders>0||ps.sales>0))return{isRedundant:false,N,noData:true,recentStart,recentEnd:campEnd,preStart,preEnd};
+  if(!(rs.orders>0||rs.sales>0)||!(ps.orders>0||ps.sales>0))return{sameAsFullCampaign,N,noData:true,recentStart,recentEnd:campEnd,preStart,preEnd};
 
   const parsed=parseCampComment(c);
   const coFundedPct=parsed.coFundedPctOfDiscount||0;
@@ -9949,7 +9966,7 @@ function campRecentWindowAnalysis(c){
   // Was another campaign (same brand+aggregator) running during the PRE-CAMPAIGN window? Same
   // check campAnalysisV2 already does for its own 28-days-ago baseline, applied here too.
   const preConcurrent=campaignData.find(x=>x!==c&&x.brand===c.brand&&x.aggregator===c.aggregator&&!isRewardsCampaign(x)&&x.startDate<=preEnd&&x.endDate>=preStart);
-  return{isRedundant:false,N,noData:false,recentStart,recentEnd:campEnd,preStart,preEnd,
+  return{sameAsFullCampaign,N,noData:false,recentStart,recentEnd:campEnd,preStart,preEnd,
     rs,ps,campGross:rC.gross,baseGross:pC.gross,campContribTotal:rC.contribution,baseContribTotal:pC.contribution,
     incrContribTotal,ourDiscCost:ourDiscCostR,discountROI,preConcurrent};
 }
@@ -10185,23 +10202,31 @@ function campParticipationSameMonthAgo(c,part){
 // v270: "Last N days" (N = min(7, days actually elapsed since campaign start), trailing, capped
 // at the covered window's own end) vs the SAME N days immediately before the campaign started.
 // N shrinks for a young campaign instead of padding out to a fake 7 — confirmed directly by
-// Nikhil: a campaign 4 days in should compare against 4 days, not 7. When N already equals the
-// full covered window (campaign hasn't run longer than 7 days total), this IS the same window
-// campParticipationV1 already shows — isRedundant flags that so the UI can show one line
-// explaining why, instead of a second identical block.
+// Nikhil: a campaign 4 days in should compare against 4 days, not 7. v272: when N already equals
+// the full covered window, the "recent" side duplicates campParticipationV1's own figures above,
+// but the section still renders — the "before campaign" baseline is a different, often more
+// relevant comparison than same-month-ago even then.
 function campParticipationRecentWindow(c,part){
   if(!part)return null;
   const elapsedDays=daysBetweenInclusive(part.covStart,part.covEnd);
   const N=Math.min(7,elapsedDays);
-  if(N===elapsedDays)return{isRedundant:true,N,elapsedDays};
+  // v272: no longer suppresses the whole section when N equals the campaign's full elapsed
+  // length — see campRecentWindowAnalysis for the reasoning (Nikhil caught this directly). The
+  // "before campaign" baseline is a different, often more relevant comparison than same-month-
+  // ago even when the campaign side duplicates "Campaign to date" above.
+  const sameAsFullCampaign=(N===elapsedDays);
   const recentStart=subDays(part.covEnd,N-1);
-  const preEnd=subDays(c.startDate,1);
-  const preStart=subDays(preEnd,N-1);
+  // v273: FIXED — same bug and same fix as campRecentWindowAnalysis: baseline is now a clean
+  // 7-day shift of the RECENT window itself (weekday-aligned), not "N days immediately before
+  // campaign start" (which misaligned weekdays and used the wrong window once a campaign had
+  // run longer than N days). See that function's comment for Nikhil's exact worked example.
+  const preStart=subDays(recentStart,7);
+  const preEnd=subDays(part.covEnd,7);
   const myScope=campOutlets(c);
   const preHistName=keetaHistoricalCampaignName(c,preEnd);
   const recent=keetaCampWindowStats(c,recentStart,part.covEnd,myScope);
   const pre=keetaCampWindowStats(c,preStart,preEnd,myScope,preHistName);
-  return{isRedundant:false,N,recentStart,recentEnd:part.covEnd,preStart,preEnd,recent,pre};
+  return{sameAsFullCampaign,N,recentStart,recentEnd:part.covEnd,preStart,preEnd,recent,pre};
 }
 const _campPartCache=new Map();
 function campParticipationV1(c){
@@ -11229,18 +11254,19 @@ function buildCampParticipationTipHTML(part,c){
   let recentBlockHTML;
   if(!rw){
     recentBlockHTML='';
-  }else if(rw.isRedundant){
-    recentBlockHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px"><div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days vs before campaign</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — this campaign has only run ${rw.elapsedDays} day${rw.elapsedDays===1?'':'s'} so far, same as "Campaign to date" above.</div></div>`;
   }else if(!rw.recent||!rw.pre){
-    recentBlockHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px"><div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days vs before campaign</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — no orders in one of the two windows to compare.</div></div>`;
+    recentBlockHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px"><div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days vs week before</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — no orders in one of the two windows to compare.</div></div>`;
   }else{
     const rFood=rw.recent.gross*food,pFood=rw.pre.gross*food;
     const incr=rw.recent.contrib-rw.pre.contrib;
     const incrClr=incr>=0?'#4ade80':'#f87171';
     const preNameDiffers=rw.pre.matchedName&&rw.pre.matchedName!==c.name;
     const preNameNote=preNameDiffers?`<div style="font-size:9.5px;line-height:1.4;color:#94a3b8;margin:4px 0 0">Running before: <strong style="color:#38BDF8">${rw.pre.matchedName}</strong></div>`:'';
+    // v272: sameAsFullCampaign no longer hides this section — see campParticipationRecentWindow.
+    const dupeNote=rw.sameAsFullCampaign?`<div style="font-size:9px;opacity:.55;margin-bottom:4px">"Last ${rw.N} days" column matches "Campaign to date" above — this campaign hasn't run longer than ${rw.N} day${rw.N===1?'':'s'} yet.</div>`:'';
     recentBlockHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px">
-      <div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days vs before campaign</div>
+      <div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days vs week before</div>
+      ${dupeNote}
       <table style="width:100%;border-collapse:collapse;font-size:11px">
       <tr><td></td><td style="text-align:right;padding:0 4px;opacity:.55;font-size:9px">${fmtShort(rw.recentStart)}→${fmtShort(rw.recentEnd)}</td><td style="text-align:right;padding:0 4px;opacity:.55;font-size:9px">${fmtShort(rw.preStart)}→${fmtShort(rw.preEnd)}</td></tr>
       <tr><td style="padding:2px 0;opacity:.72">Orders</td><td style="text-align:right">${rw.recent.orders.toLocaleString()}</td><td style="text-align:right">${rw.pre.orders.toLocaleString()}</td></tr>
@@ -11325,16 +11351,20 @@ function buildCampCalcTipHTML(a,c){
   const rw=c?campRecentWindowAnalysis(c):null;
   let recentHTML='';
   if(rw){
-    if(rw.isRedundant){
-      recentHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px"><div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — this campaign has only run ${rw.elapsedDays} day${rw.elapsedDays===1?'':'s'} so far, same as "Campaign to date" above.</div></div>`;
-    }else if(rw.noData){
+    if(rw.noData){
       recentHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px"><div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — no orders in one of the two windows to compare.</div></div>`;
     }else{
       const preNote=concurrentNote(rw.preStart,rw.preEnd);
       const rIc=rw.incrContribTotal>=0?'#4ade80':'#f87171';
       const rRc=rw.discountROI!=null?(rw.discountROI>=0?'#4ade80':'#f87171'):'#94a3b8';
+      // v272: sameAsFullCampaign no longer hides this section (see campRecentWindowAnalysis) —
+      // just adds a one-line note when the campaign side duplicates "Campaign to date" above, so
+      // it's clear why those two numbers match while the WEEK-BEFORE baseline (genuinely
+      // different from the month-ago one) is still worth showing.
+      const dupeNote=rw.sameAsFullCampaign?`<div style="font-size:9px;opacity:.55;margin-bottom:4px">Campaign column matches "Campaign to date" above — this campaign hasn't run longer than ${rw.N} day${rw.N===1?'':'s'} yet.</div>`:'';
       recentHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px">
         <div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days</div>
+        ${dupeNote}
         <table style="width:100%;border-collapse:collapse;font-size:11px">
         <tr><td></td>${tHead(`Last ${rw.N} days`,'#38BDF8',fmtShort(rw.recentStart)+'→'+fmtShort(rw.recentEnd))}${tHead('Same days, week before','#38BDF8',fmtShort(rw.preStart)+'→'+fmtShort(rw.preEnd))}</tr>
         <tr><td colspan="3" style="border-top:1px solid rgba(255,255,255,.18);padding-top:3px"></td></tr>
