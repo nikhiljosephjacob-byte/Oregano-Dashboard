@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-266";
+const BUILD_VERSION="2026-08-13-267";
 const BUILD_NOTES=[
+  "🆕 Keeta exact campaign profitability now uses real_earnings — Keeta's own stated per-order bottom-line payout — instead of reconstructing it from real_commission alone. Validated Nikhil's fresh Apr 1–Aug 13 statements (30,127 orders): the AED 6 minimum commission floor already wired in (v139) checked out at 98.5% exact match against Basic commission. But digging into a second column, 'Top-up to minimum', found it's a SEPARATE mechanism — a positive credit back to the merchant on ~5% of orders under certain promos, not the same as the commission floor — and confirmed the v139 calc was also silently missing the Online payment fee (~2%) entirely, since it only ever subtracted commission. Rather than model each Keeta-side adjustment individually and risk missing a future one, now sums Earnings directly, verified to reconcile to Original price − merchant/Keeta promo − Basic commission − Online payment fee + Top-up to minimum + Compensation from Keeta on 99.86% of orders across all 6 files. Falls back to the v139 realCommission calc for records uploaded before this build, then to the flat contractual-rate estimate for anything older — same layered safety net as before, just one more accurate tier on top.",
   "🐛 Labeled the two independent bid recommendation lines on the Deliveroo Outlet Performance table — \"Budget pacing\" (raise bid to burn through this month's allocated budget before it goes unused) vs \"Historical optimal\" (raise/lower bid to whatever balanced ROAS & volume best over the last 6 months). Nikhil flagged these stacking together with no explanation read as one system contradicting itself — e.g. pacing saying raise to AED 3.16 right above historical saying raise to only AED 1.60. Same two systems as before, same numbers — just labeled so it's clear they're answering different questions (this month's budget utilization vs. long-run performance) rather than disagreeing with each other.",
   "🆕 Both Compare page tables are now exportable — ⬇ Export CSV on the Brand × Platform Breakdown, and another on the Outlet drill-down once you've expanded a row. Same columns you see on screen (including the Ad Spend A/B/Δ added a couple builds ago), plus a plain-text % column instead of the color-coded pill so it's usable straight in Excel/Sheets. Filenames carry both date windows so exports from different comparisons don't overwrite each other. Verified the row math and both empty-state guards (no dates set, no row expanded) against the actual functions before shipping.",
   "🐛 Corrected the Compare page Ad Spend columns (v263) — removed the 🔗 \"pooled, not tracked per outlet\" caveat on Careem/Noon. Confirmed by Nikhil: the sheet does carry a real per-outlet spend split for those platforms; \"pooled\" only means the budget CAP is set at brand level (matches how the Ads Performance page already treats it elsewhere — per-outlet budget is indicative, per-outlet results are exact). The outlet drill-down's totals strip now sums the per-outlet Ad Spend rows directly instead of falling back to the brand-level figure, matching how Orders/Sales totals already work — which also doubles as a check that the outlet rows add up to the Breakdown table's brand total.",
@@ -1716,6 +1717,20 @@ async function parseKeetaXlsx(file){
     // commission" — summed directly — is exact, and sidesteps needing to guess at the floor
     // rule from an aggregate net figure.
     const basicCommission=headerIdx["Basic commission"]!==undefined?Math.abs(parseKeetaAED(r[headerIdx["Basic commission"]])):null;
+    // v142: Basic commission alone still missed two other real Keeta-side adjustments —
+    // "Online payment fee" (~2% of order, was never subtracted in the exact-cost path at all)
+    // and "Top-up to minimum" (a positive credit back to the merchant, confirmed on ~5% of
+    // orders, concentrated in "Percentage off + Delivery fee discount" campaigns — looks like a
+    // per-promo minimum-earnings guarantee, but the exact trigger per campaign isn't confirmed).
+    // Rather than model each adjustment individually and risk missing another one, read Keeta's
+    // own stated "Earnings" — the actual bottom-line payout — directly. Verified this
+    // reconciles to Original price − |merchant promo| − |Keeta promo| − |Basic commission| −
+    // |Online payment fee| + Top-up to minimum + Compensation from Keeta on 99.93% of orders
+    // (2944/2946 in the Aug 1-13 file; the 2 misses both have Original price = 0, a data
+    // anomaly, not a formula gap) — so summing Earnings directly captures the commission floor,
+    // the payment fee, the top-up, AND any other adjustment Keeta applies, with nothing to keep
+    // in sync if Keeta changes how any individual piece is calculated.
+    const realEarnings=headerIdx["Earnings"]!==undefined?parseKeetaAED(r[headerIdx["Earnings"]]):null;
     // v141: FD-exception detection replaced entirely. The v139 heuristic (flat AED 6 commission
     // + non-zero top-up-to-minimum) was WRONG in both directions, confirmed by two real orders:
     //   - order #5946 (18 Jul): flat AED 6 commission, ZERO top-up, yet FD genuinely wasn't
@@ -1798,17 +1813,18 @@ async function parseKeetaXlsx(file){
     for(let i=0;i<attributions.length;i++){
       const[campaign,share]=attributions[i];
       const key=`${brand}|${outlet}|${date}|${campaign}`;
-      if(!agg[key])agg[key]={brand,outlet,date,campaign,orders:0,gross:0,net:0,menu_disc:0,real_commission:0,real_fd:0};
+      if(!agg[key])agg[key]={brand,outlet,date,campaign,orders:0,gross:0,net:0,menu_disc:0,real_commission:0,real_fd:0,real_earnings:0};
       if(!ordersSeen[key])ordersSeen[key]=new Set();
       if(!ordersSeen[key].has(orderNo)){
         ordersSeen[key].add(orderNo);
         agg[key].orders++;
-        // Gross/net/real_commission/real_fd go fully to the first attribution only — avoids
-        // double-counting when an order spans two campaigns (its sales and per-order costs
-        // aren't split, only the discount is).
+        // Gross/net/real_commission/real_fd/real_earnings go fully to the first attribution only
+        // — avoids double-counting when an order spans two campaigns (its sales and per-order
+        // costs aren't split, only the discount is).
         if(i===0){
           agg[key].gross+=gross;agg[key].net+=net;
           if(basicCommission!==null)agg[key].real_commission+=basicCommission;
+          if(realEarnings!==null)agg[key].real_earnings+=realEarnings;
           agg[key].real_fd+=realFD;
         }
       }
@@ -1832,7 +1848,8 @@ async function parseKeetaXlsx(file){
     net:Math.round(r.net*100)/100,
     menu_disc:Math.round(r.menu_disc*100)/100,
     real_commission:Math.round((r.real_commission||0)*100)/100,
-    real_fd:Math.round((r.real_fd||0)*100)/100
+    real_fd:Math.round((r.real_fd||0)*100)/100,
+    real_earnings:Math.round((r.real_earnings||0)*100)/100
   }));
   const dates=Array.from(datesSeen).sort();
   return{
@@ -10025,7 +10042,7 @@ function campParticipationV1(c){
   const key=`${campaignData.indexOf(c)}|${c.name}|${a.effStart}|${a.effEnd}|${keetaOrdersData.metadata.generated_at||keetaOrdersData.metadata.uploaded_at||''}`;
   if(_campPartCache.has(key))return _campPartCache.get(key);
   const myScope=campOutlets(c);
-  let orders=0,gross=0,disc=0,realCommission=0,realFD=0,hasRealCostData=true;const daily={};
+  let orders=0,gross=0,disc=0,realCommission=0,realFD=0,realEarnings=0,hasRealCostData=true,hasRealEarnings=true;const daily={};
   for(const rec of keetaOrdersData.records){
     if(rec.brand!==c.brand)continue;
     if(rec.campaign!==c.name)continue;
@@ -10037,9 +10054,11 @@ function campParticipationV1(c){
     // Silently treating a missing field as 0 would make commission cost look like ZERO for
     // that record, wildly INFLATING contribution instead of just being slightly stale — so any
     // record missing the field flips hasRealCostData off, and the whole calculation falls back
-    // to the previous (flat-rate) approach rather than risk a half-correct blend.
+    // to the previous (flat-rate) approach rather than risk a half-correct blend. v142:
+    // real_earnings gets the identical same-build-or-later guard.
     if(rec.real_commission===undefined)hasRealCostData=false;
-    realCommission+=(rec.real_commission||0);realFD+=(rec.real_fd||0);
+    if(rec.real_earnings===undefined)hasRealEarnings=false;
+    realCommission+=(rec.real_commission||0);realFD+=(rec.real_fd||0);realEarnings+=(rec.real_earnings||0);
     const d=daily[rec.date]||(daily[rec.date]={orders:0,gross:0,disc:0});
     d.orders+=rec.orders;d.gross+=rec.gross;d.disc+=rec.menu_disc;
   }
@@ -10056,7 +10075,17 @@ function campParticipationV1(c){
     // old flat-rate approach when the underlying data predates this build (see above).
     const fd=hasRealCostData?realFD:orders*KEETA_FD_COST;
     const net=gross-disc-fd;       // merchant revenue on participating orders (co-fund inherent: statement discount is merchant share only)
-    const contrib=hasRealCostData?(net-realCommission-gross*foodPkgPct(brandForCost)):brandContribution('Keeta',brandForCost,net,gross,c.startDate);
+    // v142: realCommission alone (v139) was missing two more Keeta-side adjustments — the
+    // Online payment fee (~2% of every order, never subtracted here at all) and Top-up to
+    // minimum (a positive credit on ~5% of orders under certain promos). Rather than track each
+    // adjustment individually, prefer realEarnings — Keeta's own stated bottom-line payout,
+    // verified against the underlying statement to already net out ALL of these correctly (see
+    // the parser comment above this function's data source). Falls back to the v139
+    // realCommission-based calc for records uploaded between v139 and this build, then to the
+    // flat contractual-rate estimate for anything older than that.
+    const contrib=hasRealEarnings?(realEarnings-gross*foodPkgPct(brandForCost))
+      :hasRealCostData?(net-realCommission-gross*foodPkgPct(brandForCost))
+      :brandContribution('Keeta',brandForCost,net,gross,c.startDate);
     const covStart=a.effStart>dr[0]?a.effStart:dr[0];
     const covEnd=a.effEnd<dr[1]?a.effEnd:dr[1];
     const partialCoverage=covStart>a.effStart||covEnd<a.effEnd;
@@ -10065,7 +10094,7 @@ function campParticipationV1(c){
     const recs=c.brand==='All Brands'?allData.filter(r=>r.aggregator==='Keeta'):indexedRecords(c.brand,'Keeta');
     for(const r of recs){if(r.date>=covStart&&r.date<=covEnd&&(!myScope||myScope.has(r.branch)))brandOrders+=r.orders;}
     const shareOfBrandOrders=brandOrders>0?orders/brandOrders*100:null;
-    out={orders,gross,disc,fd,net,contrib,depth:disc/gross,daily,covStart,covEnd,partialCoverage,shareOfBrandOrders,brandForCost,hasRealCostData,realCommission:hasRealCostData?realCommission:null};
+    out={orders,gross,disc,fd,net,contrib,depth:disc/gross,daily,covStart,covEnd,partialCoverage,shareOfBrandOrders,brandForCost,hasRealCostData,hasRealEarnings,realCommission:hasRealCostData?realCommission:null,realEarnings:hasRealEarnings?realEarnings:null};
   }
   _campPartCache.set(key,out);
   return out;
