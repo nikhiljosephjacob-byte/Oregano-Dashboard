@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-267";
+const BUILD_VERSION="2026-08-13-268";
 const BUILD_NOTES=[
+  "🐛 Reversed the Deliveroo co-fund discount formula — Deliveroo-only, confirmed directly by Nikhil and backed by real statement evidence (found actual 'Marketing contribution' credit lines in weekly Deliveroo statements, landing 1-3 weeks after the campaign in a LATER statement, e.g. a 35% BOGOF credit that never touched the campaign-week figure at all). This confirms Deliveroo charges the FULL discount to us upfront — the statement/sheet value during the campaign IS the total, not a merchant-only portion. If a Deliveroo campaign declares '50-50', our actual burn is now 50% of that statement value (was: 100%, with an inferred equal Deliveroo top-up on top — nearly double-counting). '70-30' (brand:platform) → our burn is 70%. Explicitly NOT touched for Careem/Keeta/Noon/Talabat — no evidence either way for them, so they keep the previous inference. Also caught and fixed a versioning slip from the last build: I'd tagged two unrelated fixes 'v142' without checking, colliding with genuine pre-existing v142 history elsewhere in this file — renumbered mine to v199/v200.",
   "🆕 Keeta exact campaign profitability now uses real_earnings — Keeta's own stated per-order bottom-line payout — instead of reconstructing it from real_commission alone. Validated Nikhil's fresh Apr 1–Aug 13 statements (30,127 orders): the AED 6 minimum commission floor already wired in (v139) checked out at 98.5% exact match against Basic commission. But digging into a second column, 'Top-up to minimum', found it's a SEPARATE mechanism — a positive credit back to the merchant on ~5% of orders under certain promos, not the same as the commission floor — and confirmed the v139 calc was also silently missing the Online payment fee (~2%) entirely, since it only ever subtracted commission. Rather than model each Keeta-side adjustment individually and risk missing a future one, now sums Earnings directly, verified to reconcile to Original price − merchant/Keeta promo − Basic commission − Online payment fee + Top-up to minimum + Compensation from Keeta on 99.86% of orders across all 6 files. Falls back to the v139 realCommission calc for records uploaded before this build, then to the flat contractual-rate estimate for anything older — same layered safety net as before, just one more accurate tier on top.",
   "🐛 Labeled the two independent bid recommendation lines on the Deliveroo Outlet Performance table — \"Budget pacing\" (raise bid to burn through this month's allocated budget before it goes unused) vs \"Historical optimal\" (raise/lower bid to whatever balanced ROAS & volume best over the last 6 months). Nikhil flagged these stacking together with no explanation read as one system contradicting itself — e.g. pacing saying raise to AED 3.16 right above historical saying raise to only AED 1.60. Same two systems as before, same numbers — just labeled so it's clear they're answering different questions (this month's budget utilization vs. long-run performance) rather than disagreeing with each other.",
   "🆕 Both Compare page tables are now exportable — ⬇ Export CSV on the Brand × Platform Breakdown, and another on the Outlet drill-down once you've expanded a row. Same columns you see on screen (including the Ad Spend A/B/Δ added a couple builds ago), plus a plain-text % column instead of the color-coded pill so it's usable straight in Excel/Sheets. Filenames carry both date windows so exports from different comparisons don't overwrite each other. Verified the row math and both empty-state guards (no dates set, no row expanded) against the actual functions before shipping.",
@@ -1717,7 +1718,7 @@ async function parseKeetaXlsx(file){
     // commission" — summed directly — is exact, and sidesteps needing to guess at the floor
     // rule from an aggregate net figure.
     const basicCommission=headerIdx["Basic commission"]!==undefined?Math.abs(parseKeetaAED(r[headerIdx["Basic commission"]])):null;
-    // v142: Basic commission alone still missed two other real Keeta-side adjustments —
+    // v199: Basic commission alone still missed two other real Keeta-side adjustments —
     // "Online payment fee" (~2% of order, was never subtracted in the exact-cost path at all)
     // and "Top-up to minimum" (a positive credit back to the merchant, confirmed on ~5% of
     // orders, concentrated in "Percentage off + Delivery fee discount" campaigns — looks like a
@@ -9630,24 +9631,34 @@ function campAnalysisV2(c){
   }
   const hasOverlap=alloc.hadOverlap;
   // ── Discount cost interpretation ──
-  // `allocatedDisc` from exact-upload sources (Deliveroo/Careem/Keeta/Noon statements) is the
-  // MERCHANT-funded portion only. Their exports don't include the platform's co-fund share
-  // (which is settled off-statement — e.g. Deliveroo BOGO 35% co-fund is paid separately at
-  // statement end). Talabat is similar: menu_disc is merchant, talabat_disc is a separate column
-  // for the platform's ambient vouchers. The Google Sheet daily `disc` values also track only
-  // the merchant's cost. So `allocatedDisc` = what the merchant actually paid = ourDiscCost.
+  // v200: REVERSED for DELIVEROO ONLY — confirmed directly by Nikhil, backed by real Deliveroo
+  // statement evidence (two "Marketing contribution" credit line items found in actual weekly
+  // statements, e.g. "35% funding on the second item" landing as a lump credit 1-3 weeks AFTER
+  // the campaign, in a LATER statement — not netted into the campaign-week figure at all). This
+  // confirms Deliveroo charges the FULL discount to the merchant upfront; `allocatedDisc` (what
+  // shows in the statement/sheet during the campaign) is the TOTAL for Deliveroo specifically,
+  // not a merchant-only portion. Nikhil's instruction is explicit: if a Deliveroo campaign
+  // declares "50-50", our burn is 50% of the statement value; if "70-30" (brand:platform), our
+  // burn is 70%. Whatever credit actually lands later is Finance's reconciliation, not something
+  // this ROI calculation needs to predict or wait for.
   //
-  // When the campaign declares co-funding (e.g. "50:50 co-fund" → coFundedPct = 0.5 = platform's
-  // share), the aggregator's contribution isn't in the statement — we INFER it from the merchant
-  // portion:  agg_share = merchant × pct / (1 − pct).  Example: 50/50 split, merchant paid AED 15
-  // per statement → agg_share = 15 × 0.5 / 0.5 = AED 15 → total customer discount = AED 30.
+  // Explicitly NOT extended to Careem/Keeta/Noon/Talabat — confirmed with Nikhil this mechanic is
+  // Deliveroo-only. Keeta doesn't even reach this function (see campParticipationV1, which uses
+  // its own per-order statement fields). Careem/Noon/Talabat keep the v059 assumption below
+  // (exports already merchant-only, platform's share settled off-statement and inferred) since
+  // there's no evidence either way for them yet — would need the same kind of statement proof
+  // before flipping their formula too.
   //
-  // Previous bug (pre-v059): ourDiscCost = allocatedDisc × (1 − coFundedPct) treated allocatedDisc
-  // as the TOTAL customer discount, effectively under-reporting merchant cost by (1 − pct)× when
-  // co-funding was declared. That was wrong for every co-funded campaign.
-  const ourDiscCost=allocatedDisc;
-  const aggInferredCoFund=coFundedPct>0&&coFundedPct<1?(allocatedDisc*coFundedPct/(1-coFundedPct)):0;
-  const totalCustomerDisc=allocatedDisc+aggInferredCoFund;
+  // v059 (still applies to Careem/Keeta/Noon/Talabat): `allocatedDisc` from exact-upload sources
+  // is the MERCHANT-funded portion only; exports don't include the platform's co-fund share
+  // (settled off-statement). Platform's contribution is inferred: agg_share = merchant × pct /
+  // (1−pct). Example: 50/50 split, merchant paid AED 15 per statement → agg_share = AED 15 →
+  // total customer discount = AED 30.
+  const isDeliveroo=c.aggregator==='Deliveroo';
+  const ourDiscCost=isDeliveroo?allocatedDisc*(1-coFundedPct):allocatedDisc;
+  const aggInferredCoFund=isDeliveroo?allocatedDisc*coFundedPct
+    :(coFundedPct>0&&coFundedPct<1?(allocatedDisc*coFundedPct/(1-coFundedPct)):0);
+  const totalCustomerDisc=isDeliveroo?allocatedDisc:allocatedDisc+aggInferredCoFund;
   const ourDiscPerDay=ourDiscCost/cDays;
 
   // Incremental contribution (per day, then total over the elapsed window)
@@ -10054,7 +10065,7 @@ function campParticipationV1(c){
     // Silently treating a missing field as 0 would make commission cost look like ZERO for
     // that record, wildly INFLATING contribution instead of just being slightly stale — so any
     // record missing the field flips hasRealCostData off, and the whole calculation falls back
-    // to the previous (flat-rate) approach rather than risk a half-correct blend. v142:
+    // to the previous (flat-rate) approach rather than risk a half-correct blend. v199:
     // real_earnings gets the identical same-build-or-later guard.
     if(rec.real_commission===undefined)hasRealCostData=false;
     if(rec.real_earnings===undefined)hasRealEarnings=false;
@@ -10075,7 +10086,7 @@ function campParticipationV1(c){
     // old flat-rate approach when the underlying data predates this build (see above).
     const fd=hasRealCostData?realFD:orders*KEETA_FD_COST;
     const net=gross-disc-fd;       // merchant revenue on participating orders (co-fund inherent: statement discount is merchant share only)
-    // v142: realCommission alone (v139) was missing two more Keeta-side adjustments — the
+    // v199: realCommission alone (v139) was missing two more Keeta-side adjustments — the
     // Online payment fee (~2% of every order, never subtracted here at all) and Top-up to
     // minimum (a positive credit on ~5% of orders under certain promos). Rather than track each
     // adjustment individually, prefer realEarnings — Keeta's own stated bottom-line payout,
@@ -10427,9 +10438,9 @@ function campDetailV2HTML(c,idx){
       <tr><td>Orders</td><td style="text-align:right">${a.cs.orders.toLocaleString()}</td><td style="text-align:right">${a.bs.orders.toLocaleString()}</td><td style="text-align:right;color:${a.incrOrdersPerDay>=0?'#22C55E':'#EF4444'}">${a.incrOrdersPerDay>=0?'+':''}${a.incrOrdersPerDay.toFixed(0)}</td></tr>
       <tr><td>Net Sales</td><td style="text-align:right">${fmtAEDx(a.cs.sales)}</td><td style="text-align:right">${fmtAEDx(a.bs.sales)}</td><td style="text-align:right;color:${a.incrSalesPerDay>=0?'#22C55E':'#EF4444'}">${a.incrSalesPerDay>=0?'+':''}${fmtAEDx(a.incrSalesPerDay)}</td></tr>
       <tr><td>Gross Sales</td><td style="text-align:right">${fmtAEDx(a.campGross)}</td><td style="text-align:right">${fmtAEDx(a.baseGross)}</td><td style="text-align:right;color:${T.label}">—</td></tr>
-      <tr><td>${a.coFundedPct>0?`Merchant Discount Cost <span style="font-size:9px;color:${T.label};font-weight:400">(from statement)</span>`:'Discount Given'}</td><td style="text-align:right">${fmtAEDx(a.ourDiscCost)}</td><td style="text-align:right">${fmtAEDx(a.bs.disc||0)}</td><td style="text-align:right;color:${T.label}">—</td></tr>
-      ${a.coFundedPct>0?`<tr style="color:#60A5FA"><td>＋ ${c.aggregator}-funded co-pay <span style="font-size:9px;color:${T.label};font-weight:400">(inferred from ${Math.round(a.coFundedPct*100)}% split · off-statement)</span></td><td style="text-align:right">${fmtAEDx(a.aggInferredCoFund)}</td><td style="text-align:right;color:${T.secondary}">—</td><td style="text-align:right;color:${T.label}">—</td></tr>
-      <tr style="color:${T.secondary};font-style:italic;font-size:11px"><td>= Total discount to customer</td><td style="text-align:right">${fmtAEDx(a.totalCustomerDisc)}</td><td style="text-align:right;color:${T.secondary}">—</td><td style="text-align:right;color:${T.label}">—</td></tr>`:''}
+      <tr><td>${a.coFundedPct>0?(c.aggregator==='Deliveroo'?`${c.brand}'s Discount Cost <span style="font-size:9px;color:${T.label};font-weight:400">(${Math.round((1-a.coFundedPct)*100)}% of statement value)</span>`:`Merchant Discount Cost <span style="font-size:9px;color:${T.label};font-weight:400">(from statement)</span>`):'Discount Given'}</td><td style="text-align:right">${fmtAEDx(a.ourDiscCost)}</td><td style="text-align:right">${fmtAEDx(a.bs.disc||0)}</td><td style="text-align:right;color:${T.label}">—</td></tr>
+      ${a.coFundedPct>0?`<tr style="color:#60A5FA"><td>＋ ${c.aggregator}-funded co-pay <span style="font-size:9px;color:${T.label};font-weight:400">(${c.aggregator==='Deliveroo'?'credited back in a later statement':`inferred from ${Math.round(a.coFundedPct*100)}% split · off-statement`})</span></td><td style="text-align:right">${fmtAEDx(a.aggInferredCoFund)}</td><td style="text-align:right;color:${T.secondary}">—</td><td style="text-align:right;color:${T.label}">—</td></tr>
+      <tr style="color:${T.secondary};font-style:italic;font-size:11px"><td>= Total discount to customer${c.aggregator==='Deliveroo'?' (statement value)':''}</td><td style="text-align:right">${fmtAEDx(a.totalCustomerDisc)}</td><td style="text-align:right;color:${T.secondary}">—</td><td style="text-align:right;color:${T.label}">—</td></tr>`:''}
       <tr style="border-top:2px solid rgba(245,158,11,.3);font-weight:800"><td style="color:#f59e0b">Contribution</td><td style="text-align:right;color:${T.text}">${fmtAEDx(a.campContribTotal)}</td><td style="text-align:right;color:${T.text}">${fmtAEDx(a.baseContribTotal)}</td><td style="text-align:right;color:${incrClr}">${a.incrContribPerDay>=0?'+':''}${fmtAEDx(a.incrContribPerDay)}</td></tr>
     </tbody></table></div></div>`;
   let scenarioBox='';
@@ -10635,7 +10646,10 @@ function campDetailHTML(c,idx){
   if(a.discAvailable){
     const roiClr=a.discountROI==null?'#64748b':a.discountROI>=1?'#22C55E':a.discountROI<0?'#EF4444':'#FBBF24';
     const profClr=a.profitabilityPct==null?'#64748b':pctClr(a.profitabilityPct);
-    const cfBanner=a.coFundedPct>0?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(168,85,247,.08);border-left:3px solid #A855F7;border-radius:4px">🤝 <strong style="color:#C084FC">Co-funded ${Math.round(a.coFundedPct*100)}% by ${c.aggregator}</strong> — statements only show the merchant portion, so we infer the platform's share from the split. ${c.brand} paid <strong style="color:#0F172A">${fmtAEDTip(a.ourDiscCost)}</strong> (as shown in the ${c.aggregator} export), ${c.aggregator} absorbed <strong style="color:#A855F7">${fmtAEDTip(a.aggInferredCoFund)}</strong> (inferred, invoiced separately), total customer discount was <strong style="color:#0F172A">${fmtAEDTip(a.totalCustomerDisc)}</strong>. ROI below is against ${c.brand}'s actual cost only.</div>`:'';
+    const cfBanner=a.coFundedPct>0?(c.aggregator==='Deliveroo'
+      ?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(168,85,247,.08);border-left:3px solid #A855F7;border-radius:4px">🤝 <strong style="color:#C084FC">Co-funded ${Math.round(a.coFundedPct*100)}% by Deliveroo</strong> — Deliveroo charges the full discount to us upfront and credits their share back in a later statement (Finance's reconciliation, tracked separately from this ROI). ${c.brand}'s actual burn is <strong style="color:#0F172A">${fmtAEDTip(a.ourDiscCost)}</strong> (${Math.round((1-a.coFundedPct)*100)}% of the ${fmtAEDTip(a.totalCustomerDisc)} shown in the Deliveroo statement), Deliveroo's declared share is <strong style="color:#A855F7">${fmtAEDTip(a.aggInferredCoFund)}</strong>. ROI below is against ${c.brand}'s actual cost only.</div>`
+      :`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(168,85,247,.08);border-left:3px solid #A855F7;border-radius:4px">🤝 <strong style="color:#C084FC">Co-funded ${Math.round(a.coFundedPct*100)}% by ${c.aggregator}</strong> — statements only show the merchant portion, so we infer the platform's share from the split. ${c.brand} paid <strong style="color:#0F172A">${fmtAEDTip(a.ourDiscCost)}</strong> (as shown in the ${c.aggregator} export), ${c.aggregator} absorbed <strong style="color:#A855F7">${fmtAEDTip(a.aggInferredCoFund)}</strong> (inferred, invoiced separately), total customer discount was <strong style="color:#0F172A">${fmtAEDTip(a.totalCustomerDisc)}</strong>. ROI below is against ${c.brand}'s actual cost only.</div>`
+      ):'';
     const subsidyBanner=a.dataMismatchSuspected?`<div style="font-size:12px;color:#0F172A;margin-bottom:12px;line-height:1.55;padding:10px 14px;background:rgba(239,68,68,.08);border-left:4px solid #EF4444;border-radius:6px">
       ⚠️ <strong style="color:#EF4444">Discount data mismatch detected — the exact ${c.aggregator} upload may be stale or incomplete for this window.</strong>
       <div style="margin-top:6px;color:#475569;font-size:11px;line-height:1.6">Two independent sources disagree for this campaign's ${a.cDays}-day window:</div>
