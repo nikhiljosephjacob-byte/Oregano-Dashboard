@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-274";
+const BUILD_VERSION="2026-08-13-275";
 const BUILD_NOTES=[
+  "🐛 Fixed a nastier variant of the residual-campaign matching bug from two builds ago — Nikhil caught this on Smokeys. The v271 fix resolved ONE historical campaign name for the whole comparison window (using the window's last day), which worked when a brand's residual campaign stayed constant across the window. But Smokeys' July 1-16 window actually spanned THREE different names — \"50% OFF CAP 20\" (Jul 1-8), \"50% OFF CAP 30\" (Jul 8-15), \"30% OFF CAP 20\" (Jul 16-31) — and resolving from the last day (Jul 16) only ever matched that 1 day, silently dropping the other 15. Replaced the single-name resolution with a per-record matcher: each order is checked against whatever the residual rule says for ITS OWN date, so all three segments correctly union into one comparison instead of only the last one counting. Verified against the real rules table with a simulated order set spanning all three Smokeys campaign names — old logic found 1 of 5 matching records (8 orders), fixed logic finds all 5 (73 orders).",
   "⚡ Fixed the Campaigns page slowdown Nikhil reported on filter changes — every campaign card was computing its FULL tooltip (including the \"Last N days\"/\"same days last month\" sub-analyses from recent builds, each independently scanning allData or keetaOrdersData.records) during every render of the card grid, not just when a tooltip was actually hovered. Every aggregator/status filter re-renders the grid, so this cost was being paid repeatedly for tooltips most users never open. Tooltip computation is now deferred to first hover and cached from then on — the headline card numbers (Incr. Contribution, ROI, Own-Orders Contrib.) were already properly cached via campAnalysisCached/campParticipationV1 and are unaffected. Also trimmed BUILD_NOTES from 126 to the most recent 30 entries — confirmed the changelog UI only ever displays the first 8 (BUILD_NOTES.slice(0,8)), so entries beyond that were pure dead weight in every deploy.",
   "🐛 Two real bugs in the \"Last N days\" comparison, both caught directly by Nikhil on the same Deliveroo campaign screenshot. (1) The section was fully suppressed whenever a campaign hadn't run longer than 7 days — reasoned that the campaign side would just duplicate \"Campaign to date\" above, but that's wrong: the BASELINE (week before) is a different, often more relevant comparison than month-ago even then — a weekend campaign should be checkable against the immediately preceding weekend, not hidden just because the campaign itself is young. Removed the suppression; now shows a one-line note when the campaign side duplicates the figure above, but always shows the actual comparison. (2) The baseline itself was wrong — anchored to \"N days immediately before campaign START\" instead of a clean 7-day shift of the recent window. Nikhil's own example caught this exactly: a 14→16 Aug (Fri-Sun) campaign was comparing against 11-13 Aug (Tue-Thu, not even weekday-aligned) instead of 7-9 Aug (the same Fri-Sun the week before). Fixed to mirror campAnalysisV2's own weekday-aligned baseline principle. Verified against the real extracted function: the exact screenshot scenario now correctly resolves to a 7-9 Aug baseline with real sales/discount data, not a suppressed message.",
   "🐛 Fixed \"same days last month\" and \"before campaign\" both requiring an EXACT campaign name match — Nikhil caught this on Lollorosso's residual campaign, which was \"50% OFF CAP 30\" in July and \"50% OFF CAP 25\" in August (confirmed in KEETA_RESIDUAL_RULES). Comparing August's campaign against July under an exact-name filter found nothing, even though the same functional promo (Lollorosso's whole-menu Keeta discount) ran continuously the entire time — it wasn't that no campaign existed a month ago, it's that the cap changing renamed it. Item-specific campaigns (OFU, Select Items) don't have this problem since their names stay constant month to month, only the underlying item changes — those were already working correctly and are untouched. Residual/menu-wide campaigns now resolve to whatever ACTUALLY ran during the historical window via keetaResidualCampaignFor(), and the popup shows that name explicitly (\"Running then: 50% OFF CAP 30\") when it differs from the current campaign, so the comparison is legible rather than silently swapping data sources. Verified against the real rules table: August CAP 25 correctly resolves to July's CAP 30 for both comparison windows, and — matching Nikhil's own forward-looking example — a hypothetical September 30%/CAP 30 campaign correctly resolves against August's CAP 25 with no hardcoding involved.",
@@ -10066,15 +10067,28 @@ function campOutletBreakdownHTML(c,a){
 // exact-statement logic can be reused for the "same days last month" and "last N days"
 // comparison windows below, instead of duplicating (and risking drift from) this loop three
 // more times. Behavior is identical to what campParticipationV1 did inline before this build.
-function keetaCampWindowStats(c,startDate,endDate,myScope,campaignNameOverride){
+function keetaCampWindowStats(c,startDate,endDate,myScope,campaignMatcher){
   if(!keetaOrdersData||!keetaOrdersData.records)return null;
-  const targetName=campaignNameOverride||c.name;
+  // v275: campaignMatcher can be a plain name (string, exact match — item-specific campaigns,
+  // whose name doesn't rotate within a comparison window) OR a per-record function (residual
+  // campaigns, whose name CAN rotate mid-window — e.g. Smokeys ran "50% OFF CAP 20" then "50%
+  // OFF CAP 30" then "30% OFF CAP 20" all within the same Jul 1-16 window a single comparison
+  // needed to cover). Resolving ONE name for the whole window (the pre-v275 approach) silently
+  // dropped every day that didn't happen to match whatever the window's LAST day resolved to —
+  // confirmed directly: for that Smokeys window only 1 of 16 days matched, the other 15 (two
+  // entirely different campaign names) were dropped, producing "no matching campaign found"
+  // instead of the real comparison.
+  const matcher=campaignMatcher==null?(rec=>rec.campaign===c.name)
+    :(typeof campaignMatcher==='function')?campaignMatcher
+    :(rec=>rec.campaign===campaignMatcher);
   let orders=0,gross=0,disc=0,realCommission=0,realFD=0,realEarnings=0,hasRealCostData=true,hasRealEarnings=true;
+  const matchedNames=new Set();
   for(const rec of keetaOrdersData.records){
     if(rec.brand!==c.brand)continue;
-    if(rec.campaign!==targetName)continue;
     if(rec.date<startDate||rec.date>endDate)continue;
+    if(!matcher(rec))continue;
     if(myScope&&!myScope.has(rec.outlet))continue;
+    matchedNames.add(rec.campaign);
     orders+=rec.orders;gross+=rec.gross;disc+=rec.menu_disc;
     if(rec.real_commission===undefined)hasRealCostData=false;
     if(rec.real_earnings===undefined)hasRealEarnings=false;
@@ -10087,7 +10101,7 @@ function keetaCampWindowStats(c,startDate,endDate,myScope,campaignNameOverride){
   const contrib=hasRealEarnings?(realEarnings-gross*foodPkgPct(brandForCost))
     :hasRealCostData?(net-realCommission-gross*foodPkgPct(brandForCost))
     :brandContribution('Keeta',brandForCost,net,gross,c.startDate);
-  return{orders,gross,disc,fd,net,contrib,brandForCost,hasRealCostData,hasRealEarnings,realCommission:hasRealCostData?realCommission:null,realEarnings:hasRealEarnings?realEarnings:null,matchedName:targetName};
+  return{orders,gross,disc,fd,net,contrib,brandForCost,hasRealCostData,hasRealEarnings,realCommission:hasRealCostData?realCommission:null,realEarnings:hasRealEarnings?realEarnings:null,matchedName:[...matchedNames].join(' → ')};
 }
 // v270: "same days last month" for a Keeta campaign — shifts the campaign's own covered window
 // back one calendar month and reruns the exact same aggregation. Comes back null (not a
@@ -10099,9 +10113,14 @@ function campParticipationSameMonthAgo(c,part){
   const s=new Date(part.covStart+"T12:00:00");s.setMonth(s.getMonth()-1);
   const e=new Date(part.covEnd+"T12:00:00");e.setMonth(e.getMonth()-1);
   const histStart=dk(s),histEnd=dk(e);
-  const histName=keetaHistoricalCampaignName(c,histEnd);
   const myScope=campOutlets(c);
-  const stats=keetaCampWindowStats(c,histStart,histEnd,myScope,histName);
+  // v275: residual campaigns can rotate name WITHIN this window (see keetaCampWindowStats) — use
+  // a per-record matcher keyed to each record's own date instead of one name resolved from
+  // histEnd alone, which only ever matched whichever rule applied on the window's last day.
+  const matcher=keetaIsResidualCampaign(c)
+    ?(rec=>rec.campaign===keetaResidualCampaignFor(c.brand,rec.date))
+    :keetaHistoricalCampaignName(c,histEnd);
+  const stats=keetaCampWindowStats(c,histStart,histEnd,myScope,matcher);
   return stats?{...stats,histStart,histEnd}:null;
 }
 // v270: "Last N days" (N = min(7, days actually elapsed since campaign start), trailing, capped
@@ -10128,9 +10147,12 @@ function campParticipationRecentWindow(c,part){
   const preStart=subDays(recentStart,7);
   const preEnd=subDays(part.covEnd,7);
   const myScope=campOutlets(c);
-  const preHistName=keetaHistoricalCampaignName(c,preEnd);
+  // v275: same rotating-name fix as campParticipationSameMonthAgo above.
+  const preMatcher=keetaIsResidualCampaign(c)
+    ?(rec=>rec.campaign===keetaResidualCampaignFor(c.brand,rec.date))
+    :keetaHistoricalCampaignName(c,preEnd);
   const recent=keetaCampWindowStats(c,recentStart,part.covEnd,myScope);
-  const pre=keetaCampWindowStats(c,preStart,preEnd,myScope,preHistName);
+  const pre=keetaCampWindowStats(c,preStart,preEnd,myScope,preMatcher);
   return{sameAsFullCampaign,N,recentStart,recentEnd:part.covEnd,preStart,preEnd,recent,pre};
 }
 const _campPartCache=new Map();
