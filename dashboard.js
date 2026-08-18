@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-278";
+const BUILD_VERSION="2026-08-13-280";
 const BUILD_NOTES=[
+  "🐛 Fixed Smiles commission showing 30% instead of the real 20% — Nikhil caught this on a Smokeys campaign. Smiles only had an Oregano-specific entry in the commission table (from when Oregano was its only brand); any other brand had no match at all, so the rate lookup silently fell through to a hardcoded 30% safety guess instead of erroring visibly. Confirmed directly: 18% + 2% PG = 20% on net sales applies to Smiles generally, not just Oregano — switched to a DEFAULT entry so every brand inherits it, same pattern Keeta already uses. Verified against the real extracted function: Smokeys, Oregano, and Lollorosso (previously also unconfigured) all now correctly resolve to 20%.",
+  "🆕 Profitability added as a key measure across the whole dashboard — approved by Nikhil after a full rendering review. Same formula everywhere: Net Sales − Commission − Food/Pkg Cost, grouped by brand+platform when a view mixes several (the exact calculation every campaign contribution figure already used, just applied at the page level). Always computed from whatever filters are currently applied, same as Orders/Net Sales. Overview: new KPI card + column on both breakdown tables. Brands: KPI card + table column. Outlets: KPI card + both drill-down tables, plus a Profitability line on every tile in the default outlet grid. Platforms: slotted into the existing AOV/Discount/Outlets mini-grid as a 4th metric on every aggregator card, plus its own table column. Compare: renamed the existing Contribution card to Profitability for consistency, added the column to all three breakdown tables (Brand × Platform, Outlet drill-down, Per-Platform). Also includes the 'Incremental (decrease)' wording fix from earlier — dropped the confusing qualifier, the sign and color already communicate direction. Verified the core formula against the real extracted functions: single-group, mixed brand/platform grouping, and empty-input all compute correctly before shipping.",
   "🐛 Fixed campaign popup content getting cut off below the viewport — Nikhil hit this right after the v277 visual redesign, which made the popups tall enough (header + details panel + two full sections, especially with a long deal-terms comment) to exceed typical browser window heights. The old \"flip above cursor\" logic only helped when the tooltip fit somewhere on screen — once the content itself is taller than the viewport, flipping just moves which end gets cut off, and there was no way to see the hidden part. Now caps the tooltip to the viewport height and scrolls internally instead, which required making it interactive (a non-interactive element can't be scrolled) — adjusted the dismiss logic so moving the mouse from the hovered card onto the tooltip itself (to scroll it) doesn't immediately hide it. Verified the positioning math directly: a 750px-tall tooltip on a 950px window now lands with its bottom edge at 942px — fully on-screen with an 8px margin, instead of extending off the bottom.",
   "🎨 Redesigned both campaign contribution popups (standard + Keeta own-order economics) — approved by Nikhil after several rounds of mockups. Golden border and gradient header so it stops blending into the page background, each comparison section in its own bordered panel (amber for the month view, blue for the week view), emoji row icons for faster scanning, and a new campaign-details panel showing the REAL deal terms — pulled directly from c.comments, the same free-text column already on the Campaigns sheet (\"50% OFF CAP 20 (entire menu) - Combos 86'd + FD (AED 2)\" etc.) — plus the campaign's full duration. No data removed, purely a visual rebuild of buildCampCalcTipHTML and buildCampParticipationTipHTML; verified the generated HTML is well-formed (balanced tags, no undefined leaking through) against realistic test data before shipping. Also updated the forecaster tooltip to carry its own background/border now that the shared tooltip container was simplified to pure positioning — it would have rendered unstyled otherwise.",
   "🐛 Fixed the campaign tooltip getting stuck on screen after clicking into a campaign's detail view — Nikhil hit this directly. The tooltip only ever hid on mouseout, but clicking a card to open its detail page replaces the underlying content mid-hover, so the element the mouse was over gets destroyed before a natural mouseout can fire on it. The tooltip (a separate floating div, not part of that content) just stayed visible on top of the new page. Now hides on any click, not just mouseout — simpler and more robust than trying to catch every navigation path individually.",
@@ -358,7 +360,12 @@ const COMM={
   Noon:{DEFAULT:{commission:0.17,pg:0.02,cpc:0,cancellation:0,note:"17% + 2% PG (4% ads & 2% cancellation excluded)"}},
   // Careem: 17% + 2% PG = 19%. 4% CPC is NOT counted as a campaign cost.
   Careem:{DEFAULT:{commission:0.17,pg:0.02,cpc:0,processingFee:0,note:"17% + 2% PG (4% CPC excluded)"}},
-  Smiles:{Oregano:{commission:0.18,pg:0.02,cpc:0,note:"Oregano only — 18% + 2% PG"}},
+  // v280: was Smiles:{Oregano:{...}} only — Smokeys (and any other brand on Smiles) had no
+  // entry, so commissionRateFor()'s lookup found nothing and silently fell through to the
+  // hardcoded 0.30 safety guess instead of the real rate. Confirmed directly by Nikhil: 18% + 2%
+  // PG = 20% on net sales applies to Smiles generally, not just Oregano — switched to DEFAULT so
+  // every brand inherits it, same pattern already used for Keeta below.
+  Smiles:{DEFAULT:{commission:0.18,pg:0.02,cpc:0,note:"18% + 2% PG (confirmed for all Smiles brands)"}},
   Instashop:{Oregano:{commission:0.16,pg:0.02,cpc:0,note:"Oregano only — 16% + 2% PG"}},
   // Keeta: ALL brands at 16% + 2% PG = 18% until 31-Dec-2026; becomes 20% + 2% PG thereafter
   // if not renegotiated. Applied via DEFAULT so every brand inherits it.
@@ -392,6 +399,30 @@ function brandContribution(agg,brand,netSales,grossSales,dateStr){
   const commCost=netSales*comm;
   const foodCost=grossSales*foodPkgPct(brand);
   return netSales-commCost-foodCost;
+}
+// v279: shared "Profitability" helper for the KPI rows and breakdown tables across Overview,
+// Brands, Outlets, Platforms and Compare — same formula every campaign contribution figure in
+// the popups already uses (Net Sales − Commission − Food/Pkg Cost), just applied to a filtered
+// set of daily records instead of one campaign. Groups by brand+aggregator before summing,
+// since commission rate and food/pkg % both vary by brand and platform — a filtered view mixing
+// several (e.g. Overview with no brand/platform filter applied) would get the wrong rate if
+// computed as one lump net/gross figure. Returns {contribution, gross} — gross is handy for
+// callers that also want a margin % (contribution/net, using the caller's own net figure).
+function computeProfitability(records,dateStr){
+  const byKey={};
+  for(const r of records){
+    const k=r.brand+'|'+r.aggregator;
+    if(!byKey[k])byKey[k]={brand:r.brand,aggregator:r.aggregator,net:0,disc:0};
+    byKey[k].net+=r.sales;
+    byKey[k].disc+=(r.disc||0);
+  }
+  let contribution=0,gross=0;
+  for(const g of Object.values(byKey)){
+    const g_gross=g.net+g.disc;
+    contribution+=brandContribution(g.aggregator,g.brand,g.net,g_gross,dateStr);
+    gross+=g_gross;
+  }
+  return{contribution,gross};
 }
 const BE={Deliveroo:1.32,Noon:1.30,Careem:1.27,Talabat:1.41};
 const BMAP=Object.fromEntries(BR.map(b=>[b.n,b]));
@@ -4622,6 +4653,14 @@ function selectVerdAggregator(ag){
 function renderOverview(){
   const ld=getLD(),pd=getPD(),ls=sumR(ld),ps=sumR(pd);
   const compShort=getCompShort();
+  // v279: profitability date reference — the filter's own end date (falling back to today if
+  // unbounded), since a page-level view can span weeks/months and commission rates occasionally
+  // change over time (contract renegotiations). Using one representative date per view is the
+  // same simplification already used for campaign-level contribution math elsewhere in this file.
+  const profDateRef=curFilters().end||dk(new Date());
+  const profCur=computeProfitability(ld,profDateRef),profPrev=computeProfitability(pd,profDateRef);
+  const profMarginCur=ls.sales>0?profCur.contribution/ls.sales*100:0;
+  const profMarginPrev=ps.sales>0?profPrev.contribution/ps.sales*100:0;
   // Day counts for per-day averages: span of the selected filter range, and of the comparison range.
   const f=curFilters();
   const spanDays=(s,e)=>{if(!s)return 1;if(s===e)return 1;return Math.max(1,Math.round((new Date(e+"T12:00:00")-new Date(s+"T12:00:00"))/86400000)+1);};
@@ -4726,30 +4765,36 @@ function renderOverview(){
     const gross=b.cv.sales+disc;
     const depth=gross>0?(disc/gross*100):0;
     const pv=BR.find(x=>x.n===b.n)?sumR(pd.filter(r=>r.brand===b.n)):{sales:0,orders:0,disc:0};
+    const prof=computeProfitability(ld.filter(r=>r.brand===b.n),profDateRef).contribution;
+    const profMargin=b.cv.sales>0?prof/b.cv.sales*100:0;
     return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.n,22)}<strong style="color:${b.c}">${b.n}</strong></span>`,
       b.cv.orders.toLocaleString(),fmtAEDTip(b.cv.sales),b.cv.orders>0?`AED ${aov.toFixed(1)}`:'—',
       disc>0?`<span style="color:#FF6B6B;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
       disc>0?`<span style="color:${depth>=20?'#FF6B6B':depth>=10?'#F59E0B':'#2ECC71'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
+      `<span style="color:#2ECC71;font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
       fmtChgCell(b.cv.orders,pv.orders,false),
       fmtChgCell(b.cv.sales,pv.sales,true)
-    ],sortVals:[b.n,b.cv.orders,b.cv.sales,aov,disc,depth,b.oc,b.sc]};
+    ],sortVals:[b.n,b.cv.orders,b.cv.sales,aov,disc,depth,prof,b.oc,b.sc]};
   });
   const aggTableRows=aggRows.map(a=>{
     const disc=a.disc||0;
     const gross=a.sales+disc;
     const depth=gross>0?(disc/gross*100):0;
     const pv=sumR(pd.filter(r=>r.aggregator===a.ag));
+    const prof=computeProfitability(ld.filter(r=>r.aggregator===a.ag),profDateRef).contribution;
+    const profMargin=a.sales>0?prof/a.sales*100:0;
     return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(a.ag,22)}<strong style="color:${a.clr}">${a.ag}</strong></span>`,
       a.orders.toLocaleString(),fmtAEDTip(a.sales),a.orders>0?`AED ${(a.sales/a.orders).toFixed(1)}`:'—',
       disc>0?`<span style="color:#FF6B6B;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
       disc>0?`<span style="color:${depth>=20?'#FF6B6B':depth>=10?'#F59E0B':'#2ECC71'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
+      `<span style="color:#2ECC71;font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
       fmtChgCell(a.orders,pv.orders,false),
       fmtChgCell(a.sales,pv.sales,true)
-    ],sortVals:[a.ag,a.orders,a.sales,a.aov,disc,depth,a.oc,a.sc]};
+    ],sortVals:[a.ag,a.orders,a.sales,a.aov,disc,depth,prof,a.oc,a.sc]};
   });
-  const heads=["","Orders","Net Sales","AOV","Discount Burn","Depth %",`Δ Orders <span style="font-weight:400;color:#8393AB">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#8393AB">${compShort}</span>`];
+  const heads=["","Orders","Net Sales","AOV","Discount Burn","Depth %","💵 Profitability",`Δ Orders <span style="font-weight:400;color:#8393AB">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#8393AB">${compShort}</span>`];
 
   document.getElementById("page-overview").innerHTML=makeFilterBar()+
     // v158/v159: scoped style override — .card/.sm/.g2/.ct/.fbar are defined in an external
@@ -4778,7 +4823,7 @@ function renderOverview(){
       #page-overview .fbar .fchip{color:${DARK_THEME.textSecondary}!important}
       #page-overview .sm:hover .kpi-tooltip{display:block!important}
     </style>`+
-    `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders),null,ordPerDay)}${kpiCard("Total Net Sales",fmtAEDTip(ls.sales),`${compShort}: ${fmtAEDTip(ps.sales)}`,pctOf(ls.sales,ps.sales),null,salesPerDay)}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${(()=>{
+    `<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders),null,ordPerDay)}${kpiCard("Total Net Sales",fmtAEDTip(ls.sales),`${compShort}: ${fmtAEDTip(ps.sales)}`,pctOf(ls.sales,ps.sales),null,salesPerDay)}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${(()=>{
       // Discount Burn KPI (v072) — merchant discount from allData for the filtered period.
       // Uses same filters (brand/platform/branch/date) as the other KPIs above via `ld`/`ps`.
       // Depth-of-gross % helps benchmark burn vs gross sales at a glance.
@@ -4787,7 +4832,7 @@ function renderOverview(){
       const priorGross=ps.sales+(ps.disc||0);
       const priorDepth=priorGross>0?((ps.disc||0)/priorGross*100):0;
       return kpiCard("Discount Burn",fmtAEDTip(ls.disc||0),`${depth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(ls.disc||0,ps.disc||0),null,null,true);
-    })()}${kpiCard("Active Outlets",activeOutlets,"all brands",null,null,null,null,missingOutletsHTML)}</div>
+    })()}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution))}${kpiCard("Active Outlets",activeOutlets,"all brands",null,null,null,null,missingOutletsHTML)}</div>
     <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:220px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="card" style="padding:14px">
       <div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span>Outlet Highlights by Platform</span><span style="color:#8393AB;font-weight:400;text-transform:none;letter-spacing:0;font-size:10px">click a platform to see its top movers</span></div>
@@ -4821,6 +4866,9 @@ function renderOverview(){
 function renderBrands(){
   const b=BMAP[selBrand];const ld=getLD().filter(r=>r.brand===selBrand),pd=getPD().filter(r=>r.brand===selBrand);
   const ls=sumR(ld),ps=sumR(pd);const compShort=getCompShort();
+  const profDateRef=curFilters().end||dk(new Date());
+  const profCur=computeProfitability(ld,profDateRef),profPrev=computeProfitability(pd,profDateRef);
+  const profMarginCur=ls.sales>0?profCur.contribution/ls.sales*100:0;
   const cm=mkMap(ld,r=>`${r.branch}|${r.aggregator}`),pm=mkMap(pd,r=>`${r.branch}|${r.aggregator}`);
   const rows=Object.values(cm).map(c=>{const[branch,aggregator]=c.k.split("|");const pv=pm[c.k];return{branch,aggregator,orders:c.orders,sales:c.sales,disc:c.disc||0,aov:c.orders>0?c.sales/c.orders:0,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};});
   const aggBar=AGGS.map(ag=>{const c=sumR(ld.filter(r=>r.aggregator===ag));return{ag,sales:c.sales,orders:c.orders,clr:AC[ag]};}).filter(a=>a.orders>0).sort((a,b)=>b.sales-a.sales);
@@ -4832,18 +4880,22 @@ function renderBrands(){
   const tRows=rows.map(r=>{
     const disc=r.disc||0;const gross=r.sales+disc;const depth=gross>0?(disc/gross*100):0;
     const pm2=pm[`${r.branch}|${r.aggregator}`];
+    const rowRecs=ld.filter(x=>x.branch===r.branch&&x.aggregator===r.aggregator);
+    const prof=computeProfitability(rowRecs,profDateRef).contribution;
+    const profMargin=r.sales>0?prof/r.sales*100:0;
     return{cells:[
     `<strong>${r.branch}</strong>`,
     `<span style="color:${AC[r.aggregator]||"#888"};font-weight:700">${r.aggregator}</span>`,
     r.orders,fmtAEDTip(r.sales),r.orders>0?`AED ${r.aov.toFixed(1)}`:"—",
     disc>0?`<span style="color:${_darkPage?'#FF6B6B':'#EF4444'};font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
     disc>0?`<span style="color:${depth>=20?(_darkPage?'#FF6B6B':'#EF4444'):depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
+    `<span style="color:#22C55E;font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
     fmtChgCell(r.orders,pm2?.orders,false),
     fmtChgCell(r.sales,pm2?.sales,true)
-  ],sortVals:[r.branch,r.aggregator,r.orders,r.sales,r.aov,disc,depth,r.oc,r.sc]};
+  ],sortVals:[r.branch,r.aggregator,r.orders,r.sales,r.aov,disc,depth,prof,r.oc,r.sc]};
   });
   const mutedClr=_darkPage?DARK_THEME.textMuted:"#64748b";
-  const heads=["Outlet","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
+  const heads=["Outlet","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %","💵 Profitability",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
   const brandDisc=ls.disc||0;const brandGross=ls.sales+brandDisc;const brandDepth=brandGross>0?(brandDisc/brandGross*100):0;
   const brandsStyleOverride=_darkPage?`<style>
       #page-brands{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
@@ -4861,7 +4913,7 @@ function renderBrands(){
     </style>`:"";
   document.getElementById("page-brands").innerHTML=brandsStyleOverride+makeFilterBar({hideBrand:true})+
     `<div class="brand-sel-row" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
-    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution))}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="g2"><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — Net Sales Trend</div><div style="position:relative;height:180px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748B;font-weight:600;text-transform:none;letter-spacing:0;font-size:10px">sales bars · order count on top</span></div><div style="position:relative;height:180px"><canvas id="ch-b-agg"></canvas></div></div></div>
     <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>`;
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.brand===selBrand&&(!f.platforms.size||f.platforms.has(r.aggregator))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-b-trend",trend30(mf,f.start,f.end),b?.c||"#888");
@@ -4882,38 +4934,47 @@ function renderOutlets(){
     const outletPrev=pd.filter(r=>r.branch===selOutlet);
     const tot=sumR(outletData),prev=sumR(outletPrev);
     const brandsHere=[...new Set(outletData.map(r=>r.brand))];
+    const profDateRef=curFilters().end||dk(new Date());
+    const profCur=computeProfitability(outletData,profDateRef),profPrev=computeProfitability(outletPrev,profDateRef);
+    const profMarginCur=tot.sales>0?profCur.contribution/tot.sales*100:0;
     const cm=mkMap(outletData,r=>`${r.brand}|${r.aggregator}`),pmM=mkMap(outletPrev,r=>`${r.brand}|${r.aggregator}`);
     const rows=Object.values(cm).map(c=>{const[brand,aggregator]=c.k.split("|");const pv=pmM[c.k];return{brand,aggregator,orders:c.orders,sales:c.sales,disc:c.disc||0,aov:c.orders>0?c.sales/c.orders:0,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};});
     const brandRows=brandsHere.map(brand=>{const c=sumR(outletData.filter(r=>r.brand===brand));const p=sumR(outletPrev.filter(r=>r.brand===brand));return{brand,...c,aov:c.orders>0?c.sales/c.orders:0,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};});
     const region=AUH.has(selOutlet)?'🇦🇪 Abu Dhabi':'🇦🇪 Dubai';
     const mutedClr=_darkPage?DARK_THEME.textMuted:"#64748b";
-    const brHeads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
+    const brHeads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %","💵 Profitability",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
     const discClr=_darkPage?"#FF6B6B":"#EF4444";
     const brTRows=brandRows.map(b=>{
       const disc=b.disc||0;const gross=b.sales+disc;const depth=gross>0?(disc/gross*100):0;
       const pv=sumR(outletPrev.filter(r=>r.brand===b.brand));
+      const prof=computeProfitability(outletData.filter(r=>r.brand===b.brand),profDateRef).contribution;
+      const profMargin=b.sales>0?prof/b.sales*100:0;
       return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.brand,22)}<strong style="color:${BMAP[b.brand]?.c||'#888'}">${b.brand}</strong></span>`,
       b.orders.toLocaleString(),fmtAEDTip(b.sales),b.orders>0?`AED ${b.aov.toFixed(1)}`:"—",
       disc>0?`<span style="color:${discClr};font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
       disc>0?`<span style="color:${depth>=20?discClr:depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
+      `<span style="color:#22C55E;font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
       fmtChgCell(b.orders,pv.orders,false),
       fmtChgCell(b.sales,pv.sales,true)
-    ],sortVals:[b.brand,b.orders,b.sales,b.aov,disc,depth,b.oc,b.sc]};
+    ],sortVals:[b.brand,b.orders,b.sales,b.aov,disc,depth,prof,b.oc,b.sc]};
     });
-    const bpHeads=["Brand","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
+    const bpHeads=["Brand","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %","💵 Profitability",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
     const bpTRows=rows.map(r=>{
       const disc=r.disc||0;const gross=r.sales+disc;const depth=gross>0?(disc/gross*100):0;
       const pv=pmM[`${r.brand}|${r.aggregator}`];
+      const prof=computeProfitability(outletData.filter(x=>x.brand===r.brand&&x.aggregator===r.aggregator),profDateRef).contribution;
+      const profMargin=r.sales>0?prof/r.sales*100:0;
       return{cells:[
       `<span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span>`,
       `<span style="color:${AC[r.aggregator]||'#888'};font-weight:700;font-size:11px">${r.aggregator}</span>`,
       r.orders,fmtAEDTip(r.sales),r.orders>0?`AED ${r.aov.toFixed(1)}`:"—",
       disc>0?`<span style="color:${discClr};font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
       disc>0?`<span style="color:${depth>=20?discClr:depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
+      `<span style="color:#22C55E;font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
       fmtChgCell(r.orders,pv?.orders,false),
       fmtChgCell(r.sales,pv?.sales,true)
-    ],sortVals:[r.brand,r.aggregator,r.orders,r.sales,r.aov,disc,depth,r.oc,r.sc]};
+    ],sortVals:[r.brand,r.aggregator,r.orders,r.sales,r.aov,disc,depth,prof,r.oc,r.sc]};
     });
     const outDisc=tot.disc||0;const outGross=tot.sales+outDisc;const outDepth=outGross>0?(outDisc/outGross*100):0;
     const outletsStyleOverride=_darkPage?`<style>
@@ -4938,11 +4999,12 @@ function renderOutlets(){
         <div style="font-size:18px;font-weight:800;color:${_darkPage?DARK_THEME.textPrimary:'inherit'}">📍 ${selOutlet}</div>
         <span style="font-size:11px;color:${_darkPage?DARK_THEME.textSecondary:'#475569'};font-weight:600">${region} · ${brandsHere.length} brand${brandsHere.length!==1?'s':''}</span>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">
         ${kpiCard("Orders",tot.orders.toLocaleString(),compShort+": "+prev.orders,pctOf(tot.orders,prev.orders))}
         ${kpiCard("Net Sales",fmtAEDTip(tot.sales),compShort+": "+fmtAEDTip(prev.sales),pctOf(tot.sales,prev.sales))}
         ${kpiCard("AOV",`AED ${tot.orders>0?(tot.sales/tot.orders).toFixed(1):0}`,"per order",null)}
         ${kpiCard("Discount Burn",fmtAEDTip(outDisc),`${outDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(prev.disc||0)}`,pctOf(outDisc,prev.disc||0),null,null,true)}
+        ${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution))}
         ${kpiCard("Brands",brandsHere.length,brandsHere.join(", "),null)}
       </div>
       <div class="card"><div class="ct">${selOutlet} — Brand Performance (${getPeriodLabel()}) <span style="color:${mutedClr};font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("ou-brands",brHeads,brTRows,2)}</div>
@@ -4953,7 +5015,8 @@ function renderOutlets(){
   const cm=mkMap(ld,r=>r.branch),pmO=mkMap(pd,r=>r.branch);
   // Track per-brand Net Sales inside each outlet so we can sort the chips high→low
   const brandGmv={};ld.forEach(r=>{if(!brandGmv[r.branch])brandGmv[r.branch]={};brandGmv[r.branch][r.brand]=(brandGmv[r.branch][r.brand]||0)+r.sales;});
-  const tiles=Object.values(cm).map(c=>{const branch=c.k;const pv=pmO[branch];const bm=brandGmv[branch]||{};const brandsSorted=Object.keys(bm).sort((a,b)=>bm[b]-bm[a]);const disc=c.disc||0;const gross=c.sales+disc;const depth=gross>0?(disc/gross*100):0;return{branch,orders:c.orders,sales:c.sales,disc,depth,aov:c.orders>0?c.sales/c.orders:0,brands:brandsSorted,brandGmv:bm,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};}).sort((a,b)=>b.sales-a.sales);
+  const profDateRefGrid=curFilters().end||dk(new Date());
+  const tiles=Object.values(cm).map(c=>{const branch=c.k;const pv=pmO[branch];const bm=brandGmv[branch]||{};const brandsSorted=Object.keys(bm).sort((a,b)=>bm[b]-bm[a]);const disc=c.disc||0;const gross=c.sales+disc;const depth=gross>0?(disc/gross*100):0;const prof=computeProfitability(ld.filter(r=>r.branch===branch),profDateRefGrid).contribution;const profMargin=c.sales>0?prof/c.sales*100:0;return{branch,orders:c.orders,sales:c.sales,disc,depth,prof,profMargin,aov:c.orders>0?c.sales/c.orders:0,brands:brandsSorted,brandGmv:bm,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};}).sort((a,b)=>b.sales-a.sales);
   const renderTile=t=>{
     const region=AUH.has(t.branch)?'AUH':'DXB';
     const regionColor=region==='AUH'?'#8B5CF6':'#3B82F6';
@@ -4987,6 +5050,7 @@ function renderOutlets(){
           <div style="text-align:right"><div style="font-size:10.5px;color:${textMuted};text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:4px">Net Sales</div><div style="font-size:25px;font-weight:800;font-variant-numeric:tabular-nums;color:${textPrimary};line-height:1">${fmtAEDTip(t.sales)}</div></div>
         </div>
         ${t.disc>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid ${dividerClr}"><div style="font-size:12.5px;color:${discClr};font-weight:700">💸 Disc. Burn: ${fmtAEDTip(t.disc)}</div><div style="font-size:12.5px;color:${t.depth>=20?discClr:t.depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${t.depth.toFixed(1)}% depth</div></div>`:''}
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid ${dividerClr}"><div style="font-size:12.5px;color:#22C55E;font-weight:700">💵 Profitability: ${fmtAEDTip(t.prof)}</div><div style="font-size:12.5px;color:#22C55E;font-weight:700">${t.profMargin.toFixed(1)}% margin</div></div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px">
           ${t.brands.map(b=>`<span title="${b}: ${fmtAED(t.brandGmv[b]||0)}" style="display:inline-flex;align-items:center;gap:5px;background:${BMAP[b]?.c||'#888'}18;color:${BMAP[b]?.c||'#888'};font-size:12.5px;font-weight:800;padding:4px 10px;border-radius:7px;border:1px solid ${BMAP[b]?.c||'#888'}33">${logoImg(b,19)}${b}</span>`).join('')}
         </div>
@@ -5236,6 +5300,7 @@ function renderPlatforms(){
   // regardless of the comparison block's height. Prior-period row matches the current row's
   // text size, with darker, clearly-readable "vs prior" labels and values.
   const fmtExact=n=>`AED ${Math.round(n).toLocaleString()}`;
+  const profDateRefPlat=curFilters().end||dk(new Date());
   const aggSums=AGGS.map(ag=>{
     const ldA=getLD().filter(r=>r.aggregator===ag);
     const pdA=getPD().filter(r=>r.aggregator===ag);
@@ -5244,9 +5309,11 @@ function renderPlatforms(){
     const discP=p.disc||0;
     const outlets=new Set(ldA.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size;
     const outletsP=new Set(pdA.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size;
+    const prof=computeProfitability(ldA,profDateRefPlat).contribution;
+    const profP=computeProfitability(pdA,profDateRefPlat).contribution;
     return{ag,clr:AC[ag],...c,orders_prev:p.orders,
       aov:c.orders>0?c.sales/c.orders:0,aovP:p.orders>0?p.sales/p.orders:0,
-      disc,depth,discP,outlets,outletsP,
+      disc,depth,discP,outlets,outletsP,prof,profP,
       oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};
   }).sort((a,b)=>b.sales-a.sales);
   const ld=getLD().filter(r=>r.aggregator===selPlatform),pd=getPD().filter(r=>r.aggregator===selPlatform);
@@ -5274,32 +5341,38 @@ function renderPlatforms(){
           <div style="font-size:16px;color:${pctClr(a.oc)};font-weight:800;margin-top:1px">${fmtPct(a.oc)}</div>
         </div>
       </div>
-      <div style="margin-top:11px;padding-top:10px;border-top:1px solid ${T.border};display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+      <div style="margin-top:11px;padding-top:10px;border-top:1px solid ${T.border};display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">AOV</div><div style="font-size:17px;font-weight:800;color:${T.valuePrimary};margin-top:2px">${a.orders>0?'AED '+a.aov.toFixed(1):'—'}</div></div>
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Disc. Burn</div><div style="font-size:17px;font-weight:800;color:${burnClr};margin-top:2px">${a.disc>0?fmtExact(a.disc):'—'}</div></div>
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Outlets</div><div style="font-size:17px;font-weight:800;color:${T.valuePrimary};margin-top:2px">${a.outlets}</div></div>
+        <div style="background:rgba(46,204,113,.1);border-radius:6px;margin:-4px;padding:4px"><div style="font-size:10px;color:#2ECC71;font-weight:700;text-transform:uppercase;letter-spacing:.4px">💵 Profit</div><div style="font-size:17px;font-weight:800;color:#2ECC71;margin-top:2px">${a.orders>0?fmtExact(a.prof):'—'}</div></div>
       </div>
-      <div style="margin-top:8px;padding-top:8px;border-top:1px dashed ${T.dashedBorder};display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+      <div style="margin-top:8px;padding-top:8px;border-top:1px dashed ${T.dashedBorder};display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
         <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${T.priorValue};margin-top:2px">${a.orders_prev>0?'AED '+a.aovP.toFixed(1):'—'}</div></div>
         <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${a.discP>0?T.priorDiscClr:T.priorValue};margin-top:2px">${a.discP>0?fmtExact(a.discP):'—'}</div></div>
         <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${T.priorValue};margin-top:2px">${a.outletsP}</div></div>
+        <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${T.priorValue};margin-top:2px">${a.orders_prev>0?fmtExact(a.profP):'—'}</div></div>
       </div>
     </div>`;
   }).join("");
   const mutedClr=_darkPage?DARK_THEME.textMuted:"#64748b";
   const discClr2=_darkPage?"#FF6B6B":"#EF4444";
-  const heads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
+  const heads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %","💵 Profitability",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
+  const profDateRefPlatBrand=curFilters().end||dk(new Date());
   const tRows=brandRows.map(b=>{
     const disc=b.cv.disc||0;const gross=b.cv.sales+disc;const depth=gross>0?(disc/gross*100):0;
     const pv=sumR(pd.filter(r=>r.brand===b.n));
+    const prof=computeProfitability(ld.filter(r=>r.brand===b.n),profDateRefPlatBrand).contribution;
+    const profMargin=b.cv.sales>0?prof/b.cv.sales*100:0;
     return{cells:[
     `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.n,22)}<strong style="color:${b.c}">${b.n}</strong></span>`,
     b.cv.orders,fmtAEDTip(b.cv.sales),b.cv.orders>0?`AED ${(b.cv.sales/b.cv.orders).toFixed(1)}`:"—",
     disc>0?`<span style="color:${discClr2};font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
     disc>0?`<span style="color:${depth>=20?discClr2:depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
+    `<span style="color:#22C55E;font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
     fmtChgCell(b.cv.orders,pv.orders,false),
     fmtChgCell(b.cv.sales,pv.sales,true)
-  ],sortVals:[b.n,b.cv.orders,b.cv.sales,b.cv.orders>0?b.cv.sales/b.cv.orders:0,disc,depth,b.oc,b.sc]};
+  ],sortVals:[b.n,b.cv.orders,b.cv.sales,b.cv.orders>0?b.cv.sales/b.cv.orders:0,disc,depth,prof,b.oc,b.sc]};
   });
   const platStyleOverride=_darkPage?`<style>
       #page-platforms{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
@@ -11311,7 +11384,7 @@ function buildCampCalcTipHTML(a,c){
     </table>`
     +(monthAgoNote?`<div style="margin-top:7px;font-size:10px;line-height:1.5;color:#FCD34D">⚠ Last month also had a promo: ${monthAgoNote} — not a clean comparison.</div>`:'')
     +`<div style="border-top:1px solid #92400E;margin-top:8px;padding-top:7px">`
-    +row(a.incrContribTotal>=0?'Incremental (increase)':'Incremental (decrease)',`<strong style="color:${ic}">${fSigned(a.incrContribTotal)}</strong>`,'('+fSigned(a.incrContribPerDay)+'/day)')
+    +row('Incremental',`<strong style="color:${ic}">${fSigned(a.incrContribTotal)}</strong>`,'('+fSigned(a.incrContribPerDay)+'/day)')
     +(a.ourDiscCost>0?row('Merchant discount (campaign)',fA(a.ourDiscCost)):'')
     +(a.ourDiscCost>0&&a.coFundedPct>0?row(`${Math.round(a.coFundedPct*100)}% co-funded`,fA(a.aggInferredCoFund),'by '+a.aggregator):'')
     +roiRowOrBadgeMain
@@ -16113,7 +16186,7 @@ function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC){
     </div>`;
   }
   return `<div class="sm" style="padding:15px 16px">
-    <div style="font-size:11.5px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.9px;margin-bottom:7px">Contribution <span style="text-transform:none;font-weight:500;color:${T.vs}">· margin</span></div>
+    <div style="font-size:11.5px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.9px;margin-bottom:7px">💵 Profitability <span style="text-transform:none;font-weight:500;color:${T.vs}">· margin</span></div>
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
       <span style="font-size:23px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(a)}</span>
       <span style="font-size:13px;color:${T.vs};font-weight:600">vs</span>
@@ -16453,11 +16526,14 @@ function renderCompare(){
   }
 
   // Aggregator movement: per-platform totals for the chosen metric on each side
+  const cmpProfDateRef=cmpA.end||cmpA.start||dk(new Date());
   const platMove=AGGS.map(ag=>{
-    const a=sumR(dA.filter(r=>r.aggregator===ag));
-    const b=sumR(dB.filter(r=>r.aggregator===ag));
+    const aRecs=dA.filter(r=>r.aggregator===ag),bRecs=dB.filter(r=>r.aggregator===ag);
+    const a=sumR(aRecs);
+    const b=sumR(bRecs);
     const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
-    return{ag,clr:AC[ag]||"#888",a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a)};
+    const profA=computeProfitability(aRecs,cmpProfDateRef).contribution,profB=computeProfitability(bRecs,cmpProfDateRef).contribution;
+    return{ag,clr:AC[ag]||"#888",a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a),profA,profB,profDiff:pctOf(profB,profA)};
   }).filter(p=>p.a.orders>0||p.b.orders>0);
   const movers=[...platMove].filter(p=>p.sDiff!=null).sort((x,y)=>y.sDiff-x.sDiff);
   const risers=movers.filter(p=>p.sDiff>0),fallers=movers.filter(p=>p.sDiff<0).reverse();
@@ -16466,10 +16542,12 @@ function renderCompare(){
   const keys=new Set([...dA,...dB].map(r=>`${r.brand}|${r.aggregator}`));
   const tableRows=[...keys].map(k=>{
     const[brand,ag]=k.split("|");
-    const a=sumR(dA.filter(r=>r.brand===brand&&r.aggregator===ag));
-    const b=sumR(dB.filter(r=>r.brand===brand&&r.aggregator===ag));
+    const aRecs=dA.filter(r=>r.brand===brand&&r.aggregator===ag),bRecs=dB.filter(r=>r.brand===brand&&r.aggregator===ag);
+    const a=sumR(aRecs);
+    const b=sumR(bRecs);
     const adA=cmpAdSpendOverlap(cmpA,brand,ag,null),adB=cmpAdSpendOverlap(cmpB,brand,ag,null);
-    return{brand,ag,a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),adA,adB,adDiff:pctOf(adB.spent,adA.spent)};
+    const profA=computeProfitability(aRecs,cmpProfDateRef).contribution,profB=computeProfitability(bRecs,cmpProfDateRef).contribution;
+    return{brand,ag,a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),adA,adB,adDiff:pctOf(adB.spent,adA.spent),profA,profB,profDiff:pctOf(profB,profA)};
   }).filter(r=>r.a.orders>0||r.b.orders>0);
   // Make each row clickable to expand into per-outlet drill-down (rendered as a separate card
   // below the table). A small chevron in the brand cell shows the state; the row gets a subtle
@@ -16488,14 +16566,17 @@ function renderCompare(){
         `<span style="color:#60A5FA">${fmtAEDTip(r.a.sales)}</span>`,
         `<span style="color:#F59E0B">${fmtAEDTip(r.b.sales)}</span>`,
         `<span style="color:${pctClr(r.sDiff)};font-weight:700">${fmtPct(r.sDiff)}</span>`,
+        `<span style="color:#2ECC71">${fmtAEDTip(r.profA)}</span>`,
+        `<span style="color:#2ECC71">${fmtAEDTip(r.profB)}</span>`,
+        `<span style="color:${pctClr(r.profDiff)};font-weight:700">${fmtPct(r.profDiff)}</span>`,
         `<span style="color:#60A5FA">${r.adA.hasData?fmtAEDTip(r.adA.spent):'—'}</span>`,
         `<span style="color:#F59E0B">${r.adB.hasData?fmtAEDTip(r.adB.spent):'—'}</span>`,
         `<span style="color:${cmpSubTxt};font-weight:700">${(r.adA.hasData||r.adB.hasData)?fmtPct(r.adDiff):'—'}</span>`
       ],
-      sortVals:[r.brand,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff,r.adA.spent,r.adB.spent,r.adDiff??0]
+      sortVals:[r.brand,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff,r.profA,r.profB,r.profDiff??0,r.adA.spent,r.adB.spent,r.adDiff??0]
     };
   });
-  const tHeads=["Brand · Platform","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A Ad Spend","B Ad Spend","Δ Ad Spend"];
+  const tHeads=["Brand · Platform","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A 💵 Profit","B 💵 Profit","Δ Profit","A Ad Spend","B Ad Spend","Δ Ad Spend"];
 
   // Outlet drill-down card content (rendered below the breakdown table when a row is expanded)
   let outletDrillCard='';
@@ -16510,13 +16591,15 @@ function renderCompare(){
     ]);
     brSet.delete("(brand-level)"); // pseudo-branch for unattributed brand-level discount rows — not a real outlet
     const branchRows=[...brSet].map(branch=>{
-      const a=sumR(dA.filter(r=>r.brand===xBrand&&r.aggregator===xAg&&r.branch===branch));
-      const b=sumR(dB.filter(r=>r.brand===xBrand&&r.aggregator===xAg&&r.branch===branch));
+      const aRecs=dA.filter(r=>r.brand===xBrand&&r.aggregator===xAg&&r.branch===branch),bRecs=dB.filter(r=>r.brand===xBrand&&r.aggregator===xAg&&r.branch===branch);
+      const a=sumR(aRecs);
+      const b=sumR(bRecs);
       const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
       const adA=cmpAdSpendOverlap(cmpA,xBrand,xAg,branch),adB=cmpAdSpendOverlap(cmpB,xBrand,xAg,branch);
-      return{branch,a,b,aov_a,aov_b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a),adA,adB,adDiff:pctOf(adB.spent,adA.spent)};
+      const profA=computeProfitability(aRecs,cmpProfDateRef).contribution,profB=computeProfitability(bRecs,cmpProfDateRef).contribution;
+      return{branch,a,b,aov_a,aov_b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a),adA,adB,adDiff:pctOf(adB.spent,adA.spent),profA,profB,profDiff:pctOf(profB,profA)};
     }).filter(r=>r.a.orders>0||r.b.orders>0);
-    const oHeads=["Outlet","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A AOV","B AOV","Δ AOV","A Ad Spend","B Ad Spend","Δ Ad Spend"];
+    const oHeads=["Outlet","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A AOV","B AOV","Δ AOV","A 💵 Profit","B 💵 Profit","Δ Profit","A Ad Spend","B Ad Spend","Δ Ad Spend"];
     const oRows=branchRows.map(r=>{
       return{
       cells:[
@@ -16530,25 +16613,29 @@ function renderCompare(){
         `<span style="color:#60A5FA">${r.a.orders>0?'AED '+r.aov_a.toFixed(1):'—'}</span>`,
         `<span style="color:#F59E0B">${r.b.orders>0?'AED '+r.aov_b.toFixed(1):'—'}</span>`,
         `<span style="color:${pctClr(r.aDiff)};font-weight:700">${fmtPct(r.aDiff)}</span>`,
+        `<span style="color:#2ECC71">${fmtAEDTip(r.profA)}</span>`,
+        `<span style="color:#2ECC71">${fmtAEDTip(r.profB)}</span>`,
+        `<span style="color:${pctClr(r.profDiff)};font-weight:700">${fmtPct(r.profDiff)}</span>`,
         `<span style="color:#60A5FA">${r.adA.hasData?fmtAEDTip(r.adA.spent):'—'}</span>`,
         `<span style="color:#F59E0B">${r.adB.hasData?fmtAEDTip(r.adB.spent):'—'}</span>`,
         `<span style="color:${cmpSubTxt};font-weight:700">${(r.adA.hasData||r.adB.hasData)?fmtPct(r.adDiff):'—'}</span>`
       ],
-      sortVals:[r.branch,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff,r.aov_a,r.aov_b,r.aDiff,r.adA.spent,r.adB.spent,r.adDiff??0]
+      sortVals:[r.branch,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff,r.aov_a,r.aov_b,r.aDiff,r.profA,r.profB,r.profDiff??0,r.adA.spent,r.adB.spent,r.adDiff??0]
     };});
     // Totals strip (optional but helpful — confirms drill-down sums to the parent brand × platform row).
     // Ad spend sums this table's own per-outlet rows, same pattern as orders/sales below — per-outlet
     // spend is confirmed accurate even for Careem/Noon (their budget CAP is pooled per brand, but the
     // sheet still carries a real per-outlet spend split), so this also doubles as an implicit check that
     // the outlet rows add up to the brand total shown on the Breakdown table above.
-    const totA=branchRows.reduce((s,r)=>({orders:s.orders+r.a.orders,sales:s.sales+r.a.sales,ad:s.ad+(r.adA.hasData?r.adA.spent:0)}),{orders:0,sales:0,ad:0});
-    const totB=branchRows.reduce((s,r)=>({orders:s.orders+r.b.orders,sales:s.sales+r.b.sales,ad:s.ad+(r.adB.hasData?r.adB.spent:0)}),{orders:0,sales:0,ad:0});
+    const totA=branchRows.reduce((s,r)=>({orders:s.orders+r.a.orders,sales:s.sales+r.a.sales,ad:s.ad+(r.adA.hasData?r.adA.spent:0),prof:s.prof+r.profA}),{orders:0,sales:0,ad:0,prof:0});
+    const totB=branchRows.reduce((s,r)=>({orders:s.orders+r.b.orders,sales:s.sales+r.b.sales,ad:s.ad+(r.adB.hasData?r.adB.spent:0),prof:s.prof+r.profB}),{orders:0,sales:0,ad:0,prof:0});
     const totODiff=pctOf(totB.orders,totA.orders),totSDiff=pctOf(totB.sales,totA.sales);
     const anyAdData=branchRows.some(r=>r.adA.hasData||r.adB.hasData);
     const adSpendLine=anyAdData
       ?`<span><span style="color:${cmpMutedTxt}">Ad Spend:</span> <span style="color:#60A5FA">${fmtAEDTip(totA.ad)}</span> vs <span style="color:#F59E0B">${fmtAEDTip(totB.ad)}</span></span>`
       :'';
-    const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:12px;color:${cmpBtnTxt};margin-bottom:10px;padding:8px 12px;background:rgba(245,158,11,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><span><span style="color:#60A5FA">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAEDTip(totA.sales)}</span><span><span style="color:#F59E0B">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAEDTip(totB.sales)}</span><span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span>${adSpendLine}</div></div>`;
+    const profLine=`<span><span style="color:${cmpMutedTxt}">💵 Profit:</span> <span style="color:#60A5FA">${fmtAEDTip(totA.prof)}</span> vs <span style="color:#F59E0B">${fmtAEDTip(totB.prof)}</span></span>`;
+    const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:12px;color:${cmpBtnTxt};margin-bottom:10px;padding:8px 12px;background:rgba(245,158,11,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><span><span style="color:#60A5FA">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAEDTip(totA.sales)}</span><span><span style="color:#F59E0B">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAEDTip(totB.sales)}</span><span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span>${profLine}${adSpendLine}</div></div>`;
     outletDrillCard=branchRows.length
       ?`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown <span style="color:${cmpMutedTxt};font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></span><span style="display:flex;gap:8px;align-items:center"><button onclick="cmpExportOutletCSV()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap">⬇ Export CSV</button><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid ${cmpBtnBorder};color:${cmpBtnTxt};padding:4px 10px;font-size:11px;border-radius:5px;cursor:pointer" title="Close drill-down">✕ close</button></span></div>${totsLine}${sortableTable("cmp-outlet-tbl",oHeads,oRows,4)}</div>`
       :`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown</span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid ${cmpBtnBorder};color:${cmpBtnTxt};padding:4px 10px;font-size:11px;border-radius:5px;cursor:pointer">✕ close</button></div><div style="color:${cmpMutedTxt};font-size:13px;padding:8px 0">No outlets with activity in either window for this combination.</div></div>`;
@@ -16644,12 +16731,14 @@ function renderCompare(){
     </div>`;
   const trendTabHTML=`<div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>Trend — <span style="color:#60A5FA">A</span> vs <span style="color:#F59E0B">B</span> (aligned by day index)</span><div style="display:flex;gap:5px">${metricBtns}</div></div><div style="position:relative;height:220px"><canvas id="cmp-chart"></canvas></div><div style="font-size:11px;color:${cmpMutedTxt};margin-top:6px">Day 1 = first day of each window. This lets you compare windows of different years/lengths on the same axis.</div></div>`;
   const platformsTabHTML=`${moversTile}
-    <div class="card"><div class="ct">Per-Platform Breakdown</div>${mkTable(["Platform","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A AOV","B AOV","Δ AOV"],platMove.map(p=>[
+    <div class="card"><div class="ct">Per-Platform Breakdown</div>${mkTable(["Platform","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A 💵 Profit","B 💵 Profit","Δ Profit","A AOV","B AOV","Δ AOV"],platMove.map(p=>[
       `<span style="color:${p.clr};font-weight:700">${p.ag}</span>`,
       `<span style="color:#60A5FA">${p.a.orders.toLocaleString()}</span>`,`<span style="color:#F59E0B">${p.b.orders.toLocaleString()}</span>`,
       `<span style="color:${pctClr(p.oDiff)};font-weight:700">${fmtPct(p.oDiff)}</span>`,
       `<span style="color:#60A5FA">${fmtAEDTip(p.a.sales)}</span>`,`<span style="color:#F59E0B">${fmtAEDTip(p.b.sales)}</span>`,
       `<span style="color:${pctClr(p.sDiff)};font-weight:700">${fmtPct(p.sDiff)}</span>`,
+      `<span style="color:#2ECC71">${fmtAEDTip(p.profA)}</span>`,`<span style="color:#2ECC71">${fmtAEDTip(p.profB)}</span>`,
+      `<span style="color:${pctClr(p.profDiff)};font-weight:700">${fmtPct(p.profDiff)}</span>`,
       `<span style="color:#60A5FA">${p.a.orders>0?'AED '+(p.a.sales/p.a.orders).toFixed(1):'—'}</span>`,`<span style="color:#F59E0B">${p.b.orders>0?'AED '+(p.b.sales/p.b.orders).toFixed(1):'—'}</span>`,
       `<span style="color:${pctClr(p.aDiff)};font-weight:700">${fmtPct(p.aDiff)}</span>`
     ]))}</div>`;
