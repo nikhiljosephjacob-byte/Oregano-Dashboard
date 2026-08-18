@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-277";
+const BUILD_VERSION="2026-08-13-278";
 const BUILD_NOTES=[
+  "🐛 Fixed campaign popup content getting cut off below the viewport — Nikhil hit this right after the v277 visual redesign, which made the popups tall enough (header + details panel + two full sections, especially with a long deal-terms comment) to exceed typical browser window heights. The old \"flip above cursor\" logic only helped when the tooltip fit somewhere on screen — once the content itself is taller than the viewport, flipping just moves which end gets cut off, and there was no way to see the hidden part. Now caps the tooltip to the viewport height and scrolls internally instead, which required making it interactive (a non-interactive element can't be scrolled) — adjusted the dismiss logic so moving the mouse from the hovered card onto the tooltip itself (to scroll it) doesn't immediately hide it. Verified the positioning math directly: a 750px-tall tooltip on a 950px window now lands with its bottom edge at 942px — fully on-screen with an 8px margin, instead of extending off the bottom.",
   "🎨 Redesigned both campaign contribution popups (standard + Keeta own-order economics) — approved by Nikhil after several rounds of mockups. Golden border and gradient header so it stops blending into the page background, each comparison section in its own bordered panel (amber for the month view, blue for the week view), emoji row icons for faster scanning, and a new campaign-details panel showing the REAL deal terms — pulled directly from c.comments, the same free-text column already on the Campaigns sheet (\"50% OFF CAP 20 (entire menu) - Combos 86'd + FD (AED 2)\" etc.) — plus the campaign's full duration. No data removed, purely a visual rebuild of buildCampCalcTipHTML and buildCampParticipationTipHTML; verified the generated HTML is well-formed (balanced tags, no undefined leaking through) against realistic test data before shipping. Also updated the forecaster tooltip to carry its own background/border now that the shared tooltip container was simplified to pure positioning — it would have rendered unstyled otherwise.",
   "🐛 Fixed the campaign tooltip getting stuck on screen after clicking into a campaign's detail view — Nikhil hit this directly. The tooltip only ever hid on mouseout, but clicking a card to open its detail page replaces the underlying content mid-hover, so the element the mouse was over gets destroyed before a natural mouseout can fire on it. The tooltip (a separate floating div, not part of that content) just stayed visible on top of the new page. Now hides on any click, not just mouseout — simpler and more robust than trying to catch every navigation path individually.",
   "🐛 Fixed a nastier variant of the residual-campaign matching bug from two builds ago — Nikhil caught this on Smokeys. The v271 fix resolved ONE historical campaign name for the whole comparison window (using the window's last day), which worked when a brand's residual campaign stayed constant across the window. But Smokeys' July 1-16 window actually spanned THREE different names — \"50% OFF CAP 20\" (Jul 1-8), \"50% OFF CAP 30\" (Jul 8-15), \"30% OFF CAP 20\" (Jul 16-31) — and resolving from the last day (Jul 16) only ever matched that 1 day, silently dropping the other 15. Replaced the single-name resolution with a per-record matcher: each order is checked against whatever the residual rule says for ITS OWN date, so all three segments correctly union into one comparison instead of only the last one counting. Verified against the real rules table with a simulated order set spanning all three Smokeys campaign names — old logic found 1 of 5 matching records (8 orders), fixed logic finds all 5 (73 orders).",
@@ -11128,21 +11129,23 @@ function storeTip(fn){const id='ct'+(++calcTipSeq);calcTipData[id]=fn;return id;
 function initCalcTip(){
   if(document.getElementById('_ctip'))return;
   const el=document.createElement('div');el.id='_ctip';
-  el.style.cssText='position:fixed;z-index:9999;pointer-events:none;display:none;font-family:system-ui,sans-serif;line-height:1.5';
+  // v278: fixes tooltip content getting cut off / hidden below the viewport — Nikhil hit this
+  // directly after the v277 redesign made the campaign popups much taller (header banner +
+  // details panel + two full bordered sections can easily run 700px+, especially with a long
+  // deal-terms comment). The old "flip above cursor" logic only helped when the tooltip fit
+  // somewhere on screen; once it's taller than the viewport itself, flipping just moves which
+  // end gets cut off. Now caps height to the viewport and scrolls internally instead — which
+  // means the tooltip needs pointer-events:auto (a non-interactive element can't be scrolled),
+  // so mouseout/mouseleave below are adjusted to not dismiss it when the mouse moves from the
+  // hovered card onto the tooltip itself.
+  el.style.cssText='position:fixed;z-index:9999;pointer-events:auto;display:none;font-family:system-ui,sans-serif;line-height:1.5;max-height:calc(100vh - 20px);overflow-y:auto';
   document.body.appendChild(el);
-  // v204: previously guessed the tooltip was ~330×300px to decide whether it needed to flip
-  // above the cursor near a viewport edge — that guess was too small for longer tooltips (like
-  // campaign contribution, which has Campaign + Baseline + Incremental + ROI sections and can
-  // run 400px+ tall), so the overflow check silently passed and let it run off the bottom of the
-  // window. Now measures el.offsetWidth/offsetHeight — the tooltip's REAL rendered size, already
-  // reflecting whatever content is currently in it — so the flip decision is correct no matter
-  // how long any given tooltip's content turns out to be.
   const pos=(e)=>{
     const bw=window.innerWidth,bh=window.innerHeight;
-    const tw=el.offsetWidth,th=el.offsetHeight;
+    const tw=el.offsetWidth,th=Math.min(el.offsetHeight,bh-20);
     let x=e.clientX+14,y=e.clientY-10;
     if(x+tw>bw)x=Math.max(4,bw-tw-8);
-    if(y+th>bh)y=Math.max(4,e.clientY-th-10); // flip to render above the cursor instead
+    if(y+th>bh)y=Math.max(4,bh-th-8); // clamp within the viewport — flips above the cursor when there's room, otherwise pins to the bottom edge with the full height still visible (scrollable) rather than overflowing off-screen
     el.style.left=x+'px';el.style.top=y+'px';
   };
   document.addEventListener('mouseover',e=>{
@@ -11151,15 +11154,14 @@ function initCalcTip(){
     if(typeof h==='function'){h=h();calcTipData[t.dataset.ctip]=h;} // resolve once, cache the HTML for next time
     el.innerHTML=h;el.style.display='block';pos(e);
   });
-  // v276: fixes a stuck tooltip Nikhil hit directly — clicking a campaign card to open its
-  // detail view replaces the underlying page content mid-hover, so the [data-ctip] element the
-  // mouse was over gets destroyed before a natural mouseout can fire on it, leaving this tooltip
-  // (a separate fixed-position div outside that content) stuck visible on top of the new page.
-  // A click anywhere is a reasonable enough signal that the hover interaction is over — hide
-  // unconditionally rather than trying to catch every DOM-replacement path individually.
   document.addEventListener('click',()=>{el.style.display='none';});
   document.addEventListener('mousemove',e=>{if(el.style.display==='none')return;if(!e.target.closest('[data-ctip]'))return;pos(e);});
-  document.addEventListener('mouseout',e=>{if(!e.target.closest('[data-ctip]'))return;el.style.display='none';});
+  document.addEventListener('mouseout',e=>{
+    if(!e.target.closest('[data-ctip]'))return;
+    if(e.relatedTarget&&el.contains(e.relatedTarget))return; // moving onto the tooltip itself (e.g. to scroll a tall one) — don't dismiss
+    el.style.display='none';
+  });
+  el.addEventListener('mouseleave',()=>{el.style.display='none';});
 }
 // Build tooltip HTML for a completed/active campaign card (from campAnalysisV2 result).
 // v269: companion to buildCampCalcTipHTML below, for the OTHER Keeta card branch — own-order
