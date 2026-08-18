@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-276";
+const BUILD_VERSION="2026-08-13-277";
 const BUILD_NOTES=[
+  "🎨 Redesigned both campaign contribution popups (standard + Keeta own-order economics) — approved by Nikhil after several rounds of mockups. Golden border and gradient header so it stops blending into the page background, each comparison section in its own bordered panel (amber for the month view, blue for the week view), emoji row icons for faster scanning, and a new campaign-details panel showing the REAL deal terms — pulled directly from c.comments, the same free-text column already on the Campaigns sheet (\"50% OFF CAP 20 (entire menu) - Combos 86'd + FD (AED 2)\" etc.) — plus the campaign's full duration. No data removed, purely a visual rebuild of buildCampCalcTipHTML and buildCampParticipationTipHTML; verified the generated HTML is well-formed (balanced tags, no undefined leaking through) against realistic test data before shipping. Also updated the forecaster tooltip to carry its own background/border now that the shared tooltip container was simplified to pure positioning — it would have rendered unstyled otherwise.",
   "🐛 Fixed the campaign tooltip getting stuck on screen after clicking into a campaign's detail view — Nikhil hit this directly. The tooltip only ever hid on mouseout, but clicking a card to open its detail page replaces the underlying content mid-hover, so the element the mouse was over gets destroyed before a natural mouseout can fire on it. The tooltip (a separate floating div, not part of that content) just stayed visible on top of the new page. Now hides on any click, not just mouseout — simpler and more robust than trying to catch every navigation path individually.",
   "🐛 Fixed a nastier variant of the residual-campaign matching bug from two builds ago — Nikhil caught this on Smokeys. The v271 fix resolved ONE historical campaign name for the whole comparison window (using the window's last day), which worked when a brand's residual campaign stayed constant across the window. But Smokeys' July 1-16 window actually spanned THREE different names — \"50% OFF CAP 20\" (Jul 1-8), \"50% OFF CAP 30\" (Jul 8-15), \"30% OFF CAP 20\" (Jul 16-31) — and resolving from the last day (Jul 16) only ever matched that 1 day, silently dropping the other 15. Replaced the single-name resolution with a per-record matcher: each order is checked against whatever the residual rule says for ITS OWN date, so all three segments correctly union into one comparison instead of only the last one counting. Verified against the real rules table with a simulated order set spanning all three Smokeys campaign names — old logic found 1 of 5 matching records (8 orders), fixed logic finds all 5 (73 orders).",
   "⚡ Fixed the Campaigns page slowdown Nikhil reported on filter changes — every campaign card was computing its FULL tooltip (including the \"Last N days\"/\"same days last month\" sub-analyses from recent builds, each independently scanning allData or keetaOrdersData.records) during every render of the card grid, not just when a tooltip was actually hovered. Every aggregator/status filter re-renders the grid, so this cost was being paid repeatedly for tooltips most users never open. Tooltip computation is now deferred to first hover and cached from then on — the headline card numbers (Incr. Contribution, ROI, Own-Orders Contrib.) were already properly cached via campAnalysisCached/campParticipationV1 and are unaffected. Also trimmed BUILD_NOTES from 126 to the most recent 30 entries — confirmed the changelog UI only ever displays the first 8 (BUILD_NOTES.slice(0,8)), so entries beyond that were pure dead weight in every deploy.",
@@ -11127,7 +11128,7 @@ function storeTip(fn){const id='ct'+(++calcTipSeq);calcTipData[id]=fn;return id;
 function initCalcTip(){
   if(document.getElementById('_ctip'))return;
   const el=document.createElement('div');el.id='_ctip';
-  el.style.cssText='position:fixed;z-index:9999;background:#0F172A;color:#E2E8F0;border-radius:8px;padding:10px 14px;pointer-events:none;display:none;max-width:320px;border:1px solid rgba(255,255,255,.15);font-family:system-ui,sans-serif;line-height:1.5';
+  el.style.cssText='position:fixed;z-index:9999;pointer-events:none;display:none;font-family:system-ui,sans-serif;line-height:1.5';
   document.body.appendChild(el);
   // v204: previously guessed the tooltip was ~330×300px to decide whether it needed to flip
   // above the cursor near a viewport edge — that guess was too small for longer tooltips (like
@@ -11171,104 +11172,113 @@ function initCalcTip(){
 function buildCampParticipationTipHTML(part,c){
   const food=foodPkgPct(part.brandForCost);
   const fA=v=>'AED '+Math.abs(Math.round(v)).toLocaleString();
-  const row=(l,v,extra='')=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:1px 0;font-size:11px"><span style="opacity:.72;white-space:nowrap">${l}</span><span style="text-align:right">${v}${extra?` <span style="opacity:.55;font-size:9px">${extra}</span>`:''}</span></div>`;
-  const sep='<div style="border-top:1px solid rgba(255,255,255,.18);margin:5px 0 3px"></div>';
+  const row=(l,v,extra='')=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:2px 0;font-size:11.5px"><span style="opacity:.75;white-space:nowrap">${l}</span><span style="text-align:right">${v}${extra?` <span style="opacity:.55;font-size:9px">${extra}</span>`:''}</span></div>`;
   const tierNote=part.hasRealEarnings?'Keeta-exact · Earnings':part.hasRealCostData?'Keeta-exact · Commission':'Estimated · flat rate';
-  const termsNow=keetaCampaignTerms(c.brand,c.name,part.covEnd);
-  const termsBanner=l=>l?`<div style="font-size:9.5px;line-height:1.4;opacity:.8;margin-bottom:6px">🏷 ${l}</div>`:'';
+  // v277: same visual redesign as buildCampCalcTipHTML — golden border + gradient header +
+  // bordered panels + emoji rows, for consistency across every campaign popup in the dashboard.
+  // Deal-terms banner prefers the confirmed KEETA_ITEM_RULES.terms field (exact, hand-confirmed
+  // wording) and falls back to the sheet's own comment column when a rule doesn't have terms set.
+  const termsNow=keetaCampaignTerms(c.brand,c.name,part.covEnd)||(c.comments?String(c.comments).trim():null);
+  const detailsPanel=`<div style="background:#1E293B;border-radius:8px;padding:9px 12px;margin-bottom:12px">`
+    +(termsNow?`<div style="font-size:11px;font-weight:700;color:#F8FAFC;margin-bottom:4px;line-height:1.4">🏷️ ${termsNow}</div>`:'')
+    +`<div style="font-size:10px;opacity:.7">📆 Campaign duration: ${fmtShort(c.startDate)} → ${c.endDate?fmtShort(c.endDate):'ongoing'}</div>`
+    +'</div>';
 
   // ── "Same days last month" ──
   const smAgo=campParticipationSameMonthAgo(c,part);
-  let smAgoHTML;
+  let smAgoPanel;
   if(smAgo){
     const smFood=smAgo.gross*food;
     const nameDiffers=smAgo.matchedName&&smAgo.matchedName!==c.name;
-    const termsAgo=keetaCampaignTerms(c.brand,smAgo.matchedName,smAgo.histEnd);
-    const nameNote=nameDiffers?`<div style="font-size:9.5px;line-height:1.4;color:#94a3b8;margin-bottom:6px">Running then: <strong style="color:#F59E0B">${smAgo.matchedName}</strong> <span style="opacity:.7">(this month: ${c.name})</span></div>`:'';
-    smAgoHTML=nameNote+termsBanner(termsAgo)
-      +row('Orders',smAgo.orders.toLocaleString())+row('Gross sales',fA(smAgo.gross))
-      +row('Merchant disc.','−'+fA(smAgo.disc))+row('Keeta earnings',fA(smAgo.hasRealEarnings?smAgo.realEarnings:smAgo.net))
-      +row(`Food/pkg ${(food*100).toFixed(0)}%`,'−'+fA(smFood))+sep
-      +row('<strong>Contribution</strong>','<strong>'+fA(smAgo.contrib)+'</strong>');
+    const nameNote=nameDiffers?`<div style="font-size:9.5px;line-height:1.4;color:#94a3b8;margin-bottom:6px">Running then: <strong style="color:#FBBF24">${smAgo.matchedName}</strong> <span style="opacity:.7">(this month: ${c.name})</span></div>`:'';
+    smAgoPanel=`<div style="background:#1C1917;border:1px solid #92400E;border-radius:8px;padding:10px 12px;margin-bottom:10px">
+      <div style="font-weight:700;color:#FBBF24;font-size:11px;margin-bottom:7px">📅 Same days, last month</div>
+      ${nameNote}
+      ${row('Orders',smAgo.orders.toLocaleString())}
+      ${row('💰 Gross sales',fA(smAgo.gross))}
+      ${row('🎟️ Merchant disc.','−'+fA(smAgo.disc))}
+      ${row('Keeta earnings',fA(smAgo.hasRealEarnings?smAgo.realEarnings:smAgo.net))}
+      ${row(`📦 Food/pkg ${(food*100).toFixed(0)}%`,'−'+fA(smFood))}
+      <div style="border-top:1px solid #92400E;margin:5px 0 3px"></div>
+      ${row('<strong>Contribution</strong>','<strong>'+fA(smAgo.contrib)+'</strong>')}
+    </div>`;
   }else{
-    // v271: this message now only fires when NO campaign occupied the slot a month ago (a
-    // genuinely new item promo, or the brand wasn't running anything then) — residual/menu-wide
-    // campaigns resolve to whatever was ACTUALLY running that month via
-    // keetaHistoricalCampaignName() above, even if its name (e.g. the cap value) differed.
-    smAgoHTML=`<div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5;padding:4px 0">Not shown — no matching campaign found for ${c.brand} a month ago${keetaIsResidualCampaign(c)?'':` (this campaign's own item/terms started ${fmtShort(c.startDate)})`}.</div>`;
+    smAgoPanel=`<div style="background:#1C1917;border:1px solid #92400E;border-radius:8px;padding:10px 12px;margin-bottom:10px"><div style="font-weight:700;color:#FBBF24;font-size:11px;margin-bottom:6px">📅 Same days, last month</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — no matching campaign found for ${c.brand} a month ago${keetaIsResidualCampaign(c)?'':` (this campaign's own item/terms started ${fmtShort(c.startDate)})`}.</div></div>`;
   }
 
   // ── "Last N days" vs "N days before campaign" ──
   const rw=campParticipationRecentWindow(c,part);
-  let recentBlockHTML;
-  if(!rw){
-    recentBlockHTML='';
-  }else if(!rw.recent||!rw.pre){
-    recentBlockHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px"><div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days vs week before</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — no orders in one of the two windows to compare.</div></div>`;
-  }else{
-    const rFood=rw.recent.gross*food,pFood=rw.pre.gross*food;
-    const incr=rw.recent.contrib-rw.pre.contrib;
-    const incrClr=incr>=0?'#4ade80':'#f87171';
-    const preNameDiffers=rw.pre.matchedName&&rw.pre.matchedName!==c.name;
-    const preNameNote=preNameDiffers?`<div style="font-size:9.5px;line-height:1.4;color:#94a3b8;margin:4px 0 0">Running before: <strong style="color:#38BDF8">${rw.pre.matchedName}</strong></div>`:'';
-    // v272: sameAsFullCampaign no longer hides this section — see campParticipationRecentWindow.
-    const dupeNote=rw.sameAsFullCampaign?`<div style="font-size:9px;opacity:.55;margin-bottom:4px">"Last ${rw.N} days" column matches "Campaign to date" above — this campaign hasn't run longer than ${rw.N} day${rw.N===1?'':'s'} yet.</div>`:'';
-    recentBlockHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px">
-      <div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days vs week before</div>
-      ${dupeNote}
-      <table style="width:100%;border-collapse:collapse;font-size:11px">
-      <tr><td></td><td style="text-align:right;padding:0 4px;opacity:.55;font-size:9px">${fmtShort(rw.recentStart)}→${fmtShort(rw.recentEnd)}</td><td style="text-align:right;padding:0 4px;opacity:.55;font-size:9px">${fmtShort(rw.preStart)}→${fmtShort(rw.preEnd)}</td></tr>
-      <tr><td style="padding:2px 0;opacity:.72">Orders</td><td style="text-align:right">${rw.recent.orders.toLocaleString()}</td><td style="text-align:right">${rw.pre.orders.toLocaleString()}</td></tr>
-      <tr><td style="padding:2px 0;opacity:.72">Gross sales</td><td style="text-align:right">${fA(rw.recent.gross)}</td><td style="text-align:right">${fA(rw.pre.gross)}</td></tr>
-      <tr><td style="padding:2px 0;opacity:.72">Merchant disc.</td><td style="text-align:right">−${fA(rw.recent.disc)}</td><td style="text-align:right">−${fA(rw.pre.disc)}</td></tr>
-      <tr><td style="padding:2px 0;opacity:.72">Food/pkg ${(food*100).toFixed(0)}%</td><td style="text-align:right">−${fA(rFood)}</td><td style="text-align:right">−${fA(pFood)}</td></tr>
-      <tr><td colspan="3" style="border-top:1px solid rgba(255,255,255,.18)"></td></tr>
-      <tr style="font-weight:700"><td style="padding:3px 0">Contribution</td><td style="text-align:right">${fA(rw.recent.contrib)}</td><td style="text-align:right">${fA(rw.pre.contrib)}</td></tr>
-      </table>
-      ${preNameNote}
-      <div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0 0"><span style="opacity:.72">Incremental</span><span style="color:${incrClr};font-weight:700">${incr>=0?'+':'−'}${fA(incr)}</span></div>
-    </div>`;
+  let recentBlockHTML='';
+  if(rw){
+    if(!rw.recent||!rw.pre){
+      recentBlockHTML=`<div style="background:#0C1A2E;border:1px solid #1E40AF;border-radius:8px;padding:10px 12px"><div style="font-weight:700;color:#60A5FA;font-size:11px;margin-bottom:6px">⏱️ Last ${rw.N} days vs week before</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — no orders in one of the two windows to compare.</div></div>`;
+    }else{
+      const rFood=rw.recent.gross*food,pFood=rw.pre.gross*food;
+      const incr=rw.recent.contrib-rw.pre.contrib;
+      const incrClr=incr>=0?'#4ade80':'#f87171';
+      const preNameDiffers=rw.pre.matchedName&&rw.pre.matchedName!==c.name;
+      const preNameNote=preNameDiffers?`<div style="font-size:9.5px;line-height:1.4;color:#94a3b8;margin:4px 0 0">Running before: <strong style="color:#60A5FA">${rw.pre.matchedName}</strong></div>`:'';
+      const dupeNote=rw.sameAsFullCampaign?`<div style="font-size:9px;opacity:.6;margin-bottom:5px">"Last ${rw.N} days" matches the main figure above — this campaign hasn't run longer than ${rw.N} day${rw.N===1?'':'s'} yet.</div>`:'';
+      recentBlockHTML=`<div style="background:#0C1A2E;border:1px solid #1E40AF;border-radius:8px;padding:10px 12px">
+        <div style="font-weight:700;color:#60A5FA;font-size:11px;margin-bottom:7px">⏱️ Last ${rw.N} days vs week before</div>
+        ${dupeNote}
+        <table style="width:100%;border-collapse:collapse;font-size:11.5px">
+        <tr><td></td><td style="text-align:right;padding:0 4px;opacity:.6;font-size:9px">${fmtShort(rw.recentStart)}→${fmtShort(rw.recentEnd)}</td><td style="text-align:right;padding:0 4px;opacity:.6;font-size:9px">${fmtShort(rw.preStart)}→${fmtShort(rw.preEnd)}</td></tr>
+        <tr><td style="padding:3px 0;opacity:.75">Orders</td><td style="text-align:right">${rw.recent.orders.toLocaleString()}</td><td style="text-align:right">${rw.pre.orders.toLocaleString()}</td></tr>
+        <tr><td style="padding:3px 0;opacity:.75">💰 Gross sales</td><td style="text-align:right">${fA(rw.recent.gross)}</td><td style="text-align:right">${fA(rw.pre.gross)}</td></tr>
+        <tr><td style="padding:3px 0;opacity:.75">🎟️ Merchant disc.</td><td style="text-align:right">−${fA(rw.recent.disc)}</td><td style="text-align:right">−${fA(rw.pre.disc)}</td></tr>
+        <tr><td style="padding:3px 0;opacity:.75">📦 Food/pkg ${(food*100).toFixed(0)}%</td><td style="text-align:right">−${fA(rFood)}</td><td style="text-align:right">−${fA(pFood)}</td></tr>
+        <tr><td colspan="3" style="border-top:1px solid #1E40AF"></td></tr>
+        <tr style="font-weight:700"><td style="padding:4px 0">Contribution</td><td style="text-align:right">${fA(rw.recent.contrib)}</td><td style="text-align:right">${fA(rw.pre.contrib)}</td></tr>
+        </table>
+        ${preNameNote}
+        <div style="border-top:1px solid #1E40AF;margin-top:8px;padding-top:7px"><div style="display:flex;justify-content:space-between;font-size:11.5px"><span style="opacity:.75">Incremental</span><span style="color:${incrClr};font-weight:700">${incr>=0?'+':'−'}${fA(incr)}</span></div></div>
+      </div>`;
+    }
   }
 
-  return`<div style="max-width:340px">`
-  +`<div style="font-size:12px;font-weight:600;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.2)">${c.brand} × Keeta · own-order economics</div>`
-  +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">${fmtShort(part.covStart)} → ${fmtShort(part.covEnd)} · ${tierNote}</div>`
-  +termsBanner(termsNow)
-  +row('Orders (this campaign only)',part.orders.toLocaleString())
-  +row('Gross sales',fA(part.gross))
-  +row('Merchant discount','−'+fA(part.disc))
-  +(part.fd>0?row('Free delivery cost','−'+fA(part.fd)):'')
-  +row('Net sales',fA(part.net))
-  +(part.hasRealEarnings?row('Keeta Earnings (exact)',fA(part.realEarnings),'nets out commission, fees, FD floor & any top-up'):part.hasRealCostData?row('Commission (exact)','−'+fA(part.realCommission)):row(`Commission ${(commissionRateFor('Keeta',part.brandForCost,c.startDate)*100).toFixed(0)}%`,'−'+fA(part.net*commissionRateFor('Keeta',part.brandForCost,c.startDate)),'estimated — no exact statement data'))
-  +row(`Food/pkg ${(food*100).toFixed(0)}% × gross`,'−'+fA(part.gross*food))
-  +sep+row('<strong>Contribution</strong>','<strong>'+fA(part.contrib)+'</strong>')
-  +`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px"><div style="font-weight:700;color:#F59E0B;font-size:10px;margin-bottom:6px">Same days, last month</div>${smAgoHTML}</div>`
-  +recentBlockHTML
-  +`<div style="font-size:9px;opacity:.55;margin-top:8px;line-height:1.5">⚭ ${part.shareOfBrandOrders!=null?part.shareOfBrandOrders.toFixed(0)+'% of ':''}${c.brand}'s Keeta orders this window ran under a concurrent campaign too, so a campaign-vs-baseline incremental comparison isn't meaningful for the main figure above — this is exact economics for just this campaign's own participating orders instead.${part.partialCoverage?' Statement coverage is partial for this window.':''}</div>`
-  +`</div>`;
+  return`<div style="width:355px;background:#0F172A;border:2px solid #F59E0B;border-radius:12px;overflow:hidden;box-shadow:0 0 0 4px rgba(245,158,11,.08),0 20px 50px rgba(0,0,0,.6)">`
+  +`<div style="background:linear-gradient(90deg,#B45309,#F59E0B);padding:12px 16px"><div style="font-size:13px;font-weight:700;color:#1C1917">${c.brand} × Keeta</div><div style="font-size:10px;color:#451A03;opacity:.85">Own-order economics · ${tierNote}</div></div>`
+  +`<div style="padding:14px 16px;color:#F1F5F9">`
+  +detailsPanel
+  +`<div style="background:#1C1917;border:1px solid #92400E;border-radius:8px;padding:10px 12px;margin-bottom:10px">
+    <div style="font-weight:700;color:#FBBF24;font-size:11px;margin-bottom:2px">📅 ${fmtShort(part.covStart)} → ${fmtShort(part.covEnd)}</div>
+    ${row('Orders (this campaign only)',part.orders.toLocaleString())}
+    ${row('💰 Gross sales',fA(part.gross))}
+    ${row('🎟️ Merchant discount','−'+fA(part.disc))}
+    ${part.fd>0?row('🚴 Free delivery cost','−'+fA(part.fd)):''}
+    ${row('Net sales',fA(part.net))}
+    ${part.hasRealEarnings?row('Keeta Earnings (exact)',fA(part.realEarnings),'nets out commission, fees, FD floor & any top-up'):part.hasRealCostData?row('Commission (exact)','−'+fA(part.realCommission)):row(`Commission ${(commissionRateFor('Keeta',part.brandForCost,c.startDate)*100).toFixed(0)}%`,'−'+fA(part.net*commissionRateFor('Keeta',part.brandForCost,c.startDate)),'estimated')}
+    ${row(`📦 Food/pkg ${(food*100).toFixed(0)}% × gross`,'−'+fA(part.gross*food))}
+    <div style="border-top:1px solid #92400E;margin:5px 0 3px"></div>
+    ${row('<strong>Contribution</strong>','<strong>'+fA(part.contrib)+'</strong>')}
+  </div>`
+  +smAgoPanel
+  +(recentBlockHTML?`${recentBlockHTML}<div style="height:2px"></div>`:'')
+  +`<div style="font-size:9px;opacity:.55;margin-top:2px;line-height:1.5">⚭ ${part.shareOfBrandOrders!=null?part.shareOfBrandOrders.toFixed(0)+'% of ':''}${c.brand}'s Keeta orders this window ran under a concurrent campaign too, so a campaign-vs-baseline incremental comparison isn't meaningful for the main figure above — this is exact economics for just this campaign's own participating orders instead.${part.partialCoverage?' Statement coverage is partial for this window.':''}</div>`
+  +`</div></div>`;
 }
 function buildCampCalcTipHTML(a,c){
   const comm=commissionRateFor(a.aggregator,a.brand,a.effStart);
   const food=foodPkgPct(a.brand);
   const fA=v=>'AED '+Math.abs(Math.round(v)).toLocaleString();
-  // v192: signed version for rows where the direction itself is the point (Incremental) — fA()
-  // above deliberately strips the sign for rows that are always-subtracted costs (Commission,
-  // Food/pkg), but reusing it for Incremental silently destroyed whether the number was a gain
-  // or a loss, leaving only a subtle color difference to tell them apart.
   const fSigned=v=>(v<0?'−':'')+fA(v);
-  const row=(l,v,extra='')=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:1px 0;font-size:11px"><span style="opacity:.72;white-space:nowrap">${l}</span><span style="text-align:right">${v}${extra?` <span style="opacity:.55;font-size:9px">${extra}</span>`:''}</span></div>`;
-  const sep='<div style="border-top:1px solid rgba(255,255,255,.18);margin:5px 0 3px"></div>';
+  const row=(l,v,extra='')=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:2px 0;font-size:11.5px"><span style="opacity:.75;white-space:nowrap">${l}</span><span style="text-align:right">${v}${extra?` <span style="opacity:.55;font-size:9px">${extra}</span>`:''}</span></div>`;
   const ic=a.incrContribTotal>=0?'#4ade80':'#f87171';
   const rc=a.discountROI!=null?(a.discountROI>=0?'#4ade80':'#f87171'):'#94a3b8';
   const baseDisc=a.bs?.disc||0;
-  // v270: table format — row labels appear once, values run across columns, instead of repeating
-  // "Net sales"/"Commission"/etc. once per section. Rebuilt from the original two-stacked-section
-  // layout for this and the "Last N days" pair added below.
-  const tCell=v=>`<td style="text-align:right;padding:2px 4px">${v}</td>`;
-  const tRow=(l,...vals)=>`<tr><td style="padding:2px 0;opacity:.72;white-space:nowrap">${l}</td>${vals.map(tCell).join('')}</tr>`;
-  const tHead=(label,clr,dateStr)=>`<td style="text-align:right;padding:0 4px 2px;border-top:2px solid ${clr}"><div style="font-weight:700;color:${clr};font-size:10px">${label}</div><div style="opacity:.55;font-size:9px">${dateStr}</div></td>`;
-  // Concurrent-campaign check, reusable for ANY baseline window (was only ever applied to the
-  // month-ago baseline before this build — now applied to the pre-campaign baseline too).
+  const tCell=v=>`<td style="text-align:right;padding:3px 4px">${v}</td>`;
+  const tRow=(l,...vals)=>`<tr><td style="padding:3px 0;opacity:.75;white-space:nowrap">${l}</td>${vals.map(tCell).join('')}</tr>`;
+  const tHead=(label,clr,dateStr)=>`<td style="text-align:right;padding:0 4px 2px"><div style="font-weight:700;color:${clr};font-size:10.5px">${label}</div><div style="opacity:.6;font-size:9px">${dateStr}</div></td>`;
+  const roiBadge=(clr,val)=>`<span style="background:rgba(255,255,255,.08);color:${clr};font-size:13px;font-weight:700;padding:2px 8px;border-radius:5px">${val}</span>`;
+  // v277: visual redesign, approved by Nikhil after 5 rounds of mockups — golden outer border +
+  // gradient header so the popup stops blending into the page background, each comparison
+  // section in its own bordered panel (amber = month view, blue = week view), emoji row icons,
+  // and a "campaign details" panel pulling the REAL deal terms from c.comments — the same
+  // free-text column already visible on the Campaigns sheet ("50% OFF CAP 20 (entire menu) -
+  // Combos 86'd + FD (AED 2)" etc.) — instead of the vague "campaign contribution" subtitle this
+  // replaced. Falls back to omitting the terms line (not a placeholder) when a campaign has no
+  // comment on file, since inventing terms would be worse than not showing any.
   const concurrentNote=(wStart,wEnd)=>{
     if(!c||typeof campaignData==='undefined')return null;
     const x=campaignData.find(o=>o!==c&&o.brand===a.brand&&o.aggregator===a.aggregator&&!isRewardsCampaign(o)&&!(o.startDate>wEnd||o.endDate<wStart));
@@ -11276,66 +11286,74 @@ function buildCampCalcTipHTML(a,c){
   };
   const monthAgoNote=concurrentNote(a.bStart,a.bEnd);
 
-  const mainTable=`<table style="width:100%;border-collapse:collapse;font-size:11px">
-    <tr><td></td>${tHead('Campaign to date','#F59E0B',fmtShort(a.effStart)+'→'+fmtShort(a.effEnd))}${tHead('Same dates, last month','#F59E0B',fmtShort(a.bStart)+'→'+fmtShort(a.bEnd))}</tr>
-    <tr><td colspan="3" style="border-top:1px solid rgba(255,255,255,.18);padding-top:3px"></td></tr>
-    ${tRow('Net sales',fA(a.cs.sales),fA(a.bs.sales))}
-    ${tRow(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(a.cs.sales*comm),'−'+fA(a.bs.sales*comm))}
-    ${tRow(`Food/pkg ${+(food*100).toFixed(0)}%`,'−'+fA(a.campGross*food),'−'+fA(a.baseGross*food))}
-    ${(a.ourDiscCost>0||baseDisc>0)?tRow('Merchant disc.',a.ourDiscCost>0?'−'+fA(a.ourDiscCost):'−AED 0',baseDisc>0?'−'+fA(baseDisc):'−AED 0'):''}
-    <tr><td colspan="3" style="border-top:1px solid rgba(255,255,255,.18)"></td></tr>
-    <tr style="font-weight:700"><td style="padding:3px 0">Contribution</td><td style="text-align:right">${fA(a.campContribTotal)}</td><td style="text-align:right">${fA(a.baseContribTotal)}</td></tr>
-    </table>`
-    +(monthAgoNote?`<div style="margin-top:6px;padding:5px 7px;background:rgba(217,72,61,.15);border-left:2px solid #f87171;border-radius:0 4px 4px 0;font-size:9.5px;line-height:1.4;color:#ffb4b0">⚠ "Same dates, last month" also had a promo running: ${monthAgoNote} — this baseline isn't a clean no-promo comparison.</div>`:'');
+  const dealTerms=c&&c.comments?String(c.comments).trim():'';
+  const detailsPanel=`<div style="background:#1E293B;border-radius:8px;padding:9px 12px;margin-bottom:12px">`
+    +(dealTerms?`<div style="font-size:11px;font-weight:700;color:#F8FAFC;margin-bottom:4px;line-height:1.4">🏷️ ${dealTerms}</div>`:'')
+    +(c?`<div style="font-size:10px;opacity:.7">📆 Campaign duration: ${fmtShort(c.startDate)} → ${c.endDate?fmtShort(c.endDate):'ongoing'}</div>`:'')
+    +'</div>';
 
-  const mainSummary=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:8px;padding-top:6px">`
+  const roiRowOrBadgeMain=a.ourDiscCost>0&&a.discountROI!=null
+    ?row('ROI',`<strong style="color:${rc}">${a.discountROI.toFixed(2)}×</strong>`,'('+fSigned(a.incrContribTotal)+' ÷ '+fA(a.ourDiscCost)+')')
+    :a.ourDiscCost>0?row('ROI','<span style="opacity:.55">—  baseline or data issue</span>'):'';
+
+  const mainPanel=`<div style="background:#1C1917;border:1px solid #92400E;border-radius:8px;padding:10px 12px;margin-bottom:10px">
+    <table style="width:100%;border-collapse:collapse;font-size:11.5px">
+    <tr><td></td>${tHead('📅 Campaign to date','#FBBF24',fmtShort(a.effStart)+'→'+fmtShort(a.effEnd))}${tHead('Same dates, last month','#FBBF24',fmtShort(a.bStart)+'→'+fmtShort(a.bEnd))}</tr>
+    <tr><td colspan="3" style="border-top:1px solid #92400E;padding-top:4px"></td></tr>
+    ${tRow('💰 Net sales',fA(a.cs.sales),fA(a.bs.sales))}
+    ${tRow(`🏦 Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(a.cs.sales*comm),'−'+fA(a.bs.sales*comm))}
+    ${tRow(`📦 Food/pkg ${+(food*100).toFixed(0)}%`,'−'+fA(a.campGross*food),'−'+fA(a.baseGross*food))}
+    ${(a.ourDiscCost>0||baseDisc>0)?tRow('🎟️ Merchant disc.',a.ourDiscCost>0?'−'+fA(a.ourDiscCost):'−AED 0',baseDisc>0?'−'+fA(baseDisc):'−AED 0'):''}
+    <tr><td colspan="3" style="border-top:1px solid #92400E"></td></tr>
+    <tr style="font-weight:700"><td style="padding:4px 0">Contribution</td><td style="text-align:right">${fA(a.campContribTotal)}</td><td style="text-align:right">${fA(a.baseContribTotal)}</td></tr>
+    </table>`
+    +(monthAgoNote?`<div style="margin-top:7px;font-size:10px;line-height:1.5;color:#FCD34D">⚠ Last month also had a promo: ${monthAgoNote} — not a clean comparison.</div>`:'')
+    +`<div style="border-top:1px solid #92400E;margin-top:8px;padding-top:7px">`
     +row(a.incrContribTotal>=0?'Incremental (increase)':'Incremental (decrease)',`<strong style="color:${ic}">${fSigned(a.incrContribTotal)}</strong>`,'('+fSigned(a.incrContribPerDay)+'/day)')
     +(a.ourDiscCost>0?row('Merchant discount (campaign)',fA(a.ourDiscCost)):'')
     +(a.ourDiscCost>0&&a.coFundedPct>0?row(`${Math.round(a.coFundedPct*100)}% co-funded`,fA(a.aggInferredCoFund),'by '+a.aggregator):'')
-    +(a.ourDiscCost>0&&a.discountROI!=null?row('ROI',`<strong style="color:${rc}">${a.discountROI.toFixed(2)}×</strong>`,'('+fSigned(a.incrContribTotal)+' ÷ '+fA(a.ourDiscCost)+')'):'')
-    +(a.ourDiscCost>0&&a.discountROI==null?row('ROI','<span style="opacity:.55">—  baseline or data issue</span>'):'')
-    +'</div>';
+    +roiRowOrBadgeMain
+    +'</div></div>';
 
   // ── "Last N days" pair ──
   const rw=c?campRecentWindowAnalysis(c):null;
   let recentHTML='';
   if(rw){
     if(rw.noData){
-      recentHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px"><div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — no orders in one of the two windows to compare.</div></div>`;
+      recentHTML=`<div style="background:#0C1A2E;border:1px solid #1E40AF;border-radius:8px;padding:10px 12px"><div style="font-weight:700;color:#60A5FA;font-size:11px;margin-bottom:6px">⏱️ Last ${rw.N} days</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — no orders in one of the two windows to compare.</div></div>`;
     }else{
       const preNote=concurrentNote(rw.preStart,rw.preEnd);
       const rIc=rw.incrContribTotal>=0?'#4ade80':'#f87171';
       const rRc=rw.discountROI!=null?(rw.discountROI>=0?'#4ade80':'#f87171'):'#94a3b8';
-      // v272: sameAsFullCampaign no longer hides this section (see campRecentWindowAnalysis) —
-      // just adds a one-line note when the campaign side duplicates "Campaign to date" above, so
-      // it's clear why those two numbers match while the WEEK-BEFORE baseline (genuinely
-      // different from the month-ago one) is still worth showing.
-      const dupeNote=rw.sameAsFullCampaign?`<div style="font-size:9px;opacity:.55;margin-bottom:4px">Campaign column matches "Campaign to date" above — this campaign hasn't run longer than ${rw.N} day${rw.N===1?'':'s'} yet.</div>`:'';
-      recentHTML=`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:10px;padding-top:8px">
-        <div style="font-weight:700;color:#38BDF8;font-size:10px;margin-bottom:6px">Last ${rw.N} days</div>
+      const dupeNote=rw.sameAsFullCampaign?`<div style="font-size:9px;opacity:.6;margin-bottom:5px">Campaign column matches "Campaign to date" above — this campaign hasn't run longer than ${rw.N} day${rw.N===1?'':'s'} yet.</div>`:'';
+      const roiBadgeHTML=rw.ourDiscCost>0&&rw.discountROI!=null?roiBadge(rRc,rw.discountROI.toFixed(2)+'× ROI'):'';
+      recentHTML=`<div style="background:#0C1A2E;border:1px solid #1E40AF;border-radius:8px;padding:10px 12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px"><span style="font-weight:700;color:#60A5FA;font-size:11px">⏱️ Last ${rw.N} days</span>${roiBadgeHTML}</div>
         ${dupeNote}
-        <table style="width:100%;border-collapse:collapse;font-size:11px">
-        <tr><td></td>${tHead(`Last ${rw.N} days`,'#38BDF8',fmtShort(rw.recentStart)+'→'+fmtShort(rw.recentEnd))}${tHead('Same days, week before','#38BDF8',fmtShort(rw.preStart)+'→'+fmtShort(rw.preEnd))}</tr>
-        <tr><td colspan="3" style="border-top:1px solid rgba(255,255,255,.18);padding-top:3px"></td></tr>
-        ${tRow('Net sales',fA(rw.rs.sales),fA(rw.ps.sales))}
-        ${tRow(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(rw.rs.sales*comm),'−'+fA(rw.ps.sales*comm))}
-        ${tRow(`Food/pkg ${+(food*100).toFixed(0)}%`,'−'+fA(rw.campGross*food),'−'+fA(rw.baseGross*food))}
-        ${(rw.ourDiscCost>0||(rw.ps.disc||0)>0)?tRow('Merchant disc.',rw.ourDiscCost>0?'−'+fA(rw.ourDiscCost):'−AED 0',(rw.ps.disc||0)>0?'−'+fA(rw.ps.disc):'−AED 0'):''}
-        <tr><td colspan="3" style="border-top:1px solid rgba(255,255,255,.18)"></td></tr>
-        <tr style="font-weight:700"><td style="padding:3px 0">Contribution</td><td style="text-align:right">${fA(rw.campContribTotal)}</td><td style="text-align:right">${fA(rw.baseContribTotal)}</td></tr>
+        <table style="width:100%;border-collapse:collapse;font-size:11.5px">
+        <tr><td></td><td style="text-align:right;padding:0 4px;opacity:.6;font-size:9px">${fmtShort(rw.recentStart)}→${fmtShort(rw.recentEnd)}</td><td style="text-align:right;padding:0 4px;opacity:.6;font-size:9px">${fmtShort(rw.preStart)}→${fmtShort(rw.preEnd)}</td></tr>
+        ${tRow('💰 Net sales',fA(rw.rs.sales),fA(rw.ps.sales))}
+        ${tRow(`🏦 Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(rw.rs.sales*comm),'−'+fA(rw.ps.sales*comm))}
+        ${tRow(`📦 Food/pkg ${+(food*100).toFixed(0)}%`,'−'+fA(rw.campGross*food),'−'+fA(rw.baseGross*food))}
+        ${(rw.ourDiscCost>0||(rw.ps.disc||0)>0)?tRow('🎟️ Merchant disc.',rw.ourDiscCost>0?'−'+fA(rw.ourDiscCost):'−AED 0',(rw.ps.disc||0)>0?'−'+fA(rw.ps.disc):'−AED 0'):''}
+        <tr><td colspan="3" style="border-top:1px solid #1E40AF"></td></tr>
+        <tr style="font-weight:700"><td style="padding:4px 0">Contribution</td><td style="text-align:right">${fA(rw.campContribTotal)}</td><td style="text-align:right">${fA(rw.baseContribTotal)}</td></tr>
         </table>
-        ${preNote?`<div style="margin-top:6px;padding:5px 7px;background:rgba(217,72,61,.15);border-left:2px solid #f87171;border-radius:0 4px 4px 0;font-size:9.5px;line-height:1.4;color:#ffb4b0">⚠ "Week before" also had a promo running: ${preNote} — this baseline isn't a clean no-promo comparison.</div>`:''}
-        <div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0 0"><span style="opacity:.72">Incremental</span><span style="color:${rIc};font-weight:700">${fSigned(rw.incrContribTotal)}</span></div>
-        ${rw.ourDiscCost>0?`<div style="display:flex;justify-content:space-between;font-size:11px;padding:1px 0"><span style="opacity:.72">Merchant disc.</span><span>${fA(rw.ourDiscCost)}</span></div>`:''}
-        ${rw.ourDiscCost>0&&rw.discountROI!=null?`<div style="display:flex;justify-content:space-between;font-size:11px;padding:1px 0"><span style="opacity:.72">ROI</span><span style="color:${rRc};font-weight:700">${rw.discountROI.toFixed(2)}×</span></div>`:''}
+        ${preNote?`<div style="margin-top:7px;font-size:10px;line-height:1.5;color:#93C5FD">⚠ Week before also had a promo: ${preNote} — not a clean comparison.</div>`:''}
+        <div style="border-top:1px solid #1E40AF;margin-top:8px;padding-top:7px">
+        <div style="display:flex;justify-content:space-between;font-size:11.5px;padding:2px 0"><span style="opacity:.75">Incremental</span><span style="color:${rIc};font-weight:700">${fSigned(rw.incrContribTotal)}</span></div>
+        ${rw.ourDiscCost>0?`<div style="display:flex;justify-content:space-between;font-size:11.5px;padding:2px 0"><span style="opacity:.75">Merchant disc.</span><span>${fA(rw.ourDiscCost)}</span></div>`:''}
+        </div>
       </div>`;
     }
   }
 
-  return`<div style="max-width:360px">`
-  +`<div style="font-size:12px;font-weight:600;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.2)">${a.brand} × ${a.aggregator} · campaign contribution</div>`
-  +mainTable+mainSummary+recentHTML
-  +'</div>';
+  return`<div style="width:355px;background:#0F172A;border:2px solid #F59E0B;border-radius:12px;overflow:hidden;box-shadow:0 0 0 4px rgba(245,158,11,.08),0 20px 50px rgba(0,0,0,.6)">`
+  +`<div style="background:linear-gradient(90deg,#B45309,#F59E0B);padding:12px 16px"><div style="font-size:13px;font-weight:700;color:#1C1917">${a.brand} × ${a.aggregator}</div><div style="font-size:10px;color:#451A03;opacity:.85">Campaign contribution breakdown</div></div>`
+  +`<div style="padding:14px 16px;color:#F1F5F9">`
+  +detailsPanel+mainPanel
+  +(recentHTML?`<div style="height:10px"></div>${recentHTML}`:'')
+  +'</div></div>';
 }
 // Build tooltip HTML for a forecaster scenario card.
 function buildFcCalcTipHTML(sc,brand,agg,discPct,cap,coFundPct,dateStr){
@@ -11345,7 +11363,7 @@ function buildFcCalcTipHTML(sc,brand,agg,discPct,cap,coFundPct,dateStr){
   const row=(l,v,extra='')=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:1px 0;font-size:11px"><span style="opacity:.72;white-space:nowrap">${l}</span><span style="text-align:right">${v}${extra?` <span style="opacity:.55;font-size:9px">${extra}</span>`:''}</span></div>`;
   const sep='<div style="border-top:1px solid rgba(255,255,255,.18);margin:5px 0 3px"></div>';
   const ic=sc.incrContrib>=0?'#4ade80':'#f87171';
-  return`<div style="max-width:300px">`
+  return`<div style="max-width:300px;background:#0F172A;color:#E2E8F0;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:10px 14px">`
   +`<div style="font-size:12px;font-weight:600;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.2)">Forecast · ${brand} × ${agg}</div>`
   +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">How discount affects each order</div>`
   +row('Gross AOV (baseline)',fA(sc.grossAOV))
