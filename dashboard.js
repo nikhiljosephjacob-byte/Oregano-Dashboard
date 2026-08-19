@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-288";
+const BUILD_VERSION="2026-08-13-289";
 const BUILD_NOTES=[
+  "🐛 Fixed two real issues Nikhil caught by checking the actual math on a live screenshot — the top-level Discount Burn card showed depth dropping 73.9% while the popup's only shown mover (Oregano · Talabat) said depth was \"roughly unchanged\". Traced through the real numbers: this wasn't a bug in the arithmetic, but it exposed two genuine gaps. (1) \"Roughly unchanged\" had no actual percentages next to it — every comment branch now states the real depth figures (e.g. \"discount depth 4.6% → 4.7%\"), so a claim like this is always verifiable, not asserted. (2) The movers list only showed brands/platforms whose PROFIT-dollar impact cleared an 8% threshold — a brand with a small profit impact but a dramatic discount-depth swing (confirmed mathematically likely here: the other Talabat brands were probably running something close to a 30% depth promo in July that nearly vanished by August, invisible because their AED impact was small next to Oregano's) was getting silently dropped from view even though it was clearly driving the aggregate number shown elsewhere on the page. Added an explicit \"Other brands/platforms\" remainder row that sums whatever didn't make the shown list, with its own real depth figures — so the numbers always reconcile and nothing is invisible. Verified against a constructed 5-mover scenario where one genuinely falls below the threshold: confirms it correctly folds into the remainder row with accurate depth percentages, rather than disappearing.",
   "🐛 Fixed four real issues in the profitability explainer, all caught directly by Nikhil from the live tooltip. (1) Dates were derived from actual record min/max, which lags behind the filter's intended window whenever the latest upload hasn't fully synced — showing \"1→18 Aug\" while every other card on the page said \"1→20 Aug\" for the same comparison. Now takes curFilters()/getCompRange() (or cmpA/cmpB on Compare) as an explicit override, so this tooltip is always consistent with the rest of the page instead of computing its own competing answer. (2) A resolved campaign name was REPLACING the brand·aggregator line entirely — \"Best Sellers 30% OFF\" with no indication of which platform. Campaign name is now always additional context under the brand·aggregator line, never a substitute for it. (3) Comments like \"sales pulled back this period\" read as unsupported claims — Nikhil's exact words: \"are you trying to imply sales dropped?\" with no evidence given. Every comment now states the actual figure behind it (e.g. \"discount depth rose 26% from 7% — grew faster than sales did\", \"gross sales fell 12% (AED 108,000 → AED 95,000)\"). (4) Deliveroo's mover icon was a deer emoji (🦌) — a mistake, not intentional — swapped for a scooter (🛵). Verified all four fixes together against a simulated version of Nikhil's exact scenario (filter says 1-20 Aug, latest record only reaches part-way through) — dates now correctly follow the filter, not the data.",
   "🎨 Rebuilt the profitability explainer tooltip into its final approved format, after many rounds of rendering iteration with Nikhil — a P&L cascade (Gross Sales → Discount → Net Sales → Commission → Food/Pkg → Net Contribution) for both periods side by side, with each column's actual date range shown under its header, a clear Net Change callout, then a \"By campaign\" list with a short auto-generated comment per campaign (e.g. \"deep discount, volume didn't cover it\" / \"controlled discount, this one's working\") instead of the earlier ambiguous \"+/− impact\" phrasing. Campaign names are resolved from campaignData by brand+aggregator+date overlap where exactly one candidate matches; falls back to a plain Brand · Aggregator label when zero or multiple campaigns match, rather than guessing which one it was — the same honest limitation discussed directly with Nikhil regarding Talabat's export not carrying item-level data. Comments are generated from each mover's own discount-depth trend and sales direction, not hand-written per case. Verified end-to-end against realistic multi-campaign, multi-aggregator data: date ranges extract correctly, campaign names resolve correctly, comment logic produces sensible output for a mix of positive and negative movers, the cascade reconciles exactly for both periods, and the generated HTML contains no leaked undefined/NaN.",
   "🐛 Found the actual root cause of the profitability explainer not appearing — the v285 fix (widening the hover target) was a real improvement but not the real bug. initCalcTip() — which creates the floating tooltip element and attaches the ONE global mouseover listener everything depends on — was only ever being called as an incidental side-effect buried inside renderCampaigns(), on the same line as an unrelated KPI strip computation. Anyone who hadn't visited the Campaigns page first in that browser session never had the hover mechanism initialized at all, on any page — not just Profitability, this affected every campaign popup too, silently, with no error and no visible symptom, which is exactly why it looked like nothing was happening. Moved the call to renderPage() — the single central router every page navigation already passes through — so it's now guaranteed to run before anything else, regardless of which page loads first. initCalcTip() already no-ops on repeat calls (checks if its element already exists), so this is free after the first page load. Removed the now-redundant original call site in renderCampaigns() for clarity. Verified renderPage() calls it unconditionally as its very first line, ahead of every page-specific render branch.",
@@ -504,23 +505,25 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
     const delta=contribB-contribA;
     const salesPct=gGrossA>0?((gGrossB-gGrossA)/gGrossA*100):null;
     const depthRose=depthB>depthA+0.03,depthFell=depthB<depthA-0.03;
-    // v288: comments now always carry the actual figures that justify them — Nikhil's exact
-    // complaint was that "sales pulled back this period" reads as an unsupported claim with no
-    // number behind it. Every branch below states the concrete number driving the verdict.
+    // v289: fixes a real gap Nikhil caught — this branch said "discount depth roughly unchanged"
+    // with NO actual percentages shown, so there was no way to verify the claim. Every branch now
+    // states the real depth figures, not just a qualitative label.
     let comment;
-    if(delta<0&&depthRose)comment=`discount depth rose ${(depthB*100).toFixed(0)}% from ${(depthA*100).toFixed(0)}% — grew faster than sales did`;
-    else if(delta>=0&&(depthFell||depthB<=depthA))comment=`discount depth held at ${(depthB*100).toFixed(0)}% while sales ${salesPct!=null&&salesPct>=0?'grew':'held steady'}`;
-    else if(delta<0&&salesPct!=null&&salesPct<-3)comment=`gross sales fell ${Math.abs(salesPct).toFixed(0)}% (${fmtAEDTip(gGrossA)} → ${fmtAEDTip(gGrossB)}), discount depth roughly unchanged`;
-    else if(delta>=0&&salesPct!=null&&salesPct>3)comment=`gross sales grew ${salesPct.toFixed(0)}%, discount depth kept in line`;
-    else comment=`net contribution ${delta>=0?'up':'down'} ${fmtAEDTip(Math.abs(delta))} on roughly flat sales and discount`;
-    movers.push({brand,aggregator,campaignName,comment,contribA,contribB,delta,rate,grossA:gGrossA,grossB:gGrossB});
+    const depthStr=`${(depthA*100).toFixed(1)}% → ${(depthB*100).toFixed(1)}%`;
+    if(delta<0&&depthRose)comment=`discount depth rose ${depthStr} — grew faster than sales did`;
+    else if(delta>=0&&(depthFell||depthB<=depthA))comment=`discount depth ${depthStr}, sales ${salesPct!=null&&salesPct>=0?'grew':'held steady'}`;
+    else if(delta<0&&salesPct!=null&&salesPct<-3)comment=`gross sales fell ${Math.abs(salesPct).toFixed(0)}% (${fmtAEDTip(gGrossA)} → ${fmtAEDTip(gGrossB)}), discount depth ${depthStr}`;
+    else if(delta>=0&&salesPct!=null&&salesPct>3)comment=`gross sales grew ${salesPct.toFixed(0)}%, discount depth ${depthStr}`;
+    else comment=`net contribution ${delta>=0?'up':'down'} ${fmtAEDTip(Math.abs(delta))}, discount depth ${depthStr}`;
+    movers.push({brand,aggregator,campaignName,comment,contribA,contribB,delta,rate,grossA:gGrossA,grossB:gGrossB,discA:gA.disc,discB:gB.disc});
   }
   movers.sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta));
   return{
     grossA,grossB,discA,discB,commA,commB,foodA,foodB,
     contribA:grossA-discA-commA-foodA,contribB:grossB-discB-commB-foodB,
     rangeA,rangeB,
-    movers:movers.slice(0,5)
+    movers // v289: full list, not pre-sliced — buildProfitabilityTipHTML needs every mover to
+           // compute an accurate "other brands/platforms" remainder for whatever it doesn't show
   };
 }
 // v284/v285: reusable id-getter for every "💵 Profitability" figure across the dashboard — wires
@@ -567,14 +570,32 @@ function buildProfitabilityTipHTML(bd,labelA,labelB){
     <span style="font-size:11px;opacity:.85">Net change</span>
     <span style="font-size:17px;font-weight:800;color:${totalDelta>=0?good:bad}">${fSigned(totalDelta)}</span>
     </div>`;
-  const moversHTML=bd.movers.filter(m=>Math.abs(m.delta)>=Math.abs(totalDelta)*0.08||bd.movers.length<=3).slice(0,4).map(m=>{
-    const clr=m.delta>=0?good:bad;
-    const icon=m.aggregator==='Deliveroo'?'🛵':m.aggregator==='Talabat'?'🚴':m.aggregator==='Keeta'?'🥡':m.aggregator==='Careem'?'🚗':m.aggregator==='Noon'?'🌙':'📍';
-    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #2A3555">
-      <div><div style="font-size:11px;font-weight:700">${icon} ${m.brand} · ${m.aggregator}</div>${m.campaignName?`<div style="font-size:9.5px;color:#FBBF24;opacity:.85">🏷️ ${m.campaignName}</div>`:''}<div style="font-size:9.5px;opacity:.6;line-height:1.4;margin-top:1px">${m.comment}</div></div>
-      <span style="font-size:11.5px;font-weight:700;color:${clr};white-space:nowrap;padding-left:8px">${fSigned(m.delta)}</span>
+  const sortedMovers=[...bd.movers].sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta));
+  const shownMovers=sortedMovers.filter(m=>Math.abs(m.delta)>=Math.abs(totalDelta)*0.08||sortedMovers.length<=3).slice(0,4);
+  const shownKeys=new Set(shownMovers.map(m=>m.brand+'|'+m.aggregator));
+  const hiddenMovers=sortedMovers.filter(m=>!shownKeys.has(m.brand+'|'+m.aggregator));
+  const moverRow=(icon,label,campaignName,comment,delta,clr)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #2A3555">
+      <div><div style="font-size:11px;font-weight:700">${icon} ${label}</div>${campaignName?`<div style="font-size:9.5px;color:#FBBF24;opacity:.85">🏷️ ${campaignName}</div>`:''}<div style="font-size:9.5px;opacity:.6;line-height:1.4;margin-top:1px">${comment}</div></div>
+      <span style="font-size:11.5px;font-weight:700;color:${clr};white-space:nowrap;padding-left:8px">${fSigned(delta)}</span>
       </div>`;
+  let moversHTML=shownMovers.map(m=>{
+    const icon=m.aggregator==='Deliveroo'?'🛵':m.aggregator==='Talabat'?'🚴':m.aggregator==='Keeta'?'🥡':m.aggregator==='Careem'?'🚗':m.aggregator==='Noon'?'🌙':'📍';
+    return moverRow(icon,`${m.brand} · ${m.aggregator}`,m.campaignName,m.comment,m.delta,m.delta>=0?good:bad);
   }).join('');
+  // v289: fixes Nikhil catching a real gap — the top-level "Discount Burn" card can move a lot
+  // even when the shown movers' OWN discount depth looks flat, because smaller brands/platforms
+  // that don't clear the profit-delta threshold above can still swing the aggregate discount
+  // figure substantially. Rather than hide them, sum whatever didn't make the shown list into
+  // one explicit "Other brands/platforms" row with its own real depth figures, so the numbers
+  // always reconcile and nothing is invisible.
+  if(hiddenMovers.length){
+    const hGrossA=hiddenMovers.reduce((s,m)=>s+m.grossA,0),hGrossB=hiddenMovers.reduce((s,m)=>s+m.grossB,0);
+    const hDiscA=hiddenMovers.reduce((s,m)=>s+m.discA,0),hDiscB=hiddenMovers.reduce((s,m)=>s+m.discB,0);
+    const hDelta=hiddenMovers.reduce((s,m)=>s+m.delta,0);
+    const hDepthA=hGrossA>0?hDiscA/hGrossA*100:0,hDepthB=hGrossB>0?hDiscB/hGrossB*100:0;
+    const hComment=`${hiddenMovers.length} smaller brand${hiddenMovers.length===1?'':'s'}/platform${hiddenMovers.length===1?'':'s'} combined — discount depth ${hDepthA.toFixed(1)}% → ${hDepthB.toFixed(1)}%`;
+    moversHTML+=moverRow('➕','Other brands/platforms',null,hComment,hDelta,hDelta>=0?good:bad);
+  }
   return`<div style="width:380px;background:#0F172A;border:2px solid #F59E0B;border-radius:12px;overflow:hidden;box-shadow:0 0 0 4px rgba(245,158,11,.08),0 20px 50px rgba(0,0,0,.6)">`
   +`<div style="background:linear-gradient(90deg,#B45309,#F59E0B);padding:11px 15px"><div style="font-size:12.5px;font-weight:700;color:#1C1917">💵 Why did profitability change?</div><div style="font-size:9.5px;color:#451A03;opacity:.85">${labelA} → ${labelB}</div></div>`
   +`<div style="padding:14px 15px;color:#F1F5F9">`
