@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-284";
+const BUILD_VERSION="2026-08-13-285";
 const BUILD_NOTES=[
+  "🐛 Fixed the profitability explainer (v284) not appearing on hover — Nikhil reported it wasn't working. Root cause: the hover trigger was only wired to the small 10px \"💵 Profitability\" label text, not the 28px number underneath it that people actually look at and hover over — a genuinely easy-to-miss target, not a computation bug (verified the underlying breakdown math still works correctly with zero errors). Added a ctipId parameter to kpiCard() so the WHOLE card becomes the hover target, and widened the same way on the three custom (non-kpiCard) locations — Outlets tiles, Platforms mini-grid, Compare's Profitability card — so hovering anywhere on any of these cards now triggers it, not just a sliver of label text. Verified end-to-end against the real extracted functions: the outer card HTML has exactly one style= attribute (checked directly, since naively bolting on a second cursor:help style alongside the existing click-handling style would have been invalid HTML), and simulating a hover on the resulting markup successfully generates the tooltip with no thrown errors.",
   "🐛 Fixed a real directional bug on the Compare page — Nikhil caught this checking current week vs last week. Every delta on the page assumed Group B is always the chronologically later (\"current\") period, computing pctOf(b,a) and labeling it \"B vs A\" everywhere — which silently inverted the moment someone set up Group A as the more recent window (a completely natural way to configure the boxes). Orders went up week over week but the page showed \"-11.8%\". Added cmpBIsLater()/cmpDelta()/cmpDeltaLabel(), which detect which group is actually more recent and flip both the calculation and its label accordingly — applied across every KPI card, the insight banner and its driver ranking, the Platforms tab, both breakdown tables, and both CSV exports. Verified directly against Nikhil's exact numbers: now correctly shows +13.4%, labeled \"A vs B\".",
   "🆕 Added a hover explainer to every Profitability figure across the dashboard (Overview, Brands, Outlets — both the drill-down and every tile in the default grid, Platforms, Compare) — hover shows WHY it changed, not just by how much. Breaks the change into the four components of the contribution formula (Gross Sales, Discount, Commission, Food/Pkg cost) as a reconciling bridge, plus a ranked list of which brand×platform combos drove the swing — built specifically to surface the \"sales down on a low-commission platform, up on a high-commission one\" case Nikhil described, where a single net number hides the real story. Verified the bridge reconciles exactly (Gross − Discount − Commission − Food/Pkg equals the total change to the cent) against a simulated mix-shift scenario. Uses the same lazy storeTip() tooltip system as the campaign popups, so the breakdown is only computed on actual hover. Not yet wired into the individual row cells of the Compare page's Sales & Volume / Profitability tables (the pill-highlighted ones) — flagged as a possible follow-up, not done in this build.",
   "🎨 Extended the Compare page table redesign (v281) to the top-level Brand × Platform Breakdown table — Nikhil flagged it still showing the old dense Δ-column format, since that build was scoped to the Outlet drill-down table only. Same treatment now: split into \"Sales & Volume\" (Orders, Net Sales, Discount, AOV) and \"Profitability\" (Profit, Ad Spend), no Δ columns, pill-highlighted winner, sticky headers. AOV wasn't previously shown on this table at all — added it for consistency with the drill-down's grouping, rather than leaving the two tables with different column sets for the same conceptual group. Row-label click-to-expand into the outlet drill-down is preserved on both new tables. CSV export (cmpExportBreakdownCSV) is untouched — it already recomputes its own data independently and still includes the Δ columns for the export use case.",
@@ -471,13 +472,14 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef){
     movers:movers.slice(0,5)
   };
 }
-// v284: reusable label-wrapper for every "💵 Profitability" figure across the dashboard — wraps
-// the label text in a data-ctip span wired to the lazy tooltip system (same storeTip()/
-// initCalcTip() mechanism the campaign popups use), so the breakdown is only computed on actual
-// hover, not eagerly for every card/tile/row on the page.
-function profitabilityTipLabel(currentRecords,priorRecords,dateRef,labelCur,labelPrior){
-  const id=storeTip(()=>buildProfitabilityTipHTML(computeProfitabilityBreakdown(priorRecords,currentRecords,dateRef),labelPrior||'Prior period',labelCur||'Current period'));
-  return `<span data-ctip="${id}" style="cursor:help">💵 Profitability</span>`;
+// v284/v285: reusable id-getter for every "💵 Profitability" figure across the dashboard — wires
+// into the lazy tooltip system (same storeTip()/initCalcTip() mechanism the campaign popups
+// use), so the breakdown is only computed on actual hover, not eagerly for every card/tile/row.
+// Returns the raw ctip id rather than pre-wrapping a narrow span — v285 found that a small
+// wrapped label text was too easy to miss when hovering; callers attach this id to whatever
+// area should actually be hoverable (the whole card, in kpiCard's case).
+function profitabilityTipId(currentRecords,priorRecords,dateRef,labelCur,labelPrior){
+  return storeTip(()=>buildProfitabilityTipHTML(computeProfitabilityBreakdown(priorRecords,currentRecords,dateRef),labelPrior||'Prior period',labelCur||'Current period'));
 }
 function buildProfitabilityTipHTML(bd,labelA,labelB){
   const fAed=v=>'AED '+Math.abs(Math.round(v)).toLocaleString();
@@ -4503,12 +4505,11 @@ function mkMap(recs,kFn){const m={};recs.forEach(r=>{const k=kFn(r);if(!m[k])m[k
 function trend30(filterFn,start,end){const s=start||subDays(latest,30),e=end||latest;const m={};allData.filter(r=>filterFn(r)&&r.date>=s&&r.date<=e).forEach(r=>{if(!m[r.date])m[r.date]={d:r.date.slice(5),date:r.date,s:0,o:0};m[r.date].s+=r.sales;m[r.date].o+=r.orders;});return Object.values(m).sort((a,b)=>a.d.localeCompare(b.d));}
 
 // RENDER HELPERS
-function kpiCard(label,value,sub,chg,onclick,perDay,invertChg,tooltipHTML){
+function kpiCard(label,value,sub,chg,onclick,perDay,invertChg,tooltipHTML,ctipId){
   const hasChg=typeof chg==="number"&&!isNaN(chg);
   const T=_darkPage?{muted:DARK_THEME.textMuted,label:DARK_THEME.textSecondary,value:DARK_THEME.textPrimary,border:DARK_THEME.cardBorder,accent:DARK_THEME.accentOrange}
     :{muted:"#64748b",label:"#94a3b8",value:"#0F172A",border:"#EDE7D9",accent:"#f59e0b"};
   const cc=hasChg?pctClr(invertChg?-chg:chg):T.muted;
-  const click=onclick?`onclick="${onclick}" style="cursor:pointer" onmouseover="this.style.borderColor='${T.accent}'" onmouseout="this.style.borderColor='${T.border}'"`:""  ;
   // Per-day section (Orders + Net Sales tiles on Overview)
   let pdLine="";
   if(perDay){
@@ -4536,8 +4537,18 @@ function kpiCard(label,value,sub,chg,onclick,perDay,invertChg,tooltipHTML){
   // style override shows it when the card itself is hovered. Positioned relative/absolute so it
   // doesn't affect the card grid's layout when hidden.
   const tooltipBlock=tooltipHTML?`<div class="kpi-tooltip" style="display:none;position:absolute;top:100%;left:0;margin-top:8px;z-index:20;width:280px">${tooltipHTML}</div>`:"";
+  // v285: fixes the profitability explainer hover not being noticeable — it was only wired to
+  // the small 10px label text, not the 28px number people actually look at and hover over.
+  // ctipId, when provided, makes the WHOLE card the hover target instead of a sliver of text.
+  // Built as one merged style= attribute (outerAttrs below) rather than bolting a second style=
+  // onto the existing click-handling output, since two style attributes on one element is
+  // invalid HTML — the browser just silently keeps whichever one comes last.
   const wrapStyle=tooltipHTML?"position:relative":"";
-  return`<div class="sm" style="${wrapStyle}" ${click}>
+  const outerAttrs=onclick
+    ?`style="${wrapStyle}cursor:pointer" onclick="${onclick}" onmouseover="this.style.borderColor='${T.accent}'" onmouseout="this.style.borderColor='${T.border}'"`
+    :ctipId?`style="${wrapStyle}cursor:help" data-ctip="${ctipId}"`
+    :`style="${wrapStyle}"`;
+  return`<div class="sm" ${outerAttrs}>
     <div style="font-size:10px;color:${T.label};font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}${onclick?` <span style="color:${T.accent}">&#9656;</span>`:''}${tooltipHTML?' <span style="opacity:.6;cursor:help">&#9432;</span>':''}</div>
     <div style="font-size:28px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:${T.value}">${value}</div>
     ${compSection}
@@ -4918,7 +4929,7 @@ function renderOverview(){
       const priorGross=ps.sales+(ps.disc||0);
       const priorDepth=priorGross>0?((ps.disc||0)/priorGross*100):0;
       return kpiCard("Discount Burn",fmtAEDTip(ls.disc||0),`${depth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(ls.disc||0,ps.disc||0),null,null,true);
-    })()}${kpiCard(profitabilityTipLabel(ld,pd,profDateRef,"this period","prior period"),fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution))}${kpiCard("Active Outlets",activeOutlets,"all brands",null,null,null,null,missingOutletsHTML)}</div>
+    })()}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period"))}${kpiCard("Active Outlets",activeOutlets,"all brands",null,null,null,null,missingOutletsHTML)}</div>
     <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:220px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="card" style="padding:14px">
       <div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span>Outlet Highlights by Platform</span><span style="color:#8393AB;font-weight:400;text-transform:none;letter-spacing:0;font-size:10px">click a platform to see its top movers</span></div>
@@ -4999,7 +5010,7 @@ function renderBrands(){
     </style>`:"";
   document.getElementById("page-brands").innerHTML=brandsStyleOverride+makeFilterBar({hideBrand:true})+
     `<div class="brand-sel-row" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
-    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard(profitabilityTipLabel(ld,pd,profDateRef,"this period","prior period"),fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution))}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period"))}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="g2"><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — Net Sales Trend</div><div style="position:relative;height:180px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748B;font-weight:600;text-transform:none;letter-spacing:0;font-size:10px">sales bars · order count on top</span></div><div style="position:relative;height:180px"><canvas id="ch-b-agg"></canvas></div></div></div>
     <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>`;
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.brand===selBrand&&(!f.platforms.size||f.platforms.has(r.aggregator))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-b-trend",trend30(mf,f.start,f.end),b?.c||"#888");
@@ -5090,7 +5101,7 @@ function renderOutlets(){
         ${kpiCard("Net Sales",fmtAEDTip(tot.sales),compShort+": "+fmtAEDTip(prev.sales),pctOf(tot.sales,prev.sales))}
         ${kpiCard("AOV",`AED ${tot.orders>0?(tot.sales/tot.orders).toFixed(1):0}`,"per order",null)}
         ${kpiCard("Discount Burn",fmtAEDTip(outDisc),`${outDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(prev.disc||0)}`,pctOf(outDisc,prev.disc||0),null,null,true)}
-        ${kpiCard(profitabilityTipLabel(outletData,outletPrev,profDateRef,"this period","prior period"),fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution))}
+        ${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(outletData,outletPrev,profDateRef,"this period","prior period"))}
         ${kpiCard("Brands",brandsHere.length,brandsHere.join(", "),null)}
       </div>
       <div class="card"><div class="ct">${selOutlet} — Brand Performance (${getPeriodLabel()}) <span style="color:${mutedClr};font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("ou-brands",brHeads,brTRows,2)}</div>
@@ -5136,7 +5147,7 @@ function renderOutlets(){
           <div style="text-align:right"><div style="font-size:10.5px;color:${textMuted};text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:4px">Net Sales</div><div style="font-size:25px;font-weight:800;font-variant-numeric:tabular-nums;color:${textPrimary};line-height:1">${fmtAEDTip(t.sales)}</div></div>
         </div>
         ${t.disc>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid ${dividerClr}"><div style="font-size:12.5px;color:${discClr};font-weight:700">💸 Disc. Burn: ${fmtAEDTip(t.disc)}</div><div style="font-size:12.5px;color:${t.depth>=20?discClr:t.depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${t.depth.toFixed(1)}% depth</div></div>`:''}
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid ${dividerClr}"><div style="font-size:12.5px;color:#22C55E;font-weight:700">${profitabilityTipLabel(t.branchLd,t.branchPd,profDateRefGrid,"this period","prior period")}: ${fmtAEDTip(t.prof)}</div><div style="font-size:12.5px;color:#22C55E;font-weight:700">${t.profMargin.toFixed(1)}% margin</div></div>
+        <div data-ctip="${profitabilityTipId(t.branchLd,t.branchPd,profDateRefGrid,"this period","prior period")}" style="cursor:help;display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid ${dividerClr}"><div style="font-size:12.5px;color:#22C55E;font-weight:700">💵 Profitability: ${fmtAEDTip(t.prof)}</div><div style="font-size:12.5px;color:#22C55E;font-weight:700">${t.profMargin.toFixed(1)}% margin</div></div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px">
           ${t.brands.map(b=>`<span title="${b}: ${fmtAED(t.brandGmv[b]||0)}" style="display:inline-flex;align-items:center;gap:5px;background:${BMAP[b]?.c||'#888'}18;color:${BMAP[b]?.c||'#888'};font-size:12.5px;font-weight:800;padding:4px 10px;border-radius:7px;border:1px solid ${BMAP[b]?.c||'#888'}33">${logoImg(b,19)}${b}</span>`).join('')}
         </div>
@@ -5431,7 +5442,7 @@ function renderPlatforms(){
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">AOV</div><div style="font-size:17px;font-weight:800;color:${T.valuePrimary};margin-top:2px">${a.orders>0?'AED '+a.aov.toFixed(1):'—'}</div></div>
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Disc. Burn</div><div style="font-size:17px;font-weight:800;color:${burnClr};margin-top:2px">${a.disc>0?fmtExact(a.disc):'—'}</div></div>
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Outlets</div><div style="font-size:17px;font-weight:800;color:${T.valuePrimary};margin-top:2px">${a.outlets}</div></div>
-        <div style="background:rgba(46,204,113,.1);border-radius:6px;margin:-4px;padding:4px"><div style="font-size:10px;color:#2ECC71;font-weight:700;text-transform:uppercase;letter-spacing:.4px">${profitabilityTipLabel(a.ldA,a.pdA,profDateRefPlat,"this period","prior period")}</div><div style="font-size:17px;font-weight:800;color:#2ECC71;margin-top:2px">${a.orders>0?fmtExact(a.prof):'—'}</div></div>
+        <div data-ctip="${profitabilityTipId(a.ldA,a.pdA,profDateRefPlat,"this period","prior period")}" style="cursor:help;background:rgba(46,204,113,.1);border-radius:6px;margin:-4px;padding:4px"><div style="font-size:10px;color:#2ECC71;font-weight:700;text-transform:uppercase;letter-spacing:.4px">💵 Profit</div><div style="font-size:17px;font-weight:800;color:#2ECC71;margin-top:2px">${a.orders>0?fmtExact(a.prof):'—'}</div></div>
       </div>
       <div style="margin-top:8px;padding-top:8px;border-top:1px dashed ${T.dashedBorder};display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
         <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${T.priorValue};margin-top:2px">${a.orders_prev>0?'AED '+a.aovP.toFixed(1):'—'}</div></div>
@@ -16291,8 +16302,9 @@ function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC,dA,dB,profDa
       <div style="font-size:11.5px;color:${T.muted};margin-top:3px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
     </div>`;
   }
-  return `<div class="sm" style="padding:15px 16px">
-    <div style="font-size:11.5px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.9px;margin-bottom:7px">${dA&&dB?profitabilityTipLabel(cmpBIsLater()?dB:dA,cmpBIsLater()?dA:dB,profDateRef||dk(new Date()),cmpDeltaLabel().split(' vs ')[0],cmpDeltaLabel().split(' vs ')[1]):'💵 Profitability'} <span style="text-transform:none;font-weight:500;color:${T.vs}">· margin</span></div>
+  const profTipId=(dA&&dB)?profitabilityTipId(cmpBIsLater()?dB:dA,cmpBIsLater()?dA:dB,profDateRef||dk(new Date()),cmpDeltaLabel().split(' vs ')[0],cmpDeltaLabel().split(' vs ')[1]):null;
+  return `<div class="sm" ${profTipId?`data-ctip="${profTipId}" style="padding:15px 16px;cursor:help"`:`style="padding:15px 16px"`}>
+    <div style="font-size:11.5px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.9px;margin-bottom:7px">💵 Profitability <span style="text-transform:none;font-weight:500;color:${T.vs}">· margin</span></div>
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
       <span style="font-size:23px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(a)}</span>
       <span style="font-size:13px;color:${T.vs};font-weight:600">vs</span>
