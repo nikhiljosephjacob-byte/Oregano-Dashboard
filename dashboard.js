@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-287";
+const BUILD_VERSION="2026-08-13-288";
 const BUILD_NOTES=[
+  "🐛 Fixed four real issues in the profitability explainer, all caught directly by Nikhil from the live tooltip. (1) Dates were derived from actual record min/max, which lags behind the filter's intended window whenever the latest upload hasn't fully synced — showing \"1→18 Aug\" while every other card on the page said \"1→20 Aug\" for the same comparison. Now takes curFilters()/getCompRange() (or cmpA/cmpB on Compare) as an explicit override, so this tooltip is always consistent with the rest of the page instead of computing its own competing answer. (2) A resolved campaign name was REPLACING the brand·aggregator line entirely — \"Best Sellers 30% OFF\" with no indication of which platform. Campaign name is now always additional context under the brand·aggregator line, never a substitute for it. (3) Comments like \"sales pulled back this period\" read as unsupported claims — Nikhil's exact words: \"are you trying to imply sales dropped?\" with no evidence given. Every comment now states the actual figure behind it (e.g. \"discount depth rose 26% from 7% — grew faster than sales did\", \"gross sales fell 12% (AED 108,000 → AED 95,000)\"). (4) Deliveroo's mover icon was a deer emoji (🦌) — a mistake, not intentional — swapped for a scooter (🛵). Verified all four fixes together against a simulated version of Nikhil's exact scenario (filter says 1-20 Aug, latest record only reaches part-way through) — dates now correctly follow the filter, not the data.",
   "🎨 Rebuilt the profitability explainer tooltip into its final approved format, after many rounds of rendering iteration with Nikhil — a P&L cascade (Gross Sales → Discount → Net Sales → Commission → Food/Pkg → Net Contribution) for both periods side by side, with each column's actual date range shown under its header, a clear Net Change callout, then a \"By campaign\" list with a short auto-generated comment per campaign (e.g. \"deep discount, volume didn't cover it\" / \"controlled discount, this one's working\") instead of the earlier ambiguous \"+/− impact\" phrasing. Campaign names are resolved from campaignData by brand+aggregator+date overlap where exactly one candidate matches; falls back to a plain Brand · Aggregator label when zero or multiple campaigns match, rather than guessing which one it was — the same honest limitation discussed directly with Nikhil regarding Talabat's export not carrying item-level data. Comments are generated from each mover's own discount-depth trend and sales direction, not hand-written per case. Verified end-to-end against realistic multi-campaign, multi-aggregator data: date ranges extract correctly, campaign names resolve correctly, comment logic produces sensible output for a mix of positive and negative movers, the cascade reconciles exactly for both periods, and the generated HTML contains no leaked undefined/NaN.",
   "🐛 Found the actual root cause of the profitability explainer not appearing — the v285 fix (widening the hover target) was a real improvement but not the real bug. initCalcTip() — which creates the floating tooltip element and attaches the ONE global mouseover listener everything depends on — was only ever being called as an incidental side-effect buried inside renderCampaigns(), on the same line as an unrelated KPI strip computation. Anyone who hadn't visited the Campaigns page first in that browser session never had the hover mechanism initialized at all, on any page — not just Profitability, this affected every campaign popup too, silently, with no error and no visible symptom, which is exactly why it looked like nothing was happening. Moved the call to renderPage() — the single central router every page navigation already passes through — so it's now guaranteed to run before anything else, regardless of which page loads first. initCalcTip() already no-ops on repeat calls (checks if its element already exists), so this is free after the first page load. Removed the now-redundant original call site in renderCampaigns() for clarity. Verified renderPage() calls it unconditionally as its very first line, ahead of every page-specific render branch.",
   "🐛 Fixed the profitability explainer (v284) not appearing on hover — Nikhil reported it wasn't working. Root cause: the hover trigger was only wired to the small 10px \"💵 Profitability\" label text, not the 28px number underneath it that people actually look at and hover over — a genuinely easy-to-miss target, not a computation bug (verified the underlying breakdown math still works correctly with zero errors). Added a ctipId parameter to kpiCard() so the WHOLE card becomes the hover target, and widened the same way on the three custom (non-kpiCard) locations — Outlets tiles, Platforms mini-grid, Compare's Profitability card — so hovering anywhere on any of these cards now triggers it, not just a sliver of label text. Verified end-to-end against the real extracted functions: the outer card HTML has exactly one style= attribute (checked directly, since naively bolting on a second cursor:help style alongside the existing click-handling style would have been invalid HTML), and simulating a hover on the resulting markup successfully generates the tooltip with no thrown errors.",
@@ -451,7 +452,7 @@ function computeProfitability(records,dateStr){
 // label rather than guessing which campaign it was (matches the same "can't disambiguate
 // concurrent campaigns without item-level data" limitation discussed directly with Nikhil for
 // Talabat specifically — this is honest about that gap rather than papering over it).
-function computeProfitabilityBreakdown(recordsA,recordsB,dateRef){
+function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,explicitRangeB){
   const byKey=(recs)=>{
     const m={};
     for(const r of recs){
@@ -466,7 +467,15 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef){
     for(const r of recs){if(!r.date)continue;if(!lo||r.date<lo)lo=r.date;if(!hi||r.date>hi)hi=r.date;}
     return{start:lo,end:hi};
   };
-  const rangeA=dateRange(recordsA),rangeB=dateRange(recordsB);
+  // v288: fixes a real bug Nikhil caught — dates were derived from actual record min/max, which
+  // can lag behind the FILTER's intended window whenever the latest upload hasn't fully synced
+  // yet (e.g. filter says "this month, 1→20 Aug" but the newest data on hand only reaches 18
+  // Aug) — showing "1→18 Aug" here while every other card on the page says "1→20 Aug" for the
+  // exact same comparison. Now takes the filter's own intended range as an explicit override
+  // when the caller has it (curFilters()/getCompRange() for most pages, cmpA/cmpB for Compare),
+  // so this tooltip is always consistent with whatever the rest of the page already says —
+  // falls back to record-derived dates only when no explicit range was passed in.
+  const rangeA=explicitRangeA||dateRange(recordsA),rangeB=explicitRangeB||dateRange(recordsB);
   const groupsA=byKey(recordsA),groupsB=byKey(recordsB);
   const allKeys=new Set([...Object.keys(groupsA),...Object.keys(groupsB)]);
   const movers=[];
@@ -483,23 +492,28 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef){
     grossA+=gGrossA;grossB+=gGrossB;discA+=gA.disc;discB+=gB.disc;
     commA+=gCommA;commB+=gCommB;foodA+=gFoodA;foodB+=gFoodB;
     if(gGrossA<=0&&gGrossB<=0)continue;
-    // Try to name this mover by its actual campaign instead of just brand·aggregator.
-    let campaignLabel=null,campaignComment=null;
+    // v288: campaignName is now ADDITIONAL context, never a replacement for brand·aggregator —
+    // Nikhil caught this too: a resolved campaign name ("Best Sellers 30% OFF") was replacing
+    // the brand/aggregator line entirely, so there was no way to tell which platform it was on.
+    let campaignName=null;
     if(typeof campaignData!=='undefined'){
       const candidates=campaignData.filter(c=>c.brand===brand&&c.aggregator===aggregator&&!isRewardsCampaign(c)&&!(rangeB.end&&c.startDate>rangeB.end)&&!(rangeB.start&&c.endDate&&c.endDate<rangeB.start));
-      if(candidates.length===1)campaignLabel=candidates[0].name;
-      // more than one candidate = can't disambiguate without item-level data (same limitation
-      // as Talabat's export lacking an item field) — falls through to brand·aggregator label
+      if(candidates.length===1)campaignName=candidates[0].name;
     }
     const depthA=gGrossA>0?gA.disc/gGrossA:0,depthB=gGrossB>0?gB.disc/gGrossB:0;
     const delta=contribB-contribA;
-    const salesGrew=gGrossB>gGrossA*1.03,salesFell=gGrossB<gGrossA*0.97;
+    const salesPct=gGrossA>0?((gGrossB-gGrossA)/gGrossA*100):null;
     const depthRose=depthB>depthA+0.03,depthFell=depthB<depthA-0.03;
-    if(delta<0&&depthRose)campaignComment='deep discount, volume didn\'t cover it';
-    else if(delta>=0&&(depthFell||depthB<=depthA))campaignComment='controlled discount, this one\'s working';
-    else if(delta<0&&salesFell&&!depthRose)campaignComment='sales pulled back this period';
-    else if(delta>=0&&salesGrew)campaignComment='steady growth, discount stayed in line';
-    movers.push({brand,aggregator,label:campaignLabel||`${brand} · ${aggregator}`,comment:campaignComment,contribA,contribB,delta,rate,grossA:gGrossA,grossB:gGrossB});
+    // v288: comments now always carry the actual figures that justify them — Nikhil's exact
+    // complaint was that "sales pulled back this period" reads as an unsupported claim with no
+    // number behind it. Every branch below states the concrete number driving the verdict.
+    let comment;
+    if(delta<0&&depthRose)comment=`discount depth rose ${(depthB*100).toFixed(0)}% from ${(depthA*100).toFixed(0)}% — grew faster than sales did`;
+    else if(delta>=0&&(depthFell||depthB<=depthA))comment=`discount depth held at ${(depthB*100).toFixed(0)}% while sales ${salesPct!=null&&salesPct>=0?'grew':'held steady'}`;
+    else if(delta<0&&salesPct!=null&&salesPct<-3)comment=`gross sales fell ${Math.abs(salesPct).toFixed(0)}% (${fmtAEDTip(gGrossA)} → ${fmtAEDTip(gGrossB)}), discount depth roughly unchanged`;
+    else if(delta>=0&&salesPct!=null&&salesPct>3)comment=`gross sales grew ${salesPct.toFixed(0)}%, discount depth kept in line`;
+    else comment=`net contribution ${delta>=0?'up':'down'} ${fmtAEDTip(Math.abs(delta))} on roughly flat sales and discount`;
+    movers.push({brand,aggregator,campaignName,comment,contribA,contribB,delta,rate,grossA:gGrossA,grossB:gGrossB});
   }
   movers.sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta));
   return{
@@ -515,8 +529,16 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef){
 // Returns the raw ctip id rather than pre-wrapping a narrow span — v285 found that a small
 // wrapped label text was too easy to miss when hovering; callers attach this id to whatever
 // area should actually be hoverable (the whole card, in kpiCard's case).
-function profitabilityTipId(currentRecords,priorRecords,dateRef,labelCur,labelPrior){
-  return storeTip(()=>buildProfitabilityTipHTML(computeProfitabilityBreakdown(priorRecords,currentRecords,dateRef),labelPrior||'Prior period',labelCur||'Current period'));
+// v288: normalizes curFilters()/getCompRange() (which use different field names, {start,end} vs
+// {s,e}) into the {start,end} shape computeProfitabilityBreakdown expects, so every standard-page
+// call site can pass the SAME dates the rest of that page already shows (e.g. the "vs 1 Jul-20
+// Jul (prior mo.)" text on the other KPI cards) instead of re-deriving from record presence.
+function profDateRanges(){
+  const f=curFilters(),cr=getCompRange();
+  return{cur:{start:f.start,end:f.end},prior:{start:cr.s,end:cr.e}};
+}
+function profitabilityTipId(currentRecords,priorRecords,dateRef,labelCur,labelPrior,rangeCur,rangePrior){
+  return storeTip(()=>buildProfitabilityTipHTML(computeProfitabilityBreakdown(priorRecords,currentRecords,dateRef,rangePrior,rangeCur),labelPrior||'Prior period',labelCur||'Current period'));
 }
 function buildProfitabilityTipHTML(bd,labelA,labelB){
   const fAed=v=>Math.round(v).toLocaleString();
@@ -547,10 +569,10 @@ function buildProfitabilityTipHTML(bd,labelA,labelB){
     </div>`;
   const moversHTML=bd.movers.filter(m=>Math.abs(m.delta)>=Math.abs(totalDelta)*0.08||bd.movers.length<=3).slice(0,4).map(m=>{
     const clr=m.delta>=0?good:bad;
-    const icon=m.aggregator==='Deliveroo'?'🦌':m.aggregator==='Talabat'?'🚴':m.aggregator==='Keeta'?'🥡':m.aggregator==='Careem'?'🚗':m.aggregator==='Noon'?'🌙':'📍';
+    const icon=m.aggregator==='Deliveroo'?'🛵':m.aggregator==='Talabat'?'🚴':m.aggregator==='Keeta'?'🥡':m.aggregator==='Careem'?'🚗':m.aggregator==='Noon'?'🌙':'📍';
     return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #2A3555">
-      <div><div style="font-size:11px;font-weight:700">${icon} ${m.label}</div>${m.comment?`<div style="font-size:9.5px;opacity:.55">${m.comment}</div>`:''}</div>
-      <span style="font-size:11.5px;font-weight:700;color:${clr}">${fSigned(m.delta)}</span>
+      <div><div style="font-size:11px;font-weight:700">${icon} ${m.brand} · ${m.aggregator}</div>${m.campaignName?`<div style="font-size:9.5px;color:#FBBF24;opacity:.85">🏷️ ${m.campaignName}</div>`:''}<div style="font-size:9.5px;opacity:.6;line-height:1.4;margin-top:1px">${m.comment}</div></div>
+      <span style="font-size:11.5px;font-weight:700;color:${clr};white-space:nowrap;padding-left:8px">${fSigned(m.delta)}</span>
       </div>`;
   }).join('');
   return`<div style="width:380px;background:#0F172A;border:2px solid #F59E0B;border-radius:12px;overflow:hidden;box-shadow:0 0 0 4px rgba(245,158,11,.08),0 20px 50px rgba(0,0,0,.6)">`
@@ -4992,7 +5014,7 @@ function renderOverview(){
       const priorGross=ps.sales+(ps.disc||0);
       const priorDepth=priorGross>0?((ps.disc||0)/priorGross*100):0;
       return kpiCard("Discount Burn",fmtAEDTip(ls.disc||0),`${depth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(ls.disc||0,ps.disc||0),null,null,true);
-    })()}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period"))}${kpiCard("Active Outlets",activeOutlets,"all brands",null,null,null,null,missingOutletsHTML)}</div>
+    })()}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior))}${kpiCard("Active Outlets",activeOutlets,"all brands",null,null,null,null,missingOutletsHTML)}</div>
     <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:220px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="card" style="padding:14px">
       <div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span>Outlet Highlights by Platform</span><span style="color:#8393AB;font-weight:400;text-transform:none;letter-spacing:0;font-size:10px">click a platform to see its top movers</span></div>
@@ -5073,7 +5095,7 @@ function renderBrands(){
     </style>`:"";
   document.getElementById("page-brands").innerHTML=brandsStyleOverride+makeFilterBar({hideBrand:true})+
     `<div class="brand-sel-row" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
-    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period"))}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior))}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="g2"><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — Net Sales Trend</div><div style="position:relative;height:180px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748B;font-weight:600;text-transform:none;letter-spacing:0;font-size:10px">sales bars · order count on top</span></div><div style="position:relative;height:180px"><canvas id="ch-b-agg"></canvas></div></div></div>
     <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>`;
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.brand===selBrand&&(!f.platforms.size||f.platforms.has(r.aggregator))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-b-trend",trend30(mf,f.start,f.end),b?.c||"#888");
@@ -5164,7 +5186,7 @@ function renderOutlets(){
         ${kpiCard("Net Sales",fmtAEDTip(tot.sales),compShort+": "+fmtAEDTip(prev.sales),pctOf(tot.sales,prev.sales))}
         ${kpiCard("AOV",`AED ${tot.orders>0?(tot.sales/tot.orders).toFixed(1):0}`,"per order",null)}
         ${kpiCard("Discount Burn",fmtAEDTip(outDisc),`${outDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(prev.disc||0)}`,pctOf(outDisc,prev.disc||0),null,null,true)}
-        ${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(outletData,outletPrev,profDateRef,"this period","prior period"))}
+        ${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(outletData,outletPrev,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior))}
         ${kpiCard("Brands",brandsHere.length,brandsHere.join(", "),null)}
       </div>
       <div class="card"><div class="ct">${selOutlet} — Brand Performance (${getPeriodLabel()}) <span style="color:${mutedClr};font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("ou-brands",brHeads,brTRows,2)}</div>
@@ -5210,7 +5232,7 @@ function renderOutlets(){
           <div style="text-align:right"><div style="font-size:10.5px;color:${textMuted};text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:4px">Net Sales</div><div style="font-size:25px;font-weight:800;font-variant-numeric:tabular-nums;color:${textPrimary};line-height:1">${fmtAEDTip(t.sales)}</div></div>
         </div>
         ${t.disc>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid ${dividerClr}"><div style="font-size:12.5px;color:${discClr};font-weight:700">💸 Disc. Burn: ${fmtAEDTip(t.disc)}</div><div style="font-size:12.5px;color:${t.depth>=20?discClr:t.depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${t.depth.toFixed(1)}% depth</div></div>`:''}
-        <div data-ctip="${profitabilityTipId(t.branchLd,t.branchPd,profDateRefGrid,"this period","prior period")}" style="cursor:help;display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid ${dividerClr}"><div style="font-size:12.5px;color:#22C55E;font-weight:700">💵 Profitability: ${fmtAEDTip(t.prof)}</div><div style="font-size:12.5px;color:#22C55E;font-weight:700">${t.profMargin.toFixed(1)}% margin</div></div>
+        <div data-ctip="${profitabilityTipId(t.branchLd,t.branchPd,profDateRefGrid,"this period","prior period",profDateRanges().cur,profDateRanges().prior)}" style="cursor:help;display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid ${dividerClr}"><div style="font-size:12.5px;color:#22C55E;font-weight:700">💵 Profitability: ${fmtAEDTip(t.prof)}</div><div style="font-size:12.5px;color:#22C55E;font-weight:700">${t.profMargin.toFixed(1)}% margin</div></div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px">
           ${t.brands.map(b=>`<span title="${b}: ${fmtAED(t.brandGmv[b]||0)}" style="display:inline-flex;align-items:center;gap:5px;background:${BMAP[b]?.c||'#888'}18;color:${BMAP[b]?.c||'#888'};font-size:12.5px;font-weight:800;padding:4px 10px;border-radius:7px;border:1px solid ${BMAP[b]?.c||'#888'}33">${logoImg(b,19)}${b}</span>`).join('')}
         </div>
@@ -5505,7 +5527,7 @@ function renderPlatforms(){
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">AOV</div><div style="font-size:17px;font-weight:800;color:${T.valuePrimary};margin-top:2px">${a.orders>0?'AED '+a.aov.toFixed(1):'—'}</div></div>
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Disc. Burn</div><div style="font-size:17px;font-weight:800;color:${burnClr};margin-top:2px">${a.disc>0?fmtExact(a.disc):'—'}</div></div>
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Outlets</div><div style="font-size:17px;font-weight:800;color:${T.valuePrimary};margin-top:2px">${a.outlets}</div></div>
-        <div data-ctip="${profitabilityTipId(a.ldA,a.pdA,profDateRefPlat,"this period","prior period")}" style="cursor:help;background:rgba(46,204,113,.1);border-radius:6px;margin:-4px;padding:4px"><div style="font-size:10px;color:#2ECC71;font-weight:700;text-transform:uppercase;letter-spacing:.4px">💵 Profit</div><div style="font-size:17px;font-weight:800;color:#2ECC71;margin-top:2px">${a.orders>0?fmtExact(a.prof):'—'}</div></div>
+        <div data-ctip="${profitabilityTipId(a.ldA,a.pdA,profDateRefPlat,"this period","prior period",profDateRanges().cur,profDateRanges().prior)}" style="cursor:help;background:rgba(46,204,113,.1);border-radius:6px;margin:-4px;padding:4px"><div style="font-size:10px;color:#2ECC71;font-weight:700;text-transform:uppercase;letter-spacing:.4px">💵 Profit</div><div style="font-size:17px;font-weight:800;color:#2ECC71;margin-top:2px">${a.orders>0?fmtExact(a.prof):'—'}</div></div>
       </div>
       <div style="margin-top:8px;padding-top:8px;border-top:1px dashed ${T.dashedBorder};display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
         <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${T.priorValue};margin-top:2px">${a.orders_prev>0?'AED '+a.aovP.toFixed(1):'—'}</div></div>
@@ -16365,7 +16387,9 @@ function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC,dA,dB,profDa
       <div style="font-size:11.5px;color:${T.muted};margin-top:3px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
     </div>`;
   }
-  const profTipId=(dA&&dB)?profitabilityTipId(cmpBIsLater()?dB:dA,cmpBIsLater()?dA:dB,profDateRef||dk(new Date()),cmpDeltaLabel().split(' vs ')[0],cmpDeltaLabel().split(' vs ')[1]):null;
+  const profRangeCur=cmpBIsLater()?{start:cmpB.start,end:cmpB.end}:{start:cmpA.start,end:cmpA.end};
+  const profRangePrior=cmpBIsLater()?{start:cmpA.start,end:cmpA.end}:{start:cmpB.start,end:cmpB.end};
+  const profTipId=(dA&&dB)?profitabilityTipId(cmpBIsLater()?dB:dA,cmpBIsLater()?dA:dB,profDateRef||dk(new Date()),cmpDeltaLabel().split(' vs ')[0],cmpDeltaLabel().split(' vs ')[1],profRangeCur,profRangePrior):null;
   return `<div class="sm" ${profTipId?`data-ctip="${profTipId}" style="padding:15px 16px;cursor:help"`:`style="padding:15px 16px"`}>
     <div style="font-size:11.5px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.9px;margin-bottom:7px">💵 Profitability <span style="text-transform:none;font-weight:500;color:${T.vs}">· margin</span></div>
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
