@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-282";
+const BUILD_VERSION="2026-08-13-284";
 const BUILD_NOTES=[
+  "🐛 Fixed a real directional bug on the Compare page — Nikhil caught this checking current week vs last week. Every delta on the page assumed Group B is always the chronologically later (\"current\") period, computing pctOf(b,a) and labeling it \"B vs A\" everywhere — which silently inverted the moment someone set up Group A as the more recent window (a completely natural way to configure the boxes). Orders went up week over week but the page showed \"-11.8%\". Added cmpBIsLater()/cmpDelta()/cmpDeltaLabel(), which detect which group is actually more recent and flip both the calculation and its label accordingly — applied across every KPI card, the insight banner and its driver ranking, the Platforms tab, both breakdown tables, and both CSV exports. Verified directly against Nikhil's exact numbers: now correctly shows +13.4%, labeled \"A vs B\".",
+  "🆕 Added a hover explainer to every Profitability figure across the dashboard (Overview, Brands, Outlets — both the drill-down and every tile in the default grid, Platforms, Compare) — hover shows WHY it changed, not just by how much. Breaks the change into the four components of the contribution formula (Gross Sales, Discount, Commission, Food/Pkg cost) as a reconciling bridge, plus a ranked list of which brand×platform combos drove the swing — built specifically to surface the \"sales down on a low-commission platform, up on a high-commission one\" case Nikhil described, where a single net number hides the real story. Verified the bridge reconciles exactly (Gross − Discount − Commission − Food/Pkg equals the total change to the cent) against a simulated mix-shift scenario. Uses the same lazy storeTip() tooltip system as the campaign popups, so the breakdown is only computed on actual hover. Not yet wired into the individual row cells of the Compare page's Sales & Volume / Profitability tables (the pill-highlighted ones) — flagged as a possible follow-up, not done in this build.",
   "🎨 Extended the Compare page table redesign (v281) to the top-level Brand × Platform Breakdown table — Nikhil flagged it still showing the old dense Δ-column format, since that build was scoped to the Outlet drill-down table only. Same treatment now: split into \"Sales & Volume\" (Orders, Net Sales, Discount, AOV) and \"Profitability\" (Profit, Ad Spend), no Δ columns, pill-highlighted winner, sticky headers. AOV wasn't previously shown on this table at all — added it for consistency with the drill-down's grouping, rather than leaving the two tables with different column sets for the same conceptual group. Row-label click-to-expand into the outlet drill-down is preserved on both new tables. CSV export (cmpExportBreakdownCSV) is untouched — it already recomputes its own data independently and still includes the Δ columns for the export use case.",
   "🎨 Rebuilt the Compare page's Outlet Breakdown table — approved by Nikhil after several rounds of rendering review. The old single 16-column table (every metric × A/B/Δ) was too dense to read at a glance. Split into two focused tables: \"Sales & Volume\" (Orders, Net Sales, Discount, AOV together, not a toggle) and \"Profitability\" (Profit + Ad Spend together). Both drop the Δ % column entirely — the comparison now reads directly off which value is highlighted: green pill on the higher value for Orders/Net Sales/AOV/Profit (higher is good), red pill for Discount and Ad Spend (higher is a cost). Ad Spend's red-on-higher is flagged to Nikhil as an assumption, not a confirmed rule — more spend isn't automatically bad the way discount is, approved as shown pending correction. Both tables also get a sticky header — the original ask this whole redesign started from — so headers stay visible scrolling a long outlet list. CSV export (cmpExportOutletCSV) is untouched and still includes the Δ columns, since that's a data-completeness case rather than an at-a-glance one. Verified the highlight logic directly: correctly picks whichever side is actually higher (not always the same column — tested with the Villa case where A wins), handles ties and missing data without producing a false highlight.",
   "🐛 Fixed Smiles commission showing 30% instead of the real 20% — Nikhil caught this on a Smokeys campaign. Smiles only had an Oregano-specific entry in the commission table (from when Oregano was its only brand); any other brand had no match at all, so the rate lookup silently fell through to a hardcoded 30% safety guess instead of erroring visibly. Confirmed directly: 18% + 2% PG = 20% on net sales applies to Smiles generally, not just Oregano — switched to a DEFAULT entry so every brand inherits it, same pattern Keeta already uses. Verified against the real extracted function: Smokeys, Oregano, and Lollorosso (previously also unconfigured) all now correctly resolve to 20%.",
@@ -425,6 +427,88 @@ function computeProfitability(records,dateStr){
     gross+=g_gross;
   }
   return{contribution,gross};
+}
+// v284: explains WHY profitability moved between two record sets, not just by how much. A
+// single number ("profit down 16.8%") hides which of several genuinely different stories is
+// actually true — did gross demand drop, did discount burn get heavier, did the platform/brand
+// MIX shift toward a higher-commission combo even if total sales held steady? Decomposes the
+// change into the four components of the contribution formula (Gross Sales, Discount,
+// Commission, Food/Pkg — the same formula computeProfitability already uses) so each can be
+// read as its own line, then ranks brand×platform groups by how much each one moved the total,
+// surfacing exactly the "Talabat down + Deliveroo up, different commission rates" kind of mix
+// effect a net figure alone can't show.
+function computeProfitabilityBreakdown(recordsA,recordsB,dateRef){
+  const byKey=(recs)=>{
+    const m={};
+    for(const r of recs){
+      const k=r.brand+'|'+r.aggregator;
+      if(!m[k])m[k]={brand:r.brand,aggregator:r.aggregator,net:0,disc:0};
+      m[k].net+=r.sales;m[k].disc+=(r.disc||0);
+    }
+    return m;
+  };
+  const groupsA=byKey(recordsA),groupsB=byKey(recordsB);
+  const allKeys=new Set([...Object.keys(groupsA),...Object.keys(groupsB)]);
+  const movers=[];
+  let grossA=0,grossB=0,discA=0,discB=0,commA=0,commB=0,foodA=0,foodB=0;
+  for(const key of allKeys){
+    const gA=groupsA[key]||{net:0,disc:0},gB=groupsB[key]||{net:0,disc:0};
+    const[brand,aggregator]=key.split('|');
+    const gGrossA=gA.net+gA.disc,gGrossB=gB.net+gB.disc;
+    const rate=commissionRateFor(aggregator,brand,dateRef);
+    const gCommA=gA.net*rate,gCommB=gB.net*rate;
+    const foodPct=foodPkgPct(brand);
+    const gFoodA=gGrossA*foodPct,gFoodB=gGrossB*foodPct;
+    const contribA=gA.net-gCommA-gFoodA,contribB=gB.net-gCommB-gFoodB;
+    grossA+=gGrossA;grossB+=gGrossB;discA+=gA.disc;discB+=gB.disc;
+    commA+=gCommA;commB+=gCommB;foodA+=gFoodA;foodB+=gFoodB;
+    if(gGrossA>0||gGrossB>0)movers.push({brand,aggregator,contribA,contribB,delta:contribB-contribA,rate,grossA:gGrossA,grossB:gGrossB});
+  }
+  movers.sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta));
+  return{
+    grossA,grossB,discA,discB,commA,commB,foodA,foodB,
+    contribA:grossA-discA-commA-foodA,contribB:grossB-discB-commB-foodB,
+    movers:movers.slice(0,5)
+  };
+}
+// v284: reusable label-wrapper for every "💵 Profitability" figure across the dashboard — wraps
+// the label text in a data-ctip span wired to the lazy tooltip system (same storeTip()/
+// initCalcTip() mechanism the campaign popups use), so the breakdown is only computed on actual
+// hover, not eagerly for every card/tile/row on the page.
+function profitabilityTipLabel(currentRecords,priorRecords,dateRef,labelCur,labelPrior){
+  const id=storeTip(()=>buildProfitabilityTipHTML(computeProfitabilityBreakdown(priorRecords,currentRecords,dateRef),labelPrior||'Prior period',labelCur||'Current period'));
+  return `<span data-ctip="${id}" style="cursor:help">💵 Profitability</span>`;
+}
+function buildProfitabilityTipHTML(bd,labelA,labelB){
+  const fAed=v=>'AED '+Math.abs(Math.round(v)).toLocaleString();
+  const fSigned=v=>(v<0?'−':'+')+fAed(v);
+  const row=(emoji,l,v,clr)=>`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:11.5px"><span style="opacity:.75">${emoji} ${l}</span><span style="color:${clr};font-weight:700">${v}</span></div>`;
+  const totalDelta=bd.contribB-bd.contribA;
+  const grossDelta=bd.grossB-bd.grossA;   // up = good
+  const discDelta=bd.discB-bd.discA;      // up = bad (more discount)
+  const commDelta=bd.commB-bd.commA;      // up = bad (more commission cost)
+  const foodDelta=bd.foodB-bd.foodA;      // up = bad (more food/pkg cost)
+  const good='#2ECC71',bad='#EF4444';
+  const bridgeRows=
+    row('💰','Gross sales',fSigned(grossDelta),grossDelta>=0?good:bad)
+    +row('🎟️','Discount burn',(discDelta>=0?'−':'+')+fAed(Math.abs(discDelta))+' impact',discDelta>0?bad:(discDelta<0?good:'inherit'))
+    +row('🏦','Commission',(commDelta>=0?'−':'+')+fAed(Math.abs(commDelta))+' impact',commDelta>0?bad:(commDelta<0?good:'inherit'))
+    +row('📦','Food/pkg cost',(foodDelta>=0?'−':'+')+fAed(Math.abs(foodDelta))+' impact',foodDelta>0?bad:(foodDelta<0?good:'inherit'));
+  const moversHTML=bd.movers.filter(m=>Math.abs(m.delta)>=Math.abs(totalDelta)*0.08||bd.movers.length<=2).slice(0,4).map(m=>{
+    const clr=m.delta>=0?good:bad;
+    return `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:11px"><span style="opacity:.8">${m.brand} · ${m.aggregator} <span style="opacity:.55;font-size:9.5px">(${(m.rate*100).toFixed(0)}% comm)</span></span><span style="color:${clr};font-weight:700">${fSigned(m.delta)}</span></div>`;
+  }).join('');
+  return`<div style="width:320px;background:#0F172A;border:2px solid #F59E0B;border-radius:12px;overflow:hidden;box-shadow:0 0 0 4px rgba(245,158,11,.08),0 20px 50px rgba(0,0,0,.6)">`
+  +`<div style="background:linear-gradient(90deg,#B45309,#F59E0B);padding:11px 15px"><div style="font-size:12.5px;font-weight:700;color:#1C1917">💵 Why did profitability change?</div><div style="font-size:9.5px;color:#451A03;opacity:.85">${labelA} → ${labelB}</div></div>`
+  +`<div style="padding:13px 15px;color:#F1F5F9">`
+  +`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px"><span style="font-size:11px;opacity:.75">Total change</span><span style="font-size:17px;font-weight:800;color:${totalDelta>=0?good:bad}">${fSigned(totalDelta)}</span></div>`
+  +`<div style="background:#1E293B;border-radius:8px;padding:9px 11px;margin-bottom:10px">`
+  +`<div style="font-size:9.5px;opacity:.6;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Bridge — what moved it</div>`
+  +bridgeRows
+  +`</div>`
+  +(moversHTML?`<div style="background:#1E293B;border-radius:8px;padding:9px 11px"><div style="font-size:9.5px;opacity:.6;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Biggest movers</div>${moversHTML}</div>`:'')
+  +`<div style="font-size:9px;opacity:.5;margin-top:8px;line-height:1.5">Commission % shown per mover — a mix shift toward a higher-commission platform can lower profitability even if sales grew.</div>`
+  +`</div></div>`;
 }
 const BE={Deliveroo:1.32,Noon:1.30,Careem:1.27,Talabat:1.41};
 const BMAP=Object.fromEntries(BR.map(b=>[b.n,b]));
@@ -4834,7 +4918,7 @@ function renderOverview(){
       const priorGross=ps.sales+(ps.disc||0);
       const priorDepth=priorGross>0?((ps.disc||0)/priorGross*100):0;
       return kpiCard("Discount Burn",fmtAEDTip(ls.disc||0),`${depth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(ls.disc||0,ps.disc||0),null,null,true);
-    })()}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution))}${kpiCard("Active Outlets",activeOutlets,"all brands",null,null,null,null,missingOutletsHTML)}</div>
+    })()}${kpiCard(profitabilityTipLabel(ld,pd,profDateRef,"this period","prior period"),fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution))}${kpiCard("Active Outlets",activeOutlets,"all brands",null,null,null,null,missingOutletsHTML)}</div>
     <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:220px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="card" style="padding:14px">
       <div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span>Outlet Highlights by Platform</span><span style="color:#8393AB;font-weight:400;text-transform:none;letter-spacing:0;font-size:10px">click a platform to see its top movers</span></div>
@@ -4915,7 +4999,7 @@ function renderBrands(){
     </style>`:"";
   document.getElementById("page-brands").innerHTML=brandsStyleOverride+makeFilterBar({hideBrand:true})+
     `<div class="brand-sel-row" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
-    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution))}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard(profitabilityTipLabel(ld,pd,profDateRef,"this period","prior period"),fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution))}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="g2"><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — Net Sales Trend</div><div style="position:relative;height:180px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748B;font-weight:600;text-transform:none;letter-spacing:0;font-size:10px">sales bars · order count on top</span></div><div style="position:relative;height:180px"><canvas id="ch-b-agg"></canvas></div></div></div>
     <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>`;
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.brand===selBrand&&(!f.platforms.size||f.platforms.has(r.aggregator))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-b-trend",trend30(mf,f.start,f.end),b?.c||"#888");
@@ -5006,7 +5090,7 @@ function renderOutlets(){
         ${kpiCard("Net Sales",fmtAEDTip(tot.sales),compShort+": "+fmtAEDTip(prev.sales),pctOf(tot.sales,prev.sales))}
         ${kpiCard("AOV",`AED ${tot.orders>0?(tot.sales/tot.orders).toFixed(1):0}`,"per order",null)}
         ${kpiCard("Discount Burn",fmtAEDTip(outDisc),`${outDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(prev.disc||0)}`,pctOf(outDisc,prev.disc||0),null,null,true)}
-        ${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution))}
+        ${kpiCard(profitabilityTipLabel(outletData,outletPrev,profDateRef,"this period","prior period"),fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution))}
         ${kpiCard("Brands",brandsHere.length,brandsHere.join(", "),null)}
       </div>
       <div class="card"><div class="ct">${selOutlet} — Brand Performance (${getPeriodLabel()}) <span style="color:${mutedClr};font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("ou-brands",brHeads,brTRows,2)}</div>
@@ -5018,7 +5102,7 @@ function renderOutlets(){
   // Track per-brand Net Sales inside each outlet so we can sort the chips high→low
   const brandGmv={};ld.forEach(r=>{if(!brandGmv[r.branch])brandGmv[r.branch]={};brandGmv[r.branch][r.brand]=(brandGmv[r.branch][r.brand]||0)+r.sales;});
   const profDateRefGrid=curFilters().end||dk(new Date());
-  const tiles=Object.values(cm).map(c=>{const branch=c.k;const pv=pmO[branch];const bm=brandGmv[branch]||{};const brandsSorted=Object.keys(bm).sort((a,b)=>bm[b]-bm[a]);const disc=c.disc||0;const gross=c.sales+disc;const depth=gross>0?(disc/gross*100):0;const prof=computeProfitability(ld.filter(r=>r.branch===branch),profDateRefGrid).contribution;const profMargin=c.sales>0?prof/c.sales*100:0;return{branch,orders:c.orders,sales:c.sales,disc,depth,prof,profMargin,aov:c.orders>0?c.sales/c.orders:0,brands:brandsSorted,brandGmv:bm,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};}).sort((a,b)=>b.sales-a.sales);
+  const tiles=Object.values(cm).map(c=>{const branch=c.k;const pv=pmO[branch];const bm=brandGmv[branch]||{};const brandsSorted=Object.keys(bm).sort((a,b)=>bm[b]-bm[a]);const disc=c.disc||0;const gross=c.sales+disc;const depth=gross>0?(disc/gross*100):0;const branchLd=ld.filter(r=>r.branch===branch),branchPd=pd.filter(r=>r.branch===branch);const prof=computeProfitability(branchLd,profDateRefGrid).contribution;const profMargin=c.sales>0?prof/c.sales*100:0;return{branch,orders:c.orders,sales:c.sales,disc,depth,prof,profMargin,branchLd,branchPd,aov:c.orders>0?c.sales/c.orders:0,brands:brandsSorted,brandGmv:bm,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};}).sort((a,b)=>b.sales-a.sales);
   const renderTile=t=>{
     const region=AUH.has(t.branch)?'AUH':'DXB';
     const regionColor=region==='AUH'?'#8B5CF6':'#3B82F6';
@@ -5052,7 +5136,7 @@ function renderOutlets(){
           <div style="text-align:right"><div style="font-size:10.5px;color:${textMuted};text-transform:uppercase;font-weight:800;letter-spacing:.7px;margin-bottom:4px">Net Sales</div><div style="font-size:25px;font-weight:800;font-variant-numeric:tabular-nums;color:${textPrimary};line-height:1">${fmtAEDTip(t.sales)}</div></div>
         </div>
         ${t.disc>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid ${dividerClr}"><div style="font-size:12.5px;color:${discClr};font-weight:700">💸 Disc. Burn: ${fmtAEDTip(t.disc)}</div><div style="font-size:12.5px;color:${t.depth>=20?discClr:t.depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${t.depth.toFixed(1)}% depth</div></div>`:''}
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid ${dividerClr}"><div style="font-size:12.5px;color:#22C55E;font-weight:700">💵 Profitability: ${fmtAEDTip(t.prof)}</div><div style="font-size:12.5px;color:#22C55E;font-weight:700">${t.profMargin.toFixed(1)}% margin</div></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid ${dividerClr}"><div style="font-size:12.5px;color:#22C55E;font-weight:700">${profitabilityTipLabel(t.branchLd,t.branchPd,profDateRefGrid,"this period","prior period")}: ${fmtAEDTip(t.prof)}</div><div style="font-size:12.5px;color:#22C55E;font-weight:700">${t.profMargin.toFixed(1)}% margin</div></div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px">
           ${t.brands.map(b=>`<span title="${b}: ${fmtAED(t.brandGmv[b]||0)}" style="display:inline-flex;align-items:center;gap:5px;background:${BMAP[b]?.c||'#888'}18;color:${BMAP[b]?.c||'#888'};font-size:12.5px;font-weight:800;padding:4px 10px;border-radius:7px;border:1px solid ${BMAP[b]?.c||'#888'}33">${logoImg(b,19)}${b}</span>`).join('')}
         </div>
@@ -5315,7 +5399,7 @@ function renderPlatforms(){
     const profP=computeProfitability(pdA,profDateRefPlat).contribution;
     return{ag,clr:AC[ag],...c,orders_prev:p.orders,
       aov:c.orders>0?c.sales/c.orders:0,aovP:p.orders>0?p.sales/p.orders:0,
-      disc,depth,discP,outlets,outletsP,prof,profP,
+      disc,depth,discP,outlets,outletsP,prof,profP,ldA,pdA,
       oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};
   }).sort((a,b)=>b.sales-a.sales);
   const ld=getLD().filter(r=>r.aggregator===selPlatform),pd=getPD().filter(r=>r.aggregator===selPlatform);
@@ -5347,7 +5431,7 @@ function renderPlatforms(){
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">AOV</div><div style="font-size:17px;font-weight:800;color:${T.valuePrimary};margin-top:2px">${a.orders>0?'AED '+a.aov.toFixed(1):'—'}</div></div>
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Disc. Burn</div><div style="font-size:17px;font-weight:800;color:${burnClr};margin-top:2px">${a.disc>0?fmtExact(a.disc):'—'}</div></div>
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Outlets</div><div style="font-size:17px;font-weight:800;color:${T.valuePrimary};margin-top:2px">${a.outlets}</div></div>
-        <div style="background:rgba(46,204,113,.1);border-radius:6px;margin:-4px;padding:4px"><div style="font-size:10px;color:#2ECC71;font-weight:700;text-transform:uppercase;letter-spacing:.4px">💵 Profit</div><div style="font-size:17px;font-weight:800;color:#2ECC71;margin-top:2px">${a.orders>0?fmtExact(a.prof):'—'}</div></div>
+        <div style="background:rgba(46,204,113,.1);border-radius:6px;margin:-4px;padding:4px"><div style="font-size:10px;color:#2ECC71;font-weight:700;text-transform:uppercase;letter-spacing:.4px">${profitabilityTipLabel(a.ldA,a.pdA,profDateRefPlat,"this period","prior period")}</div><div style="font-size:17px;font-weight:800;color:#2ECC71;margin-top:2px">${a.orders>0?fmtExact(a.prof):'—'}</div></div>
       </div>
       <div style="margin-top:8px;padding-top:8px;border-top:1px dashed ${T.dashedBorder};display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
         <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${T.priorValue};margin-top:2px">${a.orders_prev>0?'AED '+a.aovP.toFixed(1):'—'}</div></div>
@@ -15620,6 +15704,28 @@ function feedbackToggleBrandFilter(brand){
 // Two independent filter states
 const cmpDefault=()=>({brands:new Set(),platforms:new Set(),branches:new Set(),start:null,end:null,preset:"custom"});
 let cmpA=cmpDefault(),cmpB=cmpDefault();
+// v283: fixes a real directional bug Nikhil caught — every delta on this page assumed Group B
+// is always the chronologically later ("current") period and Group A is always the earlier
+// ("baseline") one, computing pctOf(b,a) and labeling it "B vs A" everywhere. That assumption
+// broke the moment someone set up Group A as the MORE RECENT window (e.g. this week in A,
+// last week in B, which is a completely natural way to configure the boxes) — orders went up
+// week over week, but the page showed "-11.8%" because it blindly computed B-relative-to-A
+// regardless of which side was actually later. cmpBIsLater() detects which group is truly more
+// recent (by end date, falling back to start date, defaulting true — the original behavior —
+// when dates are missing so nothing breaks in edge cases); cmpDelta()/cmpDeltaLabel() let every
+// call site swap direction and label automatically instead of hardcoding the B-vs-A assumption.
+// The raw "A: X" / "B: Y" values themselves are untouched — only the % and its label change.
+function cmpBIsLater(){
+  const bEnd=cmpB.end||cmpB.start,aEnd=cmpA.end||cmpA.start;
+  if(!bEnd||!aEnd)return true;
+  return bEnd>=aEnd;
+}
+function cmpDelta(bVal,aVal){
+  return cmpBIsLater()?pctOf(bVal,aVal):pctOf(aVal,bVal);
+}
+function cmpDeltaLabel(){
+  return cmpBIsLater()?'B vs A':'A vs B';
+}
 // v155: optional third group. Off by default (not shown until explicitly added) — cmpC's own
 // filter state persists even while inactive, so re-adding it after removal doesn't lose
 // whatever was configured.
@@ -15790,7 +15896,7 @@ function cmpExportBreakdownCSV(){
     const a=sumR(dA.filter(r=>r.brand===brand&&r.aggregator===ag));
     const b=sumR(dB.filter(r=>r.brand===brand&&r.aggregator===ag));
     const adA=cmpAdSpendOverlap(cmpA,brand,ag,null),adB=cmpAdSpendOverlap(cmpB,brand,ag,null);
-    return{brand,ag,a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),adA,adB,adDiff:pctOf(adB.spent,adA.spent)};
+    return{brand,ag,a,b,oDiff:cmpDelta(b.orders,a.orders),sDiff:cmpDelta(b.sales,a.sales),adA,adB,adDiff:cmpDelta(adB.spent,adA.spent)};
   }).filter(r=>r.a.orders>0||r.b.orders>0);
   if(!tableRows.length){alert("No data in either window to export.");return;}
   const header=["Brand · Platform","A Orders","B Orders","Δ Ord","A Net Sales (AED)","B Net Sales (AED)","Δ Net Sales","A Ad Spend (AED)","B Ad Spend (AED)","Δ Ad Spend"];
@@ -15818,7 +15924,7 @@ function cmpExportOutletCSV(){
     const b=sumR(dB.filter(r=>r.brand===xBrand&&r.aggregator===xAg&&r.branch===branch));
     const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
     const adA=cmpAdSpendOverlap(cmpA,xBrand,xAg,branch),adB=cmpAdSpendOverlap(cmpB,xBrand,xAg,branch);
-    return{branch,a,b,aov_a,aov_b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a),adA,adB,adDiff:pctOf(adB.spent,adA.spent)};
+    return{branch,a,b,aov_a,aov_b,oDiff:cmpDelta(b.orders,a.orders),sDiff:cmpDelta(b.sales,a.sales),aDiff:cmpDelta(aov_b,aov_a),adA,adB,adDiff:cmpDelta(adB.spent,adA.spent)};
   }).filter(r=>r.a.orders>0||r.b.orders>0);
   if(!branchRows.length){alert("No outlet data in either window for this combination.");return;}
   const header=["Outlet","A Orders","B Orders","Δ Ord","A Net Sales (AED)","B Net Sales (AED)","Δ Net Sales","A AOV (AED)","B AOV (AED)","Δ AOV","A Ad Spend (AED)","B Ad Spend (AED)","Δ Ad Spend"];
@@ -15961,17 +16067,15 @@ function cmpStatCard(label,a,b,fmt,unit,perDay,c,perDayC){
       ${perDayLine}
     </div>`;
   }
-  // pctOf(b,a) measures how B changed relative to A as the baseline — the conventional
-  // period-over-period view. Earlier we used pctOf(a,b) which reported A relative to B and
-  // confused users (e.g. orders going 122 → 102 showed "+19.6% A vs B" instead of -16.4%).
-  const diff=pctOf(b,a);
+  // v283: was always pctOf(b,a) labeled "B vs A" — now chronology-aware (see cmpDelta above).
+  const diff=cmpDelta(b,a);
   const dc=pctClr(diff);
   const fa=fmt(a),fb=fmt(b);
   // Optional per-day averages line (shown when the windows span more than one day)
   let perDayLine="";
   if(perDay&&(perDay.nA>1||perDay.nB>1)){
     const avgA=a/perDay.nA,avgB=b/perDay.nB;
-    const avgDiff=pctOf(avgB,avgA);
+    const avgDiff=cmpDelta(avgB,avgA);
     perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid ${T.border}">
       <div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
       <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
@@ -15990,7 +16094,7 @@ function cmpStatCard(label,a,b,fmt,unit,perDay,c,perDayC){
       <span style="font-size:12.5px;color:${T.vs};font-weight:600">vs</span>
       <span style="font-size:23px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fb}</span>
     </div>
-    <div style="font-size:13.5px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:${T.muted};font-weight:400">B vs A</span></div>
+    <div style="font-size:13.5px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:${T.muted};font-weight:400">${cmpDeltaLabel()}</span></div>
     ${perDayLine}
   </div>`;
 }
@@ -16004,7 +16108,7 @@ function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay,discC,netC){
   const T=_darkPage?{muted:DARK_THEME.textMuted,vs:DARK_THEME.textSecondary,border:DARK_THEME.cardBorder,panelBg:DARK_THEME.card,panelBorder:DARK_THEME.cardBorder,panelShadow:DARK_THEME.shadow,rowText:DARK_THEME.textSecondary}
     :{muted:"#64748b",vs:"#475569",border:"#E2E8F0",panelBg:"#FFFFFF",panelBorder:"#E2E8F0",panelShadow:"0 12px 30px rgba(15,23,42,.12)",rowText:"#475569"};
   const a=discA||0,b=discB||0;
-  const diff=pctOf(b,a);
+  const diff=cmpDelta(b,a);
   // Inverted color: positive change = MORE burn = bad (red). Negative = less burn = good (green).
   const dc=diff==null?"#64748b":(diff>0?"#EF4444":(diff<0?"#22C55E":"#94a3b8"));
   const arrow=diff==null?"":(diff>0?"▲":(diff<0?"▼":""));
@@ -16016,7 +16120,7 @@ function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay,discC,netC){
   let perDayLine="";
   if(perDay&&(perDay.nA>1||perDay.nB>1)){
     const avgA=a/perDay.nA,avgB=b/perDay.nB;
-    const avgDiff=pctOf(avgB,avgA);
+    const avgDiff=cmpDelta(avgB,avgA);
     const avgClr=avgDiff==null?"#64748b":(avgDiff>0?"#EF4444":(avgDiff<0?"#22C55E":"#94a3b8"));
     perDayLine=`<div style="margin-top:8px;padding-top:7px;border-top:1px solid ${T.border}">
       <div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Per day avg</div>
@@ -16042,7 +16146,7 @@ function cmpDiscCard(discA,discB,netA,netB,sourceA,sourceB,perDay,discC,netC){
       <span style="font-size:12.5px;color:${T.vs};font-weight:600">vs</span>
       <span style="font-size:23px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(b)}</span>
     </div>
-    <div style="font-size:13.5px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${arrow} <span style="color:${T.muted};font-weight:400">B vs A · less is better</span></div>
+    <div style="font-size:13.5px;color:${dc};font-weight:700;margin-top:4px">${fmtPct(diff)} ${arrow} <span style="color:${T.muted};font-weight:400">${cmpDeltaLabel()} · less is better</span></div>
     ${burnLine}
     ${perDayLine}
     ${cLine}
@@ -16155,11 +16259,11 @@ function cmpComputeContribution(cfg){
   }
   return total;
 }
-function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC){
+function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC,dA,dB,profDateRef){
   const T=_darkPage?{muted:DARK_THEME.textMuted,vs:DARK_THEME.textSecondary,border:DARK_THEME.cardBorder,panelBg:DARK_THEME.card,panelBorder:DARK_THEME.cardBorder,panelShadow:DARK_THEME.shadow,rowText:DARK_THEME.textSecondary}
     :{muted:"#64748b",vs:"#475569",border:"#E2E8F0",panelBg:"#FFFFFF",panelBorder:"#E2E8F0",panelShadow:"0 12px 30px rgba(15,23,42,.12)",rowText:"#475569"};
   const a=contribA||0,b=contribB||0;
-  const diff=pctOf(b,a);
+  const diff=cmpDelta(b,a);
   const dc=pctClr(diff);
   let ctxLine="";
   if(diff!=null&&salesDiff!=null){
@@ -16175,7 +16279,7 @@ function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC){
   let perDayLine="";
   if(perDay&&(perDay.nA>1||perDay.nB>1)){
     const avgA=a/perDay.nA,avgB=b/perDay.nB;
-    const avgDiff=pctOf(avgB,avgA);
+    const avgDiff=cmpDelta(avgB,avgA);
     perDayLine=`<div style="margin-top:9px;padding-top:8px;border-top:1px solid ${T.border}">
       <div style="font-size:11.5px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Per day avg</div>
       <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap">
@@ -16188,13 +16292,13 @@ function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC){
     </div>`;
   }
   return `<div class="sm" style="padding:15px 16px">
-    <div style="font-size:11.5px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.9px;margin-bottom:7px">💵 Profitability <span style="text-transform:none;font-weight:500;color:${T.vs}">· margin</span></div>
+    <div style="font-size:11.5px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.9px;margin-bottom:7px">${dA&&dB?profitabilityTipLabel(cmpBIsLater()?dB:dA,cmpBIsLater()?dA:dB,profDateRef||dk(new Date()),cmpDeltaLabel().split(' vs ')[0],cmpDeltaLabel().split(' vs ')[1]):'💵 Profitability'} <span style="text-transform:none;font-weight:500;color:${T.vs}">· margin</span></div>
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
       <span style="font-size:23px;font-weight:800;color:${CMP_A_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(a)}</span>
       <span style="font-size:13px;color:${T.vs};font-weight:600">vs</span>
       <span style="font-size:23px;font-weight:800;color:${CMP_B_CLR};font-variant-numeric:tabular-nums">${fmtAEDTip(b)}</span>
     </div>
-    <div style="font-size:14px;color:${dc};font-weight:700;margin-top:5px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:${T.muted};font-weight:400">B vs A</span></div>
+    <div style="font-size:14px;color:${dc};font-weight:700;margin-top:5px">${fmtPct(diff)} ${diff!=null?(diff>=0?"▲":"▼"):""} <span style="color:${T.muted};font-weight:400">${cmpDeltaLabel()}</span></div>
     ${ctxLine}
     ${perDayLine}
     ${contribC!=null?`<div style="margin-top:9px;padding-top:8px;border-top:1px solid ${T.border}"><span style="font-size:10.5px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.5px">Group C</span><div style="font-size:17px;font-weight:800;color:${CMP_C_CLR};margin-top:2px">${fmtAEDTip(contribC)}</div></div>`:""}
@@ -16535,7 +16639,7 @@ function renderCompare(){
     const b=sumR(bRecs);
     const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
     const profA=computeProfitability(aRecs,cmpProfDateRef).contribution,profB=computeProfitability(bRecs,cmpProfDateRef).contribution;
-    return{ag,clr:AC[ag]||"#888",a,b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a),profA,profB,profDiff:pctOf(profB,profA)};
+    return{ag,clr:AC[ag]||"#888",a,b,oDiff:cmpDelta(b.orders,a.orders),sDiff:cmpDelta(b.sales,a.sales),aDiff:cmpDelta(aov_b,aov_a),profA,profB,profDiff:cmpDelta(profB,profA)};
   }).filter(p=>p.a.orders>0||p.b.orders>0);
   const movers=[...platMove].filter(p=>p.sDiff!=null).sort((x,y)=>y.sDiff-x.sDiff);
   const risers=movers.filter(p=>p.sDiff>0),fallers=movers.filter(p=>p.sDiff<0).reverse();
@@ -16550,7 +16654,7 @@ function renderCompare(){
     const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
     const adA=cmpAdSpendOverlap(cmpA,brand,ag,null),adB=cmpAdSpendOverlap(cmpB,brand,ag,null);
     const profA=computeProfitability(aRecs,cmpProfDateRef).contribution,profB=computeProfitability(bRecs,cmpProfDateRef).contribution;
-    return{brand,ag,a,b,aov_a,aov_b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),adA,adB,adDiff:pctOf(adB.spent,adA.spent),profA,profB,profDiff:pctOf(profB,profA)};
+    return{brand,ag,a,b,aov_a,aov_b,oDiff:cmpDelta(b.orders,a.orders),sDiff:cmpDelta(b.sales,a.sales),adA,adB,adDiff:cmpDelta(adB.spent,adA.spent),profA,profB,profDiff:cmpDelta(profB,profA)};
   }).filter(r=>r.a.orders>0||r.b.orders>0);
   // v282: same redesign just approved and built for the Outlet drill-down table, applied here
   // too — Nikhil flagged this table still showing the old dense Δ-column format after that
@@ -16637,7 +16741,7 @@ function renderCompare(){
       const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
       const adA=cmpAdSpendOverlap(cmpA,xBrand,xAg,branch),adB=cmpAdSpendOverlap(cmpB,xBrand,xAg,branch);
       const profA=computeProfitability(aRecs,cmpProfDateRef).contribution,profB=computeProfitability(bRecs,cmpProfDateRef).contribution;
-      return{branch,a,b,aov_a,aov_b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a),adA,adB,adDiff:pctOf(adB.spent,adA.spent),profA,profB,profDiff:pctOf(profB,profA)};
+      return{branch,a,b,aov_a,aov_b,oDiff:cmpDelta(b.orders,a.orders),sDiff:cmpDelta(b.sales,a.sales),aDiff:cmpDelta(aov_b,aov_a),adA,adB,adDiff:cmpDelta(adB.spent,adA.spent),profA,profB,profDiff:cmpDelta(profB,profA)};
     }).filter(r=>r.a.orders>0||r.b.orders>0);
     // v281: rebuilt per Nikhil's iterative feedback (5+ rounds of rendering review) — the old
     // single 16-column table (every metric × A/B/Δ) was too dense to read at a glance. Replaced
@@ -16742,8 +16846,9 @@ function renderCompare(){
   const yearBanner=(yA&&yB&&yA!==yB)?`<div style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.4);border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px"><span style="font-size:18px">⚠️</span><div style="font-size:13px;color:#FBBF24;line-height:1.5"><strong>Year-over-year comparison detected:</strong> Group A is in <strong>${yA}</strong> but Group B is in <strong>${yB}</strong>. If this isn't intentional, fix the year in the date pickers below — easy to misread because month/day look identical.</div></div>`:'';
   // v108: auto-insight — names the biggest driver of the change (by tableRows delta) plus a
   // campaign-overlap clause when one group's window had promo coverage the other lacked.
-  const salesDiff=pctOf(sB.sales,sA.sales);
-  const rankedRows=[...tableRows].map(r=>({...r,delta:r.b.sales-r.a.sales})).sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta));
+  const salesDiff=cmpDelta(sB.sales,sA.sales);
+  const bLater=cmpBIsLater();
+  const rankedRows=[...tableRows].map(r=>({...r,delta:bLater?(r.b.sales-r.a.sales):(r.a.sales-r.b.sales)})).sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta));
   const totalDelta=rankedRows.reduce((s,r)=>s+r.delta,0);
   const topMovers=rankedRows.slice(0,2).filter(r=>Math.abs(r.delta)>=Math.abs(totalDelta)*0.15||rankedRows.length<=2);
   const imbalance=cmpCampaignImbalance();
@@ -16784,7 +16889,7 @@ function renderCompare(){
     }).join('');
     return'<div class="card" style="margin-bottom:14px">'
       +'<div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
-      +'<span>Platform Movement · B vs A</span>'
+      +'<span>Platform Movement · '+cmpDeltaLabel()+'</span>'
       +'<span style="font-size:11px;color:'+cmpMutedTxt+';font-weight:400;text-transform:none;letter-spacing:0">by net sales Δ</span></div>'
       +'<div style="font-size:10px;color:'+cmpBtnTxt+';display:flex;justify-content:space-between;margin-bottom:10px;padding:0 2px">'
       +'<span>← declined</span><span>grew →</span></div>'
@@ -16809,7 +16914,7 @@ function renderCompare(){
       ${cmpStatCard("AOV",aovA,aovB,v=>"AED "+v.toFixed(1),"",undefined,cmpCActive?aovC:undefined)}
       ${cmpDiscCard(discA,discB,sA.sales,sB.sales,discAObj.source,discBObj.source,{nA,nB},cmpCActive?discC:undefined,cmpCActive?sC.sales:undefined)}
       ${cmpOutletCard(dA,dB,cmpCActive?dC:undefined)}
-      ${cmpContribCard(contribA,contribB,salesDiff,{nA,nB},cmpCActive?contribC:undefined)}
+      ${cmpContribCard(contribA,contribB,salesDiff,{nA,nB},cmpCActive?contribC:undefined,dA,dB,cmpProfDateRef)}
     </div>`;
   const trendTabHTML=`<div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>Trend — <span style="color:#60A5FA">A</span> vs <span style="color:#F59E0B">B</span> (aligned by day index)</span><div style="display:flex;gap:5px">${metricBtns}</div></div><div style="position:relative;height:220px"><canvas id="cmp-chart"></canvas></div><div style="font-size:11px;color:${cmpMutedTxt};margin-top:6px">Day 1 = first day of each window. This lets you compare windows of different years/lengths on the same axis.</div></div>`;
   const platformsTabHTML=`${moversTile}
