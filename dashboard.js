@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-280";
+const BUILD_VERSION="2026-08-13-281";
 const BUILD_NOTES=[
+  "🎨 Rebuilt the Compare page's Outlet Breakdown table — approved by Nikhil after several rounds of rendering review. The old single 16-column table (every metric × A/B/Δ) was too dense to read at a glance. Split into two focused tables: \"Sales & Volume\" (Orders, Net Sales, Discount, AOV together, not a toggle) and \"Profitability\" (Profit + Ad Spend together). Both drop the Δ % column entirely — the comparison now reads directly off which value is highlighted: green pill on the higher value for Orders/Net Sales/AOV/Profit (higher is good), red pill for Discount and Ad Spend (higher is a cost). Ad Spend's red-on-higher is flagged to Nikhil as an assumption, not a confirmed rule — more spend isn't automatically bad the way discount is, approved as shown pending correction. Both tables also get a sticky header — the original ask this whole redesign started from — so headers stay visible scrolling a long outlet list. CSV export (cmpExportOutletCSV) is untouched and still includes the Δ columns, since that's a data-completeness case rather than an at-a-glance one. Verified the highlight logic directly: correctly picks whichever side is actually higher (not always the same column — tested with the Villa case where A wins), handles ties and missing data without producing a false highlight.",
   "🐛 Fixed Smiles commission showing 30% instead of the real 20% — Nikhil caught this on a Smokeys campaign. Smiles only had an Oregano-specific entry in the commission table (from when Oregano was its only brand); any other brand had no match at all, so the rate lookup silently fell through to a hardcoded 30% safety guess instead of erroring visibly. Confirmed directly: 18% + 2% PG = 20% on net sales applies to Smiles generally, not just Oregano — switched to a DEFAULT entry so every brand inherits it, same pattern Keeta already uses. Verified against the real extracted function: Smokeys, Oregano, and Lollorosso (previously also unconfigured) all now correctly resolve to 20%.",
   "🆕 Profitability added as a key measure across the whole dashboard — approved by Nikhil after a full rendering review. Same formula everywhere: Net Sales − Commission − Food/Pkg Cost, grouped by brand+platform when a view mixes several (the exact calculation every campaign contribution figure already used, just applied at the page level). Always computed from whatever filters are currently applied, same as Orders/Net Sales. Overview: new KPI card + column on both breakdown tables. Brands: KPI card + table column. Outlets: KPI card + both drill-down tables, plus a Profitability line on every tile in the default outlet grid. Platforms: slotted into the existing AOV/Discount/Outlets mini-grid as a 4th metric on every aggregator card, plus its own table column. Compare: renamed the existing Contribution card to Profitability for consistency, added the column to all three breakdown tables (Brand × Platform, Outlet drill-down, Per-Platform). Also includes the 'Incremental (decrease)' wording fix from earlier — dropped the confusing qualifier, the sign and color already communicate direction. Verified the core formula against the real extracted functions: single-group, mixed brand/platform grouping, and empty-input all compute correctly before shipping.",
   "🐛 Fixed campaign popup content getting cut off below the viewport — Nikhil hit this right after the v277 visual redesign, which made the popups tall enough (header + details panel + two full sections, especially with a long deal-terms comment) to exceed typical browser window heights. The old \"flip above cursor\" logic only helped when the tooltip fit somewhere on screen — once the content itself is taller than the viewport, flipping just moves which end gets cut off, and there was no way to see the hidden part. Now caps the tooltip to the viewport height and scrolls internally instead, which required making it interactive (a non-interactive element can't be scrolled) — adjusted the dismiss logic so moving the mouse from the hovered card onto the tooltip itself (to scroll it) doesn't immediately hide it. Verified the positioning math directly: a 750px-tall tooltip on a 950px window now lands with its bottom edge at 942px — fully on-screen with an 8px margin, instead of extending off the bottom.",
@@ -16599,29 +16600,71 @@ function renderCompare(){
       const profA=computeProfitability(aRecs,cmpProfDateRef).contribution,profB=computeProfitability(bRecs,cmpProfDateRef).contribution;
       return{branch,a,b,aov_a,aov_b,oDiff:pctOf(b.orders,a.orders),sDiff:pctOf(b.sales,a.sales),aDiff:pctOf(aov_b,aov_a),adA,adB,adDiff:pctOf(adB.spent,adA.spent),profA,profB,profDiff:pctOf(profB,profA)};
     }).filter(r=>r.a.orders>0||r.b.orders>0);
-    const oHeads=["Outlet","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A AOV","B AOV","Δ AOV","A 💵 Profit","B 💵 Profit","Δ Profit","A Ad Spend","B Ad Spend","Δ Ad Spend"];
-    const oRows=branchRows.map(r=>{
-      return{
-      cells:[
-        `<strong style="color:${_darkPage?DARK_THEME.textPrimary:'#0F172A'};font-size:13px">${r.branch}</strong>`,
-        `<span style="color:${CMP_A_CLR}">${r.a.orders.toLocaleString()}</span>`,
-        `<span style="color:${CMP_B_CLR}">${r.b.orders.toLocaleString()}</span>`,
-        `<span style="color:${pctClr(r.oDiff)};font-weight:700">${fmtPct(r.oDiff)}</span>`,
-        `<span style="color:#60A5FA">${fmtAEDTip(r.a.sales)}</span>`,
-        `<span style="color:#F59E0B">${fmtAEDTip(r.b.sales)}</span>`,
-        `<span style="color:${pctClr(r.sDiff)};font-weight:700">${fmtPct(r.sDiff)}</span>`,
-        `<span style="color:#60A5FA">${r.a.orders>0?'AED '+r.aov_a.toFixed(1):'—'}</span>`,
-        `<span style="color:#F59E0B">${r.b.orders>0?'AED '+r.aov_b.toFixed(1):'—'}</span>`,
-        `<span style="color:${pctClr(r.aDiff)};font-weight:700">${fmtPct(r.aDiff)}</span>`,
-        `<span style="color:#2ECC71">${fmtAEDTip(r.profA)}</span>`,
-        `<span style="color:#2ECC71">${fmtAEDTip(r.profB)}</span>`,
-        `<span style="color:${pctClr(r.profDiff)};font-weight:700">${fmtPct(r.profDiff)}</span>`,
-        `<span style="color:#60A5FA">${r.adA.hasData?fmtAEDTip(r.adA.spent):'—'}</span>`,
-        `<span style="color:#F59E0B">${r.adB.hasData?fmtAEDTip(r.adB.spent):'—'}</span>`,
-        `<span style="color:${cmpSubTxt};font-weight:700">${(r.adA.hasData||r.adB.hasData)?fmtPct(r.adDiff):'—'}</span>`
-      ],
-      sortVals:[r.branch,r.a.orders,r.b.orders,r.oDiff,r.a.sales,r.b.sales,r.sDiff,r.aov_a,r.aov_b,r.aDiff,r.profA,r.profB,r.profDiff??0,r.adA.spent,r.adB.spent,r.adDiff??0]
-    };});
+    // v281: rebuilt per Nikhil's iterative feedback (5+ rounds of rendering review) — the old
+    // single 16-column table (every metric × A/B/Δ) was too dense to read at a glance. Replaced
+    // with two focused tables instead of one sprawling one: "Sales & Volume" (Orders, Net Sales,
+    // Discount, AOV — combined, not a toggle, per his explicit correction) and "Profitability"
+    // (Profit + Ad Spend, also combined). Both drop the Δ % column entirely — the comparison is
+    // now read directly off which of the two values is highlighted, via pillCell() below, rather
+    // than a separate column you have to cross-reference. Ad Spend is colored red-on-higher,
+    // same "cost" logic as Discount — flagged to Nikhil as an assumption, not a confirmed rule
+    // (more spend isn't automatically bad the way discount is), approved as shown pending
+    // correction. Both tables also get a sticky header — the original ask this whole redesign
+    // started from — so the header row stays visible while scrolling a long outlet list.
+    const pillCell=(val,otherVal,higherIsGood,fmtFn)=>{
+      if(val==null)return `<span style="opacity:.5">—</span>`;
+      if(otherVal==null)return `<span>${fmtFn(val)}</span>`;
+      if(val===otherVal)return `<span style="opacity:.6">${fmtFn(val)}${val!==0?' <span style=\"font-size:10px;opacity:.7\">tie</span>':''}</span>`;
+      if(val<otherVal)return `<span style="opacity:.6">${fmtFn(val)}</span>`;
+      const clr=higherIsGood?'#2ECC71':'#EF4444';
+      const bg=higherIsGood?'rgba(46,204,113,.15)':'rgba(239,68,68,.15)';
+      return `<span style="background:${bg};color:${clr};font-weight:700;padding:2px 8px;border-radius:5px">${fmtFn(val)}</span>`;
+    };
+    const fInt=v=>v.toLocaleString();
+    const fAed=v=>fmtAEDTip(v);
+    const fAov=v=>'AED '+v.toFixed(1);
+    const stickyTh=l=>`<th style="text-align:right;padding:7px 9px;position:sticky;top:0;background:${_darkPage?'#0F1729':'#F8FAFC'};box-shadow:0 2px 4px rgba(0,0,0,.15);color:${cmpMutedTxt};font-size:10px;text-transform:uppercase;font-weight:700;white-space:nowrap">${l}</th>`;
+    const stickyThLeft=l=>`<th style="text-align:left;padding:7px 9px;position:sticky;top:0;background:${_darkPage?'#0F1729':'#F8FAFC'};box-shadow:0 2px 4px rgba(0,0,0,.15);color:${cmpMutedTxt};font-size:10px;text-transform:uppercase;font-weight:700;white-space:nowrap">${l}</th>`;
+    const salesVolumeTable=`<div style="margin-bottom:14px">
+      <div style="font-size:12px;font-weight:700;color:${cmpBtnTxt};margin-bottom:2px">Sales &amp; Volume</div>
+      <div style="font-size:10.5px;color:${cmpMutedTxt};margin-bottom:8px">Orders, Net Sales, Discount, AOV — higher value highlighted (green = good, red = higher discount)</div>
+      <div style="border:1px solid ${cmpBtnBorder};border-radius:8px;overflow:hidden">
+      <div style="max-height:360px;overflow-y:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>
+        ${stickyThLeft("Outlet")}${stickyTh("A Orders")}${stickyTh("B Orders")}${stickyTh("A Net Sales")}${stickyTh("B Net Sales")}${stickyTh("A Disc.")}${stickyTh("B Disc.")}${stickyTh("A AOV")}${stickyTh("B AOV")}
+      </tr></thead><tbody>
+      ${branchRows.map(r=>`<tr style="border-top:1px solid ${cmpBtnBorder}">
+        <td style="padding:7px 9px;font-weight:700;color:${cmpBtnTxt}">${r.branch}</td>
+        <td style="text-align:right;padding:7px 9px">${pillCell(r.a.orders,r.b.orders,true,fInt)}</td>
+        <td style="text-align:right;padding:7px 9px">${pillCell(r.b.orders,r.a.orders,true,fInt)}</td>
+        <td style="text-align:right;padding:7px 9px">${pillCell(r.a.sales,r.b.sales,true,fAed)}</td>
+        <td style="text-align:right;padding:7px 9px">${pillCell(r.b.sales,r.a.sales,true,fAed)}</td>
+        <td style="text-align:right;padding:7px 9px">${pillCell(r.a.disc||0,r.b.disc||0,false,fAed)}</td>
+        <td style="text-align:right;padding:7px 9px">${pillCell(r.b.disc||0,r.a.disc||0,false,fAed)}</td>
+        <td style="text-align:right;padding:7px 9px">${pillCell(r.a.orders>0?r.aov_a:null,r.b.orders>0?r.aov_b:null,true,fAov)}</td>
+        <td style="text-align:right;padding:7px 9px">${pillCell(r.b.orders>0?r.aov_b:null,r.a.orders>0?r.aov_a:null,true,fAov)}</td>
+      </tr>`).join('')}
+      </tbody></table>
+      </div></div>
+    </div>`;
+    const profTable=`<div>
+      <div style="font-size:12px;font-weight:700;color:${cmpBtnTxt};margin-bottom:2px">Profitability</div>
+      <div style="font-size:10.5px;color:${cmpMutedTxt};margin-bottom:8px">Profit + Ad Spend — higher Profit highlighted green, higher Ad Spend highlighted red (cost-side assumption, flag if this should differ)</div>
+      <div style="border:1px solid ${cmpBtnBorder};border-radius:8px;overflow:hidden">
+      <div style="max-height:360px;overflow-y:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>
+        ${stickyThLeft("Outlet")}${stickyTh("A 💵 Profit")}${stickyTh("B 💵 Profit")}${stickyTh("A Ad Spend")}${stickyTh("B Ad Spend")}
+      </tr></thead><tbody>
+      ${branchRows.map(r=>`<tr style="border-top:1px solid ${cmpBtnBorder}">
+        <td style="padding:7px 9px;font-weight:700;color:${cmpBtnTxt}">${r.branch}</td>
+        <td style="text-align:right;padding:7px 9px">${pillCell(r.profA,r.profB,true,fAed)}</td>
+        <td style="text-align:right;padding:7px 9px">${pillCell(r.profB,r.profA,true,fAed)}</td>
+        <td style="text-align:right;padding:7px 9px">${pillCell(r.adA.hasData?r.adA.spent:null,r.adB.hasData?r.adB.spent:null,false,fAed)}</td>
+        <td style="text-align:right;padding:7px 9px">${pillCell(r.adB.hasData?r.adB.spent:null,r.adA.hasData?r.adA.spent:null,false,fAed)}</td>
+      </tr>`).join('')}
+      </tbody></table>
+      </div></div>
+    </div>`;
     // Totals strip (optional but helpful — confirms drill-down sums to the parent brand × platform row).
     // Ad spend sums this table's own per-outlet rows, same pattern as orders/sales below — per-outlet
     // spend is confirmed accurate even for Careem/Noon (their budget CAP is pooled per brand, but the
@@ -16637,7 +16680,7 @@ function renderCompare(){
     const profLine=`<span><span style="color:${cmpMutedTxt}">💵 Profit:</span> <span style="color:#60A5FA">${fmtAEDTip(totA.prof)}</span> vs <span style="color:#F59E0B">${fmtAEDTip(totB.prof)}</span></span>`;
     const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:12px;color:${cmpBtnTxt};margin-bottom:10px;padding:8px 12px;background:rgba(245,158,11,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><span><span style="color:#60A5FA">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAEDTip(totA.sales)}</span><span><span style="color:#F59E0B">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAEDTip(totB.sales)}</span><span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span>${profLine}${adSpendLine}</div></div>`;
     outletDrillCard=branchRows.length
-      ?`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown <span style="color:${cmpMutedTxt};font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></span><span style="display:flex;gap:8px;align-items:center"><button onclick="cmpExportOutletCSV()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap">⬇ Export CSV</button><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid ${cmpBtnBorder};color:${cmpBtnTxt};padding:4px 10px;font-size:11px;border-radius:5px;cursor:pointer" title="Close drill-down">✕ close</button></span></div>${totsLine}${sortableTable("cmp-outlet-tbl",oHeads,oRows,4)}</div>`
+      ?`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown</span><span style="display:flex;gap:8px;align-items:center"><button onclick="cmpExportOutletCSV()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap">⬇ Export CSV</button><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid ${cmpBtnBorder};color:${cmpBtnTxt};padding:4px 10px;font-size:11px;border-radius:5px;cursor:pointer" title="Close drill-down">✕ close</button></span></div>${totsLine}${salesVolumeTable}${profTable}</div>`
       :`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown</span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid ${cmpBtnBorder};color:${cmpBtnTxt};padding:4px 10px;font-size:11px;border-radius:5px;cursor:pointer">✕ close</button></div><div style="color:${cmpMutedTxt};font-size:13px;padding:8px 0">No outlets with activity in either window for this combination.</div></div>`;
   }
 
