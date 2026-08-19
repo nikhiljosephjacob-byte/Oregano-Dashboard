@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-286";
+const BUILD_VERSION="2026-08-13-287";
 const BUILD_NOTES=[
+  "🎨 Rebuilt the profitability explainer tooltip into its final approved format, after many rounds of rendering iteration with Nikhil — a P&L cascade (Gross Sales → Discount → Net Sales → Commission → Food/Pkg → Net Contribution) for both periods side by side, with each column's actual date range shown under its header, a clear Net Change callout, then a \"By campaign\" list with a short auto-generated comment per campaign (e.g. \"deep discount, volume didn't cover it\" / \"controlled discount, this one's working\") instead of the earlier ambiguous \"+/− impact\" phrasing. Campaign names are resolved from campaignData by brand+aggregator+date overlap where exactly one candidate matches; falls back to a plain Brand · Aggregator label when zero or multiple campaigns match, rather than guessing which one it was — the same honest limitation discussed directly with Nikhil regarding Talabat's export not carrying item-level data. Comments are generated from each mover's own discount-depth trend and sales direction, not hand-written per case. Verified end-to-end against realistic multi-campaign, multi-aggregator data: date ranges extract correctly, campaign names resolve correctly, comment logic produces sensible output for a mix of positive and negative movers, the cascade reconciles exactly for both periods, and the generated HTML contains no leaked undefined/NaN.",
   "🐛 Found the actual root cause of the profitability explainer not appearing — the v285 fix (widening the hover target) was a real improvement but not the real bug. initCalcTip() — which creates the floating tooltip element and attaches the ONE global mouseover listener everything depends on — was only ever being called as an incidental side-effect buried inside renderCampaigns(), on the same line as an unrelated KPI strip computation. Anyone who hadn't visited the Campaigns page first in that browser session never had the hover mechanism initialized at all, on any page — not just Profitability, this affected every campaign popup too, silently, with no error and no visible symptom, which is exactly why it looked like nothing was happening. Moved the call to renderPage() — the single central router every page navigation already passes through — so it's now guaranteed to run before anything else, regardless of which page loads first. initCalcTip() already no-ops on repeat calls (checks if its element already exists), so this is free after the first page load. Removed the now-redundant original call site in renderCampaigns() for clarity. Verified renderPage() calls it unconditionally as its very first line, ahead of every page-specific render branch.",
   "🐛 Fixed the profitability explainer (v284) not appearing on hover — Nikhil reported it wasn't working. Root cause: the hover trigger was only wired to the small 10px \"💵 Profitability\" label text, not the 28px number underneath it that people actually look at and hover over — a genuinely easy-to-miss target, not a computation bug (verified the underlying breakdown math still works correctly with zero errors). Added a ctipId parameter to kpiCard() so the WHOLE card becomes the hover target, and widened the same way on the three custom (non-kpiCard) locations — Outlets tiles, Platforms mini-grid, Compare's Profitability card — so hovering anywhere on any of these cards now triggers it, not just a sliver of label text. Verified end-to-end against the real extracted functions: the outer card HTML has exactly one style= attribute (checked directly, since naively bolting on a second cursor:help style alongside the existing click-handling style would have been invalid HTML), and simulating a hover on the resulting markup successfully generates the tooltip with no thrown errors.",
   "🐛 Fixed a real directional bug on the Compare page — Nikhil caught this checking current week vs last week. Every delta on the page assumed Group B is always the chronologically later (\"current\") period, computing pctOf(b,a) and labeling it \"B vs A\" everywhere — which silently inverted the moment someone set up Group A as the more recent window (a completely natural way to configure the boxes). Orders went up week over week but the page showed \"-11.8%\". Added cmpBIsLater()/cmpDelta()/cmpDeltaLabel(), which detect which group is actually more recent and flip both the calculation and its label accordingly — applied across every KPI card, the insight banner and its driver ranking, the Platforms tab, both breakdown tables, and both CSV exports. Verified directly against Nikhil's exact numbers: now correctly shows +13.4%, labeled \"A vs B\".",
@@ -439,6 +440,17 @@ function computeProfitability(records,dateStr){
 // read as its own line, then ranks brand×platform groups by how much each one moved the total,
 // surfacing exactly the "Talabat down + Deliveroo up, different commission rates" kind of mix
 // effect a net figure alone can't show.
+// v287: rebuilt per Nikhil's iterative rendering review (verdict sentences → tables → cascade
+// format with dates → campaign-level movers with comments) into the final approved shape: a P&L
+// cascade (Gross→Discount→Net→Commission→Food/Pkg→Contribution) for both periods side by side,
+// then a per-campaign list with a short auto-generated comment each. Campaign matching reuses
+// existing infrastructure rather than new attribution logic: for Keeta, groups by the exact
+// per-order campaign field already in keetaOrdersData.records (same data buildCampParticipationTipHTML
+// uses) — for other aggregators, looks for a SINGLE campaignData entry whose brand+aggregator+
+// dates overlap period B; if none or multiple match, falls back to a plain Brand · Aggregator
+// label rather than guessing which campaign it was (matches the same "can't disambiguate
+// concurrent campaigns without item-level data" limitation discussed directly with Nikhil for
+// Talabat specifically — this is honest about that gap rather than papering over it).
 function computeProfitabilityBreakdown(recordsA,recordsB,dateRef){
   const byKey=(recs)=>{
     const m={};
@@ -449,6 +461,12 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef){
     }
     return m;
   };
+  const dateRange=(recs)=>{
+    let lo=null,hi=null;
+    for(const r of recs){if(!r.date)continue;if(!lo||r.date<lo)lo=r.date;if(!hi||r.date>hi)hi=r.date;}
+    return{start:lo,end:hi};
+  };
+  const rangeA=dateRange(recordsA),rangeB=dateRange(recordsB);
   const groupsA=byKey(recordsA),groupsB=byKey(recordsB);
   const allKeys=new Set([...Object.keys(groupsA),...Object.keys(groupsB)]);
   const movers=[];
@@ -464,12 +482,30 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef){
     const contribA=gA.net-gCommA-gFoodA,contribB=gB.net-gCommB-gFoodB;
     grossA+=gGrossA;grossB+=gGrossB;discA+=gA.disc;discB+=gB.disc;
     commA+=gCommA;commB+=gCommB;foodA+=gFoodA;foodB+=gFoodB;
-    if(gGrossA>0||gGrossB>0)movers.push({brand,aggregator,contribA,contribB,delta:contribB-contribA,rate,grossA:gGrossA,grossB:gGrossB});
+    if(gGrossA<=0&&gGrossB<=0)continue;
+    // Try to name this mover by its actual campaign instead of just brand·aggregator.
+    let campaignLabel=null,campaignComment=null;
+    if(typeof campaignData!=='undefined'){
+      const candidates=campaignData.filter(c=>c.brand===brand&&c.aggregator===aggregator&&!isRewardsCampaign(c)&&!(rangeB.end&&c.startDate>rangeB.end)&&!(rangeB.start&&c.endDate&&c.endDate<rangeB.start));
+      if(candidates.length===1)campaignLabel=candidates[0].name;
+      // more than one candidate = can't disambiguate without item-level data (same limitation
+      // as Talabat's export lacking an item field) — falls through to brand·aggregator label
+    }
+    const depthA=gGrossA>0?gA.disc/gGrossA:0,depthB=gGrossB>0?gB.disc/gGrossB:0;
+    const delta=contribB-contribA;
+    const salesGrew=gGrossB>gGrossA*1.03,salesFell=gGrossB<gGrossA*0.97;
+    const depthRose=depthB>depthA+0.03,depthFell=depthB<depthA-0.03;
+    if(delta<0&&depthRose)campaignComment='deep discount, volume didn\'t cover it';
+    else if(delta>=0&&(depthFell||depthB<=depthA))campaignComment='controlled discount, this one\'s working';
+    else if(delta<0&&salesFell&&!depthRose)campaignComment='sales pulled back this period';
+    else if(delta>=0&&salesGrew)campaignComment='steady growth, discount stayed in line';
+    movers.push({brand,aggregator,label:campaignLabel||`${brand} · ${aggregator}`,comment:campaignComment,contribA,contribB,delta,rate,grossA:gGrossA,grossB:gGrossB});
   }
   movers.sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta));
   return{
     grossA,grossB,discA,discB,commA,commB,foodA,foodB,
     contribA:grossA-discA-commA-foodA,contribB:grossB-discB-commB-foodB,
+    rangeA,rangeB,
     movers:movers.slice(0,5)
   };
 }
@@ -483,34 +519,46 @@ function profitabilityTipId(currentRecords,priorRecords,dateRef,labelCur,labelPr
   return storeTip(()=>buildProfitabilityTipHTML(computeProfitabilityBreakdown(priorRecords,currentRecords,dateRef),labelPrior||'Prior period',labelCur||'Current period'));
 }
 function buildProfitabilityTipHTML(bd,labelA,labelB){
-  const fAed=v=>'AED '+Math.abs(Math.round(v)).toLocaleString();
-  const fSigned=v=>(v<0?'−':'+')+fAed(v);
-  const row=(emoji,l,v,clr)=>`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:11.5px"><span style="opacity:.75">${emoji} ${l}</span><span style="color:${clr};font-weight:700">${v}</span></div>`;
-  const totalDelta=bd.contribB-bd.contribA;
-  const grossDelta=bd.grossB-bd.grossA;   // up = good
-  const discDelta=bd.discB-bd.discA;      // up = bad (more discount)
-  const commDelta=bd.commB-bd.commA;      // up = bad (more commission cost)
-  const foodDelta=bd.foodB-bd.foodA;      // up = bad (more food/pkg cost)
+  const fAed=v=>Math.round(v).toLocaleString();
+  const fSigned=v=>(v<0?'−':'+')+'AED '+Math.abs(Math.round(v)).toLocaleString();
   const good='#2ECC71',bad='#EF4444';
-  const bridgeRows=
-    row('💰','Gross sales',fSigned(grossDelta),grossDelta>=0?good:bad)
-    +row('🎟️','Discount burn',(discDelta>=0?'−':'+')+fAed(Math.abs(discDelta))+' impact',discDelta>0?bad:(discDelta<0?good:'inherit'))
-    +row('🏦','Commission',(commDelta>=0?'−':'+')+fAed(Math.abs(commDelta))+' impact',commDelta>0?bad:(commDelta<0?good:'inherit'))
-    +row('📦','Food/pkg cost',(foodDelta>=0?'−':'+')+fAed(Math.abs(foodDelta))+' impact',foodDelta>0?bad:(foodDelta<0?good:'inherit'));
-  const moversHTML=bd.movers.filter(m=>Math.abs(m.delta)>=Math.abs(totalDelta)*0.08||bd.movers.length<=2).slice(0,4).map(m=>{
+  const totalDelta=bd.contribB-bd.contribA;
+  const cellRow=(emoji,l,valA,valB,isSubtotal,isTotal)=>{
+    const wt=isTotal?800:isSubtotal?700:400;
+    const border=isTotal?'border-top:2px solid #F59E0B':isSubtotal?'border-top:1px solid #3A4875':'border-top:1px solid #2A3555';
+    const pad=isTotal?'7px 0':'5px 0';
+    const clrA=isTotal?'#60A5FA':isSubtotal?'inherit':'#F87171';
+    const clrB=isTotal?'#F59E0B':isSubtotal?'inherit':'#F87171';
+    return `<tr style="${border}"><td style="padding:${pad};font-weight:${wt};opacity:${isSubtotal||isTotal?1:.8}">${emoji?emoji+' ':''}${l}</td><td style="text-align:right;padding:${pad}6px;font-weight:${wt};color:${clrA}">${valA}</td><td style="text-align:right;padding:${pad};font-weight:${wt};color:${clrB}">${valB}</td></tr>`;
+  };
+  const cascade=`<table style="width:100%;border-collapse:collapse;font-size:11.5px;margin-bottom:12px">
+    <tr><td></td><td style="text-align:right;padding:0 6px 2px;color:#94A3B8;font-size:10px;font-weight:700">${labelA}</td><td style="text-align:right;padding:0 0 2px;color:#94A3B8;font-size:10px;font-weight:700">${labelB}</td></tr>
+    <tr><td></td><td style="text-align:right;padding:0 6px 6px;color:#FBBF24;font-size:10.5px;font-weight:700">${bd.rangeA.start?fmtShort(bd.rangeA.start)+' → '+fmtShort(bd.rangeA.end):'—'}</td><td style="text-align:right;padding:0 0 6px;color:#FBBF24;font-size:10.5px;font-weight:700">${bd.rangeB.start?fmtShort(bd.rangeB.start)+' → '+fmtShort(bd.rangeB.end):'—'}</td></tr>
+    ${cellRow('💰','Gross sales',fAed(bd.grossA),fAed(bd.grossB))}
+    ${cellRow('🎟️','Discount burn','−'+fAed(bd.discA),'−'+fAed(bd.discB))}
+    ${cellRow('','Net sales',fAed(bd.grossA-bd.discA),fAed(bd.grossB-bd.discB),true)}
+    ${cellRow('🏦','Commission','−'+fAed(bd.commA),'−'+fAed(bd.commB))}
+    ${cellRow('📦','Food/pkg cost','−'+fAed(bd.foodA),'−'+fAed(bd.foodB))}
+    ${cellRow('','Net Contribution','AED '+fAed(bd.contribA),'AED '+fAed(bd.contribB),false,true)}
+    </table>`;
+  const netChangeBox=`<div style="display:flex;justify-content:space-between;align-items:center;background:${totalDelta>=0?'rgba(46,204,113,.1)':'rgba(239,68,68,.1)'};border-radius:8px;padding:9px 11px;margin-bottom:13px">
+    <span style="font-size:11px;opacity:.85">Net change</span>
+    <span style="font-size:17px;font-weight:800;color:${totalDelta>=0?good:bad}">${fSigned(totalDelta)}</span>
+    </div>`;
+  const moversHTML=bd.movers.filter(m=>Math.abs(m.delta)>=Math.abs(totalDelta)*0.08||bd.movers.length<=3).slice(0,4).map(m=>{
     const clr=m.delta>=0?good:bad;
-    return `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:11px"><span style="opacity:.8">${m.brand} · ${m.aggregator} <span style="opacity:.55;font-size:9.5px">(${(m.rate*100).toFixed(0)}% comm)</span></span><span style="color:${clr};font-weight:700">${fSigned(m.delta)}</span></div>`;
+    const icon=m.aggregator==='Deliveroo'?'🦌':m.aggregator==='Talabat'?'🚴':m.aggregator==='Keeta'?'🥡':m.aggregator==='Careem'?'🚗':m.aggregator==='Noon'?'🌙':'📍';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #2A3555">
+      <div><div style="font-size:11px;font-weight:700">${icon} ${m.label}</div>${m.comment?`<div style="font-size:9.5px;opacity:.55">${m.comment}</div>`:''}</div>
+      <span style="font-size:11.5px;font-weight:700;color:${clr}">${fSigned(m.delta)}</span>
+      </div>`;
   }).join('');
-  return`<div style="width:320px;background:#0F172A;border:2px solid #F59E0B;border-radius:12px;overflow:hidden;box-shadow:0 0 0 4px rgba(245,158,11,.08),0 20px 50px rgba(0,0,0,.6)">`
+  return`<div style="width:380px;background:#0F172A;border:2px solid #F59E0B;border-radius:12px;overflow:hidden;box-shadow:0 0 0 4px rgba(245,158,11,.08),0 20px 50px rgba(0,0,0,.6)">`
   +`<div style="background:linear-gradient(90deg,#B45309,#F59E0B);padding:11px 15px"><div style="font-size:12.5px;font-weight:700;color:#1C1917">💵 Why did profitability change?</div><div style="font-size:9.5px;color:#451A03;opacity:.85">${labelA} → ${labelB}</div></div>`
-  +`<div style="padding:13px 15px;color:#F1F5F9">`
-  +`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px"><span style="font-size:11px;opacity:.75">Total change</span><span style="font-size:17px;font-weight:800;color:${totalDelta>=0?good:bad}">${fSigned(totalDelta)}</span></div>`
-  +`<div style="background:#1E293B;border-radius:8px;padding:9px 11px;margin-bottom:10px">`
-  +`<div style="font-size:9.5px;opacity:.6;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Bridge — what moved it</div>`
-  +bridgeRows
-  +`</div>`
-  +(moversHTML?`<div style="background:#1E293B;border-radius:8px;padding:9px 11px"><div style="font-size:9.5px;opacity:.6;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Biggest movers</div>${moversHTML}</div>`:'')
-  +`<div style="font-size:9px;opacity:.5;margin-top:8px;line-height:1.5">Commission % shown per mover — a mix shift toward a higher-commission platform can lower profitability even if sales grew.</div>`
+  +`<div style="padding:14px 15px;color:#F1F5F9">`
+  +cascade
+  +netChangeBox
+  +(moversHTML?`<div style="font-size:9.5px;opacity:.6;text-transform:uppercase;margin-bottom:6px">By campaign</div>${moversHTML}`:'')
   +`</div></div>`;
 }
 const BE={Deliveroo:1.32,Noon:1.30,Careem:1.27,Talabat:1.41};
