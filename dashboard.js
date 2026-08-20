@@ -13,8 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-289";
+const BUILD_VERSION="2026-08-13-292";
 const BUILD_NOTES=[
+  "🆕 Extended the Noon-Oregano BOGO Monday commission reimbursement (v290/291) to the two remaining places that compute profitability independently and weren't covered yet: campAnalysisV2 (the original campaign contribution popup — \"Campaign to date\" vs \"same dates last month\") and cmpComputeContribution (the Compare page's own Profitability card, which has its own outlet-share-weighted discount calculation, separate from computeProfitability). Both now track Monday-BOGO discount the same way the already-fixed functions do and pass it through to brandContribution. Verified this exact worked example against Nikhil's uploaded statements (AED 4,412.52 total owed across the four campaign dates, cross-checked against two specific order numbers he gave) reproduces correctly through all four now-fixed code paths, including the trickier case of cmpComputeContribution's outlet-share scaling (tested at 60% outlet scope — the Monday discount scales proportionally along with regular discount, exactly as it should). Not yet extended to campTrajectory (weekly trend segmentation) or the Forecaster's hypothetical-scenario functions — those are more specialized, less central analytical tools and were deprioritized for now rather than rushed; flagged clearly rather than silently left out.",
+  "🐛 Fixed the Noon-Oregano BOGO commission reimbursement (v290) to use the actual four campaign dates (20 & 27 Jul, 3 & 10 Aug 2026) instead of matching every Monday indefinitely. Nikhil uploaded a real Noon statement to check this against — initially looked like a contradiction (the statement's Monday orders showed full 17% commission, no reimbursement visible), but that's exactly what Nikhil had already explained: the statement always charges full commission upfront since Noon and Oregano haven't agreed the reimbursement amount yet, and the credit shows up later, separately. Verified the underlying formula directly against that real statement instead of just taking the explanation on faith: lead_generation_fee totals exactly 17% of the commission base and payment_fee totals exactly 2% for the 10 Aug data, confirming the statement genuinely splits commission into precisely the two components (17% base + 2% PG) the reimbursement formula assumes. The one real fix needed was scope — this was a one-off campaign on four specific dates, not an ongoing weekly rule, so applying it to any other Monday (past or future) would have been wrong. Verified directly: the four real campaign dates now correctly show AED 20 commission on Nikhil's worked example, while an unrelated Monday correctly stays at the standard AED 28.50.",
+  "🆕 Fixed a real gap Nikhil flagged with a worked example: Noon reimburses the 17% base commission (not the 2% PG fee) on the discounted portion of Oregano's Monday BOGO orders — confirmed with an exact worked example (AED 200 gross, AED 50 discount → AED 20 true commission, not AED 28.50 at a flat 19%). commissionRateFor() takes only (aggregator, brand, date) with no discount or order-level context, so it was structurally impossible for this to have been recognized anywhere — confirmed this before writing any fix. Since Nikhil avoids running any other campaigns on Noon-Oregano-Mondays specifically, every Monday discount on that brand+aggregator is BOGO by definition, so this can be applied at the aggregate (net sales, discount) level without needing order-level statement data — extended brandContribution() with an optional mondayBogoDisc parameter (defaults to 0, so every existing caller is unaffected) and wired it through computeProfitability() and computeProfitabilityBreakdown(), both of which now track Monday discount separately for Noon-Oregano before applying the adjusted formula. Verified directly against Nikhil's own numbers: Monday Oregano-Noon orders now show AED 20 commission exactly as he calculated; confirmed Tuesday orders and other-brand Monday orders correctly stay at the standard flat 19% (AED 28.50), so the fix is properly scoped and doesn't leak into cases it shouldn't touch. I don't have an actual Noon statement file in this session to cross-check against real numbers — this is built from the formula Nikhil described and verified against his own worked example, not validated against a real statement yet.",
   "🐛 Fixed two real issues Nikhil caught by checking the actual math on a live screenshot — the top-level Discount Burn card showed depth dropping 73.9% while the popup's only shown mover (Oregano · Talabat) said depth was \"roughly unchanged\". Traced through the real numbers: this wasn't a bug in the arithmetic, but it exposed two genuine gaps. (1) \"Roughly unchanged\" had no actual percentages next to it — every comment branch now states the real depth figures (e.g. \"discount depth 4.6% → 4.7%\"), so a claim like this is always verifiable, not asserted. (2) The movers list only showed brands/platforms whose PROFIT-dollar impact cleared an 8% threshold — a brand with a small profit impact but a dramatic discount-depth swing (confirmed mathematically likely here: the other Talabat brands were probably running something close to a 30% depth promo in July that nearly vanished by August, invisible because their AED impact was small next to Oregano's) was getting silently dropped from view even though it was clearly driving the aggregate number shown elsewhere on the page. Added an explicit \"Other brands/platforms\" remainder row that sums whatever didn't make the shown list, with its own real depth figures — so the numbers always reconcile and nothing is invisible. Verified against a constructed 5-mover scenario where one genuinely falls below the threshold: confirms it correctly folds into the remainder row with accurate depth percentages, rather than disappearing.",
   "🐛 Fixed four real issues in the profitability explainer, all caught directly by Nikhil from the live tooltip. (1) Dates were derived from actual record min/max, which lags behind the filter's intended window whenever the latest upload hasn't fully synced — showing \"1→18 Aug\" while every other card on the page said \"1→20 Aug\" for the same comparison. Now takes curFilters()/getCompRange() (or cmpA/cmpB on Compare) as an explicit override, so this tooltip is always consistent with the rest of the page instead of computing its own competing answer. (2) A resolved campaign name was REPLACING the brand·aggregator line entirely — \"Best Sellers 30% OFF\" with no indication of which platform. Campaign name is now always additional context under the brand·aggregator line, never a substitute for it. (3) Comments like \"sales pulled back this period\" read as unsupported claims — Nikhil's exact words: \"are you trying to imply sales dropped?\" with no evidence given. Every comment now states the actual figure behind it (e.g. \"discount depth rose 26% from 7% — grew faster than sales did\", \"gross sales fell 12% (AED 108,000 → AED 95,000)\"). (4) Deliveroo's mover icon was a deer emoji (🦌) — a mistake, not intentional — swapped for a scooter (🛵). Verified all four fixes together against a simulated version of Nikhil's exact scenario (filter says 1-20 Aug, latest record only reaches part-way through) — dates now correctly follow the filter, not the data.",
   "🎨 Rebuilt the profitability explainer tooltip into its final approved format, after many rounds of rendering iteration with Nikhil — a P&L cascade (Gross Sales → Discount → Net Sales → Commission → Food/Pkg → Net Contribution) for both periods side by side, with each column's actual date range shown under its header, a clear Net Change callout, then a \"By campaign\" list with a short auto-generated comment per campaign (e.g. \"deep discount, volume didn't cover it\" / \"controlled discount, this one's working\") instead of the earlier ambiguous \"+/− impact\" phrasing. Campaign names are resolved from campaignData by brand+aggregator+date overlap where exactly one candidate matches; falls back to a plain Brand · Aggregator label when zero or multiple campaigns match, rather than guessing which one it was — the same honest limitation discussed directly with Nikhil regarding Talabat's export not carrying item-level data. Comments are generated from each mover's own discount-depth trend and sales direction, not hand-written per case. Verified end-to-end against realistic multi-campaign, multi-aggregator data: date ranges extract correctly, campaign names resolve correctly, comment logic produces sensible output for a mix of positive and negative movers, the cascade reconciles exactly for both periods, and the generated HTML contains no leaked undefined/NaN.",
@@ -403,9 +406,38 @@ function commissionRateFor(agg,brand,dateStr){
 // so revenue = netSales. Cost = commission(on net) + food&pkg(on gross). The discount we funded is
 // already reflected in netSales being lower than gross; we don't subtract it again.
 // Returns the contribution (margin AED) this revenue generated.
-function brandContribution(agg,brand,netSales,grossSales,dateStr){
-  const comm=commissionRateFor(agg,brand,dateStr);
-  const commCost=netSales*comm;
+// v290: adds the Noon-Oregano-Monday BOGO commission reimbursement — confirmed directly by
+// Nikhil with a worked example: an AED 200 gross order with AED 50 BOGO discount should show
+// AED 20 true commission, not AED 28.50 (flat 19% × net 150). Noon charges the full 19% on the
+// statement, then separately reimburses the 17% base-commission component (not the 2% PG) on
+// just the discounted portion — since Nikhil confirmed he runs no overlapping campaigns on Noon-
+// Oregano-Mondays, ALL Monday discount on that brand+aggregator is BOGO by definition, so this
+// can be applied at the aggregate (net sales, discount) level without needing order-level data.
+// mondayBogoDisc is optional and defaults to 0 — every EXISTING caller that doesn't pass it
+// behaves exactly as before; only computeProfitability/computeProfitabilityBreakdown (which can
+// track discount separately by day-of-week) pass it through.
+// v291: FIXED — was matching every Monday indefinitely, but Nikhil confirmed this specific
+// BOGO campaign ran on four particular dates only (20 & 27 Jul, 3 & 10 Aug 2026), not as an
+// ongoing weekly rule. Applying the reimbursement to any other Monday (past or future) would
+// have been wrong — a Monday with no BOGO campaign running has no reimbursement to apply, even
+// if it happens to have some other, unrelated discount on it. Verified this fix's underlying
+// formula directly against Nikhil's own uploaded Noon statement (10 Aug): lead_generation_fee
+// totals exactly 17% of the commission base, payment_fee totals exactly 2% — confirming the
+// statement really does split commission into precisely the two components the reimbursement
+// formula assumes (17% base + 2% PG), and that today's statement charges the full 17% with no
+// visible credit yet, exactly as Nikhil described (reimbursement is a separate future step, not
+// reflected in the statement Noon and Oregano haven't yet agreed the amount for).
+const NOON_OREGANO_BOGO_MONDAYS=new Set(["2026-07-20","2026-07-27","2026-08-03","2026-08-10"]);
+function brandContribution(agg,brand,netSales,grossSales,dateStr,mondayBogoDisc){
+  let commCost;
+  if(agg==='Noon'&&brand==='Oregano'&&mondayBogoDisc>0){
+    const fullRate=commissionRateFor(agg,brand,dateStr); // 0.19 (0.17 base + 0.02 PG)
+    const baseRate=COMM.Noon.DEFAULT.commission; // 0.17 — only this component gets reimbursed, not the 2% PG
+    commCost=netSales*fullRate-mondayBogoDisc*baseRate;
+  }else{
+    const comm=commissionRateFor(agg,brand,dateStr);
+    commCost=netSales*comm;
+  }
   const foodCost=grossSales*foodPkgPct(brand);
   return netSales-commCost-foodCost;
 }
@@ -421,14 +453,18 @@ function computeProfitability(records,dateStr){
   const byKey={};
   for(const r of records){
     const k=r.brand+'|'+r.aggregator;
-    if(!byKey[k])byKey[k]={brand:r.brand,aggregator:r.aggregator,net:0,disc:0};
+    if(!byKey[k])byKey[k]={brand:r.brand,aggregator:r.aggregator,net:0,disc:0,mondayDisc:0};
     byKey[k].net+=r.sales;
     byKey[k].disc+=(r.disc||0);
+    // v291: Noon-Oregano BOGO reimbursement, specific campaign dates only — see brandContribution.
+    if(r.aggregator==='Noon'&&r.brand==='Oregano'&&r.date&&NOON_OREGANO_BOGO_MONDAYS.has(r.date)){
+      byKey[k].mondayDisc+=(r.disc||0);
+    }
   }
   let contribution=0,gross=0;
   for(const g of Object.values(byKey)){
     const g_gross=g.net+g.disc;
-    contribution+=brandContribution(g.aggregator,g.brand,g.net,g_gross,dateStr);
+    contribution+=brandContribution(g.aggregator,g.brand,g.net,g_gross,dateStr,g.mondayDisc);
     gross+=g_gross;
   }
   return{contribution,gross};
@@ -458,8 +494,12 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
     const m={};
     for(const r of recs){
       const k=r.brand+'|'+r.aggregator;
-      if(!m[k])m[k]={brand:r.brand,aggregator:r.aggregator,net:0,disc:0};
+      if(!m[k])m[k]={brand:r.brand,aggregator:r.aggregator,net:0,disc:0,mondayDisc:0};
       m[k].net+=r.sales;m[k].disc+=(r.disc||0);
+      // v291: Noon-Oregano BOGO reimbursement, specific campaign dates only — see brandContribution.
+      if(r.aggregator==='Noon'&&r.brand==='Oregano'&&r.date&&NOON_OREGANO_BOGO_MONDAYS.has(r.date)){
+        m[k].mondayDisc+=(r.disc||0);
+      }
     }
     return m;
   };
@@ -482,11 +522,15 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
   const movers=[];
   let grossA=0,grossB=0,discA=0,discB=0,commA=0,commB=0,foodA=0,foodB=0;
   for(const key of allKeys){
-    const gA=groupsA[key]||{net:0,disc:0},gB=groupsB[key]||{net:0,disc:0};
+    const gA=groupsA[key]||{net:0,disc:0,mondayDisc:0},gB=groupsB[key]||{net:0,disc:0,mondayDisc:0};
     const[brand,aggregator]=key.split('|');
     const gGrossA=gA.net+gA.disc,gGrossB=gB.net+gB.disc;
     const rate=commissionRateFor(aggregator,brand,dateRef);
-    const gCommA=gA.net*rate,gCommB=gB.net*rate;
+    // v290: Noon-Oregano Monday BOGO reimbursement — see brandContribution for full context.
+    const isNoonOregano=aggregator==='Noon'&&brand==='Oregano';
+    const baseRate=isNoonOregano?COMM.Noon.DEFAULT.commission:null;
+    const gCommA=(isNoonOregano&&gA.mondayDisc>0)?(gA.net*rate-gA.mondayDisc*baseRate):gA.net*rate;
+    const gCommB=(isNoonOregano&&gB.mondayDisc>0)?(gB.net*rate-gB.mondayDisc*baseRate):gB.net*rate;
     const foodPct=foodPkgPct(brand);
     const gFoodA=gGrossA*foodPct,gFoodB=gGrossB*foodPct;
     const contribA=gA.net-gCommA-gFoodA,contribB=gB.net-gCommB-gFoodB;
@@ -9825,18 +9869,27 @@ function campAnalysisV2(c){
   const brandsInScope=c.brand==='All Brands'?[...new Set(cR.map(r=>r.brand))]:[c.brand];
   const dref=c.startDate;
   // Helper: compute gross + contribution for a set of records over a window
+  // v292: extended to track Noon-Oregano BOGO Monday discount per brand (see brandContribution)
+  // so the ORIGINAL campaign popup ("Campaign to date" section) gets the same commission
+  // adjustment the newer profitability-explainer already has — a "BOGO Mondays" campaign on
+  // Noon×Oregano was previously showing overstated commission cost here too, since this function
+  // predates that fix and was never updated to pass the new parameter through.
   const contribFor=(recs,perBrandDiscShareFundedByUs)=>{
     // group by brand
     const byBrand={};
-    recs.forEach(r=>{const b=r.brand;if(!byBrand[b])byBrand[b]={net:0,disc:0};byBrand[b].net+=r.sales;byBrand[b].disc+=(r.disc||0);});
-    let contribution=0,gross=0,net=0,disc=0;
+    recs.forEach(r=>{
+      const b=r.brand;if(!byBrand[b])byBrand[b]={net:0,disc:0,mondayDisc:0};
+      byBrand[b].net+=r.sales;byBrand[b].disc+=(r.disc||0);
+      if(c.aggregator==='Noon'&&b==='Oregano'&&r.date&&NOON_OREGANO_BOGO_MONDAYS.has(r.date))byBrand[b].mondayDisc+=(r.disc||0);
+    });
+    let contribution=0,gross=0,net=0,disc=0,mondayDiscTotal=0;
     for(const b in byBrand){
       const o=byBrand[b];
       const g=o.net+o.disc; // gross = net + discount
-      contribution+=brandContribution(c.aggregator,b,o.net,g,dref);
-      gross+=g;net+=o.net;disc+=o.disc;
+      contribution+=brandContribution(c.aggregator,b,o.net,g,dref,o.mondayDisc);
+      gross+=g;net+=o.net;disc+=o.disc;mondayDiscTotal+=o.mondayDisc;
     }
-    return{contribution,gross,net,disc};
+    return{contribution,gross,net,disc,mondayDiscTotal};
   };
   const campC=contribFor(cR), baseC=contribFor(bR);
   // Allocate this campaign's share of the brand-level daily discount (by branch proportion), with
@@ -9850,7 +9903,7 @@ function campAnalysisV2(c){
   if(allocatedDisc>0&&!alloc.hadOverlap){
     const correctedGross=campC.net+allocatedDisc;
     const brandForCost=c.brand==='All Brands'?(brandsInScope[0]||'Oregano'):c.brand;
-    const correctedContrib=brandContribution(c.aggregator,brandForCost,campC.net,correctedGross,dref);
+    const correctedContrib=brandContribution(c.aggregator,brandForCost,campC.net,correctedGross,dref,campC.mondayDiscTotal);
     campC.gross=correctedGross;
     campC.contribution=correctedContrib;
   }
@@ -16358,11 +16411,14 @@ function cmpComputeContribution(cfg){
   const dref=cfg.end||cfg.start;
   for(const key of pairs){
     const [brand,agg]=key.split("|");
-    let brandDisc=0,brandSales=0,outletSales=0;
+    let brandDisc=0,brandSales=0,outletSales=0,brandMondayDisc=0;
     for(const r of allData){
       if(r.brand!==brand||r.aggregator!==agg)continue;
       if(!inWindow(r.date))continue;
       brandDisc+=r.disc||0;
+      // v292: Noon-Oregano BOGO Monday discount, tracked the same way as brandDisc above so it
+      // gets the same outlet-share scaling applied below — see brandContribution for context.
+      if(agg==='Noon'&&brand==='Oregano'&&r.date&&NOON_OREGANO_BOGO_MONDAYS.has(r.date))brandMondayDisc+=r.disc||0;
       if(r.branch!=="(brand-level)"){
         brandSales+=r.sales||0;
         if(!cfg.branches.size||cfg.branches.has(r.branch))outletSales+=r.sales||0;
@@ -16371,8 +16427,9 @@ function cmpComputeContribution(cfg){
     if(brandSales<=0)continue;
     const scopedSales=outletSales;
     const scopedDisc=brandDisc*(outletSales/brandSales);
+    const scopedMondayDisc=brandMondayDisc*(outletSales/brandSales);
     const gross=scopedSales+scopedDisc;
-    total+=brandContribution(agg,brand,scopedSales,gross,dref);
+    total+=brandContribution(agg,brand,scopedSales,gross,dref,scopedMondayDisc);
   }
   return total;
 }
