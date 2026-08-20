@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-292";
+const BUILD_VERSION="2026-08-13-293";
 const BUILD_NOTES=[
+  "🐛 Fixed the original campaign popup (buildCampCalcTipHTML) still showing full unadjusted commission for a Noon-Oregano BOGO campaign, caught directly by Nikhil on a live screenshot. Two separate bugs, not one: (1) The MAIN section's underlying Contribution figure was already correct (campAnalysisV2 was fixed in v292), but the displayed \"Commission\" ROW was computed independently via a flat-rate calculation instead of being derived from that same correct total — so the row shown didn't actually reconcile with the contribution below it, making it look like nothing had been applied. Fixed by deriving the displayed commission from the known-correct contribution (Net − Contribution − Food/pkg) instead of recomputing it separately — guarantees the displayed rows always sum correctly regardless of which formula produced the total, rather than needing to keep two calculations in sync by hand. (2) The \"Last N days\" section (campRecentWindowAnalysis) was never updated in v290-292 at all — missed because it has its own separate contribFor2 helper, a near-duplicate of campAnalysisV2's — so its Contribution figure was genuinely wrong, not just a display issue. Now fixed the same way as the other four functions. Verified end-to-end against Nikhil's exact screenshot numbers: both the 3 Aug campaign date and the 27 Jul baseline (also a campaign date, so also needed the adjustment) now correctly show ~AED 1,053.74 and ~AED 1,123.86 commission respectively, not the ~AED 2,410/2,376 shown before.",
   "🆕 Extended the Noon-Oregano BOGO Monday commission reimbursement (v290/291) to the two remaining places that compute profitability independently and weren't covered yet: campAnalysisV2 (the original campaign contribution popup — \"Campaign to date\" vs \"same dates last month\") and cmpComputeContribution (the Compare page's own Profitability card, which has its own outlet-share-weighted discount calculation, separate from computeProfitability). Both now track Monday-BOGO discount the same way the already-fixed functions do and pass it through to brandContribution. Verified this exact worked example against Nikhil's uploaded statements (AED 4,412.52 total owed across the four campaign dates, cross-checked against two specific order numbers he gave) reproduces correctly through all four now-fixed code paths, including the trickier case of cmpComputeContribution's outlet-share scaling (tested at 60% outlet scope — the Monday discount scales proportionally along with regular discount, exactly as it should). Not yet extended to campTrajectory (weekly trend segmentation) or the Forecaster's hypothetical-scenario functions — those are more specialized, less central analytical tools and were deprioritized for now rather than rushed; flagged clearly rather than silently left out.",
   "🐛 Fixed the Noon-Oregano BOGO commission reimbursement (v290) to use the actual four campaign dates (20 & 27 Jul, 3 & 10 Aug 2026) instead of matching every Monday indefinitely. Nikhil uploaded a real Noon statement to check this against — initially looked like a contradiction (the statement's Monday orders showed full 17% commission, no reimbursement visible), but that's exactly what Nikhil had already explained: the statement always charges full commission upfront since Noon and Oregano haven't agreed the reimbursement amount yet, and the credit shows up later, separately. Verified the underlying formula directly against that real statement instead of just taking the explanation on faith: lead_generation_fee totals exactly 17% of the commission base and payment_fee totals exactly 2% for the 10 Aug data, confirming the statement genuinely splits commission into precisely the two components (17% base + 2% PG) the reimbursement formula assumes. The one real fix needed was scope — this was a one-off campaign on four specific dates, not an ongoing weekly rule, so applying it to any other Monday (past or future) would have been wrong. Verified directly: the four real campaign dates now correctly show AED 20 commission on Nikhil's worked example, while an unrelated Monday correctly stays at the standard AED 28.50.",
   "🆕 Fixed a real gap Nikhil flagged with a worked example: Noon reimburses the 17% base commission (not the 2% PG fee) on the discounted portion of Oregano's Monday BOGO orders — confirmed with an exact worked example (AED 200 gross, AED 50 discount → AED 20 true commission, not AED 28.50 at a flat 19%). commissionRateFor() takes only (aggregator, brand, date) with no discount or order-level context, so it was structurally impossible for this to have been recognized anywhere — confirmed this before writing any fix. Since Nikhil avoids running any other campaigns on Noon-Oregano-Mondays specifically, every Monday discount on that brand+aggregator is BOGO by definition, so this can be applied at the aggregate (net sales, discount) level without needing order-level statement data — extended brandContribution() with an optional mondayBogoDisc parameter (defaults to 0, so every existing caller is unaffected) and wired it through computeProfitability() and computeProfitabilityBreakdown(), both of which now track Monday discount separately for Noon-Oregano before applying the adjusted formula. Verified directly against Nikhil's own numbers: Monday Oregano-Noon orders now show AED 20 commission exactly as he calculated; confirmed Tuesday orders and other-brand Monday orders correctly stay at the standard flat 19% (AED 28.50), so the fix is properly scoped and doesn't leak into cases it shouldn't touch. I don't have an actual Noon statement file in this session to cross-check against real numbers — this is built from the formula Nikhil described and verified against his own worked example, not validated against a real statement yet.",
@@ -10184,10 +10185,16 @@ function campRecentWindowAnalysis(c){
   const brandForCost=c.brand==='All Brands'?'Oregano':c.brand;
   const contribFor2=recs=>{
     const byBrand={};
-    recs.forEach(r=>{const b=r.brand;if(!byBrand[b])byBrand[b]={net:0,disc:0};byBrand[b].net+=r.sales;byBrand[b].disc+=(r.disc||0);});
-    let contribution=0,gross=0,net=0,disc=0;
-    for(const b in byBrand){const o=byBrand[b];const g=o.net+o.disc;contribution+=brandContribution(c.aggregator,b,o.net,g,dref);gross+=g;net+=o.net;disc+=o.disc;}
-    return{contribution,gross,net,disc};
+    recs.forEach(r=>{
+      const b=r.brand;if(!byBrand[b])byBrand[b]={net:0,disc:0,mondayDisc:0};
+      byBrand[b].net+=r.sales;byBrand[b].disc+=(r.disc||0);
+      // v293: Noon-Oregano BOGO Monday discount — this function (powering the "Last N days"
+      // section) predates the v290-292 fix and was missed then; see brandContribution for context.
+      if(c.aggregator==='Noon'&&b==='Oregano'&&r.date&&NOON_OREGANO_BOGO_MONDAYS.has(r.date))byBrand[b].mondayDisc+=(r.disc||0);
+    });
+    let contribution=0,gross=0,net=0,disc=0,mondayDiscTotal=0;
+    for(const b in byBrand){const o=byBrand[b];const g=o.net+o.disc;contribution+=brandContribution(c.aggregator,b,o.net,g,dref,o.mondayDisc);gross+=g;net+=o.net;disc+=o.disc;mondayDiscTotal+=o.mondayDisc;}
+    return{contribution,gross,net,disc,mondayDiscTotal};
   };
   const rC=contribFor2(rR), pC=contribFor2(pR);
   const allocR=allocateCampaignDiscount(c,recentStart,campEnd);
@@ -10195,7 +10202,7 @@ function campRecentWindowAnalysis(c){
   if(allocatedDiscR>0&&!allocR.hadOverlap){
     const correctedGross=rC.net+allocatedDiscR;
     rC.gross=correctedGross;
-    rC.contribution=brandContribution(c.aggregator,brandForCost,rC.net,correctedGross,dref);
+    rC.contribution=brandContribution(c.aggregator,brandForCost,rC.net,correctedGross,dref,rC.mondayDiscTotal);
   }
   const isDeliveroo=c.aggregator==='Deliveroo';
   const ourDiscCostR=isDeliveroo?allocatedDiscR*(1-coFundedPct):allocatedDiscR;
@@ -11632,7 +11639,7 @@ function buildCampCalcTipHTML(a,c){
     <tr><td></td>${tHead('📅 Campaign to date','#FBBF24',fmtShort(a.effStart)+'→'+fmtShort(a.effEnd))}${tHead('Same dates, last month','#FBBF24',fmtShort(a.bStart)+'→'+fmtShort(a.bEnd))}</tr>
     <tr><td colspan="3" style="border-top:1px solid #92400E;padding-top:4px"></td></tr>
     ${tRow('💰 Net sales',fA(a.cs.sales),fA(a.bs.sales))}
-    ${tRow(`🏦 Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(a.cs.sales*comm),'−'+fA(a.bs.sales*comm))}
+    ${tRow('🏦 Commission','−'+fA(a.cs.sales-a.campContribTotal-a.campGross*food),'−'+fA(a.bs.sales-a.baseContribTotal-a.baseGross*food))}
     ${tRow(`📦 Food/pkg ${+(food*100).toFixed(0)}%`,'−'+fA(a.campGross*food),'−'+fA(a.baseGross*food))}
     ${(a.ourDiscCost>0||baseDisc>0)?tRow('🎟️ Merchant disc.',a.ourDiscCost>0?'−'+fA(a.ourDiscCost):'−AED 0',baseDisc>0?'−'+fA(baseDisc):'−AED 0'):''}
     <tr><td colspan="3" style="border-top:1px solid #92400E"></td></tr>
@@ -11664,7 +11671,7 @@ function buildCampCalcTipHTML(a,c){
         <table style="width:100%;border-collapse:collapse;font-size:11.5px">
         <tr><td></td><td style="text-align:right;padding:0 4px;opacity:.6;font-size:9px">${fmtShort(rw.recentStart)}→${fmtShort(rw.recentEnd)}</td><td style="text-align:right;padding:0 4px;opacity:.6;font-size:9px">${fmtShort(rw.preStart)}→${fmtShort(rw.preEnd)}</td></tr>
         ${tRow('💰 Net sales',fA(rw.rs.sales),fA(rw.ps.sales))}
-        ${tRow(`🏦 Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(rw.rs.sales*comm),'−'+fA(rw.ps.sales*comm))}
+        ${tRow('🏦 Commission','−'+fA(rw.rs.sales-rw.campContribTotal-rw.campGross*food),'−'+fA(rw.ps.sales-rw.baseContribTotal-rw.baseGross*food))}
         ${tRow(`📦 Food/pkg ${+(food*100).toFixed(0)}%`,'−'+fA(rw.campGross*food),'−'+fA(rw.baseGross*food))}
         ${(rw.ourDiscCost>0||(rw.ps.disc||0)>0)?tRow('🎟️ Merchant disc.',rw.ourDiscCost>0?'−'+fA(rw.ourDiscCost):'−AED 0',(rw.ps.disc||0)>0?'−'+fA(rw.ps.disc):'−AED 0'):''}
         <tr><td colspan="3" style="border-top:1px solid #1E40AF"></td></tr>
