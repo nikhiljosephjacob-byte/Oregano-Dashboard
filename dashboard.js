@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-296";
+const BUILD_VERSION="2026-08-13-297";
 const BUILD_NOTES=[
+  "🐛 Four concrete fixes from Nikhil's Campaigns page redesign feedback, ahead of the actual redesign. (1) The unattributed-discount CSV export — traced a real performance problem (re-scanning the full matches array once per brand×aggregator combo, plus re-filtering the entire Keeta order list once per gap-date instead of once total; compounds badly on a wide date range) and rewrote it with pre-indexed lookups; also wrapped the whole thing in try/catch so any future failure surfaces as a visible alert instead of silently doing nothing, which is indistinguishable from \"not working\" from the outside. (2) Careem's upload-date chip showing only \"1-19 Aug\" next to other chips showing full \"23 Mar-16 Aug\" style ranges — not actually a bug (a deliberate same-month compression, correctly triggered since Careem's real data genuinely falls within one month), but confirmed inconsistent-looking next to multi-month chips as Nikhil described, so removed the compression — every chip now always shows the full date on both ends. (3) Recommendations appearing twice — confirmed genuine duplication: the Recommendations panel already generates \"Ends in Xh\" items for the same ≤24h/≤48h thresholds a completely separate floating-toast system was independently checking. Removed the toast system; the panel is the better home for it (dismissible per item, not a transient popup). (4) Removed the page-level KPI strip (Winning/Losing/Contribution/Disc.Burn/Blended ROI) — these are per-campaign metrics already shown correctly on each campaign's own card, and don't make sense summed across every active campaign at once. Redesign mockups for the rest (Forecaster prominence, campaign card internals) proposed separately, not yet built.",
   "🆕 Added the comprehensive \"Download all unattributed orders\" export Nikhil proposed and approved after reviewing the existing monthly overview CSV (confirmed that one's a different report — page-wide summary + campaign totals, no order-level or per-date discrepancy data — and left it untouched as instructed). New button sits next to the Uncategorized Burn section header, separate from the per-date CSV buttons already built in v295 (those stay scoped to one expanded date at a time) — this one walks every brand×aggregator×date currently showing a real gap on the page and pulls it all into a single CSV: order numbers, items, the unattributed discount amount, the sheet-vs-allocated gap for that date, and which campaigns were actually covering that date (so the likely culprit is visible directly in the row, not a separate lookup). Keeta-only for order-level rows, same limitation as v295 — every other aggregator still gets a clear date-level gap row with an explicit \"order-level detail not available\" note rather than being silently omitted. Verified end-to-end against realistic mock data covering both cases (a Keeta date with real order detail, a Talabat date without) — both produce the expected row shape, and the covering-campaigns column correctly names the real campaign rather than a placeholder.",
   "🆕 Added order-level detail to the Discount Burn uncategorized-burn audit, per Nikhil's request after the Keeta City-Level fix — clicking a date with a genuine gap now shows the actual unattributed order numbers (up to 8 inline, full list via download), plus a CSV export button reusing the same Excel-safe order-number formatting (16-digit Keeta order numbers get mangled into scientific notation by Excel otherwise) already built for the campaign order export. Keeta-only for now, and the UI says so plainly rather than showing an empty section — orderDetail (per-order item and attribution data) only exists for Keeta, since every other aggregator's export lacks item-level data the same way Talabat's does. Verified against realistic mock data: correctly finds only the genuinely unattributed orders for a given brand+date (not ones already attributed to a real campaign), the non-Keeta message displays correctly, and a clean date with no gap correctly returns nothing.",
   "🐛 Resolved the Oregano×Keeta uncategorized burn gap Nikhil flagged as growing again — investigated with the real parser against his uploaded Aug 1-18 statement rather than guessing from the UI. Root cause: KEETA_RESIDUAL_RULES only had the first \"Keeta City Level Campaign 20% OFF\" window (10-13 Aug); the second (17-20 Aug) was deliberately left out pending confirmation it went live, per the original code comment. My first pass at investigating this used a quick standalone script that double-counted the AED 2 Keeta free-delivery subsidy as if it were unattributed campaign discount — genuinely wrong, caught before shipping anything: the real parser already correctly subtracts realFD before computing menuDisc, so an order where the ENTIRE merchant-funded amount is just the AED 2 delivery credit correctly contributes zero to any campaign bucket. Re-ran the real parser properly (with FD excluded) and found the TRUE unattributed set was much smaller and fully explained: exactly 166 Oregano orders, ALL on 17-18 Aug, zero on any other date — no separate long-tail mystery, just the one missing rule. Nikhil independently confirmed two specific order numbers from that exact list belong to this campaign, matching. Added the second window per his uploaded sheet screenshot (confirmed \"Status: Running\", 17→20 Aug). Verified the fix directly: re-ran the real parser against the same real file with the fix applied — Oregano's Keeta attribution is now 100.0% (was 88% before), zero orders left in (Unattributed).",
@@ -2130,16 +2131,16 @@ function campDataFreshnessStrip(){
   };
   // Compact date range formatter. Same-month: "3-28 Jun". Different months: "28 May-5 Jul".
   // Different years: "28 Dec 2025-5 Jan 2026" (rare). Returns empty string if range is invalid.
+  // v297: removed the same-month compression ("1-19 Aug" instead of "1 Aug-19 Aug") — this was
+  // never a bug (Careem's real data genuinely falls entirely within one month, so it correctly
+  // triggered the compact format), but Nikhil flagged it as looking inconsistent sitting next to
+  // multi-month chips like "23 Mar-16 Aug" that always show both month labels. Every chip now
+  // shows the full "D Mon-D Mon" format regardless of whether the range spans one month or many.
   const fmtRange=(dr)=>{
     if(!dr||!dr[0]||!dr[1])return "";
     const s=new Date(dr[0]+"T12:00:00"),e=new Date(dr[1]+"T12:00:00");
     const sameYear=s.getFullYear()===e.getFullYear();
-    const sameMonth=sameYear&&s.getMonth()===e.getMonth();
     const opts={day:"numeric",month:"short"};
-    if(sameMonth){
-      const month=e.toLocaleDateString("en-AE",{month:"short"});
-      return `${s.getDate()}-${e.getDate()} ${month}`;
-    }
     if(sameYear){
       return `${s.toLocaleDateString("en-AE",opts)}-${e.toLocaleDateString("en-AE",opts)}`;
     }
@@ -11403,60 +11404,13 @@ function campNeedsAttentionPanel(active,upcoming){
   </details>`;
 }
 
-// Non-blocking end-soon toasts. Called from renderCampaigns() on load. Fires at most one toast
-// per (campaign, threshold) per browser session — user can dismiss with X, or the toast auto-hides
-// after 15s if untouched. Threshold values: "48h" (>24h and ≤48h remaining), "24h" (≤24h remaining).
-// The 24h warning fires even if the 48h was already dismissed — different severity, worth notifying.
-function campEndSoonPopups(active){
-  if(typeof window==='undefined')return;
-  const now=new Date();
-  const hoursUntil=(dateStr)=>{const end=new Date(dateStr+"T23:59:59");return (end-now)/3600000;};
-  const toShow=[];
-  active.forEach(c=>{
-    if(isRewardsCampaign(c))return;
-    const h=hoursUntil(c.endDate);
-    const idx=campaignData.indexOf(c);
-    const id=`${idx}:${c.startDate}:${c.endDate}`;
-    if(h>0&&h<=24){
-      const key=`endsoon:${id}:24h`;
-      try{if(!sessionStorage.getItem(key))toShow.push({c,idx,threshold:'24h',key,hoursLeft:Math.max(1,Math.round(h))});}catch(e){}
-    }else if(h>24&&h<=48){
-      const key=`endsoon:${id}:48h`;
-      try{if(!sessionStorage.getItem(key))toShow.push({c,idx,threshold:'48h',key,hoursLeft:Math.round(h)});}catch(e){}
-    }
-  });
-  if(toShow.length===0)return;
-  let container=document.getElementById('endsoon-toasts');
-  if(!container){
-    container=document.createElement('div');
-    container.id='endsoon-toasts';
-    container.style.cssText='position:fixed;bottom:16px;right:16px;z-index:9998;display:flex;flex-direction:column;gap:8px;max-width:340px';
-    document.body.appendChild(container);
-  }
-  toShow.slice(0,3).forEach(({c,idx,threshold,key,hoursLeft})=>{ // cap at 3 stacked toasts
-    try{sessionStorage.setItem(key,'shown');}catch(e){}
-    const T=campTheme();
-    const isCritical=threshold==='24h';
-    const accent=isCritical?'#EF4444':'#F59E0B';
-    const toast=document.createElement('div');
-    toast.style.cssText=`background:${T.panelBg};border:1px solid ${accent}55;border-left:4px solid ${accent};border-radius:10px;padding:12px 14px;box-shadow:0 12px 30px rgba(15,23,42,.18);animation:endsoonSlideIn .28s ease-out`;
-    toast.innerHTML=`<div style="display:flex;align-items:flex-start;gap:10px">
-      <span style="font-size:18px;flex-shrink:0">${isCritical?'🚨':'⏰'}</span>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:10px;font-weight:800;color:${accent};text-transform:uppercase;letter-spacing:.7px;margin-bottom:3px">${isCritical?'Ends within 24h':'Ends within 48h'}</div>
-        <div style="font-size:12px;color:${T.text};font-weight:700;line-height:1.35;margin-bottom:2px">${c.name||c.brand+" on "+c.aggregator}</div>
-        <div style="font-size:11px;color:${T.secondary}">${hoursLeft}h remaining · ${fmtDisp(c.endDate)}</div>
-        <div style="display:flex;gap:8px;margin-top:8px">
-          <button onclick="selectCamp(${idx});this.closest('#endsoon-toasts>div').remove()" style="background:${accent};border:none;color:#fff;padding:5px 11px;font-size:10px;font-weight:700;border-radius:5px;cursor:pointer">Open campaign</button>
-          <button onclick="this.closest('#endsoon-toasts>div').remove()" style="background:transparent;border:1px solid ${T.border};color:${T.muted};padding:5px 11px;font-size:10px;border-radius:5px;cursor:pointer">Dismiss</button>
-        </div>
-      </div>
-      <button onclick="this.closest('#endsoon-toasts>div').remove()" style="background:transparent;border:none;color:${T.label};font-size:16px;line-height:1;cursor:pointer;padding:0 2px;flex-shrink:0" title="Close">×</button>
-    </div>`;
-    container.appendChild(toast);
-    setTimeout(()=>{if(toast.parentNode)toast.style.opacity='0';setTimeout(()=>toast.remove(),300);},15000);
-  });
-}
+// v297: removed campEndSoonPopups() entirely — Nikhil caught genuine duplication: the
+// Recommendations panel (campNeedsAttentionItems, just above) already generates "Ends in Xh"
+// items for the exact same ≤24h/≤48h thresholds this toast system checked completely
+// independently. Same information, surfaced twice through two different mechanisms (a
+// persistent, dismissible panel row AND a separate floating toast). The panel is the better
+// home for it — dismissible per-item, not a transient popup that reappears — so removed the
+// redundant one rather than trying to deduplicate between two systems going forward.
 
 // ═══════════════════════════════════════════════════════════════════
 // CALCULATION TOOLTIP SYSTEM (v100)
@@ -12716,11 +12670,13 @@ async function renderCampaigns(){
     // Header
     const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid ${T.border}"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">⚡</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Campaign Manager</div></div><div style="font-size:10px;color:${T.muted};margin-top:2px;letter-spacing:.4px">Performance · Profitability · Coordination</div></div><button onclick="campLoaded=false;selCamp=null;selBundle=null;campTab='browse';renderCampaigns()" style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:6px;color:#f59e0b;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600">↻ Refresh Data</button></div>`;
     const attention=(campTab==='browse')?campNeedsAttentionPanel(active,upcoming):'';
-    const kpiStrip=(campTab==='browse'&&campStatusFilter.has('active'))?campKPIStrip(active):'';
+    // v297: removed the page-level KPI strip (Winning/Losing/Contribution/Disc.Burn/Blended ROI)
+    // per Nikhil's point 4 — these are per-campaign metrics, already shown correctly on each
+    // campaign's own card, and don't make sense summed/blended across every active campaign at
+    // once. campKPIStrip() itself is left in place (unused for now) rather than deleted outright,
+    // in case a differently-scoped version of it is useful in the redesign.
     const topChrome=campTab==='detail'?'':forecasterCTA+statusTable;
-    pg.innerHTML=`${styleOverride}${header}${campDataFreshnessStrip()}${kpiStrip}${attention}${topChrome}${main}`;
-    // Fire non-blocking end-soon toasts on entry to Active view (once per campaign+threshold per session)
-    if(campTab==='browse'&&campStatusFilter.has('active'))setTimeout(()=>campEndSoonPopups(active),150);
+    pg.innerHTML=`${styleOverride}${header}${campDataFreshnessStrip()}${attention}${topChrome}${main}`;
     if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
     if(campTab==='detail'&&selCamp){const c=selCamp;const imp=campImpact(c);if(campStatus(c)!=='Upcoming'&&imp.hasData){const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&(c.brand==='All Brands'||r.brand===c.brand)&&(c.aggregator==='All'||r.aggregator===c.aggregator)));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-camp',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}}
   }catch(err){pg.innerHTML=`${styleOverride}<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Render error</div><div style="color:${T.muted};font-size:12px">${err.message}</div></div>`;}
@@ -13078,53 +13034,77 @@ function exportDiscGapOrders(brand,aggregator,date){
 // even without order detail — proposed to Nikhil before building, approved as described.
 function exportUnattributedDeepDive(){
   if(!_lastDiscBurnData){alert('No cached data — refresh the Discount Burn page and try again.');return;}
-  const d=_lastDiscBurnData;
-  const esc=s=>`"${String(s).replace(/"/g,'""')}"`;
-  const escId=s=>`="${String(s).replace(/"/g,'""')}"`;
-  const rows=[];
-  for(const x of d.uncategorizedByBrandAgg){
-    // Recompute the same per-date breakdown discAuditDateHTML uses, for every date with a gap
-    const sheetByDate={};
+  try{
+    const d=_lastDiscBurnData;
+    const esc=s=>`"${String(s).replace(/"/g,'""')}"`;
+    const escId=s=>`="${String(s).replace(/"/g,'""')}"`;
+    // v297: fixes a real performance problem Nikhil hit — the old version re-scanned the FULL
+    // d.matches array once per brand×aggregator combo with a gap (O(combos × matches), easily
+    // tens of thousands of iterations on a month-wide filter), AND called
+    // discGapUnattributedOrders — itself a full re-filter of keetaOrdersData.orderDetail — once
+    // PER GAP DATE instead of once total. On a wide date range with many gap combos this
+    // compounded badly enough to feel hung rather than slow. Pre-indexes everything once
+    // upfront instead. Also wrapped the whole thing in try/catch — a silent JS exception looks
+    // exactly like "nothing happens when I click it", so any failure now surfaces as a visible
+    // alert instead of disappearing.
+    const sheetByKey={},attrByKey={};
     for(const r of d.matches){
-      if(r.brand!==x.brand||r.aggregator!==x.aggregator)continue;
+      const k=r.brand+'|'+r.aggregator+'|'+r.date;
       const adj=deliveractFdAdjustment(r.brand,r.date,r.orders);
-      sheetByDate[r.date]=(sheetByDate[r.date]||0)+(r.disc||0)-adj;
+      sheetByKey[k]=(sheetByKey[k]||0)+(r.disc||0)-adj;
     }
-    const attrByDate={};
     for(const cb of (d.campaignBreakdown||[])){
-      if(cb.campaign.brand!==x.brand||cb.campaign.aggregator!==x.aggregator)continue;
-      for(const[ds,amt] of Object.entries(cb.dailyAlloc||{}))attrByDate[ds]=(attrByDate[ds]||0)+amt;
-    }
-    for(const date of Object.keys(sheetByDate)){
-      const sheetTotal=sheetByDate[date],allocated=attrByDate[date]||0,gap=sheetTotal-allocated;
-      if(gap<=1)continue; // no real gap this date
-      const covering=campaignData.filter(c=>c.brand===x.brand&&c.aggregator===x.aggregator&&c.startDate<=date&&c.endDate>=date&&campStatus(c)!=='Cancelled'&&!isRewardsCampaign(c));
-      const coveringNames=covering.map(c=>c.name||c.comments||'—').join(' | ')||'(none)';
-      const orders=x.aggregator==='Keeta'?discGapUnattributedOrders(x.brand,x.aggregator,date):null;
-      if(orders&&orders.length){
-        for(const o of orders){
-          const share=o.a.find(([camp])=>camp==='(Unattributed)')[1];
-          rows.push([escId(o.o),escId(o.orderRef||'—'),date,x.brand,x.aggregator,o.ou,esc(o.i),o.g.toFixed(2),o.n.toFixed(2),share.toFixed(2),sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames)].join(','));
-        }
-      }else{
-        // No order-level detail for this aggregator (or Keeta returned nothing specific) — still
-        // surface the date-level gap so the discrepancy isn't invisible, just without order rows.
-        rows.push(['—','—',date,x.brand,x.aggregator,'—',esc(x.aggregator==='Keeta'?'(see per-date detail on page)':'(order-level detail not available for '+x.aggregator+')'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames)].join(','));
+      for(const[ds,amt] of Object.entries(cb.dailyAlloc||{})){
+        const k=cb.campaign.brand+'|'+cb.campaign.aggregator+'|'+ds;
+        attrByKey[k]=(attrByKey[k]||0)+amt;
       }
     }
+    // Index Keeta orderDetail once by brand|date instead of re-filtering per gap-date.
+    const keetaByBrandDate={};
+    if(typeof keetaOrdersData!=='undefined'&&keetaOrdersData&&keetaOrdersData.orderDetail){
+      for(const o of keetaOrdersData.orderDetail){
+        if(!o.a.some(([camp])=>camp==='(Unattributed)'))continue;
+        const k=o.br+'|'+o.d;
+        (keetaByBrandDate[k]=keetaByBrandDate[k]||[]).push(o);
+      }
+    }
+    const rows=[];
+    for(const x of d.uncategorizedByBrandAgg){
+      const datesForCombo=new Set();
+      for(const r of d.matches)if(r.brand===x.brand&&r.aggregator===x.aggregator)datesForCombo.add(r.date);
+      for(const date of datesForCombo){
+        const k=x.brand+'|'+x.aggregator+'|'+date;
+        const sheetTotal=sheetByKey[k]||0,allocated=attrByKey[k]||0,gap=sheetTotal-allocated;
+        if(gap<=1)continue;
+        const covering=campaignData.filter(c=>c.brand===x.brand&&c.aggregator===x.aggregator&&c.startDate<=date&&c.endDate>=date&&campStatus(c)!=='Cancelled'&&!isRewardsCampaign(c));
+        const coveringNames=covering.map(c=>c.name||c.comments||'—').join(' | ')||'(none)';
+        const orders=x.aggregator==='Keeta'?(keetaByBrandDate[x.brand+'|'+date]||null):null;
+        if(orders&&orders.length){
+          for(const o of orders){
+            const share=o.a.find(([camp])=>camp==='(Unattributed)')[1];
+            rows.push([escId(o.o),escId(o.orderRef||'—'),date,x.brand,x.aggregator,o.ou,esc(o.i),o.g.toFixed(2),o.n.toFixed(2),share.toFixed(2),sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames)].join(','));
+          }
+        }else{
+          rows.push(['—','—',date,x.brand,x.aggregator,'—',esc(x.aggregator==='Keeta'?'(see per-date detail on page)':'(order-level detail not available for '+x.aggregator+')'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames)].join(','));
+        }
+      }
+    }
+    if(!rows.length){alert('No dates with a real unattributed gap found for the current filters.');return;}
+    const header=['Order No (long)','Order No (short)','Date','Brand','Aggregator','Outlet','Items','Gross (AED)','Net (AED)','Unattributed Discount (AED)','Sheet Burn That Date (AED)','Allocated That Date (AED)','Gap That Date (AED)','Campaigns Covering This Date'];
+    const csv=[header.map(esc).join(','),...rows].join('\r\n');
+    const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+    const url=URL.createObjectURL(blob);
+    const link=document.createElement('a');
+    link.href=url;
+    link.download=`unattributed_deep_dive_${discountFilters.dateStart||'range'}_to_${discountFilters.dateEnd||'range'}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(err){
+    alert('Export failed: '+err.message+'\n\nPlease screenshot this and share it — it\'ll help track down exactly what went wrong.');
+    console.error('[exportUnattributedDeepDive]',err);
   }
-  if(!rows.length){alert('No dates with a real unattributed gap found for the current filters.');return;}
-  const header=['Order No (long)','Order No (short)','Date','Brand','Aggregator','Outlet','Items','Gross (AED)','Net (AED)','Unattributed Discount (AED)','Sheet Burn That Date (AED)','Allocated That Date (AED)','Gap That Date (AED)','Campaigns Covering This Date'];
-  const csv=[header.map(esc).join(','),...rows].join('\r\n');
-  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
-  const url=URL.createObjectURL(blob);
-  const link=document.createElement('a');
-  link.href=url;
-  link.download=`unattributed_deep_dive_${discountFilters.dateStart||'range'}_to_${discountFilters.dateEnd||'range'}.csv`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 function discAuditDateHTML(brand,aggregator,date){
   if(!_lastDiscBurnData)return'<div style="padding:10px;font-size:11px;color:#94a3b8">No cached data — refresh the page and try again.</div>';
