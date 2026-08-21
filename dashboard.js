@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-295";
+const BUILD_VERSION="2026-08-13-296";
 const BUILD_NOTES=[
+  "🆕 Added the comprehensive \"Download all unattributed orders\" export Nikhil proposed and approved after reviewing the existing monthly overview CSV (confirmed that one's a different report — page-wide summary + campaign totals, no order-level or per-date discrepancy data — and left it untouched as instructed). New button sits next to the Uncategorized Burn section header, separate from the per-date CSV buttons already built in v295 (those stay scoped to one expanded date at a time) — this one walks every brand×aggregator×date currently showing a real gap on the page and pulls it all into a single CSV: order numbers, items, the unattributed discount amount, the sheet-vs-allocated gap for that date, and which campaigns were actually covering that date (so the likely culprit is visible directly in the row, not a separate lookup). Keeta-only for order-level rows, same limitation as v295 — every other aggregator still gets a clear date-level gap row with an explicit \"order-level detail not available\" note rather than being silently omitted. Verified end-to-end against realistic mock data covering both cases (a Keeta date with real order detail, a Talabat date without) — both produce the expected row shape, and the covering-campaigns column correctly names the real campaign rather than a placeholder.",
   "🆕 Added order-level detail to the Discount Burn uncategorized-burn audit, per Nikhil's request after the Keeta City-Level fix — clicking a date with a genuine gap now shows the actual unattributed order numbers (up to 8 inline, full list via download), plus a CSV export button reusing the same Excel-safe order-number formatting (16-digit Keeta order numbers get mangled into scientific notation by Excel otherwise) already built for the campaign order export. Keeta-only for now, and the UI says so plainly rather than showing an empty section — orderDetail (per-order item and attribution data) only exists for Keeta, since every other aggregator's export lacks item-level data the same way Talabat's does. Verified against realistic mock data: correctly finds only the genuinely unattributed orders for a given brand+date (not ones already attributed to a real campaign), the non-Keeta message displays correctly, and a clean date with no gap correctly returns nothing.",
   "🐛 Resolved the Oregano×Keeta uncategorized burn gap Nikhil flagged as growing again — investigated with the real parser against his uploaded Aug 1-18 statement rather than guessing from the UI. Root cause: KEETA_RESIDUAL_RULES only had the first \"Keeta City Level Campaign 20% OFF\" window (10-13 Aug); the second (17-20 Aug) was deliberately left out pending confirmation it went live, per the original code comment. My first pass at investigating this used a quick standalone script that double-counted the AED 2 Keeta free-delivery subsidy as if it were unattributed campaign discount — genuinely wrong, caught before shipping anything: the real parser already correctly subtracts realFD before computing menuDisc, so an order where the ENTIRE merchant-funded amount is just the AED 2 delivery credit correctly contributes zero to any campaign bucket. Re-ran the real parser properly (with FD excluded) and found the TRUE unattributed set was much smaller and fully explained: exactly 166 Oregano orders, ALL on 17-18 Aug, zero on any other date — no separate long-tail mystery, just the one missing rule. Nikhil independently confirmed two specific order numbers from that exact list belong to this campaign, matching. Added the second window per his uploaded sheet screenshot (confirmed \"Status: Running\", 17→20 Aug). Verified the fix directly: re-ran the real parser against the same real file with the fix applied — Oregano's Keeta attribution is now 100.0% (was 88% before), zero orders left in (Unattributed).",
   "🐛 Fixed the original campaign popup (buildCampCalcTipHTML) still showing full unadjusted commission for a Noon-Oregano BOGO campaign, caught directly by Nikhil on a live screenshot. Two separate bugs, not one: (1) The MAIN section's underlying Contribution figure was already correct (campAnalysisV2 was fixed in v292), but the displayed \"Commission\" ROW was computed independently via a flat-rate calculation instead of being derived from that same correct total — so the row shown didn't actually reconcile with the contribution below it, making it look like nothing had been applied. Fixed by deriving the displayed commission from the known-correct contribution (Net − Contribution − Food/pkg) instead of recomputing it separately — guarantees the displayed rows always sum correctly regardless of which formula produced the total, rather than needing to keep two calculations in sync by hand. (2) The \"Last N days\" section (campRecentWindowAnalysis) was never updated in v290-292 at all — missed because it has its own separate contribFor2 helper, a near-duplicate of campAnalysisV2's — so its Contribution figure was genuinely wrong, not just a display issue. Now fixed the same way as the other four functions. Verified end-to-end against Nikhil's exact screenshot numbers: both the 3 Aug campaign date and the 27 Jul baseline (also a campaign date, so also needed the adjustment) now correctly show ~AED 1,053.74 and ~AED 1,123.86 commission respectively, not the ~AED 2,410/2,376 shown before.",
@@ -13068,6 +13069,63 @@ function exportDiscGapOrders(brand,aggregator,date){
   document.body.removeChild(link);
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
+// v296: comprehensive "download everything" export for the whole Uncategorized Burn section —
+// distinct from discGapOrdersHTML/exportDiscGapOrders (v295), which stay scoped to one date at a
+// time inside an expanded panel. This one walks every brand×aggregator×date currently flagged
+// with a real gap on the page and pulls it all into one CSV, so a full deep-dive doesn't require
+// clicking into each date individually. Keeta-only for the order-level rows (see v295 for why);
+// for every other aggregator, still includes the date-level gap so the discrepancy is visible
+// even without order detail — proposed to Nikhil before building, approved as described.
+function exportUnattributedDeepDive(){
+  if(!_lastDiscBurnData){alert('No cached data — refresh the Discount Burn page and try again.');return;}
+  const d=_lastDiscBurnData;
+  const esc=s=>`"${String(s).replace(/"/g,'""')}"`;
+  const escId=s=>`="${String(s).replace(/"/g,'""')}"`;
+  const rows=[];
+  for(const x of d.uncategorizedByBrandAgg){
+    // Recompute the same per-date breakdown discAuditDateHTML uses, for every date with a gap
+    const sheetByDate={};
+    for(const r of d.matches){
+      if(r.brand!==x.brand||r.aggregator!==x.aggregator)continue;
+      const adj=deliveractFdAdjustment(r.brand,r.date,r.orders);
+      sheetByDate[r.date]=(sheetByDate[r.date]||0)+(r.disc||0)-adj;
+    }
+    const attrByDate={};
+    for(const cb of (d.campaignBreakdown||[])){
+      if(cb.campaign.brand!==x.brand||cb.campaign.aggregator!==x.aggregator)continue;
+      for(const[ds,amt] of Object.entries(cb.dailyAlloc||{}))attrByDate[ds]=(attrByDate[ds]||0)+amt;
+    }
+    for(const date of Object.keys(sheetByDate)){
+      const sheetTotal=sheetByDate[date],allocated=attrByDate[date]||0,gap=sheetTotal-allocated;
+      if(gap<=1)continue; // no real gap this date
+      const covering=campaignData.filter(c=>c.brand===x.brand&&c.aggregator===x.aggregator&&c.startDate<=date&&c.endDate>=date&&campStatus(c)!=='Cancelled'&&!isRewardsCampaign(c));
+      const coveringNames=covering.map(c=>c.name||c.comments||'—').join(' | ')||'(none)';
+      const orders=x.aggregator==='Keeta'?discGapUnattributedOrders(x.brand,x.aggregator,date):null;
+      if(orders&&orders.length){
+        for(const o of orders){
+          const share=o.a.find(([camp])=>camp==='(Unattributed)')[1];
+          rows.push([escId(o.o),escId(o.orderRef||'—'),date,x.brand,x.aggregator,o.ou,esc(o.i),o.g.toFixed(2),o.n.toFixed(2),share.toFixed(2),sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames)].join(','));
+        }
+      }else{
+        // No order-level detail for this aggregator (or Keeta returned nothing specific) — still
+        // surface the date-level gap so the discrepancy isn't invisible, just without order rows.
+        rows.push(['—','—',date,x.brand,x.aggregator,'—',esc(x.aggregator==='Keeta'?'(see per-date detail on page)':'(order-level detail not available for '+x.aggregator+')'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames)].join(','));
+      }
+    }
+  }
+  if(!rows.length){alert('No dates with a real unattributed gap found for the current filters.');return;}
+  const header=['Order No (long)','Order No (short)','Date','Brand','Aggregator','Outlet','Items','Gross (AED)','Net (AED)','Unattributed Discount (AED)','Sheet Burn That Date (AED)','Allocated That Date (AED)','Gap That Date (AED)','Campaigns Covering This Date'];
+  const csv=[header.map(esc).join(','),...rows].join('\r\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const link=document.createElement('a');
+  link.href=url;
+  link.download=`unattributed_deep_dive_${discountFilters.dateStart||'range'}_to_${discountFilters.dateEnd||'range'}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
 function discAuditDateHTML(brand,aggregator,date){
   if(!_lastDiscBurnData)return'<div style="padding:10px;font-size:11px;color:#94a3b8">No cached data — refresh the page and try again.</div>';
   const d=_lastDiscBurnData;
@@ -13673,6 +13731,7 @@ function discountUncategorizedBreakdownHTML(d){
   return `<div class="card" style="padding:14px 16px;margin-bottom:14px;border-left:4px solid #F59E0B">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <div class="ct" style="margin-bottom:0">❓ Uncategorized burn — where the ${fmt(grandUnc)} is coming from</div>
+      <button onclick="exportUnattributedDeepDive()" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.35);border-radius:8px;color:#16a34a;padding:6px 13px;font-size:11.5px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px" title="Every unattributed order across every brand/aggregator/date currently shown here, with items, discount amounts, and the daily gap — not just one date at a time.">📥 Download all unattributed orders (CSV)</button>
     </div>
     <div style="font-size:11px;color:${T.muted};line-height:1.6;margin-bottom:12px;padding:8px 10px;background:rgba(245,158,11,.06);border-left:3px solid #F59E0B;border-radius:4px">
       Merchant discount from the Google Sheet daily data that couldn't be attributed to any tracked campaign in this window. Common causes to check for the top rows below:
