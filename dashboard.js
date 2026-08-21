@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-299";
+const BUILD_VERSION="2026-08-13-301";
 const BUILD_NOTES=[
+  "🆕 Fixed a real gap in the Forecaster Nikhil caught with a specific example — forecasting an upcoming Talabat Flash Sale (50% OFF CAP 30, 50-50 co-funded, 2 days) came back with very low projected uplift and burn, dominated by a \"Reality check\" showing -28% uplift from a July Flash Sale that Nikhil explained was actually stopped mid-day due to an execution issue, not a genuine market result. Root cause: CAMP_FC_ATYPICAL_RE (the existing down-weighting mechanism) only ever recognized NAMED events (World Cup, Eid, festivals) — it had zero concept of an operationally cut-short campaign, so a broken measurement was being treated as clean evidence and became the single largest input to both the reality-check banner and the weighted scenario math. Two fixes, both real: (1) campFcDetectTruncation() — an automatic detector comparing a completed campaign's last day of orders against the average of its other days; a genuine cut-short shows as a cliff (last day under 35% of the norm), not the mild dip an ordinary weaker last day would show. Verified directly: correctly flags a simulated 88% single-day collapse, correctly does NOT flag a normal 25% taper as truncation. (2) CAMP_FC_MANUAL_ISSUE_RE — lets Nikhil flag a specific campaign directly in its sheet comment going forward (\"stopped early\", \"technical issue\", \"cut short\", etc.), no code change needed each time; verified it matches natural phrasing without false-triggering on ordinary campaign terms like \"cap AED 30\". Both signals wired into every matcher (menu-wide, select-items, BOGO, OFU, platform-event — the shared campFcFindHistoryMatches covers four of these in one place) — truncated matches are excluded from the \"closest match\" pick when a clean alternative exists, down-weighted in the scenario math the same way named events already are, and when a truncated campaign IS shown (only as a last-resort fallback with nothing clean available), the Reality check banner now explicitly says so instead of presenting it with the same confidence as a clean result.",
+  "🐛 Fixed why every Keeta row in the unattributed-deep-dive CSV showed \"(see per-date detail on page)\" instead of real order numbers — Nikhil sent the actual downloaded file, which made this traceable precisely instead of guesswork. The Sheet Burn/Allocated/Gap numbers were all correct, only the order-level detail was empty — that split pointed straight at keetaOrdersData.records (intact) vs keetaOrdersData.orderDetail (missing), two separate fields with two separate fates. Root cause: trySaveLocalOrderData (the existing localStorage-quota workaround) deliberately sheds orderDetail BEFORE records when a browser's local storage runs out of room — a real, sanctioned trade-off, not new. The v247 fix (for a similar earlier bug) already checks whether a browser's local copy is missing records compared to the server and re-pulls if so — but it only ever compared records.length, never orderDetail, so a browser could have 100% complete records (passing that check cleanly) while orderDetail sat silently empty, with nothing anywhere flagging it as incomplete. Extended the same completeness check to also compare orderDetail counts between local and server, and re-pull the full copy whenever local is short on either. Verified directly against the exact diagnosed scenario: simulated a local copy with complete records but empty orderDetail against a full server copy with matching timestamps — the old check alone would have found nothing wrong; the new check correctly triggers a re-pull.",
   "🐛 Removed the Campaigns page's FILTERS→Status dropdown entirely — genuine bug fix, not a style choice. It was a second, independent status filter sitting on top of the SHOW toggle (Active/Upcoming/History), ANDed together — SHOW=Active (which only contains \"Running\" campaigns) combined with Status filter=Upcoming is a mathematically impossible combination, guaranteed zero results every time, exactly what Nikhil hit and screenshotted. Confirmed removing it loses no real capability before doing it: the \"Cancelled\" status option was already broken on its own beforehand, since the completed/history bucket only ever includes status \"Completed\", never \"Cancelled\" — so that option could never have surfaced anything either. Verified directly: ran the real applyCampFilters against Nikhil's exact scenario (SHOW=Active tab, two running campaigns) — both now correctly pass through, with no way for a contradictory Status selection to exist anymore. Brand, Platform, Branch, and Dates filters are untouched and remain exactly as they were — the campaign card design was also left completely unchanged, per explicit instruction. No animations added, per explicit instruction.",
   "🐛 Fixed \"still no download option\" on Discount Burn — the screenshot Nikhil sent was the TOP summary tile (a plain, non-clickable div — the v296 download button only existed on the detailed breakdown section further down the page). Two genuinely different pieces of UI sharing a similar name, and the top one is the very first thing anyone sees, so expecting a download there too was entirely reasonable. Added an optional onclick to the tile() helper and wired it into the Uncategorized Burn tile specifically (the other two summary tiles — Total Burn, Attributed — stay non-clickable, unaffected) — clicking it now triggers the same exportUnattributedDeepDive() from v296. When there's zero unattributed burn, the tile correctly stays non-clickable with the existing \"no unattributed burn in this window\" message, matching how the other tiles already behave. Verified both branches (with and without a real gap) produce the correct, distinct HTML before shipping.",
   "🐛 Four concrete fixes from Nikhil's Campaigns page redesign feedback, ahead of the actual redesign. (1) The unattributed-discount CSV export — traced a real performance problem (re-scanning the full matches array once per brand×aggregator combo, plus re-filtering the entire Keeta order list once per gap-date instead of once total; compounds badly on a wide date range) and rewrote it with pre-indexed lookups; also wrapped the whole thing in try/catch so any future failure surfaces as a visible alert instead of silently doing nothing, which is indistinguishable from \"not working\" from the outside. (2) Careem's upload-date chip showing only \"1-19 Aug\" next to other chips showing full \"23 Mar-16 Aug\" style ranges — not actually a bug (a deliberate same-month compression, correctly triggered since Careem's real data genuinely falls within one month), but confirmed inconsistent-looking next to multi-month chips as Nikhil described, so removed the compression — every chip now always shows the full date on both ends. (3) Recommendations appearing twice — confirmed genuine duplication: the Recommendations panel already generates \"Ends in Xh\" items for the same ≤24h/≤48h thresholds a completely separate floating-toast system was independently checking. Removed the toast system; the panel is the better home for it (dismissible per item, not a transient popup). (4) Removed the page-level KPI strip (Winning/Losing/Contribution/Disc.Burn/Blended ROI) — these are per-campaign metrics already shown correctly on each campaign's own card, and don't make sense summed across every active campaign at once. Redesign mockups for the rest (Forecaster prominence, campaign card internals) proposed separately, not yet built.",
@@ -1093,7 +1095,18 @@ async function pullOrderDataFromServer(){
       const localRecordCount=local?.records?.length||0;
       const serverRecordCount=server.records?.length||0;
       const localIncomplete=serverRecordCount>0&&localRecordCount<serverRecordCount;
-      if(!local||localIncomplete||(serverTs&&(!localTs||serverTs>localTs))){
+      // v300: fixes a real gap in the v247 check above, found from Nikhil's CSV export showing
+      // every Keeta row with the correct Sheet Burn/Allocated/Gap numbers (from records — intact)
+      // but zero order-level detail (from orderDetail — silently missing). trySaveLocalOrderData
+      // sheds orderDetail BEFORE records when localStorage quota is hit (see that function) — so
+      // a browser can end up with 100% complete records (passing the v247 check above) while
+      // orderDetail is entirely empty, and the old check never noticed because it only ever
+      // compared records.length. Checking orderDetail presence/completeness the same way records
+      // already is.
+      const localDetailCount=local?.orderDetail?.length||0;
+      const serverDetailCount=server.orderDetail?.length||0;
+      const localMissingDetail=serverDetailCount>0&&localDetailCount<serverDetailCount;
+      if(!local||localIncomplete||localMissingDetail||(serverTs&&(!localTs||serverTs>localTs))){
         const obj={metadata:server.metadata,records:server.records};
         if(server.orderDetail)obj.orderDetail=server.orderDetail;
         // v175: prefer server cancellations, but if the server's copy doesn't have any (e.g. an
@@ -1105,7 +1118,7 @@ async function pullOrderDataFromServer(){
         try{localStorage.setItem(cfg.lsKey(),JSON.stringify(obj));}catch(e){}
         changed=true;
         invalidateAggCaches(cfg.agg); // v113: surgical — only this aggregator's analyses go cold
-        console.log(`[sync] ${cfg.agg} updated from server (${server.records.length} records, by ${server.updatedBy||'—'}${localIncomplete?' — local copy was incomplete ('+localRecordCount+' vs '+serverRecordCount+' records)':''})`);
+        console.log(`[sync] ${cfg.agg} updated from server (${server.records.length} records, by ${server.updatedBy||'—'}${localIncomplete?' — local copy was incomplete ('+localRecordCount+' vs '+serverRecordCount+' records)':''}${localMissingDetail?' — local copy was missing order-level detail ('+localDetailCount+' vs '+serverDetailCount+')':''})`);
       }
     }
     // v114: reverse direction — if this user is an ADMIN and their browser holds data the
@@ -11804,6 +11817,41 @@ function campFcBaseline(brand,agg,branches,days){
 // This flags them (isAtypical) so campFcRun can down-weight rather than silently exclude them —
 // the info is still visible in the match table, just not allowed to dominate the estimate.
 const CAMP_FC_ATYPICAL_RE=/\b(fest(?:ival)?|world\s*cup|eid|ramadan|national\s*day|new\s*year|christmas|black\s*friday|anniversary|carnival|activation|launch\s*party|grand\s*opening)\b/i;
+// v301: fixes a real gap Nikhil caught — CAMP_FC_ATYPICAL_RE only ever recognized NAMED events
+// (World Cup, Eid, festivals). It had no concept of a campaign that ran its planned dates but was
+// pulled mid-day for an operational reason (Nikhil's exact example: a July Talabat Flash Sale
+// stopped mid-day due to an issue) — that kind of result isn't a genuine market read, it's a
+// broken measurement, but it was being weighted identically to a clean full-run campaign and
+// became the dominant single input to the "Reality check" line. Two complementary signals:
+// (1) a manual flag Nikhil can add directly to a campaign's comment in the sheet going forward
+// (no code change needed each time), and (2) an automatic detector that doesn't require anyone
+// to remember to flag it — checks whether the LAST day of a completed campaign's run shows a
+// dramatic, unexplained volume collapse relative to the rest of its own days, the actual
+// statistical signature of "this got cut short partway through", not just "this campaign is
+// naturally weaker on its last day" (which would show a mild dip, not a cliff).
+const CAMP_FC_MANUAL_ISSUE_RE=/\b(cut\s*short|stopped\s*early|paused\s*(?:mid|part)way|technical\s*issue|had\s*to\s*stop|stopped\s*mid|execution\s*issue|didn'?t\s*run\s*(?:the\s*)?full|not\s*a\s*clean\s*(?:run|comparison))\b/i;
+function campFcDetectTruncation(c){
+  if(!c.startDate||!c.endDate||c.startDate===c.endDate)return null; // single-day campaigns have no "last day vs rest" to compare
+  const brandRecs=c.brand==='All Brands'?allData:indexedRecords(c.brand,c.aggregator);
+  const outletSet=campOutlets(c);
+  const flt=r=>{if(c.brand!=='All Brands'&&r.brand!==c.brand)return false;if(outletSet&&!outletSet.has(r.branch))return false;return true;};
+  const effEnd=c.endDate<latest?c.endDate:latest;
+  const cR=brandRecs.filter(r=>r.date>=c.startDate&&r.date<=effEnd&&flt(r));
+  if(!cR.length)return null;
+  const byDate={};
+  for(const r of cR)byDate[r.date]=(byDate[r.date]||0)+(r.orders||0);
+  const dates=Object.keys(byDate).sort();
+  if(dates.length<2)return null; // need at least 2 days of data to compare "last" against "the rest"
+  const lastDate=dates[dates.length-1],lastVal=byDate[lastDate];
+  const otherVals=dates.slice(0,-1).map(d=>byDate[d]);
+  const otherAvg=otherVals.reduce((s,v)=>s+v,0)/otherVals.length;
+  if(otherAvg<3)return null; // too little volume to draw any conclusion either way
+  // A genuine cut-short shows as a CLIFF (last day well under a third of the norm), not a mild
+  // dip — an ordinary weaker last day (e.g. a promo naturally tapering off) typically lands
+  // 60-90% of the average, nowhere near this threshold.
+  if(lastVal<otherAvg*0.35)return{lastDate,lastVal:Math.round(lastVal),otherAvg:Math.round(otherAvg)};
+  return null;
+}
 // v250: "% off select items" historical matching — same real-performance approach as
 // campFcFindMatches (menu-wide), reusing campAnalysisV2's baseline/allocation/contribution
 // logic unchanged, since that math doesn't care what SHAPE a campaign is, only its actual
@@ -11842,7 +11890,10 @@ function campFcFindHistoryMatches(brand,agg,pattern,discPct){
     const a=campAnalysisV2(c);
     if(!a.hasData||!a.hasBaseline||a.ordersLift==null)continue;
     const isAtypical=CAMP_FC_ATYPICAL_RE.test(`${c.name||''} ${c.comments||''}`);
-    out.push({c,discPct:hp,cap:null,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales,campOrdersPerDay:a.cs.orders/a.cDays,campSalesPerDay:a.cs.sales/a.cDays,isAtypical});
+    const manualIssueFlag=CAMP_FC_MANUAL_ISSUE_RE.test(`${c.name||''} ${c.comments||''}`);
+    const truncation=manualIssueFlag?null:campFcDetectTruncation(c);
+    const isTruncated=manualIssueFlag||!!truncation;
+    out.push({c,discPct:hp,cap:null,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales,campOrdersPerDay:a.cs.orders/a.cDays,campSalesPerDay:a.cs.sales/a.cDays,isAtypical,isTruncated,truncationDetail:truncation,manualIssueFlag});
   }
   out.sort((a,b)=>b.c.startDate.localeCompare(a.c.startDate));
   return out;
@@ -11903,7 +11954,10 @@ function campFcFindMatches(brand,agg,discPct,cap){
     const a=campAnalysisV2(c);
     if(!a.hasData||!a.hasBaseline||a.ordersLift==null)continue;
     const isAtypical=CAMP_FC_ATYPICAL_RE.test(`${c.name||''} ${c.comments||''}`);
-    out.push({c,discPct:hp,cap:cCap,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales,campOrdersPerDay:a.cs.orders/a.cDays,campSalesPerDay:a.cs.sales/a.cDays,isAtypical});
+    const manualIssueFlag=CAMP_FC_MANUAL_ISSUE_RE.test(`${c.name||''} ${c.comments||''}`);
+    const truncation=manualIssueFlag?null:campFcDetectTruncation(c); // manual flag already covers it — don't also run the heuristic
+    const isTruncated=manualIssueFlag||!!truncation;
+    out.push({c,discPct:hp,cap:cCap,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales,campOrdersPerDay:a.cs.orders/a.cDays,campSalesPerDay:a.cs.sales/a.cDays,isAtypical,isTruncated,truncationDetail:truncation,manualIssueFlag});
   }
   // Most recent campaigns first — the display only shows the top 8, and recent campaigns
   // are more relevant for a forecast than old ones. All matches are still used in the
@@ -12090,7 +12144,14 @@ function campFcRun(){
   // v110: the closest available real-world evidence — same brand/agg/discount depth, most
   // recent, not a named one-off event — surfaced prominently as a "reality check" regardless
   // of how the weighted scenarios come out. Prevents a losing repeat from getting buried.
-  const closestMatch=matches.find(m=>!m.isAtypical&&m.upliftPct!=null&&Math.abs(m.upliftPct)<150)||null;
+  // v301: now ALSO skips truncated campaigns (cut short mid-run, manually flagged or auto-
+  // detected) when picking this headline match — a broken measurement isn't "the closest recent
+  // match" in any meaningful sense, and Nikhil's exact complaint was this exact case (a July
+  // Flash Sale stopped mid-day due to an issue) dominating the reality-check line. Falls back to
+  // the closest truncated match ONLY if literally nothing else qualifies, so there's still some
+  // evidence shown rather than none — but the fallback is clearly marked, never silent.
+  const cleanMatches=matches.filter(m=>!m.isAtypical&&!m.isTruncated&&m.upliftPct!=null&&Math.abs(m.upliftPct)<150);
+  const closestMatch=cleanMatches[0]||matches.find(m=>!m.isAtypical&&m.upliftPct!=null&&Math.abs(m.upliftPct)<150)||null;
   let cU=0.10,eU=0.20,oU=0.35;
   if(matches.length){
     // Only true statistical outliers get dropped entirely (data errors / freak swings).
@@ -12100,7 +12161,10 @@ function campFcRun(){
     const weighted=useM.map(m=>{
       const daysAgo=Math.max(1,daysBetweenInclusive(m.c.endDate,campFcStart));
       const recencyW=Math.exp(-daysAgo/45); // ~31-day half-life — a repeat from last week outweighs one from 5 months ago
-      const typeW=m.isAtypical?0.3:1; // named events (Fest, World Cup, etc.) count for 3/10 of a normal promo match
+      // v301: truncated campaigns down-weighted the same way atypical events are — a cut-short
+      // run isn't a reliable read on what the discount mechanic itself would do, same reasoning
+      // as isAtypical, just a different cause (operational failure vs an unusual occasion).
+      const typeW=(m.isAtypical||m.isTruncated)?0.3:1; // named events / cut-short runs count for 3/10 of a normal promo match
       return{u:m.upliftPct/100,w:recencyW*typeW};
     });
     if(weighted.length){
@@ -12119,7 +12183,7 @@ function campFcRun(){
     const discWeighted=matches.filter(m=>m.ourDiscPerDay!=null&&m.campOrdersPerDay>0).map(m=>{
       const daysAgo=Math.max(1,daysBetweenInclusive(m.c.endDate,campFcStart));
       const recencyW=Math.exp(-daysAgo/45);
-      const typeW=m.isAtypical?0.3:1;
+      const typeW=(m.isAtypical||m.isTruncated)?0.3:1;
       return{u:m.ourDiscPerDay/m.campOrdersPerDay,w:recencyW*typeW};
     });
     const histDiscPerOrder=discWeighted.length?campFcWeightedPercentile(discWeighted,50):null;
@@ -12452,10 +12516,20 @@ function campFcHTML(){
       const roiClr=cm.discountROI==null?T.muted:cm.discountROI>=0?'#16a34a':'#dc2626';
       const roiTxt=cm.discountROI!=null?cm.discountROI.toFixed(2)+'×':'n/a';
       const upliftClr=(cm.upliftPct||0)>=0?'#16a34a':'#dc2626';
-      const warn=cm.discountROI!=null&&cm.discountROI<0;
+      const warn=(cm.discountROI!=null&&cm.discountROI<0)||cm.isTruncated;
+      // v301: if this closest match is itself a known cut-short campaign (only possible when NO
+      // clean match existed at all — closestMatch skips truncated ones otherwise), say so
+      // explicitly rather than presenting a broken measurement with the same confidence as a
+      // clean one. Nikhil's exact complaint: a truncated campaign silently became "the closest
+      // recent match" with no indication it wasn't a fair read.
+      const truncNote=cm.isTruncated
+        ?(cm.manualIssueFlag
+          ?` ⚠️ <strong>This campaign was flagged as an incomplete/problem run</strong> (per its comment) — its result reflects an operational issue, not the discount mechanic itself. Shown only because no clean comparable campaign exists; treat this number with real caution.`
+          :` ⚠️ <strong>This campaign's last day (${fmtShort(cm.truncationDetail.lastDate)}) shows a sudden volume collapse</strong> (${cm.truncationDetail.lastVal} orders vs ~${cm.truncationDetail.otherAvg}/day for the rest of its run) — the signature of a campaign cut short mid-run, not genuine demand. Shown only because no clean comparable campaign exists; treat this number with real caution.`)
+        :'';
       return `<div style="display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border-radius:8px;margin-bottom:12px;background:${warn?'rgba(239,68,68,.08)':'rgba(59,130,246,.08)'};border:1px solid ${warn?'rgba(239,68,68,.35)':'rgba(59,130,246,.3)'}">`
         +`<span style="font-size:16px;flex-shrink:0">${warn?'⚠️':'ℹ️'}</span>`
-        +`<div style="font-size:12.5px;line-height:1.6;color:${T.text}"><strong>Reality check:</strong> the closest recent match — ${cm.c.name||cm.c.comments||'this campaign'} (${cm.c.startDate} – ${cm.c.endDate}, ${cm.discPct}% off${cm.cap?' · cap AED '+cm.cap:''}) — actually delivered <strong style="color:${upliftClr}">${fP(cm.upliftPct)}</strong> uplift with <strong style="color:${roiClr}">${roiTxt} ROI</strong>${warn?' — it lost money on a contribution basis. This match is already the largest single input to the scenarios below.':'.'}</div>`
+        +`<div style="font-size:12.5px;line-height:1.6;color:${T.text}"><strong>Reality check:</strong> the closest recent match — ${cm.c.name||cm.c.comments||'this campaign'} (${cm.c.startDate} – ${cm.c.endDate}, ${cm.discPct}% off${cm.cap?' · cap AED '+cm.cap:''}) — actually delivered <strong style="color:${upliftClr}">${fP(cm.upliftPct)}</strong> uplift with <strong style="color:${roiClr}">${roiTxt} ROI</strong>${(cm.discountROI!=null&&cm.discountROI<0)?' — it lost money on a contribution basis.':'.'}${cm.isTruncated?'':' This match is already the largest single input to the scenarios below.'}${truncNote}</div>`
         +`</div>`;
     })():'';
     const flagsHTML=flags.map(f=>`<div style="display:flex;align-items:flex-start;gap:8px;font-size:12px;padding:8px 10px;border-radius:6px;margin-bottom:6px;background:${f.lvl==='warn'?'rgba(245,158,11,.08)':T.rowBg};border:0.5px solid ${f.lvl==='warn'?'rgba(245,158,11,.4)':T.border}">`
