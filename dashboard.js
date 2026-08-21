@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-293";
+const BUILD_VERSION="2026-08-13-295";
 const BUILD_NOTES=[
+  "🆕 Added order-level detail to the Discount Burn uncategorized-burn audit, per Nikhil's request after the Keeta City-Level fix — clicking a date with a genuine gap now shows the actual unattributed order numbers (up to 8 inline, full list via download), plus a CSV export button reusing the same Excel-safe order-number formatting (16-digit Keeta order numbers get mangled into scientific notation by Excel otherwise) already built for the campaign order export. Keeta-only for now, and the UI says so plainly rather than showing an empty section — orderDetail (per-order item and attribution data) only exists for Keeta, since every other aggregator's export lacks item-level data the same way Talabat's does. Verified against realistic mock data: correctly finds only the genuinely unattributed orders for a given brand+date (not ones already attributed to a real campaign), the non-Keeta message displays correctly, and a clean date with no gap correctly returns nothing.",
+  "🐛 Resolved the Oregano×Keeta uncategorized burn gap Nikhil flagged as growing again — investigated with the real parser against his uploaded Aug 1-18 statement rather than guessing from the UI. Root cause: KEETA_RESIDUAL_RULES only had the first \"Keeta City Level Campaign 20% OFF\" window (10-13 Aug); the second (17-20 Aug) was deliberately left out pending confirmation it went live, per the original code comment. My first pass at investigating this used a quick standalone script that double-counted the AED 2 Keeta free-delivery subsidy as if it were unattributed campaign discount — genuinely wrong, caught before shipping anything: the real parser already correctly subtracts realFD before computing menuDisc, so an order where the ENTIRE merchant-funded amount is just the AED 2 delivery credit correctly contributes zero to any campaign bucket. Re-ran the real parser properly (with FD excluded) and found the TRUE unattributed set was much smaller and fully explained: exactly 166 Oregano orders, ALL on 17-18 Aug, zero on any other date — no separate long-tail mystery, just the one missing rule. Nikhil independently confirmed two specific order numbers from that exact list belong to this campaign, matching. Added the second window per his uploaded sheet screenshot (confirmed \"Status: Running\", 17→20 Aug). Verified the fix directly: re-ran the real parser against the same real file with the fix applied — Oregano's Keeta attribution is now 100.0% (was 88% before), zero orders left in (Unattributed).",
   "🐛 Fixed the original campaign popup (buildCampCalcTipHTML) still showing full unadjusted commission for a Noon-Oregano BOGO campaign, caught directly by Nikhil on a live screenshot. Two separate bugs, not one: (1) The MAIN section's underlying Contribution figure was already correct (campAnalysisV2 was fixed in v292), but the displayed \"Commission\" ROW was computed independently via a flat-rate calculation instead of being derived from that same correct total — so the row shown didn't actually reconcile with the contribution below it, making it look like nothing had been applied. Fixed by deriving the displayed commission from the known-correct contribution (Net − Contribution − Food/pkg) instead of recomputing it separately — guarantees the displayed rows always sum correctly regardless of which formula produced the total, rather than needing to keep two calculations in sync by hand. (2) The \"Last N days\" section (campRecentWindowAnalysis) was never updated in v290-292 at all — missed because it has its own separate contribFor2 helper, a near-duplicate of campAnalysisV2's — so its Contribution figure was genuinely wrong, not just a display issue. Now fixed the same way as the other four functions. Verified end-to-end against Nikhil's exact screenshot numbers: both the 3 Aug campaign date and the 27 Jul baseline (also a campaign date, so also needed the adjustment) now correctly show ~AED 1,053.74 and ~AED 1,123.86 commission respectively, not the ~AED 2,410/2,376 shown before.",
   "🆕 Extended the Noon-Oregano BOGO Monday commission reimbursement (v290/291) to the two remaining places that compute profitability independently and weren't covered yet: campAnalysisV2 (the original campaign contribution popup — \"Campaign to date\" vs \"same dates last month\") and cmpComputeContribution (the Compare page's own Profitability card, which has its own outlet-share-weighted discount calculation, separate from computeProfitability). Both now track Monday-BOGO discount the same way the already-fixed functions do and pass it through to brandContribution. Verified this exact worked example against Nikhil's uploaded statements (AED 4,412.52 total owed across the four campaign dates, cross-checked against two specific order numbers he gave) reproduces correctly through all four now-fixed code paths, including the trickier case of cmpComputeContribution's outlet-share scaling (tested at 60% outlet scope — the Monday discount scales proportionally along with regular discount, exactly as it should). Not yet extended to campTrajectory (weekly trend segmentation) or the Forecaster's hypothetical-scenario functions — those are more specialized, less central analytical tools and were deprioritized for now rather than rushed; flagged clearly rather than silently left out.",
   "🐛 Fixed the Noon-Oregano BOGO commission reimbursement (v290) to use the actual four campaign dates (20 & 27 Jul, 3 & 10 Aug 2026) instead of matching every Monday indefinitely. Nikhil uploaded a real Noon statement to check this against — initially looked like a contradiction (the statement's Monday orders showed full 17% commission, no reimbursement visible), but that's exactly what Nikhil had already explained: the statement always charges full commission upfront since Noon and Oregano haven't agreed the reimbursement amount yet, and the credit shows up later, separately. Verified the underlying formula directly against that real statement instead of just taking the explanation on faith: lead_generation_fee totals exactly 17% of the commission base and payment_fee totals exactly 2% for the 10 Aug data, confirming the statement genuinely splits commission into precisely the two components (17% base + 2% PG) the reimbursement formula assumes. The one real fix needed was scope — this was a one-off campaign on four specific dates, not an ongoing weekly rule, so applying it to any other Monday (past or future) would have been wrong. Verified directly: the four real campaign dates now correctly show AED 20 commission on Nikhil's worked example, while an unrelated Monday correctly stays at the standard AED 28.50.",
@@ -855,10 +857,18 @@ const KEETA_RESIDUAL_RULES=[
   // ── August: Lollorosso's cap changed from 30 to 25, confirmed from sheet — new rule, not an
   // extension of the July one above (which stays correctly capped at Jul 31). ──
   {brand:"Lollorosso",  campaign:"50% OFF CAP 25", startDate:"2026-08-01",endDate:null},
-  // ── Oregano: time-limited "Keeta City Level Campaign 20% OFF" overlay, confirmed from sheet
-  // (two separate windows shown: Aug 10-13 in one screenshot, Aug 17-20 "Upcoming" in another —
-  // only the confirmed Aug 10-13 one is added here; add the second when it's actually live). ──
-  {brand:"Oregano",     campaign:"Keeta City Level Campaign 20% OFF", startDate:"2026-08-10",endDate:"2026-08-13"}
+  // ── Oregano: time-limited "Keeta City Level Campaign 20% OFF" overlay, confirmed from sheet.
+  // Two separate windows, both now confirmed live (sheet screenshot shows Status: Completed for
+  // the first, Status: Running for the second) — v294 adds the second, which was deliberately
+  // left out until confirmed. Verified directly: ran the real Keeta parser against Nikhil's
+  // Aug 1-18 statement with only the first window in place, found exactly 166 Oregano orders
+  // landing in "(Unattributed)", 100% of them on 17-18 Aug (zero on any other date) — no other
+  // gap exists. Nikhil separately confirmed two specific order numbers from that exact list
+  // (4967841703657053, 4957842921763499, both 18 Aug) belong to this campaign, matching. Adding
+  // this single rule closes the entire uncategorized-burn gap for Oregano×Keeta, not just part
+  // of it — confirmed by re-running the parser with the fix applied (see build notes). ──
+  {brand:"Oregano",     campaign:"Keeta City Level Campaign 20% OFF", startDate:"2026-08-10",endDate:"2026-08-13"},
+  {brand:"Oregano",     campaign:"Keeta City Level Campaign 20% OFF", startDate:"2026-08-17",endDate:"2026-08-20"}
 ];
 
 // v140: now accepts an optional `timeStr` ("HH:MM") for same-day cutovers — a rule whose
@@ -13008,6 +13018,56 @@ function discAuditToggle(brand,aggregator,date){
 // date range covers this specific date for this brand+aggregator, showing whether each was
 // included in the attribution math and, if so, exactly how much it was allocated for that day.
 // This turns 'why is this date uncategorized' from a guessing game into a direct answer.
+// v295: shows the actual order numbers behind a date's unattributed gap, with a CSV download —
+// Nikhil asked for this directly after the Keeta City-Level fix, so future gaps like this one can
+// be diagnosed from the dashboard itself instead of needing a fresh investigation each time.
+// Keeta-only for now: orderDetail (per-order item/attribution detail) only exists for Keeta —
+// every other aggregator's export lacks item-level data entirely (the same limitation discussed
+// with Nikhil regarding Talabat), so there's no order list to show for them, and the UI says so
+// plainly rather than showing an empty section with no explanation.
+function discGapUnattributedOrders(brand,aggregator,date){
+  if(aggregator!=='Keeta'||typeof keetaOrdersData==='undefined'||!keetaOrdersData||!keetaOrdersData.orderDetail)return null;
+  return keetaOrdersData.orderDetail.filter(o=>o.br===brand&&o.d===date&&o.a.some(([camp])=>camp==='(Unattributed)'));
+}
+function discGapOrdersHTML(brand,aggregator,date){
+  if(aggregator!=='Keeta'){
+    return '<div style="font-size:10.5px;color:#94a3b8;margin-top:6px;padding-top:6px;border-top:1px dashed #F1F5F9">Order-level detail isn\'t available for '+aggregator+' yet — its export doesn\'t carry item-level data the way Keeta\'s does.</div>';
+  }
+  const orders=discGapUnattributedOrders(brand,aggregator,date);
+  if(!orders||!orders.length)return '';
+  const rows=orders.slice(0,8).map(o=>{
+    const share=o.a.find(([camp])=>camp==='(Unattributed)')[1];
+    return '<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;font-size:10px"><span style="color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px">'+esc_html(o.i||'—')+'</span><span style="font-weight:700;color:#0F172A;white-space:nowrap">AED '+share.toFixed(2)+'</span></div>';
+  }).join('');
+  const more=orders.length>8?'<div style="font-size:9.5px;color:#94a3b8;margin-top:2px">+ '+(orders.length-8)+' more — download for the full list</div>':'';
+  return '<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #F1F5F9">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+    +'<span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">'+orders.length+' unattributed orders</span>'
+    +'<button onclick="exportDiscGapOrders(\''+brand.replace(/'/g,"\\'")+'\',\''+aggregator+'\',\''+date+'\')" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#16a34a;padding:3px 8px;font-size:9.5px;font-weight:700;cursor:pointer">📥 CSV</button>'
+    +'</div>'+rows+more+'</div>';
+}
+function esc_html(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function exportDiscGapOrders(brand,aggregator,date){
+  const orders=discGapUnattributedOrders(brand,aggregator,date);
+  if(!orders||!orders.length){alert('No order-level detail available for this date.');return;}
+  const esc=s=>`"${String(s).replace(/"/g,'""')}"`;
+  const escId=s=>`="${String(s).replace(/"/g,'""')}"`; // Excel-safe: prevents 16-digit order numbers being mangled into scientific notation
+  const header=['Order No (long)','Order No (short)','Date','Outlet','Items','Gross (AED)','Net (AED)','Unattributed Discount (AED)'];
+  const csvRows=orders.map(o=>{
+    const share=o.a.find(([camp])=>camp==='(Unattributed)')[1];
+    return[escId(o.o),escId(o.orderRef||'—'),o.d,o.ou,esc(o.i),o.g.toFixed(2),o.n.toFixed(2),share.toFixed(2)].join(',');
+  });
+  const csv=[header.map(esc).join(','),...csvRows].join('\r\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const link=document.createElement('a');
+  link.href=url;
+  link.download=`unattributed_${brand.replace(/[^a-z0-9]+/gi,'_')}_${aggregator}_${date}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
 function discAuditDateHTML(brand,aggregator,date){
   if(!_lastDiscBurnData)return'<div style="padding:10px;font-size:11px;color:#94a3b8">No cached data — refresh the page and try again.</div>';
   const d=_lastDiscBurnData;
@@ -13053,7 +13113,7 @@ function discAuditDateHTML(brand,aggregator,date){
     +(rows||'<div style="padding:8px;font-size:11px;color:#94a3b8">No campaign in the sheet covers this date for '+brand+' × '+aggregator+'.</div>')
     +'<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid #F1F5F9">'
     +'<span style="color:#64748b">Allocated total</span><strong style="color:#0F172A">AED '+Math.round(totalAllocated).toLocaleString()+'</strong></div>'
-    +(gap>1?'<div style="margin-top:4px;font-size:11px;color:#DC2626;font-weight:700">Gap: AED '+Math.round(gap).toLocaleString()+' — '+(rows?'a campaign above is not receiving its expected share (check overlap/outlet-scope logic)':'no campaign in the sheet covers this date at all — check the aggregator portal')+'</div>':'')
+    +(gap>1?'<div style="margin-top:4px;font-size:11px;color:#DC2626;font-weight:700">Gap: AED '+Math.round(gap).toLocaleString()+' — '+(rows?'a campaign above is not receiving its expected share (check overlap/outlet-scope logic)':'no campaign in the sheet covers this date at all — check the aggregator portal')+'</div>'+discGapOrdersHTML(brand,aggregator,date):'')
     +typeBreakdownHTML
     +'</div>';
 }
