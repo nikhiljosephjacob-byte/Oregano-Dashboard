@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-309";
+const BUILD_VERSION="2026-08-13-310";
 const BUILD_NOTES=[
+  "🆕 Direct answer to Nikhil's question — were the August/July/June fixes teaching the dashboard anything for next time, or just correcting those specific months? Honestly, until this build, only the latter. Every one of those fixes started the exact same way: noticing a sheet campaign name with no matching rule, then manually cross-checking real order data to figure out what changed. The diagnostic that makes that noticing possible already existed (getKeetaExactDisc, added in v230) and was already running on every single page load — it just wrote to window._keetaMismatchLog and a console.warn that nobody was reading. Built keetaNamingMismatchPanel() to surface that log directly on the Discount Burn page instead: every sheet campaign with no matching rule but real Keeta orders behind it, brand, date window, how many real orders, and what name(s) Keeta itself uses for them — deduplicated (the same mismatch can log multiple times per session without being a new issue) and sorted by size so the biggest problems surface first. This is the actual systematic fix — a campaign rotating its items next month, the same way it always has, now shows up here automatically on next page load instead of requiring another from-scratch investigation like the last several builds. Verified against a realistic mismatch log including duplicates: correctly dedupes, correctly sorts biggest-first, correctly renders nothing when the log is empty or doesn't exist yet.",
   "🆕 Backfilled June's Oregano×Keeta rules (third month, after August's re-verification/fix in v307 and July's backfill in v308). Found the existing rules only covered 12-23 June, leaving three real gaps — 1-4 (item-specific), 5-11 and 18 (both residual). Verified all three against real order data before writing anything. (1) 1-4 Jun: same item list as the 12-23 rotation (Milanese, Risotto Funghi, Tuscan Pasta, Pepperoni), each confirmed with a single clean dominant discount value — same confidence level as August's original rules. (2) 5-11 Jun \"Showcase 50% OFF\": sheet lists this as two separate rows (5-8 and 9-11) with seemingly different discount amounts (AED 17 vs AED 32 dominant) — investigated the difference before assuming two different rates, and confirmed it's one continuous campaign: the AED 32 orders are simply larger gross-value orders hitting the same CAP 30 ceiling harder (32.00 − 2.00 FD = 30.00 exactly, verified against real order gross values). One rule covers the full 5-11 span. AED 65,569 combined — genuinely material. (3) 18 Jun: a separate single-day promo per the sheet, confirmed against real data (171/226 orders at a clean AED 17.00), added as its own residual alongside the still-running item rules for that day (both correctly apply simultaneously, matching how the sheet describes it). Verified full-month coverage directly: every single day in June now resolves to either an item rule or a residual campaign, with zero gap days remaining.",
   "🆕 Backfilled July's Oregano×Keeta rules (second month in the historical backfill, after August was re-verified and fixed in v307). Verified the existing item-specific rules (Milanese, Bolognese, Pepperoni, Lasagna, Alfredo) against real per-order July data first — all confirmed correct and already covering 1-12 and 17-23 Jul properly, no changes needed there. Found and fixed two genuinely missing residual campaign windows, both real gaps with no rule at all previously: (1) 24-30 Jul \"Keeta Week\" — verified against real data: 973 single-item discounted orders in this window, 810 (83%) at a clean flat AED 20 discount spanning a wide range of menu items, confirming a menu-wide cap-based promo (sheet: \"50% OFF CAP 30\"), not item-specific rules — every one of those 973 orders was previously landing in (Unattributed). (2) 13-15 Jul — sheet shows TWO co-funded campaigns running simultaneously (\"30% OFF CAP 35\" and \"40% OFF CAP 35\"); real order data for this window is genuinely messier than the 24-30 window (62% dominance vs 83%), consistent with two real campaigns blending together rather than one clean signal. Deliberately did NOT attempt to split this into two separate rules — the data doesn't cleanly separate them, and a confident-looking guess at which specific order belongs to which of two simultaneous promos would be worse than an honest combined rule; labeled transparently as \"30%/40% OFF (combined)\" rather than picking one name arbitrarily. This window is genuinely material — AED 7,633, 9.4% of July's total Oregano-Keeta discount — worth closing even without a clean per-campaign split. Verified both new rules resolve correctly across the full month with no unintended date overlap.",
   "🐛 Found and fixed a real, CURRENT (not historical) gap in Oregano's Keeta rules, verifying August first per Nikhil's request before backfilling further back. The sheet shows Oregano's two Keeta campaigns literally swap items on 20 Aug: Alfredo Pasta moves out of \"25% OFF Select Items\" into \"OFU Item Keeta\" (a deeper 50% discount replacing the prior 40% Blackened Chicken deal); Blackened Chicken moves the opposite direction into Select Items. Both existing rules had endDate:null (never-ending), so from 20 Aug onward every real order for either item was being matched against the wrong campaign's expected discount — an active, ongoing gap affecting today's data, not just old history. Confirmed against real per-order data before touching anything: both items show a clean, sharp break in discount value on exactly 20 Aug (Alfredo 14.75→17.30, Blackened Chicken ~19.36→17.50, both figures still including the AED 2 FD cost bundled into this export's discount column — after subtracting it, Alfredo's new rate is exactly AED 15.30, matching the sheet's stated \"50% off\" precisely). Also explicitly verified the other five Select Items dishes (Milanese, Bolognese, Pepperoni, Aglio e Olio, Pesto) genuinely did NOT change across the same boundary, confirming only these two needed fixing, not all seven.",
@@ -13347,6 +13348,47 @@ function exportUnattributedDeepDive(){
     console.error('[exportUnattributedDeepDive]',err);
   }
 }
+// v310: turns the existing getKeetaExactDisc naming-mismatch diagnostic (v230 — logs to
+// window._keetaMismatchLog and console.warn, but nothing ever reads it back out) into an actual
+// visible panel. This is the direct answer to Nikhil asking whether the August/July/June
+// corrections taught the dashboard anything for next time, or just fixed those specific months —
+// honestly, until this build, only the latter. Every one of those fixes started the same way:
+// noticing a name in the sheet with no matching rule, then manually cross-checking real order
+// data. The diagnostic that makes that noticing possible already existed and was already running
+// on every page load — it just wrote to a place nobody was looking. This surfaces it directly,
+// so a NEW naming mismatch (a campaign rotating to new items next month, the same way it always
+// has) shows up here automatically instead of requiring another from-scratch investigation.
+function keetaNamingMismatchPanel(){
+  const log=window._keetaMismatchLog;
+  if(!log||!log.length)return '';
+  // Dedup by (sheetName, brand, window) — the same mismatch can log multiple times across a
+  // session (re-renders, cache invalidation) without representing a NEW distinct issue.
+  const seen=new Set();const rows=[];
+  for(const m of log){
+    const key=`${m.sheetName}|${m.brand}|${m.window}`;
+    if(seen.has(key))continue;
+    seen.add(key);
+    rows.push(m);
+  }
+  rows.sort((a,b)=>b.keetaHasRecords-a.keetaHasRecords); // biggest first — most worth checking
+  return `<div class="card" style="padding:14px 16px;margin-bottom:14px;border-left:4px solid #DC2626">
+    <div class="ct" style="margin-bottom:6px">⚠️ Keeta naming mismatches — ${rows.length} campaign${rows.length===1?'':'s'} with no matching rule but real orders found</div>
+    <div style="font-size:11px;color:${T.muted};line-height:1.6;margin-bottom:10px">
+      A sheet campaign name didn't match anything in KEETA_ITEM_RULES / KEETA_RESIDUAL_RULES, but Keeta's uploaded orders show real activity for that brand+date window under a different name — usually because a campaign's items rotated and the rules weren't updated to match, the exact same pattern behind the August/July/June fixes. Every row below is currently landing in Uncategorized burn.
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:11.5px">
+    <tr><th style="text-align:left;padding:5px 8px;color:${T.muted};font-size:10px">Sheet campaign</th><th style="text-align:left;padding:5px 8px;color:${T.muted};font-size:10px">Brand</th><th style="text-align:left;padding:5px 8px;color:${T.muted};font-size:10px">Window</th><th style="text-align:right;padding:5px 8px;color:${T.muted};font-size:10px">Real orders</th><th style="text-align:left;padding:5px 8px;color:${T.muted};font-size:10px">Keeta's own name(s) for these orders</th></tr>
+    ${rows.slice(0,20).map(m=>`<tr style="border-top:1px solid ${T.border}">
+      <td style="padding:6px 8px;font-weight:700">${esc_html(m.sheetName)}</td>
+      <td style="padding:6px 8px">${esc_html(m.brand)}</td>
+      <td style="padding:6px 8px;color:${T.muted}">${m.window}</td>
+      <td style="text-align:right;padding:6px 8px;font-weight:700;color:#DC2626">${m.keetaHasRecords}</td>
+      <td style="padding:6px 8px;color:${T.muted}">${m.keetaCampaignNamesFound.map(esc_html).join(', ')||'—'}</td>
+    </tr>`).join('')}
+    </table>
+    ${rows.length>20?`<div style="font-size:10px;color:${T.muted};margin-top:6px">+ ${rows.length-20} more — showing the 20 with the most real orders behind them</div>`:''}
+  </div>`;
+}
 function discAuditDateHTML(brand,aggregator,date){
   if(!_lastDiscBurnData)return'<div style="padding:10px;font-size:11px;color:#94a3b8">No cached data — refresh the page and try again.</div>';
   const d=_lastDiscBurnData;
@@ -13955,7 +13997,7 @@ function discountUncategorizedBreakdownHTML(d){
     +'';
   }).join('');
   const grandUnc=d.uncategorizedByBrandAgg.reduce((s,x)=>s+x.uncategorized,0);
-  return `<div class="card" style="padding:14px 16px;margin-bottom:14px;border-left:4px solid #F59E0B">
+  return `${keetaNamingMismatchPanel()}<div class="card" style="padding:14px 16px;margin-bottom:14px;border-left:4px solid #F59E0B">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <div class="ct" style="margin-bottom:0">❓ Uncategorized burn — where the ${fmt(grandUnc)} is coming from</div>
       <button onclick="exportUnattributedDeepDive()" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.35);border-radius:8px;color:#16a34a;padding:6px 13px;font-size:11.5px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px" title="Every unattributed order across every brand/aggregator/date currently shown here, with items, discount amounts, and the daily gap — not just one date at a time.">📥 Download all unattributed orders (CSV)</button>
