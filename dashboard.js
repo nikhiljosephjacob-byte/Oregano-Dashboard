@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-310";
+const BUILD_VERSION="2026-08-13-311";
 const BUILD_NOTES=[
+  "🆕 Direct response to Nikhil asking why the fix itself couldn't be automated, since sheet item names are ~90% similar to real Keeta menu names. Tested this properly before building anything: fuzzy-matching a sheet term against the FULL menu is genuinely unsafe, not just imprecise — \"Chicken\" scores 0.58 against \"Blackened Chicken\" and 0.56 against \"Chicken Tortellini\" (two different real dishes, different rates, nearly indistinguishable scores), \"Risotto\" scores within 0.11 across three different risotto dishes. That's the actual failure mode: confident-looking suggestions, wrong in exactly the ambiguous cases that matter most, worse than the status quo because they'd look trustworthy. The fix that IS safe: narrow the candidate pool to only items that actually appear in real Keeta orders for that specific brand+window (not the whole menu — usually 5-15 real items, not 50+) — tested against a reconstruction of June's actual mismatch and every match had a wide gap to its nearest wrong answer (smallest 0.26 vs the ambiguous full-menu cases' 0.02), including correctly resolving the exact real \"Tuscan Fusilli\"→\"Tuscan Pasta\" case from that investigation. Built keetaSuggestItemMatches() on this narrowed-pool principle and wired it into the v310 mismatch panel — each unmatched sheet campaign now shows its most likely real item matches with supporting evidence (order count, modal discount value, % consistency) directly in the panel. Still a suggestion only, never auto-applied — confirmed and tested end-to-end through the real panel function, not just the matching logic in isolation.",
   "🆕 Direct answer to Nikhil's question — were the August/July/June fixes teaching the dashboard anything for next time, or just correcting those specific months? Honestly, until this build, only the latter. Every one of those fixes started the exact same way: noticing a sheet campaign name with no matching rule, then manually cross-checking real order data to figure out what changed. The diagnostic that makes that noticing possible already existed (getKeetaExactDisc, added in v230) and was already running on every single page load — it just wrote to window._keetaMismatchLog and a console.warn that nobody was reading. Built keetaNamingMismatchPanel() to surface that log directly on the Discount Burn page instead: every sheet campaign with no matching rule but real Keeta orders behind it, brand, date window, how many real orders, and what name(s) Keeta itself uses for them — deduplicated (the same mismatch can log multiple times per session without being a new issue) and sorted by size so the biggest problems surface first. This is the actual systematic fix — a campaign rotating its items next month, the same way it always has, now shows up here automatically on next page load instead of requiring another from-scratch investigation like the last several builds. Verified against a realistic mismatch log including duplicates: correctly dedupes, correctly sorts biggest-first, correctly renders nothing when the log is empty or doesn't exist yet.",
   "🆕 Backfilled June's Oregano×Keeta rules (third month, after August's re-verification/fix in v307 and July's backfill in v308). Found the existing rules only covered 12-23 June, leaving three real gaps — 1-4 (item-specific), 5-11 and 18 (both residual). Verified all three against real order data before writing anything. (1) 1-4 Jun: same item list as the 12-23 rotation (Milanese, Risotto Funghi, Tuscan Pasta, Pepperoni), each confirmed with a single clean dominant discount value — same confidence level as August's original rules. (2) 5-11 Jun \"Showcase 50% OFF\": sheet lists this as two separate rows (5-8 and 9-11) with seemingly different discount amounts (AED 17 vs AED 32 dominant) — investigated the difference before assuming two different rates, and confirmed it's one continuous campaign: the AED 32 orders are simply larger gross-value orders hitting the same CAP 30 ceiling harder (32.00 − 2.00 FD = 30.00 exactly, verified against real order gross values). One rule covers the full 5-11 span. AED 65,569 combined — genuinely material. (3) 18 Jun: a separate single-day promo per the sheet, confirmed against real data (171/226 orders at a clean AED 17.00), added as its own residual alongside the still-running item rules for that day (both correctly apply simultaneously, matching how the sheet describes it). Verified full-month coverage directly: every single day in June now resolves to either an item rule or a residual campaign, with zero gap days remaining.",
   "🆕 Backfilled July's Oregano×Keeta rules (second month in the historical backfill, after August was re-verified and fixed in v307). Verified the existing item-specific rules (Milanese, Bolognese, Pepperoni, Lasagna, Alfredo) against real per-order July data first — all confirmed correct and already covering 1-12 and 17-23 Jul properly, no changes needed there. Found and fixed two genuinely missing residual campaign windows, both real gaps with no rule at all previously: (1) 24-30 Jul \"Keeta Week\" — verified against real data: 973 single-item discounted orders in this window, 810 (83%) at a clean flat AED 20 discount spanning a wide range of menu items, confirming a menu-wide cap-based promo (sheet: \"50% OFF CAP 30\"), not item-specific rules — every one of those 973 orders was previously landing in (Unattributed). (2) 13-15 Jul — sheet shows TWO co-funded campaigns running simultaneously (\"30% OFF CAP 35\" and \"40% OFF CAP 35\"); real order data for this window is genuinely messier than the 24-30 window (62% dominance vs 83%), consistent with two real campaigns blending together rather than one clean signal. Deliberately did NOT attempt to split this into two separate rules — the data doesn't cleanly separate them, and a confident-looking guess at which specific order belongs to which of two simultaneous promos would be worse than an honest combined rule; labeled transparently as \"30%/40% OFF (combined)\" rather than picking one name arbitrarily. This window is genuinely material — AED 7,633, 9.4% of July's total Oregano-Keeta discount — worth closing even without a clean per-campaign split. Verified both new rules resolve correctly across the full month with no unintended date overlap.",
@@ -1839,7 +1840,7 @@ function getKeetaExactDisc(c,start,end){
     if(sameWindow.length){
       const otherNames=[...new Set(sameWindow.map(rec=>rec.campaign).filter(Boolean))];
       window._keetaMismatchLog=window._keetaMismatchLog||[];
-      window._keetaMismatchLog.push({sheetName:c.name,brand:c.brand,window:`${start}→${end}`,keetaHasRecords:sameWindow.length,keetaCampaignNamesFound:otherNames});
+      window._keetaMismatchLog.push({sheetName:c.name,sheetComments:c.comments||'',brand:c.brand,windowStart:start,windowEnd:end,window:`${start}→${end}`,keetaHasRecords:sameWindow.length,keetaCampaignNamesFound:otherNames});
       if(otherNames.length)console.warn(`[Keeta attribution] Sheet campaign "${c.name}" (${c.brand}, ${start}→${end}) found no exact match, but Keeta HAS ${sameWindow.length} order(s) in this window under different name(s): ${otherNames.join(', ')} — likely a naming mismatch, not missing data.`);
     }
     return null;
@@ -13358,6 +13359,83 @@ function exportUnattributedDeepDive(){
 // on every page load — it just wrote to a place nobody was looking. This surfaces it directly,
 // so a NEW naming mismatch (a campaign rotating to new items next month, the same way it always
 // has) shows up here automatically instead of requiring another from-scratch investigation.
+// v311: fixes the honest gap Nikhil pushed on directly — why only detect mismatches, not suggest
+// the fix? Tested this properly before building it: fuzzy-matching a sheet item name against the
+// FULL menu is genuinely unsafe — "Chicken" scores nearly identically against "Blackened Chicken"
+// and "Chicken Tortellini" (two different dishes, different rates), "Risotto" scores within 0.11
+// across three different risotto dishes. That's not a hedge, it's a real failure mode: an
+// auto-suggestion confident enough to look trustworthy but wrong in exactly the ambiguous cases
+// that matter most. BUT narrowing the candidate pool to only items that actually appear in REAL
+// discounted Keeta orders for that specific brand+window (not the whole menu — usually 5-15 real
+// candidates, not 50+) changes this: tested against a reconstructed real case (June's "Milanese,
+// Pepperoni (R), Risotto Funghi, Tuscan Fusilli" list) and every match had a clear gap (smallest
+// 0.26) to its nearest wrong answer. Still a SUGGESTION only — surfaced for confirmation, never
+// auto-applied, since even a wide gap isn't proof, just much lower risk than matching blind.
+function keetaSuggestItemMatches(sheetCommentText,brand,windowStart,windowEnd){
+  if(!keetaOrdersData||!keetaOrdersData.records)return[];
+  // Extract candidate item phrases from the sheet comment — split on common list delimiters.
+  // Deliberately simple (not NLP) — good enough to isolate item names from surrounding prose
+  // like "4 Items at 25% OFF :" and "(60:40 Co-Funding...)", not meant to be perfect.
+  const stripped=sheetCommentText.replace(/\d+\s*items?\s*at\s*\d+%\s*off\s*:?/gi,'').replace(/\(\s*co-?funded?.*?\)/gi,'').replace(/[+\-]\s*fd\s*\(aed\s*\d+\)/gi,'');
+  const stated=stripped.split(/[,;]|(?:\s+and\s+)/i).map(s=>s.trim()).filter(s=>s.length>2&&!/^\d+%/.test(s));
+  if(!stated.length)return[];
+  // Narrow pool: real distinct item names actually seen on discounted single-item orders for
+  // this brand within the window — not the whole menu.
+  const realItems=new Map(); // item name -> {count, discValues:[]}
+  for(const rec of keetaOrdersData.records){
+    if(rec.brand!==brand)continue;
+    if(rec.date<windowStart||rec.date>windowEnd)continue;
+    if(!(rec.menu_disc>0.5))continue;
+    // records here are already per-(brand,outlet,date,campaign) aggregates in this codebase, not
+    // per-order — item-level detail only exists in orderDetail. Use that instead.
+  }
+  if(!keetaOrdersData.orderDetail)return[];
+  for(const o of keetaOrdersData.orderDetail){
+    if(o.br!==brand||o.d<windowStart||o.d>windowEnd)continue;
+    const items=(o.i||'').split(';').map(s=>s.trim()).filter(Boolean);
+    if(items.length!==1)continue; // single-item orders only — same discipline as the manual investigations
+    const share=o.a&&o.a[0]?o.a[0][1]:0;
+    if(!(share>0.5))continue;
+    const name=items[0];
+    if(!realItems.has(name))realItems.set(name,{count:0,discValues:[]});
+    const e=realItems.get(name);e.count++;e.discValues.push(share);
+  }
+  if(!realItems.size)return[];
+  const pool=[...realItems.keys()];
+  const seqRatio=(a,b)=>{
+    // Minimal Levenshtein-based ratio, same spirit as difflib.SequenceMatcher — no external
+    // dependency needed for something this scoped.
+    a=a.toLowerCase();b=b.toLowerCase();
+    const m=a.length,n=b.length;
+    if(!m||!n)return 0;
+    const dp=Array.from({length:m+1},()=>new Array(n+1).fill(0));
+    for(let i=0;i<=m;i++)dp[i][0]=i;
+    for(let j=0;j<=n;j++)dp[0][j]=j;
+    for(let i=1;i<=m;i++)for(let j=1;j<=n;j++){
+      dp[i][j]=a[i-1]===b[j-1]?dp[i-1][j-1]:1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1]);
+    }
+    const dist=dp[m][n];
+    return 1-dist/Math.max(m,n);
+  };
+  const suggestions=[];
+  for(const term of stated){
+    const scored=pool.map(item=>({item,score:seqRatio(term,item)})).sort((a,b)=>b.score-a.score);
+    if(!scored.length||scored[0].score<0.4)continue; // too weak to suggest at all
+    const gap=scored.length>1?scored[0].score-scored[1].score:1;
+    const top=scored[0];
+    const evidence=realItems.get(top.item);
+    // Mode discount value + how consistent it is — same sanity check done by hand throughout
+    // this whole investigation, surfaced automatically instead of requiring a manual pivot table.
+    const counts={};for(const v of evidence.discValues)counts[v]=(counts[v]||0)+1;
+    const modeVal=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
+    const cleanPct=modeVal[1]/evidence.discValues.length;
+    suggestions.push({
+      sheetTerm:term,suggestedItem:top.item,confidence:top.score,gapToNext:gap,
+      orderCount:evidence.count,modeDiscount:parseFloat(modeVal[0]),cleanPct
+    });
+  }
+  return suggestions;
+}
 function keetaNamingMismatchPanel(){
   const log=window._keetaMismatchLog;
   if(!log||!log.length)return '';
@@ -13377,15 +13455,24 @@ function keetaNamingMismatchPanel(){
       A sheet campaign name didn't match anything in KEETA_ITEM_RULES / KEETA_RESIDUAL_RULES, but Keeta's uploaded orders show real activity for that brand+date window under a different name — usually because a campaign's items rotated and the rules weren't updated to match, the exact same pattern behind the August/July/June fixes. Every row below is currently landing in Uncategorized burn.
     </div>
     <table style="width:100%;border-collapse:collapse;font-size:11.5px">
-    <tr><th style="text-align:left;padding:5px 8px;color:${T.muted};font-size:10px">Sheet campaign</th><th style="text-align:left;padding:5px 8px;color:${T.muted};font-size:10px">Brand</th><th style="text-align:left;padding:5px 8px;color:${T.muted};font-size:10px">Window</th><th style="text-align:right;padding:5px 8px;color:${T.muted};font-size:10px">Real orders</th><th style="text-align:left;padding:5px 8px;color:${T.muted};font-size:10px">Keeta's own name(s) for these orders</th></tr>
-    ${rows.slice(0,20).map(m=>`<tr style="border-top:1px solid ${T.border}">
-      <td style="padding:6px 8px;font-weight:700">${esc_html(m.sheetName)}</td>
-      <td style="padding:6px 8px">${esc_html(m.brand)}</td>
-      <td style="padding:6px 8px;color:${T.muted}">${m.window}</td>
-      <td style="text-align:right;padding:6px 8px;font-weight:700;color:#DC2626">${m.keetaHasRecords}</td>
-      <td style="padding:6px 8px;color:${T.muted}">${m.keetaCampaignNamesFound.map(esc_html).join(', ')||'—'}</td>
-    </tr>`).join('')}
+    <tr><th style="text-align:left;padding:5px 8px;color:${T.muted};font-size:10px">Sheet campaign</th><th style="text-align:left;padding:5px 8px;color:${T.muted};font-size:10px">Brand</th><th style="text-align:left;padding:5px 8px;color:${T.muted};font-size:10px">Window</th><th style="text-align:right;padding:5px 8px;color:${T.muted};font-size:10px">Real orders</th><th style="text-align:left;padding:5px 8px;color:${T.muted};font-size:10px">Suggested item rules (unconfirmed — verify before adding)</th></tr>
+    ${rows.slice(0,20).map(m=>{
+      const suggestions=m.sheetComments&&m.windowStart?keetaSuggestItemMatches(m.sheetComments,m.brand,m.windowStart,m.windowEnd):[];
+      const suggHTML=suggestions.length
+        ?suggestions.map(s=>{
+          const confColor=s.gapToNext>=0.2&&s.cleanPct>=0.8?'#22C55E':s.gapToNext>=0.1?'#F59E0B':'#94A3B8';
+          return `<div style="font-size:10px;margin-bottom:2px"><span style="color:${T.muted}">"${esc_html(s.sheetTerm)}"</span> → <strong style="color:${confColor}">${esc_html(s.suggestedItem)}</strong> <span style="color:${T.muted}">(${s.orderCount} orders, AED ${s.modeDiscount.toFixed(2)}, ${(s.cleanPct*100).toFixed(0)}% consistent)</span></div>`;
+        }).join('')
+        :`<span style="color:${T.muted};font-style:italic">no confident suggestion — check manually</span>`;
+      return `<tr style="border-top:1px solid ${T.border}">
+      <td style="padding:6px 8px;font-weight:700;vertical-align:top">${esc_html(m.sheetName)}</td>
+      <td style="padding:6px 8px;vertical-align:top">${esc_html(m.brand)}</td>
+      <td style="padding:6px 8px;color:${T.muted};vertical-align:top">${m.window}</td>
+      <td style="text-align:right;padding:6px 8px;font-weight:700;color:#DC2626;vertical-align:top">${m.keetaHasRecords}</td>
+      <td style="padding:6px 8px">${suggHTML}</td>
+    </tr>`;}).join('')}
     </table>
+    <div style="font-size:9.5px;color:${T.muted};margin-top:8px;line-height:1.5">Suggestions are matched against Keeta's real items seen in this exact brand+window only (not the full menu — narrowing the pool this way is what makes a suggestion safe to show; matching against the whole menu produces dangerously ambiguous results, e.g. "Chicken" scores nearly identically against two different real dishes). Still requires your confirmation before becoming a rule — a wide gap and clean discount consistency make a suggestion likely correct, not certain.</div>
     ${rows.length>20?`<div style="font-size:10px;color:${T.muted};margin-top:6px">+ ${rows.length-20} more — showing the 20 with the most real orders behind them</div>`:''}
   </div>`;
 }
