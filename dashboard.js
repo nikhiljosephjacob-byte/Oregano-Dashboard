@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-311";
+const BUILD_VERSION="2026-08-13-312";
 const BUILD_NOTES=[
+  "🆕 Made the Overview and Brands page trend charts switchable, per Nikhil's mockup review — small pill buttons above each chart (Net Sales / Orders / AOV / Discount Burn) swap the underlying data and label on click, both pages using the same pattern. trend30() (the existing day-by-day accumulator, already used by Net Sales) extended to also accumulate discount per day — AOV needed no new accumulation, derived from the sales/orders already there. trendChart() itself now takes an optional metric parameter with a safe default of 'sales', so all three OTHER existing call sites (Platforms page, campaign bundle detail, campaign detail trend) that don't pass it continue behaving exactly as before, unaffected. Whatever date/brand/platform filters are active already drives the existing chart, so metric-switching inherits that automatically — no separate filter logic needed. Per Nikhil's explicit instruction, the selection always resets to Net Sales on navigation (reset lives specifically in gp(), the actual page-navigation function — not inside renderOverview()/renderBrands() themselves, since resetting there would immediately undo a pill click's own re-render and the toggle would never visibly work). Verified the metric calculations directly against realistic data including a zero-order day (AOV correctly returns 0, not NaN/Infinity) and confirmed the navigation reset behaves as specified before shipping.",
   "🆕 Direct response to Nikhil asking why the fix itself couldn't be automated, since sheet item names are ~90% similar to real Keeta menu names. Tested this properly before building anything: fuzzy-matching a sheet term against the FULL menu is genuinely unsafe, not just imprecise — \"Chicken\" scores 0.58 against \"Blackened Chicken\" and 0.56 against \"Chicken Tortellini\" (two different real dishes, different rates, nearly indistinguishable scores), \"Risotto\" scores within 0.11 across three different risotto dishes. That's the actual failure mode: confident-looking suggestions, wrong in exactly the ambiguous cases that matter most, worse than the status quo because they'd look trustworthy. The fix that IS safe: narrow the candidate pool to only items that actually appear in real Keeta orders for that specific brand+window (not the whole menu — usually 5-15 real items, not 50+) — tested against a reconstruction of June's actual mismatch and every match had a wide gap to its nearest wrong answer (smallest 0.26 vs the ambiguous full-menu cases' 0.02), including correctly resolving the exact real \"Tuscan Fusilli\"→\"Tuscan Pasta\" case from that investigation. Built keetaSuggestItemMatches() on this narrowed-pool principle and wired it into the v310 mismatch panel — each unmatched sheet campaign now shows its most likely real item matches with supporting evidence (order count, modal discount value, % consistency) directly in the panel. Still a suggestion only, never auto-applied — confirmed and tested end-to-end through the real panel function, not just the matching logic in isolation.",
   "🆕 Direct answer to Nikhil's question — were the August/July/June fixes teaching the dashboard anything for next time, or just correcting those specific months? Honestly, until this build, only the latter. Every one of those fixes started the exact same way: noticing a sheet campaign name with no matching rule, then manually cross-checking real order data to figure out what changed. The diagnostic that makes that noticing possible already existed (getKeetaExactDisc, added in v230) and was already running on every single page load — it just wrote to window._keetaMismatchLog and a console.warn that nobody was reading. Built keetaNamingMismatchPanel() to surface that log directly on the Discount Burn page instead: every sheet campaign with no matching rule but real Keeta orders behind it, brand, date window, how many real orders, and what name(s) Keeta itself uses for them — deduplicated (the same mismatch can log multiple times per session without being a new issue) and sorted by size so the biggest problems surface first. This is the actual systematic fix — a campaign rotating its items next month, the same way it always has, now shows up here automatically on next page load instead of requiring another from-scratch investigation like the last several builds. Verified against a realistic mismatch log including duplicates: correctly dedupes, correctly sorts biggest-first, correctly renders nothing when the log is empty or doesn't exist yet.",
   "🆕 Backfilled June's Oregano×Keeta rules (third month, after August's re-verification/fix in v307 and July's backfill in v308). Found the existing rules only covered 12-23 June, leaving three real gaps — 1-4 (item-specific), 5-11 and 18 (both residual). Verified all three against real order data before writing anything. (1) 1-4 Jun: same item list as the 12-23 rotation (Milanese, Risotto Funghi, Tuscan Pasta, Pepperoni), each confirmed with a single clean dominant discount value — same confidence level as August's original rules. (2) 5-11 Jun \"Showcase 50% OFF\": sheet lists this as two separate rows (5-8 and 9-11) with seemingly different discount amounts (AED 17 vs AED 32 dominant) — investigated the difference before assuming two different rates, and confirmed it's one continuous campaign: the AED 32 orders are simply larger gross-value orders hitting the same CAP 30 ceiling harder (32.00 − 2.00 FD = 30.00 exactly, verified against real order gross values). One rule covers the full 5-11 span. AED 65,569 combined — genuinely material. (3) 18 Jun: a separate single-day promo per the sheet, confirmed against real data (171/226 orders at a clean AED 17.00), added as its own residual alongside the still-running item rules for that day (both correctly apply simultaneously, matching how the sheet describes it). Verified full-month coverage directly: every single day in June now resolves to either an item rule or a residual campaign, with zero gap days remaining.",
@@ -4751,7 +4752,7 @@ function ddHTML(id,label,activeSet,items,type){
 // ANALYTICS
 const sumR=recs=>recs.reduce((a,r)=>({sales:a.sales+r.sales,orders:a.orders+r.orders,disc:a.disc+(r.disc||0)}),{sales:0,orders:0,disc:0});
 function mkMap(recs,kFn){const m={};recs.forEach(r=>{const k=kFn(r);if(!m[k])m[k]={k,...r,sales:0,orders:0,disc:0};m[k].sales+=r.sales;m[k].orders+=r.orders;m[k].disc+=(r.disc||0);});return m;}
-function trend30(filterFn,start,end){const s=start||subDays(latest,30),e=end||latest;const m={};allData.filter(r=>filterFn(r)&&r.date>=s&&r.date<=e).forEach(r=>{if(!m[r.date])m[r.date]={d:r.date.slice(5),date:r.date,s:0,o:0};m[r.date].s+=r.sales;m[r.date].o+=r.orders;});return Object.values(m).sort((a,b)=>a.d.localeCompare(b.d));}
+function trend30(filterFn,start,end){const s=start||subDays(latest,30),e=end||latest;const m={};allData.filter(r=>filterFn(r)&&r.date>=s&&r.date<=e).forEach(r=>{if(!m[r.date])m[r.date]={d:r.date.slice(5),date:r.date,s:0,o:0,disc:0};m[r.date].s+=r.sales;m[r.date].o+=r.orders;m[r.date].disc+=(r.disc||0);});return Object.values(m).sort((a,b)=>a.d.localeCompare(b.d));}
 
 // RENDER HELPERS
 function kpiCard(label,value,sub,chg,onclick,perDay,invertChg,tooltipHTML,ctipId){
@@ -4850,7 +4851,17 @@ function mkTable(heads,rows){return`<div style="overflow-x:auto"><table class="t
 
 // CHARTS — tooltips show the exact date + value on hover
 function destroyChart(id){if(charts[id]){charts[id].destroy();delete charts[id];}}
-function trendChart(id,data,color){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);
+function trendChart(id,data,color,metric){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);
+  // v312: added the optional metric param for the clickable Overview/Brands trend chart — every
+  // existing caller that doesn't pass it keeps behaving exactly as before (metric defaults to
+  // 'sales', the only option that existed until now).
+  const METRIC_DEFS={
+    sales:{label:"Net Sales",getVal:d=>d.s,fmt:v=>`AED ${Math.round(v).toLocaleString()}`},
+    aov:{label:"AOV",getVal:d=>d.o>0?d.s/d.o:0,fmt:v=>`AED ${v.toFixed(1)}`},
+    disc:{label:"Discount Burn",getVal:d=>d.disc||0,fmt:v=>`AED ${Math.round(v).toLocaleString()}`},
+    orders:{label:"Orders",getVal:d=>d.o,fmt:v=>`${Math.round(v).toLocaleString()}`}
+  };
+  const M=METRIC_DEFS[metric]||METRIC_DEFS.sales;
   const axisClr=_darkPage?DARK_THEME.textMuted:"#64748b",gridClr=_darkPage?"#2A3450":"#F1F5F9";
   // Multi-line x-axis labels: ["07-02","Thu"] renders MM-DD on top and day-of-week below. Falls back to
   // single-line labels for callers that don't pass a full ISO date (e.g. campaign detail trend graphs).
@@ -4862,7 +4873,7 @@ function trendChart(id,data,color){const ctx=document.getElementById(id)?.getCon
     }
     return d.d;
   };
-  charts[id]=new Chart(ctx,{type:"line",data:{labels:data.map(buildLabel),datasets:[{data:data.map(d=>d.s),borderColor:color,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false,label:"Net Sales"}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:false},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{title:t=>Array.isArray(t[0].label)?t[0].label.join(" · "):t[0].label,label:c=>{const o=data[c.dataIndex]?.o;return [`AED ${Math.round(c.raw).toLocaleString()} Net Sales`,o!=null?`${Math.round(o).toLocaleString()} orders`:""].filter(Boolean);}}}},scales:{x:{ticks:{color:axisClr,font:{size:9}},grid:{color:gridClr},border:{display:false}},y:{ticks:{color:axisClr,font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:gridClr},border:{display:false}}}}});}
+  charts[id]=new Chart(ctx,{type:"line",data:{labels:data.map(buildLabel),datasets:[{data:data.map(M.getVal),borderColor:color,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false,label:M.label}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:false},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{title:t=>Array.isArray(t[0].label)?t[0].label.join(" · "):t[0].label,label:c=>{const o=data[c.dataIndex]?.o;return [`${M.fmt(c.raw)} ${M.label}`,metric!=='orders'&&o!=null?`${Math.round(o).toLocaleString()} orders`:""].filter(Boolean);}}}},scales:{x:{ticks:{color:axisClr,font:{size:9}},grid:{color:gridClr},border:{display:false}},y:{ticks:{color:axisClr,font:{size:9},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:gridClr},border:{display:false}}}}});}
 function barChart(id,labels,values,colors,extra,mode){const ctx=document.getElementById(id)?.getContext("2d");if(!ctx)return;destroyChart(id);const idx=[...Array(labels.length).keys()].sort((a,b)=>values[b]-values[a]);const sl=idx.map(i=>labels[i]),sv=idx.map(i=>values[i]),sc=idx.map(i=>colors[i]),se=extra?idx.map(i=>extra[i]):null;
   const axisClrX=_darkPage?DARK_THEME.textSecondary:"#475569",axisClrY=_darkPage?DARK_THEME.textMuted:"#64748B",gridClrBar=_darkPage?"#2A3450":"#F1F5F9",barLabelClr=_darkPage?DARK_THEME.textPrimary:"#0F172A";
   const showOrdersOnTop=mode==="salesWithOrdersOnTop";
@@ -4927,7 +4938,7 @@ function restructureTabIcons(){
     t.innerHTML=`<span class="tab-icon" style="flex-shrink:0;display:inline-flex;justify-content:center;width:18px">${icon}</span><span class="tab-label">${label}</span>`;
   });
 }
-function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>{t.classList.toggle("act",t.dataset.pg===page);});document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(page);}
+function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>{t.classList.toggle("act",t.dataset.pg===page);});document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};ovTrendMetric='sales';brTrendMetric='sales';renderPage(page);}
 
 // ── MOBILE NAV DRAWER ──
 // Slides in from the left on tap of hamburger. Overlay dims the page. Any tap on a nav item or
@@ -5193,7 +5204,7 @@ function renderOverview(){
       const priorDepth=priorGross>0?((ps.disc||0)/priorGross*100):0;
       return kpiCard("Discount Burn",fmtAEDTip(ls.disc||0),`${depth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(ls.disc||0,ps.disc||0),null,null,true);
     })()}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior))}${kpiCard("Active Outlets",activeOutlets,"all brands",null,null,null,null,missingOutletsHTML)}</div>
-    <div class="g2"><div class="sm"><div class="ct">Net Sales Trend</div><div style="position:relative;height:220px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
+    <div class="g2"><div class="sm"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px"><span>${OV_TREND_METRICS[ovTrendMetric].label} Trend</span><span style="display:flex;gap:4px">${OV_TREND_METRIC_KEYS.map(k=>`<span onclick="ovSetTrendMetric('${k}')" style="cursor:pointer;font-size:10px;font-weight:${k===ovTrendMetric?700:500};padding:3px 8px;border-radius:6px;text-transform:none;letter-spacing:0;background:${k===ovTrendMetric?(_darkPage?DARK_THEME.accentOrange+'22':'#F59E0B22'):'transparent'};color:${k===ovTrendMetric?(_darkPage?DARK_THEME.accentOrange:'#B45309'):(_darkPage?DARK_THEME.textMuted:'#64748B')};border:1px solid ${k===ovTrendMetric?(_darkPage?DARK_THEME.accentOrange:'#F59E0B'):'transparent'}">${OV_TREND_METRICS[k].shortLabel}</span>`).join('')}</span></div><div style="position:relative;height:220px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="card" style="padding:14px">
       <div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span>Outlet Highlights by Platform</span><span style="color:#8393AB;font-weight:400;text-transform:none;letter-spacing:0;font-size:10px">click a platform to see its top movers</span></div>
       <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">${verdTabs}</div>
@@ -5209,7 +5220,7 @@ function renderOverview(){
     // Trend must respect the active brand/platform/outlet filters (not just the date range).
     const f=curFilters();
     const matchFilters=(r)=>(!f.brands.size||f.brands.has(r.brand))&&(!f.platforms.size||f.platforms.has(r.aggregator))&&(!f.branches.size||f.branches.has(r.branch));
-    trendChart("ch-trend",trend30(matchFilters,f.start,f.end),"#F59E0B");
+    trendChart("ch-trend",trend30(matchFilters,f.start,f.end),"#F59E0B",ovTrendMetric);
     barChart("ch-agg",aggRows.map(a=>a.ag),aggRows.map(a=>a.sales),aggRows.map(a=>a.clr),aggRows.map(a=>a.orders),"gmv");
     if(aovDrill){
       // Build per-day AOV per brand across selected range
@@ -5274,9 +5285,9 @@ function renderBrands(){
   document.getElementById("page-brands").innerHTML=brandsStyleOverride+makeFilterBar({hideBrand:true})+
     `<div class="brand-sel-row" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
     <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior))}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
-    <div class="g2"><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — Net Sales Trend</div><div style="position:relative;height:180px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748B;font-weight:600;text-transform:none;letter-spacing:0;font-size:10px">sales bars · order count on top</span></div><div style="position:relative;height:180px"><canvas id="ch-b-agg"></canvas></div></div></div>
+    <div class="g2"><div class="sm"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;color:${b?.c}"><span>${selBrand} — ${OV_TREND_METRICS[brTrendMetric].label} Trend</span><span style="display:flex;gap:4px">${OV_TREND_METRIC_KEYS.map(k=>`<span onclick="brSetTrendMetric('${k}')" style="cursor:pointer;font-size:10px;font-weight:${k===brTrendMetric?700:500};padding:3px 8px;border-radius:6px;text-transform:none;letter-spacing:0;background:${k===brTrendMetric?(b?.c||'#F59E0B')+'22':'transparent'};color:${k===brTrendMetric?(b?.c||'#F59E0B'):(_darkPage?DARK_THEME.textMuted:'#64748B')};border:1px solid ${k===brTrendMetric?(b?.c||'#F59E0B'):'transparent'}">${OV_TREND_METRICS[k].shortLabel}</span>`).join('')}</span></div><div style="position:relative;height:180px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748B;font-weight:600;text-transform:none;letter-spacing:0;font-size:10px">sales bars · order count on top</span></div><div style="position:relative;height:180px"><canvas id="ch-b-agg"></canvas></div></div></div>
     <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>`;
-  setTimeout(()=>{const f=curFilters();const mf=(r)=>r.brand===selBrand&&(!f.platforms.size||f.platforms.has(r.aggregator))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-b-trend",trend30(mf,f.start,f.end),b?.c||"#888");
+  setTimeout(()=>{const f=curFilters();const mf=(r)=>r.brand===selBrand&&(!f.platforms.size||f.platforms.has(r.aggregator))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-b-trend",trend30(mf,f.start,f.end),b?.c||"#888",brTrendMetric);
     // Single bar chart: sales as bar height, orders shown as data label on top of each bar
     barChart("ch-b-agg",aggBar.map(a=>a.ag),aggBar.map(a=>a.sales),aggBar.map(a=>a.clr),aggBar.map(a=>a.orders),"salesWithOrdersOnTop");
   },50);
@@ -16356,6 +16367,22 @@ function feedbackToggleBrandFilter(brand){
 // Two independent filter states
 const cmpDefault=()=>({brands:new Set(),platforms:new Set(),branches:new Set(),start:null,end:null,preset:"custom"});
 let cmpA=cmpDefault(),cmpB=cmpDefault();
+// v312: switchable Overview/Brands trend chart — shared metric definitions so both pages present
+// the same four options consistently. State (ovTrendMetric/brTrendMetric) always defaults to
+// 'sales' and is explicitly reset to 'sales' on every gp() navigation (see gp() above) — per
+// Nikhil's explicit instruction that leaving and returning to a page should always show Net
+// Sales again, not remember the last-selected metric.
+const OV_TREND_METRICS={
+  sales:{label:"Net Sales",shortLabel:"Net Sales"},
+  aov:{label:"AOV",shortLabel:"AOV"},
+  disc:{label:"Discount Burn",shortLabel:"Disc. Burn"},
+  orders:{label:"Orders",shortLabel:"Orders"}
+};
+const OV_TREND_METRIC_KEYS=["sales","orders","aov","disc"];
+let ovTrendMetric="sales";
+function ovSetTrendMetric(k){if(!OV_TREND_METRICS[k])return;ovTrendMetric=k;renderOverview();}
+let brTrendMetric="sales";
+function brSetTrendMetric(k){if(!OV_TREND_METRICS[k])return;brTrendMetric=k;renderBrands();}
 // v283: fixes a real directional bug Nikhil caught — every delta on this page assumed Group B
 // is always the chronologically later ("current") period and Group A is always the earlier
 // ("baseline") one, computing pctOf(b,a) and labeling it "B vs A" everywhere. That assumption
