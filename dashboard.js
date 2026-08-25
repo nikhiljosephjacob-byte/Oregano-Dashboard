@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-313";
+const BUILD_VERSION="2026-08-13-314";
 const BUILD_NOTES=[
+  "🐛 Investigated the Ads Performance crash Nikhil hit right after the Discount Burn fix — \"Cannot read properties of null (reading 'getContext')\" thrown from inside Chart.js's own internals (helpers.canvas.ts), not from any of this dashboard's own chart-creation call sites (all five already have null-safe getContext guards, checked directly). Being fully honest about certainty here: the console log this time didn't include a full stack trace back into dashboard.js, so the exact triggering line couldn't be pinned with the same confidence as the last two fixes. What IS confirmed, directly: gp() (page navigation) never awaits renderPage(), and renderCPC() has a genuine unguarded async gap around buildCPCModel() (a real, possibly slow operation — it has its own progress-bar UI). That means if a user navigates away from Ads Performance and back, or re-triggers it, while a previous renderCPC() call is still mid-flight, the stale call can resume AFTER the DOM has moved on and try to draw into a canvas that's since been replaced — exactly the shape of bug that produces this exact Chart.js internal crash. Fixed with a generation-token guard: each renderCPC() call captures the current token on entry and re-checks it after every await; a stale call whose token no longer matches silently aborts instead of touching the DOM. Verified the guard logic directly with a simulated race (two overlapping calls, old one slower) — confirmed the newer call completes normally while the stale one correctly detects it's outdated and aborts before running. This closes a real, confirmed race condition regardless of whether it's the exact cause of this specific crash — if the crash recurs after this build, that would mean a second, different cause is also in play, and the next console log (ideally with the full stack trace this time) would be needed to find it.",
   "🐛 Fixed a real crash that was taking down the ENTIRE Discount Burn page — \"T is not defined\" — caught directly from Nikhil's console log. keetaNamingMismatchPanel() (added in v310) used a theme-color variable T six times but never declared it itself; every other function on this page (including its own caller) gets that value from discTheme(), a pattern this function should have followed but didn't. This is exactly the kind of bug that can pass casual testing by coincidence — if T happened to still be in scope from something else at the time — and then throw the first time it runs somewhere that assumption doesn't hold, which is what happened here: an uncaught exception partway through the page's render aborted the entire renderDiscounts() call, not just this one panel. Fixed by adding the same const T=discTheme() every other function on the page uses. Verified two ways before shipping: confirmed discTheme() is a pure function with no side effects (safe to call unconditionally), and reproduced the exact real failure scenario from Nikhil's console log (a genuine Keeta Week mismatch entry) against the fixed code — renders successfully instead of throwing, and the empty-log fast path still correctly returns nothing.",
   "🆕 Made the Overview and Brands page trend charts switchable, per Nikhil's mockup review — small pill buttons above each chart (Net Sales / Orders / AOV / Discount Burn) swap the underlying data and label on click, both pages using the same pattern. trend30() (the existing day-by-day accumulator, already used by Net Sales) extended to also accumulate discount per day — AOV needed no new accumulation, derived from the sales/orders already there. trendChart() itself now takes an optional metric parameter with a safe default of 'sales', so all three OTHER existing call sites (Platforms page, campaign bundle detail, campaign detail trend) that don't pass it continue behaving exactly as before, unaffected. Whatever date/brand/platform filters are active already drives the existing chart, so metric-switching inherits that automatically — no separate filter logic needed. Per Nikhil's explicit instruction, the selection always resets to Net Sales on navigation (reset lives specifically in gp(), the actual page-navigation function — not inside renderOverview()/renderBrands() themselves, since resetting there would immediately undo a pill click's own re-render and the toggle would never visibly work). Verified the metric calculations directly against realistic data including a zero-order day (AOV correctly returns 0, not NaN/Infinity) and confirmed the navigation reset behaves as specified before shipping.",
   "🆕 Direct response to Nikhil asking why the fix itself couldn't be automated, since sheet item names are ~90% similar to real Keeta menu names. Tested this properly before building anything: fuzzy-matching a sheet term against the FULL menu is genuinely unsafe, not just imprecise — \"Chicken\" scores 0.58 against \"Blackened Chicken\" and 0.56 against \"Chicken Tortellini\" (two different real dishes, different rates, nearly indistinguishable scores), \"Risotto\" scores within 0.11 across three different risotto dishes. That's the actual failure mode: confident-looking suggestions, wrong in exactly the ambiguous cases that matter most, worse than the status quo because they'd look trustworthy. The fix that IS safe: narrow the candidate pool to only items that actually appear in real Keeta orders for that specific brand+window (not the whole menu — usually 5-15 real items, not 50+) — tested against a reconstruction of June's actual mismatch and every match had a wide gap to its nearest wrong answer (smallest 0.26 vs the ambiguous full-menu cases' 0.02), including correctly resolving the exact real \"Tuscan Fusilli\"→\"Tuscan Pasta\" case from that investigation. Built keetaSuggestItemMatches() on this narrowed-pool principle and wired it into the v310 mismatch panel — each unmatched sheet campaign now shows its most likely real item matches with supporting evidence (order count, modal discount value, % consistency) directly in the panel. Still a suggestion only, never auto-applied — confirmed and tested end-to-end through the real panel function, not just the matching logic in isolation.",
@@ -6045,6 +6046,19 @@ function parseCPCSheet(csv){
 //     actions: [ ...urgent action items... ]
 //   }
 let cpcModel=null,cpcModelProgress=0,cpcModelBuilding=false;
+// v314: fixes a real, confirmed race condition — gp() (navigation) never awaits renderPage(), and
+// renderCPC() has a genuine unguarded async gap around buildCPCModel() (can take real time, per
+// its own progress bar UI). If the user navigates away from Ads Performance and back — or
+// re-triggers it — while a previous renderCPC() call is still mid-flight, that stale call can
+// resume AFTER the DOM has moved on and try to draw a chart into a canvas that navigation has
+// since replaced. Chart.js's own internals (helpers.canvas.ts) then throw trying to read
+// getContext() on a stale/null reference — this exact crash, per Nikhil's console log, though
+// the log didn't include a full stack trace back into dashboard.js so the precise call site
+// couldn't be pinned with certainty; this closes the confirmed race regardless. A monotonically
+// increasing generation token: each renderCPC() call captures the CURRENT token on entry: any
+// call whose token no longer matches after an await knows a newer render has since started and
+// aborts before touching the DOM, rather than racing it.
+let cpcRenderGen=0;
 
 function buildCPCModel(onProgress){
   return new Promise((resolve)=>{
@@ -6292,25 +6306,29 @@ function cpcSetMonth(m){cpcMonthFilter=m;renderCPC();}
 
 // ── RENDER ──
 async function renderCPC(){
+  const myGen=++cpcRenderGen; // v314: this call's own generation — see cpcRenderGen declaration above
   const pg=document.getElementById("page-cpc");if(!pg)return;
   const T=cpcTheme();
   // Load raw data
   if(!cpcLoaded){
     pg.innerHTML=cpcShell(`<div style="display:flex;align-items:center;gap:10px;padding:20px"><div class="dot"></div><div style="color:${T.label};font-size:13px">Loading Ad Investments data…</div></div>`);
-    try{const csv=await fetchCSV(CPC_GID);cpcData=parseCPCSheet(csv);cpcLoaded=true;}
-    catch(e){pg.innerHTML=cpcShell(`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Could not load Ad data</div><div style="color:${T.muted};font-size:12px">${e.message}</div></div>`);return;}
+    try{const csv=await fetchCSV(CPC_GID);if(myGen!==cpcRenderGen)return;cpcData=parseCPCSheet(csv);cpcLoaded=true;}
+    catch(e){if(myGen!==cpcRenderGen)return;pg.innerHTML=cpcShell(`<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Could not load Ad data</div><div style="color:${T.muted};font-size:12px">${e.message}</div></div>`);return;}
   }
+  if(myGen!==cpcRenderGen)return;
   if(!cpcData.length){pg.innerHTML=cpcShell(`<div class="card"><div style="color:${T.label};font-size:13px;padding:8px">No ad rows parsed. Check the Ad Investments tab column headers.</div></div>`);return;}
   // Build the model once, with a progress bar
   if(!cpcModel&&!cpcModelBuilding){
     cpcModelBuilding=true;
-    const paint=(pct)=>{const bar=document.getElementById("cpc-progress-fill");const lbl=document.getElementById("cpc-progress-lbl");if(bar)bar.style.width=pct+"%";if(lbl)lbl.textContent=pct+"%";};
+    const paint=(pct)=>{if(myGen!==cpcRenderGen)return;const bar=document.getElementById("cpc-progress-fill");const lbl=document.getElementById("cpc-progress-lbl");if(bar)bar.style.width=pct+"%";if(lbl)lbl.textContent=pct+"%";};
     pg.innerHTML=cpcShell(cpcProgressHTML(0));
     cpcModel=await buildCPCModel(paint);
     cpcModelBuilding=false;
+    if(myGen!==cpcRenderGen)return; // a newer navigation/render started while this one was building — don't touch the DOM
     // fall through to render
   }
   if(cpcModelBuilding){return;}
+  if(myGen!==cpcRenderGen)return;
   // Render based on view mode + drill level
   let body='';
   if(cpcViewMode==="plan"){body=cpcRenderInvestmentPlan();pg.innerHTML=cpcShell(body,false);return;}
@@ -6318,6 +6336,7 @@ async function renderCPC(){
   if(cpcDrill.level==="agg")body=cpcRenderAggLevel();
   else if(cpcDrill.level==="brand")body=cpcRenderBrandLevel(cpcDrill.agg);
   else if(cpcDrill.level==="outlet")body=cpcRenderOutletLevel(cpcDrill.agg,cpcDrill.brand);
+  if(myGen!==cpcRenderGen)return;
   pg.innerHTML=cpcShell(body,true);
 }
 
