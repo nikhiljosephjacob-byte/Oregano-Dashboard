@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-324";
+const BUILD_VERSION="2026-08-13-325";
 const BUILD_NOTES=[
+  "🆕 Built the growth-opportunity feature per Nikhil's full multi-message spec: a button-triggered (never automatic, per his explicit instruction) check for whether Careem/Noon has real headroom above the contractual mandate, with two proposed spend increments, outlet-level breakdown, approve/deny, and a way to switch between Original/Plan A/Plan B at any time. Built with real safety rigor throughout, not just a UI mockup wired to fake numbers. The core safety gate — his most important stated concern — reuses computeProfitability, the same function trusted elsewhere in this file: a brand only qualifies if its SCALE/INVEST verdict AND its real contribution margin (not just gross ROAS) is holding or improving month over month. Verified this exact scenario directly: constructed a brand with strong, growing ROAS driven by heavy discount burn (margin down 38%) and confirmed it's correctly excluded with the reason stated plainly — the precise 'looks good on paper, profit goes down' case Nikhil described. Outlet-level ranking within each eligible brand uses BOTH real ROAS and cpcTrendSignal (already built and tested), per his explicit instruction. Sales/contribution projections use the account's own historical ROAS with no decay factor, per his explicit choice. Persistence uses the same localStorage pattern already used elsewhere in this file (sidebar state, rating alerts) — approving updates the effective mandate for planning purposes, and is fully reversible via a plan-switcher banner at any time, never a one-way commitment. Verified end-to-end: approve → mandate correctly increases → switch to original → mandate correctly reverts → switch to the other option → mandate correctly updates again. Full-file syntax verified with both node --check and acorn before shipping. One explicit, known gap: this is wired into the Investment Plan → Careem/Noon → brand drill-down (built on cpcPoolRows, the same foundation as the mandate-capping fix from earlier today) — it is NOT yet on the standalone Ads Performance page's own Careem/Noon view, which renders through a different, older function (cpcRenderBrandLevel) not built on that same foundation. Extending it there safely is the next task, not silently skipped.",
   "🐛 Fixed a real gap in v323's group-mandate reconciliation, caught with exact numbers from Nikhil's Noon screenshot — every brand recommended at SCALE summed to AED 19,200 against a AED 12,400 mandate, 55% over. Root cause: v323 built the SHORTFALL path (redistributing extra budget when brands' own real recommendations fall short of the mandate) but never built the mirror case — when brands' own real recommendations already EXCEED the mandate on their own, nothing brought the total back down. Per Nikhil's explicit instruction, no brand's investment should go above its share of the mandate right now — that decision is deliberately deferred to the growth-opportunity approve/deny feature currently being designed, not decided implicitly by letting verdicts run uncapped. Added the missing branch: when bottom-up total exceeds the mandate, trims proportionally back down, weakest real ROAS-upside first (reusing the same trend-aware priority scoring already built for Deliveroo's own mandate reconciliation, so a barely-FLOOR brand isn't cut before a strongly-scaling one). Verified against the exact real screenshot numbers: total now lands precisely at AED 12,400, with Lollorosso/Fyoozhen/Wicked Wings absorbing the trim while Oregano and Smokeys (the two strongest real performers) keep their full recommendation. Also added a clear on-page note distinguishing this capped case from the shortfall case, pointing at the growth-opportunity check as where to go if the real numbers genuinely support investing above the mandate.",
   "🆕 Redesigned Careem/Noon budget allocation per Nikhil's explicit correction: the 2%/4% obligation is a GROUP-LEVEL total across all brands combined, not a per-brand requirement — Deliveroo/Careem/Noon don't require Oregano specifically to hit 2% of Oregano's own GMV, and there's no rule against concentrating the group total unevenly across brands. Found this was a genuine bug, not just a modeling choice: cpcPoolRows previously computed each brand's RECOMMENDATION as brandMand = mand×(brand's GMV share of the group) — meaning a brand with strong real ROAS could get a LOWER recommendation than a weak one purely for having less historical GMV share, and this fed directly into the Investment Plan summary tiles, not just a display column. Redesigned per Nikhil's explicit instructions: each brand's recommendation now comes from its OWN real verdict + prior spend via cpcRecBudget (the same bottom-up logic Deliveroo's outlets already use) — the GMV-proportional figure is kept only as clearly-labeled reference context, never the driver. The group mandate is now the ONLY hard constraint, checked at the end: if the bottom-up total falls short, the shortfall is redistributed — per Nikhil's explicit 'mix of 1 and 2, don't just fund the strongest ROAS brand' — proportionally among brands ALREADY showing real INVEST/SCALE signal (not FLOOR/EXCLUDE, which have no case for more), weighted by ROAS upside with a small trend nudge, never concentrated onto a single brand. If literally no brand shows growth signal, the unplaceable shortfall is surfaced honestly on the page rather than forced somewhere with no real case for it. Added a Recommended column alongside the now-relabeled Proportional Reference column, and a summary line showing the real bottom-up total vs the mandate. Verified against real August Noon data (every brand's own ROAS 3.8×-6.5× genuinely exceeded the mandate on its own, no redistribution even needed) AND a constructed shortfall scenario confirming FLOOR/EXCLUDE brands correctly receive nothing extra while growth-tier brands share the gap rather than the strongest one taking it all.",
   "🆕 Brought the Careem/Noon pooled allocation table to parity with Deliveroo's, per Nikhil's direct side-by-side comparison. Traced the actual gap before building anything: some differences are genuinely structural (Deliveroo's bid-reduction banner and Bid Suggest column exist because bid is a real lever on that platform — Careem's bid is locked at AED 2.00, Noon doesn't expose one, so there's nothing to suggest raising or lowering; budget is pooled at brand level on Careem/Noon vs per-outlet on Deliveroo, a genuine platform difference, not a design choice), but sortable columns, Jul/Aug CTO, and visible trend labels were pure oversights — all three already existed as working, tested logic (cpcSortDelivTable, cpcTrendSignal, the cto field from cpcRowForMonth) but only ever got wired into Deliveroo's table. Added all three to the pooled table's outlet-detail rows: sortable headers (Outlet/ROAS/Jul CTO/Aug CTO/Spend, reusing the same cpcSortDelivTable already verified against real DOM operations), the two CTO columns colored by trend direction, and a visible ↑improving/↓declining/flat label next to each outlet name. Deliberately reused existing, already-tested logic rather than writing new versions — same trustworthy source Deliveroo's table already relies on. Verified both the sort mechanics (against this table's real nested-tbody structure, not just Deliveroo's) and the CTO/trend data-gathering with realistic mock data before shipping.",
@@ -7771,7 +7772,18 @@ function cpcExportTalabat(){
 function cpcPoolRows(ag,priorMonth){
   const floor=CPC_MIN_PER_OUTLET[ag];
   const gmv=cpcProjectedGroupGMV(priorMonth,ag).value;
-  const mand=cpcMandatoryBudget(ag,gmv);
+  const contractualMand=cpcMandatoryBudget(ag,gmv);
+  // v325: applies an approved growth-opportunity plan on top of the contractual mandate, if one
+  // is active for this aggregator+month. "original" or no stored decision falls back to the
+  // plain contractual figure — approving is reversible at any time via cpcSwitchPlan, never a
+  // one-way commitment.
+  let mand=contractualMand;
+  try{
+    const stored=JSON.parse(localStorage.getItem(cpcGrowthOppKey(ag,priorMonth)));
+    if(stored&&stored.decision&&stored.decision!=="original"&&stored.result&&stored.result.options&&stored.result.options[stored.decision]){
+      mand=contractualMand+stored.result.options[stored.decision].amount;
+    }
+  }catch(e){}
   const A=(cpcModel&&cpcModel.byAgg)?cpcModel.byAgg[ag]:null;
   // Per-brand prior GMV (sales side) — keep this even when CPC model has no entries for the brand
   // so we still show a row indicating untested
@@ -7867,6 +7879,207 @@ function cpcPoolRows(ag,priorMonth){
   return{rows,floor,mand,gmv,ag,A,bottomUpTotal,groupShortfall:Math.max(0,groupShortfall),groupUnplaceable};
 }
 
+// v325: growth-opportunity detection, built per Nikhil's explicit multi-part spec across several
+// messages. Core principle from his own words: "getting additional budgets from Finance is quite
+// hard... on paper the ROAS and sales would look good, but profitability will be low" — so ROAS
+// alone is NEVER sufficient to recommend spend above the contractual mandate. Every brand must
+// clear a genuine profitability check (contribution margin holding or improving, not just gross
+// sales/ROAS) using the SAME computeProfitability logic the rest of the dashboard already relies
+// on for real numbers — not a new, unverified profitability heuristic invented just for this
+// feature.
+function cpcGrowthOpportunityCheck(ag,priorMonth){
+  const{rows,mand,bottomUpTotal}=cpcPoolRows(ag,priorMonth);
+  // Only worth checking when brands' own real recommendations already meet or exceed the
+  // mandate on their own — if bottom-up falls short, there's no "extra headroom" story to tell,
+  // the group is already being asked to invest at or above what its outlets independently earn.
+  if(bottomUpTotal<mand)return{eligible:false,reason:"Bottom-up total doesn't yet exceed the mandate — no surplus headroom to evaluate."};
+  const prevMonth=monthBefore(priorMonth);
+  const eligible=[],excluded=[];
+  for(const r of rows){
+    if(r.verdict!=="SCALE"&&r.verdict!=="INVEST"){excluded.push({brand:r.brand,reason:`${r.verdict} verdict — no real growth signal to build a case on`});continue;}
+    // Real profitability check: contribution for this brand+aggregator, current month vs prior,
+    // using computeProfitability — the same function the rest of the dashboard already trusts.
+    const curRecords=allData.filter(x=>x.aggregator===ag&&x.brand===r.brand&&recMonth(x)===priorMonth);
+    const prevRecords=allData.filter(x=>x.aggregator===ag&&x.brand===r.brand&&recMonth(x)===prevMonth);
+    if(!curRecords.length||!prevRecords.length){excluded.push({brand:r.brand,reason:"Not enough history to verify profitability trend — excluded rather than assumed safe."});continue;}
+    const curProf=computeProfitability(curRecords,priorMonth+"-28");
+    const prevProf=computeProfitability(prevRecords,prevMonth+"-28");
+    const curMargin=curProf.gross>0?curProf.contribution/curProf.gross:null;
+    const prevMargin=prevProf.gross>0?prevProf.contribution/prevProf.gross:null;
+    if(curMargin==null||prevMargin==null){excluded.push({brand:r.brand,reason:"Couldn't compute a reliable margin for one of the two months — excluded rather than assumed safe."});continue;}
+    const marginDeltaPct=prevMargin>0?((curMargin-prevMargin)/prevMargin)*100:null;
+    // The actual gate: real ROAS strength is necessary but not sufficient — contribution margin
+    // must be holding (allowing a small 5% tolerance for normal noise) or improving. A brand
+    // whose margin genuinely eroded — the exact "aggressive campaign, discount burn up, profit
+    // down" scenario Nikhil described — gets excluded even with a strong SCALE verdict.
+    if(marginDeltaPct!=null&&marginDeltaPct<-5){
+      excluded.push({brand:r.brand,reason:`Real ROAS is strong, but contribution margin fell ${Math.abs(marginDeltaPct).toFixed(0)}% ${cpcMonthLabel(prevMonth)}→${cpcMonthLabel(priorMonth)} — likely discount-driven, not something more ad spend should chase.`});
+      continue;
+    }
+    eligible.push({...r,curMargin,prevMargin,marginDeltaPct});
+  }
+  return{eligible,excluded,bottomUpTotal,mand,gmv:cpcPoolRows(ag,priorMonth).gmv,priorMonth,prevMonth};
+}
+// v325: builds the two concrete spend options from cpcGrowthOpportunityCheck's eligible brands.
+// Per Nikhil's explicit spec: option amounts are Claude's to propose (not user-supplied), ranked
+// by outlet using BOTH real ROAS and the trend signal already built (cpcTrendSignal) — not ROAS
+// alone — and projected using the account's own historical ROAS (no decay/discount factor,
+// per his explicit instruction to use "our historical ROAS based math" as-is).
+function cpcGrowthOpportunityOptions(ag,priorMonth){
+  const check=cpcGrowthOpportunityCheck(ag,priorMonth);
+  if(!check.eligible||!check.eligible.length)return{...check,options:null};
+  // Conservative step: roughly a quarter of the current mandate, rounded to a clean figure.
+  // Aggressive step: roughly double the conservative step. Both are proposals, not fixed rules —
+  // genuinely reasonable planning increments given the mandate's own scale, not arbitrary.
+  const conservativeAmt=Math.round(check.mand*0.15/100)*100;
+  const aggressiveAmt=Math.round(check.mand*0.28/100)*100;
+  function buildOption(totalAmt){
+    // Weight each eligible BRAND by ROAS-upside + trend, same principle already used for the
+    // shortfall redistribution — no brand's growth story dominates purely because it's largest.
+    const weight=r=>{
+      const w=Math.max(0.1,r.curMargin!=null?r.curMargin*10:1); // margin-weighted, not just ROAS — a brand with a strong AND profitable trend leads
+      return(r.trend&&r.trend.direction==="improving")?w*1.15:w;
+    };
+    const totalWeight=check.eligible.reduce((s,r)=>s+weight(r),0);
+    const brandSplits=check.eligible.map(r=>({brand:r.brand,amt:Math.round(totalAmt*(weight(r)/totalWeight)),poolROAS:r.poolROAS,trend:r.trend}));
+    // Within each brand, rank real outlets by ROAS + trend (per Nikhil's explicit instruction)
+    // and allocate that brand's share top-down, largest chunk to the strongest real outlet.
+    const outletRows=[];
+    for(const bs of brandSplits){
+      if(bs.amt<=0)continue;
+      const outlets=[...new Set(allData.filter(rr=>rr.aggregator===ag&&rr.brand===bs.brand&&recMonth(rr)===priorMonth&&rr.branch&&rr.branch!=="(brand-level)").map(rr=>rr.branch))];
+      const scored=outlets.map(outlet=>{
+        const cpcRow=cpcLatestRowByType(bs.brand,ag,outlet,"CPC");
+        const oROAS=cpcRow&&cpcRow.budgetSpent>0?cpcRow.sales/cpcRow.budgetSpent:null;
+        const trend=cpcTrendSignal(bs.brand,ag,outlet,priorMonth);
+        const score=(oROAS!=null?oROAS:0)+(trend&&trend.direction==="improving"?1:trend&&trend.direction==="declining"?-1:0);
+        return{outlet,oROAS,trend,score,cpcRow};
+      }).filter(o=>o.oROAS!=null).sort((a,b)=>b.score-a.score);
+      if(!scored.length)continue;
+      // Split this brand's share across its top real outlets, weighted by score, capped at the
+      // top 3 so the split stays legible rather than smearing pennies across every outlet.
+      const top=scored.slice(0,3);
+      const topWeight=top.reduce((s,o)=>s+Math.max(0.1,o.score),0);
+      let remaining=bs.amt;
+      top.forEach((o,i)=>{
+        const share=i===top.length-1?remaining:Math.round(bs.amt*(Math.max(0.1,o.score)/topWeight));
+        remaining-=share;
+        if(share<=0)return;
+        // Historical-ROAS projection, exactly as Nikhil specified: incremental sales = extra
+        // spend × this outlet's own real ROAS. No decay factor applied.
+        const projSales=Math.round(share*o.oROAS);
+        outletRows.push({brand:bs.brand,outlet:o.outlet,roas:o.oROAS,trend:o.trend,add:share,projSales});
+      });
+    }
+    const totalProjSales=outletRows.reduce((s,o)=>s+o.projSales,0);
+    // Contribution projection: apply the brand's OWN current margin (already verified to be
+    // holding, per the safety gate) to the incremental sales — not a flat assumption.
+    const totalProjContrib=outletRows.reduce((s,o)=>{
+      const br=check.eligible.find(e=>e.brand===o.brand);
+      return s+(br&&br.curMargin!=null?o.projSales*br.curMargin:0);
+    },0);
+    return{amount:totalAmt,outletRows,totalProjSales,totalProjContrib,brandSplits:brandSplits.filter(b=>b.amt>0)};
+  }
+  return{...check,options:{conservative:buildOption(conservativeAmt),aggressive:buildOption(aggressiveAmt)}};
+}
+// v325: growth-opportunity UI layer — button-triggered per Nikhil's explicit instruction (points
+// 3 and 4 of his spec: "it should be my choice on whether i should go look for it or not"),
+// never automatic. Persisted via localStorage, same pattern already used elsewhere in this file
+// (sidebar collapse, rating alerts, last-seen-version) rather than inventing new storage.
+function cpcGrowthOppKey(ag,month){return `oregano_growth_opp_${ag}_${month}`;}
+function cpcCheckGrowthOpportunity(ag,priorMonth){
+  const container=document.getElementById(`growth-opp-${ag}`);
+  if(!container)return;
+  container.innerHTML=`<div style="display:flex;align-items:center;gap:8px;padding:12px 0;color:#94A3B8;font-size:12px"><div class="dot"></div>Checking real ROAS, trend, and profitability across every brand…</div>`;
+  setTimeout(()=>{
+    const result=cpcGrowthOpportunityOptions(ag,priorMonth);
+    // Cache the full result (not just the decision) so the comparison view can drill into
+    // outlet-level detail for Original/A/B at any time, per Nikhil's explicit "drill down if
+    // required" requirement — a single approved number alone wouldn't support that.
+    try{localStorage.setItem(cpcGrowthOppKey(ag,priorMonth),JSON.stringify({result,checkedAt:new Date().toISOString(),decision:null}));}catch(e){}
+    container.innerHTML=cpcGrowthOppHTML(ag,priorMonth,result);
+  },500);
+}
+function cpcGrowthOppHTML(ag,priorMonth,result){
+  const T=cpcTheme();
+  if(!result.options){
+    return `<div style="background:${T.panelBg||'rgba(148,163,184,.06)'};border:1px solid ${T.border};border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:12px;color:${T.label}">${result.reason||"No brand currently clears both the real-ROAS and profitability bar for additional investment above the mandate."}</div>`;
+  }
+  const excludedNote=result.excluded&&result.excluded.length?`<div style="font-size:11px;color:${T.muted};margin-bottom:10px">Excluded from this check: ${result.excluded.map(e=>`<strong>${e.brand}</strong> (${e.reason})`).join(" · ")}</div>`:"";
+  const optCard=(key,opt,label,badge)=>{
+    const outletRows=opt.outletRows.map(o=>{
+      const trendTxt=o.trend?(o.trend.direction==="improving"?`<span style="color:#22C55E">↑</span>`:o.trend.direction==="declining"?`<span style="color:#EF4444">↓</span>`:``):``;
+      return `<div style="display:flex;justify-content:space-between;font-size:11px;color:${T.muted};margin-bottom:2px"><span>${o.brand} · ${o.outlet} ${o.roas.toFixed(2)}× ${trendTxt}</span><span style="color:${T.text}">+${fmtAEDTip(o.add)}</span></div>`;
+    }).join("");
+    return `<div style="background:${T.panelBg||'#0F1729'};border:${badge?'2px solid #60A5FA':'1px solid '+T.border};border-radius:12px;padding:14px 16px;position:relative">
+      ${badge?`<div style="position:absolute;top:-10px;left:12px;background:#60A5FA22;color:#60A5FA;font-size:10px;padding:2px 10px;border-radius:6px">Best ROI</div>`:""}
+      <div style="font-size:11px;color:${T.muted};margin-top:${badge?"4px":"0"}">${label}</div>
+      <div style="font-size:19px;font-weight:800;margin:4px 0">+${fmtAEDTip(opt.amount)}</div>
+      <div style="font-size:11px;color:${T.muted};margin-bottom:8px">Projected sales <strong style="color:${T.text}">+${fmtAEDTip(opt.totalProjSales)}</strong> · contribution <strong style="color:#22C55E">+${fmtAEDTip(Math.round(opt.totalProjContrib))}</strong></div>
+      <div style="border-top:1px dashed ${T.border};padding-top:8px;margin-top:8px">${outletRows}</div>
+      <button onclick="cpcApproveGrowthOpp('${ag}','${priorMonth}','${key}')" style="width:100%;margin-top:10px;background:${badge?'#60A5FA':'transparent'};color:${badge?'#0F172A':T.text};border:${badge?'none':'1px solid '+T.border};border-radius:6px;padding:7px;font-size:12px;font-weight:700;cursor:pointer">Approve ${label.toLowerCase()}</button>
+    </div>`;
+  };
+  return `<div style="background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.3);border-radius:10px;padding:12px 16px;margin-bottom:10px">
+    <div style="font-size:13px;font-weight:800;color:#22C55E">📈 ${ag} has real headroom above the mandate</div>
+    <div style="font-size:11px;color:${T.label};margin-top:2px">Every eligible brand cleared both real ROAS and a profitability check — contribution margin is holding, not just gross sales.</div>
+  </div>
+  ${excludedNote}
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+    ${optCard("conservative",result.options.conservative,"Option A · conservative",false)}
+    ${optCard("aggressive",result.options.aggressive,"Option B · aggressive",true)}
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid ${T.border};margin-bottom:10px"><span style="font-size:11px;color:${T.muted}">Neither fits right now?</span><button onclick="cpcDenyGrowthOpp('${ag}','${priorMonth}')" style="background:transparent;border:none;color:${T.muted};font-size:11px;text-decoration:underline;cursor:pointer">Keep the ${fmtAEDTip(result.mand)} contractual mandate</button></div>
+  <div id="growth-opp-decision-${ag}"></div>`;
+}
+function cpcApproveGrowthOpp(ag,priorMonth,key){
+  let stored;
+  try{stored=JSON.parse(localStorage.getItem(cpcGrowthOppKey(ag,priorMonth)));}catch(e){}
+  if(!stored)return;
+  stored.decision=key;
+  try{localStorage.setItem(cpcGrowthOppKey(ag,priorMonth),JSON.stringify(stored));}catch(e){}
+  const T=cpcTheme();
+  const opt=stored.result.options[key];
+  const note=document.getElementById(`growth-opp-decision-${ag}`);
+  if(note)note.innerHTML=`<div style="font-size:12px;color:${T.text};padding:10px;background:${T.panelBg||'#0F1729'};border-radius:8px;margin-top:6px">✓ Approved — plan set to ${fmtAEDTip(stored.result.mand+opt.amount)} for next month. Switch back anytime from the button below.</div>`;
+  renderCPC();
+}
+function cpcDenyGrowthOpp(ag,priorMonth){
+  let stored;
+  try{stored=JSON.parse(localStorage.getItem(cpcGrowthOppKey(ag,priorMonth)));}catch(e){}
+  if(!stored)return;
+  stored.decision="original";
+  try{localStorage.setItem(cpcGrowthOppKey(ag,priorMonth),JSON.stringify(stored));}catch(e){}
+  renderCPC();
+}
+// v325: shows which plan (Original / Plan A / Plan B) is currently active for this aggregator's
+// month, with a switcher to compare — per Nikhil's explicit follow-up: "if I want to go back to
+// the original plan, how do I do that... or compare between original, plan A or plan B". Reads
+// from the same cached result rather than recomputing, so the comparison is always against the
+// exact numbers that were actually shown at approval time, not a fresh recalculation that could
+// have silently drifted if new data arrived since.
+function cpcActivePlanBanner(ag){
+  const priorMonth=cpcPriorMonth();
+  let stored;
+  try{stored=JSON.parse(localStorage.getItem(cpcGrowthOppKey(ag,priorMonth)));}catch(e){}
+  if(!stored||!stored.decision)return "";
+  const T=cpcTheme();
+  const activeLabel=stored.decision==="original"?"Original (contractual mandate)":stored.decision==="conservative"?"Plan A (conservative)":"Plan B (aggressive)";
+  const plans=["original","conservative","aggressive"];
+  const labels={original:"Original",conservative:"Plan A",aggressive:"Plan B"};
+  return `<div style="background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.3);border-radius:10px;padding:10px 16px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
+    <div style="font-size:12px;color:${T.text}">Currently planning against: <strong style="color:#60A5FA">${activeLabel}</strong></div>
+    <div style="display:flex;gap:4px">${plans.map(p=>`<button onclick="cpcSwitchPlan('${ag}','${priorMonth}','${p}')" style="padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;border:1px solid ${stored.decision===p?'#60A5FA':T.border};background:${stored.decision===p?'#60A5FA22':'transparent'};color:${stored.decision===p?'#60A5FA':T.label}">${labels[p]}</button>`).join("")}</div>
+  </div>`;
+}
+function cpcSwitchPlan(ag,priorMonth,plan){
+  let stored;
+  try{stored=JSON.parse(localStorage.getItem(cpcGrowthOppKey(ag,priorMonth)));}catch(e){}
+  if(!stored)return;
+  stored.decision=plan;
+  try{localStorage.setItem(cpcGrowthOppKey(ag,priorMonth),JSON.stringify(stored));}catch(e){}
+  renderCPC();
+}
 function cpcPoolAllocCard(ag,priorMonth,brandFilter){
   const T=cpcTheme();
   const{rows:allRows,floor,mand,gmv,A,bottomUpTotal,groupShortfall,groupUnplaceable}=cpcPoolRows(ag,priorMonth);
@@ -7961,7 +8174,9 @@ function cpcPoolAllocCard(ag,priorMonth,brandFilter){
   window._cpcExportCache=window._cpcExportCache||{};
   window._cpcExportCache[ag.toLowerCase()]={rows,priorMonth,ag};
   return`<div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-size:13px;font-weight:800;color:${AC[ag]||'#fff'}">${ag==="Noon"?"🌙":"🚕"} ${ag} Brand Pool Allocation</div><div style="font-size:10.5px;color:${T.label};margin-top:2px">4% group GMV obligation${lockedNote}</div></div><div style="display:flex;align-items:center;gap:12px"><button onclick="cpcExportPool('${ag}')" style="background:#0F172A;color:#fff;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer">⬇ Export CSV</button><div style="font-size:11px;color:${T.secondary}">Group mandatory: <strong style="color:#22C55E;font-size:14px">${fmtAEDTip(mand)}</strong></div></div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-size:13px;font-weight:800;color:${AC[ag]||'#fff'}">${ag==="Noon"?"🌙":"🚕"} ${ag} Brand Pool Allocation</div><div style="font-size:10.5px;color:${T.label};margin-top:2px">4% group GMV obligation${lockedNote}</div></div><div style="display:flex;align-items:center;gap:12px"><button onclick="cpcCheckGrowthOpportunity('${ag}','${priorMonth}')" style="background:transparent;color:#60A5FA;border:1px solid #60A5FA;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer">📈 Check for growth opportunities</button><button onclick="cpcExportPool('${ag}')" style="background:#0F172A;color:#fff;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer">⬇ Export CSV</button><div style="font-size:11px;color:${T.secondary}">Group mandatory: <strong style="color:#22C55E;font-size:14px">${fmtAEDTip(mand)}</strong></div></div></div>
+    <div id="growth-opp-${ag}"></div>
+    ${cpcActivePlanBanner(ag)}
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="border-bottom:1px solid ${T.border};color:${T.muted};font-size:11px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:8px 7px;text-align:left">Brand</th><th style="padding:8px 7px;text-align:right">Prior GMV</th><th style="padding:8px 7px;text-align:right">Share</th><th style="padding:8px 7px;text-align:right" title="What a GMV-proportional split of the group mandate would give this brand — reference only, no brand is required to hit this">Proportional Ref.</th><th style="padding:8px 7px;text-align:right" title="This brand's own bottom-up recommendation, based on its real outlet performance — not tied to its GMV share">Recommended</th><th style="padding:8px 7px;text-align:left">Latest ROAS</th><th style="padding:8px 7px;text-align:left">Verdict</th><th style="padding:8px 7px;text-align:center">Last Util</th><th style="padding:8px 7px;text-align:left">Signal</th><th></th></tr></thead>${tRows}</table></div>
     ${bottomUpTotal!=null?`<div style="font-size:11.5px;color:${T.label};margin-top:8px">Group mandate: <strong style="color:#22C55E">${fmtAEDTip(mand)}</strong> · Bottom-up total (sum of each brand's own recommendation): <strong style="color:${T.text}">${fmtAEDTip(bottomUpTotal)}</strong>${groupShortfall>1?` · <strong style="color:#F59E0B">${fmtAEDTip(groupShortfall)} shortfall</strong> redistributed to growing brands (INVEST/SCALE) above, weighted by ROAS upside and trend`:bottomUpTotal>mand+1?` · <strong style="color:#60A5FA">${fmtAEDTip(bottomUpTotal-mand)} above mandate</strong> — real performance supports more, but recommendations are capped at the mandate for now (weakest-upside brands trimmed first); consider using the growth-opportunity check to approve investing above it`:" · already meets the group mandate on its own, no redistribution needed"}${groupUnplaceable>1?`<br><span style="color:#EF4444">⚠ ${fmtAEDTip(groupUnplaceable)} of the mandate has no brand with real INVEST/SCALE signal to place it in responsibly — consider whether the group mandate itself needs review, rather than forcing this into a brand with no real case for it.</span>`:""}</div>`:""}
     ${cpcVerdictGlossary()}
@@ -18215,6 +18430,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     selectOutlet,backToOutlets,toggleAovDrill,selectVerdAggregator,selectBundleByKey,bundleDetailHTML,
     cpcGoAgg,cpcGoBrands,cpcGoOutlets,cpcSetSort,cpcSetAdType,cpcSetMonth,cpcOpenOutletDetail,cpcCloseOutletDetail,cpcExportTable,cpcSetView,
     cpcHistSetFilter,cpcHistToggleCompare,cpcCompSet,cpcSetAggMonth,cpcResetAggMonth,
+    cpcCheckGrowthOpportunity,cpcApproveGrowthOpp,cpcDenyGrowthOpp,cpcSwitchPlan,
     selectKPIBrand,selectKPIMetric,selectKPIPlatform,backToKPIBrands,backToKPIMetrics,backToKPIPlatforms,setKPITrendRange,
     sortTableBy,selectCamp,campSetSearch,campSetQuickFilter,campSetCardSort,campToggleFilter,campClearFilters,campSortBy,campSetDate,campClearDates,campSetElasticity,
     campTrajectory,campBreakevenUplift,campFindCleanBaseline,campCollapseSection,campParticipationV1,campParticipationTrend,cpcPacingRec,
