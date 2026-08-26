@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-317";
+const BUILD_VERSION="2026-08-13-318";
 const BUILD_NOTES=[
+  "🆕 Renamed PAUSE to FLOOR across every Deliveroo/Talabat/Careem/Noon allocation table, per Nikhil's correction — PAUSE was a genuine mislabel, not just informal wording: that tier has always recommended real, mandatory spend (the per-listing floor), and \"pause\" implies stopping. Fixed in every place the term appears — verdict logic, color/style maps (all three duplicated table-rendering copies), sort order, eligibility filters, and visible copy text — not just the one label. Also built the new EXCLUDE tier Nikhil confirmed separately in the same conversation: the mandatory floor only applies to listings you choose to keep running — it was never a requirement to invest in every listing, and Deliveroo's 2% obligation is a GROUP-LEVEL percentage of total GMV, not a per-outlet floor sum, so dropping a genuinely dead listing doesn't put that obligation at risk. EXCLUDE is deliberately a stricter, narrower condition than FLOOR — zero/unmeasurable ROAS AND zero real order activity, not just \"below break-even\" — so a listing with real if weak performance still correctly gets FLOOR (worth its minimum), while one with no activity at all gets flagged for AED 0. Added cpcVerdictGlossary(), shown below the Deliveroo table, explaining every term in plain language plus the underlying floor/mandate distinction directly, so future confusion about what a verdict actually means doesn't require asking again. Verified the new verdict logic against reconstructions of the exact cases from Nikhil's screenshot: Furjan (0 ROAS, 0 orders) correctly gets EXCLUDE with AED 0 recommended; Marina (weak but real 1.55× ROAS, real orders) correctly stays FLOOR at the AED 90 minimum, confirming the two tiers separate real-but-weak from genuinely-dead as intended.",
   "🐛 Found and fixed a real, widespread bug Nikhil caught with exact real numbers — Lollorosso Motorcity's Deliveroo spend showed AED 893.80 when the real figure is AED 1,538.96 (893.80 from an Aug 3-10 campaign that ran out of budget, plus 645.16 from a second Aug 14-31 campaign — Nikhil's reported total, and confirmed exactly against the real uploaded sheet). Root cause: cpcLatestRowByType() and cpcRowForMonth() both checked raw, unaggregated cpcData FIRST — .sort(...)[0] and .find() respectively — silently picking a single row and discarding any other real campaign sharing the same outlet+month, even though buildCPCModel's own monthly-aggregation step (its own comment: \"combine multiple CPCs in same outlet+month\") already correctly sums exactly this case. That correct aggregated data was sitting right there as a fallback that never got reached, because the raw-data branch always found something first. Fixed by reordering both functions to check the aggregated cpcModel.monthly first, with a corrected (summing, not single-row) raw-data fallback for the rare case the model isn't built yet. Nikhil asked whether other outlets had the same problem — checked the entire real sheet: 196 separate outlet+aggregator+month combinations have multiple real rows, not just Motorcity (October 2025 alone shows nearly every outlet with 3 rows each) — this fix, being at the shared function level, automatically covers every one of them, not just the reported case. Verified three ways before shipping: a direct reconstruction of the real Motorcity numbers now produces exactly AED 1,538.96 through both the primary aggregated path and the raw-data fallback path, and a second real case pulled independently from the sheet (Lollorosso DMC, AED 351.90 real vs AED 159.60 previously shown) confirms the fix generalizes correctly rather than being tuned to one example.",
   "🆕 Refined the Deliveroo per-outlet allocation table per Nikhil's approved mockup: larger fonts throughout (was 9.5-11.5px, now 12-13px), sortable column headers (click Prior Spend, Recommended, Δ, ROAS, or the two new CTO columns to sort within an expanded brand — detail rows stay correctly paired with their outlet row when reordering), fixed the Export CSV button's actual contrast bug (it used T.text as a background color, which is a text-color token that resolves to a near-white value in dark mode — near-white button with white text was the 'awkward color' — replaced with a fixed dark navy that works correctly as a button background in both themes), and added the two requested CTO comparison columns (Jul CTO / Aug CTO, click-to-order rate, colored green/red by whether it held or declined month-over-month) to both the on-screen table and the CSV export so they stay in sync. Also fixed a real gap found while building this: cpcRowForMonth()'s cpcModel.monthly fallback branch had views and orders available but never computed .cto from them — only its 'direct cpcData' branch got CTO for free from parsing — so the new columns would have silently shown blanks for any row sourced from that fallback path; fixed to compute it the same way. Built this in two passes and want to be direct about the first one: my initial edit left a genuine duplicate code fragment behind (an incomplete old copy of the row-building logic sitting next to the new version), which broke the file's syntax entirely — caught it via node --check returning a confusing error, spent real time hand-tracing before switching to the acorn parser for an exact error position, which pinpointed it immediately. Fully fixed and reverified two ways before shipping: acorn parses the entire file cleanly with zero errors, and (separately) a jsdom-based test of the actual sort function against real DOM operations confirms ascending/descending sort, correct value ordering, and correct detail-row pairing all work as intended.",
   "🐛 Found and fixed the root cause of Town Square showing UNTESTED with zero CPC spend on the Deliveroo Ad Investments page — Nikhil flagged this directly, and it needed the real sheet to pin down (a dashboard export alone showed the symptom but not the cause). Ruled out several real candidates first before finding it: checked adType defaulting (fine — Deliveroo genuinely uses \"CPC\"), checked the current-vs-prior month calculation (cpcPriorMonth()/monthBefore() are both correct, single-step, no stacking), checked whether hidden rows in the sheet were being silently skipped (confirmed NOT the case — pandas/openpyxl read all 1,945 real data rows regardless of hidden-row display state). The actual cause, found by listing every real Brand-Location string in the uploaded sheet: the sheet uses \"Oregano-TQ\" (and the same \"-TQ\" suffix for Lollorosso and Smokeys) as its abbreviation for Town Square — but BRANCH_ALIASES, the lookup table every outlet-name match ultimately depends on, had aliases for \"tsqr\" and \"ts\" but never \"tq\". Every downstream function (current month lookup, prior month lookup, all-time historical spend) already shares this same single alias table through resolveBranchName()/resolveBrandLocation(), so the fix is one line, not several — added \"tq\":\"town square\". Verified two ways: directly against resolveBranchName() with a realistic Oregano branch list, and end-to-end through the full resolveBrandLocation() pipeline using the exact real string format (\"Oregano-TQ\") from Nikhil's actual sheet — both correctly resolve to \"Town Square\" now. This affects real spend data for Oregano, Lollorosso, and Smokeys' Town Square outlets on Deliveroo, all previously invisible to the investment plan.",
@@ -6872,12 +6873,28 @@ function cpcPlanBE(ag,brand){
   return BREAK_EVEN_ROAS[ag]||2.0;
 }
 
-// Verdict ladder: PAUSE / MONITOR / INVEST / SCALE based on brand × break-even thresholds
-function cpcPlanVerdict(brand,ag,latestROAS){
+// Verdict ladder: EXCLUDE / FLOOR / MONITOR / INVEST / SCALE based on brand × break-even
+// thresholds. v318: renamed PAUSE -> FLOOR per Nikhil's correction — this tier still recommends
+// real, mandatory-if-running spend (the per-listing floor), so "PAUSE" was a genuine mislabel,
+// not just informal wording; a paused listing implies stopping, but this tier funds the listing
+// at its floor, nothing more. Also added the new EXCLUDE tier Nikhil confirmed separately: the
+// AED 90/650/1000/500 floor is only mandatory IF you choose to run a listing at all — it's not
+// a requirement to invest in every listing, and Deliveroo's real 2% obligation is a GROUP-LEVEL
+// percentage of total GMV (see cpcMandatoryBudget above), not a per-outlet floor sum. EXCLUDE
+// is deliberately a stricter, narrower condition than FLOOR — genuinely dead listings (zero or
+// unmeasurable ROAS AND no real order volume), not just "below break-even" — since a listing
+// with real if weak performance is still arguably worth its floor, while one with no activity
+// at all has no case for even the minimum.
+function cpcPlanVerdict(brand,ag,latestROAS,latestOrders){
   const be=cpcPlanBE(ag,brand);
-  if(latestROAS==null||!isFinite(latestROAS))return"UNTESTED";
+  if(latestROAS==null||!isFinite(latestROAS)){
+    // No ROAS at all AND no real order activity — genuinely dead, not just untested.
+    if(latestOrders!=null&&latestOrders===0)return"EXCLUDE";
+    return"UNTESTED";
+  }
+  if(latestROAS<=0&&(latestOrders==null||latestOrders===0))return"EXCLUDE";
   const tiers=BRAND_ROAS_TIERS[brand]||{monitor:0.3,invest:0.7};
-  if(latestROAS<be)return"PAUSE";
+  if(latestROAS<be)return"FLOOR";
   if(latestROAS<be+tiers.monitor)return"MONITOR";
   if(latestROAS<be+tiers.invest)return"INVEST";
   return"SCALE";
@@ -6886,7 +6903,8 @@ function cpcPlanVerdict(brand,ag,latestROAS){
 // Recommended budget given verdict + last-month spend + mandatory floor
 function cpcRecBudget(verdict,priorSpend,floor){
   const ps=priorSpend||0,f=floor||0;
-  if(verdict==="PAUSE")return f; // mandatory only
+  if(verdict==="EXCLUDE")return 0; // genuinely dead listing — no case for even the floor
+  if(verdict==="FLOOR")return f; // still worth the mandatory minimum, but nothing more
   if(verdict==="MONITOR")return Math.max(f,Math.round(ps));
   if(verdict==="INVEST")return Math.max(f,Math.round(ps*1.2));
   if(verdict==="SCALE")return Math.max(f,Math.round(ps*1.4));
@@ -7117,11 +7135,11 @@ const BRAND_TILE_CLR={Oregano:"#C9933A",Lollorosso:"#7C8C2A",Smokeys:"#F07020",F
 function getInvPlanVerd(){
   return _darkPage?{
     SCALE:{clr:"#4ADE80",bg:"rgba(34,197,94,.15)"},INVEST:{clr:"#60A5FA",bg:"rgba(37,99,235,.18)"},
-    MONITOR:{clr:"#FBBF24",bg:"rgba(217,119,6,.18)"},PAUSE:{clr:"#F87171",bg:"rgba(220,38,38,.18)"},
-    UNTESTED:{clr:"#94A3B8",bg:"rgba(148,163,184,.15)"}
+    MONITOR:{clr:"#FBBF24",bg:"rgba(217,119,6,.18)"},FLOOR:{clr:"#F87171",bg:"rgba(220,38,38,.18)"},
+    EXCLUDE:{clr:"#94A3B8",bg:"rgba(71,85,105,.25)"},UNTESTED:{clr:"#94A3B8",bg:"rgba(148,163,184,.15)"}
   }:{
     SCALE:{clr:"#16A34A",bg:"#F0FDF4"},INVEST:{clr:"#2563EB",bg:"#EFF6FF"},MONITOR:{clr:"#D97706",bg:"#FFFBEB"},
-    PAUSE:{clr:"#DC2626",bg:"#FEF2F2"},UNTESTED:{clr:"#94A3B8",bg:"#F1F5F9"}
+    FLOOR:{clr:"#DC2626",bg:"#FEF2F2"},EXCLUDE:{clr:"#64748B",bg:"#F1F5F9"},UNTESTED:{clr:"#94A3B8",bg:"#F1F5F9"}
   };
 }
 function cpcInvPlanRenderBrands(ag,priorMonth){
@@ -7304,7 +7322,7 @@ function cpcDeliverooRows(priorMonth){
     const[brand,outlet]=k.split("|");
     const cpcRow=cpcLatestRow(brand,ag,outlet);
     const latestROAS=cpcRow&&cpcRow.budgetSpent>0?cpcRow.sales/cpcRow.budgetSpent:null;
-    const verdict=cpcPlanVerdict(brand,ag,latestROAS);
+    const verdict=cpcPlanVerdict(brand,ag,latestROAS,cpcRow?cpcRow.orders:null);
     const priorSpend=cpcRow?cpcRow.budgetSpent:0;
     const baseRec=cpcRecBudget(verdict,priorSpend,floor);
     const histTotal=cpcHistoricalSpend(brand,ag,outlet);
@@ -7312,14 +7330,14 @@ function cpcDeliverooRows(priorMonth){
     return{brand,outlet,latestROAS,verdict,priorSpend,baseRec,rec:baseRec,surplusAlloc:0,histTotal,bidOpt,cpcRow};
   }).sort((a,b)=>{
     if(a.brand!==b.brand)return a.brand.localeCompare(b.brand);
-    const order={SCALE:0,INVEST:1,MONITOR:2,UNTESTED:3,PAUSE:4};
+    const order={SCALE:0,INVEST:1,MONITOR:2,UNTESTED:3,FLOOR:4,EXCLUDE:5};
     return(order[a.verdict]||5)-(order[b.verdict]||5);
   });
 
   // ── RECONCILE BOTTOM-UP TO TOP-DOWN MANDATE ──────────────────────────────
   // The 2% × prior-month GMV is non-negotiable per the Deliveroo contract. If the bottom-up
   // verdict-based recommendations sum to LESS than the mandate, distribute the surplus to the
-  // best-performing outlets (weighted by ROAS upside above break-even). Always exclude PAUSE
+  // best-performing outlets (weighted by ROAS upside above break-even). Always exclude FLOOR/EXCLUDE
   // outlets from receiving the surplus — they failed at break-even, more budget won't help.
   // Smokeys is also excluded per the standing structural-decline guidance.
   const mandate=cpcMandatoryBudget(ag,cpcProjectedGroupGMV(priorMonth,ag).value);
@@ -7328,8 +7346,8 @@ function cpcDeliverooRows(priorMonth){
   let reconciliationNote="";
   if(mandate>0&&baseTotal<mandate*0.98){ // 2% tolerance — don't redistribute trivial amounts
     const gap=mandate-baseTotal;
-    // Eligible for surplus: not PAUSE, not Smokeys, and has a positive ROAS upside vs BE
-    const eligible=rows.filter(r=>r.verdict!=="PAUSE"&&r.brand!=="Smokeys"&&r.latestROAS!=null);
+    // Eligible for surplus: not FLOOR, not EXCLUDE, not Smokeys, and has a positive ROAS upside vs BE
+    const eligible=rows.filter(r=>r.verdict!=="FLOOR"&&r.verdict!=="EXCLUDE"&&r.brand!=="Smokeys"&&r.latestROAS!=null);
     if(eligible.length){
       // Weight = ROAS - BE, floored at 0.1 so even at-BE outlets get some share
       eligible.forEach(r=>{r.upside=Math.max(0.1,(r.latestROAS||0)-cpcPlanBE(ag,r.brand));});
@@ -7340,7 +7358,7 @@ function cpcDeliverooRows(priorMonth){
       });
       const eligibleCount=eligible.length;
       const _cdrT=cpcTheme();
-      reconciliationNote=`Base verdict-driven recommendations sum to <strong style="color:${_cdrT.secondary}">${fmtAEDTip(baseTotal)}</strong>. Mandate is <strong style="color:#16A34A">${fmtAEDTip(mandate)}</strong>. Distributing the gap across <strong>${eligibleCount}</strong> top-performing outlet${eligibleCount===1?"":"s"}, weighted by ROAS upside above break-even (Smokeys & PAUSE excluded).`;
+      reconciliationNote=`Base verdict-driven recommendations sum to <strong style="color:${_cdrT.secondary}">${fmtAEDTip(baseTotal)}</strong>. Mandate is <strong style="color:#16A34A">${fmtAEDTip(mandate)}</strong>. Distributing the gap across <strong>${eligibleCount}</strong> top-performing outlet${eligibleCount===1?"":"s"}, weighted by ROAS upside above break-even (Smokeys & FLOOR/EXCLUDE excluded).`;
       const reconDetailId=`reconDetail_${Math.random().toString(36).slice(2,7)}`;
       surplusBanner=`<div style="background:${_darkPage?'rgba(22,163,74,.10)':'#F0FDF4'};border:1px solid ${_darkPage?'rgba(22,163,74,.35)':'#BBF7D0'};border-left:5px solid #16A34A;border-radius:10px;padding:14px 18px;margin-bottom:12px">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;cursor:pointer" onclick="const el=document.getElementById('${reconDetailId}');el.style.display=el.style.display==='none'?'block':'none'">
@@ -7350,7 +7368,7 @@ function cpcDeliverooRows(priorMonth){
         <div id="${reconDetailId}" style="display:none;margin-top:12px;padding-top:12px;border-top:1px dashed ${_darkPage?'rgba(22,163,74,.35)':'#BBF7D0'};font-size:12px;color:${_cdrT.secondary};line-height:1.6">${reconciliationNote}</div>
       </div>`;
     }else{
-      // No eligible outlets (everything is PAUSE or untested with no ROAS). Flag this — can't
+      // No eligible outlets (everything is FLOOR, EXCLUDE, or untested with no ROAS). Flag this — cant
       // hit the mandate by just topping up; needs strategic decision.
       const _cdrT2=cpcTheme();
       surplusBanner=`<div style="background:${_darkPage?'rgba(220,38,38,.10)':'#FEF2F2'};border:1px solid ${_darkPage?'rgba(220,38,38,.35)':'#FECACA'};border-left:5px solid #DC2626;border-radius:10px;padding:14px 18px;margin-bottom:12px;display:flex;align-items:center;gap:12px"><span style="font-size:20px">⚠️</span><div><div style="font-size:14px;font-weight:800;color:#DC2626">${fmtAEDTip(mandate-baseTotal)} short of the ${fmtAEDTip(mandate)} mandate</div><div style="font-size:12px;color:${_cdrT2.label};margin-top:1px">No SCALE/INVEST/MONITOR outlets with ROAS upside found — needs a strategic call (pause the mandate, run brand-level promos, or test new areas)</div></div></div>`;
@@ -7406,6 +7424,30 @@ function cpcDeliverooRows(priorMonth){
   return{rows,mandate,floor,surplusBanner,ag};
 }
 
+// v318: verdict glossary, requested directly alongside the FLOOR rename — explains what each
+// term means in plain language, since "FLOOR" and "EXCLUDE" (and the existing SCALE/INVEST/
+// MONITOR/UNTESTED) are load-bearing recommendations, not self-explanatory labels. Shared across
+// every allocation table (Deliveroo, Talabat, Careem/Noon pooled) so the terminology and its
+// explanation never drift apart between tables.
+function cpcVerdictGlossary(){
+  const T=cpcTheme();
+  const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",FLOOR:"#EF4444",EXCLUDE:"#94A3B8",UNTESTED:T.label};
+  const terms=[
+    {v:"SCALE",d:"Strong ROAS, well above break-even. Recommended budget increases from last month — this listing earns more the more it gets."},
+    {v:"INVEST",d:"Good ROAS above break-even, room to grow. Recommended budget increases, more conservatively than SCALE."},
+    {v:"MONITOR",d:"Roughly matching last month's spend — performing near break-even, worth keeping an eye on rather than actively growing or cutting."},
+    {v:"FLOOR",d:"Below break-even. Funded at the mandatory per-listing minimum only — the least you can spend while still running the listing at all — nothing more."},
+    {v:"EXCLUDE",d:"No real order activity and no measurable ROAS. Recommended budget is AED 0 — a candidate to stop running entirely, not just fund at the minimum."},
+    {v:"UNTESTED",d:"No CPC data yet for this listing this month. Started at the mandatory floor so there's something to measure next month."}
+  ];
+  return`<div style="margin-top:14px;padding-top:14px;border-top:1px solid ${T.border}">
+    <div style="font-size:11px;color:${T.label};font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Glossary</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px 16px">
+    ${terms.map(t=>`<div style="display:flex;gap:8px;align-items:flex-start"><span style="background:${verdClr[t.v]}22;color:${verdClr[t.v]};padding:2px 8px;border-radius:5px;font-size:10.5px;font-weight:800;letter-spacing:.3px;white-space:nowrap;margin-top:1px">${t.v}</span><span style="font-size:11.5px;color:${T.secondary};line-height:1.5">${t.d}</span></div>`).join("")}
+    </div>
+    <div style="font-size:10.5px;color:${T.label};margin-top:10px;line-height:1.5">The mandatory floor (AED ${CPC_MIN_PER_OUTLET.Deliveroo}/outlet on Deliveroo) only applies to listings you choose to keep running — it's not a requirement to invest in every listing. The 2% group GMV obligation is a total across all actively-invested listings, not a per-outlet sum, so excluding a dead listing doesn't put that obligation at risk.</div>
+  </div>`;
+}
 function cpcDeliverooAllocCard(priorMonth,brandFilter){
   const T=cpcTheme();
   const{rows:allRows,mandate,floor,surplusBanner,ag}=cpcDeliverooRows(priorMonth);
@@ -7415,8 +7457,8 @@ function cpcDeliverooAllocCard(priorMonth,brandFilter){
   // surplus math stays correct regardless of which single brand is being viewed.
   const rows=brandFilter?allRows.filter(r=>r.brand===brandFilter):allRows;
 
-  const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",PAUSE:"#EF4444",UNTESTED:T.label};
-  const verdBg={SCALE:"rgba(34,197,94,.08)",INVEST:"rgba(134,239,172,.06)",MONITOR:"rgba(251,191,36,.06)",PAUSE:"rgba(239,68,68,.06)",UNTESTED:"rgba(148,163,184,.06)"};
+  const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",FLOOR:"#EF4444",EXCLUDE:"#94A3B8",UNTESTED:T.label};
+  const verdBg={SCALE:"rgba(34,197,94,.08)",INVEST:"rgba(134,239,172,.06)",MONITOR:"rgba(251,191,36,.06)",FLOOR:"rgba(239,68,68,.06)",EXCLUDE:"rgba(100,116,139,.06)",UNTESTED:"rgba(148,163,184,.06)"};
   // v148: rows are unchanged from before — every field, every outlet, every computation
   // preserved exactly. Only the FINAL rendering changed: grouped by brand with click-to-expand,
   // instead of every outlet always shown flat.
@@ -7488,7 +7530,8 @@ function cpcDeliverooAllocCard(priorMonth,brandFilter){
     ${surplusBanner}
     ${lowerBidCount>0?`<div style="background:${_darkPage?"rgba(217,119,6,.12)":"#FFFBEB"};border:1px solid ${_darkPage?"rgba(217,119,6,.4)":"#FDE68A"};border-left:5px solid #D97706;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:12px"><span style="font-size:20px">📉</span><div><div style="font-size:14px;font-weight:800;color:#D97706">${lowerBidCount} outlet${lowerBidCount===1?"":"s"} show bid-reduction signals</div><div style="font-size:12px;color:${T.label};margin-top:1px">Overspent vs. their best-ROAS month — lowering bids preserves budget for the full month</div></div></div>`:""}
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr id="deliv-hdr-row" style="border-bottom:1px solid ${T.border};color:${T.muted};font-size:11px;text-transform:uppercase;letter-spacing:.4px"><th></th><th data-sortcol="outlet" onclick="cpcSortDelivTable(this,'outlet','string')" style="padding:8px 7px;text-align:left;cursor:pointer">Brand</th><th style="padding:8px 7px;text-align:left">Outlet</th><th data-sortcol="roas" onclick="cpcSortDelivTable(this,'roas','number')" style="padding:8px 7px;text-align:left;cursor:pointer">Latest ROAS</th><th data-sortcol="prior" onclick="cpcSortDelivTable(this,'prior','number')" style="padding:8px 7px;text-align:right;cursor:pointer">Prior Spend</th><th data-sortcol="rec" onclick="cpcSortDelivTable(this,'rec','number')" style="padding:8px 7px;text-align:right;cursor:pointer">Recommended</th><th data-sortcol="delta" onclick="cpcSortDelivTable(this,'delta','number')" style="padding:8px 7px;text-align:right;cursor:pointer">Δ vs Prior</th><th data-sortcol="julcto" onclick="cpcSortDelivTable(this,'julcto','number')" style="padding:8px 7px;text-align:right;cursor:pointer" title="July click-to-order rate — orders ÷ menu views">Jul CTO</th><th data-sortcol="augcto" onclick="cpcSortDelivTable(this,'augcto','number')" style="padding:8px 7px;text-align:right;cursor:pointer" title="August click-to-order rate — orders ÷ menu views">Aug CTO</th><th style="padding:8px 7px;text-align:right" title="Bid suggestion based on best historical ROAS-volume month">Bid Suggest</th><th style="padding:8px 7px;text-align:right">All-Time Spend</th></tr></thead>${tRows}<tfoot><tr style="border-top:2px solid ${T.border}"><td colspan="6" style="padding:9px 7px;color:${T.label};font-size:12px;font-weight:700">${rows.length} OUTLETS · base ${fmtAEDTip(roundTo10(totalBase))}${totalRecRounded!==roundTo10(totalBase)?` + ${fmtAEDTip(totalRecRounded-roundTo10(totalBase))} redistributed`:""}</td><td colspan="2"></td><td colspan="2" style="padding:9px 7px;text-align:right;color:${totalClr};font-weight:800">${fmtAEDTip(totalRecRounded)}</td><td></td></tr></tfoot></table></div>
-    <div style="font-size:11px;color:${T.label};margin-top:7px">Click a brand row to expand outlet-level detail. Click a column header to sort within an expanded brand.</div></div>`;
+    <div style="font-size:11px;color:${T.label};margin-top:7px">Click a brand row to expand outlet-level detail. Click a column header to sort within an expanded brand.</div>
+    ${cpcVerdictGlossary()}</div>`;
 }
 // v316: sorts an expanded brand's outlet rows in place by the clicked column, reading the
 // data-sort-* attributes already embedded on each row (see cpcDeliverooAllocCard) rather than
@@ -7561,8 +7604,8 @@ function cpcTalabatRows(priorMonth){
     const cpcROAS=cpcRow&&cpcRow.budgetSpent>0?cpcRow.sales/cpcRow.budgetSpent:null;
     const kwROAS=kwRow&&kwRow.budgetSpent>0?kwRow.sales/kwRow.budgetSpent:null;
     const beVal=cpcPlanBE(ag,brand);
-    const cpcVerdict=cpcPlanVerdict(brand,ag,cpcROAS);
-    const kwVerdict=cpcPlanVerdict(brand,ag,kwROAS);
+    const cpcVerdict=cpcPlanVerdict(brand,ag,cpcROAS,cpcRow?cpcRow.orders:null);
+    const kwVerdict=cpcPlanVerdict(brand,ag,kwROAS,kwRow?kwRow.orders:null);
     const cpcPriorSpend=cpcRow?cpcRow.budgetSpent:0;
     const kwPriorSpend=kwRow?kwRow.budgetSpent:0;
     const cpcRec=TALABAT_DEAL_SIGNED?cpcRecBudget(cpcVerdict,cpcPriorSpend,floor):0;
@@ -7584,7 +7627,7 @@ function cpcTalabatRows(priorMonth){
     return{brand,outlet,cpcROAS,kwROAS,beVal,cpcVerdict,kwVerdict,cpcPriorSpend,kwPriorSpend,cpcRec,kwRec,histTotal,kwHistTotal,tested,kwTested,lever,leverColor};
   }).sort((a,b)=>{
     if(a.brand!==b.brand)return a.brand.localeCompare(b.brand);
-    const order={SCALE:0,INVEST:1,MONITOR:2,UNTESTED:3,PAUSE:4};
+    const order={SCALE:0,INVEST:1,MONITOR:2,UNTESTED:3,FLOOR:4,EXCLUDE:5};
     return(order[a.cpcVerdict]||5)-(order[b.cpcVerdict]||5);
   });
   return{rows,floor,kwFloor,ag,noData:false};
@@ -7596,7 +7639,7 @@ function cpcTalabatAllocCard(priorMonth,brandFilter){
   if(noData)return`<div class="card" style="border:1px dashed rgba(251,191,36,.4);background:rgba(251,191,36,.04)"><div style="font-size:13px;font-weight:800;color:${AC.Talabat||'#FF5A00'}">🍔 Talabat Per-Outlet Allocation — Conditional</div><div style="color:${T.label};font-size:11px;margin-top:6px">No prior-month Talabat sales found. ${TALABAT_DEAL_SIGNED?"":"Deal not yet signed."}</div></div>`;
   // v153: brandFilter (optional) scopes rendering to one brand — used by Investment Plan Level 3.
   const rows=brandFilter?allRows.filter(r=>r.brand===brandFilter):allRows;
-  const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",PAUSE:"#EF4444",UNTESTED:T.label};
+  const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",FLOOR:"#EF4444",EXCLUDE:"#94A3B8",UNTESTED:T.label};
   // v148: same restructuring as Deliveroo — rows/computation unchanged, only the final
   // rendering groups by brand with click-to-expand.
   const brandGroups={};
@@ -7676,7 +7719,8 @@ function cpcPoolRows(ag,priorMonth){
     const poolAlloc=B?(hasCurrent?B.curInvested:B.invested)||0:0;
     const poolROAS=poolSpent>0?poolSales/poolSpent:null;
     const util=poolAlloc>0?poolSpent/poolAlloc*100:null;
-    const verdict=cpcPlanVerdict(b.n,ag,poolROAS);
+    const poolOrders=B?(hasCurrent?B.curOrders:B.orders)||0:0;
+    const verdict=cpcPlanVerdict(b.n,ag,poolROAS,poolOrders);
     return{brand:b.n,bGMV,brandShare,brandMand,poolSpent,poolAlloc,poolROAS,util,verdict,hasCurrent,hasAnyHistory:!!B};
   });
   return{rows,floor,mand,gmv,ag,A};
@@ -7685,7 +7729,7 @@ function cpcPoolRows(ag,priorMonth){
 function cpcPoolAllocCard(ag,priorMonth,brandFilter){
   const T=cpcTheme();
   const{rows:allRows,floor,mand,gmv,A}=cpcPoolRows(ag,priorMonth);
-  const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",PAUSE:"#EF4444",UNTESTED:T.label};
+  const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",FLOOR:"#EF4444",EXCLUDE:"#94A3B8",UNTESTED:T.label};
   // v153: brandFilter (optional) scopes rendering to one brand — used by Investment Plan Level 3.
   // Each brand's mandate share (brandMand = mand * brandShare) is already computed above using
   // the FULL group GMV, so filtering afterward doesn't change any brand's own numbers.
@@ -7804,7 +7848,7 @@ function cpcDecliningOutletsCard(){
     return`<tr style="border-bottom:1px solid ${T.border}"><td style="padding:7px 6px;color:${BMAP[d.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${d.brand}</td><td style="padding:7px 6px;color:${T.text};font-size:11.5px">${d.outlet}</td><td style="padding:7px 6px;text-align:right;color:${T.label}">${fmtAEDTip(d.prior)}</td><td style="padding:7px 6px;text-align:right;color:${T.secondary}">${fmtAEDTip(d.cur)}</td><td style="padding:7px 6px;text-align:right;color:#EF4444;font-weight:800">${d.pct.toFixed(0)}%</td><td style="padding:7px 6px;font-size:11px">${stack}</td><td style="padding:7px 6px;color:${T.secondary};font-size:11px">${suggestion}</td></tr>`;
   }).join("");
   return`<div class="card" style="border:1px solid rgba(239,68,68,.25)">
-    <div style="margin-bottom:10px"><div style="font-size:13px;font-weight:800;color:#fca5a5">📉 Declining Outlets — Visibility-Boost Candidates</div><div style="font-size:10.5px;color:${T.label};margin-top:2px">MoM decline > 15% · CPC boost on the dominant aggregator may help recover visibility · funded by redirecting from PAUSE-rated outlets above</div></div>
+    <div style="margin-bottom:10px"><div style="font-size:13px;font-weight:800;color:#fca5a5">📉 Declining Outlets — Visibility-Boost Candidates</div><div style="font-size:10.5px;color:${T.label};margin-top:2px">MoM decline > 15% · CPC boost on the dominant aggregator may help recover visibility · funded by redirecting from FLOOR-rated outlets above</div></div>
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="border-bottom:1px solid ${T.border};color:${T.muted};font-size:10px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:6px;text-align:left">Brand</th><th style="padding:6px;text-align:left">Outlet</th><th style="padding:6px;text-align:right">Prior Sales</th><th style="padding:6px;text-align:right">Current Sales</th><th style="padding:6px;text-align:right">MoM Δ</th><th style="padding:6px;text-align:left">Aggregator Mix</th><th style="padding:6px;text-align:left">Suggestion</th></tr></thead><tbody>${tRows}</tbody></table></div>
   </div>`;
 }
