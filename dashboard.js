@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-321";
+const BUILD_VERSION="2026-08-13-323";
 const BUILD_NOTES=[
+  "🆕 Redesigned Careem/Noon budget allocation per Nikhil's explicit correction: the 2%/4% obligation is a GROUP-LEVEL total across all brands combined, not a per-brand requirement — Deliveroo/Careem/Noon don't require Oregano specifically to hit 2% of Oregano's own GMV, and there's no rule against concentrating the group total unevenly across brands. Found this was a genuine bug, not just a modeling choice: cpcPoolRows previously computed each brand's RECOMMENDATION as brandMand = mand×(brand's GMV share of the group) — meaning a brand with strong real ROAS could get a LOWER recommendation than a weak one purely for having less historical GMV share, and this fed directly into the Investment Plan summary tiles, not just a display column. Redesigned per Nikhil's explicit instructions: each brand's recommendation now comes from its OWN real verdict + prior spend via cpcRecBudget (the same bottom-up logic Deliveroo's outlets already use) — the GMV-proportional figure is kept only as clearly-labeled reference context, never the driver. The group mandate is now the ONLY hard constraint, checked at the end: if the bottom-up total falls short, the shortfall is redistributed — per Nikhil's explicit 'mix of 1 and 2, don't just fund the strongest ROAS brand' — proportionally among brands ALREADY showing real INVEST/SCALE signal (not FLOOR/EXCLUDE, which have no case for more), weighted by ROAS upside with a small trend nudge, never concentrated onto a single brand. If literally no brand shows growth signal, the unplaceable shortfall is surfaced honestly on the page rather than forced somewhere with no real case for it. Added a Recommended column alongside the now-relabeled Proportional Reference column, and a summary line showing the real bottom-up total vs the mandate. Verified against real August Noon data (every brand's own ROAS 3.8×-6.5× genuinely exceeded the mandate on its own, no redistribution even needed) AND a constructed shortfall scenario confirming FLOOR/EXCLUDE brands correctly receive nothing extra while growth-tier brands share the gap rather than the strongest one taking it all.",
+  "🆕 Brought the Careem/Noon pooled allocation table to parity with Deliveroo's, per Nikhil's direct side-by-side comparison. Traced the actual gap before building anything: some differences are genuinely structural (Deliveroo's bid-reduction banner and Bid Suggest column exist because bid is a real lever on that platform — Careem's bid is locked at AED 2.00, Noon doesn't expose one, so there's nothing to suggest raising or lowering; budget is pooled at brand level on Careem/Noon vs per-outlet on Deliveroo, a genuine platform difference, not a design choice), but sortable columns, Jul/Aug CTO, and visible trend labels were pure oversights — all three already existed as working, tested logic (cpcSortDelivTable, cpcTrendSignal, the cto field from cpcRowForMonth) but only ever got wired into Deliveroo's table. Added all three to the pooled table's outlet-detail rows: sortable headers (Outlet/ROAS/Jul CTO/Aug CTO/Spend, reusing the same cpcSortDelivTable already verified against real DOM operations), the two CTO columns colored by trend direction, and a visible ↑improving/↓declining/flat label next to each outlet name. Deliberately reused existing, already-tested logic rather than writing new versions — same trustworthy source Deliveroo's table already relies on. Verified both the sort mechanics (against this table's real nested-tbody structure, not just Deliveroo's) and the CTO/trend data-gathering with realistic mock data before shipping.",
   "🐛 Fixed a real structural design bug in the Noon/Careem pooled allocation table (outletBreakdownFor), caught directly from Nikhil's screenshot — the per-outlet detail rows (spend, sales, keep/exclude status) had NO header row of their own and sat directly underneath the PARENT table's brand-level headers (Brand/Prior GMV/Share/Proportional Mandate/Latest ROAS/Verdict/Last Util/Signal) — a completely different data shape. That's why AED 776 (Al Quoz's real spend) visually appeared to sit under a column literally labeled 'SHARE' or 'PROPORTIONAL MAND.' — verified the underlying numbers were actually correct (776 spend × 8.37 ROAS ≈ 6,495 sales, matching the screenshot's AED 6.5K exactly) so this was purely a missing-header/misalignment bug, not a data bug. Added a proper labeled header row (Outlet / ROAS / This Month Spend / This Month Sales / Status) directly above the outlet rows. Also raised font sizes throughout this table and its footer note to match the Deliveroo table's already-approved refinement, which this page never received, and added the verdict glossary here too since this table uses the same SCALE/FLOOR/EXCLUDE terminology. Verified the fix renders correctly against realistic data matching the real screenshot numbers before shipping.",
   "🐛 Two real fixes from Nikhil's direct feedback. (1) Fixed a genuine flaw in v319's own trend-aware trim logic, found from his Lollorosso Al Reef report — verified against the real sheet: Al Reef genuinely improved 117% Jul→Aug (1.95×→4.22× ROAS), a real, strong result, but got cut hard in the September plan anyway. Root cause: v319's trend adjustment used a MULTIPLIER (×0.8 for improving, ×1.4 for declining) that scaled proportionally with an outlet's own upside value — so a large genuine improvement could swing the trim-priority score further than several genuinely-declining-but-weaker outlets' protection did, concentrating trim pressure onto Al Reef and NAS (Lollorosso's only two improving outlets) while shielding outlets with objectively worse ROAS just because they happened to be declining. Fixed by replacing the multiplier with a small, FIXED, capped additive nudge (±0.3 upside-points) — trend can now only break close ties or nudge borderline cases, never override a large genuine performance gap. Verified against the complete real Lollorosso dataset (all 13 outlets' real Jul→Aug ROAS): Al Reef now correctly lands mid-pack in the trim order matching its actual 4.22× ROAS, not artificially pushed to the front. (2) Fixed the export-button contrast bug in two more places — Talabat's and the pooled Noon/Careem export (confirmed via Nikhil's own screenshot) still had the same background:${T.text} bug fixed for Deliveroo in v316 but never checked elsewhere; searched the full file this time and confirmed no other instances remain.",
   "🆕 Built trend-aware trim priority for the Deliveroo allocation plan, per Nikhil's direct feedback on Fyoozhen DIP — DIP is Fyoozhen's top-performing Deliveroo outlet in real terms, but got cut in September planning purely because the trim logic only ever compared instantaneous ROAS against a static break-even threshold, with no memory of direction. Verified this against real numbers before building anything: DIP's own Jul→Aug figures show ROAS dropping 5.50×→3.99× and CTO dropping 15.3%→11.6% in the same window — a genuine warning sign the old model had no way to see, since it was the WEAKEST of three SCALE outlets purely by raw ROAS level. Built cpcTrendSignal() — computes real month-over-month ROAS and CTO movement per outlet, using the same cpcRowForMonth() already fixed to correctly sum multi-campaign months (the Motorcity fix). Investigated whether a full marginal-ROI model was buildable first — tested spend-vs-ROAS correlation across 48 real outlets with 4+ months of history — found the relationship too noisy across most outlets to support a precise number, so this deliberately stays an honest direction signal (declining/flat/improving) rather than a fabricated-precision estimate. Wired into BOTH trim pools (MONITOR/INVEST and the SCALE fallback that actually affected DIP): a declining outlet's effective trim-priority score is now weighted to protect it (cut later), an improving outlet's score is weighted to make it a more available candidate to absorb the cut instead. Deliberately scoped to the trim side only, not the surplus/top-up side — Nikhil's example and complaint were specifically about being cut, extending the same logic to reward improving outlets with MORE surplus wasn't part of what was discussed or verified. Verified end-to-end with a full reconstruction of the exact Fyoozhen scenario from the screenshot (Al Forsan flat, DIP declining, NAS improving per its own real 24→49 order growth) — confirmed the trim now correctly falls on NAS (the improving outlet, most available) instead of DIP (the declining outlet, now protected).",
@@ -7166,7 +7168,7 @@ function cpcInvPlanRenderBrands(ag,priorMonth){
     }
   }else if(isPool){
     const{rows}=cpcPoolRows(ag,priorMonth);
-    brandTiles=rows.map(r=>({brand:r.brand,outlets:null,vCounts:{[r.verdict]:1},prior:r.poolSpent,rec:roundTo10(r.brandMand)}));
+    brandTiles=rows.map(r=>({brand:r.brand,outlets:null,vCounts:{[r.verdict]:1},prior:r.poolSpent,rec:roundTo10(r.rec)}));
   }else{ // Deliveroo
     const{rows}=cpcDeliverooRows(priorMonth);
     const groups={};
@@ -7776,6 +7778,15 @@ function cpcPoolRows(ag,priorMonth){
   const rows=brands.map(b=>{
     const bGMV=allData.filter(r=>r.aggregator===ag&&recMonth(r)===priorMonth&&r.brand===b.n).reduce((s,r)=>s+(r.sales||0),0);
     const brandShare=gmv>0?bGMV/gmv:0;
+    // v323: brandMand kept ONLY as informational context (what a proportional split of the group
+    // mandate WOULD look like) — per Nikhil's explicit correction, the 2%/4% obligation is a
+    // GROUP-LEVEL total, not a per-brand requirement. Deliveroo's own contract doesn't require
+    // Oregano to hit 2% of Oregano's own GMV specifically; the group total is the only real
+    // constraint, and there's no rule against concentrating it unevenly across brands. This was
+    // previously used to DRIVE the recommendation (see the old brandTiles rec:roundTo10(r.brandMand)
+    // at the Investment Plan summary level) — a genuine bug, not just a display quirk: a brand
+    // with strong real ROAS could get a LOWER recommendation than a weak one purely because it
+    // had less historical GMV share. Fixed below.
     const brandMand=mand*brandShare;
     // Pool figures from cpcModel — uses current-month accumulators if present, otherwise all-time
     const B=A&&A.brands?A.brands[b.n]:null;
@@ -7789,14 +7800,50 @@ function cpcPoolRows(ag,priorMonth){
     const util=poolAlloc>0?poolSpent/poolAlloc*100:null;
     const poolOrders=B?(hasCurrent?B.curOrders:B.orders)||0:0;
     const verdict=cpcPlanVerdict(b.n,ag,poolROAS,poolOrders);
-    return{brand:b.n,bGMV,brandShare,brandMand,poolSpent,poolAlloc,poolROAS,util,verdict,hasCurrent,hasAnyHistory:!!B};
+    const trend=cpcTrendSignal(b.n,ag,null,priorMonth); // brand-level pool has no single outlet — null outlet arg is fine, cpcRowForMonth will simply find nothing and return null, which is the correct "no trend data at this granularity" outcome
+    // v323: baseRec now comes from the brand's OWN verdict + prior spend via cpcRecBudget — the
+    // same bottom-up logic Deliveroo's outlets already use — NOT the GMV-proportional split.
+    const baseRec=cpcRecBudget(verdict,poolSpent,floor);
+    return{brand:b.n,bGMV,brandShare,brandMand,poolSpent,poolAlloc,poolROAS,util,verdict,hasCurrent,hasAnyHistory:!!B,baseRec,rec:baseRec,trend};
   });
-  return{rows,floor,mand,gmv,ag,A};
+  // ── GROUP-LEVEL RECONCILIATION — the only hard constraint, checked at the end ──────────────
+  // v323: if the bottom-up total (every brand's own real recommendation, summed) falls short of
+  // the group mandate, distribute the shortfall — per Nikhil's explicit instruction: "mix of 1
+  // and 2" — proportionally among brands that ALREADY show real INVEST/SCALE signal (not brands
+  // sitting at FLOOR/EXCLUDE/UNTESTED, which have no case for MORE budget just to plug a gap),
+  // further weighted toward brands with an improving trend. This deliberately does NOT
+  // concentrate everything into the single strongest-ROAS brand — Nikhil was explicit that
+  // brands earlier in their growth curve still need support, not to be starved in favor of
+  // whichever brand currently tests best.
+  const bottomUpTotal=rows.reduce((s,r)=>s+r.baseRec,0);
+  let groupShortfall=mand-bottomUpTotal;
+  if(groupShortfall>1){
+    const growthPool=rows.filter(r=>r.verdict==="INVEST"||r.verdict==="SCALE");
+    if(growthPool.length){
+      const weight=r=>{
+        const w=r.poolROAS!=null?Math.max(0.1,r.poolROAS-cpcPlanBE(ag,r.brand)):0.1;
+        return(r.trend&&r.trend.direction==="improving")?w*1.15:w; // small nudge, not a dominant factor — matches the same "nudge, don't override" principle as the trim-priority fix
+      };
+      const totalWeight=growthPool.reduce((s,r)=>s+weight(r),0);
+      if(totalWeight>0){
+        growthPool.forEach(r=>{
+          const share=weight(r)/totalWeight;
+          r.rec=r.baseRec+Math.round(groupShortfall*share);
+        });
+      }
+    }
+    // If NO brand shows INVEST/SCALE at all (everything is FLOOR/EXCLUDE/UNTESTED), the
+    // shortfall genuinely can't be responsibly placed anywhere — surfaced as groupUnplaceable
+    // for the UI to show honestly rather than forcing it onto a brand with no real case for it.
+  }
+  const finalTotal=rows.reduce((s,r)=>s+r.rec,0);
+  const groupUnplaceable=Math.max(0,mand-finalTotal);
+  return{rows,floor,mand,gmv,ag,A,bottomUpTotal,groupShortfall:Math.max(0,groupShortfall),groupUnplaceable};
 }
 
 function cpcPoolAllocCard(ag,priorMonth,brandFilter){
   const T=cpcTheme();
-  const{rows:allRows,floor,mand,gmv,A}=cpcPoolRows(ag,priorMonth);
+  const{rows:allRows,floor,mand,gmv,A,bottomUpTotal,groupShortfall,groupUnplaceable}=cpcPoolRows(ag,priorMonth);
   const verdClr={SCALE:"#22C55E",INVEST:"#86EFAC",MONITOR:"#FBBF24",FLOOR:"#EF4444",EXCLUDE:"#94A3B8",UNTESTED:T.label};
   // v153: brandFilter (optional) scopes rendering to one brand — used by Investment Plan Level 3.
   // Each brand's mandate share (brandMand = mand * brandShare) is already computed above using
@@ -7816,24 +7863,32 @@ function cpcPoolAllocCard(ag,priorMonth,brandFilter){
       const oSpent=cpcRow?cpcRow.budgetSpent:0;
       const oSales=cpcRow?cpcRow.sales:0;
       const exclude=oROAS!=null&&oROAS<beVal*0.8;
-      return{outlet,oROAS,oSpent,oSales,exclude};
+      // v322: bringing this table to parity with Deliveroo's, per Nikhil's direct comparison —
+      // both the trend signal and CTO were already built and tested (cpcTrendSignal, from the
+      // Al Reef trim-priority fix; .cto, from the earlier cpcRowForMonth fix) but never wired
+      // into this table's display, only into Deliveroo's. Reusing both here rather than building
+      // new logic — same trustworthy source, no new untested code path.
+      const trend=cpcTrendSignal(brand,ag,outlet,priorMonth);
+      const augCto=cpcRow&&cpcRow.cto!=null?cpcRow.cto:null;
+      const julRow=cpcRowForMonth(brand,ag,outlet,"CPC",monthBefore(priorMonth));
+      const julCto=julRow&&julRow.cto!=null?julRow.cto:null;
+      return{outlet,oROAS,oSpent,oSales,exclude,trend,julCto,augCto};
     }).sort((a,b)=>(b.oROAS||0)-(a.oROAS||0));
     if(!outletRows.length)return null;
     const excludeCount=outletRows.filter(o=>o.exclude).length;
-    // v321: added a proper, correctly-labeled header row for this outlet-level detail table —
-    // fixing a real structural bug Nikhil caught: these rows had no header of their own and sat
-    // directly under the PARENT table's brand-level headers (Brand/Prior GMV/Share/Proportional
-    // Mandate/etc), a completely different data shape, so "AED 776" (this outlet's real spend)
-    // visually appeared to sit under a column literally labeled "SHARE" or "PROPORTIONAL MAND."
-    // Also raised font sizes to match the Deliveroo table's approved refinement (was 9.5-11px,
-    // now 12-13px), which this table never received.
-    const headerRow=`<tr style="background:rgba(15,23,42,.03)"><td></td><td style="padding:6px 7px;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase">Outlet</td><td colspan="2" style="padding:6px 7px;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase">ROAS</td><td style="padding:6px 7px;text-align:right;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase">This Month Spend</td><td style="padding:6px 7px;text-align:right;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase">This Month Sales</td><td colspan="2" style="padding:6px 7px;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase">Status</td></tr>`;
+    // v322: header row now sortable (reuses cpcSortDelivTable, already tested against real DOM
+    // operations for the Deliveroo table) and includes the two new CTO columns.
+    const headerRow=`<tr style="background:rgba(15,23,42,.03)"><td></td><td data-sortcol="outlet" onclick="cpcSortDelivTable(this,'outlet','string')" style="padding:6px 7px;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase;cursor:pointer">Outlet</td><td data-sortcol="roas" onclick="cpcSortDelivTable(this,'roas','number')" style="padding:6px 7px;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase;cursor:pointer">ROAS</td><td data-sortcol="julcto" onclick="cpcSortDelivTable(this,'julcto','number')" style="padding:6px 7px;text-align:right;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase;cursor:pointer">Jul CTO</td><td data-sortcol="augcto" onclick="cpcSortDelivTable(this,'augcto','number')" style="padding:6px 7px;text-align:right;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase;cursor:pointer">Aug CTO</td><td data-sortcol="prior" onclick="cpcSortDelivTable(this,'prior','number')" style="padding:6px 7px;text-align:right;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase;cursor:pointer">This Month Spend</td><td style="padding:6px 7px;text-align:right;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase">This Month Sales</td><td colspan="2" style="padding:6px 7px;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase">Status</td></tr>`;
     const rowsHtml=outletRows.map(o=>{
       const roasTxt=o.oROAS!=null?`<strong style="color:${o.oROAS>=beVal?'#22C55E':o.exclude?'#EF4444':'#FBBF24'}">${o.oROAS.toFixed(2)}×</strong>`:`<span style="color:${T.muted}">no spend</span>`;
+      const trendTxt=o.trend?(o.trend.direction==="declining"?`<span style="color:#EF4444;font-size:10.5px">↓ declining</span>`:o.trend.direction==="improving"?`<span style="color:#22C55E;font-size:10.5px">↑ improving</span>`:`<span style="color:${T.muted};font-size:10.5px">flat</span>`):"";
       const tag=o.exclude?`<span style="background:rgba(239,68,68,.15);color:#EF4444;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:800">EXCLUDE CANDIDATE</span>`:o.oROAS!=null&&o.oROAS>=beVal?`<span style="color:#22C55E;font-size:11px;font-weight:700">keep</span>`:`<span style="color:${T.label};font-size:11px">monitor</span>`;
+      const julCtoTxt=o.julCto!=null?`${o.julCto.toFixed(1)}%`:"—";
+      const augCtoTxt=o.augCto!=null?`${o.augCto.toFixed(1)}%`:"—";
+      const ctoTrendClr=(o.augCto!=null&&o.julCto!=null)?(o.augCto>=o.julCto?"#22C55E":"#EF4444"):T.muted;
       const cpcRow=cpcLatestRowByType(brand,ag,o.outlet,"CPC");
       const momHtml=cpcMoMSnippet(brand,ag,o.outlet,"CPC",o.oROAS,cpcRow?cpcRow.orders:null,priorMonth);
-      return`<tr style="border-bottom:none"><td></td><td style="padding:7px 7px 2px 20px;color:${T.text};font-size:13px">↳ ${o.outlet}</td><td colspan="2" style="padding:7px 7px 2px;font-size:13px">${roasTxt}</td><td style="padding:7px 7px 2px;text-align:right;color:${T.label};font-size:12px">${fmtAEDTip(o.oSpent)}</td><td style="padding:7px 7px 2px;text-align:right;color:${T.label};font-size:12px">${fmtAEDTip(o.oSales)}</td><td colspan="2" style="padding:7px 7px 2px">${tag}</td></tr><tr style="border-bottom:1px solid ${T.border}"><td></td><td colspan="7" style="padding:2px 7px 8px 20px">${momHtml}</td></tr>`;
+      return`<tr data-sort-outlet="${o.outlet}" data-sort-roas="${o.oROAS??-999}" data-sort-julcto="${o.julCto??-999}" data-sort-augcto="${o.augCto??-999}" data-sort-prior="${o.oSpent}" style="border-bottom:none"><td></td><td style="padding:7px 7px 2px 20px;color:${T.text};font-size:13px">↳ ${o.outlet} ${trendTxt}</td><td style="padding:7px 7px 2px;font-size:13px">${roasTxt}</td><td style="padding:7px 7px 2px;text-align:right;color:${T.label};font-size:12px">${julCtoTxt}</td><td style="padding:7px 7px 2px;text-align:right;color:${ctoTrendClr};font-size:12px;font-weight:700">${augCtoTxt}</td><td style="padding:7px 7px 2px;text-align:right;color:${T.label};font-size:12px">${fmtAEDTip(o.oSpent)}</td><td style="padding:7px 7px 2px;text-align:right;color:${T.label};font-size:12px">${fmtAEDTip(o.oSales)}</td><td colspan="2" style="padding:7px 7px 2px">${tag}</td></tr><tr style="border-bottom:1px solid ${T.border}"><td></td><td colspan="8" style="padding:2px 7px 8px 20px">${momHtml}</td></tr>`;
     }).join("");
     return{rowsHtml:headerRow+rowsHtml,count:outletRows.length,excludeCount};
   }
@@ -7871,7 +7926,8 @@ function cpcPoolAllocCard(ag,priorMonth,brandFilter){
     const rid=`poolRows_${gi}_${Math.random().toString(36).slice(2,7)}`;
     const chevCell=brk?`<td style="width:16px;cursor:pointer;color:${T.label}" class="chev">▾</td>`:`<td></td>`;
     const rowOnclick=brk?` onclick="const el=document.getElementById('${rid}');const open=el.style.display!=='none';el.style.display=open?'none':'table-row-group';this.querySelector('.chev').textContent=open?'▸':'▾'" style="cursor:pointer"`:'';
-    const summaryRow=`<tr${rowOnclick}><td style="padding:7px 6px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}${adTypeBreakdown}</td><td style="padding:7px 6px;text-align:right;color:${T.secondary}">${fmtAEDTip(r.bGMV)}</td><td style="padding:7px 6px;text-align:right;color:${T.label};font-size:11px">${(r.brandShare*100).toFixed(0)}%</td><td style="padding:7px 6px;text-align:right;color:#fbbf24;font-weight:700">${fmtAEDTip(roundTo10(r.brandMand))}</td><td style="padding:7px 6px;font-size:11px">${roasTxt}</td><td style="padding:7px 6px"><span style="background:${verdClr[r.verdict]}22;color:${verdClr[r.verdict]};padding:2px 7px;border-radius:4px;font-size:10px;font-weight:800">${r.verdict}</span></td><td style="padding:7px 6px;text-align:center">${utilTxt}</td><td style="padding:7px 6px">${signal}</td>${chevCell}</tr>`;
+    const recBump=r.rec>r.baseRec?` <span style="color:#22C55E;font-size:9.5px" title="Includes a share of the group shortfall, redistributed to growing brands">+${fmtAEDTip(r.rec-r.baseRec)} growth share</span>`:"";
+    const summaryRow=`<tr${rowOnclick}><td style="padding:7px 6px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}${adTypeBreakdown}</td><td style="padding:7px 6px;text-align:right;color:${T.secondary}">${fmtAEDTip(r.bGMV)}</td><td style="padding:7px 6px;text-align:right;color:${T.label};font-size:11px">${(r.brandShare*100).toFixed(0)}%</td><td style="padding:7px 6px;text-align:right;color:${T.muted};font-size:10.5px" title="What a GMV-proportional split of the group mandate would give this brand — reference only, not the recommendation">${fmtAEDTip(roundTo10(r.brandMand))}</td><td style="padding:7px 6px;text-align:right;color:#fbbf24;font-weight:700">${fmtAEDTip(roundTo10(r.rec))}${recBump}</td><td style="padding:7px 6px;font-size:11px">${roasTxt}</td><td style="padding:7px 6px"><span style="background:${verdClr[r.verdict]}22;color:${verdClr[r.verdict]};padding:2px 7px;border-radius:4px;font-size:10px;font-weight:800">${r.verdict}</span></td><td style="padding:7px 6px;text-align:center">${utilTxt}</td><td style="padding:7px 6px">${signal}</td>${chevCell}</tr>`;
     if(!brk)return`<tbody style="display:table-row-group">${summaryRow}</tbody>`;
     return summaryRow+`<tbody id="${rid}" style="display:none"><tr style="background:rgba(245,158,11,.04)"><td colspan="9" style="padding:7px 7px 7px 20px;font-size:11.5px;color:${T.label};font-weight:700">${brk.count} outlets${brk.excludeCount?` · <strong style="color:#EF4444">${brk.excludeCount} exclude candidate${brk.excludeCount===1?"":"s"}</strong>`:""} — budget is pooled at brand level, but underperforming outlets can be excluded from targeting</td></tr>${brk.rowsHtml}</tbody>`;
   }).join("");
@@ -7880,7 +7936,8 @@ function cpcPoolAllocCard(ag,priorMonth,brandFilter){
   window._cpcExportCache[ag.toLowerCase()]={rows,priorMonth,ag};
   return`<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><div style="font-size:13px;font-weight:800;color:${AC[ag]||'#fff'}">${ag==="Noon"?"🌙":"🚕"} ${ag} Brand Pool Allocation</div><div style="font-size:10.5px;color:${T.label};margin-top:2px">4% group GMV obligation${lockedNote}</div></div><div style="display:flex;align-items:center;gap:12px"><button onclick="cpcExportPool('${ag}')" style="background:#0F172A;color:#fff;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer">⬇ Export CSV</button><div style="font-size:11px;color:${T.secondary}">Group mandatory: <strong style="color:#22C55E;font-size:14px">${fmtAEDTip(mand)}</strong></div></div></div>
-    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="border-bottom:1px solid ${T.border};color:${T.muted};font-size:11px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:8px 7px;text-align:left">Brand</th><th style="padding:8px 7px;text-align:right">Prior GMV</th><th style="padding:8px 7px;text-align:right">Share</th><th style="padding:8px 7px;text-align:right">Proportional Mand.</th><th style="padding:8px 7px;text-align:left">Latest ROAS</th><th style="padding:8px 7px;text-align:left">Verdict</th><th style="padding:8px 7px;text-align:center">Last Util</th><th style="padding:8px 7px;text-align:left">Signal</th><th></th></tr></thead>${tRows}</table></div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="border-bottom:1px solid ${T.border};color:${T.muted};font-size:11px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:8px 7px;text-align:left">Brand</th><th style="padding:8px 7px;text-align:right">Prior GMV</th><th style="padding:8px 7px;text-align:right">Share</th><th style="padding:8px 7px;text-align:right" title="What a GMV-proportional split of the group mandate would give this brand — reference only, no brand is required to hit this">Proportional Ref.</th><th style="padding:8px 7px;text-align:right" title="This brand's own bottom-up recommendation, based on its real outlet performance — not tied to its GMV share">Recommended</th><th style="padding:8px 7px;text-align:left">Latest ROAS</th><th style="padding:8px 7px;text-align:left">Verdict</th><th style="padding:8px 7px;text-align:center">Last Util</th><th style="padding:8px 7px;text-align:left">Signal</th><th></th></tr></thead>${tRows}</table></div>
+    ${bottomUpTotal!=null?`<div style="font-size:11.5px;color:${T.label};margin-top:8px">Group mandate: <strong style="color:#22C55E">${fmtAEDTip(mand)}</strong> · Bottom-up total (sum of each brand's own recommendation): <strong style="color:${T.text}">${fmtAEDTip(bottomUpTotal)}</strong>${groupShortfall>1?` · <strong style="color:#F59E0B">${fmtAEDTip(groupShortfall)} shortfall</strong> redistributed to growing brands (INVEST/SCALE) above, weighted by ROAS upside and trend`:" · already meets the group mandate on its own, no redistribution needed"}${groupUnplaceable>1?`<br><span style="color:#EF4444">⚠ ${fmtAEDTip(groupUnplaceable)} of the mandate has no brand with real INVEST/SCALE signal to place it in responsibly — consider whether the group mandate itself needs review, rather than forcing this into a brand with no real case for it.</span>`:""}</div>`:""}
     ${cpcVerdictGlossary()}
     <div style="font-size:11.5px;color:${T.label};margin-top:8px">${ag} budget is pooled at brand level — click a brand row with outlet data to see per-outlet ROAS and exclude candidates (outlets consistently &lt;80% of break-even)</div>
   </div>`;
@@ -7892,7 +7949,7 @@ function cpcExportPool(ag){
   if(!cache){alert(`No ${ag} allocation data loaded yet.`);return;}
   const{rows,priorMonth}=cache;
   const prevMonth=monthBefore(priorMonth);
-  const header=["Brand","Prior GMV (AED)","Share %","Proportional Mandate (AED)","Latest ROAS","Verdict","Last Util %",
+  const header=["Brand","Prior GMV (AED)","Share %","Proportional Reference (AED)","Recommended (AED)","Latest ROAS","Verdict","Last Util %",
     `${cpcMonthLabel(prevMonth)} ROAS (brand-level)`];
   const csvRows=rows.map(r=>{
     // Brand-level MoM proxy: compare THIS brand's pool ROAS against its OWN value the prior
@@ -7905,7 +7962,7 @@ function cpcExportPool(ag){
       const prevSpent=prevRows.reduce((s,rr)=>s+(rr.budgetSpent||0),0),prevSales=prevRows.reduce((s,rr)=>s+(rr.sales||0),0);
       if(prevSpent>0)prevROASTxt=(prevSales/prevSpent).toFixed(2);
     }
-    return[r.brand,r.bGMV.toFixed(2),(r.brandShare*100).toFixed(1)+"%",roundTo10(r.brandMand).toFixed(2),
+    return[r.brand,r.bGMV.toFixed(2),(r.brandShare*100).toFixed(1)+"%",roundTo10(r.brandMand).toFixed(2),roundTo10(r.rec).toFixed(2),
       r.poolROAS!=null?r.poolROAS.toFixed(2):"",r.verdict,r.util!=null?r.util.toFixed(0)+"%":"",prevROASTxt];
   });
   cpcExportCSV(`${ag.toLowerCase()}_allocation_${priorMonth}.csv`,header,csvRows);
