@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-318";
+const BUILD_VERSION="2026-08-13-319";
 const BUILD_NOTES=[
+  "🆕 Built trend-aware trim priority for the Deliveroo allocation plan, per Nikhil's direct feedback on Fyoozhen DIP — DIP is Fyoozhen's top-performing Deliveroo outlet in real terms, but got cut in September planning purely because the trim logic only ever compared instantaneous ROAS against a static break-even threshold, with no memory of direction. Verified this against real numbers before building anything: DIP's own Jul→Aug figures show ROAS dropping 5.50×→3.99× and CTO dropping 15.3%→11.6% in the same window — a genuine warning sign the old model had no way to see, since it was the WEAKEST of three SCALE outlets purely by raw ROAS level. Built cpcTrendSignal() — computes real month-over-month ROAS and CTO movement per outlet, using the same cpcRowForMonth() already fixed to correctly sum multi-campaign months (the Motorcity fix). Investigated whether a full marginal-ROI model was buildable first — tested spend-vs-ROAS correlation across 48 real outlets with 4+ months of history — found the relationship too noisy across most outlets to support a precise number, so this deliberately stays an honest direction signal (declining/flat/improving) rather than a fabricated-precision estimate. Wired into BOTH trim pools (MONITOR/INVEST and the SCALE fallback that actually affected DIP): a declining outlet's effective trim-priority score is now weighted to protect it (cut later), an improving outlet's score is weighted to make it a more available candidate to absorb the cut instead. Deliberately scoped to the trim side only, not the surplus/top-up side — Nikhil's example and complaint were specifically about being cut, extending the same logic to reward improving outlets with MORE surplus wasn't part of what was discussed or verified. Verified end-to-end with a full reconstruction of the exact Fyoozhen scenario from the screenshot (Al Forsan flat, DIP declining, NAS improving per its own real 24→49 order growth) — confirmed the trim now correctly falls on NAS (the improving outlet, most available) instead of DIP (the declining outlet, now protected).",
   "🆕 Renamed PAUSE to FLOOR across every Deliveroo/Talabat/Careem/Noon allocation table, per Nikhil's correction — PAUSE was a genuine mislabel, not just informal wording: that tier has always recommended real, mandatory spend (the per-listing floor), and \"pause\" implies stopping. Fixed in every place the term appears — verdict logic, color/style maps (all three duplicated table-rendering copies), sort order, eligibility filters, and visible copy text — not just the one label. Also built the new EXCLUDE tier Nikhil confirmed separately in the same conversation: the mandatory floor only applies to listings you choose to keep running — it was never a requirement to invest in every listing, and Deliveroo's 2% obligation is a GROUP-LEVEL percentage of total GMV, not a per-outlet floor sum, so dropping a genuinely dead listing doesn't put that obligation at risk. EXCLUDE is deliberately a stricter, narrower condition than FLOOR — zero/unmeasurable ROAS AND zero real order activity, not just \"below break-even\" — so a listing with real if weak performance still correctly gets FLOOR (worth its minimum), while one with no activity at all gets flagged for AED 0. Added cpcVerdictGlossary(), shown below the Deliveroo table, explaining every term in plain language plus the underlying floor/mandate distinction directly, so future confusion about what a verdict actually means doesn't require asking again. Verified the new verdict logic against reconstructions of the exact cases from Nikhil's screenshot: Furjan (0 ROAS, 0 orders) correctly gets EXCLUDE with AED 0 recommended; Marina (weak but real 1.55× ROAS, real orders) correctly stays FLOOR at the AED 90 minimum, confirming the two tiers separate real-but-weak from genuinely-dead as intended.",
   "🐛 Found and fixed a real, widespread bug Nikhil caught with exact real numbers — Lollorosso Motorcity's Deliveroo spend showed AED 893.80 when the real figure is AED 1,538.96 (893.80 from an Aug 3-10 campaign that ran out of budget, plus 645.16 from a second Aug 14-31 campaign — Nikhil's reported total, and confirmed exactly against the real uploaded sheet). Root cause: cpcLatestRowByType() and cpcRowForMonth() both checked raw, unaggregated cpcData FIRST — .sort(...)[0] and .find() respectively — silently picking a single row and discarding any other real campaign sharing the same outlet+month, even though buildCPCModel's own monthly-aggregation step (its own comment: \"combine multiple CPCs in same outlet+month\") already correctly sums exactly this case. That correct aggregated data was sitting right there as a fallback that never got reached, because the raw-data branch always found something first. Fixed by reordering both functions to check the aggregated cpcModel.monthly first, with a corrected (summing, not single-row) raw-data fallback for the rare case the model isn't built yet. Nikhil asked whether other outlets had the same problem — checked the entire real sheet: 196 separate outlet+aggregator+month combinations have multiple real rows, not just Motorcity (October 2025 alone shows nearly every outlet with 3 rows each) — this fix, being at the shared function level, automatically covers every one of them, not just the reported case. Verified three ways before shipping: a direct reconstruction of the real Motorcity numbers now produces exactly AED 1,538.96 through both the primary aggregated path and the raw-data fallback path, and a second real case pulled independently from the sheet (Lollorosso DMC, AED 351.90 real vs AED 159.60 previously shown) confirms the fix generalizes correctly rather than being tuned to one example.",
   "🆕 Refined the Deliveroo per-outlet allocation table per Nikhil's approved mockup: larger fonts throughout (was 9.5-11.5px, now 12-13px), sortable column headers (click Prior Spend, Recommended, Δ, ROAS, or the two new CTO columns to sort within an expanded brand — detail rows stay correctly paired with their outlet row when reordering), fixed the Export CSV button's actual contrast bug (it used T.text as a background color, which is a text-color token that resolves to a near-white value in dark mode — near-white button with white text was the 'awkward color' — replaced with a fixed dark navy that works correctly as a button background in both themes), and added the two requested CTO comparison columns (Jul CTO / Aug CTO, click-to-order rate, colored green/red by whether it held or declined month-over-month) to both the on-screen table and the CSV export so they stay in sync. Also fixed a real gap found while building this: cpcRowForMonth()'s cpcModel.monthly fallback branch had views and orders available but never computed .cto from them — only its 'direct cpcData' branch got CTO for free from parsing — so the new columns would have silently shown blanks for any row sourced from that fallback path; fixed to compute it the same way. Built this in two passes and want to be direct about the first one: my initial edit left a genuine duplicate code fragment behind (an incomplete old copy of the row-building logic sitting next to the new version), which broke the file's syntax entirely — caught it via node --check returning a confusing error, spent real time hand-tracing before switching to the acorn parser for an exact error position, which pinpointed it immediately. Fully fixed and reverified two ways before shipping: acorn parses the entire file cleanly with zero errors, and (separately) a jsdom-based test of the actual sort function against real DOM operations confirms ascending/descending sort, correct value ordering, and correct detail-row pairing all work as intended.",
@@ -7313,6 +7314,44 @@ function cpcObligationsCard(priorMonth,priorLabel,nextLabel){
 // cpcDeliverooBidOpt (Deliveroo is the only aggregator where bid is in our control).
 // Reconciles bottom-up recommendations to the top-down 2% mandate by redistributing any gap
 // to the best-performing outlets (weighted by ROAS upside).
+// v319: trend-aware verdicts + trim-priority, per Nikhil's direct feedback — Fyoozhen DIP got
+// trimmed in September planning despite being Deliveroo's genuinely strong performer for the
+// brand, because the trim logic only ever looked at instantaneous ROAS level, never whether that
+// performance was climbing or declining. DIP's own Jul→Aug numbers (verified against the real
+// sheet) show ROAS dropping 5.50×→3.99× and CTO dropping 15.3%→11.6% in the same window — a real
+// warning sign the old model had no way to see, since it only compared ROAS against a static
+// break-even threshold with no memory of direction.
+//
+// cpcTrendSignal() computes month-over-month movement in ROAS and CTO for one outlet, using
+// cpcRowForMonth (already fixed to correctly SUM multiple real campaigns sharing a month, per
+// the Motorcity fix) for both the current and prior month's data — same trustworthy source the
+// rest of the page already relies on. Returns null when there's not enough real data to compare
+// (fewer than two comparable months, or either month has zero real spend) rather than guessing
+// at a trend from noise. Correlation testing across 48 real outlets with 4+ months of history
+// showed spend-vs-ROAS is often weakly negative or inconsistent — not reliable enough to build a
+// precise marginal-ROI estimate — so this deliberately stays a simple, honest DIRECTION signal
+// (up/flat/down) rather than a fabricated-precision number.
+function cpcTrendSignal(brand,ag,outlet,curMonth,adType){
+  adType=adType||"CPC";
+  const prevMonth=monthBefore(curMonth);
+  const cur=cpcRowForMonth(brand,ag,outlet,adType,curMonth);
+  const prev=cpcRowForMonth(brand,ag,outlet,adType,prevMonth);
+  if(!cur||!prev||!(cur.budgetSpent>0)||!(prev.budgetSpent>0))return null;
+  const curROAS=cur.sales>0?cur.sales/cur.budgetSpent:0;
+  const prevROAS=prev.sales>0?prev.sales/prev.budgetSpent:0;
+  const roasDeltaPct=prevROAS>0?((curROAS-prevROAS)/prevROAS)*100:null;
+  const curCTO=cur.cto,prevCTO=prev.cto;
+  const ctoDeltaPts=(curCTO!=null&&prevCTO!=null)?curCTO-prevCTO:null;
+  // Direction: ROAS is the primary signal (it's what verdicts and budget already key off of);
+  // CTO corroborates rather than overrides — an outlet can have a flat ROAS but declining CTO
+  // (early saturation warning) without being called "declining" outright on ROAS alone.
+  let direction="flat";
+  if(roasDeltaPct!=null){
+    if(roasDeltaPct<=-10)direction="declining";
+    else if(roasDeltaPct>=10)direction="improving";
+  }
+  return{direction,roasDeltaPct,ctoDeltaPts,curROAS,prevROAS,curCTO,prevCTO};
+}
 function cpcDeliverooRows(priorMonth){
   const ag="Deliveroo";
   const floor=CPC_MIN_PER_OUTLET[ag];
@@ -7327,7 +7366,8 @@ function cpcDeliverooRows(priorMonth){
     const baseRec=cpcRecBudget(verdict,priorSpend,floor);
     const histTotal=cpcHistoricalSpend(brand,ag,outlet);
     const bidOpt=cpcDeliverooBidOptModel(brand,outlet)||(cpcRow?cpcDeliverooBidOpt(ag,brand,outlet,cpcRow):null);
-    return{brand,outlet,latestROAS,verdict,priorSpend,baseRec,rec:baseRec,surplusAlloc:0,histTotal,bidOpt,cpcRow};
+    const trend=cpcTrendSignal(brand,ag,outlet,priorMonth);
+    return{brand,outlet,latestROAS,verdict,priorSpend,baseRec,rec:baseRec,surplusAlloc:0,histTotal,bidOpt,cpcRow,trend};
   }).sort((a,b)=>{
     if(a.brand!==b.brand)return a.brand.localeCompare(b.brand);
     const order={SCALE:0,INVEST:1,MONITOR:2,UNTESTED:3,FLOOR:4,EXCLUDE:5};
@@ -7385,8 +7425,26 @@ function cpcDeliverooRows(priorMonth){
     // resort — staying within the mandate is the hard constraint here, preserving SCALE is the
     // preference within that constraint.
     let excess=baseTotal-mandate;
+    // v319: trim priority now factors in trend, not just raw ROAS-upside above break-even.
+    // Per Nikhil's feedback on DIP: cutting an already-declining outlet risks compounding the
+    // decline, while an outlet with flat or improving ROAS at the same upside level can more
+    // safely absorb a cut. This is a PRIORITY adjustment, not a marginal-ROI estimate — testing
+    // spend-vs-ROAS correlation across 48 real outlets with 4+ months of history showed the
+    // relationship is too noisy to model precisely (see cpcTrendSignal comment above), so this
+    // stays a directional nudge rather than a fabricated-precision number. A declining outlet's
+    // effective score is reduced by 40% (protecting it — LOWER score sorts earlier/more likely
+    // to be picked in this ascending-weakest-first sort, so REDUCING an already-low score would
+    // make it MORE likely to be cut, the opposite of intended — increased instead, pushing it
+    // later in the cut order); an improving outlet's score is reduced by 20%, making it a
+    // relatively more available (earlier-in-line) candidate to absorb the cut instead.
+    const trimScore=r=>{
+      const base=r.latestROAS-cpcPlanBE(ag,r.brand);
+      if(r.trend&&r.trend.direction==="declining")return base*1.4; // protect: push later in cut order
+      if(r.trend&&r.trend.direction==="improving")return base*0.8; // more available: pull earlier
+      return base;
+    };
     const trimPool=rows.filter(r=>(r.verdict==="MONITOR"||r.verdict==="INVEST")&&r.latestROAS!=null)
-      .sort((a,b)=>((a.latestROAS-cpcPlanBE(ag,a.brand))-(b.latestROAS-cpcPlanBE(ag,b.brand))));
+      .sort((a,b)=>trimScore(a)-trimScore(b));
     let trimmed=0;const trimLog=[];
     for(const r of trimPool){
       if(excess<=0)break;
@@ -7397,7 +7455,7 @@ function cpcDeliverooRows(priorMonth){
     let forcedScaleNote="";
     if(excess>1){ // MONITOR/INVEST alone couldn't close the gap — SCALE alone exceeds the mandate
       const scalePool=rows.filter(r=>r.verdict==="SCALE"&&r.latestROAS!=null)
-        .sort((a,b)=>((a.latestROAS-cpcPlanBE(ag,a.brand))-(b.latestROAS-cpcPlanBE(ag,b.brand))));
+        .sort((a,b)=>trimScore(a)-trimScore(b));
       for(const r of scalePool){
         if(excess<=0)break;
         const capacity=Math.max(0,r.baseRec-floor);
@@ -7405,7 +7463,7 @@ function cpcDeliverooRows(priorMonth){
         if(cut>0){r.rec=r.baseRec-cut;trimmed+=cut;excess-=cut;trimLog.push({r,cut});}
       }
       if(trimLog.some(t=>t.r.verdict==="SCALE")){
-        forcedScaleNote=` SCALE outlets' own base recommendations exceeded the mandate on their own — trimmed weakest-SCALE-first as a last resort since staying within the mandate takes priority.`;
+        forcedScaleNote=` SCALE outlets' own base recommendations exceeded the mandate on their own — trimmed weakest-SCALE-first (adjusted for trend — declining outlets protected, improving outlets prioritized for the cut) as a last resort since staying within the mandate takes priority.`;
       }
     }
     const newTotal=rows.reduce((s,r)=>s+r.rec,0);
