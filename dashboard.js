@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-316";
+const BUILD_VERSION="2026-08-13-317";
 const BUILD_NOTES=[
+  "🐛 Found and fixed a real, widespread bug Nikhil caught with exact real numbers — Lollorosso Motorcity's Deliveroo spend showed AED 893.80 when the real figure is AED 1,538.96 (893.80 from an Aug 3-10 campaign that ran out of budget, plus 645.16 from a second Aug 14-31 campaign — Nikhil's reported total, and confirmed exactly against the real uploaded sheet). Root cause: cpcLatestRowByType() and cpcRowForMonth() both checked raw, unaggregated cpcData FIRST — .sort(...)[0] and .find() respectively — silently picking a single row and discarding any other real campaign sharing the same outlet+month, even though buildCPCModel's own monthly-aggregation step (its own comment: \"combine multiple CPCs in same outlet+month\") already correctly sums exactly this case. That correct aggregated data was sitting right there as a fallback that never got reached, because the raw-data branch always found something first. Fixed by reordering both functions to check the aggregated cpcModel.monthly first, with a corrected (summing, not single-row) raw-data fallback for the rare case the model isn't built yet. Nikhil asked whether other outlets had the same problem — checked the entire real sheet: 196 separate outlet+aggregator+month combinations have multiple real rows, not just Motorcity (October 2025 alone shows nearly every outlet with 3 rows each) — this fix, being at the shared function level, automatically covers every one of them, not just the reported case. Verified three ways before shipping: a direct reconstruction of the real Motorcity numbers now produces exactly AED 1,538.96 through both the primary aggregated path and the raw-data fallback path, and a second real case pulled independently from the sheet (Lollorosso DMC, AED 351.90 real vs AED 159.60 previously shown) confirms the fix generalizes correctly rather than being tuned to one example.",
   "🆕 Refined the Deliveroo per-outlet allocation table per Nikhil's approved mockup: larger fonts throughout (was 9.5-11.5px, now 12-13px), sortable column headers (click Prior Spend, Recommended, Δ, ROAS, or the two new CTO columns to sort within an expanded brand — detail rows stay correctly paired with their outlet row when reordering), fixed the Export CSV button's actual contrast bug (it used T.text as a background color, which is a text-color token that resolves to a near-white value in dark mode — near-white button with white text was the 'awkward color' — replaced with a fixed dark navy that works correctly as a button background in both themes), and added the two requested CTO comparison columns (Jul CTO / Aug CTO, click-to-order rate, colored green/red by whether it held or declined month-over-month) to both the on-screen table and the CSV export so they stay in sync. Also fixed a real gap found while building this: cpcRowForMonth()'s cpcModel.monthly fallback branch had views and orders available but never computed .cto from them — only its 'direct cpcData' branch got CTO for free from parsing — so the new columns would have silently shown blanks for any row sourced from that fallback path; fixed to compute it the same way. Built this in two passes and want to be direct about the first one: my initial edit left a genuine duplicate code fragment behind (an incomplete old copy of the row-building logic sitting next to the new version), which broke the file's syntax entirely — caught it via node --check returning a confusing error, spent real time hand-tracing before switching to the acorn parser for an exact error position, which pinpointed it immediately. Fully fixed and reverified two ways before shipping: acorn parses the entire file cleanly with zero errors, and (separately) a jsdom-based test of the actual sort function against real DOM operations confirms ascending/descending sort, correct value ordering, and correct detail-row pairing all work as intended.",
   "🐛 Found and fixed the root cause of Town Square showing UNTESTED with zero CPC spend on the Deliveroo Ad Investments page — Nikhil flagged this directly, and it needed the real sheet to pin down (a dashboard export alone showed the symptom but not the cause). Ruled out several real candidates first before finding it: checked adType defaulting (fine — Deliveroo genuinely uses \"CPC\"), checked the current-vs-prior month calculation (cpcPriorMonth()/monthBefore() are both correct, single-step, no stacking), checked whether hidden rows in the sheet were being silently skipped (confirmed NOT the case — pandas/openpyxl read all 1,945 real data rows regardless of hidden-row display state). The actual cause, found by listing every real Brand-Location string in the uploaded sheet: the sheet uses \"Oregano-TQ\" (and the same \"-TQ\" suffix for Lollorosso and Smokeys) as its abbreviation for Town Square — but BRANCH_ALIASES, the lookup table every outlet-name match ultimately depends on, had aliases for \"tsqr\" and \"ts\" but never \"tq\". Every downstream function (current month lookup, prior month lookup, all-time historical spend) already shares this same single alias table through resolveBranchName()/resolveBrandLocation(), so the fix is one line, not several — added \"tq\":\"town square\". Verified two ways: directly against resolveBranchName() with a realistic Oregano branch list, and end-to-end through the full resolveBrandLocation() pipeline using the exact real string format (\"Oregano-TQ\") from Nikhil's actual sheet — both correctly resolve to \"Town Square\" now. This affects real spend data for Oregano, Lollorosso, and Smokeys' Town Square outlets on Deliveroo, all previously invisible to the investment plan.",
   "🐛 Investigated the Ads Performance crash Nikhil hit right after the Discount Burn fix — \"Cannot read properties of null (reading 'getContext')\" thrown from inside Chart.js's own internals (helpers.canvas.ts), not from any of this dashboard's own chart-creation call sites (all five already have null-safe getContext guards, checked directly). Being fully honest about certainty here: the console log this time didn't include a full stack trace back into dashboard.js, so the exact triggering line couldn't be pinned with the same confidence as the last two fixes. What IS confirmed, directly: gp() (page navigation) never awaits renderPage(), and renderCPC() has a genuine unguarded async gap around buildCPCModel() (a real, possibly slow operation — it has its own progress-bar UI). That means if a user navigates away from Ads Performance and back, or re-triggers it, while a previous renderCPC() call is still mid-flight, the stale call can resume AFTER the DOM has moved on and try to draw into a canvas that's since been replaced — exactly the shape of bug that produces this exact Chart.js internal crash. Fixed with a generation-token guard: each renderCPC() call captures the current token on entry and re-checks it after every await; a stale call whose token no longer matches silently aborts instead of touching the DOM. Verified the guard logic directly with a simulated race (two overlapping calls, old one slower) — confirmed the newer call completes normally while the stale one correctly detects it's outdated and aborts before running. This closes a real, confirmed race condition regardless of whether it's the exact cause of this specific crash — if the crash recurs after this build, that would mean a second, different cause is also in play, and the next console log (ideally with the full stack trace this time) would be needed to find it.",
@@ -6962,9 +6963,17 @@ function cpcLatestRow(brand,ag,outlet){
 // rows can be retrieved the same way as CPC rows.
 function cpcLatestRowByType(brand,ag,outlet,adType){
   adType=adType||"CPC";
-  const direct=cpcData.filter(r=>r.brand===brand&&r.aggregator===ag&&r.branch===outlet&&r.adType===adType&&r.month)
-    .sort((a,b)=>b.month.localeCompare(a.month))[0];
-  if(direct)return direct;
+  // v317: fixes a real bug Nikhil caught with real numbers — Lollorosso Motorcity ran TWO
+  // separate Deliveroo CPC campaigns within August (3-10 Aug, AED 893.80 spent; 14-31 Aug, AED
+  // 645.16 spent — 893.80+645.16=1,538.96, matching exactly what Nikhil reported as the real
+  // total). This function used to check raw cpcData FIRST via .sort(...)[0], which picks a
+  // single row and silently discards any other real row sharing the same outlet+month — even
+  // though the monthly-aggregation step (see buildCPCModel, \"Step 3: monthly aggregation —
+  // combine multiple CPCs in same outlet+month\") ALREADY correctly sums exactly this case, and
+  // was sitting right there as a fallback that never got reached because the raw-data branch
+  // always found something first. Now checks the aggregated cpcModel.monthly FIRST — it already
+  // has the correct combined totals with an unambiguous month key — falling back to a raw
+  // cpcData scan (also fixed to sum, not pick one) only if the model isn't built yet.
   if(cpcModel&&cpcModel.monthly){
     let best=null;
     for(const[k,o] of cpcModel.monthly){
@@ -6973,10 +6982,19 @@ function cpcLatestRowByType(brand,ag,outlet,adType){
       }
     }
     if(best){
-      return{brand:best.brand,aggregator:best.aggregator,branch:best.branch,adType:best.adType,month:best.month,sales:best.sales,budgetSpent:best.spent,budgetAlloc:best.alloc,orders:best.orders,views:best.views,roi:best.roi,avgBid:best.spent>0&&best.views>0?best.spent/best.views:0};
+      return{brand:best.brand,aggregator:best.aggregator,branch:best.branch,adType:best.adType,month:best.month,sales:best.sales,budgetSpent:best.spent,budgetAlloc:best.alloc,orders:best.orders,views:best.views,roi:best.roi,cto:best.cto,avgBid:best.spent>0&&best.views>0?best.spent/best.views:0};
     }
   }
-  return null;
+  // Fallback: model not built yet — sum raw cpcData rows for the latest month rather than
+  // picking a single one, so this path has the same correctness the model-based path has.
+  const matching=cpcData.filter(r=>r.brand===brand&&r.aggregator===ag&&r.branch===outlet&&r.adType===adType&&r.month);
+  if(!matching.length)return null;
+  const latestMonth=matching.reduce((m,r)=>r.month>m?r.month:m,matching[0].month);
+  const sameMonth=matching.filter(r=>r.month===latestMonth);
+  const sales=sameMonth.reduce((s,r)=>s+(r.sales||0),0),spent=sameMonth.reduce((s,r)=>s+(r.budgetSpent||0),0);
+  const orders=sameMonth.reduce((s,r)=>s+(r.orders||0),0),views=sameMonth.reduce((s,r)=>s+(r.views||0),0);
+  const alloc=sameMonth.reduce((s,r)=>s+(r.budgetAlloc||0),0);
+  return{brand,aggregator:ag,branch:outlet,adType,month:latestMonth,sales,budgetSpent:spent,budgetAlloc:alloc,orders,views,roi:spent>0?sales/spent:null,cto:views>0?(orders/views)*100:null,avgBid:spent>0&&views>0?spent/views:0};
 }
 // v150: previous-month helper — "2026-07" -> "2026-06", "2026-01" -> "2025-12"
 // v152: round a recommended budget to the nearest AED 10 for display — practical for actually
@@ -6992,16 +7010,25 @@ function monthBefore(month){
 // comparison, since cpcLatestRowByType would just return July again.
 function cpcRowForMonth(brand,ag,outlet,adType,month){
   adType=adType||"CPC";
-  const direct=cpcData.find(r=>r.brand===brand&&r.aggregator===ag&&r.branch===outlet&&r.adType===adType&&r.month===month);
-  if(direct)return direct;
+  // v317: same fix as cpcLatestRowByType above — check the correctly-aggregated cpcModel.monthly
+  // first (it already sums multiple real campaigns sharing an outlet+month, exactly like
+  // Motorcity's two August windows), rather than a raw cpcData .find() that silently returns
+  // just the first matching row and ignores any others for that same month.
   if(cpcModel&&cpcModel.monthly){
     for(const[k,o] of cpcModel.monthly){
       if(o.brand===brand&&o.aggregator===ag&&o.branch===outlet&&o.adType===adType&&o.month===month){
-        return{brand:o.brand,aggregator:o.aggregator,branch:o.branch,adType:o.adType,month:o.month,sales:o.sales,budgetSpent:o.spent,budgetAlloc:o.alloc,orders:o.orders,views:o.views,roi:o.roi,cto:o.views>0?(o.orders/o.views)*100:null};
+        return{brand:o.brand,aggregator:o.aggregator,branch:o.branch,adType:o.adType,month:o.month,sales:o.sales,budgetSpent:o.spent,budgetAlloc:o.alloc,orders:o.orders,views:o.views,roi:o.roi,cto:o.cto};
       }
     }
   }
-  return null;
+  // Fallback: model not built yet — sum raw cpcData rows for this exact month rather than
+  // returning just the first one found.
+  const matching=cpcData.filter(r=>r.brand===brand&&r.aggregator===ag&&r.branch===outlet&&r.adType===adType&&r.month===month);
+  if(!matching.length)return null;
+  const sales=matching.reduce((s,r)=>s+(r.sales||0),0),spent=matching.reduce((s,r)=>s+(r.budgetSpent||0),0);
+  const orders=matching.reduce((s,r)=>s+(r.orders||0),0),views=matching.reduce((s,r)=>s+(r.views||0),0);
+  const alloc=matching.reduce((s,r)=>s+(r.budgetAlloc||0),0);
+  return{brand,aggregator:ag,branch:outlet,adType,month,sales,budgetSpent:spent,budgetAlloc:alloc,orders,views,roi:spent>0?sales/spent:null,cto:views>0?(orders/views)*100:null};
 }
 // v150: shared MoM comparison snippet, used by all four Investment Plan tables (Deliveroo,
 // Talabat, Noon, Careem) so an outlet's recommendation shows the TREND behind it, not just a
