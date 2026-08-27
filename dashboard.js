@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-326";
+const BUILD_VERSION="2026-08-13-328";
 const BUILD_NOTES=[
+  "🐛 Fixed a real, significant bug in the Deliveroo mandate-trim logic Nikhil caught with exact numbers — Al Forsan showed SCALE (3.24× ROAS, real upside) but its recommended budget was cut all the way to the floor (AED 90), identical to several other unrelated SCALE outlets, while Marina and Al Reef sat completely untouched despite also being in the same trim pool. Confirmed the arithmetic first: Al Forsan's base recommendation should be ~AED 756 (540 prior × 1.4 for SCALE) — the AED 90 shown was a full cut to the floor, not a display issue. Root cause, found by reproducing the exact pattern with a simulation before touching any code: the trim loop processed its sorted pool ONE OUTLET AT A TIME, giving each one its FULL available cut capacity (base minus floor) before ever considering the next outlet — sequentially draining outlets to their floor one by one in sorted order, rather than distributing the required cut across the whole eligible pool at once. The simulation reproduced Nikhil's exact screenshot pattern precisely: first few outlets drop straight to floor, the next one partially cut, everything after it in the sort order left completely untouched — confirming this was the real cause, not a coincidence. Fixed with cpcProportionalTrim(): distributes the excess proportionally by trim priority across the WHOLE pool simultaneously, capped at each outlet's own floor, iteratively redistributing any leftover from outlets that hit their cap early so the full trim still gets placed without any single outlet absorbing it all before others are touched. Applied to both trim pools (MONITOR/INVEST and the SCALE fallback — the exact pool affecting Al Forsan). Verified two ways: a full reconstruction of the real screenshot's 8 outlets with the real shortfall size confirms every outlet now shares in the cut (zero left completely untouched, vs. 2 untouched before) — and a second test with a smaller, more realistic shortfall confirms the fix doesn't force outlets to their floor when a lighter proportional trim would genuinely suffice.",
+  "🆕 Added a separate organic sales trend signal to the Deliveroo allocation table, per Nikhil's direct question — he caught a real gap: an outlet can show FLOOR on its CPC verdict (weak ad-attributed ROAS) while the outlet's TOTAL Deliveroo sales are genuinely growing, and the old table had no way to show both facts at once. Confirmed this is a real, meaningful distinction, not just a display gap: cpcPlanVerdict only ever measures whether CPC-attributed sales ÷ CPC spend clears break-even — it has zero visibility into overall sales, and those two numbers can legitimately diverge for real reasons (organic/repeat-customer growth carrying an outlet independent of ads; ad performance being under-measured by attribution; or the outlet doing well despite genuinely weak ads). Per Nikhil's explicit choice, built this as a SEPARATE, purely informational signal rather than folding it into the verdict or the recommended budget — collapsing two different real questions into one number would hide which scenario is actually happening. Built cpcOutletSalesTrend() using allData directly (the same real sales source powering every other trend figure on this dashboard), completely independent of CPC/ad-spend data — shows the outlet's actual month-over-month total sales change as a distinctly-styled badge (different color and icon from the verdict badge, with a tooltip explaining it's a separate signal) right next to the CPC verdict. Verified against a reconstruction of the exact scenario described — an outlet with real sales growth (+60%) sitting alongside its own CPC verdict — and confirmed the missing-data case correctly returns nothing rather than a fabricated trend.",
   "🐛 Root-caused the 'Investment Plan showing tiny budgets' report — traced through every GMV/mandate formula first (cpcProjectedGroupGMV, cpcMonthDaysInfo, cpcMandatoryBudget) and confirmed they're all structurally correct; the actual cause was in Nikhil's console log, not the math. His log showed only 6 brand×aggregator combinations with real sales data loaded, ALL of them Wicked Wings — a healthy session logs 31 combos across all five brands. Four of five brands (Oregano, Lollorosso, Smokeys, Fyoozhen) genuinely had zero sales data in allData that session, which collapsed every GMV-derived figure to a small fraction of the real number (AED 8.3K 'Projected GMV' for Noon vs the real ~200K+ scale) — the formulas were correctly computing off of data that was 80% missing, not miscalculating real data. This traces to a load-time network failure — the dashboard's own CORS-fallback log showed real 403s from corsproxy.io for every brand's sheet fetch this load. The recovery mechanism (retryBrand) already existed and works correctly, but the only visible retry button lived on a single Overview card, invisible from the Investment Plan — so there was no way to notice or fix this from where Nikhil actually was. Added a clear warning banner directly to the Investment Plan itself: whenever any brand has failed to load, it's the first thing shown, names exactly which brands and why their numbers are understated, and includes a retry button for each right there. Verified detection logic against both the exact real failure (4 specific brands, matching the real log) and a healthy zero-brands-failed session. Immediate fix for the live dashboard right now: a hard refresh reloads all five brands fresh, since nothing was permanently corrupted — the data just never made it into that session in the first place.",
   "🆕 Built the growth-opportunity feature per Nikhil's full multi-message spec: a button-triggered (never automatic, per his explicit instruction) check for whether Careem/Noon has real headroom above the contractual mandate, with two proposed spend increments, outlet-level breakdown, approve/deny, and a way to switch between Original/Plan A/Plan B at any time. Built with real safety rigor throughout, not just a UI mockup wired to fake numbers. The core safety gate — his most important stated concern — reuses computeProfitability, the same function trusted elsewhere in this file: a brand only qualifies if its SCALE/INVEST verdict AND its real contribution margin (not just gross ROAS) is holding or improving month over month. Verified this exact scenario directly: constructed a brand with strong, growing ROAS driven by heavy discount burn (margin down 38%) and confirmed it's correctly excluded with the reason stated plainly — the precise 'looks good on paper, profit goes down' case Nikhil described. Outlet-level ranking within each eligible brand uses BOTH real ROAS and cpcTrendSignal (already built and tested), per his explicit instruction. Sales/contribution projections use the account's own historical ROAS with no decay factor, per his explicit choice. Persistence uses the same localStorage pattern already used elsewhere in this file (sidebar state, rating alerts) — approving updates the effective mandate for planning purposes, and is fully reversible via a plan-switcher banner at any time, never a one-way commitment. Verified end-to-end: approve → mandate correctly increases → switch to original → mandate correctly reverts → switch to the other option → mandate correctly updates again. Full-file syntax verified with both node --check and acorn before shipping. One explicit, known gap: this is wired into the Investment Plan → Careem/Noon → brand drill-down (built on cpcPoolRows, the same foundation as the mandate-capping fix from earlier today) — it is NOT yet on the standalone Ads Performance page's own Careem/Noon view, which renders through a different, older function (cpcRenderBrandLevel) not built on that same foundation. Extending it there safely is the next task, not silently skipped.",
   "🐛 Fixed a real gap in v323's group-mandate reconciliation, caught with exact numbers from Nikhil's Noon screenshot — every brand recommended at SCALE summed to AED 19,200 against a AED 12,400 mandate, 55% over. Root cause: v323 built the SHORTFALL path (redistributing extra budget when brands' own real recommendations fall short of the mandate) but never built the mirror case — when brands' own real recommendations already EXCEED the mandate on their own, nothing brought the total back down. Per Nikhil's explicit instruction, no brand's investment should go above its share of the mandate right now — that decision is deliberately deferred to the growth-opportunity approve/deny feature currently being designed, not decided implicitly by letting verdicts run uncapped. Added the missing branch: when bottom-up total exceeds the mandate, trims proportionally back down, weakest real ROAS-upside first (reusing the same trend-aware priority scoring already built for Deliveroo's own mandate reconciliation, so a barely-FLOOR brand isn't cut before a strongly-scaling one). Verified against the exact real screenshot numbers: total now lands precisely at AED 12,400, with Lollorosso/Fyoozhen/Wicked Wings absorbing the trim while Oregano and Smokeys (the two strongest real performers) keep their full recommendation. Also added a clear on-page note distinguishing this capped case from the shortfall case, pointing at the growth-opportunity check as where to go if the real numbers genuinely support investing above the mandate.",
@@ -7375,6 +7377,77 @@ function cpcTrendSignal(brand,ag,outlet,curMonth,adType){
   }
   return{direction,roasDeltaPct,ctoDeltaPts,curROAS,prevROAS,curCTO,prevCTO};
 }
+// v327: separate organic-sales-trend signal, per Nikhil's direct question — an outlet's CPC
+// verdict (cpcPlanVerdict) only ever measures whether THAT SPECIFIC ad spend is efficient
+// (CPC-attributed sales ÷ CPC spend), and has zero visibility into the outlet's real overall
+// sales trend. Nikhil caught a genuine case: an outlet showing FLOOR on CPC while its total
+// Deliveroo sales were actually climbing — those are two different, real questions that can
+// legitimately disagree (organic growth carrying an outlet despite weak ad performance; or ad
+// performance being under-measured; or the outlet genuinely doing well independent of ads).
+// Deliberately built as a SEPARATE, purely informational signal — not folded into the verdict
+// itself, per his explicit choice — since collapsing the two into one number would hide which
+// of those real scenarios is actually happening. Uses allData directly (the same real sales
+// source powering every other trend figure on this dashboard), completely independent of any
+// CPC/ad-spend data.
+function cpcOutletSalesTrend(brand,ag,outlet,curMonth){
+  const prevMonth=monthBefore(curMonth);
+  const curRecs=allData.filter(r=>r.brand===brand&&r.aggregator===ag&&r.branch===outlet&&recMonth(r)===curMonth);
+  const prevRecs=allData.filter(r=>r.brand===brand&&r.aggregator===ag&&r.branch===outlet&&recMonth(r)===prevMonth);
+  if(!curRecs.length||!prevRecs.length)return null;
+  const curSales=curRecs.reduce((s,r)=>s+(r.sales||0),0);
+  const prevSales=prevRecs.reduce((s,r)=>s+(r.sales||0),0);
+  const curOrders=curRecs.reduce((s,r)=>s+(r.orders||0),0);
+  const prevOrders=prevRecs.reduce((s,r)=>s+(r.orders||0),0);
+  if(prevSales<=0)return null;
+  const salesDeltaPct=((curSales-prevSales)/prevSales)*100;
+  return{salesDeltaPct,curSales,prevSales,curOrders,prevOrders,direction:salesDeltaPct>=10?"up":salesDeltaPct<=-10?"down":"flat"};
+}
+// v328: proportional trim distribution — see the detailed comment at its call site in
+// cpcDeliverooRows for the full bug this fixes. Distributes `excess` across `pool` (already
+// sorted weakest-priority-first, though this function doesn't depend on that ordering) weighted
+// by each outlet's trimScore, capped at `floor`. Runs iteratively: any outlet that hits its cap
+// stops absorbing further cuts, and whatever it couldn't take gets redistributed across the
+// remaining outlets in the next pass — so the full excess is still placed even if a few outlets
+// have very little room to give, without any single outlet ever being asked to give more than
+// its own floor allows.
+function cpcProportionalTrim(pool,excess,floor,scoreFn){
+  const trimLog=[];
+  let trimmed=0;
+  let active=pool.filter(r=>r.baseRec>floor); // outlets with zero room to give don't participate at all
+  let remaining=excess;
+  let guard=0; // safety against a pathological infinite loop — real pools are small (a few dozen outlets max)
+  while(remaining>0.5&&active.length&&guard<50){
+    guard++;
+    // Weight = inverse of trim priority (weaker score → cut harder) — same "protect strong,
+    // available takes more" direction as trimScore's own design, just applied as a proportional
+    // share instead of an all-or-nothing sequential drain.
+    const scores=active.map(r=>scoreFn(r));
+    const minScore=Math.min(...scores);
+    const weights=active.map(r=>Math.max(0.1,scoreFn(r)-minScore+0.5)); // +0.5 floor so even the weakest outlet still gets SOME weight, never zero
+    const invWeights=weights.map(w=>1/w); // weaker score (lower trimScore) → smaller w → larger invWeight → cut harder
+    const totalInv=invWeights.reduce((s,w)=>s+w,0);
+    let placedThisPass=0;
+    const stillActive=[];
+    active.forEach((r,i)=>{
+      const share=remaining*(invWeights[i]/totalInv);
+      const capacity=Math.max(0,(r.rec??r.baseRec)-floor);
+      const cut=Math.min(capacity,share);
+      if(cut>0){
+        r.rec=(r.rec??r.baseRec)-cut;
+        trimmed+=cut;
+        placedThisPass+=cut;
+        const existing=trimLog.find(t=>t.r===r);
+        if(existing)existing.cut+=cut;else trimLog.push({r,cut});
+      }
+      // Still has room left after this pass → stays active for the next redistribution round
+      if(Math.max(0,(r.rec??r.baseRec)-floor)>0.5)stillActive.push(r);
+    });
+    remaining-=placedThisPass;
+    active=stillActive;
+    if(placedThisPass<0.5)break; // nothing more can be placed — every remaining outlet is at its cap
+  }
+  return{trimmed,trimLog};
+}
 function cpcDeliverooRows(priorMonth){
   const ag="Deliveroo";
   const floor=CPC_MIN_PER_OUTLET[ag];
@@ -7390,7 +7463,8 @@ function cpcDeliverooRows(priorMonth){
     const histTotal=cpcHistoricalSpend(brand,ag,outlet);
     const bidOpt=cpcDeliverooBidOptModel(brand,outlet)||(cpcRow?cpcDeliverooBidOpt(ag,brand,outlet,cpcRow):null);
     const trend=cpcTrendSignal(brand,ag,outlet,priorMonth);
-    return{brand,outlet,latestROAS,verdict,priorSpend,baseRec,rec:baseRec,surplusAlloc:0,histTotal,bidOpt,cpcRow,trend};
+    const salesTrend=cpcOutletSalesTrend(brand,ag,outlet,priorMonth);
+    return{brand,outlet,latestROAS,verdict,priorSpend,baseRec,rec:baseRec,surplusAlloc:0,histTotal,bidOpt,cpcRow,trend,salesTrend};
   }).sort((a,b)=>{
     if(a.brand!==b.brand)return a.brand.localeCompare(b.brand);
     const order={SCALE:0,INVEST:1,MONITOR:2,UNTESTED:3,FLOOR:4,EXCLUDE:5};
@@ -7474,27 +7548,33 @@ function cpcDeliverooRows(priorMonth){
       if(r.trend&&r.trend.direction==="improving")return base-TREND_NUDGE; // more available: pull earlier
       return base;
     };
+    // v328: fixes a real bug Nikhil caught with exact numbers — Al Forsan showed SCALE (3.24×
+    // ROAS, real upside) but recommended budget was cut all the way to the floor (AED 90),
+    // identical to several other SCALE outlets, while later outlets in the sort order (Marina,
+    // Al Reef) were left completely untouched despite also needing to contribute to the trim.
+    // Root cause: the OLD loop processed the sorted trim pool one outlet at a time, giving each
+    // one its FULL available cut capacity before ever considering the next — sequentially
+    // draining outlets to their floor one by one, rather than distributing the required cut
+    // across the whole pool. Reproduced this exact pattern with a simulation before fixing:
+    // confirmed it produces precisely "first few outlets drop to floor, next one partially cut,
+    // rest untouched" — matching the screenshot precisely. Fixed with cpcProportionalTrim():
+    // distributes the excess proportionally by trim priority across the WHOLE eligible pool at
+    // once, capping each outlet at its own floor, and iteratively redistributing any leftover
+    // from outlets that hit their cap early — so a shortfall spreads fairly across every outlet
+    // with real upside, weakest-priority outlets absorbing proportionally more, but never
+    // fully draining one before another is even touched.
     const trimPool=rows.filter(r=>(r.verdict==="MONITOR"||r.verdict==="INVEST")&&r.latestROAS!=null)
       .sort((a,b)=>trimScore(a)-trimScore(b));
-    let trimmed=0;const trimLog=[];
-    for(const r of trimPool){
-      if(excess<=0)break;
-      const capacity=Math.max(0,r.baseRec-floor);
-      const cut=Math.min(capacity,excess);
-      if(cut>0){r.rec=r.baseRec-cut;trimmed+=cut;excess-=cut;trimLog.push({r,cut});}
-    }
+    const{trimmed,trimLog}=cpcProportionalTrim(trimPool,excess,floor,trimScore);
+    excess-=trimmed;
     let forcedScaleNote="";
     if(excess>1){ // MONITOR/INVEST alone couldn't close the gap — SCALE alone exceeds the mandate
       const scalePool=rows.filter(r=>r.verdict==="SCALE"&&r.latestROAS!=null)
         .sort((a,b)=>trimScore(a)-trimScore(b));
-      for(const r of scalePool){
-        if(excess<=0)break;
-        const capacity=Math.max(0,r.baseRec-floor);
-        const cut=Math.min(capacity,excess);
-        if(cut>0){r.rec=r.baseRec-cut;trimmed+=cut;excess-=cut;trimLog.push({r,cut});}
-      }
+      const{trimmed:scaleTrimmed,trimLog:scaleTrimLog}=cpcProportionalTrim(scalePool,excess,floor,trimScore);
+      trimmed+=scaleTrimmed;excess-=scaleTrimmed;trimLog.push(...scaleTrimLog);
       if(trimLog.some(t=>t.r.verdict==="SCALE")){
-        forcedScaleNote=` SCALE outlets' own base recommendations exceeded the mandate on their own — trimmed weakest-SCALE-first (adjusted for trend — declining outlets protected, improving outlets prioritized for the cut) as a last resort since staying within the mandate takes priority.`;
+        forcedScaleNote=` SCALE outlets' own base recommendations exceeded the mandate on their own — trimmed proportionally across weakest-SCALE-first (adjusted for trend — declining outlets protected, improving outlets prioritized for the cut) as a last resort since staying within the mandate takes priority.`;
       }
     }
     const newTotal=rows.reduce((s,r)=>s+r.rec,0);
@@ -7597,7 +7677,18 @@ function cpcDeliverooAllocCard(priorMonth,brandFilter){
       const ctoTrendClr=(augCto!=null&&julCto!=null)?(augCto>=julCto?"#22C55E":"#EF4444"):T.muted;
       const julCtoTxt=julCto!=null?`${julCto.toFixed(1)}%`:"—";
       const augCtoTxt=augCto!=null?`${augCto.toFixed(1)}%`:"—";
-      return`<tr data-sort-roas="${r.latestROAS??-999}" data-sort-prior="${r.priorSpend}" data-sort-rec="${recRounded}" data-sort-delta="${delta}" data-sort-julcto="${julCto??-999}" data-sort-augcto="${augCto??-999}" data-sort-outlet="${r.outlet}" style="background:${verdBg[r.verdict]};border-bottom:none"><td></td><td style="padding:8px 7px 2px 22px;color:${T.text};font-size:13px">↳ ${r.outlet}</td><td style="padding:8px 7px 2px;font-size:12px" colspan="2">${roasTxt} <span style="background:${verdClr[r.verdict]}22;color:${verdClr[r.verdict]};padding:2px 8px;border-radius:5px;font-size:11px;font-weight:800;letter-spacing:.3px;margin-left:5px">${r.verdict}</span></td><td style="padding:8px 7px 2px;text-align:right;color:${T.label};font-size:12px">${fmtAEDTip(r.priorSpend)}</td><td style="padding:8px 7px 2px;text-align:right">${recCell}</td><td style="padding:8px 7px 2px;text-align:right;font-size:12px">${deltaTxt}</td><td style="padding:8px 7px 2px;text-align:right;color:${T.label};font-size:12px">${julCtoTxt}</td><td style="padding:8px 7px 2px;text-align:right;color:${ctoTrendClr};font-size:12px;font-weight:700">${augCtoTxt}</td><td style="padding:8px 7px 2px;text-align:right">${bidCol}</td><td style="padding:8px 7px 2px;text-align:right">${histTxt}</td></tr><tr style="background:${verdBg[r.verdict]};border-bottom:1px solid ${T.border}"><td></td><td colspan="9" style="padding:2px 7px 9px 22px">${momHtml}</td></tr>`;
+      // v327: organic sales trend badge — deliberately styled distinctly from the CPC verdict
+      // badge (different icon, muted-blue vs the verdict's red/green/yellow) so it reads as a
+      // separate signal, never mistaken for a second opinion on the same thing. Per Nikhil's
+      // explicit choice: informational only, never changes the verdict or the recommended spend.
+      const salesTrendBadge=r.salesTrend?(()=>{
+        const st=r.salesTrend;
+        const clr=st.direction==="up"?"#60A5FA":st.direction==="down"?"#F59E0B":T.muted;
+        const icon=st.direction==="up"?"📈":st.direction==="down"?"📉":"➖";
+        const sign=st.salesDeltaPct>=0?"+":"";
+        return ` <span title="Outlet's TOTAL Deliveroo sales trend (all orders, not just CPC-attributed) — a separate signal from the CPC verdict above, informational only" style="background:${clr}18;color:${clr};padding:2px 7px;border-radius:5px;font-size:10.5px;font-weight:700;margin-left:4px">${icon} ${sign}${st.salesDeltaPct.toFixed(0)}% overall sales</span>`;
+      })():"";
+      return`<tr data-sort-roas="${r.latestROAS??-999}" data-sort-prior="${r.priorSpend}" data-sort-rec="${recRounded}" data-sort-delta="${delta}" data-sort-julcto="${julCto??-999}" data-sort-augcto="${augCto??-999}" data-sort-outlet="${r.outlet}" style="background:${verdBg[r.verdict]};border-bottom:none"><td></td><td style="padding:8px 7px 2px 22px;color:${T.text};font-size:13px">↳ ${r.outlet}</td><td style="padding:8px 7px 2px;font-size:12px" colspan="2">${roasTxt} <span style="background:${verdClr[r.verdict]}22;color:${verdClr[r.verdict]};padding:2px 8px;border-radius:5px;font-size:11px;font-weight:800;letter-spacing:.3px;margin-left:5px">${r.verdict}</span>${salesTrendBadge}</td><td style="padding:8px 7px 2px;text-align:right;color:${T.label};font-size:12px">${fmtAEDTip(r.priorSpend)}</td><td style="padding:8px 7px 2px;text-align:right">${recCell}</td><td style="padding:8px 7px 2px;text-align:right;font-size:12px">${deltaTxt}</td><td style="padding:8px 7px 2px;text-align:right;color:${T.label};font-size:12px">${julCtoTxt}</td><td style="padding:8px 7px 2px;text-align:right;color:${ctoTrendClr};font-size:12px;font-weight:700">${augCtoTxt}</td><td style="padding:8px 7px 2px;text-align:right">${bidCol}</td><td style="padding:8px 7px 2px;text-align:right">${histTxt}</td></tr><tr style="background:${verdBg[r.verdict]};border-bottom:1px solid ${T.border}"><td></td><td colspan="9" style="padding:2px 7px 9px 22px">${momHtml}</td></tr>`;
     }).join("");
     return summaryRow+`<tbody id="${rid}" style="display:table-row-group">${detailRows}</tbody>`;
   }).join("");
