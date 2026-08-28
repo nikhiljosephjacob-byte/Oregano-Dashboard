@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-333";
+const BUILD_VERSION="2026-08-13-334";
 const BUILD_NOTES=[
+  "🆕 Two real fixes from Nikhil's direct feedback. (1) Generalized the growth-opportunity check (approve/deny, Plan A/B, Original/Plan comparison) to Deliveroo, per his explicit 'all aggregators should have this option' — it was hardwired to cpcPoolRows (the Careem/Noon pooled-brand model) only. cpcGrowthOpportunityCheck/Options now accept precomputed rows/mand/bottomUpTotal as parameters instead of calling cpcPoolRows internally, with an isPerOutlet flag distinguishing Deliveroo's real per-outlet shape (each eligible row already IS an outlet, no further derivation needed) from the pooled brand-level shape (outlets derived separately, as before) — same safety-gated profitability check either way, just fed the correct real data shape. Added the same approved-plan mandate override to cpcDeliverooRows that Careem/Noon already had. Verified end-to-end against realistic per-outlet Deliveroo data before shipping. (2) Fixed a real design gap on the Noon/Careem pooled table, per Nikhil's exact Smokeys example — a brand-level budget (e.g. AED 1,500) was listing all of a brand's outlets with no indication that the actual budget can only realistically fund a couple of them at the real per-listing floor (AED 1,000 on Noon). Added a genuine coverage calculation: floor(budget ÷ floor) = how many outlets are actually fundable, then ranks real outlets by the same ROAS+trend signal already used for growth-opportunity ranking to identify WHICH specific ones — those get a ✓ FUNDED badge and float to the top; the rest stay visible (for context) but are visually de-emphasized with a 'not funded this month' note. Verified against the exact real Smokeys numbers from the screenshot (AED 1,500 budget, AED 1,000 floor) — correctly identifies exactly 1 realistically-fundable outlet; also verified a larger budget correctly scales to recommend more.",
   "🐛 Fixed the real issue behind Nikhil's repeated 'No CPC in July' complaint — took two passes to actually understand it correctly, worth being direct about. First pass: verified cpcPriorMonth()/monthBefore() are mechanically correct (August is genuinely the reference month, July is genuinely the month before it — confirmed against the real 'Latest: Aug 25/26' header shown in every screenshot this session), and separately verified the TQ branch-alias fix from earlier this session correctly resolves 'Lollorosso-TQ' to 'Town Square' for Careem specifically (ran the real parser function against the exact real string, confirmed correct) — so the underlying date logic and outlet-name matching were never the bug. Second pass, after Nikhil restated the actual complaint: the real problem was MESSAGE FRAMING, not date logic. cpcMoMSnippet's job is showing a month-over-month TREND; when July (the older comparison month) has no data, it displayed 'No CPC in Jul 26 — new this month' as the headline — reading like a data-quality warning about something being wrong, when there's usually nothing wrong at all. When planning September off of August, whether July had data is frequently irrelevant, and August's real performance was already shown correctly elsewhere on the same row (the ROAS/spend/sales columns) — this specific snippet just never restated it, making the row look like it was missing data it actually had. Fixed by reframing: when real reference-month (August) data exists, the message now LEADS with it directly ('Aug 26: 7.20×'), with the missing older-month note demoted to a small, neutral aside rather than the headline. The genuine 'no data at all, brand new this month' case is unchanged. Verified both paths directly: a listing with real August data but no July comparison now correctly leads with the August number; a genuinely new listing with zero data still shows the original, appropriate message.",
   "⚡ Campaigns page speed fix, per Nikhil's chosen option from the slate of speed proposals — switched the Active/Upcoming/History status filter from multi-select to exclusive (single-select). Previously all three could be checked simultaneously, meaning every visible campaign across all three sections ran campAnalysisV2 synchronously before the page painted anything — with 30+ active campaigns typical this session, viewing all three at once meant real, avoidable first-paint cost. Since realistically one section is viewed at a time, clicking a status now shows only that one (tab-like behavior) instead of toggling membership in a set, cutting the typical synchronous work by up to two-thirds in the worst case (all three previously checked). No UI redesign needed — the existing checkmark-style button already reads correctly as exclusive selection. Verified the exclusivity logic directly (clicking a new status always leaves exactly one selected, never zero or multiple) and confirmed each of the three section-render branches already correctly gates on the same Set, so only one branch's campCardGrid calls now run per view instead of up to three.",
   "🆕 Fixed real column-parity gaps between the Noon/Careem pooled table and Deliveroo's, per Nikhil's direct side-by-side comparison. Traced the exact differences before changing anything: Deliveroo has Prior Spend, Recommended, Δ vs Prior, Bid Suggest, and All-Time Spend per outlet; Noon/Careem only had ROAS, CTO, 'This Month Spend/Sales', and Status. Two real findings. First: 'This Month Spend' and Deliveroo's 'Prior Spend' were already showing the SAME underlying month (the most recent complete month, used as the basis for next month's plan) — the inconsistent labeling made it look like a genuine data gap when the figure itself was already correct August data both places; relabeled to match Deliveroo's terminology exactly ('Prior Spend'/'Prior Sales') so the same data reads the same way on both tables. Second: All-Time Spend was genuinely missing entirely — added it, reusing cpcHistoricalSpend, the exact same function Deliveroo's own All-Time Spend column already relies on, so it's the same trustworthy source, not a new calculation. Recommended and Δ vs Prior deliberately were NOT added at the outlet level — Noon/Careem budget is genuinely pooled at brand level (one number for the whole brand, not a per-outlet figure the way Deliveroo's is), so a literal per-outlet 'Recommended' doesn't map cleanly onto how these platforms actually work; Bid Suggest also correctly stays absent since neither platform exposes a controllable per-outlet bid. Verified the new column renders correctly with real data (All-Time Spend showing the right historical figure) and confirmed header/row column counts now match exactly (10 columns each) before shipping.",
@@ -7496,7 +7497,18 @@ function cpcDeliverooRows(priorMonth){
   // best-performing outlets (weighted by ROAS upside above break-even). Always exclude FLOOR/EXCLUDE
   // outlets from receiving the surplus — they failed at break-even, more budget won't help.
   // Smokeys is also excluded per the standing structural-decline guidance.
-  const mandate=cpcMandatoryBudget(ag,cpcProjectedGroupGMV(priorMonth,ag).value);
+  const contractualMandate=cpcMandatoryBudget(ag,cpcProjectedGroupGMV(priorMonth,ag).value);
+  // v334: same approved-plan override already built for Careem/Noon (cpcPoolRows) — applies an
+  // approved growth-opportunity plan on top of the contractual mandate for Deliveroo too, per
+  // Nikhil's explicit "all aggregators should have this option" request. Reversible at any time
+  // via the same plan-switcher banner.
+  let mandate=contractualMandate;
+  try{
+    const stored=JSON.parse(localStorage.getItem(cpcGrowthOppKey(ag,priorMonth)));
+    if(stored&&stored.decision&&stored.decision!=="original"&&stored.result&&stored.result.options&&stored.result.options[stored.decision]){
+      mandate=contractualMandate+stored.result.options[stored.decision].amount;
+    }
+  }catch(e){}
   const baseTotal=rows.reduce((s,r)=>s+r.baseRec,0);
   let surplusBanner="";
   let reconciliationNote="";
@@ -7730,7 +7742,9 @@ function cpcDeliverooAllocCard(priorMonth,brandFilter){
   window._cpcExportCache=window._cpcExportCache||{};
   window._cpcExportCache.deliveroo={rows,priorMonth,mandate};
   return`<div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div><div style="font-size:15px;font-weight:800;color:${AC.Deliveroo}">🛵 Deliveroo Per-Outlet Allocation</div><div style="font-size:12px;color:${T.label};margin-top:3px">Mandatory floor: AED ${floor}/outlet · 2% group GMV obligation · <strong style="color:#fbbf24">Bids are in our control</strong> — adjust to extend coverage on degrowing listings</div></div><div style="display:flex;align-items:center;gap:14px"><button onclick="cpcExportDeliveroo()" style="background:#0F172A;color:#fff;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer">⬇ Export CSV</button><div style="text-align:right"><div style="font-size:12px;color:${T.secondary}">Total recommended: <strong style="color:${totalClr};font-size:15px">${fmtAEDTip(totalRecRounded)}</strong></div>${totalLabel?`<div style="margin-top:2px">${totalLabel}</div>`:""}</div></div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div><div style="font-size:15px;font-weight:800;color:${AC.Deliveroo}">🛵 Deliveroo Per-Outlet Allocation</div><div style="font-size:12px;color:${T.label};margin-top:3px">Mandatory floor: AED ${floor}/outlet · 2% group GMV obligation · <strong style="color:#fbbf24">Bids are in our control</strong> — adjust to extend coverage on degrowing listings</div></div><div style="display:flex;align-items:center;gap:14px"><button onclick="cpcCheckGrowthOpportunity('Deliveroo','${priorMonth}')" style="background:transparent;color:#60A5FA;border:1px solid #60A5FA;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer">📈 Check for growth opportunities</button><button onclick="cpcExportDeliveroo()" style="background:#0F172A;color:#fff;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer">⬇ Export CSV</button><div style="text-align:right"><div style="font-size:12px;color:${T.secondary}">Total recommended: <strong style="color:${totalClr};font-size:15px">${fmtAEDTip(totalRecRounded)}</strong></div>${totalLabel?`<div style="margin-top:2px">${totalLabel}</div>`:""}</div></div></div>
+    <div id="growth-opp-Deliveroo"></div>
+    ${cpcActivePlanBanner("Deliveroo")}
     ${surplusBanner}
     ${lowerBidCount>0?`<div style="background:${_darkPage?"rgba(217,119,6,.12)":"#FFFBEB"};border:1px solid ${_darkPage?"rgba(217,119,6,.4)":"#FDE68A"};border-left:5px solid #D97706;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:12px"><span style="font-size:20px">📉</span><div><div style="font-size:14px;font-weight:800;color:#D97706">${lowerBidCount} outlet${lowerBidCount===1?"":"s"} show bid-reduction signals</div><div style="font-size:12px;color:${T.label};margin-top:1px">Overspent vs. their best-ROAS month — lowering bids preserves budget for the full month</div></div></div>`:""}
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr id="deliv-hdr-row" style="border-bottom:1px solid ${T.border};color:${T.muted};font-size:11px;text-transform:uppercase;letter-spacing:.4px"><th></th><th data-sortcol="outlet" onclick="cpcSortDelivTable(this,'outlet','string')" style="padding:8px 7px;text-align:left;cursor:pointer">Brand</th><th style="padding:8px 7px;text-align:left">Outlet</th><th data-sortcol="roas" onclick="cpcSortDelivTable(this,'roas','number')" style="padding:8px 7px;text-align:left;cursor:pointer">Latest ROAS</th><th data-sortcol="prior" onclick="cpcSortDelivTable(this,'prior','number')" style="padding:8px 7px;text-align:right;cursor:pointer">Prior Spend</th><th data-sortcol="rec" onclick="cpcSortDelivTable(this,'rec','number')" style="padding:8px 7px;text-align:right;cursor:pointer">Recommended</th><th data-sortcol="delta" onclick="cpcSortDelivTable(this,'delta','number')" style="padding:8px 7px;text-align:right;cursor:pointer">Δ vs Prior</th><th data-sortcol="julcto" onclick="cpcSortDelivTable(this,'julcto','number')" style="padding:8px 7px;text-align:right;cursor:pointer" title="July click-to-order rate — orders ÷ menu views">Jul CTO</th><th data-sortcol="augcto" onclick="cpcSortDelivTable(this,'augcto','number')" style="padding:8px 7px;text-align:right;cursor:pointer" title="August click-to-order rate — orders ÷ menu views">Aug CTO</th><th style="padding:8px 7px;text-align:right" title="Bid suggestion based on best historical ROAS-volume month">Bid Suggest</th><th style="padding:8px 7px;text-align:right">All-Time Spend</th></tr></thead>${tRows}<tfoot><tr style="border-top:2px solid ${T.border}"><td colspan="6" style="padding:9px 7px;color:${T.label};font-size:12px;font-weight:700">${rows.length} OUTLETS · base ${fmtAEDTip(roundTo10(totalBase))}${totalRecRounded!==roundTo10(totalBase)?` + ${fmtAEDTip(totalRecRounded-roundTo10(totalBase))} redistributed`:""}</td><td colspan="2"></td><td colspan="2" style="padding:9px 7px;text-align:right;color:${totalClr};font-weight:800">${fmtAEDTip(totalRecRounded)}</td><td></td></tr></tfoot></table></div>
@@ -8019,46 +8033,56 @@ function cpcPoolRows(ag,priorMonth){
 // sales/ROAS) using the SAME computeProfitability logic the rest of the dashboard already relies
 // on for real numbers — not a new, unverified profitability heuristic invented just for this
 // feature.
-function cpcGrowthOpportunityCheck(ag,priorMonth){
-  const{rows,mand,bottomUpTotal}=cpcPoolRows(ag,priorMonth);
-  // Only worth checking when brands' own real recommendations already meet or exceed the
-  // mandate on their own — if bottom-up falls short, there's no "extra headroom" story to tell,
-  // the group is already being asked to invest at or above what its outlets independently earn.
+// v334: generalized per Nikhil's explicit request — this used to call cpcPoolRows() internally,
+// hardwiring it to the Careem/Noon pooled-brand model only. Now takes rows/mand/bottomUpTotal as
+// parameters so the SAME safety-gated logic (profitability check, not just ROAS) works for
+// Deliveroo's per-outlet rows too, not just brand-pooled ones — same trustworthy gate, applied
+// at whatever granularity the caller's rows represent.
+function cpcGrowthOpportunityCheck(ag,priorMonth,rows,mand,bottomUpTotal,gmv){
   if(bottomUpTotal<mand)return{eligible:false,reason:"Bottom-up total doesn't yet exceed the mandate — no surplus headroom to evaluate."};
   const prevMonth=monthBefore(priorMonth);
   const eligible=[],excluded=[];
   for(const r of rows){
-    if(r.verdict!=="SCALE"&&r.verdict!=="INVEST"){excluded.push({brand:r.brand,reason:`${r.verdict} verdict — no real growth signal to build a case on`});continue;}
-    // Real profitability check: contribution for this brand+aggregator, current month vs prior,
-    // using computeProfitability — the same function the rest of the dashboard already trusts.
-    const curRecords=allData.filter(x=>x.aggregator===ag&&x.brand===r.brand&&recMonth(x)===priorMonth);
-    const prevRecords=allData.filter(x=>x.aggregator===ag&&x.brand===r.brand&&recMonth(x)===prevMonth);
-    if(!curRecords.length||!prevRecords.length){excluded.push({brand:r.brand,reason:"Not enough history to verify profitability trend — excluded rather than assumed safe."});continue;}
+    const label=r.outlet?`${r.brand} · ${r.outlet}`:r.brand;
+    if(r.verdict!=="SCALE"&&r.verdict!=="INVEST"){excluded.push({brand:label,reason:`${r.verdict} verdict — no real growth signal to build a case on`});continue;}
+    // Real profitability check: contribution for this brand(+outlet if given)+aggregator,
+    // current month vs prior, using computeProfitability — the same function the rest of the
+    // dashboard already trusts.
+    const outletFilter=r.outlet?(x=>x.branch===r.outlet):(()=>true);
+    const curRecords=allData.filter(x=>x.aggregator===ag&&x.brand===r.brand&&recMonth(x)===priorMonth&&outletFilter(x));
+    const prevRecords=allData.filter(x=>x.aggregator===ag&&x.brand===r.brand&&recMonth(x)===prevMonth&&outletFilter(x));
+    if(!curRecords.length||!prevRecords.length){excluded.push({brand:label,reason:"Not enough history to verify profitability trend — excluded rather than assumed safe."});continue;}
     const curProf=computeProfitability(curRecords,priorMonth+"-28");
     const prevProf=computeProfitability(prevRecords,prevMonth+"-28");
     const curMargin=curProf.gross>0?curProf.contribution/curProf.gross:null;
     const prevMargin=prevProf.gross>0?prevProf.contribution/prevProf.gross:null;
-    if(curMargin==null||prevMargin==null){excluded.push({brand:r.brand,reason:"Couldn't compute a reliable margin for one of the two months — excluded rather than assumed safe."});continue;}
+    if(curMargin==null||prevMargin==null){excluded.push({brand:label,reason:"Couldn't compute a reliable margin for one of the two months — excluded rather than assumed safe."});continue;}
     const marginDeltaPct=prevMargin>0?((curMargin-prevMargin)/prevMargin)*100:null;
     // The actual gate: real ROAS strength is necessary but not sufficient — contribution margin
     // must be holding (allowing a small 5% tolerance for normal noise) or improving. A brand
     // whose margin genuinely eroded — the exact "aggressive campaign, discount burn up, profit
     // down" scenario Nikhil described — gets excluded even with a strong SCALE verdict.
     if(marginDeltaPct!=null&&marginDeltaPct<-5){
-      excluded.push({brand:r.brand,reason:`Real ROAS is strong, but contribution margin fell ${Math.abs(marginDeltaPct).toFixed(0)}% ${cpcMonthLabel(prevMonth)}→${cpcMonthLabel(priorMonth)} — likely discount-driven, not something more ad spend should chase.`});
+      excluded.push({brand:label,reason:`Real ROAS is strong, but contribution margin fell ${Math.abs(marginDeltaPct).toFixed(0)}% ${cpcMonthLabel(prevMonth)}→${cpcMonthLabel(priorMonth)} — likely discount-driven, not something more ad spend should chase.`});
       continue;
     }
     eligible.push({...r,curMargin,prevMargin,marginDeltaPct});
   }
-  return{eligible,excluded,bottomUpTotal,mand,gmv:cpcPoolRows(ag,priorMonth).gmv,priorMonth,prevMonth};
+  return{eligible,excluded,bottomUpTotal,mand,gmv,priorMonth,prevMonth};
 }
 // v325: builds the two concrete spend options from cpcGrowthOpportunityCheck's eligible brands.
 // Per Nikhil's explicit spec: option amounts are Claude's to propose (not user-supplied), ranked
 // by outlet using BOTH real ROAS and the trend signal already built (cpcTrendSignal) — not ROAS
 // alone — and projected using the account's own historical ROAS (no decay/discount factor,
 // per his explicit instruction to use "our historical ROAS based math" as-is).
-function cpcGrowthOpportunityOptions(ag,priorMonth){
-  const check=cpcGrowthOpportunityCheck(ag,priorMonth);
+// v334: generalized alongside cpcGrowthOpportunityCheck — accepts the same rows/mand/
+// bottomUpTotal so this works for Deliveroo's per-outlet model, not just the pooled one.
+// isPerOutlet distinguishes the two real shapes: pooled rows are brand-level and need their
+// real outlets derived separately (as before); Deliveroo rows already ARE outlets, so no
+// further derivation step is needed or correct — using the brand-derivation path on
+// already-per-outlet data would silently look up the wrong thing.
+function cpcGrowthOpportunityOptions(ag,priorMonth,rows,mand,bottomUpTotal,gmv,isPerOutlet){
+  const check=cpcGrowthOpportunityCheck(ag,priorMonth,rows,mand,bottomUpTotal,gmv);
   if(!check.eligible||!check.eligible.length)return{...check,options:null};
   // Conservative step: roughly a quarter of the current mandate, rounded to a clean figure.
   // Aggressive step: roughly double the conservative step. Both are proposals, not fixed rules —
@@ -8066,51 +8090,64 @@ function cpcGrowthOpportunityOptions(ag,priorMonth){
   const conservativeAmt=Math.round(check.mand*0.15/100)*100;
   const aggressiveAmt=Math.round(check.mand*0.28/100)*100;
   function buildOption(totalAmt){
-    // Weight each eligible BRAND by ROAS-upside + trend, same principle already used for the
-    // shortfall redistribution — no brand's growth story dominates purely because it's largest.
+    // Weight each eligible row (brand for pooled, outlet for Deliveroo) by margin-strength +
+    // trend, same principle already used for the shortfall redistribution — no single row's
+    // growth story dominates purely because it's largest.
     const weight=r=>{
-      const w=Math.max(0.1,r.curMargin!=null?r.curMargin*10:1); // margin-weighted, not just ROAS — a brand with a strong AND profitable trend leads
+      const w=Math.max(0.1,r.curMargin!=null?r.curMargin*10:1);
       return(r.trend&&r.trend.direction==="improving")?w*1.15:w;
     };
     const totalWeight=check.eligible.reduce((s,r)=>s+weight(r),0);
-    const brandSplits=check.eligible.map(r=>({brand:r.brand,amt:Math.round(totalAmt*(weight(r)/totalWeight)),poolROAS:r.poolROAS,trend:r.trend}));
-    // Within each brand, rank real outlets by ROAS + trend (per Nikhil's explicit instruction)
-    // and allocate that brand's share top-down, largest chunk to the strongest real outlet.
     const outletRows=[];
-    for(const bs of brandSplits){
-      if(bs.amt<=0)continue;
-      const outlets=[...new Set(allData.filter(rr=>rr.aggregator===ag&&rr.brand===bs.brand&&recMonth(rr)===priorMonth&&rr.branch&&rr.branch!=="(brand-level)").map(rr=>rr.branch))];
-      const scored=outlets.map(outlet=>{
-        const cpcRow=cpcLatestRowByType(bs.brand,ag,outlet,"CPC");
-        const oROAS=cpcRow&&cpcRow.budgetSpent>0?cpcRow.sales/cpcRow.budgetSpent:null;
-        const trend=cpcTrendSignal(bs.brand,ag,outlet,priorMonth);
-        const score=(oROAS!=null?oROAS:0)+(trend&&trend.direction==="improving"?1:trend&&trend.direction==="declining"?-1:0);
-        return{outlet,oROAS,trend,score,cpcRow};
-      }).filter(o=>o.oROAS!=null).sort((a,b)=>b.score-a.score);
-      if(!scored.length)continue;
-      // Split this brand's share across its top real outlets, weighted by score, capped at the
-      // top 3 so the split stays legible rather than smearing pennies across every outlet.
-      const top=scored.slice(0,3);
-      const topWeight=top.reduce((s,o)=>s+Math.max(0.1,o.score),0);
-      let remaining=bs.amt;
-      top.forEach((o,i)=>{
-        const share=i===top.length-1?remaining:Math.round(bs.amt*(Math.max(0.1,o.score)/topWeight));
-        remaining-=share;
-        if(share<=0)return;
-        // Historical-ROAS projection, exactly as Nikhil specified: incremental sales = extra
-        // spend × this outlet's own real ROAS. No decay factor applied.
-        const projSales=Math.round(share*o.oROAS);
-        outletRows.push({brand:bs.brand,outlet:o.outlet,roas:o.oROAS,trend:o.trend,add:share,projSales});
-      });
+    if(isPerOutlet){
+      // Deliveroo: each eligible row already IS a real outlet — allocate directly, no
+      // brand-then-outlet derivation needed.
+      for(const r of check.eligible){
+        const share=Math.round(totalAmt*(weight(r)/totalWeight));
+        if(share<=0)continue;
+        const projSales=Math.round(share*(r.latestROAS||0));
+        outletRows.push({brand:r.brand,outlet:r.outlet,roas:r.latestROAS,trend:r.trend,add:share,projSales,curMargin:r.curMargin});
+      }
+    }else{
+      const brandSplits=check.eligible.map(r=>({brand:r.brand,amt:Math.round(totalAmt*(weight(r)/totalWeight)),poolROAS:r.poolROAS,trend:r.trend}));
+      // Within each brand, rank real outlets by ROAS + trend (per Nikhil's explicit instruction)
+      // and allocate that brand's share top-down, largest chunk to the strongest real outlet.
+      for(const bs of brandSplits){
+        if(bs.amt<=0)continue;
+        const outlets=[...new Set(allData.filter(rr=>rr.aggregator===ag&&rr.brand===bs.brand&&recMonth(rr)===priorMonth&&rr.branch&&rr.branch!=="(brand-level)").map(rr=>rr.branch))];
+        const scored=outlets.map(outlet=>{
+          const cpcRow=cpcLatestRowByType(bs.brand,ag,outlet,"CPC");
+          const oROAS=cpcRow&&cpcRow.budgetSpent>0?cpcRow.sales/cpcRow.budgetSpent:null;
+          const trend=cpcTrendSignal(bs.brand,ag,outlet,priorMonth);
+          const score=(oROAS!=null?oROAS:0)+(trend&&trend.direction==="improving"?1:trend&&trend.direction==="declining"?-1:0);
+          return{outlet,oROAS,trend,score,cpcRow};
+        }).filter(o=>o.oROAS!=null).sort((a,b)=>b.score-a.score);
+        if(!scored.length)continue;
+        // Split this brand's share across its top real outlets, weighted by score, capped at the
+        // top 3 so the split stays legible rather than smearing pennies across every outlet.
+        const top=scored.slice(0,3);
+        const topWeight=top.reduce((s,o)=>s+Math.max(0.1,o.score),0);
+        let remaining=bs.amt;
+        top.forEach((o,i)=>{
+          const share=i===top.length-1?remaining:Math.round(bs.amt*(Math.max(0.1,o.score)/topWeight));
+          remaining-=share;
+          if(share<=0)return;
+          // Historical-ROAS projection, exactly as Nikhil specified: incremental sales = extra
+          // spend × this outlet's own real ROAS. No decay factor applied.
+          const projSales=Math.round(share*o.oROAS);
+          outletRows.push({brand:bs.brand,outlet:o.outlet,roas:o.oROAS,trend:o.trend,add:share,projSales});
+        });
+      }
     }
     const totalProjSales=outletRows.reduce((s,o)=>s+o.projSales,0);
-    // Contribution projection: apply the brand's OWN current margin (already verified to be
-    // holding, per the safety gate) to the incremental sales — not a flat assumption.
+    // Contribution projection: apply the relevant margin (already verified to be holding, per
+    // the safety gate) to the incremental sales — not a flat assumption.
     const totalProjContrib=outletRows.reduce((s,o)=>{
+      if(o.curMargin!=null)return s+o.projSales*o.curMargin; // per-outlet margin already attached (Deliveroo path)
       const br=check.eligible.find(e=>e.brand===o.brand);
       return s+(br&&br.curMargin!=null?o.projSales*br.curMargin:0);
     },0);
-    return{amount:totalAmt,outletRows,totalProjSales,totalProjContrib,brandSplits:brandSplits.filter(b=>b.amt>0)};
+    return{amount:totalAmt,outletRows,totalProjSales,totalProjContrib};
   }
   return{...check,options:{conservative:buildOption(conservativeAmt),aggressive:buildOption(aggressiveAmt)}};
 }
@@ -8122,9 +8159,21 @@ function cpcGrowthOppKey(ag,month){return `oregano_growth_opp_${ag}_${month}`;}
 function cpcCheckGrowthOpportunity(ag,priorMonth){
   const container=document.getElementById(`growth-opp-${ag}`);
   if(!container)return;
-  container.innerHTML=`<div style="display:flex;align-items:center;gap:8px;padding:12px 0;color:#94A3B8;font-size:12px"><div class="dot"></div>Checking real ROAS, trend, and profitability across every brand…</div>`;
+  container.innerHTML=`<div style="display:flex;align-items:center;gap:8px;padding:12px 0;color:#94A3B8;font-size:12px"><div class="dot"></div>Checking real ROAS, trend, and profitability across every ${ag==="Deliveroo"?"outlet":"brand"}…</div>`;
   setTimeout(()=>{
-    const result=cpcGrowthOpportunityOptions(ag,priorMonth);
+    // v334: per Nikhil's explicit "all aggregators should have this option" — computes the
+    // right row set for whichever aggregator's real model applies: Deliveroo is per-outlet
+    // (cpcDeliverooRows), Careem/Noon are pooled per-brand (cpcPoolRows). Same underlying
+    // safety-gated check either way, just fed the correct real data shape.
+    let result;
+    if(ag==="Deliveroo"){
+      const{rows,mandate,floor}=cpcDeliverooRows(priorMonth);
+      const bottomUpTotal=rows.reduce((s,r)=>s+r.baseRec,0);
+      result=cpcGrowthOpportunityOptions(ag,priorMonth,rows,mandate,bottomUpTotal,null,true);
+    }else{
+      const{rows,mand,bottomUpTotal,gmv}=cpcPoolRows(ag,priorMonth);
+      result=cpcGrowthOpportunityOptions(ag,priorMonth,rows,mand,bottomUpTotal,gmv,false);
+    }
     // Cache the full result (not just the decision) so the comparison view can drill into
     // outlet-level detail for Original/A/B at any time, per Nikhil's explicit "drill down if
     // required" requirement — a single approved number alone wouldn't support that.
@@ -8233,14 +8282,6 @@ function cpcPoolAllocCard(ag,priorMonth,brandFilter){
       const oROAS=cpcRow&&cpcRow.budgetSpent>0?cpcRow.sales/cpcRow.budgetSpent:null;
       const oSpent=cpcRow?cpcRow.budgetSpent:0;
       const oSales=cpcRow?cpcRow.sales:0;
-      // v330: fixes a real gap Nikhil caught — this table never computed the real SCALE/INVEST/
-      // MONITOR/FLOOR/EXCLUDE verdict at all. It predates cpcPlanVerdict (built for Deliveroo)
-      // and was still using its own older, separate keep/monitor/EXCLUDE-CANDIDATE system based
-      // on a simple ROAS-vs-80%-of-breakeven check — never upgraded when the richer verdict
-      // system was built, which is why every other table's per-outlet badges never showed up
-      // here. Now computes the SAME real verdict every other table uses, via the same function,
-      // so this table's badges mean exactly what they mean everywhere else — not a separate,
-      // narrower classification with different thresholds.
       const oOrders=cpcRow?cpcRow.orders:null;
       const verdict=cpcPlanVerdict(brand,ag,oROAS,oOrders);
       const exclude=verdict==="EXCLUDE"||(oROAS!=null&&oROAS<beVal*0.8);
@@ -8248,13 +8289,22 @@ function cpcPoolAllocCard(ag,priorMonth,brandFilter){
       const augCto=cpcRow&&cpcRow.cto!=null?cpcRow.cto:null;
       const julRow=cpcRowForMonth(brand,ag,outlet,"CPC",monthBefore(priorMonth));
       const julCto=julRow&&julRow.cto!=null?julRow.cto:null;
-      // v331: All-Time Spend column, per Nikhil's explicit column-parity request — reuses
-      // cpcHistoricalSpend, the same function Deliveroo's table already relies on for this exact
-      // figure, so it's the same trustworthy source, not a new calculation.
       const histTotal=cpcHistoricalSpend(brand,ag,outlet,"CPC");
-      return{outlet,oROAS,oSpent,oSales,exclude,verdict,trend,julCto,augCto,histTotal};
+      // v334: coverage-ranking score, per Nikhil's explicit Noon feedback — a pooled brand
+      // budget (e.g. Smokeys' AED 1,500) is only actually enough to properly fund a HANDFUL of
+      // outlets at the real per-listing floor (AED 1,000 on Noon), not all of them at once. Same
+      // combined ROAS+trend signal already used for growth-opportunity outlet ranking, applied
+      // here to rank which specific outlets are the realistic candidates to receive that budget.
+      const coverageScore=(oROAS!=null?oROAS:-999)+(trend&&trend.direction==="improving"?1:trend&&trend.direction==="declining"?-1:0);
+      return{outlet,oROAS,oSpent,oSales,exclude,verdict,trend,julCto,augCto,histTotal,coverageScore};
     }).sort((a,b)=>(b.oROAS||0)-(a.oROAS||0));
     if(!outletRows.length)return null;
+    // v334: how many outlets the ACTUAL recommended brand-level budget can realistically fund at
+    // the real per-listing floor — this is what turns "here are 15 outlets" into an honest
+    // "here's the budget's real coverage, and which specific outlets should get it."
+    const maxCoverage=Math.max(1,Math.floor(poolSpent/floor));
+    const rankedForCoverage=[...outletRows].filter(o=>!o.exclude).sort((a,b)=>b.coverageScore-a.coverageScore);
+    const recommendedOutlets=new Set(rankedForCoverage.slice(0,maxCoverage).map(o=>o.outlet));
     const excludeCount=outletRows.filter(o=>o.exclude).length;
     // v331: header relabeled "Prior Spend/Sales" to match Deliveroo's terminology exactly — both
     // tables show the same underlying month (the most recent complete/current month, used as the
@@ -8262,9 +8312,21 @@ function cpcPoolAllocCard(ag,priorMonth,brandFilter){
     // data with inconsistent labels, which is what looked like a real data gap in Nikhil's report
     // even though the underlying figure was already correct August data both places.
     const headerRow=`<tr style="background:rgba(15,23,42,.03)"><td></td><td data-sortcol="outlet" onclick="cpcSortDelivTable(this,'outlet','string')" style="padding:6px 7px;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase;cursor:pointer">Outlet</td><td data-sortcol="roas" onclick="cpcSortDelivTable(this,'roas','number')" style="padding:6px 7px;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase;cursor:pointer">ROAS</td><td data-sortcol="julcto" onclick="cpcSortDelivTable(this,'julcto','number')" style="padding:6px 7px;text-align:right;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase;cursor:pointer">Jul CTO</td><td data-sortcol="augcto" onclick="cpcSortDelivTable(this,'augcto','number')" style="padding:6px 7px;text-align:right;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase;cursor:pointer">Aug CTO</td><td data-sortcol="prior" onclick="cpcSortDelivTable(this,'prior','number')" style="padding:6px 7px;text-align:right;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase;cursor:pointer">Prior Spend</td><td style="padding:6px 7px;text-align:right;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase">Prior Sales</td><td data-sortcol="hist" onclick="cpcSortDelivTable(this,'hist','number')" style="padding:6px 7px;text-align:right;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase;cursor:pointer">All-Time Spend</td><td colspan="2" style="padding:6px 7px;font-size:11px;color:${T.muted};font-weight:700;text-transform:uppercase">Status</td></tr>`;
-    const rowsHtml=outletRows.map(o=>{
+    const rowsHtml=[...outletRows].sort((a,b)=>{
+      const aRec=recommendedOutlets.has(a.outlet),bRec=recommendedOutlets.has(b.outlet);
+      if(aRec!==bRec)return aRec?-1:1; // recommended-for-this-budget outlets float to the top
+      return (b.oROAS||0)-(a.oROAS||0);
+    }).map(o=>{
       const roasTxt=o.oROAS!=null?`<strong style="color:${o.oROAS>=beVal?'#22C55E':o.exclude?'#EF4444':'#FBBF24'}">${o.oROAS.toFixed(2)}×</strong>`:`<span style="color:${T.muted}">no spend</span>`;
       const trendTxt=o.trend?(o.trend.direction==="declining"?`<span style="color:#EF4444;font-size:10.5px">↓ declining</span>`:o.trend.direction==="improving"?`<span style="color:#22C55E;font-size:10.5px">↑ improving</span>`:`<span style="color:${T.muted};font-size:10.5px">flat</span>`):"";
+      // v334: recommended-coverage badge, per Nikhil's explicit Noon feedback — a pooled budget
+      // like AED 1,500 genuinely only funds a handful of outlets at the real floor, not all of
+      // them. This makes that concrete: the specific outlets that would actually receive this
+      // budget, ranked by real ROAS + trend, get a distinct green marker; the rest are still
+      // shown (for context/history) but visually de-emphasized as "not funded at this budget."
+      const coverageBadge=recommendedOutlets.has(o.outlet)
+        ?`<span title="One of the outlets this month's actual recommended budget can realistically fund at the AED ${floor} floor" style="background:rgba(34,197,94,.15);color:#22C55E;padding:1px 6px;border-radius:4px;font-size:9.5px;font-weight:800;margin-left:6px">✓ FUNDED</span>`
+        :(!o.exclude?`<span title="Real performer, but this month's budget doesn't stretch far enough to cover it at the floor" style="color:${T.muted};font-size:9.5px;margin-left:6px">· not funded this month</span>`:"");
       const tag=`<span style="background:${verdClr[o.verdict]}22;color:${verdClr[o.verdict]};padding:2px 8px;border-radius:5px;font-size:11px;font-weight:800;letter-spacing:.3px">${o.verdict}</span>${o.exclude&&o.verdict!=="EXCLUDE"?` <span style="color:#EF4444;font-size:10px">· exclude candidate</span>`:""}`;
       const julCtoTxt=o.julCto!=null?`${o.julCto.toFixed(1)}%`:"—";
       const augCtoTxt=o.augCto!=null?`${o.augCto.toFixed(1)}%`:"—";
@@ -8272,9 +8334,13 @@ function cpcPoolAllocCard(ag,priorMonth,brandFilter){
       const histTxt=o.histTotal>0?`<span style="color:${T.label};font-size:12px">${fmtAEDTip(o.histTotal)}</span>`:`<span style="color:${T.muted};font-size:11px">none</span>`;
       const cpcRow=cpcLatestRowByType(brand,ag,o.outlet,"CPC");
       const momHtml=cpcMoMSnippet(brand,ag,o.outlet,"CPC",o.oROAS,cpcRow?cpcRow.orders:null,priorMonth);
-      return`<tr data-sort-outlet="${o.outlet}" data-sort-roas="${o.oROAS??-999}" data-sort-julcto="${o.julCto??-999}" data-sort-augcto="${o.augCto??-999}" data-sort-prior="${o.oSpent}" data-sort-hist="${o.histTotal}" style="border-bottom:none"><td></td><td style="padding:7px 7px 2px 20px;color:${T.text};font-size:13px">↳ ${o.outlet} ${trendTxt}</td><td style="padding:7px 7px 2px;font-size:13px">${roasTxt}</td><td style="padding:7px 7px 2px;text-align:right;color:${T.label};font-size:12px">${julCtoTxt}</td><td style="padding:7px 7px 2px;text-align:right;color:${ctoTrendClr};font-size:12px;font-weight:700">${augCtoTxt}</td><td style="padding:7px 7px 2px;text-align:right;color:${T.label};font-size:12px">${fmtAEDTip(o.oSpent)}</td><td style="padding:7px 7px 2px;text-align:right;color:${T.label};font-size:12px">${fmtAEDTip(o.oSales)}</td><td style="padding:7px 7px 2px;text-align:right">${histTxt}</td><td colspan="2" style="padding:7px 7px 2px">${tag}</td></tr><tr style="border-bottom:1px solid ${T.border}"><td></td><td colspan="9" style="padding:2px 7px 8px 20px">${momHtml}</td></tr>`;
+      // v334: rows for outlets NOT funded this month are visually de-emphasized (dimmed
+      // background) rather than hidden — still real, verifiable data, just clearly secondary to
+      // the budget's actual reach.
+      const rowBg=recommendedOutlets.has(o.outlet)?"rgba(34,197,94,.04)":"transparent";
+      return`<tr data-sort-outlet="${o.outlet}" data-sort-roas="${o.oROAS??-999}" data-sort-julcto="${o.julCto??-999}" data-sort-augcto="${o.augCto??-999}" data-sort-prior="${o.oSpent}" data-sort-hist="${o.histTotal}" style="border-bottom:none;background:${rowBg}"><td></td><td style="padding:7px 7px 2px 20px;color:${T.text};font-size:13px">↳ ${o.outlet} ${trendTxt}${coverageBadge}</td><td style="padding:7px 7px 2px;font-size:13px">${roasTxt}</td><td style="padding:7px 7px 2px;text-align:right;color:${T.label};font-size:12px">${julCtoTxt}</td><td style="padding:7px 7px 2px;text-align:right;color:${ctoTrendClr};font-size:12px;font-weight:700">${augCtoTxt}</td><td style="padding:7px 7px 2px;text-align:right;color:${T.label};font-size:12px">${fmtAEDTip(o.oSpent)}</td><td style="padding:7px 7px 2px;text-align:right;color:${T.label};font-size:12px">${fmtAEDTip(o.oSales)}</td><td style="padding:7px 7px 2px;text-align:right">${histTxt}</td><td colspan="2" style="padding:7px 7px 2px">${tag}</td></tr><tr style="border-bottom:1px solid ${T.border};background:${rowBg}"><td></td><td colspan="9" style="padding:2px 7px 8px 20px">${momHtml}</td></tr>`;
     }).join("");
-    return{rowsHtml:headerRow+rowsHtml,count:outletRows.length,excludeCount};
+    return{rowsHtml:headerRow+rowsHtml,count:outletRows.length,excludeCount,maxCoverage,recommendedCount:recommendedOutlets.size};
   }
   let gi=0;
   const tRows=rows.map(r=>{
@@ -8313,7 +8379,7 @@ function cpcPoolAllocCard(ag,priorMonth,brandFilter){
     const recBump=r.rec>r.baseRec?` <span style="color:#22C55E;font-size:9.5px" title="Includes a share of the group shortfall, redistributed to growing brands">+${fmtAEDTip(r.rec-r.baseRec)} growth share</span>`:"";
     const summaryRow=`<tr${rowOnclick}><td style="padding:7px 6px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11.5px">${r.brand}${adTypeBreakdown}</td><td style="padding:7px 6px;text-align:right;color:${T.secondary}">${fmtAEDTip(r.bGMV)}</td><td style="padding:7px 6px;text-align:right;color:${T.label};font-size:11px">${(r.brandShare*100).toFixed(0)}%</td><td style="padding:7px 6px;text-align:right;color:${T.muted};font-size:10.5px" title="What a GMV-proportional split of the group mandate would give this brand — reference only, not the recommendation">${fmtAEDTip(roundTo10(r.brandMand))}</td><td style="padding:7px 6px;text-align:right;color:#fbbf24;font-weight:700">${fmtAEDTip(roundTo10(r.rec))}${recBump}</td><td style="padding:7px 6px;font-size:11px">${roasTxt}</td><td style="padding:7px 6px"><span style="background:${verdClr[r.verdict]}22;color:${verdClr[r.verdict]};padding:2px 7px;border-radius:4px;font-size:10px;font-weight:800">${r.verdict}</span></td><td style="padding:7px 6px;text-align:center">${utilTxt}</td><td style="padding:7px 6px">${signal}</td>${chevCell}</tr>`;
     if(!brk)return`<tbody style="display:table-row-group">${summaryRow}</tbody>`;
-    return summaryRow+`<tbody id="${rid}" style="display:none"><tr style="background:rgba(245,158,11,.04)"><td colspan="9" style="padding:7px 7px 7px 20px;font-size:11.5px;color:${T.label};font-weight:700">${brk.count} outlets${brk.excludeCount?` · <strong style="color:#EF4444">${brk.excludeCount} exclude candidate${brk.excludeCount===1?"":"s"}</strong>`:""} — budget is pooled at brand level, but underperforming outlets can be excluded from targeting</td></tr>${brk.rowsHtml}</tbody>`;
+    return summaryRow+`<tbody id="${rid}" style="display:none"><tr style="background:rgba(245,158,11,.04)"><td colspan="9" style="padding:7px 7px 7px 20px;font-size:11.5px;color:${T.label};font-weight:700">${brk.count} outlets total · <strong style="color:#22C55E">this month's budget covers ${brk.recommendedCount} of them</strong>${brk.excludeCount?` · <strong style="color:#EF4444">${brk.excludeCount} exclude candidate${brk.excludeCount===1?"":"s"}</strong>`:""} — budget is pooled at brand level; the funded outlets are ranked to the top and marked ✓ FUNDED below</td></tr>${brk.rowsHtml}</tbody>`;
   }).join("");
   const lockedNote=ag==="Careem"?` · <strong style="color:#fbbf24">Bids locked at AED 2.00</strong> — only lever is budget size`:ag==="Noon"?` · Minimum AED ${floor} to activate a brand pool`:"";
   window._cpcExportCache=window._cpcExportCache||{};
