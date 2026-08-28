@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-336";
+const BUILD_VERSION="2026-08-13-338";
 const BUILD_NOTES=[
+  "🆕 Built real extrapolation for CPC/Keywords cost on genuinely open (not-yet-confirmed-ended) campaigns, per Nikhil's exact two-condition rule worked out together across several messages. Uses parseRemarksDate (already existed, already wired into every parsed row's updateDate field — confirmed real ~97% coverage across the actual sheet once free-text entries like 'Funded by Deliveroo - 20-Oct' are properly extracted, not just clean date cells) to determine whether a row is CONFIRMED ended (its update date is AFTER its End Date — proof Nikhil checked the row after it ended, e.g. real row 1869: Oregano-Motorcity, End Date 14-Aug, Remarks 24-Aug) versus genuinely still open (update date BEFORE End Date, e.g. Lollorosso-Al Reef's real Aug 14-31 row, Remarks 24-Aug). Confirmed-ended rows use ONLY their literal logged spend, never extrapolated. Genuinely open rows extrapolate past the known-through date using cpcExtrapolatedCost — Nikhil's own two conditions: (1) budgetSpent must be below budgetAlloc, (2) the day-by-day running total is capped at the remaining budget, the capping day getting only its real remaining share rather than the full daily rate. A real double-counting bug was caught by testing before shipping: the boundary day between literal and extrapolated cost was being counted twice in the original implementation whenever the requested range started exactly on the known-through date (the common case) — inflated Nikhil's own worked example from the correct AED 101.46 to AED 126.83. Fixed and reverified against three real scenarios: the confirmed-ended Motorcity row (correctly returns its exact real spend, zero extrapolation, even when asked about a much wider date range), the genuinely-open Al Reef row (correctly returns AED 101.46, matching Nikhil's own manual calculation), and a budget-overshoot case (correctly caps at the real remaining budget rather than exceeding it).",
   "🆕 Three fixes from Nikhil's feedback. (1) Confirmed Wicked Wings Talabat CPC WAS correctly analyzed in the report (Al Forsan and Al Reem both have real numbers in the appendix) — checked the real sheet directly to confirm; the confusion was likely the Coverage Record page reading as 'no CPC for Wicked Wings' when it specifically meant two OTHER outlets (Al Sheba, NAS) that never ran Talabat CPC at all — will tighten that wording next revision. (2) Built real pro-rata CPC/Keywords ad-cost deduction into profitability, per explicit instruction to include it everywhere except Campaigns. Uses each real campaign window's own dailyBurn (budgetSpent÷days, already computed during parsing) overlapped against whatever date range is being profitability-checked — a campaign only partially covering the requested range only contributes its real overlapping share, not the whole cost. Wired into computeProfitability (used across Overview/Brands/Outlets/Platforms/Compare) and computeProfitabilityBreakdown (the actual popup) — added a visible 'CPC/Keywords cost' line in the cascade table, matching how Commission and Food/pkg cost already display. Verified the overlap math directly: exact match, partial overlap, zero overlap, and outlet-mismatch all produce correct results. (3) Fixed real density problems on the growth-opportunity page, caught directly from Nikhil's screenshot — the 'excluded from this check' text was one unbroken paragraph listing every excluded brand's full reasoning inline (15+ entries in the real screenshot), and each option card rendered every eligible outlet unconditionally (40+ rows possible on Deliveroo). Both collapsed to a one-line summary with click-to-expand detail — the excluded note reusing the exact same Details-toggle interaction already used for the mandate-trim banner elsewhere on this page, and each option card now shows only the top 6 outlets by dollar amount with the rest tucked behind '+N more outlets'. Verified the capping logic directly against a 20-outlet scenario matching the real screenshot's density.",
   "🆕 Two real fixes from Nikhil's direct feedback. (1) Generalized the growth-opportunity check (approve/deny, Plan A/B, Original/Plan comparison) to Deliveroo, per his explicit 'all aggregators should have this option' — it was hardwired to cpcPoolRows (the Careem/Noon pooled-brand model) only. cpcGrowthOpportunityCheck/Options now accept precomputed rows/mand/bottomUpTotal as parameters instead of calling cpcPoolRows internally, with an isPerOutlet flag distinguishing Deliveroo's real per-outlet shape (each eligible row already IS an outlet, no further derivation needed) from the pooled brand-level shape (outlets derived separately, as before) — same safety-gated profitability check either way, just fed the correct real data shape. Added the same approved-plan mandate override to cpcDeliverooRows that Careem/Noon already had. Verified end-to-end against realistic per-outlet Deliveroo data before shipping. (2) Fixed a real design gap on the Noon/Careem pooled table, per Nikhil's exact Smokeys example — a brand-level budget (e.g. AED 1,500) was listing all of a brand's outlets with no indication that the actual budget can only realistically fund a couple of them at the real per-listing floor (AED 1,000 on Noon). Added a genuine coverage calculation: floor(budget ÷ floor) = how many outlets are actually fundable, then ranks real outlets by the same ROAS+trend signal already used for growth-opportunity ranking to identify WHICH specific ones — those get a ✓ FUNDED badge and float to the top; the rest stay visible (for context) but are visually de-emphasized with a 'not funded this month' note. Verified against the exact real Smokeys numbers from the screenshot (AED 1,500 budget, AED 1,000 floor) — correctly identifies exactly 1 realistically-fundable outlet; also verified a larger budget correctly scales to recommend more.",
   "🐛 Fixed the real issue behind Nikhil's repeated 'No CPC in July' complaint — took two passes to actually understand it correctly, worth being direct about. First pass: verified cpcPriorMonth()/monthBefore() are mechanically correct (August is genuinely the reference month, July is genuinely the month before it — confirmed against the real 'Latest: Aug 25/26' header shown in every screenshot this session), and separately verified the TQ branch-alias fix from earlier this session correctly resolves 'Lollorosso-TQ' to 'Town Square' for Careem specifically (ran the real parser function against the exact real string, confirmed correct) — so the underlying date logic and outlet-name matching were never the bug. Second pass, after Nikhil restated the actual complaint: the real problem was MESSAGE FRAMING, not date logic. cpcMoMSnippet's job is showing a month-over-month TREND; when July (the older comparison month) has no data, it displayed 'No CPC in Jul 26 — new this month' as the headline — reading like a data-quality warning about something being wrong, when there's usually nothing wrong at all. When planning September off of August, whether July had data is frequently irrelevant, and August's real performance was already shown correctly elsewhere on the same row (the ROAS/spend/sales columns) — this specific snippet just never restated it, making the row look like it was missing data it actually had. Fixed by reframing: when real reference-month (August) data exists, the message now LEADS with it directly ('Aug 26: 7.20×'), with the missing older-month note demoted to a small, neutral aside rather than the headline. The genuine 'no data at all, brand new this month' case is unchanged. Verified both paths directly: a listing with real August data but no July comparison now correctly leads with the August number; a genuinely new listing with zero data still shows the original, appropriate message.",
@@ -482,6 +483,19 @@ const NOON_OREGANO_BOGO_MONDAYS=new Set(["2026-07-20","2026-07-27","2026-08-03",
 // thing. Optionally scoped to one outlet (branch) when the caller has that granularity; brand-
 // level otherwise, matching whatever granularity brandContribution/computeProfitability already
 // operate at for the same call.
+// v338: uses the real, already-parsed updateDate field (parseRemarksDate, extracted from the
+// Remarks/Last Updation Date column at parse time — confirmed ~97% real coverage across the
+// actual sheet) to decide whether a row needs literal overlap only, or is a genuine candidate
+// for extrapolation. Nikhil's exact rule, verified against two real rows from the sheet
+// (Oregano-Motorcity, row 1869: End Date 14-Aug, Remarks 24-Aug — update date is AFTER end date,
+// meaning he checked it on the 24th and it was already over, a CONFIRMED end, not a stale
+// placeholder; Lollorosso-Al Reef, Aug 14-31 row: End Date 31-Aug, Remarks 24-Aug — update date
+// is BEFORE end date, genuinely open, real extrapolation candidate): if updateDate > endDate,
+// the campaign is confirmed ended — use ONLY the literal logged overlap, no extrapolation. If
+// updateDate <= endDate (or no updateDate at all), the row MAY still be open — literal overlap
+// covers days through updateDate (the real, confirmed boundary), and cpcExtrapolatedCost
+// (Nikhil's two-condition day-by-day budget-capped rate) covers any further days the requested
+// range reaches beyond that, up to the row's own endDate.
 function cpcAdCostForRange(brand,agg,startDate,endDate,branch){
   if(!cpcData||!cpcData.length)return 0;
   let total=0;
@@ -489,13 +503,83 @@ function cpcAdCostForRange(brand,agg,startDate,endDate,branch){
     if(r.brand!==brand||r.aggregator!==agg)continue;
     if(branch&&r.branch&&r.branch!==branch)continue; // only filter by branch when caller asked AND the row has one — brand-pooled rows (Careem/Noon) have no branch to match against
     if(!r.startDate||!r.endDate||!r.dailyBurn)continue;
+    const confirmedEnded=r.updateDate&&r.updateDate>r.endDate;
+    // The real, confirmed boundary of logged data for this row — the earlier of its own End
+    // Date and its update date (when known), since a still-open row's real activity can only be
+    // trusted up to when it was last actually checked.
+    const knownThrough=(!confirmedEnded&&r.updateDate&&r.updateDate<r.endDate)?r.updateDate:r.endDate;
     const overlapStart=r.startDate>startDate?r.startDate:startDate;
-    const overlapEnd=r.endDate<endDate?r.endDate:endDate;
-    if(overlapStart>overlapEnd)continue; // no real overlap with the requested range
-    const overlapDays=Math.round((new Date(overlapEnd)-new Date(overlapStart))/86400000)+1;
-    total+=r.dailyBurn*overlapDays;
+    const overlapEnd=knownThrough<endDate?knownThrough:endDate;
+    if(overlapStart<=overlapEnd){
+      const overlapDays=Math.round((new Date(overlapEnd)-new Date(overlapStart))/86400000)+1;
+      total+=r.dailyBurn*overlapDays;
+    }
+    // Extrapolation only when genuinely NOT confirmed ended, and the requested range reaches
+    // past the known-through boundary but still within the row's own (still-planned) end date.
+    if(!confirmedEnded&&endDate>knownThrough){
+      // v338 fix: extrapolation always starts the day AFTER knownThrough — full stop. Testing
+      // caught a real double-count here: the original condition (knownThrough>startDate ? nextDay
+      // : startDate) fell back to the plain startDate whenever knownThrough===startDate, which
+      // is exactly the common case (the requested range starts on the same day data is known
+      // through) — that day was then counted once in the literal overlap above AND again here,
+      // overstating cost by a full day's rate. Verified against Nikhil's real Al Reef example
+      // after the fix: AED 101.46 (1 real day + 3 extrapolated), not the original AED 126.83.
+      const extraStart=cpcNextDay(knownThrough);
+      const extraEnd=endDate<r.endDate?endDate:r.endDate;
+      if(extraStart<=extraEnd){
+        const{cost}=cpcExtrapolatedCost(r,extraStart,extraEnd);
+        total+=cost;
+      }
+    }
   }
   return total;
+}
+function cpcNextDay(dateStr){
+  const d=new Date(dateStr+"T12:00:00");
+  d.setDate(d.getDate()+1);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+// v337: real-rate extrapolation beyond the sheet's last logged data, per Nikhil's explicit
+// two-condition logic (verified against his own worked example — Lollorosso-Al Reef, AED
+// 253.65 consumed over 10 real days = AED 25.365/day, correctly extrapolating to AED 50.73 for
+// 2 further days). Condition 1: budgetSpent < budgetAlloc — the campaign genuinely still has
+// room, not already exhausted. Condition 2: the day-by-day extrapolated total must never exceed
+// budgetAlloc — checked one day at a time, not as a single yes/no gate on the whole requested
+// range, because a multi-day extrapolation can pass a check on its TOTAL while still exceeding
+// the remaining budget partway through (e.g. day 1 fits, day 1+2 together would overshoot) — the
+// day that would exceed the cap gets only its real remaining share, not the full daily rate,
+// and no day after that gets anything.
+//
+// Deliberately does NOT try to parse the Remarks/Last Updation Date column as the boundary —
+// checked the real sheet directly and that column is genuinely mixed (clean dates in different
+// formats, and pure free-text notes like "Cancelled due to closure" with no date at all), not
+// reliably parseable across every row. Uses the row's own real startDate/endDate/dailyBurn
+// instead, which are already structured and reliable.
+function cpcExtrapolatedCost(row,extraStart,extraEnd){
+  if(!row||!row.budgetAlloc||row.budgetSpent==null)return{cost:0,daysExtrapolated:0,cappedEarly:false};
+  // Condition 1: budget must genuinely still have room
+  const remaining=row.budgetAlloc-row.budgetSpent;
+  if(remaining<=0)return{cost:0,daysExtrapolated:0,cappedEarly:false};
+  const dailyRate=row.dailyBurn;
+  if(!dailyRate||dailyRate<=0)return{cost:0,daysExtrapolated:0,cappedEarly:false};
+  const totalExtraDays=Math.round((new Date(extraEnd)-new Date(extraStart))/86400000)+1;
+  if(totalExtraDays<=0)return{cost:0,daysExtrapolated:0,cappedEarly:false};
+  // Condition 2, applied day by day: run the daily rate forward, capping the running total at
+  // the remaining budget the moment it would be exceeded — the capping day gets only its real
+  // remaining share, not the full rate, and nothing after that day counts.
+  let cost=0,daysExtrapolated=0,cappedEarly=false;
+  for(let d=0;d<totalExtraDays;d++){
+    if(cost+dailyRate<=remaining){
+      cost+=dailyRate;
+      daysExtrapolated++;
+    }else{
+      const lastPartialDay=remaining-cost;
+      if(lastPartialDay>0){cost+=lastPartialDay;daysExtrapolated++;}
+      cappedEarly=true;
+      break;
+    }
+  }
+  return{cost,daysExtrapolated,cappedEarly};
 }
 function brandContribution(agg,brand,netSales,grossSales,dateStr,mondayBogoDisc){
   let commCost;
