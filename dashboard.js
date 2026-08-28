@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-334";
+const BUILD_VERSION="2026-08-13-336";
 const BUILD_NOTES=[
+  "🆕 Three fixes from Nikhil's feedback. (1) Confirmed Wicked Wings Talabat CPC WAS correctly analyzed in the report (Al Forsan and Al Reem both have real numbers in the appendix) — checked the real sheet directly to confirm; the confusion was likely the Coverage Record page reading as 'no CPC for Wicked Wings' when it specifically meant two OTHER outlets (Al Sheba, NAS) that never ran Talabat CPC at all — will tighten that wording next revision. (2) Built real pro-rata CPC/Keywords ad-cost deduction into profitability, per explicit instruction to include it everywhere except Campaigns. Uses each real campaign window's own dailyBurn (budgetSpent÷days, already computed during parsing) overlapped against whatever date range is being profitability-checked — a campaign only partially covering the requested range only contributes its real overlapping share, not the whole cost. Wired into computeProfitability (used across Overview/Brands/Outlets/Platforms/Compare) and computeProfitabilityBreakdown (the actual popup) — added a visible 'CPC/Keywords cost' line in the cascade table, matching how Commission and Food/pkg cost already display. Verified the overlap math directly: exact match, partial overlap, zero overlap, and outlet-mismatch all produce correct results. (3) Fixed real density problems on the growth-opportunity page, caught directly from Nikhil's screenshot — the 'excluded from this check' text was one unbroken paragraph listing every excluded brand's full reasoning inline (15+ entries in the real screenshot), and each option card rendered every eligible outlet unconditionally (40+ rows possible on Deliveroo). Both collapsed to a one-line summary with click-to-expand detail — the excluded note reusing the exact same Details-toggle interaction already used for the mandate-trim banner elsewhere on this page, and each option card now shows only the top 6 outlets by dollar amount with the rest tucked behind '+N more outlets'. Verified the capping logic directly against a 20-outlet scenario matching the real screenshot's density.",
   "🆕 Two real fixes from Nikhil's direct feedback. (1) Generalized the growth-opportunity check (approve/deny, Plan A/B, Original/Plan comparison) to Deliveroo, per his explicit 'all aggregators should have this option' — it was hardwired to cpcPoolRows (the Careem/Noon pooled-brand model) only. cpcGrowthOpportunityCheck/Options now accept precomputed rows/mand/bottomUpTotal as parameters instead of calling cpcPoolRows internally, with an isPerOutlet flag distinguishing Deliveroo's real per-outlet shape (each eligible row already IS an outlet, no further derivation needed) from the pooled brand-level shape (outlets derived separately, as before) — same safety-gated profitability check either way, just fed the correct real data shape. Added the same approved-plan mandate override to cpcDeliverooRows that Careem/Noon already had. Verified end-to-end against realistic per-outlet Deliveroo data before shipping. (2) Fixed a real design gap on the Noon/Careem pooled table, per Nikhil's exact Smokeys example — a brand-level budget (e.g. AED 1,500) was listing all of a brand's outlets with no indication that the actual budget can only realistically fund a couple of them at the real per-listing floor (AED 1,000 on Noon). Added a genuine coverage calculation: floor(budget ÷ floor) = how many outlets are actually fundable, then ranks real outlets by the same ROAS+trend signal already used for growth-opportunity ranking to identify WHICH specific ones — those get a ✓ FUNDED badge and float to the top; the rest stay visible (for context) but are visually de-emphasized with a 'not funded this month' note. Verified against the exact real Smokeys numbers from the screenshot (AED 1,500 budget, AED 1,000 floor) — correctly identifies exactly 1 realistically-fundable outlet; also verified a larger budget correctly scales to recommend more.",
   "🐛 Fixed the real issue behind Nikhil's repeated 'No CPC in July' complaint — took two passes to actually understand it correctly, worth being direct about. First pass: verified cpcPriorMonth()/monthBefore() are mechanically correct (August is genuinely the reference month, July is genuinely the month before it — confirmed against the real 'Latest: Aug 25/26' header shown in every screenshot this session), and separately verified the TQ branch-alias fix from earlier this session correctly resolves 'Lollorosso-TQ' to 'Town Square' for Careem specifically (ran the real parser function against the exact real string, confirmed correct) — so the underlying date logic and outlet-name matching were never the bug. Second pass, after Nikhil restated the actual complaint: the real problem was MESSAGE FRAMING, not date logic. cpcMoMSnippet's job is showing a month-over-month TREND; when July (the older comparison month) has no data, it displayed 'No CPC in Jul 26 — new this month' as the headline — reading like a data-quality warning about something being wrong, when there's usually nothing wrong at all. When planning September off of August, whether July had data is frequently irrelevant, and August's real performance was already shown correctly elsewhere on the same row (the ROAS/spend/sales columns) — this specific snippet just never restated it, making the row look like it was missing data it actually had. Fixed by reframing: when real reference-month (August) data exists, the message now LEADS with it directly ('Aug 26: 7.20×'), with the missing older-month note demoted to a small, neutral aside rather than the headline. The genuine 'no data at all, brand new this month' case is unchanged. Verified both paths directly: a listing with real August data but no July comparison now correctly leads with the August number; a genuinely new listing with zero data still shows the original, appropriate message.",
   "⚡ Campaigns page speed fix, per Nikhil's chosen option from the slate of speed proposals — switched the Active/Upcoming/History status filter from multi-select to exclusive (single-select). Previously all three could be checked simultaneously, meaning every visible campaign across all three sections ran campAnalysisV2 synchronously before the page painted anything — with 30+ active campaigns typical this session, viewing all three at once meant real, avoidable first-paint cost. Since realistically one section is viewed at a time, clicking a status now shows only that one (tab-like behavior) instead of toggling membership in a set, cutting the typical synchronous work by up to two-thirds in the worst case (all three previously checked). No UI redesign needed — the existing checkmark-style button already reads correctly as exclusive selection. Verified the exclusivity logic directly (clicking a new status always leaves exactly one selected, never zero or multiple) and confirmed each of the three section-render branches already correctly gates on the same Set, so only one branch's campCardGrid calls now run per view instead of up to three.",
@@ -470,6 +471,32 @@ function commissionRateFor(agg,brand,dateStr){
 // visible credit yet, exactly as Nikhil described (reimbursement is a separate future step, not
 // reflected in the statement Noon and Oregano haven't yet agreed the amount for).
 const NOON_OREGANO_BOGO_MONDAYS=new Set(["2026-07-20","2026-07-27","2026-08-03","2026-08-10"]);
+// v335: pro-rata ad-cost allocation, per Nikhil's explicit request — CPC and Keywords spend was
+// never subtracted anywhere in the profitability chain, meaning contribution was overstated by
+// real ad cost for any brand+aggregator+date range with active campaigns. The correct pro-rata
+// unit already exists on every parsed cpcData row: dailyBurn = budgetSpent / days, the real
+// average daily spend for that specific campaign window (computed during parsing, not
+// estimated here). For a requested date range, this overlaps each real campaign window against
+// the range and sums dailyBurn × (overlapping days) — so a campaign that only partially covers
+// the requested range only contributes its real, overlapping share of its cost, not the whole
+// thing. Optionally scoped to one outlet (branch) when the caller has that granularity; brand-
+// level otherwise, matching whatever granularity brandContribution/computeProfitability already
+// operate at for the same call.
+function cpcAdCostForRange(brand,agg,startDate,endDate,branch){
+  if(!cpcData||!cpcData.length)return 0;
+  let total=0;
+  for(const r of cpcData){
+    if(r.brand!==brand||r.aggregator!==agg)continue;
+    if(branch&&r.branch&&r.branch!==branch)continue; // only filter by branch when caller asked AND the row has one — brand-pooled rows (Careem/Noon) have no branch to match against
+    if(!r.startDate||!r.endDate||!r.dailyBurn)continue;
+    const overlapStart=r.startDate>startDate?r.startDate:startDate;
+    const overlapEnd=r.endDate<endDate?r.endDate:endDate;
+    if(overlapStart>overlapEnd)continue; // no real overlap with the requested range
+    const overlapDays=Math.round((new Date(overlapEnd)-new Date(overlapStart))/86400000)+1;
+    total+=r.dailyBurn*overlapDays;
+  }
+  return total;
+}
 function brandContribution(agg,brand,netSales,grossSales,dateStr,mondayBogoDisc){
   let commCost;
   if(agg==='Noon'&&brand==='Oregano'&&mondayBogoDisc>0){
@@ -495,21 +522,29 @@ function computeProfitability(records,dateStr){
   const byKey={};
   for(const r of records){
     const k=r.brand+'|'+r.aggregator;
-    if(!byKey[k])byKey[k]={brand:r.brand,aggregator:r.aggregator,net:0,disc:0,mondayDisc:0};
+    if(!byKey[k])byKey[k]={brand:r.brand,aggregator:r.aggregator,net:0,disc:0,mondayDisc:0,lo:null,hi:null};
     byKey[k].net+=r.sales;
     byKey[k].disc+=(r.disc||0);
+    if(r.date){if(!byKey[k].lo||r.date<byKey[k].lo)byKey[k].lo=r.date;if(!byKey[k].hi||r.date>byKey[k].hi)byKey[k].hi=r.date;}
     // v291: Noon-Oregano BOGO reimbursement, specific campaign dates only — see brandContribution.
     if(r.aggregator==='Noon'&&r.brand==='Oregano'&&r.date&&NOON_OREGANO_BOGO_MONDAYS.has(r.date)){
       byKey[k].mondayDisc+=(r.disc||0);
     }
   }
-  let contribution=0,gross=0;
+  let contribution=0,gross=0,adCostTotal=0;
   for(const g of Object.values(byKey)){
     const g_gross=g.net+g.disc;
-    contribution+=brandContribution(g.aggregator,g.brand,g.net,g_gross,dateStr,g.mondayDisc);
+    // v335: subtract real, pro-rata CPC + Keywords cost for this brand+aggregator's actual date
+    // range, per Nikhil's explicit instruction that ad spend should factor into profitability
+    // everywhere except Campaigns. Uses the group's own real date span (same derivation pattern
+    // computeProfitabilityBreakdown already uses), not the single dateStr reference point, since
+    // ad cost needs a genuine start/end to overlap campaign windows against.
+    const adCost=(g.lo&&g.hi)?cpcAdCostForRange(g.brand,g.aggregator,g.lo,g.hi):0;
+    adCostTotal+=adCost;
+    contribution+=brandContribution(g.aggregator,g.brand,g.net,g_gross,dateStr,g.mondayDisc)-adCost;
     gross+=g_gross;
   }
-  return{contribution,gross};
+  return{contribution,gross,adCost:adCostTotal};
 }
 // v284: explains WHY profitability moved between two record sets, not just by how much. A
 // single number ("profit down 16.8%") hides which of several genuinely different stories is
@@ -562,7 +597,7 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
   const groupsA=byKey(recordsA),groupsB=byKey(recordsB);
   const allKeys=new Set([...Object.keys(groupsA),...Object.keys(groupsB)]);
   const movers=[];
-  let grossA=0,grossB=0,discA=0,discB=0,commA=0,commB=0,foodA=0,foodB=0;
+  let grossA=0,grossB=0,discA=0,discB=0,commA=0,commB=0,foodA=0,foodB=0,adCostA=0,adCostB=0;
   for(const key of allKeys){
     const gA=groupsA[key]||{net:0,disc:0,mondayDisc:0},gB=groupsB[key]||{net:0,disc:0,mondayDisc:0};
     const[brand,aggregator]=key.split('|');
@@ -575,9 +610,16 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
     const gCommB=(isNoonOregano&&gB.mondayDisc>0)?(gB.net*rate-gB.mondayDisc*baseRate):gB.net*rate;
     const foodPct=foodPkgPct(brand);
     const gFoodA=gGrossA*foodPct,gFoodB=gGrossB*foodPct;
-    const contribA=gA.net-gCommA-gFoodA,contribB=gB.net-gCommB-gFoodB;
+    // v335: real pro-rata CPC + Keywords cost, per Nikhil's explicit instruction — subtracted
+    // from contribution in the popup breakdown, using each side's OWN real date range (rangeA/
+    // rangeB, already correctly derived above — either the filter's explicit range or the
+    // records' own min/max), so a comparison spanning two different months correctly prices ad
+    // cost against the campaign windows that actually overlap each side, not a shared range.
+    const gAdCostA=(rangeA.start&&rangeA.end)?cpcAdCostForRange(brand,aggregator,rangeA.start,rangeA.end):0;
+    const gAdCostB=(rangeB.start&&rangeB.end)?cpcAdCostForRange(brand,aggregator,rangeB.start,rangeB.end):0;
+    const contribA=gA.net-gCommA-gFoodA-gAdCostA,contribB=gB.net-gCommB-gFoodB-gAdCostB;
     grossA+=gGrossA;grossB+=gGrossB;discA+=gA.disc;discB+=gB.disc;
-    commA+=gCommA;commB+=gCommB;foodA+=gFoodA;foodB+=gFoodB;
+    commA+=gCommA;commB+=gCommB;foodA+=gFoodA;foodB+=gFoodB;adCostA+=gAdCostA;adCostB+=gAdCostB;
     if(gGrossA<=0&&gGrossB<=0)continue;
     // v288: campaignName is now ADDITIONAL context, never a replacement for brand·aggregator —
     // Nikhil caught this too: a resolved campaign name ("Best Sellers 30% OFF") was replacing
@@ -606,7 +648,7 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
   movers.sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta));
   return{
     grossA,grossB,discA,discB,commA,commB,foodA,foodB,
-    contribA:grossA-discA-commA-foodA,contribB:grossB-discB-commB-foodB,
+    contribA:grossA-discA-commA-foodA-adCostA,contribB:grossB-discB-commB-foodB-adCostB,adCostA,adCostB,
     rangeA,rangeB,
     movers // v289: full list, not pre-sliced — buildProfitabilityTipHTML needs every mover to
            // compute an accurate "other brands/platforms" remainder for whatever it doesn't show
@@ -650,6 +692,7 @@ function buildProfitabilityTipHTML(bd,labelA,labelB){
     ${cellRow('','Net sales',fAed(bd.grossA-bd.discA),fAed(bd.grossB-bd.discB),true)}
     ${cellRow('🏦','Commission','−'+fAed(bd.commA),'−'+fAed(bd.commB))}
     ${cellRow('📦','Food/pkg cost','−'+fAed(bd.foodA),'−'+fAed(bd.foodB))}
+    ${cellRow('📣','CPC/Keywords cost','−'+fAed(bd.adCostA||0),'−'+fAed(bd.adCostB||0))}
     ${cellRow('','Net Contribution','AED '+fAed(bd.contribA),'AED '+fAed(bd.contribB),false,true)}
     </table>`;
   const netChangeBox=`<div style="display:flex;justify-content:space-between;align-items:center;background:${totalDelta>=0?'rgba(46,204,113,.1)':'rgba(239,68,68,.1)'};border-radius:8px;padding:9px 11px;margin-bottom:13px">
@@ -8186,18 +8229,42 @@ function cpcGrowthOppHTML(ag,priorMonth,result){
   if(!result.options){
     return `<div style="background:${T.panelBg||'rgba(148,163,184,.06)'};border:1px solid ${T.border};border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:12px;color:${T.label}">${result.reason||"No brand currently clears both the real-ROAS and profitability bar for additional investment above the mandate."}</div>`;
   }
-  const excludedNote=result.excluded&&result.excluded.length?`<div style="font-size:11px;color:${T.muted};margin-bottom:10px">Excluded from this check: ${result.excluded.map(e=>`<strong>${e.brand}</strong> (${e.reason})`).join(" · ")}</div>`:"";
+  const excludedDetailId=`gopp-excl-${ag}-${Math.random().toString(36).slice(2,7)}`;
+  // v336: fixes a real readability problem Nikhil flagged with a screenshot — every excluded
+  // outlet's full reasoning was dumped inline as one unbroken paragraph, unreadable at a glance.
+  // Collapsed to a one-line count with a click-to-expand detail list, same interaction pattern
+  // already used for the mandate-trim "Details" toggle elsewhere on this page — consistent, and
+  // doesn't introduce a new UI idiom just for this.
+  const excludedNote=result.excluded&&result.excluded.length?`<div style="margin-bottom:10px">
+    <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="const el=document.getElementById('${excludedDetailId}');el.style.display=el.style.display==='none'?'block':'none'">
+      <span style="font-size:11px;color:${T.muted}">${result.excluded.length} outlet${result.excluded.length===1?"":"s"} excluded from this check</span>
+      <span style="font-size:10px;color:${T.muted};font-weight:700">Details ▾</span>
+    </div>
+    <div id="${excludedDetailId}" style="display:none;margin-top:6px;padding:8px 10px;background:${T.panelBg||'rgba(148,163,184,.06)'};border-radius:6px;font-size:10.5px;color:${T.muted};line-height:1.7">
+      ${result.excluded.map(e=>`<div style="margin-bottom:3px"><strong style="color:${T.text}">${e.brand}</strong> — ${e.reason}</div>`).join("")}
+    </div>
+  </div>`:"";
   const optCard=(key,opt,label,badge)=>{
-    const outletRows=opt.outletRows.map(o=>{
+    const cardId=`gopp-outlets-${ag}-${key}-${Math.random().toString(36).slice(2,7)}`;
+    const rowHtml=o=>{
       const trendTxt=o.trend?(o.trend.direction==="improving"?`<span style="color:#22C55E">↑</span>`:o.trend.direction==="declining"?`<span style="color:#EF4444">↓</span>`:``):``;
       return `<div style="display:flex;justify-content:space-between;font-size:11px;color:${T.muted};margin-bottom:2px"><span>${o.brand} · ${o.outlet} ${o.roas.toFixed(2)}× ${trendTxt}</span><span style="color:${T.text}">+${fmtAEDTip(o.add)}</span></div>`;
-    }).join("");
+    };
+    // v336: caps the visible outlet list per card, per Nikhil's screenshot showing the same
+    // density problem as the excluded-note wall of text — every eligible outlet rendered
+    // unconditionally, up to 40+ rows on Deliveroo. Shows the top 6 by dollar amount (the ones
+    // that actually matter for the decision) with the rest tucked behind a click-to-expand,
+    // rather than a hard cutoff that silently hides real allocations.
+    const sorted=[...opt.outletRows].sort((a,b)=>b.add-a.add);
+    const visible=sorted.slice(0,6),rest=sorted.slice(6);
+    const outletRows=visible.map(rowHtml).join("");
+    const restHtml=rest.length?`<div id="${cardId}" style="display:none">${rest.map(rowHtml).join("")}</div><div onclick="const el=document.getElementById('${cardId}');const open=el.style.display!=='none';el.style.display=open?'none':'block';this.textContent=open?'+ ${rest.length} more outlet${rest.length===1?"":"s"} ▾':'Show fewer ▴'" style="font-size:10.5px;color:#60A5FA;cursor:pointer;margin-top:4px">+ ${rest.length} more outlet${rest.length===1?"":"s"} ▾</div>`:"";
     return `<div style="background:${T.panelBg||'#0F1729'};border:${badge?'2px solid #60A5FA':'1px solid '+T.border};border-radius:12px;padding:14px 16px;position:relative">
       ${badge?`<div style="position:absolute;top:-10px;left:12px;background:#60A5FA22;color:#60A5FA;font-size:10px;padding:2px 10px;border-radius:6px">Best ROI</div>`:""}
       <div style="font-size:11px;color:${T.muted};margin-top:${badge?"4px":"0"}">${label}</div>
       <div style="font-size:19px;font-weight:800;margin:4px 0">+${fmtAEDTip(opt.amount)}</div>
       <div style="font-size:11px;color:${T.muted};margin-bottom:8px">Projected sales <strong style="color:${T.text}">+${fmtAEDTip(opt.totalProjSales)}</strong> · contribution <strong style="color:#22C55E">+${fmtAEDTip(Math.round(opt.totalProjContrib))}</strong></div>
-      <div style="border-top:1px dashed ${T.border};padding-top:8px;margin-top:8px">${outletRows}</div>
+      <div style="border-top:1px dashed ${T.border};padding-top:8px;margin-top:8px">${outletRows}${restHtml}</div>
       <button onclick="cpcApproveGrowthOpp('${ag}','${priorMonth}','${key}')" style="width:100%;margin-top:10px;background:${badge?'#60A5FA':'transparent'};color:${badge?'#0F172A':T.text};border:${badge?'none':'1px solid '+T.border};border-radius:6px;padding:7px;font-size:12px;font-weight:700;cursor:pointer">Approve ${label.toLowerCase()}</button>
     </div>`;
   };
