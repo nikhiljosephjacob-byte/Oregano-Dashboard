@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-345";
+const BUILD_VERSION="2026-08-13-346";
 const BUILD_NOTES=[
+  "🔍 Scoped the per-row trace to ONLY Oregano+Deliveroo — the one combo already isolated as genuinely anomalous (real answer AED 5,146.80; brand-level call returns AED 26,870.13) — per Nikhil's real difficulty finding this specific trace among 17+ other combo blocks the unconditional build-345 trace printed (Wicked Wings, Keeta, Smiles, etc., all uninteresting for this investigation). Also fixed a genuine, separate small bug noticed while diagnosing: cpcAdCostForRange was being called for Keeta and Smiles despite them never carrying real ad-investment data (already excluded elsewhere in this file via CPC_EXCLUDE_AGGS) — every such call wastefully scanned the full 1921-row array just to always return 0. Now skips those aggregators immediately. This build's console output, when the popup opens, should now show ONLY the two Oregano+Deliveroo trace blocks (July range and August range) with their full per-row detail — no scrolling or searching needed to find the relevant trace.",
   "🔍 Removed the window.__cpcTrace flag requirement from build 344's diagnostic — the flag wasn't actually taking effect (Nikhil's console output showed no [cpcAdCostForRange TRACE] lines despite setting it), consistent with the console-command friction that's affected this entire investigation. Now traces unconditionally, automatically, the moment the popup opens — zero setup steps, zero console commands, nothing that can be mistyped. This is a deliberate, temporary tradeoff (more console verbosity than ideal) specifically to finally see the real per-row execution live, since every other diagnostic layer has confirmed the underlying data is clean but the same clean data produces different wrong totals depending on call pattern (branch-scoped sum: AED 45,163.52; brand-level: AED 26,870.13; real answer: AED 5,146.80) — this should show, row by row, exactly where that divergence originates.",
   "🔍 Deepest diagnostic yet, per Nikhil's build-343 result: the SAME real, clean, confirmed-correct 23-row Oregano+Deliveroo dataset produced two DIFFERENT wrong totals depending on call pattern — AED 45,163.52 summed per-branch vs AED 26,870.13 called brand-level, both wrong (real answer AED 5,146.80). This ruled out every theory tested so far (data duplication, shared/global state, timezone-sensitive date arithmetic — directly tested the exact real overlap-day calculation under a simulated Dubai timezone and confirmed it's timezone-safe). Added internal, per-row tracing directly inside cpcAdCostForRange itself — gated behind a `window.__cpcTrace` flag so it never fires during normal use, only when explicitly requested — showing exactly which real row contributes what, and why (confirmedEnded, knownThrough, literal vs extrapolated contribution, running total), live, inside the actual execution. To use: run `window.__cpcTrace=true` in the console once, then open the popup — full per-row breakdown tables will print automatically for every brand+aggregator+branch combo the popup touches, showing definitively which specific row(s) are contributing more than they should.",
   "🔍 Most targeted diagnostic yet, per Nikhil's clean build-342 result: cpcData confirmed genuinely clean (only 1 duplicate row total across 1921 rows, and the specific Oregano+Deliveroo Aug set showed exactly 23 correct rows summing to exactly AED 5,146.80 — matching everything verified offline). Since the raw data is now conclusively ruled out as the cause, this build traces the REAL, LIVE cpcAdCostForRange function's actual per-row behavior directly — for every real Oregano+Deliveroo August row, calls the real function scoped to just that one branch (isolating its individual real contribution), sums those individual contributions, and directly compares that sum against calling the function at brand-level with no branch filter at all (the exact call the popup itself makes). If these two numbers diverge, it proves the discrepancy is specifically in how the brand-level (no-branch) call processes multiple outlets together — a real, previously untested distinction, since every offline test so far used either a single branch or reconstructed data by hand rather than calling the exact live function both ways side by side. Zero typing required — automatic the moment the popup opens, same pattern as builds 341-342.",
@@ -505,6 +506,11 @@ const NOON_OREGANO_BOGO_MONDAYS=new Set(["2026-07-20","2026-07-27","2026-08-03",
 // range reaches beyond that, up to the row's own endDate.
 function cpcAdCostForRange(brand,agg,startDate,endDate,branch){
   if(!cpcData||!cpcData.length)return 0;
+  // v346: skip aggregators that never carry real ad-investment data at all — matches
+  // CPC_EXCLUDE_AGGS used elsewhere in this file. Noticed while diagnosing Nikhil's real
+  // discrepancy: the popup was calling this function for Keeta/Smiles every time despite them
+  // always correctly returning 0, wastefully scanning the full 1921-row array for nothing.
+  if(CPC_EXCLUDE_AGGS.has(agg.toLowerCase()))return 0;
   let total=0;
   // v344: internal per-row trace, gated behind window.__cpcTrace so it never fires during normal
   // use and only runs when explicitly requested — the one thing not yet directly observed after
@@ -517,7 +523,12 @@ function cpcAdCostForRange(brand,agg,startDate,endDate,branch){
   // (typos, scoping confusion, flags not taking effect), this now traces UNCONDITIONALLY. This
   // is already a temporary diagnostic build; the extra verbosity is an acceptable, deliberate
   // tradeoff to finally see the real per-row execution with zero setup steps required.
-  const _trace=true;
+  // v346: scoped the trace to ONLY the one combo already isolated as genuinely anomalous
+  // (Oregano+Deliveroo — real answer AED 5,146.80, brand-level call returns AED 26,870.13) —
+  // per Nikhil's real difficulty finding this specific trace amid 17+ other combo blocks the
+  // unconditional trace printed. Every other combo already confirmed uninteresting for this
+  // investigation (correct zeros for Keeta/Smiles, not yet isolated as wrong for the rest).
+  const _trace=brand==='Oregano'&&agg==='Deliveroo';
   const _traceRows=_trace?[]:null;
   for(const r of cpcData){
     if(r.brand!==brand||r.aggregator!==agg)continue;
