@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-343";
+const BUILD_VERSION="2026-08-13-344";
 const BUILD_NOTES=[
+  "🔍 Deepest diagnostic yet, per Nikhil's build-343 result: the SAME real, clean, confirmed-correct 23-row Oregano+Deliveroo dataset produced two DIFFERENT wrong totals depending on call pattern — AED 45,163.52 summed per-branch vs AED 26,870.13 called brand-level, both wrong (real answer AED 5,146.80). This ruled out every theory tested so far (data duplication, shared/global state, timezone-sensitive date arithmetic — directly tested the exact real overlap-day calculation under a simulated Dubai timezone and confirmed it's timezone-safe). Added internal, per-row tracing directly inside cpcAdCostForRange itself — gated behind a `window.__cpcTrace` flag so it never fires during normal use, only when explicitly requested — showing exactly which real row contributes what, and why (confirmedEnded, knownThrough, literal vs extrapolated contribution, running total), live, inside the actual execution. To use: run `window.__cpcTrace=true` in the console once, then open the popup — full per-row breakdown tables will print automatically for every brand+aggregator+branch combo the popup touches, showing definitively which specific row(s) are contributing more than they should.",
   "🔍 Most targeted diagnostic yet, per Nikhil's clean build-342 result: cpcData confirmed genuinely clean (only 1 duplicate row total across 1921 rows, and the specific Oregano+Deliveroo Aug set showed exactly 23 correct rows summing to exactly AED 5,146.80 — matching everything verified offline). Since the raw data is now conclusively ruled out as the cause, this build traces the REAL, LIVE cpcAdCostForRange function's actual per-row behavior directly — for every real Oregano+Deliveroo August row, calls the real function scoped to just that one branch (isolating its individual real contribution), sums those individual contributions, and directly compares that sum against calling the function at brand-level with no branch filter at all (the exact call the popup itself makes). If these two numbers diverge, it proves the discrepancy is specifically in how the brand-level (no-branch) call processes multiple outlets together — a real, previously untested distinction, since every offline test so far used either a single branch or reconstructed data by hand rather than calling the exact live function both ways side by side. Zero typing required — automatic the moment the popup opens, same pattern as builds 341-342.",
   "🔍 Extended the temporary diagnostic build — Nikhil's console commands kept silently returning undefined across multiple careful attempts (screenshots confirmed the exact syntax was correct each time), so rather than continue troubleshooting console mechanics, added the two exact checks needed directly into the automatic popup logging from build 341, using the same reliable pattern (fires the instant the popup opens, zero typing required). Now automatically logs, every time the popup opens: whether cpcData contains genuine duplicate rows (comparing total length against a uniqueness set keyed on brand+aggregator+branch+startDate+endDate — this is the leading real hypothesis given the exact same ~5.2x inflation ratio on Oregano-Deliveroo reproduced identically hours apart, which rules out random/transient causes and points to something structural), the real row count and real summed budgetSpent for Oregano-Deliveroo specifically (the exact combo already isolated as anomalous — build 341's trace showed AED 26,871.53 for this combo when the real, hand-verified ceiling from the same 23 real rows is AED 5,146.80), and a full console.table of every real row in that combo so any duplication or unexpected extra row is directly visible without further manual filtering. Next step: Nikhil opens the popup once on this build, no typing needed, and sends whatever prints — this should conclusively confirm or rule out row-level duplication as the real root cause.",
   "🔍 TEMPORARY DIAGNOSTIC BUILD — added automatic console logging to computeProfitabilityBreakdown to resolve Nikhil's real, still-unexplained AED 137,431 vs AED 61,169 CPC/Keywords cost discrepancy on the Overview profitability popup. Extensive manual console-command debugging across many rounds proved unreliable (typos, scoping confusion, inconsistent results) despite the underlying function testing correctly every time it was run against real exported data — extracted directly from Nikhil's own uploaded live dashboard.js (confirmed byte-for-byte identical to this build via diff) and run against his exact real console-verified data, it correctly produced AED 5,048 against a real AED 5,147 ceiling, not the AED 26,870 his live browser reported for the same query. This build removes all manual typing from the loop: the moment the profitability popup opens, the browser console automatically prints every brand+aggregator key processed, its resolved date range, its individually computed ad cost, the summed total, and — critically — the FINAL returned adCostA/adCostB values exactly as the popup displays them, with zero console commands required from Nikhil. Next step: Nikhil opens the popup once, copies whatever the console shows automatically, sends it back — that trace will show definitively whether the discrepancy is in date-range resolution, a specific misbehaving row, or a duplicate-summation issue that manual queries couldn't isolate. This logging is temporary and will be removed once the real cause is found and fixed.",
@@ -504,6 +505,14 @@ const NOON_OREGANO_BOGO_MONDAYS=new Set(["2026-07-20","2026-07-27","2026-08-03",
 function cpcAdCostForRange(brand,agg,startDate,endDate,branch){
   if(!cpcData||!cpcData.length)return 0;
   let total=0;
+  // v344: internal per-row trace, gated behind window.__cpcTrace so it never fires during normal
+  // use and only runs when explicitly requested — the one thing not yet directly observed after
+  // every other theory (duplication, timezone arithmetic, shared state) was tested and ruled
+  // out, while the SAME real clean data still produced two different wrong totals depending on
+  // whether the call was branch-scoped or brand-level. This shows exactly what each real row
+  // contributes and why, live, inside the actual function execution.
+  const _trace=typeof window!=='undefined'&&window.__cpcTrace;
+  const _traceRows=_trace?[]:null;
   for(const r of cpcData){
     if(r.brand!==brand||r.aggregator!==agg)continue;
     if(branch&&r.branch&&r.branch!==branch)continue; // only filter by branch when caller asked AND the row has one — brand-pooled rows (Careem/Noon) have no branch to match against
@@ -525,9 +534,11 @@ function cpcAdCostForRange(brand,agg,startDate,endDate,branch){
     const knownThrough=(!confirmedEnded&&r.updateDate&&r.updateDate<r.endDate)?cpcPrevDay(r.updateDate):r.endDate;
     const overlapStart=r.startDate>startDate?r.startDate:startDate;
     const overlapEnd=knownThrough<endDate?knownThrough:endDate;
+    let literalContrib=0,extraContrib=0;
     if(overlapStart<=overlapEnd){
       const overlapDays=Math.round((new Date(overlapEnd)-new Date(overlapStart))/86400000)+1;
-      total+=r.dailyBurn*overlapDays;
+      literalContrib=r.dailyBurn*overlapDays;
+      total+=literalContrib;
     }
     // Extrapolation only when genuinely NOT confirmed ended, and the requested range reaches
     // past the known-through boundary but still within the row's own (still-planned) end date.
@@ -543,9 +554,17 @@ function cpcAdCostForRange(brand,agg,startDate,endDate,branch){
       const extraEnd=endDate<r.endDate?endDate:r.endDate;
       if(extraStart<=extraEnd){
         const{cost}=cpcExtrapolatedCost(r,extraStart,extraEnd);
+        extraContrib=cost;
         total+=cost;
       }
     }
+    if(_trace&&(literalContrib>0||extraContrib>0)){
+      _traceRows.push({branch:r.branch,rowStart:r.startDate,rowEnd:r.endDate,updateDate:r.updateDate,confirmedEnded,knownThrough,overlapStart,overlapEnd,literalContrib:+literalContrib.toFixed(2),extraContrib:+extraContrib.toFixed(2),runningTotal:+total.toFixed(2)});
+    }
+  }
+  if(_trace){
+    console.log(`%c[cpcAdCostForRange TRACE] brand=${brand} agg=${agg} branch=${branch||'(none — brand-level)'} range=${startDate}→${endDate}  FINAL TOTAL=${total.toFixed(2)}`,'color:#A855F7;font-weight:700;font-size:12px');
+    console.table(_traceRows);
   }
   return total;
 }
