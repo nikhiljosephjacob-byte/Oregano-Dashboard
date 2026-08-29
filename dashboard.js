@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-347";
+const BUILD_VERSION="2026-08-13-348";
 const BUILD_NOTES=[
+  "🐛 FOUND AND FIXED THE REAL ROOT CAUSE of the AED 137K+ CPC/Keywords cost anomaly — after an extensive investigation across many builds, got the exact real raw text from Nikhil's live browser for the first genuinely corrupted row: Remarks/Last Updation Date = \"28-Feb\" (no year). This exact format never appeared in the Excel file used for offline testing (Excel had silently converted it to a real date internally when the file was built), which is why every offline reconstruction kept producing correct results while the live app kept producing wrong ones — a real, hard lesson: the live CSV export and the offline Excel export are NOT the same data representation for this column. Traced precisely: \"28-Feb\" fell through every explicit date rule in parseRemarksDate and reached the last-resort `new Date(t)` fallback, which JavaScript silently defaults to the year 2001 for any year-less date string — a genuine, documented JS engine quirk with zero warning or error. That made a still-recent update look like it happened 25 years ago, which made the campaign look abandoned-and-reopened across a 25-year gap, triggering full extrapolation across that entire span and inflating cost by orders of magnitude — reproduced this exact mechanism directly, confirmed 2001 as the precise wrong output. Fixed two ways: (1) added an explicit day-month-no-year parsing rule that reads it as the most recent real occurrence of that date (the sensible interpretation of 'last updated 28-Feb' with no year given), and (2) added a sanity guard on the last-resort fallback rejecting any parsed year outside 2020-2035, as defense in depth for any other year-less or malformed format not explicitly handled by name. Verified exhaustively before shipping: the exact real bug case now correctly parses to 2026-02-28 (not 2001); every previously-verified case (ISO datetimes, numeric D/M/Y, genuine unparseable free text) still works with zero regressions; and a full end-to-end reconstruction using the exact real remarks text confirms a genuinely-completed Feb 2025 campaign now correctly contributes AED 0 to an August 2026 query instead of runaway extrapolated cost. This was a genuinely difficult bug to find precisely because it only existed in the live data's real text representation, not in any file available for offline testing — found only by building a persistent, scroll-proof live trace and getting the exact raw string directly from the browser.",
   "🔍 Made the Oregano+Deliveroo trace persist to a global (window.__cpcTraceResults), not just console.log — confirmed build 346 genuinely was live (Nikhil verified via BUILD_VERSION directly, printed '2026-08-13-346'), but the specific trace block for this combo still wasn't visible in his copied output, most likely lost to scrolling given how much other console content surrounds it. This survives independent of scrolling: after opening the popup once, running `JSON.stringify(window.__cpcTraceResults)` (or just `window.__cpcTraceResults` to inspect it directly) retrieves the exact same real per-row trace data reliably, any time after the popup has opened, without needing to catch it in the console output at the right moment.",
   "🔍 Scoped the per-row trace to ONLY Oregano+Deliveroo — the one combo already isolated as genuinely anomalous (real answer AED 5,146.80; brand-level call returns AED 26,870.13) — per Nikhil's real difficulty finding this specific trace among 17+ other combo blocks the unconditional build-345 trace printed (Wicked Wings, Keeta, Smiles, etc., all uninteresting for this investigation). Also fixed a genuine, separate small bug noticed while diagnosing: cpcAdCostForRange was being called for Keeta and Smiles despite them never carrying real ad-investment data (already excluded elsewhere in this file via CPC_EXCLUDE_AGGS) — every such call wastefully scanned the full 1921-row array just to always return 0. Now skips those aggregators immediately. This build's console output, when the popup opens, should now show ONLY the two Oregano+Deliveroo trace blocks (July range and August range) with their full per-row detail — no scrolling or searching needed to find the relevant trace.",
   "🔍 Removed the window.__cpcTrace flag requirement from build 344's diagnostic — the flag wasn't actually taking effect (Nikhil's console output showed no [cpcAdCostForRange TRACE] lines despite setting it), consistent with the console-command friction that's affected this entire investigation. Now traces unconditionally, automatically, the moment the popup opens — zero setup steps, zero console commands, nothing that can be mistyped. This is a deliberate, temporary tradeoff (more console verbosity than ideal) specifically to finally see the real per-row execution live, since every other diagnostic layer has confirmed the underlying data is clean but the same clean data produces different wrong totals depending on call pattern (branch-scoped sum: AED 45,163.52; brand-level: AED 26,870.13; real answer: AED 5,146.80) — this should show, row by row, exactly where that divergence originates.",
@@ -508,29 +509,10 @@ const NOON_OREGANO_BOGO_MONDAYS=new Set(["2026-07-20","2026-07-27","2026-08-03",
 function cpcAdCostForRange(brand,agg,startDate,endDate,branch){
   if(!cpcData||!cpcData.length)return 0;
   // v346: skip aggregators that never carry real ad-investment data at all — matches
-  // CPC_EXCLUDE_AGGS used elsewhere in this file. Noticed while diagnosing Nikhil's real
-  // discrepancy: the popup was calling this function for Keeta/Smiles every time despite them
-  // always correctly returning 0, wastefully scanning the full 1921-row array for nothing.
+  // CPC_EXCLUDE_AGGS used elsewhere in this file, avoiding a wasted scan of the full cpcData
+  // array for combos that can only ever return 0.
   if(CPC_EXCLUDE_AGGS.has(agg.toLowerCase()))return 0;
   let total=0;
-  // v344: internal per-row trace, gated behind window.__cpcTrace so it never fires during normal
-  // use and only runs when explicitly requested — the one thing not yet directly observed after
-  // every other theory (duplication, timezone arithmetic, shared state) was tested and ruled
-  // out, while the SAME real clean data still produced two different wrong totals depending on
-  // whether the call was branch-scoped or brand-level. This shows exactly what each real row
-  // contributes and why, live, inside the actual function execution.
-  // v345: removed the window.__cpcTrace flag requirement entirely — per repeated real
-  // difficulty getting console commands to execute correctly across this whole investigation
-  // (typos, scoping confusion, flags not taking effect), this now traces UNCONDITIONALLY. This
-  // is already a temporary diagnostic build; the extra verbosity is an acceptable, deliberate
-  // tradeoff to finally see the real per-row execution with zero setup steps required.
-  // v346: scoped the trace to ONLY the one combo already isolated as genuinely anomalous
-  // (Oregano+Deliveroo — real answer AED 5,146.80, brand-level call returns AED 26,870.13) —
-  // per Nikhil's real difficulty finding this specific trace amid 17+ other combo blocks the
-  // unconditional trace printed. Every other combo already confirmed uninteresting for this
-  // investigation (correct zeros for Keeta/Smiles, not yet isolated as wrong for the rest).
-  const _trace=brand==='Oregano'&&agg==='Deliveroo';
-  const _traceRows=_trace?[]:null;
   for(const r of cpcData){
     if(r.brand!==brand||r.aggregator!==agg)continue;
     if(branch&&r.branch&&r.branch!==branch)continue; // only filter by branch when caller asked AND the row has one — brand-pooled rows (Careem/Noon) have no branch to match against
@@ -552,11 +534,9 @@ function cpcAdCostForRange(brand,agg,startDate,endDate,branch){
     const knownThrough=(!confirmedEnded&&r.updateDate&&r.updateDate<r.endDate)?cpcPrevDay(r.updateDate):r.endDate;
     const overlapStart=r.startDate>startDate?r.startDate:startDate;
     const overlapEnd=knownThrough<endDate?knownThrough:endDate;
-    let literalContrib=0,extraContrib=0;
     if(overlapStart<=overlapEnd){
       const overlapDays=Math.round((new Date(overlapEnd)-new Date(overlapStart))/86400000)+1;
-      literalContrib=r.dailyBurn*overlapDays;
-      total+=literalContrib;
+      total+=r.dailyBurn*overlapDays;
     }
     // Extrapolation only when genuinely NOT confirmed ended, and the requested range reaches
     // past the known-through boundary but still within the row's own (still-planned) end date.
@@ -572,23 +552,8 @@ function cpcAdCostForRange(brand,agg,startDate,endDate,branch){
       const extraEnd=endDate<r.endDate?endDate:r.endDate;
       if(extraStart<=extraEnd){
         const{cost}=cpcExtrapolatedCost(r,extraStart,extraEnd);
-        extraContrib=cost;
         total+=cost;
       }
-    }
-    if(_trace&&(literalContrib>0||extraContrib>0)){
-      _traceRows.push({branch:r.branch,rowStart:r.startDate,rowEnd:r.endDate,updateDate:r.updateDate,confirmedEnded,knownThrough,overlapStart,overlapEnd,literalContrib:+literalContrib.toFixed(2),extraContrib:+extraContrib.toFixed(2),runningTotal:+total.toFixed(2)});
-    }
-  }
-  if(_trace){
-    console.log(`%c[cpcAdCostForRange TRACE] brand=${brand} agg=${agg} branch=${branch||'(none — brand-level)'} range=${startDate}→${endDate}  FINAL TOTAL=${total.toFixed(2)}`,'color:#A855F7;font-weight:700;font-size:12px');
-    console.table(_traceRows);
-    // v347: ALSO persist to a global, per Nikhil's repeated real difficulty finding this exact
-    // trace amid other console output — this survives independent of scrolling and can be
-    // retrieved afterward with one simple, hard-to-mistype command: window.__cpcTraceResults
-    if(typeof window!=='undefined'){
-      window.__cpcTraceResults=window.__cpcTraceResults||[];
-      window.__cpcTraceResults.push({brand,agg,branch:branch||'(brand-level)',startDate,endDate,total:+total.toFixed(2),rows:_traceRows});
     }
   }
   return total;
@@ -746,47 +711,6 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
   const allKeys=new Set([...Object.keys(groupsA),...Object.keys(groupsB)]);
   const movers=[];
   let grossA=0,grossB=0,discA=0,discB=0,commA=0,commB=0,foodA=0,foodB=0,adCostA=0,adCostB=0;
-  // v341: TEMPORARY diagnostic logging, per Nikhil's real, unresolved AED 137,431 vs AED 61,169
-  // discrepancy — automatic, fires the moment the popup opens, zero console typing required.
-  // Every key this function processes, its resolved date range, and its individually computed
-  // ad cost get logged directly, so the exact source of the discrepancy is visible without
-  // relying on manually-typed console commands (which produced inconsistent, unreliable results
-  // across many attempts). Remove once the real cause is found and fixed.
-  console.log(`%c[PROFIT DIAG] rangeA=${rangeA.start}→${rangeA.end}  rangeB=${rangeB.start}→${rangeB.end}  totalKeys=${allKeys.size}`,'color:#F59E0B;font-weight:700');
-  // v342: two more automatic checks, per Nikhil's repeated real difficulty getting console
-  // commands to run cleanly — added directly here so BOTH fire automatically with zero typing,
-  // the same reliable pattern that already worked for the rangeA/rangeB/totalKeys line above.
-  if(typeof cpcData!=='undefined'&&cpcData){
-    const dupKey=r=>`${r.brand}|${r.aggregator}|${r.branch}|${r.startDate}|${r.endDate}`;
-    const uniqueCount=new Set(cpcData.map(dupKey)).size;
-    console.log(`%c[PROFIT DIAG] cpcData.length=${cpcData.length}  unique rows=${uniqueCount}  ${cpcData.length!==uniqueCount?'⚠ DUPLICATES FOUND: '+(cpcData.length-uniqueCount)+' extra rows':'✓ no duplicates'}`,cpcData.length!==uniqueCount?'color:#EF4444;font-weight:700;font-size:13px':'color:#22C55E;font-weight:700');
-    const oregDelivAug=cpcData.filter(r=>r.aggregator==='Deliveroo'&&r.brand==='Oregano'&&r.startDate>='2026-08-01'&&r.startDate<='2026-08-28');
-    console.log(`%c[PROFIT DIAG] Oregano+Deliveroo rows starting Aug1-28: count=${oregDelivAug.length}  sum(budgetSpent)=${oregDelivAug.reduce((s,r)=>s+(r.budgetSpent||0),0).toFixed(2)}`,'color:#60A5FA;font-weight:700');
-    console.log('%c[PROFIT DIAG] full Oregano+Deliveroo Aug row list:','color:#60A5FA;font-weight:700');
-    console.table(oregDelivAug.map(r=>({branch:r.branch,startDate:r.startDate,endDate:r.endDate,budgetSpent:r.budgetSpent,budgetAlloc:r.budgetAlloc,dailyBurn:+((r.dailyBurn||0).toFixed(2)),updateDate:r.updateDate})));
-    // v343: maximally targeted trace, per Nikhil's repeated hard-to-explain discrepancy — logs
-    // cpcAdCostForRange's ACTUAL internal per-row decision (confirmedEnded, knownThrough,
-    // literal contribution, extrapolated contribution) for every real Oregano+Deliveroo Aug row,
-    // live, exactly as the real function computes it — not a reconstruction. If any row's real,
-    // live confirmedEnded/knownThrough differs from what offline testing predicted, this will
-    // show it directly.
-    if(typeof cpcAdCostForRange==='function'){
-      const traceRows=[];
-      let traceTotal=0;
-      for(const r of oregDelivAug){
-        const before=traceTotal;
-        // Call the REAL function scoped to just this one branch, isolating its real contribution
-        const single=cpcAdCostForRange('Oregano','Deliveroo','2026-08-01','2026-08-28',r.branch);
-        traceTotal+=single;
-        traceRows.push({branch:r.branch,startDate:r.startDate,endDate:r.endDate,budgetSpent:r.budgetSpent,budgetAlloc:r.budgetAlloc,updateDate:r.updateDate,REAL_CONTRIBUTION:+single.toFixed(2)});
-      }
-      console.log(`%c[PROFIT DIAG] per-branch REAL contribution (summed with branch filter applied individually): ${traceTotal.toFixed(2)}`,'color:#EC4899;font-weight:700;font-size:13px');
-      console.table(traceRows);
-      console.log(`%c[PROFIT DIAG] compare: brand-level call (no branch filter) = ${cpcAdCostForRange('Oregano','Deliveroo','2026-08-01','2026-08-28').toFixed(2)}`,'color:#EC4899;font-weight:700;font-size:13px');
-    }
-  }
-  let diagAdCostATotal=0,diagAdCostBTotal=0;
-  const diagRows=[];
   for(const key of allKeys){
     const gA=groupsA[key]||{net:0,disc:0,mondayDisc:0},gB=groupsB[key]||{net:0,disc:0,mondayDisc:0};
     const[brand,aggregator]=key.split('|');
@@ -836,9 +760,6 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
     else comment=`net contribution ${delta>=0?'up':'down'} ${fmtAEDTip(Math.abs(delta))}, discount depth ${depthStr}`;
     movers.push({brand,aggregator,campaignName,comment,contribA,contribB,delta,rate,grossA:gGrossA,grossB:gGrossB,discA:gA.disc,discB:gB.disc});
   }
-  console.log(`%c[PROFIT DIAG] SUM of per-key adCostA=${diagAdCostATotal.toFixed(2)}  SUM of per-key adCostB=${diagAdCostBTotal.toFixed(2)}`,'color:#F59E0B;font-weight:700');
-  console.log(`%c[PROFIT DIAG] FINAL RETURNED adCostA=${adCostA.toFixed(2)}  adCostB=${adCostB.toFixed(2)}  (this is exactly what the popup displays as CPC/Keywords cost)`,'color:#EF4444;font-weight:700;font-size:13px');
-  console.table(diagRows);
   movers.sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta));
   return{
     grossA,grossB,discA,discB,commA,commB,foodA,foodB,
@@ -6182,6 +6103,28 @@ function parseRemarksDate(s){
     const mo=months[monStr.toLowerCase().slice(0,3)];
     if(mo){if(yr<100)yr+=2000;return `${yr}-${String(mo).padStart(2,"0")}-${String(day).padStart(2,"0")}`;}
   }
+  // 3.5) Day-Month with NO year at all (e.g. "28-Feb", "20-Oct", "03-Nov") — genuinely common in
+  // the real live Remarks column, confirmed directly from Nikhil's own live browser data. This
+  // is the actual root cause of a real, serious bug: falling through to the last-resort new
+  // Date(t) below, JavaScript silently defaults a year-less string to 2001 (a documented JS
+  // engine quirk, not an error) — "28-Feb" became "2001-02-28" with no warning, which made a
+  // genuinely still-open campaign look like it was last checked 25 years ago, triggering full
+  // extrapolation across the entire gap and inflating cost by orders of magnitude. The sensible
+  // reading of "last updated 28-Feb" with no year given is the MOST RECENT real occurrence of
+  // that date — if today is after Feb 28 this year, that's this year; otherwise last year.
+  m=t.match(new RegExp(`^(\\d{1,2})[-\\s](${monthNames})$`,"i"));
+  if(m){
+    const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+    const mo=months[m[2].toLowerCase().slice(0,3)];
+    const day=parseInt(m[1],10);
+    if(mo&&day>=1&&day<=31){
+      const now=(typeof latest==='string'&&latest)?new Date(latest+"T12:00:00"):new Date();
+      let yr=now.getFullYear();
+      const candidate=new Date(yr,mo-1,day,12);
+      if(candidate>now)yr-=1; // that date hasn't happened yet this year — must mean last year
+      return `${yr}-${String(mo).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+    }
+  }
   // 4) Last resort: try parsing the whole string as a date (works when remarks contains ONLY a
   // date with no other text). Never attempted on strings with extra non-date words, since
   // new Date() on garbled text like "Funded by Noon" silently returns Invalid Date (safe) but
@@ -6189,7 +6132,11 @@ function parseRemarksDate(s){
   // being short and not containing obvious non-date words.
   if(t.length<=20&&!/funded|noon|deal|pending|tbc|tbd|n\/a|note/i.test(t)){
     const dObj=new Date(t);
-    if(!isNaN(dObj))return `${dObj.getFullYear()}-${String(dObj.getMonth()+1).padStart(2,"0")}-${String(dObj.getDate()).padStart(2,"0")}`;
+    // v347: sanity guard, added alongside the day-month-no-year fix above — never trust a
+    // parsed year outside a plausible real business range. This is what should have caught
+    // "28-Feb" -> year 2001 even before the dedicated rule above existed; kept as defense in
+    // depth for any other year-less or malformed format not explicitly handled by name.
+    if(!isNaN(dObj)&&dObj.getFullYear()>=2020&&dObj.getFullYear()<=2035)return `${dObj.getFullYear()}-${String(dObj.getMonth()+1).padStart(2,"0")}-${String(dObj.getDate()).padStart(2,"0")}`;
   }
   return null;
 }
