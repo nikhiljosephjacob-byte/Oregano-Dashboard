@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-351";
+const BUILD_VERSION="2026-08-13-352";
 const BUILD_NOTES=[
+  "🐛 Fixed a real, significant bug Nikhil caught by directly questioning the design intent — he pointed out that since campaigns are only manually re-confirmed roughly weekly (mostly Mondays), and the system is explicitly designed to assume pro-rata consumption continues for still-open campaigns between updates, the dashboard's total should be HIGHER than a flat sheet sum, not equal to or lower than it. Checked this directly: for Oregano-Al Reef on Deliveroo (real confirmed spend AED 201.60 as of the last update, genuinely still open with real budget remaining), the dashboard was returning AED 168 for the SAME period — actually LESS than the real, already-confirmed spend alone, not more. Root cause: r.dailyBurn is computed once at PARSE TIME using the row's FULL planned campaign window (startDate to endDate) — for this row, 18 days (Aug 14-31) — but only 10 of those days were actually real, confirmed activity (Aug 14-23, before the last update). Using that diluted 18-day-average rate to reconstruct the literal, already-confirmed portion silently understated real money already spent — the literal calculation was re-deriving a number that should have just been the real, exact budgetSpent figure directly. Fixed by: (1) when the requested range covers the campaign's ENTIRE real confirmed period, using budgetSpent directly, with zero re-derivation; (2) when only partially overlapping, using a REAL rate computed from budgetSpent over the REAL confirmed days (not the diluted full-window average); (3) using that same real, correct rate for extrapolation into unconfirmed days too, so a genuinely fast-spending campaign projects forward at its true observed pace, not an artificially slow blended average. Verified exhaustively: the real Al Reef case now correctly returns its exact real confirmed spend for the confirmed period (AED 201.60, not 112) and correctly extrapolates further real spend for days since the last update without ever losing money or exceeding the real budget cap; every earlier-verified case (confirmed-ended rows, the 28-Feb parsing fix, the sponsor-funded exclusion) re-tested clean with zero regressions.",
   "🐛 Refined build 350's sponsor-funded exclusion to match the exact, more precise pattern already proven correct elsewhere in this file (v210, the Ads Performance page's own contractual-spend split) — found while checking Nikhil's own Ads Performance screenshot, which already had a working 'FUNDED BY NOON' badge using an aggregator-SPECIFIC regex ('funded by [this exact aggregator's name]'), not the generic 'funded by anyone' check build 350 used. Fixed to match: excludes a row from an aggregator's cost only when THAT aggregator specifically is named as the funder (Deliveroo rows check for 'Roo' or 'Deliveroo' — Roo being Deliveroo's own brand name in real remarks; other aggregators check their own name directly). Verified this doesn't change real results for the current data (all 8 real distinct 'funded by' phrasings from Nikhil's live browser still match correctly under the new precise pattern) but is the semantically correct rule going forward. Also fully reconciled the small remaining gap Nikhil flagged between his manual Column M calculation (AED 59,505) and the popup's real, pro-rated figure (AED 58,663) — confirmed this AED 842 difference is NOT a bug: 93 real Oregano-group rows genuinely extend past the requested Aug 1-28 window into early September, and the popup CORRECTLY excludes the portion of their spend falling on those later days via day-fractioning, while a flat 'sum every row that starts in August' calculation (Column M totaled directly) does not — verified the same explanation holds at both the single-combo level (Oregano-Deliveroo: real Column M 5,146.63 vs dashboard's correctly-fractioned 5,048.44, gap fully explained by 2 real rows extending past the 28th) and the whole-group level. The popup's number is the more accurate one for the specific date range requested.",
   "🐛 Fixed a real, direct correction from Nikhil — the profitability popup's CPC/Keywords cost was counting campaigns explicitly marked as sponsor-funded (\"Funded by Noon\", \"Funded by Roo\", \"Funded by Deliveroo\", etc.) as if they were Oregano Group's own real spend, when the platform itself paid for them. His own manual calculation (real Column M total minus the known Noon-funded amount) didn't match the popup, correctly flagging this gap. Verified directly against his live browser data before building anything: 162 real rows across the whole sheet carry a genuine 'funded by [sponsor]' remark, in 8 different real phrasings (different sponsors, date formats, capitalization — \"Funded by Roo - 13-10-2025\", \"Funded By Noon, Awareness Bid : 04-Aug-2026\", etc.) — confirmed a single case-insensitive check for the phrase 'funded by' reliably catches every real variant regardless of formatting. Added the exclusion directly in cpcAdCostForRange, immediately skipping any row with this marker before any cost calculation (literal or extrapolated) touches it — genuinely own-spend rows are completely unaffected. Verified against a reconstruction of the exact real rows from Nikhil's screenshot (Oregano-Jumeirah and Oregano-MC, both real 'Funded by Noon, 24-Aug-26' rows on Noon) — both now correctly contribute AED 0, while a genuine own-spend row in the same brand+aggregator group is unaffected and still counts normally.",
   "🐛 Fixed a real regression I introduced in build 348's own diagnostic cleanup — Nikhil reported the profitability popup stopped working entirely right after that build. Root cause: when removing the temporary diagnostic logging, two lines referencing the diagnostic-only variables (diagAdCostATotal, diagAdCostBTotal, diagRows) were accidentally left behind deep inside computeProfitabilityBreakdown's main loop, while their declarations were correctly removed elsewhere — a real ReferenceError the moment the function actually ran, which node --check's syntax-only validation could never catch (referencing an undeclared variable is valid JavaScript syntax, only invalid at runtime). This is exactly why 'the file parses cleanly' was never sufficient proof on its own for this kind of change. Found and removed the two stale lines, then — this time — verified the fix by actually EXECUTING the real, complete computeProfitabilityBreakdown function end-to-end with realistic data, not just re-running node --check, confirming it now returns real, correct contribution and ad-cost figures without throwing. Sorry for this one — it was a genuine oversight during what should have been a purely subtractive cleanup step.",
@@ -553,11 +554,37 @@ function cpcAdCostForRange(brand,agg,startDate,endDate,branch){
     // this makes the literal-only reconstruction exactly match real budgetSpent again, and the
     // full-range (literal+extrapolated) total never exceeds budgetAlloc.
     const knownThrough=(!confirmedEnded&&r.updateDate&&r.updateDate<r.endDate)?cpcPrevDay(r.updateDate):r.endDate;
+    // v352: fixed a real, serious bug Nikhil caught directly — the literal (already-confirmed)
+    // portion was multiplying r.dailyBurn (computed at PARSE TIME over the row's FULL planned
+    // campaign window, startDate to endDate) by the real confirmed days (startDate to
+    // knownThrough). Whenever a campaign's real confirmed data covers FEWER days than its full
+    // planned span — which is the common case for any still-open campaign — dailyBurn is diluted
+    // and this UNDERSTATES real, already-spent money. Verified directly: Oregano-Al Reef on
+    // Deliveroo, real budgetSpent=201.6 confirmed as of update date, but the old logic computed
+    // only AED 112 for that same confirmed period — losing over AED 89 of real, already-spent
+    // money, and the WHOLE result (AED 168) came out lower than the real confirmed spend alone.
+    // Fixed: the real confirmed days always get the REAL budgetSpent figure directly (correctly
+    // scaled if the requested range only covers PART of the confirmed period) — never re-derived
+    // via a diluted rate. The rate used for EXTRAPOLATION (days beyond knownThrough) is now
+    // computed fresh from budgetSpent over the REAL confirmed days (not the full planned span),
+    // so a genuinely fast-spending campaign extrapolates at its real observed pace, not a
+    // slowed-down average that assumes it'll coast to the end of its planned window.
+    const realConfirmedDays=Math.max(1,Math.round((new Date(knownThrough)-new Date(r.startDate))/86400000)+1);
+    const realRate=r.budgetSpent/realConfirmedDays;
     const overlapStart=r.startDate>startDate?r.startDate:startDate;
     const overlapEnd=knownThrough<endDate?knownThrough:endDate;
     if(overlapStart<=overlapEnd){
-      const overlapDays=Math.round((new Date(overlapEnd)-new Date(overlapStart))/86400000)+1;
-      total+=r.dailyBurn*overlapDays;
+      if(overlapStart===r.startDate&&overlapEnd===knownThrough){
+        // The requested range covers the ENTIRE real confirmed period — use the real,
+        // exact budgetSpent figure directly, not a re-derived multiplication.
+        total+=r.budgetSpent;
+      }else{
+        // The requested range only covers PART of the confirmed period (e.g. querying a single
+        // month when the campaign's confirmed data spans a boundary) — scale using the REAL
+        // rate (budgetSpent over real confirmed days), not the diluted parse-time dailyBurn.
+        const overlapDays=Math.round((new Date(overlapEnd)-new Date(overlapStart))/86400000)+1;
+        total+=realRate*overlapDays;
+      }
     }
     // Extrapolation only when genuinely NOT confirmed ended, and the requested range reaches
     // past the known-through boundary but still within the row's own (still-planned) end date.
@@ -572,7 +599,7 @@ function cpcAdCostForRange(brand,agg,startDate,endDate,branch){
       const extraStart=cpcNextDay(knownThrough);
       const extraEnd=endDate<r.endDate?endDate:r.endDate;
       if(extraStart<=extraEnd){
-        const{cost}=cpcExtrapolatedCost(r,extraStart,extraEnd);
+        const{cost}=cpcExtrapolatedCost(r,extraStart,extraEnd,realRate);
         total+=cost;
       }
     }
@@ -605,12 +632,16 @@ function cpcPrevDay(dateStr){
 // formats, and pure free-text notes like "Cancelled due to closure" with no date at all), not
 // reliably parseable across every row. Uses the row's own real startDate/endDate/dailyBurn
 // instead, which are already structured and reliable.
-function cpcExtrapolatedCost(row,extraStart,extraEnd){
+function cpcExtrapolatedCost(row,extraStart,extraEnd,explicitRate){
   if(!row||!row.budgetAlloc||row.budgetSpent==null)return{cost:0,daysExtrapolated:0,cappedEarly:false};
   // Condition 1: budget must genuinely still have room
   const remaining=row.budgetAlloc-row.budgetSpent;
   if(remaining<=0)return{cost:0,daysExtrapolated:0,cappedEarly:false};
-  const dailyRate=row.dailyBurn;
+  // v352: uses the REAL rate (budgetSpent over real confirmed days) when the caller supplies
+  // one — computed correctly in cpcAdCostForRange, not the diluted parse-time row.dailyBurn
+  // (which averages spend over the FULL planned campaign window, understating the real pace of
+  // a still-open campaign). Falls back to row.dailyBurn only if no explicit rate is given.
+  const dailyRate=explicitRate!=null?explicitRate:row.dailyBurn;
   if(!dailyRate||dailyRate<=0)return{cost:0,daysExtrapolated:0,cappedEarly:false};
   const totalExtraDays=Math.round((new Date(extraEnd)-new Date(extraStart))/86400000)+1;
   if(totalExtraDays<=0)return{cost:0,daysExtrapolated:0,cappedEarly:false};
