@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-355";
+const BUILD_VERSION="2026-08-13-356";
 const BUILD_NOTES=[
+  "\ud83c\udd95 Added the profitability explainer popup to the All Brands and All Platforms summary tables on the Overview page. Previously only the top KPI card had the 'why did profitability change' hover breakdown; the per-brand and per-platform rows showed the figure (now correctly red when negative, from build 355) but gave no way to see why. Hovering the profitability cell in either table now opens the same period-over-period breakdown \u2014 gross sales, discount burn, commission, food/packaging, CPC/Keywords cost \u2014 filtered to that specific brand or platform, so a red number like Lollorosso's can be explained on the spot.",
   "\ud83d\udc1b Fixed profitability/contribution showing GREEN even when negative on the Overview page \u2014 Nikhil spotted Lollorosso at AED -12,994 and several platforms with negative contribution all displayed in green with a minus sign. Four separate cells hardcoded the green colour regardless of sign: the All Brands table, the All Platforms table, the outlet-highlights list, and the platform tiles. All four now colour red when contribution is negative, green when positive, matching every other figure on the page.",
   "🆕 Added the failed-brand warning to the Overview page, per Nikhil hitting a real Lollorosso load failure there — the profitability popup silently showed AED 38,309 instead of AED 66,209 with nothing on screen indicating a whole brand was missing (the page also showed 35 active outlets instead of 50, same cause). Verified that exact figure offline against his real sheet data: removing Lollorosso reproduces AED 38,309.27 precisely, confirming his own diagnosis. Build 326 had added this warning to the Investment Plan only; extracted it into a shared failedBrandBanner() function and wired it into Overview, so a failed load can never again silently produce wrong-but-plausible group totals on the page most likely to be read. Runtime-tested (not just syntax-checked, per the build-349 lesson) across three cases: healthy session renders nothing, single-brand failure names the brand with correct singular grammar and a working retry button, multi-brand failure renders correct plural grammar and one retry button per brand.",
   "✅ Reconciled the July figure Nikhil questioned — dashboard showed AED 71,909 vs his sheet calculation of AED 71,537.45, a AED 371.98 gap. Traced it exactly by isolating every row individually against the real data: the difference is entirely four real Smokeys-on-Noon campaigns (Jumeirah, DSO, Motorcity, TQ) that ran 23 June → 22 July, spanning the month boundary. Their combined spend is AED 507.24, of which the 22 days falling inside July pro-rate to AED 371.98 — matching the gap to the dirham. Nikhil's calculation counted only campaigns that STARTED in July, so it correctly captured everything except the July portion of campaigns that began in late June. The dashboard's figure is the more accurate one for a calendar-month question. No code change needed; confirmed correct as-is.",
@@ -5396,7 +5397,7 @@ function renderOverview(){
       b.cv.orders.toLocaleString(),fmtAEDTip(b.cv.sales),b.cv.orders>0?`AED ${aov.toFixed(1)}`:'—',
       disc>0?`<span style="color:#FF6B6B;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
       disc>0?`<span style="color:${depth>=20?'#FF6B6B':depth>=10?'#F59E0B':'#2ECC71'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
-      `<span style="color:${prof>=0?'#2ECC71':'#FF6B6B'};font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
+      `<span data-ctip="${profitabilityTipId(ld.filter(r=>r.brand===b.n),pd.filter(r=>r.brand===b.n),profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior)}" style="cursor:help;color:${prof>=0?'#2ECC71':'#FF6B6B'};font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
       fmtChgCell(b.cv.orders,pv.orders,false),
       fmtChgCell(b.cv.sales,pv.sales,true)
     ],sortVals:[b.n,b.cv.orders,b.cv.sales,aov,disc,depth,prof,b.oc,b.sc]};
@@ -5413,7 +5414,7 @@ function renderOverview(){
       a.orders.toLocaleString(),fmtAEDTip(a.sales),a.orders>0?`AED ${(a.sales/a.orders).toFixed(1)}`:'—',
       disc>0?`<span style="color:#FF6B6B;font-weight:700">${fmtAEDTip(disc)}</span>`:'—',
       disc>0?`<span style="color:${depth>=20?'#FF6B6B':depth>=10?'#F59E0B':'#2ECC71'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
-      `<span style="color:${prof>=0?'#2ECC71':'#FF6B6B'};font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
+      `<span data-ctip="${profitabilityTipId(ld.filter(r=>r.aggregator===a.ag),pd.filter(r=>r.aggregator===a.ag),profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior)}" style="cursor:help;color:${prof>=0?'#2ECC71':'#FF6B6B'};font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
       fmtChgCell(a.orders,pv.orders,false),
       fmtChgCell(a.sales,pv.sales,true)
     ],sortVals:[a.ag,a.orders,a.sales,a.aov,disc,depth,prof,a.oc,a.sc]};
