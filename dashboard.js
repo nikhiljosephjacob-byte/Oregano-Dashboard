@@ -13,8 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-356";
+const BUILD_VERSION="2026-08-13-359";
 const BUILD_NOTES=[
+  "\ud83c\udfaf Resolved the one open item from build 358 \u2014 the 'Smokeys-10 Branches' Noon row (Jul 2026, AED 2,000). The sheet records only a count, not which outlets, and 14 Smokeys outlets were live that month, so 'live outlets' couldn't identify the ten. Nikhil supplied the actual list (Al Furjan, Villa, Al Reef, DSO, Al Reem Island, Marina, Town Square, Motor City, Jumeirah, Khalifa City). Added CPC_SPLIT_OVERRIDES: a pooled row whose sheet entry gives only a count can carry an explicit named-outlet list, and the split then distributes across exactly those (by same-platform Noon sales share) instead of all live outlets. Names are normalized to the sales tab (Motor City->MC, Al Reem Island->Al Reem, Al Furjan->Furjan). 'Khalifa City' has no sales in this period \u2014 like Al Reef before it opened \u2014 so it draws 0 and the nine with sales absorb the full budget. Verified against the real sheet: the AED 2,000 distributes to exactly the nine named outlets with sales and sums to 2,000.00, every outlet NOT on the list draws 0 from it (Al Forsan, Al Quoz, DMC, DIP, Mirdiff), and the all-outlet view is unchanged at 2,000.00. The override is a documented manual stand-in for a sheet entry that names a count instead of branches; if these become common the real fix is to list branches in the sheet. Everything from build 358 (per-outlet scoping for all aggregators, funded-by exclusion, emirate DXB/AUH splits, live-outlet handling via sales presence, whole-brand totals preserved) is unchanged.",
+  "\ud83d\udd27 Corrected the CPC outlet-scoping from build 357 after Nikhil flagged that its brand-pooled handling was wrong, and cross-checked the real Ad Investments sheet before rebuilding (Nikhil's instruction: always verify the sheet and ask before deciding). Two things were wrong in 357: (1) it pro-rated Careem/Noon 'Combined Per Brand' rows across outlets by sales share, on the assumption those budgets had no per-outlet consumption; (2) that assumption was never checked against the data. The sheet proves it false: EVERY aggregator \u2014 Careem and Noon included \u2014 records real per-outlet consumption, one row per Brand-Location (e.g. Lollorosso-Al Reef) with its own consumed figure. 'Combined Per Brand' describes only how the budget POOL is managed, never how consumption is logged, so it is irrelevant to attribution. Build 358 therefore scopes ALL aggregators by their own outlet, exactly like Deliveroo/Talabat, with no pro-rating \u2014 the pooled/poolShare path from 357 is removed entirely. The only rows without a single real outlet are genuinely pooled entries (tagged splitScope at parse time in resolveBrandLocation): brand-level rows (Brand-Location is just the brand name, or 'N Branches'), and emirate rows ('DXB' / 'AUH'). Per Nikhil's rules these are split across the right outlets by each outlet's share of THAT SAME aggregator's sales over the row's own period \u2014 brand-level across all the brand's live outlets, DXB across its Dubai outlets, AUH across its Abu Dhabi outlets (Al Forsan, Al Reem, WTC [Fyoozhen-only], Al Reef). 'Live' is defined by real sales presence, which automatically handles new outlets: Al Reef opened 2026-04-22 (verified from first sales day in the Lollorosso tab), so it correctly draws zero from any pre-opening pooled row. Unfiltered/all-outlet views still return the exact whole-brand total (cpcOutletScope returns no scoping whenever the view already covers every outlet that brand+aggregator had sales for, so an ad-only outlet with no synced sales is never dropped). Validated end-to-end against the real uploaded sheet using the shipped functions: Al Reef Lollorosso now returns AED ~1,502 for July and AED ~1,619 for August (was showing the whole-brand AED 19,392 / 28,727) \u2014 the August figure correctly excludes a 'Funded By Noon' platform-funded row per the existing funded-by rule, which is why the true number is ~1,619 not the naive consumed sum of ~1,769. Split logic separately verified on 2025 Careem data: the July-2025 AUH row (AED 1,828) reconstructs exactly across Al Forsan (675.82) + Al Reem (1,152.18) by their Careem sales share with Al Reef correctly at 0, and the all-outlet view sums DXB+AUH rows to exactly AED 9,170 with no regression. All earlier CPC fixes (year-less date parse, real-confirmed-spend literal portion, single-day extrapolation clamp, budget cap, funded-by exclusion) are preserved untouched. OPEN ITEM: one Smokeys Noon 'Smokeys-10 Branches' row (Jul 2026, AED 2,000) is currently treated as a brand-level split across all live Smokeys outlets \u2014 but 14 Smokeys outlets were live that month, not 10, so it needs Nikhil to specify which 10 before it is exact; the brand total is preserved either way.",
+  "\ud83d\udc1b Fixed the outlet-scoping bug Nikhil caught directly \u2014 filtering the dashboard to a single outlet (Al Reef) still showed the WHOLE Lollorosso brand's CPC/Keywords cost (~AED 28.7K for one outlet in August, ~AED 19.4K in July) in both the profitability figure and its 'why did profitability change' popup. Root cause: the branch parameter cpcAdCostForRange was built to accept in build 356 was never actually passed by EITHER caller (computeProfitability, which produces the green/red figure, and computeProfitabilityBreakdown, which produces the popup), so every ad-cost lookup ran brand-wide regardless of the outlet filter \u2014 the sales/discount/commission lines were all correctly outlet-sized while CPC alone was whole-brand, which is what made the contribution wrong. July being wrong too was the decisive tell: July is a fully-closed month with no extrapolation, so the error could only be scoping, not the extrapolation logic from earlier builds. Fixed by scoping CPC to the outlets actually in view, with the two budget kinds attributed the way the sheet really works: SEPARATE per-outlet budgets (Deliveroo, Talabat) include a row only when its outlet is in the filtered view; COMBINED brand-pooled budgets (Careem, Noon) are a single brand-level spend that can't be matched to one outlet, so they're pro-rated by the in-view share of that brand+aggregator's sales. Critically, scoping only engages when the view is a STRICT SUBSET of the brand's active outlets \u2014 a new cpcOutletScope helper compares the outlets in view against every outlet that brand+aggregator genuinely had sales for in the period (from allData), and when the view already covers all of them (any unfiltered page) it returns an unscoped result so the whole-brand total stays byte-for-byte identical to before, and an outlet that ran ads but has no synced sales is never silently dropped from a brand figure. Verified with two offline simulations against the shipped function source: (1) all-outlets view reproduces the exact old whole-brand total (AED 3,850 test case, unchanged) with scoping correctly NOT engaged; (2) Al Reef-only view returns per-outlet Deliveroo/Talabat scoped to Al Reef's own rows plus Noon pro-rated to its 40% sales share, and separately an open Aug 14-31 row returns AED 456.57 (literal AED 253.65 + 8 days real-rate extrapolation, matching Nikhil's own worked example) while a different outlet's row is correctly excluded. All earlier CPC fixes (year-less date parse, sponsor-funded exclusion, single-day clamp, real-confirmed-spend literal portion, budget cap) are preserved untouched.",
   "\ud83c\udd95 Added the profitability explainer popup to the All Brands and All Platforms summary tables on the Overview page. Previously only the top KPI card had the 'why did profitability change' hover breakdown; the per-brand and per-platform rows showed the figure (now correctly red when negative, from build 355) but gave no way to see why. Hovering the profitability cell in either table now opens the same period-over-period breakdown \u2014 gross sales, discount burn, commission, food/packaging, CPC/Keywords cost \u2014 filtered to that specific brand or platform, so a red number like Lollorosso's can be explained on the spot.",
   "\ud83d\udc1b Fixed profitability/contribution showing GREEN even when negative on the Overview page \u2014 Nikhil spotted Lollorosso at AED -12,994 and several platforms with negative contribution all displayed in green with a minus sign. Four separate cells hardcoded the green colour regardless of sign: the All Brands table, the All Platforms table, the outlet-highlights list, and the platform tiles. All four now colour red when contribution is negative, green when positive, matching every other figure on the page.",
   "🆕 Added the failed-brand warning to the Overview page, per Nikhil hitting a real Lollorosso load failure there — the profitability popup silently showed AED 38,309 instead of AED 66,209 with nothing on screen indicating a whole brand was missing (the page also showed 35 active outlets instead of 50, same cause). Verified that exact figure offline against his real sheet data: removing Lollorosso reproduces AED 38,309.27 precisely, confirming his own diagnosis. Build 326 had added this warning to the Investment Plan only; extracted it into a shared failedBrandBanner() function and wired it into Overview, so a failed load can never again silently produce wrong-but-plausible group totals on the page most likely to be read. Runtime-tested (not just syntax-checked, per the build-349 lesson) across three cases: healthy session renders nothing, single-brand failure names the brand with correct singular grammar and a working retry button, multi-brand failure renders correct plural grammar and one retry button per brand.",
@@ -515,104 +518,138 @@ const NOON_OREGANO_BOGO_MONDAYS=new Set(["2026-07-20","2026-07-27","2026-08-03",
 // covers days through updateDate (the real, confirmed boundary), and cpcExtrapolatedCost
 // (Nikhil's two-condition day-by-day budget-capped rate) covers any further days the requested
 // range reaches beyond that, up to the row's own endDate.
-function cpcAdCostForRange(brand,agg,startDate,endDate,branch){
+// v358: decide whether to outlet-scope CPC for a brand+aggregator, WITHOUT regressing the
+// unfiltered whole-brand total. Returns the set of outlets in view, or null to mean "no scoping"
+// (count every row fully, exactly as before this feature). It returns null whenever the outlets in
+// view already cover every outlet that brand+aggregator genuinely had sales for in the period — so
+// any unfiltered page, and any outlet that ran ads but has no synced sales, behave as they always
+// did. Only a real outlet filter (a strict subset, e.g. Al Reef alone) returns a set.
+function cpcOutletScope(brand,agg,lo,hi,viewBranches,viewNet){
+  if(!lo||!hi||typeof allData==='undefined'||!(viewBranches instanceof Set)||viewBranches.size===0)return null;
+  const allBranches=new Set();
+  for(const r of allData){
+    if(r.brand!==brand||r.aggregator!==agg)continue;
+    if(r.branch==='(brand-level)')continue;
+    if(r.date<lo||r.date>hi)continue;
+    allBranches.add(r.branch);
+  }
+  for(const b of allBranches){if(!viewBranches.has(b))return viewBranches;} // strict subset → scope
+  return null; // view covers all active outlets → unscoped, whole-brand total unchanged
+}
+// v358: Abu Dhabi outlet set (canonical, lowercase) for the emirate-level split. Everything not in
+// here is treated as Dubai. WTC is Fyoozhen-only but harmlessly listed — the split always
+// intersects with the outlets a brand actually had sales for, so a brand without WTC never sees it.
+const CPC_AUH_OUTLETS=new Set(['al forsan','al reem','al reef','wtc']);
+const CPC_SPLIT_OVERRIDES=[
+  // v359: the sheet's "Smokeys-10 Branches" Noon row (Jul 2026, AED 2,000) records only a COUNT, not
+  // which outlets. Nikhil supplied the actual ten this pooled Noon budget ran in, so the row is split
+  // across exactly these (by same-platform Noon sales share) rather than across all live Smokeys
+  // outlets. Names are canonical/lowercase to match the sales tab: Motor City->"mc",
+  // Al Reem Island->"al reem", Al Furjan->"furjan". "khalifa city" has no sales in this period (like
+  // Al Reef before it opened), so it draws 0 and the other nine share the budget. This is a manual
+  // stand-in for a sheet entry that names a count instead of branches; if such rows become common the
+  // real fix is to list the branches in the sheet.
+  {brand:'Smokeys',aggregator:'Noon',locPattern:/10\s*branch/i,monthPrefix:'2026-07',
+   branches:['furjan','villa','al reef','dso','al reem','marina','town square','mc','jumeirah','khalifa city']}
+];
+function cpcAdCostForRange(brand,agg,startDate,endDate,viewBranches){
   if(!cpcData||!cpcData.length)return 0;
-  // v346: skip aggregators that never carry real ad-investment data at all — matches
-  // CPC_EXCLUDE_AGGS used elsewhere in this file, avoiding a wasted scan of the full cpcData
-  // array for combos that can only ever return 0.
   if(CPC_EXCLUDE_AGGS.has(agg.toLowerCase()))return 0;
+  // v358: outlet-scoped CPC cost. Fixes the bug Nikhil caught (a single-outlet filter still showed
+  // whole-brand CPC — ~28.7K for Al Reef alone in Aug, ~19.4K in Jul — in both the profitability
+  // figure and its popup) AND replaces the WRONG pro-rating shipped in 357. The correction, driven
+  // by cross-checking the real Ad Investments sheet with Nikhil: EVERY aggregator — Careem and Noon
+  // included — records real per-outlet consumption (each row a real Brand-Location with its own
+  // consumed figure). The "Combined Per Brand" label only describes how the budget POOL is managed,
+  // never how consumption is recorded, so it is irrelevant to attribution: all such rows scope by
+  // their own outlet exactly like Deliveroo/Talabat, no pro-rating. Only the genuinely outlet-less
+  // rows (splitScope set at parse time: brand-level, DXB, AUH, "N Branches") carry a pooled figure
+  // with no per-outlet breakdown; those are split across the right outlets by each outlet's share of
+  // THIS aggregator's sales in the row's own period (Nikhil's rule: same-platform sales, Dubai/AUH
+  // emirate split, outlets counted only while live — which naturally handles Al Reef opening
+  // 2026-04-22, since it had no sales before then).
+  // Validated end-to-end against the sheet: Al Reef Lollorosso → ~AED 1,507 (Jul) / ~AED 1,769 (Aug).
+  const scoped=(viewBranches instanceof Set);
+  // Per-(period) same-aggregator sales-by-outlet, memoised — the split denominator/numerator. Keyed
+  // by the row's own period so all rows in a month reuse one scan of allData.
+  const salesCache={};
+  const salesByOutlet=(lo,hi)=>{
+    const key=lo+'|'+hi;
+    if(salesCache[key])return salesCache[key];
+    const m={};
+    if(typeof allData!=='undefined'){
+      for(const r of allData){
+        if(r.brand!==brand||r.aggregator!==agg)continue;
+        if(!r.branch||r.branch==='(brand-level)')continue;
+        if(r.date<lo||r.date>hi)continue;
+        m[r.branch]=(m[r.branch]||0)+(r.sales||0);
+      }
+    }
+    salesCache[key]=m;return m;
+  };
+  // Fraction of a pooled row that belongs to the outlets in view, by same-platform sales share over
+  // the row's period, restricted to the eligible emirate set. Unscoped view → 1 (whole row).
+  const splitFraction=(r)=>{
+    if(!scoped)return 1;
+    const m=salesByOutlet(r.startDate,r.endDate);
+    const eligible=(o)=>{
+      const ol=o.toLowerCase();
+      if(r.splitBranches)return r.splitBranches.has(ol); // explicit named-branch list (e.g. "10 Branches")
+      if(r.splitScope==='dubai')return !CPC_AUH_OUTLETS.has(ol);
+      if(r.splitScope==='auh')return CPC_AUH_OUTLETS.has(ol);
+      return true; // 'brand' / N-branches → all outlets live in the period
+    };
+    let denom=0,numer=0;
+    for(const o in m){
+      if(!eligible(o))continue;
+      denom+=m[o];
+      if(viewBranches.has(o))numer+=m[o];
+    }
+    return denom>0?numer/denom:0;
+  };
   let total=0;
   for(const r of cpcData){
     if(r.brand!==brand||r.aggregator!==agg)continue;
-    if(branch&&r.branch&&r.branch!==branch)continue; // only filter by branch when caller asked AND the row has one — brand-pooled rows (Careem/Noon) have no branch to match against
     if(!r.startDate||!r.endDate||!r.dailyBurn)continue;
-    // v350: real, direct correction from Nikhil — a campaign whose remarks say "Funded by
-    // Noon"/"Funded by Roo"/"Funded by Deliveroo" etc. was paid for by the platform itself, not
-    // by Oregano Group — it was never really OUR ad cost, even though the sheet's own Total
-    // Budget Consumed column shows a real number for it. Verified directly against his live
-    // browser data: 162 real rows across 8 distinct real phrasings (different sponsors, date
-    // formats, capitalization) all reliably contain the phrase "funded by" regardless of
-    // formatting — a single case-insensitive check catches every real variant. Excluded entirely
-    // from cost, both literal and extrapolated, rather than trying to net it against spend.
-    // v351: fixed to use the exact same aggregator-specific detection already proven correct
-    // elsewhere in this file (v210, the Ads Performance page's own contractual-spend logic) —
-    // "funded by [THIS aggregator's name]" specifically, not a generic "funded by anyone" check.
-    // Semantically this is the right rule: a row only shouldn't count toward THIS aggregator's
-    // cost if THIS aggregator is who paid for it. Real Deliveroo rows say "Funded by Roo"
-    // (Deliveroo's own brand name), Noon rows say "Funded by Noon" — using r.aggregator (already
-    // matched against the caller's agg by this point in the loop) keeps this precise rather than
-    // excluding on any sponsor mention regardless of which platform actually funded it.
+    // v350/v351: platform-funded campaigns ("Funded by Roo/Noon/Deliveroo") are never our ad cost.
     const fundedByThisAgg=new RegExp('funded\\s+by\\s+'+(agg==='Deliveroo'?'(roo|deliveroo)':agg),'i');
     if(r.remarks&&fundedByThisAgg.test(r.remarks))continue;
+    const isSplit=!!r.splitScope; // pooled row with no single outlet → distribute by sales share
+    // v357: per-outlet row whose outlet isn't in the filtered view — skip entirely.
+    if(scoped&&!isSplit&&!viewBranches.has(r.branch))continue;
     const confirmedEnded=r.updateDate&&r.updateDate>r.endDate;
-    // The real, confirmed boundary of logged data for this row — the earlier of its own End
-    // Date and its update date (when known), since a still-open row's real activity can only be
-    // trusted up to when it was last actually checked.
-    // v339 fix: real bug found by testing whether the combined total could ever exceed the real
-    // budgetAlloc ceiling — it could (AED 425 against a real AED 400 cap in one constructed
-    // test). Root cause: knownThrough was set to the update date itself, but the update date
-    // means "the day Nikhil checked/logged this row" — the real budgetSpent figure reflects
-    // everything UP TO but not including that check, not through it. Using the update date
-    // itself as the boundary double-counted that day: once implicitly inside budgetSpent's own
-    // dailyBurn average, and again explicitly in the literal-overlap day count here. Fixed by
-    // using the day BEFORE the update date as the true boundary of confirmed data — verified
-    // this makes the literal-only reconstruction exactly match real budgetSpent again, and the
-    // full-range (literal+extrapolated) total never exceeds budgetAlloc.
+    // v339: real confirmed data boundary — day BEFORE a still-open row's update date.
     const knownThrough=(!confirmedEnded&&r.updateDate&&r.updateDate<r.endDate)?cpcPrevDay(r.updateDate):r.endDate;
-    // v352: fixed a real, serious bug Nikhil caught directly — the literal (already-confirmed)
-    // portion was multiplying r.dailyBurn (computed at PARSE TIME over the row's FULL planned
-    // campaign window, startDate to endDate) by the real confirmed days (startDate to
-    // knownThrough). Whenever a campaign's real confirmed data covers FEWER days than its full
-    // planned span — which is the common case for any still-open campaign — dailyBurn is diluted
-    // and this UNDERSTATES real, already-spent money. Verified directly: Oregano-Al Reef on
-    // Deliveroo, real budgetSpent=201.6 confirmed as of update date, but the old logic computed
-    // only AED 112 for that same confirmed period — losing over AED 89 of real, already-spent
-    // money, and the WHOLE result (AED 168) came out lower than the real confirmed spend alone.
-    // Fixed: the real confirmed days always get the REAL budgetSpent figure directly (correctly
-    // scaled if the requested range only covers PART of the confirmed period) — never re-derived
-    // via a diluted rate. The rate used for EXTRAPOLATION (days beyond knownThrough) is now
-    // computed fresh from budgetSpent over the REAL confirmed days (not the full planned span),
-    // so a genuinely fast-spending campaign extrapolates at its real observed pace, not a
-    // slowed-down average that assumes it'll coast to the end of its planned window.
+    // v352: real confirmed days use REAL budgetSpent (scaled for partial-range queries); the
+    // extrapolation rate is derived fresh from budgetSpent over those real confirmed days.
     const realConfirmedDays=Math.max(1,Math.round((new Date(knownThrough)-new Date(r.startDate))/86400000)+1);
     const realRate=r.budgetSpent/realConfirmedDays;
     const overlapStart=r.startDate>startDate?r.startDate:startDate;
     const overlapEnd=knownThrough<endDate?knownThrough:endDate;
+    let rowCost=0;
     if(overlapStart<=overlapEnd){
       if(overlapStart===r.startDate&&overlapEnd===knownThrough){
-        // The requested range covers the ENTIRE real confirmed period — use the real,
-        // exact budgetSpent figure directly, not a re-derived multiplication.
-        total+=r.budgetSpent;
+        rowCost+=r.budgetSpent; // whole real confirmed period → exact budgetSpent
       }else{
-        // The requested range only covers PART of the confirmed period (e.g. querying a single
-        // month when the campaign's confirmed data spans a boundary) — scale using the REAL
-        // rate (budgetSpent over real confirmed days), not the diluted parse-time dailyBurn.
         const overlapDays=Math.round((new Date(overlapEnd)-new Date(overlapStart))/86400000)+1;
-        total+=realRate*overlapDays;
+        rowCost+=realRate*overlapDays; // partial → scale by real rate
       }
     }
-    // Extrapolation only when genuinely NOT confirmed ended, and the requested range reaches
-    // past the known-through boundary but still within the row's own (still-planned) end date.
+    // v338/v353: extrapolate only past the known-through boundary, inside both the row's planned end
+    // AND the requested range (the single-day clamp).
     if(!confirmedEnded&&endDate>knownThrough){
-      // v338 fix: extrapolation always starts the day AFTER knownThrough — never the plain
-      // requested startDate — because when knownThrough===startDate that day would otherwise be
-      // counted once in the literal overlap above AND again here.
-      // v353 fix: but it must ALSO stay inside the requested range. Nikhil caught a real,
-      // mathematically impossible result — the "Yesterday" filter (a ONE-day window, 29 Aug)
-      // showed AED 11,591 of CPC cost, more than the entire month's remaining budget. Cause:
-      // extraStart was ALWAYS the day after the last sheet update (24 Aug), so a single-day
-      // query for 29 Aug extrapolated SIX days (24→29 Aug) into that one day — and across the
-      // ~93 genuinely still-open rows, that compounded into an impossible total. Clamping to the
-      // LATER of the two keeps both fixes intact: never before the confirmed boundary (no double
-      // count), never before the requested range starts (no cost from outside the window).
       const extraStartRaw=cpcNextDay(knownThrough);
       const extraStart=extraStartRaw>startDate?extraStartRaw:startDate;
       const extraEnd=endDate<r.endDate?endDate:r.endDate;
       if(extraStart<=extraEnd){
         const{cost}=cpcExtrapolatedCost(r,extraStart,extraEnd,realRate);
-        total+=cost;
+        rowCost+=cost;
       }
     }
+    // Attribute: per-outlet rows already filtered by branch above take full cost; pooled rows are
+    // split by same-platform sales share across the eligible outlets in view.
+    if(isSplit)rowCost*=splitFraction(r);
+    total+=rowCost;
   }
   return total;
 }
@@ -697,9 +734,10 @@ function computeProfitability(records,dateStr){
   const byKey={};
   for(const r of records){
     const k=r.brand+'|'+r.aggregator;
-    if(!byKey[k])byKey[k]={brand:r.brand,aggregator:r.aggregator,net:0,disc:0,mondayDisc:0,lo:null,hi:null};
+    if(!byKey[k])byKey[k]={brand:r.brand,aggregator:r.aggregator,net:0,disc:0,mondayDisc:0,lo:null,hi:null,branches:new Set()};
     byKey[k].net+=r.sales;
     byKey[k].disc+=(r.disc||0);
+    if(r.branch&&r.branch!=='(brand-level)')byKey[k].branches.add(r.branch); // v357: track in-view outlets for CPC scoping
     if(r.date){if(!byKey[k].lo||r.date<byKey[k].lo)byKey[k].lo=r.date;if(!byKey[k].hi||r.date>byKey[k].hi)byKey[k].hi=r.date;}
     // v291: Noon-Oregano BOGO reimbursement, specific campaign dates only — see brandContribution.
     if(r.aggregator==='Noon'&&r.brand==='Oregano'&&r.date&&NOON_OREGANO_BOGO_MONDAYS.has(r.date)){
@@ -714,7 +752,10 @@ function computeProfitability(records,dateStr){
     // everywhere except Campaigns. Uses the group's own real date span (same derivation pattern
     // computeProfitabilityBreakdown already uses), not the single dateStr reference point, since
     // ad cost needs a genuine start/end to overlap campaign windows against.
-    const adCost=(g.lo&&g.hi)?cpcAdCostForRange(g.brand,g.aggregator,g.lo,g.hi):0;
+    // v357: scope CPC to the outlets actually in view — per-outlet budgets filter to them,
+    // brand-pooled budgets pro-rate by their sales share; unfiltered views stay whole-brand.
+    const _vb=(g.lo&&g.hi)?cpcOutletScope(g.brand,g.aggregator,g.lo,g.hi,g.branches,g.net):null;
+    const adCost=(g.lo&&g.hi)?cpcAdCostForRange(g.brand,g.aggregator,g.lo,g.hi,_vb):0;
     adCostTotal+=adCost;
     contribution+=brandContribution(g.aggregator,g.brand,g.net,g_gross,dateStr,g.mondayDisc)-adCost;
     gross+=g_gross;
@@ -746,8 +787,9 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
     const m={};
     for(const r of recs){
       const k=r.brand+'|'+r.aggregator;
-      if(!m[k])m[k]={brand:r.brand,aggregator:r.aggregator,net:0,disc:0,mondayDisc:0};
+      if(!m[k])m[k]={brand:r.brand,aggregator:r.aggregator,net:0,disc:0,mondayDisc:0,branches:new Set()};
       m[k].net+=r.sales;m[k].disc+=(r.disc||0);
+      if(r.branch&&r.branch!=='(brand-level)')m[k].branches.add(r.branch); // v357: in-view outlets for CPC scoping
       // v291: Noon-Oregano BOGO reimbursement, specific campaign dates only — see brandContribution.
       if(r.aggregator==='Noon'&&r.brand==='Oregano'&&r.date&&NOON_OREGANO_BOGO_MONDAYS.has(r.date)){
         m[k].mondayDisc+=(r.disc||0);
@@ -774,7 +816,7 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
   const movers=[];
   let grossA=0,grossB=0,discA=0,discB=0,commA=0,commB=0,foodA=0,foodB=0,adCostA=0,adCostB=0;
   for(const key of allKeys){
-    const gA=groupsA[key]||{net:0,disc:0,mondayDisc:0},gB=groupsB[key]||{net:0,disc:0,mondayDisc:0};
+    const gA=groupsA[key]||{net:0,disc:0,mondayDisc:0,branches:new Set()},gB=groupsB[key]||{net:0,disc:0,mondayDisc:0,branches:new Set()};
     const[brand,aggregator]=key.split('|');
     const gGrossA=gA.net+gA.disc,gGrossB=gB.net+gB.disc;
     const rate=commissionRateFor(aggregator,brand,dateRef);
@@ -790,8 +832,13 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
     // rangeB, already correctly derived above — either the filter's explicit range or the
     // records' own min/max), so a comparison spanning two different months correctly prices ad
     // cost against the campaign windows that actually overlap each side, not a shared range.
-    const gAdCostA=(rangeA.start&&rangeA.end)?cpcAdCostForRange(brand,aggregator,rangeA.start,rangeA.end):0;
-    const gAdCostB=(rangeB.start&&rangeB.end)?cpcAdCostForRange(brand,aggregator,rangeB.start,rangeB.end):0;
+    // v357: scope each period's CPC to the outlets in view (per-outlet budgets filter, brand-pooled
+    // pro-rate) using that side's own range and its own in-view outlet set. Unfiltered views (the
+    // group already covering every active outlet) fall back to the whole-brand total unchanged.
+    const _vbA=(rangeA.start&&rangeA.end)?cpcOutletScope(brand,aggregator,rangeA.start,rangeA.end,gA.branches,gA.net):null;
+    const _vbB=(rangeB.start&&rangeB.end)?cpcOutletScope(brand,aggregator,rangeB.start,rangeB.end,gB.branches,gB.net):null;
+    const gAdCostA=(rangeA.start&&rangeA.end)?cpcAdCostForRange(brand,aggregator,rangeA.start,rangeA.end,_vbA):0;
+    const gAdCostB=(rangeB.start&&rangeB.end)?cpcAdCostForRange(brand,aggregator,rangeB.start,rangeB.end,_vbB):0;
     const contribA=gA.net-gCommA-gFoodA-gAdCostA,contribB=gB.net-gCommB-gFoodB-gAdCostB;
     grossA+=gGrossA;grossB+=gGrossB;discA+=gA.disc;discB+=gB.disc;
     commA+=gCommA;commB+=gCommB;foodA+=gFoodA;foodB+=gFoodB;adCostA+=gAdCostA;adCostB+=gAdCostB;
@@ -6230,8 +6277,24 @@ function resolveBrandLocation(bl,brandCache,branchCache){
     if(!branchCache.has(brand))branchCache.set(brand,[...new Set((allData||[]).filter(r=>r.brand===brand).map(r=>r.branch))].filter(b=>b!=="(brand-level)"));
     brandBranches=branchCache.get(brand);
   }else brandBranches=[...new Set((allData||[]).filter(r=>r.brand===brand).map(r=>r.branch))].filter(b=>b!=="(brand-level)");
-  const branch=(brandBranches.length?resolveBranchName(branchRaw,brandBranches):null)||branchRaw;
-  return{brand,branch};
+  const resolved=brandBranches.length?resolveBranchName(branchRaw,brandBranches):null;
+  const branch=resolved||branchRaw;
+  // v358: classify rows whose Brand-Location is NOT a single real outlet, so their pooled spend can
+  // be split across the right outlets by sales share (Nikhil's rule). Only recognized patterns get a
+  // scope; anything else keeps the legacy per-outlet fallback untouched.
+  //   'brand' — no location, the brand name itself, or "N Branches" → split across all the brand's
+  //             outlets live in the period
+  //   'dubai' — "DXB" → split across the brand's Dubai outlets live in the period
+  //   'auh'   — "AUH" → split across the brand's Abu Dhabi outlets live in the period
+  let splitScope=null;
+  if(!resolved){
+    const t=(branchRaw||'').trim().toLowerCase();
+    if(t===''||t===(brand||'').toLowerCase()||/^\d+\s*branch/.test(t))splitScope='brand';
+    else if(t==='dxb'||t==='dubai')splitScope='dubai';
+    else if(t==='auh'||t==='ad'||t==='abu dhabi'||t==='abudhabi')splitScope='auh';
+    // else: unrecognized token — leave splitScope=null so behaviour is unchanged from before
+  }
+  return{brand,branch,splitScope};
 }
 
 // Parse the Ad Investments CSV into raw rows (light work only — heavy analysis happens later)
@@ -6268,7 +6331,7 @@ function parseCPCSheet(csv){
     const aggregator=(row[cm.aggregator]||"").trim();if(!aggregator)continue;
     if(CPC_EXCLUDE_AGGS.has(aggregator.toLowerCase()))continue;
     const bl=(row[cm.location]||"").trim();
-    const {brand,branch}=resolveBrandLocation(bl,brandCache,branchCache);
+    const {brand,branch,splitScope}=resolveBrandLocation(bl,brandCache,branchCache);
     if(!brand||CPC_EXCLUDE_BRANDS.has(brand.toLowerCase()))continue;
     const num=(idx)=>{if(idx<0)return 0;const v=(row[idx]||"").toString().replace(/[, ]/g,"").replace(/%/g,"").trim();const n=parseFloat(v);return isNaN(n)?0:n;};
     const remarksRaw=(row[cm.remarks]||"").toString().trim();
@@ -6288,7 +6351,7 @@ function parseCPCSheet(csv){
     const budgetType=btRaw.includes("combin")?"combined":(btRaw.includes("seperat")||btRaw.includes("separat"))?"separate":"separate";
     const rec={
       adType:/keyword/i.test(adType)?"Keywords":/banner/i.test(adType)?"Banners":"CPC",
-      aggregator,brand,branch,brandLocation:bl,startDate,endDate,
+      aggregator,brand,branch,splitScope,brandLocation:bl,startDate,endDate,
       views:num(cm.views),orders:num(cm.orders),sales:num(cm.sales),aov:num(cm.aov),cto:num(cm.cto),
       budgetAlloc:num(cm.budgetAlloc),budgetSpent:num(cm.budgetSpent),leftover:num(cm.leftover),
       roi:num(cm.roi),avgBid:num(cm.avgBid),ftu:num(cm.ftu),
@@ -6302,6 +6365,13 @@ function parseCPCSheet(csv){
       // buildCPCModel so they don't show up as bogus brand cards in the drilldown.
       brandUnmapped:!CPC_VALID_BRANDS.has(brand)
     };
+    // v359: attach an explicit outlet list to pooled rows whose sheet entry gives only a count
+    // ("N Branches"), from CPC_SPLIT_OVERRIDES — the split then uses exactly those outlets.
+    for(const ov of CPC_SPLIT_OVERRIDES){
+      if(rec.brand===ov.brand&&rec.aggregator===ov.aggregator&&ov.locPattern.test(rec.brandLocation||"")&&(!ov.monthPrefix||(rec.month||"").startsWith(ov.monthPrefix))){
+        rec.splitBranches=new Set(ov.branches);if(!rec.splitScope)rec.splitScope="brand";break;
+      }
+    }
     if(rec.startDate&&rec.endDate){
       rec.days=Math.max(1,Math.round((new Date(rec.endDate)-new Date(rec.startDate))/86400000)+1);
       rec.dailyBurn=rec.budgetSpent/rec.days;
