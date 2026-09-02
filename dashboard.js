@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-360";
+const BUILD_VERSION="2026-08-13-361";
 const BUILD_NOTES=[
+  "\ud83c\udd95 Taught the dashboard to READ Deliveroo's new day-of-week / daypart CPC split, entered by Nikhil in the renamed 'Budget Type & Schedule' column (col N) as the existing budget-type text plus a comma and a schedule token, e.g. 'Seperate Budget Per Outlet, Mon-Thu' or '..., Lunch'. Registered the new column header (old names kept). The budget-type detection is unchanged (still keys on 'combin'/'seperat' anywhere in the cell); a new parseCpcSchedule reads the token after the comma into a structured schedule {kind, label, days, daypart}. Day-of-week tokens (Mon-Fri, Fri-Sun, Mon-Thu, single days, and Weekday/Weekend shortcuts) become a set of active weekdays; dayparts (Lunch/Dinner) carry a label but no day restriction. Cost attribution is now schedule-aware: a day-of-week row's confirmed-day count, partial-range scaling, and forward extrapolation all count only its active weekdays (via new cpcDowDaysBetween), so its spend lands on the right days at any granularity — a Fri-Sun row shows zero cost in a Mon-Thu window and vice-versa, while a whole-month query still returns the exact real budgetSpent. Dayparts run every day and their budgets simply sum to the outlet total (the sheet has no hourly sales, so lunch-vs-dinner performance genuinely can't be separated — the labels are informational). Rows with no comma (every existing entry) parse to 'all days' and are completely unaffected. Verified with the shipped functions against the exact strings from Nikhil's screenshots: parsing is correct for every token; Sep-2026 Mon-Thu=18 days + Fri-Sun=12 days sums to 30; a confirmed Fyoozhen outlet with Mon-Thu(360)+Fri-Sun(540) returns 900 for the whole month, 90 for a Sat-Sun window (Fri-Sun row only), 80 for a Mon-Thu window (Mon-Thu row only), and 0 from the wrong-day row in each case; and Lunch(660)+Dinner(440) returns 1,100 for the month and a positive figure every single day. NOTE: this build makes the numbers correct. The on-page DISPLAY of the split on the Ad Investments page is the next step — deliberately not bundled here because the per-outlet allocation table is keyed to the prior complete month (these are current-month September rows) and is the tuned/fragile table, so the split needs its own surface built and verified against the live page rather than bolted onto that table blind. Everything from builds 358-360 (per-outlet scoping, emirate splits, funded-row handling, whole-brand totals) is unchanged.",
   "\ud83d\udcb8 Nikhil flagged that the 'Smokeys-10 Branches' Noon Banner campaign (Jul 2026, AED 2,000) was actually FUNDED BY NOON — no cost to us. Build 359 was wrongly splitting it as a real AED 2,000 cost, because the standard funded-by exclusion reads the Remarks column and this row's remarks say only 'Banner : 04-Aug-2026', with no 'Funded by' text to match — so it wasn't caught automatically. Marked the row funded via CPC_SPLIT_OVERRIDES (new 'funded' flag → rec.externallyFunded), which excludes it from ad cost entirely in cpcAdCostForRange, right alongside the remarks-based funded-by check; the earlier ten-outlet split is moot for a zero-cost row. Verified against the real sheet: the row now contributes AED 0.00 both in aggregate and for any single outlet, and all-view Smokeys Noon for Jul 2026 drops by exactly AED 2,000 (4,154.93 → 2,154.93) with nothing else affected. Note for the future: the clean fix for platform-funded campaigns is to write 'Funded by Noon' (or Talabat/Deliveroo/Careem) in the sheet's Remarks column — the standard exclusion then catches them automatically with no code override needed. Everything else from builds 358–359 (per-outlet scoping for all aggregators, emirate DXB/AUH splits, live-outlet handling, whole-brand totals preserved) is unchanged.",
   "\ud83c\udfaf Resolved the one open item from build 358 \u2014 the 'Smokeys-10 Branches' Noon row (Jul 2026, AED 2,000). The sheet records only a count, not which outlets, and 14 Smokeys outlets were live that month, so 'live outlets' couldn't identify the ten. Nikhil supplied the actual list (Al Furjan, Villa, Al Reef, DSO, Al Reem Island, Marina, Town Square, Motor City, Jumeirah, Khalifa City). Added CPC_SPLIT_OVERRIDES: a pooled row whose sheet entry gives only a count can carry an explicit named-outlet list, and the split then distributes across exactly those (by same-platform Noon sales share) instead of all live outlets. Names are normalized to the sales tab (Motor City->MC, Al Reem Island->Al Reem, Al Furjan->Furjan). 'Khalifa City' has no sales in this period \u2014 like Al Reef before it opened \u2014 so it draws 0 and the nine with sales absorb the full budget. Verified against the real sheet: the AED 2,000 distributes to exactly the nine named outlets with sales and sums to 2,000.00, every outlet NOT on the list draws 0 from it (Al Forsan, Al Quoz, DMC, DIP, Mirdiff), and the all-outlet view is unchanged at 2,000.00. The override is a documented manual stand-in for a sheet entry that names a count instead of branches; if these become common the real fix is to list branches in the sheet. Everything from build 358 (per-outlet scoping for all aggregators, funded-by exclusion, emirate DXB/AUH splits, live-outlet handling via sales presence, whole-brand totals preserved) is unchanged.",
   "\ud83d\udd27 Corrected the CPC outlet-scoping from build 357 after Nikhil flagged that its brand-pooled handling was wrong, and cross-checked the real Ad Investments sheet before rebuilding (Nikhil's instruction: always verify the sheet and ask before deciding). Two things were wrong in 357: (1) it pro-rated Careem/Noon 'Combined Per Brand' rows across outlets by sales share, on the assumption those budgets had no per-outlet consumption; (2) that assumption was never checked against the data. The sheet proves it false: EVERY aggregator \u2014 Careem and Noon included \u2014 records real per-outlet consumption, one row per Brand-Location (e.g. Lollorosso-Al Reef) with its own consumed figure. 'Combined Per Brand' describes only how the budget POOL is managed, never how consumption is logged, so it is irrelevant to attribution. Build 358 therefore scopes ALL aggregators by their own outlet, exactly like Deliveroo/Talabat, with no pro-rating \u2014 the pooled/poolShare path from 357 is removed entirely. The only rows without a single real outlet are genuinely pooled entries (tagged splitScope at parse time in resolveBrandLocation): brand-level rows (Brand-Location is just the brand name, or 'N Branches'), and emirate rows ('DXB' / 'AUH'). Per Nikhil's rules these are split across the right outlets by each outlet's share of THAT SAME aggregator's sales over the row's own period \u2014 brand-level across all the brand's live outlets, DXB across its Dubai outlets, AUH across its Abu Dhabi outlets (Al Forsan, Al Reem, WTC [Fyoozhen-only], Al Reef). 'Live' is defined by real sales presence, which automatically handles new outlets: Al Reef opened 2026-04-22 (verified from first sales day in the Lollorosso tab), so it correctly draws zero from any pre-opening pooled row. Unfiltered/all-outlet views still return the exact whole-brand total (cpcOutletScope returns no scoping whenever the view already covers every outlet that brand+aggregator had sales for, so an ad-only outlet with no synced sales is never dropped). Validated end-to-end against the real uploaded sheet using the shipped functions: Al Reef Lollorosso now returns AED ~1,502 for July and AED ~1,619 for August (was showing the whole-brand AED 19,392 / 28,727) \u2014 the August figure correctly excludes a 'Funded By Noon' platform-funded row per the existing funded-by rule, which is why the true number is ~1,619 not the naive consumed sum of ~1,769. Split logic separately verified on 2025 Careem data: the July-2025 AUH row (AED 1,828) reconstructs exactly across Al Forsan (675.82) + Al Reem (1,152.18) by their Careem sales share with Al Reef correctly at 0, and the all-outlet view sums DXB+AUH rows to exactly AED 9,170 with no regression. All earlier CPC fixes (year-less date parse, real-confirmed-spend literal portion, single-day extrapolation clamp, budget cap, funded-by exclusion) are preserved untouched. OPEN ITEM: one Smokeys Noon 'Smokeys-10 Branches' row (Jul 2026, AED 2,000) is currently treated as a brand-level split across all live Smokeys outlets \u2014 but 14 Smokeys outlets were live that month, not 10, so it needs Nikhil to specify which 10 before it is exact; the brand total is preserved either way.",
@@ -541,6 +542,47 @@ function cpcOutletScope(brand,agg,lo,hi,viewBranches,viewNet){
 // here is treated as Dubai. WTC is Fyoozhen-only but harmlessly listed — the split always
 // intersects with the outlets a brand actually had sales for, so a brand without WTC never sees it.
 const CPC_AUH_OUTLETS=new Set(['al forsan','al reem','al reef','wtc']);
+// v361: day-of-week + daypart scheduling, from Deliveroo's new split approach. The schedule lives
+// in the "Budget Type & Schedule" column (col N) after a comma, e.g. "Seperate Budget Per Outlet,
+// Mon-Fri" or "..., Lunch". parseCpcSchedule pulls the token after the comma into a structured
+// shape: {kind, label, days, daypart}. Only `days` (a Set of JS getDay() numbers, Sun=0..Sat=6)
+// affects cost — a day-of-week row's spend is attributed to matching weekdays only, at any
+// granularity. Dayparts (Lunch/Dinner) run every day (days=null) so they don't change day-level
+// cost; they carry a label and their budgets simply sum to the outlet total (the dashboard has no
+// hourly sales, so lunch-vs-dinner performance can't be split — label only).
+const CPC_DOW={sun:0,mon:1,tue:2,wed:3,thu:4,fri:5,sat:6};
+function cpcDaySetFromRange(a,b){
+  const ai=CPC_DOW[a],bi=CPC_DOW[b];
+  if(ai==null||bi==null)return null;
+  const s=new Set();let i=ai;
+  for(let n=0;n<7;n++){s.add(i);if(i===bi)break;i=(i+1)%7;} // inclusive, wraps (e.g. fri-sun = Fri,Sat,Sun)
+  return s;
+}
+function parseCpcSchedule(cellRaw){
+  if(!cellRaw)return null;
+  const i=cellRaw.indexOf(',');
+  if(i<0)return null;                                   // no schedule token → all days
+  const label=cellRaw.slice(i+1).trim();
+  const tok=label.toLowerCase();
+  if(!tok)return null;
+  if(tok==='lunch')return{kind:'daypart',label:'Lunch',days:null,daypart:'lunch'};
+  if(tok==='dinner')return{kind:'daypart',label:'Dinner',days:null,daypart:'dinner'};
+  if(/^weekdays?$/.test(tok))return{kind:'dow',label:'Weekdays',days:new Set([1,2,3,4,5]),daypart:null};
+  if(/^weekends?$/.test(tok))return{kind:'dow',label:'Weekend',days:new Set([6,0]),daypart:null};
+  const m=tok.match(/^([a-z]{3})\s*(?:-|–|to)\s*([a-z]{3})$/);
+  if(m){const s=cpcDaySetFromRange(m[1],m[2]);if(s)return{kind:'dow',label,days:s,daypart:null};}
+  if(CPC_DOW[tok]!=null)return{kind:'dow',label,days:new Set([CPC_DOW[tok]]),daypart:null};
+  return{kind:'label',label,days:null,daypart:null};    // unrecognized → show label, treat as all days
+}
+// Count days in [lo,hi] inclusive whose weekday is in daysSet; all calendar days when daysSet is null.
+function cpcDowDaysBetween(lo,hi,daysSet){
+  if(!lo||!hi||lo>hi)return 0;
+  const start=new Date(lo+'T12:00:00'),end=new Date(hi+'T12:00:00');
+  if(!daysSet)return Math.round((end-start)/86400000)+1;
+  let n=0;const d=new Date(start);
+  while(d<=end){if(daysSet.has(d.getDay()))n++;d.setDate(d.getDate()+1);}
+  return n;
+}
 const CPC_SPLIT_OVERRIDES=[
   // v360: the "Smokeys-10 Branches" Noon Banner row (Jul 2026, AED 2,000) was FUNDED BY NOON per
   // Nikhil — no cost to us — but the sheet's remarks say only "Banner : 04-Aug-2026", with no
@@ -621,7 +663,8 @@ function cpcAdCostForRange(brand,agg,startDate,endDate,viewBranches){
     const knownThrough=(!confirmedEnded&&r.updateDate&&r.updateDate<r.endDate)?cpcPrevDay(r.updateDate):r.endDate;
     // v352: real confirmed days use REAL budgetSpent (scaled for partial-range queries); the
     // extrapolation rate is derived fresh from budgetSpent over those real confirmed days.
-    const realConfirmedDays=Math.max(1,Math.round((new Date(knownThrough)-new Date(r.startDate))/86400000)+1);
+    const dow=(r.schedule&&r.schedule.days)?r.schedule.days:null; // v361: day-of-week restriction, if any
+    const realConfirmedDays=Math.max(1,cpcDowDaysBetween(r.startDate,knownThrough,dow));
     const realRate=r.budgetSpent/realConfirmedDays;
     const overlapStart=r.startDate>startDate?r.startDate:startDate;
     const overlapEnd=knownThrough<endDate?knownThrough:endDate;
@@ -630,7 +673,7 @@ function cpcAdCostForRange(brand,agg,startDate,endDate,viewBranches){
       if(overlapStart===r.startDate&&overlapEnd===knownThrough){
         rowCost+=r.budgetSpent; // whole real confirmed period → exact budgetSpent
       }else{
-        const overlapDays=Math.round((new Date(overlapEnd)-new Date(overlapStart))/86400000)+1;
+        const overlapDays=cpcDowDaysBetween(overlapStart,overlapEnd,dow); // v361: count active days only
         rowCost+=realRate*overlapDays; // partial → scale by real rate
       }
     }
@@ -641,7 +684,7 @@ function cpcAdCostForRange(brand,agg,startDate,endDate,viewBranches){
       const extraStart=extraStartRaw>startDate?extraStartRaw:startDate;
       const extraEnd=endDate<r.endDate?endDate:r.endDate;
       if(extraStart<=extraEnd){
-        const{cost}=cpcExtrapolatedCost(r,extraStart,extraEnd,realRate);
+        const{cost}=cpcExtrapolatedCost(r,extraStart,extraEnd,realRate,dow);
         rowCost+=cost;
       }
     }
@@ -678,7 +721,7 @@ function cpcPrevDay(dateStr){
 // formats, and pure free-text notes like "Cancelled due to closure" with no date at all), not
 // reliably parseable across every row. Uses the row's own real startDate/endDate/dailyBurn
 // instead, which are already structured and reliable.
-function cpcExtrapolatedCost(row,extraStart,extraEnd,explicitRate){
+function cpcExtrapolatedCost(row,extraStart,extraEnd,explicitRate,dowSet){
   if(!row||!row.budgetAlloc||row.budgetSpent==null)return{cost:0,daysExtrapolated:0,cappedEarly:false};
   // Condition 1: budget must genuinely still have room
   const remaining=row.budgetAlloc-row.budgetSpent;
@@ -695,7 +738,9 @@ function cpcExtrapolatedCost(row,extraStart,extraEnd,explicitRate){
   // the remaining budget the moment it would be exceeded — the capping day gets only its real
   // remaining share, not the full rate, and nothing after that day counts.
   let cost=0,daysExtrapolated=0,cappedEarly=false;
+  const _es=new Date(extraStart+"T12:00:00");
   for(let d=0;d<totalExtraDays;d++){
+    if(dowSet){const cur=new Date(_es);cur.setDate(cur.getDate()+d);if(!dowSet.has(cur.getDay()))continue;} // v361: only active weekdays
     if(cost+dailyRate<=remaining){
       cost+=dailyRate;
       daysExtrapolated++;
@@ -6320,7 +6365,7 @@ function parseCPCSheet(csv){
     // NEW: "Budget Combined/Seperate" column distinguishes pooled (brand-level, can't edit per outlet)
     // from individually-editable per-outlet budgets. Matches partial header substrings so the column
     // can be renamed slightly without breaking the parser. Handles the user's "Seperate" typo too.
-    budgetType:col("budget combined/seperate","budget combined/separate","budget type","budget style","combined/seperate","combined/separate"),
+    budgetType:col("budget type & schedule","budget type and schedule","budget combined/seperate","budget combined/separate","budget type","budget style","combined/seperate","combined/separate"),
     remarks:col("remarks/last updation date","remarks","last updation date","notes")
   };
   const brandCache=new Map(),branchCache=new Map();
@@ -6347,14 +6392,16 @@ function parseCPCSheet(csv){
     // Falls back to "separate" if the cell is blank or the value is unrecognized, so older
     // rows added before this column existed still get a sensible default.
     const btRaw=((cm.budgetType>=0?row[cm.budgetType]:"")||"").toString().trim().toLowerCase();
+    const budgetCellRaw=((cm.budgetType>=0?row[cm.budgetType]:"")||"").toString().trim(); // original case for the schedule label
     const budgetType=btRaw.includes("combin")?"combined":(btRaw.includes("seperat")||btRaw.includes("separat"))?"separate":"separate";
+    const schedule=parseCpcSchedule(budgetCellRaw); // v361: day-of-week / daypart split, if present
     const rec={
       adType:/keyword/i.test(adType)?"Keywords":/banner/i.test(adType)?"Banners":"CPC",
       aggregator,brand,branch,splitScope,brandLocation:bl,startDate,endDate,
       views:num(cm.views),orders:num(cm.orders),sales:num(cm.sales),aov:num(cm.aov),cto:num(cm.cto),
       budgetAlloc:num(cm.budgetAlloc),budgetSpent:num(cm.budgetSpent),leftover:num(cm.leftover),
       roi:num(cm.roi),avgBid:num(cm.avgBid),ftu:num(cm.ftu),
-      budgetType,
+      budgetType,schedule,
       remarks:remarksRaw,
       updateDate:parseRemarksDate(remarksRaw),
       month:startDate?startDate.slice(0,7):null,
