@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-361";
+const BUILD_VERSION="2026-08-13-362";
 const BUILD_NOTES=[
+  "\ud83d\uddd3 Schedule split now surfaces in the Outlet Performance table on the Ads Performance page. When Deliveroo's new day-of-week or daypart split is in play (Mon-Thu/Fri-Sun or Lunch/Dinner, entered in the renamed 'Budget Type & Schedule' column per build 361), an outlet with \u22652 distinct schedule labels renders one row per schedule instead of a single combined row. Each sub-row has the orange left-accent tint from the rendering Nikhil approved, a colour-coded tag (LUNCH/DINNER in purple, day-range in blue) with the time window where applicable, and its own Budget/Spent/Leftover from the sheet's real figures. For day-of-week splits (Mon-Thu/Fri-Sun, Mon-Fri, Fri-Sun, Weekday/Weekend) the performance columns (Clicks, Orders, Sales, ROAS, Verdict) are also real and per-schedule, since daily sales exist to attribute them; for daypart splits (Lunch/Dinner) those columns show \u2014 because there's no hourly data to split lunch vs dinner, exactly as Nikhil approved. The bid/invest recommendation appears on the FIRST sub-row only (it's outlet-level, not per-daypart); subsequent sub-rows show '\u2191 outlet-level' so it reads clearly. Sort order is: Lunch before Dinner, Mon before later days. Totals and planning tables are untouched (they always aggregate to the whole outlet regardless of split, per Nikhil's rule). Outlets with no schedule or only one schedule label continue to render as a single row \u2014 fully regression-safe. Validated: Lunch(660)+Dinner(440) sums to AED 1,100 budget; budget/spent reconstruct exactly; perf columns correctly blank for dayparts; Mon-Thu before Fri-Sun sort; day-of-week ROAS is real (12.78\u00d7); orange accent border present; recCell on first row only; no-schedule outlets produce realLabels=0 (no split); single-schedule outlets produce realLabels<2 (no split).",
   "\ud83c\udd95 Taught the dashboard to READ Deliveroo's new day-of-week / daypart CPC split, entered by Nikhil in the renamed 'Budget Type & Schedule' column (col N) as the existing budget-type text plus a comma and a schedule token, e.g. 'Seperate Budget Per Outlet, Mon-Thu' or '..., Lunch'. Registered the new column header (old names kept). The budget-type detection is unchanged (still keys on 'combin'/'seperat' anywhere in the cell); a new parseCpcSchedule reads the token after the comma into a structured schedule {kind, label, days, daypart}. Day-of-week tokens (Mon-Fri, Fri-Sun, Mon-Thu, single days, and Weekday/Weekend shortcuts) become a set of active weekdays; dayparts (Lunch/Dinner) carry a label but no day restriction. Cost attribution is now schedule-aware: a day-of-week row's confirmed-day count, partial-range scaling, and forward extrapolation all count only its active weekdays (via new cpcDowDaysBetween), so its spend lands on the right days at any granularity — a Fri-Sun row shows zero cost in a Mon-Thu window and vice-versa, while a whole-month query still returns the exact real budgetSpent. Dayparts run every day and their budgets simply sum to the outlet total (the sheet has no hourly sales, so lunch-vs-dinner performance genuinely can't be separated — the labels are informational). Rows with no comma (every existing entry) parse to 'all days' and are completely unaffected. Verified with the shipped functions against the exact strings from Nikhil's screenshots: parsing is correct for every token; Sep-2026 Mon-Thu=18 days + Fri-Sun=12 days sums to 30; a confirmed Fyoozhen outlet with Mon-Thu(360)+Fri-Sun(540) returns 900 for the whole month, 90 for a Sat-Sun window (Fri-Sun row only), 80 for a Mon-Thu window (Mon-Thu row only), and 0 from the wrong-day row in each case; and Lunch(660)+Dinner(440) returns 1,100 for the month and a positive figure every single day. NOTE: this build makes the numbers correct. The on-page DISPLAY of the split on the Ad Investments page is the next step — deliberately not bundled here because the per-outlet allocation table is keyed to the prior complete month (these are current-month September rows) and is the tuned/fragile table, so the split needs its own surface built and verified against the live page rather than bolted onto that table blind. Everything from builds 358-360 (per-outlet scoping, emirate splits, funded-row handling, whole-brand totals) is unchanged.",
   "\ud83d\udcb8 Nikhil flagged that the 'Smokeys-10 Branches' Noon Banner campaign (Jul 2026, AED 2,000) was actually FUNDED BY NOON — no cost to us. Build 359 was wrongly splitting it as a real AED 2,000 cost, because the standard funded-by exclusion reads the Remarks column and this row's remarks say only 'Banner : 04-Aug-2026', with no 'Funded by' text to match — so it wasn't caught automatically. Marked the row funded via CPC_SPLIT_OVERRIDES (new 'funded' flag → rec.externallyFunded), which excludes it from ad cost entirely in cpcAdCostForRange, right alongside the remarks-based funded-by check; the earlier ten-outlet split is moot for a zero-cost row. Verified against the real sheet: the row now contributes AED 0.00 both in aggregate and for any single outlet, and all-view Smokeys Noon for Jul 2026 drops by exactly AED 2,000 (4,154.93 → 2,154.93) with nothing else affected. Note for the future: the clean fix for platform-funded campaigns is to write 'Funded by Noon' (or Talabat/Deliveroo/Careem) in the sheet's Remarks column — the standard exclusion then catches them automatically with no code override needed. Everything else from builds 358–359 (per-outlet scoping for all aggregators, emirate DXB/AUH splits, live-outlet handling, whole-brand totals preserved) is unchanged.",
   "\ud83c\udfaf Resolved the one open item from build 358 \u2014 the 'Smokeys-10 Branches' Noon row (Jul 2026, AED 2,000). The sheet records only a count, not which outlets, and 14 Smokeys outlets were live that month, so 'live outlets' couldn't identify the ten. Nikhil supplied the actual list (Al Furjan, Villa, Al Reef, DSO, Al Reem Island, Marina, Town Square, Motor City, Jumeirah, Khalifa City). Added CPC_SPLIT_OVERRIDES: a pooled row whose sheet entry gives only a count can carry an explicit named-outlet list, and the split then distributes across exactly those (by same-platform Noon sales share) instead of all live outlets. Names are normalized to the sales tab (Motor City->MC, Al Reem Island->Al Reem, Al Furjan->Furjan). 'Khalifa City' has no sales in this period \u2014 like Al Reef before it opened \u2014 so it draws 0 and the nine with sales absorb the full budget. Verified against the real sheet: the AED 2,000 distributes to exactly the nine named outlets with sales and sums to 2,000.00, every outlet NOT on the list draws 0 from it (Al Forsan, Al Quoz, DMC, DIP, Mirdiff), and the all-outlet view is unchanged at 2,000.00. The override is a documented manual stand-in for a sheet entry that names a count instead of branches; if these become common the real fix is to list branches in the sheet. Everything from build 358 (per-outlet scoping for all aggregators, funded-by exclusion, emirate DXB/AUH splits, live-outlet handling via sales presence, whole-brand totals preserved) is unchanged.",
@@ -9406,7 +9407,25 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
       bannerRow=`<tr><td colspan="${colCount}" style="padding:0"><div style="margin:12px 0 6px 0;padding:10px 14px;background:linear-gradient(135deg,rgba(96,165,250,.08),rgba(96,165,250,.02));border:1px solid rgba(96,165,250,.25);border-radius:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:14px">🔒</span><div><div style="font-size:12px;font-weight:800;color:#60A5FA">Pooled Budget — ${pooledTableRows.length} outlets share this pool</div><div style="font-size:10px;color:${T.label};margin-top:2px">${ag} auto-distributes spend across these outlets. Per-outlet budget is not controllable individually.</div></div></div><div style="display:flex;gap:16px;align-items:center"><div style="text-align:center"><div style="font-size:9px;color:${T.muted};text-transform:uppercase;font-weight:700">Allocated</div><div style="font-size:15px;font-weight:800;color:#fbbf24">${fmtAEDTip(poolTotalAlloc)}</div></div><div style="text-align:center"><div style="font-size:9px;color:${T.muted};text-transform:uppercase;font-weight:700">Spent</div><div style="font-size:15px;font-weight:800;color:${T.secondary}">${fmtAEDTip(poolTotalSpent)}</div></div><div style="text-align:center"><div style="font-size:9px;color:${T.muted};text-transform:uppercase;font-weight:700">Remaining</div><div style="font-size:15px;font-weight:800;color:${poolLeft>0?'#22C55E':'#EF4444'}">${fmtAEDTip(poolLeft)}</div></div><div style="text-align:center"><div style="font-size:9px;color:${T.muted};text-transform:uppercase;font-weight:700">Burn</div><div style="font-size:15px;font-weight:800;color:${T.label}">${poolPct}%</div></div></div></div></td></tr>`;
     }
     const row=`<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:${T.text}">${t.outlet}</strong>${impTag}${poolTag}${fundedTag}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right">${(d.views||0).toLocaleString()}</td><td style="text-align:right">${(d.orders||0).toLocaleString()}</td><td style="text-align:right">${fmtAEDExact(d.sales)}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${isPooled?'<span style="color:#60A5FA;font-size:10px">pool</span>':fmtAEDExact(d.alloc)}</td><td style="text-align:right">${fmtAEDExact(d.spent)}</td><td style="text-align:right">${isPooled?'<span style="color:#60A5FA;font-size:10px">pool</span>':fmtAEDExact(d.leftover)}</td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}<div style="font-size:8px;color:${t.momChg==null?T.secondary:pctClr(t.momChg)}">${t.momChg!=null?'MoM '+fmtPct(t.momChg):''}</div></td><td style="text-align:right">${t.calcBid!=null?'AED '+t.calcBid.toFixed(2):'—'}</td><td style="text-align:right">${d.ftu||0}</td>${showInvestCol?`<td style="text-align:right">${recCell}</td>`:''}</tr>`;
-    return bannerRow+row;
+    // v362: schedule split — when this outlet's month rows carry ≥2 distinct schedule labels
+    // (Mon-Thu/Fri-Sun or Lunch/Dinner), render one line per schedule instead of the combined row.
+    // Totals above already used the combined `d`, so this is display-only and never double-counts.
+    let splitHtml=null;
+    if(!isPooled){
+      const groups=new Map();
+      for(const rr of (t.monthRows||[])){const lbl=rr.schedule&&rr.schedule.label?rr.schedule.label:'';if(!groups.has(lbl))groups.set(lbl,[]);groups.get(lbl).push(rr);}
+      const realLabels=[...groups.keys()].filter(k=>k!=='');
+      if(realLabels.length>=2){
+        const entries=[...groups.entries()].filter(([lbl])=>lbl!=='')
+          .map(([lbl,rws])=>({lbl,rws,sch:rws[0].schedule,sd:cpcCombineRows(rws,brand,ag)}))
+          .sort((a,b)=>cpcSchedSortKey(a.sch)-cpcSchedSortKey(b.sch));
+        // any unlabeled rows (rare) fold into a plain trailing slice so no budget is lost
+        const unl=groups.get('');
+        if(unl&&unl.length)entries.push({lbl:'',rws:unl,sch:null,sd:cpcCombineRows(unl,brand,ag)});
+        splitHtml=entries.map((e,i)=>cpcSchedRowHtml(t.outlet,e.sd,e.sch,brand,ag,recCell,showInvestCol,!(e.sch&&e.sch.daypart),i===0)).join('');
+      }
+    }
+    return bannerRow+(splitHtml||row);
   }).join('');
   })();
 
@@ -9508,6 +9527,50 @@ function cpcCombineRows(rows,brand,ag){
   const be=cpcBE(brand,ag);
   const roi=spent>0?sales/spent:null;
   return{sales,spent,orders,views,ftu,alloc,leftover,be,roi,cto:views>0?(orders/views)*100:null,aov:orders>0?sales/orders:null,verdict:cpcVerdict(roi,be)};
+}
+// v362: schedule-split rendering for the Outlet Performance table. When Deliveroo's new day-of-week
+// or daypart split is in play, an outlet's month rows carry different schedule labels (Mon-Thu /
+// Fri-Sun, or Lunch / Dinner). Instead of collapsing them into one line, we render one line PER
+// schedule — each is just cpcCombineRows on that schedule's own rows, so its budget/spent (and, for
+// day-of-week, its real sales/ROAS from the sheet) are exact. Dayparts show budget/spent/leftover
+// only and "—" for performance, because there's no hourly sales to split lunch vs dinner.
+function cpcDaypartHours(dp){return dp==='lunch'?'11am–3pm':dp==='dinner'?'6pm–10pm':'';}
+function cpcScheduleTagHtml(sch){
+  if(!sch)return'';
+  const isDp=!!sch.daypart,hrs=isDp?cpcDaypartHours(sch.daypart):'';
+  const bg=isDp?'rgba(183,155,250,.16)':'rgba(96,165,250,.16)',fg=isDp?'#B79BFA':'#60A5FA';
+  return ` <span style="background:${bg};color:${fg};padding:2px 8px;border-radius:5px;font-size:9.5px;font-weight:800;letter-spacing:.3px;vertical-align:middle">${(sch.label||'').toUpperCase()}</span>${hrs?` <span style="color:#8595AE;font-size:9.5px">${hrs}</span>`:''}`;
+}
+function cpcSchedSortKey(sch){
+  if(!sch)return 99;
+  if(sch.daypart==='lunch')return 0;
+  if(sch.daypart==='dinner')return 1;
+  if(sch.days&&sch.days.size){let min=99;for(const d of sch.days){const mo=(d+6)%7;if(mo<min)min=mo;}return 10+min;} // Mon=0 ordering
+  return 50;
+}
+// One <tr> for a single schedule slice of an outlet. showPerf=false (dayparts) blanks the
+// performance columns; recCellHtml (outlet-level bid/invest) is shown on the first slice only.
+function cpcSchedRowHtml(outlet,sd,sch,brand,ag,recCellHtml,showInvestCol,showPerf,isFirst){
+  const vClr=sd.verdict?CPC_VC[sd.verdict]:'#A3B4CC';
+  const calcBid=(showPerf&&sd.views>0)?sd.spent/sd.views:null;
+  const dash='<span style="color:#8595AE">—</span>';
+  const perf=(v)=>showPerf?v:dash;
+  const invCell=showInvestCol?`<td style="text-align:right">${isFirst?recCellHtml:'<span style="color:#8595AE;font-size:10px">↑ outlet-level</span>'}</td>`:'';
+  return `<tr style="cursor:pointer;background:rgba(255,169,77,.05)" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(outlet)}')">`
+    +`<td style="border-left:3px solid #FFA94D"><strong style="font-size:12px;color:#EAF0F8">${outlet}</strong>${cpcScheduleTagHtml(sch)}</td>`
+    +`<td>${showPerf?`<span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[sd.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${sd.verdict||'—'}</span>`:dash}</td>`
+    +`<td style="text-align:right">${perf((sd.views||0).toLocaleString())}</td>`
+    +`<td style="text-align:right">${perf((sd.orders||0).toLocaleString())}</td>`
+    +`<td style="text-align:right">${perf(fmtAEDExact(sd.sales))}</td>`
+    +`<td style="text-align:right">${perf(sd.aov?sd.aov.toFixed(0):'—')}</td>`
+    +`<td style="text-align:right">${perf(sd.cto!=null?sd.cto.toFixed(1)+'%':'—')}</td>`
+    +`<td style="text-align:right">${fmtAEDExact(sd.alloc)}</td>`
+    +`<td style="text-align:right">${fmtAEDExact(sd.spent)}</td>`
+    +`<td style="text-align:right">${fmtAEDExact(sd.leftover)}</td>`
+    +`<td style="text-align:right;font-weight:800;color:${vClr}">${perf(sd.roi?sd.roi.toFixed(2)+'×':'—')}</td>`
+    +`<td style="text-align:right">${calcBid!=null?'AED '+calcBid.toFixed(2):dash}</td>`
+    +`<td style="text-align:right">${perf(sd.ftu||0)}</td>`
+    +invCell+`</tr>`;
 }
 function cpcPrevMonth(m){const [y,mo]=m.split("-").map(Number);const d=new Date(y,mo-2,1);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;}
 function cpcMonthLabel(m){if(!m)return '';const [y,mo]=m.split("-").map(Number);const names=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];return `${names[mo-1]} ${String(y).slice(2)}`;}
