@@ -261,9 +261,17 @@ async function handleForecastSave(request, env) {
   if (!session) return json({ error: "no_session" }, 401);
 
   const body = await readBody(request);
-  const required = ["brand", "agg", "discPct", "cap", "start", "end", "scenarios"];
+  // discPct and cap are legitimately null for BOGO campaigns — the cost is derived from
+  // real historical data rather than a stated percentage. Exclude them from the null check
+  // when type is bogo; every other type still requires them.
+  const isBogo = body.type === "bogo";
+  const required = ["brand", "agg", "start", "end", "scenarios"];
   for (const k of required) {
     if (body[k] === undefined || body[k] === null) return json({ error: `missing_${k}` }, 400);
+  }
+  if (!isBogo) {
+    if (body.discPct === undefined || body.discPct === null) return json({ error: "missing_discPct" }, 400);
+    if (body.cap === undefined || body.cap === null) return json({ error: "missing_cap" }, 400);
   }
 
   const ts = new Date().toISOString();
