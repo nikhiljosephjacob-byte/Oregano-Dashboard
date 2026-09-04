@@ -13,8 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-365";
+const BUILD_VERSION="2026-08-13-369";
 const BUILD_NOTES=[
+  "\ud83d\udcc5 Break-even calculator now shows exactly which dates its baseline came from, with the day of week \u2014 caught directly by Nikhil after the earlier fix confirmed baseline can carry a real organic discount (small vouchers, standing combos) even with no new campaign running. Two changes: (1) the existing prior-week and same-days-last-month date display in the baseline card now uses fmtDisp (weekday + day + month + year, e.g. \"Tue, 25 Aug 2026\") instead of raw ISO dates; (2) a new subtitle line under the econ panel's Discount/order row shows a compact version of the SAME dates right where the number is (\"From Tue 25 \u2013 Mon 31 Aug & Sat 25 \u2013 Fri 31 Jul\"), only referencing whichever comparison period(s) genuinely contributed data \u2014 not blindly both, since either the prior-week or same-days-last-month window can independently have no sales data. Switching to any of the four campaign scenarios correctly swaps this subtitle to the cost-share note instead (dates aren't relevant there \u2014 campaign terms are user-entered, not historically derived). Verified end-to-end with a real DOM (jsdom): initial render shows the correct compact date string with weekday names, switching to a campaign scenario swaps to \"100% our cost\", and switching back to Baseline correctly restores the date reference.",
+  "\ud83c\udd95 Campaign Break-Even Calculator rebuilt with the full interactive design approved over many rounds \u2014 dynamic hero banner, five-zone gauge with neon-glow segments and curved tags, an evenly-spaced journey track, and per-order economics that genuinely switch between two REAL profiles (baseline uses actual historical gross-vs-net AOV gap, not an assumed zero; the four campaign scenarios share identical real per-order economics since only volume differs between them). Cool Contrast palette locked in as final (indigo/crimson/cyan/teal/gold). Auto-plays left to right every ~1.8s; hovering any card or circle jumps there and pauses, moving away resumes. Built as targeted DOM updates (campBeSetActive, by element id) rather than full re-renders for the interactive parts \u2014 a full pg.innerHTML replace on every 1.8s tick would tear down and recreate every node, which kills CSS transitions (they only animate on the SAME persisting element across a property change, never across a fresh DOM replacement). The auto-play timer is stopped before any renderCampaigns() DOM replacement (old target nodes are about to die) and restarted only after the new DOM is in place; also stopped on every page navigation via gp(), not just returns to Campaigns, so it can't leak and keep firing in the background while the user is on an unrelated page. Verified with a real jsdom-rendered DOM (not just code review, per Nikhil's explicit push after the dial-centering bug \u2014 confirmed via genuine arithmetic audit that CX must equal viewBox-width/2, not re-asserted from a carried-over constant): all 44 required element ids exist after render; initial baseline state renders correctly; campBeSetActive(idx) correctly updates the hero, needle rotation, zone highlighting, econ panel (including the real organic-discount detection responding to actual data variation, not a hardcoded value), and card styling together as one system; hover correctly pauses and jumps, unhover correctly resumes the timer.",
+  "\ud83d\udcc5 Fixed a real, self-correcting version of the discount-availability check that has already caused one bug before. The old check hardcoded a single cutoff date (previously wrong as \"May 2026\", manually corrected to \"Jan 2026\" in an earlier build) to decide whether to show \"Discount data before Jan 2026 not available\" on the Campaign Forecaster's year-over-year comparison. Nikhil is now backfilling 2025 discount data per brand/outlet/aggregator into the sheet (Aug/Sep/Oct 2025 done as of 4 Sep, full 2025 expected by ~11 Sep) \u2014 a second manual date-chase was guaranteed the moment that backfill landed, since the hardcoded cutoff has no way to know which months are actually populated. Replaced with campFcHasDiscDataForPeriod(brand,agg,start,end): a genuine, self-updating check for whether ANY real discount value exists in allData for that exact brand+aggregator combination and calendar window \u2014 auto-adapts as more months get backfilled, with zero future manual date changes ever needed again. Scoped to brand+aggregator (not narrowed to the branch filter) so one quiet outlet with a genuinely zero-discount week doesn't produce a false \"no data\" flag \u2014 the whole brand+aggregator combination showing zero discount across every outlet for the period is the real \"not backfilled yet\" signature, not a single branch's quiet day. The flag message itself was also hardcoded to say \"before Jan 2026\" regardless of the actual comparison period \u2014 now names the real dates being compared (e.g. \"No discount data on record for 25 Aug\u201331 Aug 2025 yet\"), so it stays accurate for any future gap rather than baking in today's specific month. Verified against a realistic backfill scenario: Aug/Sep/Oct 2025 (backfilled) correctly show as available, Nov/Dec 2025 (not yet backfilled) correctly show as unavailable DESPITE having real sales activity that day \u2014 the check isn't fooled by orders existing, only by real discount values \u2014 Jan 2026 onward remains correctly available, and a different brand+aggregator combination with its own separate backfill gap is correctly scoped independently rather than being masked by another brand's data.",
+  "\ud83d\udc1b Fixed the Campaign Forecaster's own Start/End date fields having the same invisible-calendar-icon bug just fixed on the Break-Even Calculator (build 365) \u2014 the shared inp() helper used for the Forecaster's date/number inputs never set color-scheme, so the native picker defaulted to light mode and was nearly invisible on the dark panel. Same one-line fix (color-scheme:T.inputScheme added to the input's style string), confirmed via a full-file sweep that every input type=\"date\" in the dashboard now has color-scheme somewhere in its style \u2014 no other date field in the file was missing it.",
   "\ud83d\udc1b Fixed the Break-Even Calculator's date fields showing no visible way to open a calendar \u2014 caught directly by Nikhil's screenshot. Root cause: fldStyle (shared by every input in campBeHTML) never set the CSS color-scheme property, so the browser defaulted the native date input's calendar icon AND its popup picker to light mode \u2014 a dark icon on a dark background, effectively invisible, even though the picker was technically there and clickable if you knew exactly where to click. Every other date input in the dashboard already sets color-scheme (campSetDate's date range, the discount-page custom range, the Compare page's date pickers) \u2014 this was the one path that got missed when campBeHTML was built fresh in v364 rather than reusing an existing date-input helper. Fixed by adding color-scheme:T.inputScheme (the theme object's existing dark/light flag) to fldStyle, which all four date inputs (Start, End, Prior Week start/end, Same-Days-Last-Month start/end) already share \u2014 one fix, no need to touch each input individually. Confirmed no other CSS (e.g. a webkit-calendar-picker-indicator override) was separately suppressing the icon.",
   "\ud83c\udd95 Campaign Break-Even Calculator \u2014 new tool built into the Campaigns page, per Nikhil's request: given a planned campaign's discount terms, tells you how many orders/day you need to break even or hit a +10%/+20% profit target, with a full P&L per scenario. Separate from the existing Campaign Forecaster (Nikhil confirmed the two shouldn't be merged). UI: the old single-width 'Campaign Forecaster' banner is now two half-width side-by-side cards \u2014 amber-accented Forecaster (unchanged) on the left, blue-accented Break-Even Calculator on the right \u2014 matching the approved rendering. Opening either now shows a '\u2190 Back to campaigns' bar (previously the forecaster had no way back to the campaigns list at all \u2014 caught by Nikhil live). Baseline is auto-built from real sales data: prior week (7 days before the campaign start) and same days last month, averaged \u2014 both windows are individually checked for a running campaign and flagged with a warning if found, rather than silently treating an already-elevated period as clean baseline. Comparison dates are editable via a 'Change dates' toggle, so Nikhil can override the auto-picked window when needed. Supports all four discount structures from the Forecaster: % off with cap, menu-wide % off, select items (with attach rate), and BOGO. Math fix from the version Nikhil caught live: the discount is applied ONCE, as the reduction in effective revenue per order (gross AOV minus our discount share) \u2014 it is never subtracted a second time as a separate P&L line, which is what caused the original bug (break-even showing 709 orders \u2014 a 184% uplift \u2014 instead of the correct ~344, a ~40% uplift, for a 30%-off-cap-20 campaign). Commission is charged on customer-paid net; food + packaging on gross. Platform co-funding reduces our discount cost proportionally and shows as a rebate line. Verified with the real extracted functions against synthetic sales data: date auto-fill lands on the exact right calendar days; baseline averaging combines both comparison periods correctly; the break-even order count is the minimum integer order volume whose contribution meets or exceeds the baseline (any one fewer order falls short \u2014 confirmed by hand); the no-double-count invariant (effective revenue = gross AOV \u2212 our discount share, computed once) holds exactly; campaign-during-baseline detection correctly flags a planted test campaign; 50% co-funding correctly halves our discount cost and raises contribution; the impossible-scenario warning (contribution per order \u2264 0, e.g. an 85% uncapped discount) correctly triggers and no order count is offered. Render tested in three states \u2014 fully computed, no dates entered yet, and the impossible case \u2014 all render without error.",
   "\ud83c\udff7 Fixed the Wicked Wings / Lollorosso case Nikhil caught live: outlets with exactly ONE schedule label (e.g. Wicked Wings all-branches Fri-Sun, or Lollorosso Mon-Fri once those rows are added) showed no tag at all, because build 362's split only fired when realLabels.length>=2. A single-label outlet has nothing to split (one row, one schedule) so it correctly stays as a single row — but it should still show the schedule tag on the outlet name so the user knows the campaign only runs those days. Fixed by adding an else-if(realLabels.length===1) branch that injects cpcScheduleTagHtml into the existing row's outlet name cell only, leaving every other column unchanged. Three cases now handled: 0 labels (no tag, normal row — all pre-existing rows), 1 label (tag injected on name, single row), >=2 labels (full per-schedule sub-rows, from build 362). Verified: Fri-Sun, Mon-Fri, Weekend, Lunch all produce the correct uppercase tag text; the row is otherwise identical to the untagged version; 0-label outlets still produce no tag; the 2-label split is unaffected.",
@@ -5287,7 +5291,7 @@ function restructureTabIcons(){
     t.innerHTML=`<span class="tab-icon" style="flex-shrink:0;display:inline-flex;justify-content:center;width:18px">${icon}</span><span class="tab-label">${label}</span>`;
   });
 }
-function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>{t.classList.toggle("act",t.dataset.pg===page);});document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};ovTrendMetric='sales';brTrendMetric='sales';renderPage(page);}
+function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>{t.classList.toggle("act",t.dataset.pg===page);});document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};ovTrendMetric='sales';brTrendMetric='sales';if(typeof campBeStopAuto==='function')campBeStopAuto();renderPage(page);}
 
 // ── MOBILE NAV DRAWER ──
 // Slides in from the left on tap of hamburger. Overlay dims the page. Any tap on a nav item or
@@ -13497,6 +13501,21 @@ function campFcWeightedPercentile(weighted,p){
   for(const x of sorted){cum+=x.w;if(cum/totalW>=p/100)return x.u;}
   return sorted[sorted.length-1].u;
 }
+// v367: replaces the hardcoded '2026-01-01' cutoff below with a genuine, self-updating check —
+// does this exact brand+aggregator combination have ANY real discount value recorded anywhere
+// in allData for the comparison window? Nikhil is backfilling 2025 discount data per brand,
+// outlet, and aggregator into the sheet (Aug/Sep/Oct 2025 done as of 4 Sep, full 2025 expected
+// by ~11 Sep) — a hardcoded cutoff date would be wrong the moment that backfill starts landing,
+// and this exact pattern has already caused one real bug before (the cutoff was previously
+// hardcoded to "May 2026", found wrong, and manually corrected to "Jan 2026" — a second manual
+// date-chase was guaranteed the moment 2025 data arrived). This auto-adapts with zero future
+// code changes as more months get backfilled. Scoped to brand+aggregator, not narrowed further
+// to the branch filter — a single quiet outlet with genuinely zero discount that week is a
+// normal outcome, not evidence of missing data, whereas the whole brand+aggregator showing zero
+// discount across every outlet for the period is the real "not backfilled yet" signature.
+function campFcHasDiscDataForPeriod(brand,agg,start,end){
+  return allData.some(r=>r.brand===brand&&r.aggregator===agg&&r.date>=start&&r.date<=end&&(r.disc||0)>0);
+}
 function campFcRun(){
   const brand=campFcBrand,agg=campFcAgg;
   if(!brand||!agg||!campFcStart||!campFcEnd){alert('Please fill in Brand, Aggregator, Start and End dates.');return;}
@@ -13621,7 +13640,8 @@ function campFcRun(){
     cleanWindowCompare,weekOfMonthMismatch,
     lyOrders:lyRecs.length?lyRecs.reduce((s,r)=>s+r.orders,0)/lyDays:null,
     lyNet:lyRecs.length?lyRecs.reduce((s,r)=>s+r.sales,0)/lyDays:null,
-    lyHasDisc:lyStart>='2026-01-01',
+    lyHasDisc:campFcHasDiscDataForPeriod(brand,agg,lyStart,lyEnd),
+    lyStart,lyEnd, // v367: kept so the "no discount data" flag message can name the actual period instead of a hardcoded month
     pwOrders:pwRecs.length?pwRecs.reduce((s,r)=>s+r.orders,0)/pwDays:null,
     pwNet:pwRecs.length?pwRecs.reduce((s,r)=>s+r.sales,0)/pwDays:null,
     recCamp,conc,closestMatch,
@@ -13814,6 +13834,15 @@ let campBeDiscPct=30,campBeCap=20,campBeCoFund=0,campBeAttach=60,campBeFreeItemP
 let campBeStart='',campBeEnd='',campBePriorStart='',campBePriorEnd='';
 let campBeMonthStart='',campBeMonthEnd='',campBeShowDateEdit=false;
 let campBeResult=null;
+// v368: interactive hero+dial state — which scenario (0=base,1=flat,2=be,3=p10,4=p20) is
+// currently highlighted across the hero/dial/track/econ-panel/cards, the auto-play timer handle,
+// and a cache of the last-rendered scenario array so campBeSetActive can update DOM nodes
+// directly (targeted style/text mutation on persisting elements) without a full re-render —
+// a full pg.innerHTML replace would tear down and recreate every node on each tick, which kills
+// CSS transitions (they only animate on the SAME element across a property change, not across a
+// fresh DOM node). campBeAutoTimer must be stopped before any renderCampaigns() call that might
+// replace this DOM (old nodes are about to die) and restarted only after the new DOM is in place.
+let campBeActiveIdx=0,campBeScenCache=null,campBeAutoTimer=null;
 
 function campBeDateOffset(dateStr,days){
   const d=new Date(dateStr+'T12:00:00');d.setDate(d.getDate()+days);return dk(d);
@@ -13905,6 +13934,27 @@ function campBeCompute(){
     prior:prior,month:month,
     flat:flatScenario,be:mkScenario(1.00),p10:mkScenario(1.10),p20:mkScenario(1.20)};
 }
+// v368: dial geometry helpers — same math verified earlier for the approved mockup (CX must equal
+// viewBox width/2, confirmed by dividing the actual viewBox value rather than re-asserting a
+// carried-over constant, which is exactly the bug that caused the dial to render off-center twice).
+function campBePolar(cx,cy,r,deg){const rad=(deg-90)*Math.PI/180;return{x:cx+r*Math.cos(rad),y:cy+r*Math.sin(rad)};}
+function campBeArcPath(cx,cy,r,a1,a2){const p1=campBePolar(cx,cy,r,a1),p2=campBePolar(cx,cy,r,a2);const large=(a2-a1<=180)?0:1;return'M '+p1.x+' '+p1.y+' A '+r+' '+r+' 0 '+large+' 1 '+p2.x+' '+p2.y;}
+// v369: compact day+date range for the econ panel's Discount/order subtitle — Nikhil pointed out
+// that baseline can carry a real organic discount (small vouchers, standing combos) even with no
+// new campaign running, and asked to see exactly which dates that number came from, with the day
+// of week. fmtDisp (weekday+day+month+year) is too long for a single compact line here, so this
+// gives "Tue 25 – Mon 31 Aug" for the common same-month case, or "Sat 25 Jul – Fri 31 Jul" style
+// when the window spans two months (a real case: if a campaign starts early in the month, the
+// prior-week comparison window can cross the previous month's end).
+function campBeCompactRange(start,end){
+  if(!start||!end)return'';
+  const s=new Date(start+'T12:00:00'),e=new Date(end+'T12:00:00');
+  const wd=d=>d.toLocaleDateString('en-US',{weekday:'short'});
+  const dm=d=>d.toLocaleDateString('en-US',{day:'numeric',month:'short'});
+  if(s.getMonth()===e.getMonth()&&s.getFullYear()===e.getFullYear())
+    return wd(s)+' '+s.getDate()+' – '+wd(e)+' '+e.getDate()+' '+e.toLocaleDateString('en-US',{month:'short'});
+  return wd(s)+' '+dm(s)+' – '+wd(e)+' '+dm(e);
+}
 function campBeHTML(){
   const T=campTheme();
   if(!campLoaded)return'';
@@ -13968,7 +14018,7 @@ function campBeHTML(){
       +'<div style="font-size:10px;font-weight:700;color:'+T.muted+';text-transform:uppercase;margin-bottom:6px">Prior week</div>'
       +(campBeShowDateEdit
         ?'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px"><input type="date" value="'+campBePriorStart+'" onchange="campBePriorStart=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"><input type="date" value="'+campBePriorEnd+'" onchange="campBePriorEnd=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>'
-        :'<div style="font-size:12px;font-weight:600;color:'+T.text+';margin-bottom:5px">'+campBePriorStart+' → '+campBePriorEnd+'</div>')
+        :'<div style="font-size:12px;font-weight:600;color:'+T.text+';margin-bottom:5px">'+fmtDisp(campBePriorStart)+' → '+fmtDisp(campBePriorEnd)+'</div>')
       +'<div style="margin-bottom:4px">'+periodWarn(R?R.prior:null,'prior week')+'</div>'
       +(R&&R.prior?'<div style="font-size:13px;font-weight:800;color:'+T.text+'">'+fmN(R.prior.opd)+'/day · '+fmA(R.prior.netAOV)+' net AOV</div>':'')
       +'</div>'
@@ -13976,7 +14026,7 @@ function campBeHTML(){
       +'<div style="font-size:10px;font-weight:700;color:'+T.muted+';text-transform:uppercase;margin-bottom:6px">Same days last month</div>'
       +(campBeShowDateEdit
         ?'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px"><input type="date" value="'+campBeMonthStart+'" onchange="campBeMonthStart=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"><input type="date" value="'+campBeMonthEnd+'" onchange="campBeMonthEnd=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>'
-        :'<div style="font-size:12px;font-weight:600;color:'+T.text+';margin-bottom:5px">'+campBeMonthStart+' → '+campBeMonthEnd+'</div>')
+        :'<div style="font-size:12px;font-weight:600;color:'+T.text+';margin-bottom:5px">'+fmtDisp(campBeMonthStart)+' → '+fmtDisp(campBeMonthEnd)+'</div>')
       +'<div style="margin-bottom:4px">'+periodWarn(R?R.month:null,'last month')+'</div>'
       +(R&&R.month?'<div style="font-size:13px;font-weight:800;color:'+T.text+'">'+fmN(R.month.opd)+'/day · '+fmA(R.month.netAOV)+' net AOV</div>':'')
       +'</div>'
@@ -13995,79 +14045,201 @@ function campBeHTML(){
       +'<div style="font-size:14px;font-weight:800;color:#F87171;margin-bottom:6px">⛔ No break-even possible at these terms</div>'
       +'<div style="font-size:12px;color:#FCA5A5;line-height:1.6">Contribution per order = <strong>'+fmA(R.contribPo)+'</strong>. Every additional order deepens the loss. Reduce the discount, lower the cap, or increase platform co-funding.</div></div>';
   }
-  const econItems=[
-    ['Gross AOV',fmA(R.baseGrossAOV),T.text,'Baseline order size'],
-    ['Discount/order','– '+fmA(R.discPo),'#F87171',campBeCoFund>0?('Platform covers '+campBeCoFund+'%'):'100% our cost'],
-    ['Customer pays',fmA(R.custNetAOV),T.text,'Net AOV after discount']
-  ];
-  if(campBeCoFund>0)econItems.push(['Platform rebate','+ '+fmA(R.platDiscPo),'#22C55E',campBeCoFund+'% of discount back']);
-  econItems.push(['Our revenue',fmA(R.effectivePo),ac,'Effective receipt/order']);
-  econItems.push(['Food + pkg','– '+fmA(R.foodPo),'#FB923C',Math.round(R.fp*100)+'% of gross']);
-  econItems.push(['Contribution/order',fmA(R.contribPo),R.contribPo>R.bContribPo*0.6?'#22C55E':'#FBBF24','vs '+fmA(R.bContribPo)+' baseline']);
-  let econ='<div style="'+cardStyle+'">'
-    +secLabel('Discount impact — per order',ac)
-    +'<div style="display:grid;grid-template-columns:repeat('+(campBeCoFund>0?7:6)+',1fr);gap:12px;margin-bottom:10px">'
-    +econItems.map(function(x){return'<div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:'+T.muted+';margin-bottom:3px">'+x[0]+'</div><div style="font-size:15px;font-weight:800;color:'+x[2]+'">'+x[1]+'</div><div style="font-size:10px;color:'+T.muted+';margin-top:2px">'+x[3]+'</div></div>';}).join('')
-    +'</div>'
-    +'<div style="padding:8px 12px;background:rgba(255,255,255,.04);border-radius:7px;font-size:11px;color:'+T.muted+'">Discount is already in the lower effective revenue — not deducted again in the P&L. Every order above break-even earns <strong style="color:'+ac+'">'+fmA(R.contribPo)+'</strong> extra profit.</div>'
-    +'</div>';
+  // v368: Cool Contrast palette, approved after comparing options across many iterations.
+  const CBE_COLORS=['#818CF8','#F43F5E','#22D3EE','#2DD4BF','#EAB308'];
+  const CBE_LABELS=['Baseline','Loss','Break-even','Profit','Stretch'];
   const SCEN=[
-    {key:'base',label:'Baseline',sub:'No campaign',col:'#64748B',d:{orders:R.baseOrders,opd:R.baseOpd,ordersVsBase:0,grossSales:R.baseOrders*R.baseGrossAOV,discBurn:0,custNetSales:R.baseOrders*R.baseNetAOV,platRebate:0,effectiveRev:R.baseOrders*R.baseNetAOV,foodCost:R.baseOrders*R.baseGrossAOV*R.fp,commCost:R.baseOrders*R.baseNetAOV*R.cr,contrib:R.bContrib,contribVsBase:0}},
-    {key:'flat',label:'Flat orders',sub:'Same volume + discount',col:'#F87171',d:R.flat},
-    {key:'be',label:'Break-even',sub:'Match baseline',col:'#60A5FA',d:R.be},
-    {key:'p10',label:'+10% profit',sub:'10% above baseline',col:'#22C55E',d:R.p10},
-    {key:'p20',label:'+20% profit',sub:'20% above baseline',col:'#A78BFA',d:R.p20}
+    {key:'base',label:'Baseline',sub:'No campaign',col:CBE_COLORS[0],d:{orders:R.baseOrders,opd:R.baseOpd,ordersVsBase:0,contrib:R.bContrib,contribVsBase:0}},
+    {key:'flat',label:'Flat orders',sub:'Same volume + discount',col:CBE_COLORS[1],d:R.flat},
+    {key:'be',label:'Break-even',sub:'Match baseline',col:CBE_COLORS[2],d:R.be},
+    {key:'p10',label:'+10% profit',sub:'10% above baseline',col:CBE_COLORS[3],d:R.p10},
+    {key:'p20',label:'+20% profit',sub:'20% above baseline',col:CBE_COLORS[4],d:R.p20}
   ];
-  const RDEF=[
-    {sec:'VOLUME',items:[
-      {l:'Orders / day',f:function(d){return'<strong style="font-size:15px">'+fmN(d.opd)+'</strong>';}},
-      {l:'Total orders',f:function(d){return fmN(d.orders,0);}},
-      {l:'vs baseline',f:function(d,k){return k==='base'?('<span style="color:'+T.muted+'">Reference</span>'):('<span style="color:'+(d.ordersVsBase>0?'#FBBF24':'#94A3B8')+';font-weight:700">'+fmP(d.ordersVsBase,0)+'</span>');}}
-    ]},
-    {sec:'AOV',items:[
-      {l:'Gross AOV',f:function(){return fmA(R.baseGrossAOV);}},
-      {l:'Discount/order',f:function(d,k){return k==='base'?('<span style="color:'+T.muted+'">—</span>'):('<span style="color:#F87171">– '+fmA(R.discPo)+'</span>');}},
-      {l:'Customer pays',f:function(d,k){return fmA(k==='base'?R.baseNetAOV:R.custNetAOV);}},
-      {l:'Effective revenue/order',f:function(d,k){return k==='base'?('<strong>'+fmA(R.baseNetAOV)+'</strong>'):('<strong style="color:'+ac+'">'+fmA(R.effectivePo)+'</strong>');}}
-    ]},
-    {sec:'P&L',items:[
-      {l:'Gross Sales',f:function(d){return fmA(d.grossSales);}},
-      {l:'Discount Burn (total)',f:function(d,k){return k==='base'?('<span style="color:'+T.muted+'">—</span>'):('<span style="color:#F87171">('+fmA(d.discBurn)+')</span>');}},
-      {l:'Net Sales (cust. paid)',f:function(d){return fmA(d.custNetSales);}},
-      {l:'Food + Pkg ('+Math.round(R.fp*100)+'% gross)',f:function(d){return'<span style="color:#FB923C">('+fmA(d.foodCost)+')</span>';}},
-      {l:'Commission ('+Math.round(R.cr*100)+'% cust. net)',f:function(d){return'<span style="color:#FB923C">('+fmA(d.commCost)+')</span>';}}
-    ]},
-    {sec:'RESULT',items:[
-      {l:'Net Contribution',f:function(d){var c=d.contrib>=R.bContrib*0.98?'#22C55E':d.contrib>0?'#FBBF24':'#F87171';return'<span style="font-size:15px;font-weight:800;color:'+c+'">'+(d.contrib<0?'– ':'')+fmA(d.contrib)+'</span>';}},
-      {l:'vs baseline',f:function(d,k){return k==='base'?('<span style="color:'+T.muted+'">Baseline</span>'):('<span style="color:'+(d.contribVsBase>=0?'#22C55E':'#F87171')+';font-weight:700">'+fmP(d.contribVsBase,0)+'</span>');}}
-    ]}
+  // Two real per-order economics profiles. Baseline (index 0) uses the REAL historical gap
+  // between gross and net AOV — real sales data can show a small organic discount (minor
+  // vouchers, standing combos) even with no new campaign running, so this is not hardcoded to
+  // zero. The four campaign scenarios all share IDENTICAL per-order economics, since only order
+  // volume differs between them, not the campaign terms.
+  // v369: which dates the baseline's organic discount was actually computed from — only the
+  // periods that genuinely contributed (R.prior / R.month can each be null if that window had no
+  // sales data), not just both blindly.
+  const baseDiscDateRef=(function(){
+    const parts=[];
+    if(R.prior)parts.push(campBeCompactRange(campBePriorStart,campBePriorEnd));
+    if(R.month)parts.push(campBeCompactRange(campBeMonthStart,campBeMonthEnd));
+    return parts.length?('From '+parts.join(' & ')):'Organic, from your own sales data';
+  })();
+  const econBase=[
+    ['Gross AOV',fmA(R.baseGrossAOV),T.text,'Baseline order size'],
+    ['Discount / order',(R.baseGrossAOV-R.baseNetAOV)>0.5?('– '+fmA(R.baseGrossAOV-R.baseNetAOV)):'AED 0',T.muted,baseDiscDateRef],
+    ['Customer pays',fmA(R.baseNetAOV),T.text,'Net AOV'],
+    ['Our revenue',fmA(R.baseNetAOV),ac,'No campaign running'],
+    ['Food + pkg','– '+fmA(R.baseGrossAOV*R.fp),'#FB923C',Math.round(R.fp*100)+'% of gross'],
+    ['Commission','– '+fmA(R.baseNetAOV*R.cr),'#FB923C',Math.round(R.cr*100)+'% of net']
   ];
-  const cW=Math.round(78/SCEN.length)+'%';
-  let th='<thead><tr><th style="width:22%;padding:8px 10px;text-align:left;font-size:10px;color:'+T.muted+'"></th>';
-  SCEN.forEach(function(s){th+='<th style="width:'+cW+';padding:8px 10px;text-align:right;border-bottom:3px solid '+s.col+'"><div style="font-size:11px;font-weight:800;color:'+s.col+';letter-spacing:.3px">'+s.label+'</div><div style="font-size:10px;color:'+T.muted+';margin-top:2px;font-weight:400">'+s.sub+'</div></th>';});
-  th+='</tr></thead>';
-  let tb='<tbody>';
-  RDEF.forEach(function(sec,si){
-    if(si>0)tb+='<tr><td colspan="'+(SCEN.length+1)+'" style="border-top:1px solid '+T.border+';padding:3px"></td></tr>';
-    tb+='<tr><td colspan="'+(SCEN.length+1)+'" style="padding:7px 10px 3px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:'+T.muted+'">'+sec.sec+'</td></tr>';
-    sec.items.forEach(function(row,ri){
-      tb+='<tr style="background:'+(ri%2===0?'rgba(255,255,255,.02)':'transparent')+'"><td style="padding:8px 10px;font-size:12px;color:'+T.label+';white-space:nowrap">'+row.l+'</td>';
-      SCEN.forEach(function(s){tb+='<td style="padding:8px 10px;text-align:right;font-size:12px;font-weight:600;color:'+T.text+'">'+(s.d?row.f(s.d,s.key):('<span style="color:'+T.muted+'">—</span>'))+'</td>';});
-      tb+='</tr>';
-    });
+  const econCampaign=[
+    ['Gross AOV',fmA(R.baseGrossAOV),T.text,'Baseline order size'],
+    ['Discount / order','– '+fmA(R.discPo),'#F43F5E',campBeCoFund>0?('Platform covers '+campBeCoFund+'%'):'100% our cost'],
+    ['Customer pays',fmA(R.custNetAOV),T.text,'Net AOV after discount'],
+    ['Our revenue',fmA(R.effectivePo),ac,campBeCoFund>0?'After platform rebate':'Effective receipt/order'],
+    ['Food + pkg','– '+fmA(R.foodPo),'#FB923C',Math.round(R.fp*100)+'% of gross'],
+    ['Commission','– '+fmA(R.commPo),'#FB923C',Math.round(R.cr*100)+'% of cust. net']
+  ];
+  const econContribBase={v:fmA(R.bContribPo),c:CBE_COLORS[0]};
+  const econContribCampaign={v:fmA(R.contribPo),c:R.contribPo>R.bContribPo*0.6?CBE_COLORS[2]:'#FBBF24'};
+  // Cache for campBeSetActive to consume on hover/auto-play, without a full re-render.
+  campBeScenCache={scen:SCEN,econBase:econBase,econCampaign:econCampaign,econContribBase:econContribBase,econContribCampaign:econContribCampaign,colors:CBE_COLORS,campDays:R.campDays};
+  campBeActiveIdx=0;
+
+  // ── Dial geometry — verified: CX must equal viewBox width/2 (420/2=210). ──
+  const CX=210,CY=182,ARC_R=130,NEEDLE_LEN=106,ARC_STROKE=18,LABEL_ARC_R=ARC_R+ARC_STROKE/2+22,GAP_DEG=2.5;
+  const ZONE_BOUNDS=[[-90,-54],[-54,-18],[-18,18],[18,54],[54,90]];
+  const ZONE_DEG=[-72,-36,0,36,72];
+  const TR='all .7s cubic-bezier(.4,0,.2,1)';
+
+  const s0=SCEN[0];
+  const heroHTML='<div id="cbe-hero" style="background:linear-gradient(135deg,'+s0.col+'22,'+s0.col+'05);border:1.5px solid '+s0.col+'77;border-radius:20px;padding:26px 30px;margin-bottom:14px;box-shadow:0 0 50px '+s0.col+'22;position:relative;overflow:hidden;transition:'+TR+'">'
+    +'<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:20px;position:relative">'
+    +'<div>'
+    +'<div id="cbe-hero-label" style="font-size:11px;font-weight:800;letter-spacing:1.2px;color:'+s0.col+';text-transform:uppercase;margin-bottom:8px;transition:'+TR+'">'+s0.label+'</div>'
+    +'<div style="display:flex;align-items:baseline;gap:12px">'
+    +'<span id="cbe-hero-opd" style="font-size:52px;font-weight:800;color:'+T.text+';line-height:1;transition:'+TR+'">'+fmN(s0.d.opd)+'</span>'
+    +'<span style="font-size:18px;font-weight:600;color:'+T.muted+'">orders / day</span>'
+    +'</div>'
+    +'<div id="cbe-hero-sub" style="font-size:14px;color:'+T.label+';margin-top:6px">'+fmN(s0.d.orders,0)+' orders total over '+R.campDays+' days</div>'
+    +'</div>'
+    +'<div style="text-align:right">'
+    +'<div style="font-size:10px;font-weight:700;color:'+T.muted+';text-transform:uppercase;letter-spacing:1px">Net contribution</div>'
+    +'<div id="cbe-hero-contrib" style="font-size:26px;font-weight:800;color:'+s0.col+';transition:'+TR+'">'+fmA(s0.d.contrib)+'</div>'
+    +'</div></div></div>';
+
+  let defsSVG='',zonesSVG='',tagsSVG='';
+  for(let i=0;i<5;i++){
+    const b=ZONE_BOUNDS[i],col=CBE_COLORS[i],isOn=i===0;
+    const gA=b[0]+GAP_DEG,gB=b[1]-GAP_DEG;
+    defsSVG+='<path id="labelPath-'+i+'" d="'+campBeArcPath(CX,CY,LABEL_ARC_R,b[0],b[1])+'" fill="none"></path>';
+    zonesSVG+='<path id="cbe-zone-'+i+'" d="'+campBeArcPath(CX,CY,ARC_R,gA,gB)+'" fill="none" stroke="'+col+'" stroke-width="'+(isOn?22:18)+'" opacity="'+(isOn?1:0.85)+'" style="transition:'+TR+';filter:'+(isOn?('drop-shadow(0 0 14px '+col+') drop-shadow(0 0 4px '+col+')'):('drop-shadow(0 0 5px '+col+'99)'))+'"></path>';
+    tagsSVG+='<text id="cbe-tag-'+i+'" font-size="'+(isOn?15:13)+'" font-weight="800" fill="'+col+'" style="transition:'+TR+';opacity:'+(isOn?1:0.75)+';filter:'+(isOn?('drop-shadow(0 0 6px '+col+'cc)'):'none')+'"><textPath href="#labelPath-'+i+'" startOffset="50%" text-anchor="middle">'+CBE_LABELS[i]+'</textPath></text>';
+  }
+  const dialSVG='<svg width="420" height="220" viewBox="0 0 420 220"><defs>'+defsSVG+'</defs>'+zonesSVG+tagsSVG
+    +'<line id="cbe-needle" x1="'+CX+'" y1="'+CY+'" x2="'+CX+'" y2="'+(CY-NEEDLE_LEN)+'" stroke="'+CBE_COLORS[0]+'" stroke-width="5" stroke-linecap="round" style="filter:drop-shadow(0 0 8px '+CBE_COLORS[0]+');transform:rotate('+ZONE_DEG[0]+'deg);transform-origin:'+CX+'px '+CY+'px;transition:transform .9s cubic-bezier(.22,1.4,.36,1)"></line>'
+    +'<circle id="cbe-needle-pivot" cx="'+CX+'" cy="'+CY+'" r="9" fill="'+CBE_COLORS[0]+'" style="transition:'+TR+'"></circle>'
+    +'</svg>';
+
+  let trackHTML='<div style="position:relative;height:96px">'
+    +'<div style="position:absolute;top:38px;left:6%;right:6%;height:4px;border-radius:2px;background:linear-gradient(90deg,'+CBE_COLORS.join(',')+')"></div>';
+  SCEN.forEach(function(sc,i){
+    const pos=6+i*(88/4),isOn=i===0;
+    trackHTML+='<div onmouseenter="campBeHover('+i+')" onmouseleave="campBeUnhover()" style="position:absolute;left:'+pos+'%;top:0;transform:translateX(-50%);text-align:center;width:120px;cursor:pointer">'
+      +'<div id="cbe-circle-'+i+'" style="width:'+(isOn?32:20)+'px;height:'+(isOn?32:20)+'px;border-radius:50%;background:'+T.panelBg+';border:3px solid '+sc.col+';margin:0 auto;margin-top:'+(isOn?18:24)+'px;box-shadow:'+(isOn?('0 0 20px '+sc.col):'none')+';transition:'+TR+'"></div>'
+      +'<div id="cbe-circle-val-'+i+'" style="font-size:'+(isOn?15:12)+'px;font-weight:800;color:'+sc.col+';margin-top:8px;transition:'+TR+'">'+fmN(sc.d.opd)+'/day</div>'
+      +'<div style="font-size:10px;color:'+T.label+';margin-top:2px">'+sc.label+'</div>'
+      +'</div>';
   });
-  tb+='</tbody>';
-  const table='<div style="'+cardStyle+'"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:'+T.muted+';margin-bottom:10px">Orders needed for each target</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:720px">'+th+tb+'</table></div></div>';
-  const insightDefs=[
-    {c:'#F87171',i:'📉',t:'At baseline volume',b:'Running at '+fmN(R.baseOpd)+'/day drops contribution to '+fmA(R.flat?R.flat.contrib:null)+' — a '+fmA(R.bContrib-(R.flat?R.flat.contrib:0))+' loss vs not running.'},
-    {c:'#60A5FA',i:'🎯',t:'Break-even',b:fmN(R.be?R.be.opd:null)+'/day · '+(R.be?R.be.orders:'—')+' total ('+fmP(R.be?R.be.ordersVsBase:0,0)+' above baseline). Contribution matches your baseline '+fmA(R.bContrib)+'.'},
-    {c:'#A78BFA',i:'🚀',t:'+20% profit target',b:fmN(R.p20?R.p20.opd:null)+'/day · '+(R.p20?R.p20.orders:'—')+' total ('+fmP(R.p20?R.p20.ordersVsBase:0,0)+'). Each order above break-even adds '+fmA(R.contribPo)+' to profit.'}
-  ];
-  const insights='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:4px">'
-    +insightDefs.map(function(ins){return'<div style="'+cardStyle+';border-left:4px solid '+ins.c+';margin-bottom:0"><div style="font-size:12px;font-weight:800;color:'+ins.c+';margin-bottom:6px">'+ins.i+' '+ins.t+'</div><div style="font-size:11px;color:'+T.muted+';line-height:1.6">'+ins.b+'</div></div>';}).join('')
-    +'</div>';
-  return setup+baseCard+econ+table+insights;
+  trackHTML+='</div>';
+
+  const dialCard='<div style="background:'+T.panelBg+';border:1px solid '+T.border+';padding:16px;border-radius:16px;display:flex;flex-direction:column;align-items:center">'+dialSVG
+    +'<div style="text-align:center;margin-top:-4px"><div style="font-size:11px;font-weight:700;color:'+T.muted+';text-transform:uppercase;letter-spacing:1px">Needle tracks</div><div id="cbe-needle-label" style="font-size:14px;font-weight:800;color:'+CBE_COLORS[0]+';margin-top:2px;transition:'+TR+'">'+SCEN[0].label+'</div></div></div>';
+  const trackCard='<div style="background:'+T.panelBg+';border:1px solid '+T.border+';padding:20px 24px;border-radius:16px">'
+    +secLabel('Your journey to profit',T.muted)+trackHTML+'</div>';
+  const dialTrackRow='<div style="display:grid;grid-template-columns:460px 1fr;gap:14px;margin-bottom:14px">'+dialCard+trackCard+'</div>';
+
+  let econRowsHTML='';
+  econBase.forEach(function(row,i){
+    // v369: subtitle shown only under Discount/order (index 1) — the one row where the source
+    // (real historical dates, or the campaign's own terms) genuinely needs to be traceable.
+    // The other rows are self-explanatory and stay compact.
+    const subLine=(i===1)?('<div id="cbe-econ-sub-'+i+'" style="font-size:9.5px;color:'+T.muted+';margin-top:2px;text-align:right;transition:'+TR+'">'+row[3]+'</div>'):'';
+    econRowsHTML+='<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:10px 0;border-bottom:'+(i<5?('1px solid '+T.border+'66'):'none')+'"><span style="font-size:13px;color:'+T.label+';padding-top:2px">'+row[0]+'</span><span style="text-align:right"><span id="cbe-econ-val-'+i+'" style="font-size:16px;font-weight:800;color:'+row[2]+';transition:'+TR+';display:block">'+row[1]+'</span>'+subLine+'</span></div>';
+  });
+  const econPanel='<div id="cbe-econ-panel" style="background:'+T.panelBg+';border:1.5px solid '+T.border+';border-radius:16px;padding:18px 20px;box-shadow:none;transition:'+TR+'">'
+    +'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:'+T.muted+'">Per-order economics</div>'
+    +'<span id="cbe-econ-badge" style="font-size:10px;font-weight:700;color:'+CBE_COLORS[0]+';transition:'+TR+'">no campaign</span></div>'
+    +econRowsHTML
+    +'<div id="cbe-econ-contrib-box" style="margin-top:12px;padding:12px 14px;background:'+CBE_COLORS[0]+'1A;border:1px solid '+CBE_COLORS[0]+'55;border-radius:10px;text-align:center;transition:'+TR+'">'
+    +'<div id="cbe-econ-contrib-label" style="font-size:10px;font-weight:700;color:'+CBE_COLORS[0]+';text-transform:uppercase;letter-spacing:.5px;transition:'+TR+'">Contribution / order</div>'
+    +'<div id="cbe-econ-contrib-val" style="font-size:22px;font-weight:800;color:'+CBE_COLORS[0]+';margin-top:4px;transition:'+TR+'">'+econContribBase.v+'</div>'
+    +'</div></div>';
+
+  let cardsHTML='';
+  SCEN.forEach(function(sc,i){
+    const isOn=i===0;
+    cardsHTML+='<div id="cbe-card-'+i+'" onmouseenter="campBeHover('+i+')" onmouseleave="campBeUnhover()" style="background:'+(isOn?('linear-gradient(160deg,'+sc.col+'2A,'+T.panelBg+')'):T.panelBg)+';border:1.5px solid '+(isOn?sc.col:T.border)+';border-radius:14px;padding:14px 13px;box-shadow:'+(isOn?('0 0 22px '+sc.col+'55'):'none')+';transform:'+(isOn?'translateY(-3px)':'none')+';cursor:pointer;transition:'+TR+'">'
+      +'<div style="font-size:11px;font-weight:800;color:'+sc.col+';text-transform:uppercase;letter-spacing:.4px">'+sc.label+'</div>'
+      +'<div style="font-size:9px;color:'+T.label+';margin-bottom:6px">'+sc.sub+'</div>'
+      +'<div style="font-size:24px;font-weight:800;color:'+T.text+';line-height:1">'+fmN(sc.d.opd)+'</div>'
+      +'<div style="font-size:10px;color:'+T.muted+'">orders / day</div>'
+      +'<div style="font-size:11px;color:'+T.label+';margin-top:2px">'+fmN(sc.d.orders,0)+' total</div>'
+      +'<div style="margin-top:8px;padding-top:8px;border-top:1px solid '+T.border+'66">'
+      +'<div style="font-size:14px;font-weight:800;color:'+sc.col+'">'+fmA(sc.d.contrib)+'</div>'
+      +'<div style="font-size:10px;color:'+T.label+'">'+(sc.key==='base'?'reference':(fmP(sc.d.contribVsBase,0)+' vs baseline'))+'</div>'
+      +'</div></div>';
+  });
+  const econCardsRow='<div style="display:grid;grid-template-columns:300px 1fr;gap:14px">'+econPanel+'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">'+cardsHTML+'</div></div>';
+
+  return setup+baseCard+heroHTML+dialTrackRow+econCardsRow;
 }
+// v368: targeted DOM updates for the hover/auto-play interactions — deliberately NOT going through
+// renderCampaigns()/pg.innerHTML, which would tear down and recreate every node on each tick and
+// kill the CSS transitions declared above (they only animate on the SAME persisting element across
+// a property change, never across a fresh DOM replacement). campBeScenCache (set by campBeHTML on
+// every real render) holds everything needed to patch styles/text directly by element id.
+function campBeSetActive(idx){
+  if(!campBeScenCache)return;
+  campBeActiveIdx=idx;
+  const C=campBeScenCache,sc=C.scen[idx],isBase=idx===0;
+  const cardBg=(typeof _darkPage!=='undefined'&&_darkPage)?DARK_THEME.card:'#FEFDFA';
+  const cardBorder=(typeof _darkPage!=='undefined'&&_darkPage)?DARK_THEME.cardBorder:'#EDE7D9';
+  const hero=document.getElementById('cbe-hero');
+  if(hero){hero.style.background='linear-gradient(135deg,'+sc.col+'22,'+sc.col+'05)';hero.style.borderColor=sc.col+'77';hero.style.boxShadow='0 0 50px '+sc.col+'22';}
+  const hl=document.getElementById('cbe-hero-label');if(hl){hl.textContent=sc.label;hl.style.color=sc.col;}
+  const ho=document.getElementById('cbe-hero-opd');if(ho)ho.textContent=sc.d.opd.toFixed(1);
+  const hs=document.getElementById('cbe-hero-sub');
+  if(hs)hs.textContent=Math.round(sc.d.orders).toLocaleString()+' orders total over '+(C.campDays||7)+' days'+(isBase?'':(' · '+(sc.d.ordersVsBase>=0?'+':'')+Math.round(sc.d.ordersVsBase)+'% vs baseline'));
+  const hc=document.getElementById('cbe-hero-contrib');if(hc){hc.textContent='AED '+Math.round(Math.abs(sc.d.contrib)).toLocaleString();hc.style.color=sc.col;}
+  for(let i=0;i<5;i++){
+    const isOn=i===idx,col=C.colors[i];
+    const z=document.getElementById('cbe-zone-'+i);
+    if(z){z.setAttribute('stroke-width',isOn?22:18);z.setAttribute('opacity',isOn?1:0.85);z.style.filter=isOn?('drop-shadow(0 0 14px '+col+') drop-shadow(0 0 4px '+col+')'):('drop-shadow(0 0 5px '+col+'99)');}
+    const t=document.getElementById('cbe-tag-'+i);
+    if(t){t.setAttribute('font-size',isOn?15:13);t.style.opacity=isOn?1:0.75;t.style.filter=isOn?('drop-shadow(0 0 6px '+col+'cc)'):'none';}
+  }
+  const needle=document.getElementById('cbe-needle');
+  if(needle){const deg=[-72,-36,0,36,72][idx];needle.style.transform='rotate('+deg+'deg)';needle.setAttribute('stroke',sc.col);needle.style.filter='drop-shadow(0 0 8px '+sc.col+')';}
+  const pivot=document.getElementById('cbe-needle-pivot');if(pivot)pivot.setAttribute('fill',sc.col);
+  const nl=document.getElementById('cbe-needle-label');if(nl){nl.textContent=sc.label;nl.style.color=sc.col;}
+  for(let i=0;i<5;i++){
+    const isOn=i===idx,csc=C.scen[i];
+    const circ=document.getElementById('cbe-circle-'+i);
+    if(circ){const sz=isOn?32:20;circ.style.width=sz+'px';circ.style.height=sz+'px';circ.style.marginTop=(isOn?18:24)+'px';circ.style.boxShadow=isOn?('0 0 20px '+csc.col):'none';}
+    const cv=document.getElementById('cbe-circle-val-'+i);
+    if(cv){cv.style.fontSize=(isOn?15:12)+'px';cv.textContent=csc.d.opd.toFixed(1)+'/day';}
+  }
+  const rows=isBase?C.econBase:C.econCampaign;
+  const badge=document.getElementById('cbe-econ-badge');if(badge){badge.textContent=isBase?'no campaign':'campaign terms';badge.style.color=sc.col;}
+  for(let i=0;i<6;i++){const el=document.getElementById('cbe-econ-val-'+i);if(el&&rows[i]){el.textContent=rows[i][1];el.style.color=rows[i][2];}}
+  const sub1=document.getElementById('cbe-econ-sub-1');if(sub1&&rows[1])sub1.textContent=rows[1][3];
+  const panel=document.getElementById('cbe-econ-panel');
+  if(panel){panel.style.borderColor=isBase?cardBorder:sc.col+'77';panel.style.boxShadow=isBase?'none':('0 0 22px '+sc.col+'22');}
+  const contribInfo=isBase?C.econContribBase:C.econContribCampaign;
+  const cbox=document.getElementById('cbe-econ-contrib-box');if(cbox){cbox.style.background=contribInfo.c+'1A';cbox.style.borderColor=contribInfo.c+'55';}
+  const clbl=document.getElementById('cbe-econ-contrib-label');if(clbl)clbl.style.color=contribInfo.c;
+  const cval=document.getElementById('cbe-econ-contrib-val');if(cval){cval.textContent=contribInfo.v;cval.style.color=contribInfo.c;}
+  for(let i=0;i<5;i++){
+    const isOn=i===idx,csc=C.scen[i];
+    const card=document.getElementById('cbe-card-'+i);
+    if(card){
+      card.style.background=isOn?('linear-gradient(160deg,'+csc.col+'2A,'+cardBg+')'):cardBg;
+      card.style.borderColor=isOn?csc.col:cardBorder;
+      card.style.boxShadow=isOn?('0 0 22px '+csc.col+'55'):'none';
+      card.style.transform=isOn?'translateY(-3px)':'none';
+    }
+  }
+}
+function campBeStopAuto(){if(campBeAutoTimer){clearInterval(campBeAutoTimer);campBeAutoTimer=null;}}
+function campBeStartAuto(){campBeStopAuto();if(!campBeScenCache)return;campBeAutoTimer=setInterval(function(){campBeSetActive((campBeActiveIdx+1)%5);},1800);}
+function campBeHover(idx){campBeStopAuto();campBeSetActive(idx);}
+function campBeUnhover(){campBeStartAuto();}
 
 function campFcHTML(){
   const T=campTheme();
@@ -14132,7 +14304,7 @@ function campFcHTML(){
     // Flags
     const flags=[];
     if(r.conc.length){flags.push({lvl:'warn',msg:`<strong>Concurrent campaign:</strong> "${r.conc[0].name||r.conc[0].comments||'—'}" overlaps this window on ${r.brand} × ${r.agg}. Forecast does not adjust for campaign-on-campaign dilution.`});}
-    if(!r.lyHasDisc){flags.push({lvl:'info',msg:`Discount data before Jan 2026 not available. Year-over-year comparison shows sales only — no burn figures from last year to compare.`});}
+    if(!r.lyHasDisc){flags.push({lvl:'info',msg:`No discount data on record for ${fmtShort(r.lyStart)}–${fmtShort(r.lyEnd)} ${r.lyStart.slice(0,4)} yet. Year-over-year comparison shows sales only — no burn figures from that period to compare.`});}
     if(r.seasonality.pct!==0){flags.push({lvl:'info',msg:`Seasonality correction applied: <strong>${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong> vs periods when historical matches ran (${r.matches.length} campaign${r.matches.length!==1?'s':''}).`});}
     if(!r.matches.length){flags.push({lvl:'warn',msg:`No exact historical matches found for ${r.brand} × ${r.agg} at ${campFcDiscPct}% off (±8%) cap AED ${campFcCap} (±6). Fallback uplifts used: conservative 10%, expected 20%, optimistic 35%. Find and select a comparable past campaign for better accuracy.`});}
     // v154: genuine clean-baseline comparison, when one exists. Doesn't change the scenario
@@ -14254,7 +14426,9 @@ function campFcHTML(){
   // Form
   const today=dk(new Date());
   const sel=(k,opts,cur)=>`<select onchange="campFcSet('${k}',this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600"><option value="">—</option>${opts}</select>`;
-  const inp=(k,type,cur,min,max)=>`<input type="${type}" value="${cur}" min="${min}" max="${max}" onchange="campFcSet('${k}',this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600;box-sizing:border-box">`;
+  // v366: same color-scheme gap as the Break-Even Calculator (build 365) — without it, the native
+  // date picker icon and popup default to light mode and are nearly invisible on this dark panel.
+  const inp=(k,type,cur,min,max)=>`<input type="${type}" value="${cur}" min="${min}" max="${max}" onchange="campFcSet('${k}',this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600;box-sizing:border-box;color-scheme:${T.inputScheme}">`;
   const fld=(lbl,html)=>`<div><div style="font-size:10px;font-weight:600;color:${T.muted};margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px">${lbl}</div>${html}</div>`;
 
   const historyPanel=`<div style="background:${T.panelBg};border:0.5px solid ${T.border};border-radius:12px;padding:14px 16px;margin-top:14px">
@@ -14424,7 +14598,13 @@ async function renderCampaigns(){
     // in case a differently-scoped version of it is useful in the redesign.
     const topChrome=(campTab==='detail'||campTab==='forecaster'||campTab==='breakeven')?'':forecasterCTA+statusTable;
     const toolBack=(campTab==='forecaster'||campTab==='breakeven')?`<div style="margin-bottom:10px;padding:8px 12px;background:rgba(255,255,255,.04);border-radius:8px;border:1px solid ${T.border};display:flex;align-items:center;gap:10px"><button onclick="campTab='browse';renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.3);border-radius:7px;color:${T.label};padding:6px 13px;font-size:12px;cursor:pointer;font-weight:700">← Back to campaigns</button><span style="color:${T.border}">|</span><span style="font-size:13px;font-weight:700;color:${campTab==='forecaster'?'#fbbf24':'#93C5FD'}">${campTab==='forecaster'?'🔮 Campaign Forecaster':'🎯 Campaign Break-Even Calculator'}</span></div>`:'';
+    // v368: the auto-play timer targets specific DOM nodes by id — those nodes are about to be
+    // destroyed by the innerHTML replacement below, so the timer MUST stop first or it keeps
+    // firing against elements that no longer exist. Restarted after the new DOM is in place, only
+    // when the breakeven tool is actually open and has a computed result to animate.
+    campBeStopAuto();
     pg.innerHTML=`${styleOverride}${header}${campDataFreshnessStrip()}${attention}${topChrome}${toolBack}${main}`;
+    if(campTab==='breakeven'&&campBeScenCache)campBeStartAuto();
     if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
     if(campTab==='detail'&&selCamp){const c=selCamp;const imp=campImpact(c);if(campStatus(c)!=='Upcoming'&&imp.hasData){const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&(c.brand==='All Brands'||r.brand===c.brand)&&(c.aggregator==='All'||r.aggregator===c.aggregator)));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-camp',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}}
   }catch(err){pg.innerHTML=`${styleOverride}<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Render error</div><div style="color:${T.muted};font-size:12px">${err.message}</div></div>`;}
