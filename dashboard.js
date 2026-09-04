@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-363";
+const BUILD_VERSION="2026-08-13-364";
 const BUILD_NOTES=[
+  "\ud83c\udd95 Campaign Break-Even Calculator \u2014 new tool built into the Campaigns page, per Nikhil's request: given a planned campaign's discount terms, tells you how many orders/day you need to break even or hit a +10%/+20% profit target, with a full P&L per scenario. Separate from the existing Campaign Forecaster (Nikhil confirmed the two shouldn't be merged). UI: the old single-width 'Campaign Forecaster' banner is now two half-width side-by-side cards \u2014 amber-accented Forecaster (unchanged) on the left, blue-accented Break-Even Calculator on the right \u2014 matching the approved rendering. Opening either now shows a '\u2190 Back to campaigns' bar (previously the forecaster had no way back to the campaigns list at all \u2014 caught by Nikhil live). Baseline is auto-built from real sales data: prior week (7 days before the campaign start) and same days last month, averaged \u2014 both windows are individually checked for a running campaign and flagged with a warning if found, rather than silently treating an already-elevated period as clean baseline. Comparison dates are editable via a 'Change dates' toggle, so Nikhil can override the auto-picked window when needed. Supports all four discount structures from the Forecaster: % off with cap, menu-wide % off, select items (with attach rate), and BOGO. Math fix from the version Nikhil caught live: the discount is applied ONCE, as the reduction in effective revenue per order (gross AOV minus our discount share) \u2014 it is never subtracted a second time as a separate P&L line, which is what caused the original bug (break-even showing 709 orders \u2014 a 184% uplift \u2014 instead of the correct ~344, a ~40% uplift, for a 30%-off-cap-20 campaign). Commission is charged on customer-paid net; food + packaging on gross. Platform co-funding reduces our discount cost proportionally and shows as a rebate line. Verified with the real extracted functions against synthetic sales data: date auto-fill lands on the exact right calendar days; baseline averaging combines both comparison periods correctly; the break-even order count is the minimum integer order volume whose contribution meets or exceeds the baseline (any one fewer order falls short \u2014 confirmed by hand); the no-double-count invariant (effective revenue = gross AOV \u2212 our discount share, computed once) holds exactly; campaign-during-baseline detection correctly flags a planted test campaign; 50% co-funding correctly halves our discount cost and raises contribution; the impossible-scenario warning (contribution per order \u2264 0, e.g. an 85% uncapped discount) correctly triggers and no order count is offered. Render tested in three states \u2014 fully computed, no dates entered yet, and the impossible case \u2014 all render without error.",
   "\ud83c\udff7 Fixed the Wicked Wings / Lollorosso case Nikhil caught live: outlets with exactly ONE schedule label (e.g. Wicked Wings all-branches Fri-Sun, or Lollorosso Mon-Fri once those rows are added) showed no tag at all, because build 362's split only fired when realLabels.length>=2. A single-label outlet has nothing to split (one row, one schedule) so it correctly stays as a single row — but it should still show the schedule tag on the outlet name so the user knows the campaign only runs those days. Fixed by adding an else-if(realLabels.length===1) branch that injects cpcScheduleTagHtml into the existing row's outlet name cell only, leaving every other column unchanged. Three cases now handled: 0 labels (no tag, normal row — all pre-existing rows), 1 label (tag injected on name, single row), >=2 labels (full per-schedule sub-rows, from build 362). Verified: Fri-Sun, Mon-Fri, Weekend, Lunch all produce the correct uppercase tag text; the row is otherwise identical to the untagged version; 0-label outlets still produce no tag; the 2-label split is unaffected.",
   "\ud83d\uddd3 Schedule split now surfaces in the Outlet Performance table on the Ads Performance page. When Deliveroo's new day-of-week or daypart split is in play (Mon-Thu/Fri-Sun or Lunch/Dinner, entered in the renamed 'Budget Type & Schedule' column per build 361), an outlet with \u22652 distinct schedule labels renders one row per schedule instead of a single combined row. Each sub-row has the orange left-accent tint from the rendering Nikhil approved, a colour-coded tag (LUNCH/DINNER in purple, day-range in blue) with the time window where applicable, and its own Budget/Spent/Leftover from the sheet's real figures. For day-of-week splits (Mon-Thu/Fri-Sun, Mon-Fri, Fri-Sun, Weekday/Weekend) the performance columns (Clicks, Orders, Sales, ROAS, Verdict) are also real and per-schedule, since daily sales exist to attribute them; for daypart splits (Lunch/Dinner) those columns show \u2014 because there's no hourly data to split lunch vs dinner, exactly as Nikhil approved. The bid/invest recommendation appears on the FIRST sub-row only (it's outlet-level, not per-daypart); subsequent sub-rows show '\u2191 outlet-level' so it reads clearly. Sort order is: Lunch before Dinner, Mon before later days. Totals and planning tables are untouched (they always aggregate to the whole outlet regardless of split, per Nikhil's rule). Outlets with no schedule or only one schedule label continue to render as a single row \u2014 fully regression-safe. Validated: Lunch(660)+Dinner(440) sums to AED 1,100 budget; budget/spent reconstruct exactly; perf columns correctly blank for dayparts; Mon-Thu before Fri-Sun sort; day-of-week ROAS is real (12.78\u00d7); orange accent border present; recCell on first row only; no-schedule outlets produce realLabels=0 (no split); single-schedule outlets produce realLabels<2 (no split).",
   "\ud83c\udd95 Taught the dashboard to READ Deliveroo's new day-of-week / daypart CPC split, entered by Nikhil in the renamed 'Budget Type & Schedule' column (col N) as the existing budget-type text plus a comma and a schedule token, e.g. 'Seperate Budget Per Outlet, Mon-Thu' or '..., Lunch'. Registered the new column header (old names kept). The budget-type detection is unchanged (still keys on 'combin'/'seperat' anywhere in the cell); a new parseCpcSchedule reads the token after the comma into a structured schedule {kind, label, days, daypart}. Day-of-week tokens (Mon-Fri, Fri-Sun, Mon-Thu, single days, and Weekday/Weekend shortcuts) become a set of active weekdays; dayparts (Lunch/Dinner) carry a label but no day restriction. Cost attribution is now schedule-aware: a day-of-week row's confirmed-day count, partial-range scaling, and forward extrapolation all count only its active weekdays (via new cpcDowDaysBetween), so its spend lands on the right days at any granularity — a Fri-Sun row shows zero cost in a Mon-Thu window and vice-versa, while a whole-month query still returns the exact real budgetSpent. Dayparts run every day and their budgets simply sum to the outlet total (the sheet has no hourly sales, so lunch-vs-dinner performance genuinely can't be separated — the labels are informational). Rows with no comma (every existing entry) parse to 'all days' and are completely unaffected. Verified with the shipped functions against the exact strings from Nikhil's screenshots: parsing is correct for every token; Sep-2026 Mon-Thu=18 days + Fri-Sun=12 days sums to 30; a confirmed Fyoozhen outlet with Mon-Thu(360)+Fri-Sun(540) returns 900 for the whole month, 90 for a Sat-Sun window (Fri-Sun row only), 80 for a Mon-Thu window (Mon-Thu row only), and 0 from the wrong-day row in each case; and Lunch(660)+Dinner(440) returns 1,100 for the month and a positive figure every single day. NOTE: this build makes the numbers correct. The on-page DISPLAY of the split on the Ad Investments page is the next step — deliberately not bundled here because the per-outlet allocation table is keyed to the prior complete month (these are current-month September rows) and is the tuned/fragile table, so the split needs its own surface built and verified against the live page rather than bolted onto that table blind. Everything from builds 358-360 (per-outlet scoping, emirate splits, funded-row handling, whole-brand totals) is unchanged.",
@@ -13798,6 +13799,270 @@ function campFcExport(){
 
 function bPill(brand,sz=20){const clr=BMAP[brand]?.c||'#888';return`<span style="display:inline-flex;align-items:center;justify-content:center;width:${sz}px;height:${sz}px;border-radius:5px;background:${clr}22;border:1px solid ${clr}55;font-size:${Math.round(sz*.55)}px;font-weight:800;color:${clr};flex-shrink:0">${brand.slice(0,1)}</span>`;}
 function aPill(agg,sz=20){const clr=AC[agg]||'#888';return`<span style="display:inline-flex;align-items:center;justify-content:center;width:${sz}px;height:${sz}px;border-radius:5px;background:${clr}22;border:1px solid ${clr}55;font-size:${Math.round(sz*.55)}px;font-weight:800;color:${clr};flex-shrink:0">${agg.slice(0,1)}</span>`;}
+// v364: Campaign Break-Even Calculator — full tool rendering function.
+// Baseline is auto-built from allData (prior week + same days last month, averaged), so the user
+// never has to type historical numbers by hand. Comparison dates are auto-filled from the campaign
+// start date but remain editable via the "Change dates" toggle, per Nikhil's request. The math never
+// double-counts the discount: it's already reflected in the lower effective revenue per order
+// (gross AOV minus our share of the discount), so it is never subtracted a second time in the P&L —
+// that double-count was the original bug Nikhil caught (break-even showing 709 orders instead of the
+// correct ~349 for a 30%-off-cap-20 campaign). Commission is charged on customer-paid net; food and
+// packaging cost is charged on gross (the kitchen makes the food regardless of the discount).
+let campBeBrand=(typeof BR!=='undefined'&&BR[0])?BR[0].n:'Oregano',campBeAgg='Talabat',campBeDiscType='pct_cap';
+let campBeDiscPct=30,campBeCap=20,campBeCoFund=0,campBeAttach=60,campBeFreeItemPct=25;
+let campBeStart='',campBeEnd='',campBePriorStart='',campBePriorEnd='';
+let campBeMonthStart='',campBeMonthEnd='',campBeShowDateEdit=false;
+let campBeResult=null;
+
+function campBeDateOffset(dateStr,days){
+  const d=new Date(dateStr+'T12:00:00');d.setDate(d.getDate()+days);return dk(d);
+}
+function campBeSameDaysLastMonth(start,end){
+  const s=new Date(start+'T12:00:00'),e=new Date(end+'T12:00:00');
+  const ms=new Date(s);ms.setMonth(ms.getMonth()-1);
+  const me=new Date(e);me.setMonth(me.getMonth()-1);
+  return{start:dk(ms),end:dk(me)};
+}
+function campBeAutoFillDates(){
+  if(!campBeStart)return;
+  const priorEnd=campBeDateOffset(campBeStart,-1);
+  const priorStart=campBeDateOffset(campBeStart,-7);
+  campBePriorStart=priorStart;campBePriorEnd=priorEnd;
+  const r=campBeSameDaysLastMonth(priorStart,priorEnd);
+  campBeMonthStart=r.start;campBeMonthEnd=r.end;
+}
+function campBeGetBaseline(brand,agg,start,end){
+  if(!start||!end||!allData||!allData.length)return null;
+  const rows=allData.filter(function(r){return r.brand===brand&&r.aggregator===agg&&r.date>=start&&r.date<=end&&r.sales>0;});
+  if(!rows.length)return null;
+  const dateSet={};rows.forEach(function(r){dateSet[r.date]=1;});
+  const days=Object.keys(dateSet).length;
+  const totalNet=rows.reduce(function(s,r){return s+r.sales;},0);
+  const totalOrders=rows.reduce(function(s,r){return s+(r.orders||0);},0);
+  const totalDisc=rows.reduce(function(s,r){return s+(r.disc||0);},0);
+  const totalGross=totalNet+totalDisc;
+  const opd=totalOrders/days;
+  const netAOV=totalOrders?totalNet/totalOrders:0;
+  const grossAOV=totalOrders?totalGross/totalOrders:netAOV;
+  const campDuring=(typeof campaignData!=='undefined'?campaignData:[]).filter(function(c){
+    if(c.brand!==brand&&c.brand!=='All Brands')return false;
+    if(c.aggregator!==agg&&c.aggregator!=='All')return false;
+    const st=campStatus(c);
+    return c.startDate<=end&&(c.endDate||end)>=start&&(st==='Active'||st==='Completed');
+  });
+  return{opd:opd,netAOV:netAOV,grossAOV:grossAOV,totalOrders:totalOrders,totalNet:totalNet,days:days,
+    hasCampaign:campDuring.length>0,campNames:campDuring.map(function(c){return c.name||'';}).filter(Boolean)};
+}
+function campBeCompute(){
+  const fp=foodPkgPct(campBeBrand);
+  const cr=commissionRateFor(campBeAgg,campBeBrand,campBeStart||dk(new Date()));
+  const prior=campBeGetBaseline(campBeBrand,campBeAgg,campBePriorStart,campBePriorEnd);
+  const month=campBeGetBaseline(campBeBrand,campBeAgg,campBeMonthStart,campBeMonthEnd);
+  const sources=[];
+  if(prior&&prior.opd>0)sources.push(prior);
+  if(month&&month.opd>0)sources.push(month);
+  if(!sources.length)return null;
+  const baseOpd=sources.reduce(function(s,r){return s+r.opd;},0)/sources.length;
+  const baseGrossAOV=sources.reduce(function(s,r){return s+r.grossAOV;},0)/sources.length;
+  const baseNetAOV=sources.reduce(function(s,r){return s+r.netAOV;},0)/sources.length;
+  const campDays=(campBeStart&&campBeEnd)?Math.max(1,Math.round((new Date(campBeEnd+'T12:00:00')-new Date(campBeStart+'T12:00:00'))/86400000)+1):7;
+  const baseOrders=Math.round(baseOpd*campDays);
+  let discPo=0;
+  if(campBeDiscType==='pct_cap')discPo=Math.min(baseGrossAOV*campBeDiscPct/100,campBeCap>0?campBeCap:9999);
+  else if(campBeDiscType==='menu')discPo=baseGrossAOV*campBeDiscPct/100;
+  else if(campBeDiscType==='select')discPo=Math.min(baseGrossAOV*(campBeAttach/100)*(campBeDiscPct/100),campBeCap>0?campBeCap:9999);
+  else if(campBeDiscType==='bogo')discPo=baseGrossAOV*campBeFreeItemPct/100;
+  const platDiscPo=discPo*(campBeCoFund/100);
+  const ourDiscPo=discPo*(1-campBeCoFund/100);
+  const custNetAOV=baseGrossAOV-discPo;
+  const effectivePo=baseGrossAOV-ourDiscPo;
+  const foodPo=baseGrossAOV*fp;
+  const commPo=custNetAOV*cr;
+  const contribPo=effectivePo-foodPo-commPo;
+  const bFoodPo=baseGrossAOV*fp;
+  const bCommPo=baseNetAOV*cr;
+  const bContribPo=baseNetAOV-bFoodPo-bCommPo;
+  const bContrib=bContribPo*baseOrders;
+  function mkScenario(mult){
+    if(contribPo<=0)return null;
+    const orders=Math.ceil(bContrib*mult/contribPo);
+    return{orders:orders,opd:orders/campDays,ordersVsBase:(orders-baseOrders)/baseOrders*100,
+      grossSales:orders*baseGrossAOV,discBurn:orders*discPo,custNetSales:orders*custNetAOV,
+      platRebate:orders*platDiscPo,effectiveRev:orders*effectivePo,
+      foodCost:orders*foodPo,commCost:orders*commPo,
+      contrib:orders*contribPo,contribVsBase:(orders*contribPo-bContrib)/bContrib*100};
+  }
+  const flatScenario={orders:baseOrders,opd:baseOpd,ordersVsBase:0,
+    grossSales:baseOrders*baseGrossAOV,discBurn:baseOrders*discPo,custNetSales:baseOrders*custNetAOV,
+    platRebate:baseOrders*platDiscPo,effectiveRev:baseOrders*effectivePo,
+    foodCost:baseOrders*foodPo,commCost:baseOrders*commPo,
+    contrib:baseOrders*contribPo,contribVsBase:(baseOrders*contribPo-bContrib)/bContrib*100};
+  return{fp:fp,cr:cr,baseGrossAOV:baseGrossAOV,baseNetAOV:baseNetAOV,baseOpd:baseOpd,baseOrders:baseOrders,campDays:campDays,
+    discPo:discPo,platDiscPo:platDiscPo,ourDiscPo:ourDiscPo,custNetAOV:custNetAOV,effectivePo:effectivePo,
+    foodPo:foodPo,commPo:commPo,contribPo:contribPo,
+    bContribPo:bContribPo,bContrib:bContrib,impossible:contribPo<=0,
+    prior:prior,month:month,
+    flat:flatScenario,be:mkScenario(1.00),p10:mkScenario(1.10),p20:mkScenario(1.20)};
+}
+function campBeHTML(){
+  const T=campTheme();
+  if(!campLoaded)return'';
+  function fmA(n){return n==null?'—':'AED '+Math.round(Math.abs(n)).toLocaleString();}
+  function fmP(n,d){d=d||0;return n==null?'—':(n>=0?'+':'')+n.toFixed(d)+'%';}
+  function fmN(n,d){if(d===undefined)d=1;return n==null?'—':d?n.toFixed(d):Math.round(n).toLocaleString();}
+  const ac='#60A5FA';
+  const cardStyle='background:'+T.panelBg+';border:1px solid '+T.border+';border-radius:12px;padding:14px 16px;margin-bottom:12px';
+  function secLabel(txt,clr){return'<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:'+(clr||T.muted)+';margin-bottom:10px">'+txt+'</div>';}
+  const fldStyle='background:'+T.inputBg+';border:1px solid '+T.border+';border-radius:7px;color:'+T.text+';padding:7px 10px;font-size:12px;font-weight:600;width:100%';
+  const bOpts=BR.map(function(b){return'<option value="'+b.n+'"'+(b.n===campBeBrand?' selected':'')+'>'+b.n+'</option>';}).join('');
+  const aOpts=AGGS.filter(function(a){return a!=='Smiles'&&a!=='Instashop';}).map(function(a){return'<option value="'+a+'"'+(a===campBeAgg?' selected':'')+'>'+a+'</option>';}).join('');
+  const dtOptsList=[{v:'pct_cap',l:'% Off with Cap'},{v:'menu',l:'Menu-wide % Off'},{v:'select',l:'Select Items'},{v:'bogo',l:'BOGO / Free Item'}];
+  const dtOpts=dtOptsList.map(function(o){return'<option value="'+o.v+'"'+(o.v===campBeDiscType?' selected':'')+'>'+o.l+'</option>';}).join('');
+  const hasBaseDates=campBePriorStart&&campBeMonthStart;
+  const R=hasBaseDates?campBeCompute():null;
+  campBeResult=R;
+  function periodWarn(p,label){
+    if(!p)return'<span style="color:'+T.muted+';font-size:11px">No data found for '+label+'</span>';
+    if(p.hasCampaign)return'<span style="color:#FBBF24;font-size:10px">⚠ Campaign running in '+label+': '+p.campNames.slice(0,2).join(', ')+'</span>';
+    return'<span style="color:#22C55E;font-size:10px">✓ Clean baseline period</span>';
+  }
+  let setup='<div style="'+cardStyle+'">'
+    +secLabel('Campaign setup',ac)
+    +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:10px">'
+    +'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Brand</div><select onchange="campBeBrand=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'">'+bOpts+'</select></div>'
+    +'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Aggregator</div><select onchange="campBeAgg=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'">'+aOpts+'</select></div>'
+    +'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Start date</div><input type="date" value="'+campBeStart+'" onchange="campBeStart=this.value;campBeAutoFillDates();campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>'
+    +'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">End date</div><input type="date" value="'+campBeEnd+'" onchange="campBeEnd=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>'
+    +'</div>'
+    +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px">'
+    +'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Discount type</div><select onchange="campBeDiscType=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'">'+dtOpts+'</select></div>'
+    +(campBeDiscType!=='bogo'?'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Discount %</div><input type="number" value="'+campBeDiscPct+'" min="1" max="90" onchange="campBeDiscPct=+this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>':'')
+    +((campBeDiscType==='pct_cap'||campBeDiscType==='select')?'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Cap (AED, 0=none)</div><input type="number" value="'+campBeCap+'" min="0" onchange="campBeCap=+this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>':'')
+    +(campBeDiscType==='bogo'?'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Free item (% of cart)</div><input type="number" value="'+campBeFreeItemPct+'" min="5" max="60" onchange="campBeFreeItemPct=+this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>':'')
+    +(campBeDiscType==='select'?'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Attach rate %</div><input type="number" value="'+campBeAttach+'" min="1" max="100" onchange="campBeAttach=+this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>':'')
+    +'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Platform co-funds %</div><input type="number" value="'+campBeCoFund+'" min="0" max="100" onchange="campBeCoFund=+this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>'
+    +'</div>'
+    +(R?'<div style="margin-top:10px;padding:7px 12px;background:rgba(255,255,255,.03);border-radius:7px;font-size:11px;color:'+T.muted+';display:flex;gap:14px;flex-wrap:wrap">'
+      +'<span>Commission: <strong style="color:'+T.text+'">'+Math.round(R.cr*100)+'%</strong> of cust. net</span>'
+      +'<span>Food + pkg: <strong style="color:'+T.text+'">'+Math.round(R.fp*100)+'%</strong> of gross</span>'
+      +'<span>Discount/order: <strong style="color:#F87171">'+fmA(R.discPo)+'</strong></span>'
+      +(campBeCoFund>0?'<span>Our share: <strong style="color:#F87171">'+fmA(R.ourDiscPo)+'</strong> · Platform covers: <strong style="color:#22C55E">'+fmA(R.platDiscPo)+'</strong></span>':'')
+      +'</div>':'')
+    +'</div>';
+  let baseCard='<div style="'+cardStyle+'">'
+    +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'
+    +secLabel('Baseline — auto-pulled from your data',T.muted)
+    +'<button onclick="campBeShowDateEdit=!campBeShowDateEdit;renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid '+T.border+';border-radius:6px;color:'+T.label+';padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600;margin-top:-6px">'+(campBeShowDateEdit?'Hide dates ↑':'Change dates ↓')+'</button>'
+    +'</div>';
+  if(!campBeStart){
+    baseCard+='<div style="color:'+T.muted+';font-size:12px">Enter the campaign start date above — comparison dates will fill automatically.</div>';
+  }else{
+    baseCard+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:'+(R?'10px':'0')+'">'
+      +'<div style="padding:10px 12px;background:'+T.inputBg+';border-radius:8px;border:1px solid '+T.border+'">'
+      +'<div style="font-size:10px;font-weight:700;color:'+T.muted+';text-transform:uppercase;margin-bottom:6px">Prior week</div>'
+      +(campBeShowDateEdit
+        ?'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px"><input type="date" value="'+campBePriorStart+'" onchange="campBePriorStart=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"><input type="date" value="'+campBePriorEnd+'" onchange="campBePriorEnd=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>'
+        :'<div style="font-size:12px;font-weight:600;color:'+T.text+';margin-bottom:5px">'+campBePriorStart+' → '+campBePriorEnd+'</div>')
+      +'<div style="margin-bottom:4px">'+periodWarn(R?R.prior:null,'prior week')+'</div>'
+      +(R&&R.prior?'<div style="font-size:13px;font-weight:800;color:'+T.text+'">'+fmN(R.prior.opd)+'/day · '+fmA(R.prior.netAOV)+' net AOV</div>':'')
+      +'</div>'
+      +'<div style="padding:10px 12px;background:'+T.inputBg+';border-radius:8px;border:1px solid '+T.border+'">'
+      +'<div style="font-size:10px;font-weight:700;color:'+T.muted+';text-transform:uppercase;margin-bottom:6px">Same days last month</div>'
+      +(campBeShowDateEdit
+        ?'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px"><input type="date" value="'+campBeMonthStart+'" onchange="campBeMonthStart=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"><input type="date" value="'+campBeMonthEnd+'" onchange="campBeMonthEnd=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>'
+        :'<div style="font-size:12px;font-weight:600;color:'+T.text+';margin-bottom:5px">'+campBeMonthStart+' → '+campBeMonthEnd+'</div>')
+      +'<div style="margin-bottom:4px">'+periodWarn(R?R.month:null,'last month')+'</div>'
+      +(R&&R.month?'<div style="font-size:13px;font-weight:800;color:'+T.text+'">'+fmN(R.month.opd)+'/day · '+fmA(R.month.netAOV)+' net AOV</div>':'')
+      +'</div>'
+      +'</div>';
+    if(R){
+      const bstats=[['Avg orders/day',fmN(R.baseOpd),T.text],['Net AOV',fmA(R.baseNetAOV),T.text],['Total orders ('+R.campDays+'d)',''+R.baseOrders,T.text],['Baseline contribution',fmA(R.bContrib),'#22C55E']];
+      baseCard+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">'
+        +bstats.map(function(x){return'<div style="padding:9px 10px;background:'+T.inputBg+';border-radius:7px;border:1px solid '+T.border+';text-align:center"><div style="font-size:9px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:3px">'+x[0]+'</div><div style="font-size:17px;font-weight:800;color:'+x[2]+'">'+x[1]+'</div></div>';}).join('')
+        +'</div>';
+    }
+  }
+  baseCard+='</div>';
+  if(!R)return setup+baseCard;
+  if(R.impossible){
+    return setup+baseCard+'<div style="'+cardStyle+';border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.06)">'
+      +'<div style="font-size:14px;font-weight:800;color:#F87171;margin-bottom:6px">⛔ No break-even possible at these terms</div>'
+      +'<div style="font-size:12px;color:#FCA5A5;line-height:1.6">Contribution per order = <strong>'+fmA(R.contribPo)+'</strong>. Every additional order deepens the loss. Reduce the discount, lower the cap, or increase platform co-funding.</div></div>';
+  }
+  const econItems=[
+    ['Gross AOV',fmA(R.baseGrossAOV),T.text,'Baseline order size'],
+    ['Discount/order','– '+fmA(R.discPo),'#F87171',campBeCoFund>0?('Platform covers '+campBeCoFund+'%'):'100% our cost'],
+    ['Customer pays',fmA(R.custNetAOV),T.text,'Net AOV after discount']
+  ];
+  if(campBeCoFund>0)econItems.push(['Platform rebate','+ '+fmA(R.platDiscPo),'#22C55E',campBeCoFund+'% of discount back']);
+  econItems.push(['Our revenue',fmA(R.effectivePo),ac,'Effective receipt/order']);
+  econItems.push(['Food + pkg','– '+fmA(R.foodPo),'#FB923C',Math.round(R.fp*100)+'% of gross']);
+  econItems.push(['Contribution/order',fmA(R.contribPo),R.contribPo>R.bContribPo*0.6?'#22C55E':'#FBBF24','vs '+fmA(R.bContribPo)+' baseline']);
+  let econ='<div style="'+cardStyle+'">'
+    +secLabel('Discount impact — per order',ac)
+    +'<div style="display:grid;grid-template-columns:repeat('+(campBeCoFund>0?7:6)+',1fr);gap:12px;margin-bottom:10px">'
+    +econItems.map(function(x){return'<div><div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:'+T.muted+';margin-bottom:3px">'+x[0]+'</div><div style="font-size:15px;font-weight:800;color:'+x[2]+'">'+x[1]+'</div><div style="font-size:10px;color:'+T.muted+';margin-top:2px">'+x[3]+'</div></div>';}).join('')
+    +'</div>'
+    +'<div style="padding:8px 12px;background:rgba(255,255,255,.04);border-radius:7px;font-size:11px;color:'+T.muted+'">Discount is already in the lower effective revenue — not deducted again in the P&L. Every order above break-even earns <strong style="color:'+ac+'">'+fmA(R.contribPo)+'</strong> extra profit.</div>'
+    +'</div>';
+  const SCEN=[
+    {key:'base',label:'Baseline',sub:'No campaign',col:'#64748B',d:{orders:R.baseOrders,opd:R.baseOpd,ordersVsBase:0,grossSales:R.baseOrders*R.baseGrossAOV,discBurn:0,custNetSales:R.baseOrders*R.baseNetAOV,platRebate:0,effectiveRev:R.baseOrders*R.baseNetAOV,foodCost:R.baseOrders*R.baseGrossAOV*R.fp,commCost:R.baseOrders*R.baseNetAOV*R.cr,contrib:R.bContrib,contribVsBase:0}},
+    {key:'flat',label:'Flat orders',sub:'Same volume + discount',col:'#F87171',d:R.flat},
+    {key:'be',label:'Break-even',sub:'Match baseline',col:'#60A5FA',d:R.be},
+    {key:'p10',label:'+10% profit',sub:'10% above baseline',col:'#22C55E',d:R.p10},
+    {key:'p20',label:'+20% profit',sub:'20% above baseline',col:'#A78BFA',d:R.p20}
+  ];
+  const RDEF=[
+    {sec:'VOLUME',items:[
+      {l:'Orders / day',f:function(d){return'<strong style="font-size:15px">'+fmN(d.opd)+'</strong>';}},
+      {l:'Total orders',f:function(d){return fmN(d.orders,0);}},
+      {l:'vs baseline',f:function(d,k){return k==='base'?('<span style="color:'+T.muted+'">Reference</span>'):('<span style="color:'+(d.ordersVsBase>0?'#FBBF24':'#94A3B8')+';font-weight:700">'+fmP(d.ordersVsBase,0)+'</span>');}}
+    ]},
+    {sec:'AOV',items:[
+      {l:'Gross AOV',f:function(){return fmA(R.baseGrossAOV);}},
+      {l:'Discount/order',f:function(d,k){return k==='base'?('<span style="color:'+T.muted+'">—</span>'):('<span style="color:#F87171">– '+fmA(R.discPo)+'</span>');}},
+      {l:'Customer pays',f:function(d,k){return fmA(k==='base'?R.baseNetAOV:R.custNetAOV);}},
+      {l:'Effective revenue/order',f:function(d,k){return k==='base'?('<strong>'+fmA(R.baseNetAOV)+'</strong>'):('<strong style="color:'+ac+'">'+fmA(R.effectivePo)+'</strong>');}}
+    ]},
+    {sec:'P&L',items:[
+      {l:'Gross Sales',f:function(d){return fmA(d.grossSales);}},
+      {l:'Discount Burn (total)',f:function(d,k){return k==='base'?('<span style="color:'+T.muted+'">—</span>'):('<span style="color:#F87171">('+fmA(d.discBurn)+')</span>');}},
+      {l:'Net Sales (cust. paid)',f:function(d){return fmA(d.custNetSales);}},
+      {l:'Food + Pkg ('+Math.round(R.fp*100)+'% gross)',f:function(d){return'<span style="color:#FB923C">('+fmA(d.foodCost)+')</span>';}},
+      {l:'Commission ('+Math.round(R.cr*100)+'% cust. net)',f:function(d){return'<span style="color:#FB923C">('+fmA(d.commCost)+')</span>';}}
+    ]},
+    {sec:'RESULT',items:[
+      {l:'Net Contribution',f:function(d){var c=d.contrib>=R.bContrib*0.98?'#22C55E':d.contrib>0?'#FBBF24':'#F87171';return'<span style="font-size:15px;font-weight:800;color:'+c+'">'+(d.contrib<0?'– ':'')+fmA(d.contrib)+'</span>';}},
+      {l:'vs baseline',f:function(d,k){return k==='base'?('<span style="color:'+T.muted+'">Baseline</span>'):('<span style="color:'+(d.contribVsBase>=0?'#22C55E':'#F87171')+';font-weight:700">'+fmP(d.contribVsBase,0)+'</span>');}}
+    ]}
+  ];
+  const cW=Math.round(78/SCEN.length)+'%';
+  let th='<thead><tr><th style="width:22%;padding:8px 10px;text-align:left;font-size:10px;color:'+T.muted+'"></th>';
+  SCEN.forEach(function(s){th+='<th style="width:'+cW+';padding:8px 10px;text-align:right;border-bottom:3px solid '+s.col+'"><div style="font-size:11px;font-weight:800;color:'+s.col+';letter-spacing:.3px">'+s.label+'</div><div style="font-size:10px;color:'+T.muted+';margin-top:2px;font-weight:400">'+s.sub+'</div></th>';});
+  th+='</tr></thead>';
+  let tb='<tbody>';
+  RDEF.forEach(function(sec,si){
+    if(si>0)tb+='<tr><td colspan="'+(SCEN.length+1)+'" style="border-top:1px solid '+T.border+';padding:3px"></td></tr>';
+    tb+='<tr><td colspan="'+(SCEN.length+1)+'" style="padding:7px 10px 3px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:'+T.muted+'">'+sec.sec+'</td></tr>';
+    sec.items.forEach(function(row,ri){
+      tb+='<tr style="background:'+(ri%2===0?'rgba(255,255,255,.02)':'transparent')+'"><td style="padding:8px 10px;font-size:12px;color:'+T.label+';white-space:nowrap">'+row.l+'</td>';
+      SCEN.forEach(function(s){tb+='<td style="padding:8px 10px;text-align:right;font-size:12px;font-weight:600;color:'+T.text+'">'+(s.d?row.f(s.d,s.key):('<span style="color:'+T.muted+'">—</span>'))+'</td>';});
+      tb+='</tr>';
+    });
+  });
+  tb+='</tbody>';
+  const table='<div style="'+cardStyle+'"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:'+T.muted+';margin-bottom:10px">Orders needed for each target</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:720px">'+th+tb+'</table></div></div>';
+  const insightDefs=[
+    {c:'#F87171',i:'📉',t:'At baseline volume',b:'Running at '+fmN(R.baseOpd)+'/day drops contribution to '+fmA(R.flat?R.flat.contrib:null)+' — a '+fmA(R.bContrib-(R.flat?R.flat.contrib:0))+' loss vs not running.'},
+    {c:'#60A5FA',i:'🎯',t:'Break-even',b:fmN(R.be?R.be.opd:null)+'/day · '+(R.be?R.be.orders:'—')+' total ('+fmP(R.be?R.be.ordersVsBase:0,0)+' above baseline). Contribution matches your baseline '+fmA(R.bContrib)+'.'},
+    {c:'#A78BFA',i:'🚀',t:'+20% profit target',b:fmN(R.p20?R.p20.opd:null)+'/day · '+(R.p20?R.p20.orders:'—')+' total ('+fmP(R.p20?R.p20.ordersVsBase:0,0)+'). Each order above break-even adds '+fmA(R.contribPo)+' to profit.'}
+  ];
+  const insights='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:4px">'
+    +insightDefs.map(function(ins){return'<div style="'+cardStyle+';border-left:4px solid '+ins.c+';margin-bottom:0"><div style="font-size:12px;font-weight:800;color:'+ins.c+';margin-bottom:6px">'+ins.i+' '+ins.t+'</div><div style="font-size:11px;color:'+T.muted+';line-height:1.6">'+ins.b+'</div></div>';}).join('')
+    +'</div>';
+  return setup+baseCard+econ+table+insights;
+}
+
 function campFcHTML(){
   const T=campTheme();
   if(!campLoaded)return''; // don't render until campaigns are loaded
@@ -14098,9 +14363,19 @@ async function renderCampaigns(){
     </div></div>`;
     // Forecaster — its own prominent card, not one pill among equals, since it's a genuinely
     // different kind of tool (planning) rather than a status filter.
-    const forecasterCTA=`<div onclick="campTab='forecaster';renderCampaigns()" style="cursor:pointer;background:linear-gradient(135deg,rgba(245,158,11,.16),rgba(245,158,11,.05));border:1.5px solid ${campTab==='forecaster'?'#f59e0b':'rgba(245,158,11,.4)'};border-radius:12px;padding:16px 20px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${campTab==='forecaster'?'#f59e0b':'rgba(245,158,11,.4)'}'">
-      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><span style="font-size:30px">🔮</span><div><div style="font-size:16px;font-weight:800;color:#fbbf24">Campaign Forecaster</div><div style="font-size:11.5px;color:${T.label};margin-top:2px">Model a hypothetical discount before you run it — expected lift, ROI, and break-even</div></div></div>
-      <span style="font-size:12px;font-weight:700;color:#f59e0b;white-space:nowrap">${campTab==='forecaster'?'✓ Open':'Open →'}</span>
+    // v364: two side-by-side half-width tool cards replacing the single full-width forecaster banner.
+    // Left = existing Campaign Forecaster (unchanged internally), right = new Campaign Break-Even
+    // Calculator. Each gets a distinct border-left accent so they read as different tools at a
+    // glance: amber for the forecaster, blue for the break-even.
+    const forecasterCTA=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+      <div onclick="campTab='forecaster';renderCampaigns()" style="cursor:pointer;background:linear-gradient(135deg,rgba(245,158,11,.13),rgba(245,158,11,.04));border:1.5px solid ${campTab==='forecaster'?'#f59e0b':'rgba(245,158,11,.35)'};border-left:3px solid #f59e0b;border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${campTab==='forecaster'?'#f59e0b':'rgba(245,158,11,.35)'}'">
+        <div style="display:flex;align-items:center;gap:11px"><span style="font-size:24px">🔮</span><div><div style="font-size:14px;font-weight:800;color:#fbbf24">Campaign Forecaster</div><div style="font-size:11px;color:${T.label};margin-top:2px;line-height:1.4">Model a planned discount — expected lift, ROI, and break-even</div></div></div>
+        <span style="font-size:11px;font-weight:700;color:#f59e0b;white-space:nowrap;flex-shrink:0">${campTab==='forecaster'?'✓ Open':'Open →'}</span>
+      </div>
+      <div onclick="campTab='breakeven';renderCampaigns()" style="cursor:pointer;background:linear-gradient(135deg,rgba(96,165,250,.13),rgba(96,165,250,.04));border:1.5px solid ${campTab==='breakeven'?'#60A5FA':'rgba(96,165,250,.35)'};border-left:3px solid #60A5FA;border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px" onmouseover="this.style.borderColor='#60A5FA'" onmouseout="this.style.borderColor='${campTab==='breakeven'?'#60A5FA':'rgba(96,165,250,.35)'}'">
+        <div style="display:flex;align-items:center;gap:11px"><span style="font-size:24px">🎯</span><div><div style="font-size:14px;font-weight:800;color:#93C5FD">Campaign Break-Even Calculator</div><div style="font-size:11px;color:${T.label};margin-top:2px;line-height:1.4">Enter campaign terms — baseline auto-pulled, targets calculated</div></div></div>
+        <span style="font-size:11px;font-weight:700;color:#60A5FA;white-space:nowrap;flex-shrink:0">${campTab==='breakeven'?'✓ Open':'Open →'}</span>
+      </div>
     </div>`;
     // Rewards segregation renderer: on Active/History, split the filtered list into "regular" and
     // "rewards" campaigns. Regular go first as the main grid. Rewards appear below in a labelled
@@ -14121,6 +14396,7 @@ async function renderCampaigns(){
     };
     let main='';
     if(campTab==='forecaster'){main=campFcHTML();}
+    else if(campTab==='breakeven'){main=campBeHTML();}
     else if(campTab==='browse'){
       // Filter bar renders ONCE, above the combined sections — not duplicated per status,
       // which is what would've happened if each section still called it independently.
@@ -14140,8 +14416,9 @@ async function renderCampaigns(){
     // campaign's own card, and don't make sense summed/blended across every active campaign at
     // once. campKPIStrip() itself is left in place (unused for now) rather than deleted outright,
     // in case a differently-scoped version of it is useful in the redesign.
-    const topChrome=campTab==='detail'?'':forecasterCTA+statusTable;
-    pg.innerHTML=`${styleOverride}${header}${campDataFreshnessStrip()}${attention}${topChrome}${main}`;
+    const topChrome=(campTab==='detail'||campTab==='forecaster'||campTab==='breakeven')?'':forecasterCTA+statusTable;
+    const toolBack=(campTab==='forecaster'||campTab==='breakeven')?`<div style="margin-bottom:10px;padding:8px 12px;background:rgba(255,255,255,.04);border-radius:8px;border:1px solid ${T.border};display:flex;align-items:center;gap:10px"><button onclick="campTab='browse';renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.3);border-radius:7px;color:${T.label};padding:6px 13px;font-size:12px;cursor:pointer;font-weight:700">← Back to campaigns</button><span style="color:${T.border}">|</span><span style="font-size:13px;font-weight:700;color:${campTab==='forecaster'?'#fbbf24':'#93C5FD'}">${campTab==='forecaster'?'🔮 Campaign Forecaster':'🎯 Campaign Break-Even Calculator'}</span></div>`:'';
+    pg.innerHTML=`${styleOverride}${header}${campDataFreshnessStrip()}${attention}${topChrome}${toolBack}${main}`;
     if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
     if(campTab==='detail'&&selCamp){const c=selCamp;const imp=campImpact(c);if(campStatus(c)!=='Upcoming'&&imp.hasData){const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&(c.brand==='All Brands'||r.brand===c.brand)&&(c.aggregator==='All'||r.aggregator===c.aggregator)));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-camp',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}}
   }catch(err){pg.innerHTML=`${styleOverride}<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Render error</div><div style="color:${T.muted};font-size:12px">${err.message}</div></div>`;}
