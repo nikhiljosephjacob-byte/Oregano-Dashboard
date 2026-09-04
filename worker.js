@@ -283,6 +283,11 @@ async function handleForecastSave(request, env) {
     savedByName: session.displayName,
     algoVersion: body.algoVersion || null, // dashboard BUILD_VERSION at the time of saving
     brand: body.brand, agg: body.agg,
+    type: body.type || null, // v1: was read for the isBogo check above but never persisted — every
+    // saved forecast came back from history with no type at all, so the display always fell back to
+    // the generic "X% off" label. For BOGO specifically this showed literally "null% off" (discPct
+    // is correctly null for BOGO, but the type that should have selected the "BOGO" label was
+    // missing) — caught directly by Nikhil on a live screenshot of Forecast History.
     discPct: body.discPct, cap: body.cap,
     coFund: !!body.coFund, coFundPct: body.coFundPct || null,
     start: body.start, end: body.end,
