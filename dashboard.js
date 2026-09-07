@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-370";
+const BUILD_VERSION="2026-08-13-371";
 const BUILD_NOTES=[
+  "\ud83d\udc1b Found and fixed a real, PROVEN bug in the forecaster's percentile math, using the actual Sep-3 Deliveroo BOGO forecast (expected +6%, actual +50%) as the test case Nikhil asked for. Hand-traced the exact weighted-percentile calculation against the real 5-match historical pool that fed that forecast: one recent match (BOGO 14\u201316 Aug, +6% uplift) held 58% of the total weight, and its cumulative-weight span (~19%\u201377%) covered the 25th, 50th, AND 75th percentile thresholds all at once \u2014 so Conservative and Expected came back IDENTICAL (+6% and +6%), silently collapsing two supposedly-independent scenarios into one number, even though the underlying weighted evidence genuinely spanned -2% to +29%. Reproduced this exactly by hand (P25=P50=P75=+6.0% under the old method) before touching any code. Fixed campFcWeightedPercentile to interpolate between the MIDPOINT of each match's cumulative-weight span instead of returning the raw value of whichever match's span first crosses the threshold \u2014 the standard approach for weighted-percentile interpolation. Re-verified on the same real data: Conservative is now +1.2% (genuinely distinct from Expected's +6%), while Expected and Optimistic can still legitimately coincide when two OR MORE distinct historical matches happen to share the same real uplift value (as two of the five do here, both showing +6%) \u2014 that's real signal from thin historical data, not an artifact, and the fix correctly leaves it alone rather than manufacturing false precision. Verified monotonic ordering (P25\u2264P50\u2264P75) holds across 200 randomized weight distributions, plus sanity checks on single-point and equal-weight-pair edge cases. NOTE, stated plainly: this fix does not fully explain everything in the numbers Nikhil showed \u2014 Conservative and Optimistic from a fresh re-run matched this corrected methodology cleanly by hand-calculation, but Expected did not (calculated ~+27\u201331%, displayed +7%), and no code path was found that would explain that specific gap. Flagged back to Nikhil as still open, with a specific ask for how to pin it down further, rather than papering over an unresolved discrepancy.",
+  "\ud83d\udc1b Fixed the Campaign Forecaster's historical-match header showing stale, irrelevant matching criteria for BOGO and other non-percentage campaign types \u2014 caught directly on the same real BOGO forecast, which displayed \"30% off \u00b18% \u00b7 cap AED 20 \u00b16\" even though BOGO matching uses neither a percentage nor a cap (campFcFindBogoMatches passes discPct=null \u2014 confirmed no percentage filtering happens for BOGO at all). The header text was unconditionally interpolating the campFcDiscPct/campFcCap global variables regardless of campFcType, so it kept showing whatever those defaulted to or were last set to, even for types where they're structurally meaningless. Added campFcMatchCriteriaLabel(), which mirrors exactly which filter each campaign type's match-finder actually applies \u2014 BOGO shows no percentage/cap at all, select-items/OFU/platform-event show only a percentage (no cap, since none of them use one), and the original menu-wide type keeps the existing percentage+cap text unchanged. Fixed in both places this text appeared: the historical-match table header and the no-matches-found fallback warning.",
   "\ud83d\udc1b Found and fixed why checking the Deliveroo BOGO forecast (saved 3 Sep, running 4\u20136 Sep) against its actual result wasn't possible at all \u2014 not an accuracy problem, a matching problem. campFcMatchSaved(), which powers the \"You forecasted this on...actual result...\" callout on every campaign's detail page, extracted a discount percentage from the real campaign's own comment text and returned null immediately if none was found. BOGO campaigns never mention a percentage (\"BOGO on 5 Items: 2 Grilled Chicken...\"), so this function could structurally never match ANY BOGO campaign to its saved forecast, regardless of whether one existed \u2014 the comparison was silently never happening, for every BOGO campaign that's ever been forecasted, not just this one. A second wrinkle made this specific case harder: the saved forecast was written on 3 Sep, before the earlier fix that made the server persist the 'type' field (v\u2026 building on that fix), so this exact record has no type field at all and can't be identified as BOGO that way. Fixed with a BOGO-aware branch: campaigns whose text matches the existing CAMP_FC_BOGO_RE pattern now match saved forecasts by brand+aggregator+BOGO-ness instead of a percentage \u2014 'BOGO-ness' means either type==='bogo' (records saved after the type-persistence fix) or, for older records like this one, type is absent AND discPct is null (which BOGO forecasts were already correctly saving even before the type field existed). The existing percentage-based matching for %-off campaigns is untouched and unaffected. Also hardened the %-off path defensively: a saved record with a null discPct can no longer satisfy a percentage match (arithmetic on null previously coerced to 0, which could have let a stray null-discPct record wrongly match a very small real discount). Verified with 6 test cases: the exact broken scenario (legacy no-type BOGO record) now matches; a post-fix BOGO record with type='bogo' matches; normal %-off matching is unchanged (regression-safe); a wrong-percentage %-off forecast is still correctly rejected; a null-discPct record can no longer falsely match a real percentage campaign; a BOGO campaign with a saved forecast for a DIFFERENT brand is correctly rejected, not wrongly matched. Once deployed, the campaign detail page for this specific BOGO campaign should now show the real forecast-vs-actual comparison for the first time \u2014 the actual accuracy question (was the forecast close to what really happened) still needs Nikhil to look at the real numbers now that they can finally be compared.",
   "\ud83d\udcc5 Break-even calculator now shows exactly which dates its baseline came from, with the day of week \u2014 caught directly by Nikhil after the earlier fix confirmed baseline can carry a real organic discount (small vouchers, standing combos) even with no new campaign running. Two changes: (1) the existing prior-week and same-days-last-month date display in the baseline card now uses fmtDisp (weekday + day + month + year, e.g. \"Tue, 25 Aug 2026\") instead of raw ISO dates; (2) a new subtitle line under the econ panel's Discount/order row shows a compact version of the SAME dates right where the number is (\"From Tue 25 \u2013 Mon 31 Aug & Sat 25 \u2013 Fri 31 Jul\"), only referencing whichever comparison period(s) genuinely contributed data \u2014 not blindly both, since either the prior-week or same-days-last-month window can independently have no sales data. Switching to any of the four campaign scenarios correctly swaps this subtitle to the cost-share note instead (dates aren't relevant there \u2014 campaign terms are user-entered, not historically derived). Verified end-to-end with a real DOM (jsdom): initial render shows the correct compact date string with weekday names, switching to a campaign scenario swaps to \"100% our cost\", and switching back to Baseline correctly restores the date reference.",
   "\ud83c\udd95 Campaign Break-Even Calculator rebuilt with the full interactive design approved over many rounds \u2014 dynamic hero banner, five-zone gauge with neon-glow segments and curved tags, an evenly-spaced journey track, and per-order economics that genuinely switch between two REAL profiles (baseline uses actual historical gross-vs-net AOV gap, not an assumed zero; the four campaign scenarios share identical real per-order economics since only volume differs between them). Cool Contrast palette locked in as final (indigo/crimson/cyan/teal/gold). Auto-plays left to right every ~1.8s; hovering any card or circle jumps there and pauses, moving away resumes. Built as targeted DOM updates (campBeSetActive, by element id) rather than full re-renders for the interactive parts \u2014 a full pg.innerHTML replace on every 1.8s tick would tear down and recreate every node, which kills CSS transitions (they only animate on the SAME persisting element across a property change, never across a fresh DOM replacement). The auto-play timer is stopped before any renderCampaigns() DOM replacement (old target nodes are about to die) and restarted only after the new DOM is in place; also stopped on every page navigation via gp(), not just returns to Campaigns, so it can't leak and keep firing in the background while the user is on an unrelated page. Verified with a real jsdom-rendered DOM (not just code review, per Nikhil's explicit push after the dial-centering bug \u2014 confirmed via genuine arithmetic audit that CX must equal viewBox-width/2, not re-asserted from a carried-over constant): all 44 required element ids exist after render; initial baseline state renders correctly; campBeSetActive(idx) correctly updates the hero, needle rotation, zone highlighting, econ panel (including the real organic-discount detection responding to actual data variation, not a hardcoded value), and card styling together as one system; hover correctly pauses and jumps, unhover correctly resumes the timer.",
@@ -13517,13 +13519,39 @@ function campFcRunScenario(baseline,uplift,discPct,cap,coFundPct,agg,brand,nDays
 // counting equally. A weight of 1 = full vote; a weight of 0.3 = counts for 3/10 of a vote.
 // This is how "last week's exact repeat" ends up dominating "a festival from 5 months ago"
 // instead of the other way around.
+// v371: rewritten to interpolate between the MIDPOINT of each match's cumulative-weight span,
+// instead of returning the raw value of whichever match's cumulative weight first crosses the
+// threshold. Verified this was a real, provable bug on a real forecast: the Sep 3 BOGO forecast
+// (Oregano x Deliveroo) had one recent match holding 58% of the total weight — under the old
+// method, that single match's raw value satisfied the 25th, 50th, AND 75th percentile checks
+// simultaneously (its cumulative span, ~19%-77%, contains all three thresholds), so Conservative
+// and Expected came back IDENTICAL (+6% and +6%) even though the underlying weighted evidence
+// spans -2% to +29% — collapsing two supposedly-independent scenarios into one number, and
+// silently understating the genuine spread of outcomes the historical data actually shows.
+// Confirmed hand-verified against the exact real match pool: old method gave P25=P50=P75=+6%;
+// new method gives P25=+1.2%, P50=+6%, P75=+6% — Conservative is now genuinely distinct. Note
+// P50 and P75 can still legitimately coincide when two OR MORE distinct historical matches
+// happen to show the identical uplift value (as they do here) — that's real signal from the
+// data, not a bug to paper over; only a SINGLE match's span improperly spanning multiple
+// thresholds was the actual defect.
 function campFcWeightedPercentile(weighted,p){
   const sorted=[...weighted].sort((a,b)=>a.u-b.u);
   const totalW=sorted.reduce((s,x)=>s+x.w,0);
   if(totalW<=0)return sorted.length?sorted[Math.floor(sorted.length/2)].u:0;
+  if(sorted.length===1)return sorted[0].u;
   let cum=0;
-  for(const x of sorted){cum+=x.w;if(cum/totalW>=p/100)return x.u;}
-  return sorted[sorted.length-1].u;
+  const points=sorted.map(x=>{const mid=(cum+x.w/2)/totalW;cum+=x.w;return{pos:mid,u:x.u};});
+  const target=p/100;
+  if(target<=points[0].pos)return points[0].u;
+  if(target>=points[points.length-1].pos)return points[points.length-1].u;
+  for(let i=0;i<points.length-1;i++){
+    if(target>=points[i].pos&&target<=points[i+1].pos){
+      const span=points[i+1].pos-points[i].pos;
+      const frac=span>0?(target-points[i].pos)/span:0;
+      return points[i].u+frac*(points[i+1].u-points[i].u);
+    }
+  }
+  return points[points.length-1].u;
 }
 // v367: replaces the hardcoded '2026-01-01' cutoff below with a genuine, self-updating check —
 // does this exact brand+aggregator combination have ANY real discount value recorded anywhere
@@ -13539,6 +13567,21 @@ function campFcWeightedPercentile(weighted,p){
 // discount across every outlet for the period is the real "not backfilled yet" signature.
 function campFcHasDiscDataForPeriod(brand,agg,start,end){
   return allData.some(r=>r.brand===brand&&r.aggregator===agg&&r.date>=start&&r.date<=end&&(r.disc||0)>0);
+}
+// v371: the match-table header and the no-matches warning both unconditionally showed
+// "{discPct}% off ±8% · cap AED {cap} ±6" regardless of campaign type — stale/wrong for BOGO
+// (no percentage or cap concept at all) and for select-items/OFU/platform-event (percentage
+// matters, but there's no cap). Caught directly on a real BOGO forecast showing "30% off ±8% ·
+// cap AED 20 ±6" criteria that had nothing to do with how BOGO campaigns are actually matched
+// (campFcFindBogoMatches passes discPct=null — no percentage filtering happens at all). This
+// mirrors exactly which filter each type's match-finder actually applies, so the label can never
+// again claim a criterion the matching itself doesn't use.
+function campFcMatchCriteriaLabel(){
+  if(campFcType==='bogo')return'BOGO / free-item campaigns';
+  if(campFcType==='selectItems')return campFcDiscPct+'% off (select items) ±8%';
+  if(campFcType==='ofu')return campFcDiscPct+'% off (OFU) ±8%';
+  if(campFcType==='platformEvent')return campFcDiscPct+'% off (platform event) ±8%';
+  return campFcDiscPct+'% off ±8% · cap AED '+campFcCap+' ±6';
 }
 function campFcRun(){
   const brand=campFcBrand,agg=campFcAgg;
@@ -14330,7 +14373,7 @@ function campFcHTML(){
     if(r.conc.length){flags.push({lvl:'warn',msg:`<strong>Concurrent campaign:</strong> "${r.conc[0].name||r.conc[0].comments||'—'}" overlaps this window on ${r.brand} × ${r.agg}. Forecast does not adjust for campaign-on-campaign dilution.`});}
     if(!r.lyHasDisc){flags.push({lvl:'info',msg:`No discount data on record for ${fmtShort(r.lyStart)}–${fmtShort(r.lyEnd)} ${r.lyStart.slice(0,4)} yet. Year-over-year comparison shows sales only — no burn figures from that period to compare.`});}
     if(r.seasonality.pct!==0){flags.push({lvl:'info',msg:`Seasonality correction applied: <strong>${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong> vs periods when historical matches ran (${r.matches.length} campaign${r.matches.length!==1?'s':''}).`});}
-    if(!r.matches.length){flags.push({lvl:'warn',msg:`No exact historical matches found for ${r.brand} × ${r.agg} at ${campFcDiscPct}% off (±8%) cap AED ${campFcCap} (±6). Fallback uplifts used: conservative 10%, expected 20%, optimistic 35%. Find and select a comparable past campaign for better accuracy.`});}
+    if(!r.matches.length){flags.push({lvl:'warn',msg:`No exact historical matches found for ${r.brand} × ${r.agg} at ${campFcMatchCriteriaLabel()}. Fallback uplifts used: conservative 10%, expected 20%, optimistic 35%. Find and select a comparable past campaign for better accuracy.`});}
     // v154: genuine clean-baseline comparison, when one exists. Doesn't change the scenario
     // numbers above — surfaces what a real campaign-free period actually shows, next to them.
     if(r.cleanWindowCompare){
@@ -14414,7 +14457,7 @@ function campFcHTML(){
     +(r.matches.length?`<div style="font-size:11px;font-weight:700;color:${T.secondary};margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">`
     +bPill(r.brand,22)+aPill(r.agg,22)
     +`<span style="background:rgba(34,197,94,.1);color:#16a34a;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">${r.matches.length} historical match${r.matches.length!==1?'es':''}</span>`
-    +`<span style="font-size:10px;color:${T.label}">· ${campFcDiscPct}% off ±8% · cap AED ${campFcCap} ±6 · <em style="opacity:.7">dimmed = statistical outlier · excluded</em></span></div>`
+    +`<span style="font-size:10px;color:${T.label}">· ${campFcMatchCriteriaLabel()} · <em style="opacity:.7">dimmed = statistical outlier · excluded</em></span></div>`
     +`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr;gap:4px;padding:5px 0;border-bottom:0.5px solid ${T.border};font-size:11px;font-weight:600;color:${T.label};text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Days</div><div>Uplift</div><div>Orders/day</div><div>Sales/day</div><div>Disc/day</div><div>ROI</div></div>`
     +matchRows
     +`<div style="font-size:12px;color:${T.label};margin-top:8px">Avg uplift: <strong style="color:${T.text}">${fP(r.matches.reduce((s,m)=>s+(m.upliftPct||0),0)/r.matches.length)}</strong>  ·  Seasonality: <strong style="color:${r.seasonality.pct>=0?T.text:'#dc2626'}">${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong></div>`
