@@ -13,8 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-372";
+const BUILD_VERSION="2026-08-13-375";
 const BUILD_NOTES=[
+  "\ud83d\udc1b Keeta renamed a column in their \"Recent Orders\" export \u2014 \"Restaurant name\" became \"Store name\" \u2014 which broke uploads entirely on the Campaigns page. Confirmed directly against a fresh real export Nikhil downloaded the same day: every other column (Order no., Order status, Order time, Items, Original price, Customer paid, Campaign type, Promotion funded columns) is completely unchanged \u2014 this is a single, isolated rename, not a broader format change. parseKeetaXlsx's required-columns check hardcoded the old name and threw \"Missing required columns: Restaurant name\" immediately on any file using the new header, even though the column was right there under its new name. Fixed with a one-line alias: if \"Restaurant name\" isn't found but \"Store name\" is, the new column's index gets assigned onto the \"Restaurant name\" key right after the header row is read \u2014 every downstream reference in the function (there are several) keeps working completely unchanged, and it now accepts either name going forward, so a future revert or another rename doesn't require another code change. Confirmed the Talabat parser's own, separate \"Restaurant name\" column (a coincidental naming overlap between two unrelated aggregator formats) was untouched \u2014 not in scope, no evidence it changed. Verified END TO END against Nikhil's real new file, not just a syntax check: loaded the actual parseKeetaXlsx function with its full real dependency chain (item-matching rules, brand/outlet code tables, AED parsing) and ran it against the real 1,176-row export via Node's xlsx package (same API the browser's SheetJS build uses) \u2014 382 records parsed successfully, 8 cancelled orders correctly skipped, zero rows dropped for missing brand/outlet/date, and unmapped_restaurants came back completely empty, meaning every single Store-name value in the real file mapped correctly. Separately noticed (not a bug, routine catalog maintenance): a handful of items in this export \u2014 Truffle Mushroom Pizza, Margherita Pizza, a few drinks \u2014 aren't in the current item-to-campaign mapping table, so their discount currently falls back to residual attribution rather than a named campaign; worth updating that table next time campaigns rotate, per the keeta-orders skill's own maintenance note.",
+  "\ud83d\udcca Closed the gap flagged at the end of build 373 by actually inspecting the real sheet with Nikhil \u2014 all ~1,533 real campaigns across every brand and aggregator, not a guess. Confirmed two hard rules directly from the data: every single \"Best Seller(s)\"-named campaign (checked ~90 real instances, zero exceptions) lists a specific item count or named dishes in its comments \u2014 Nikhil confirmed \"Best Seller\" in the name always means select-items. And \"Pizza Week\" is genuinely ambiguous by NAME alone \u2014 Nikhil's own two real examples: Deliveroo 2024 (\"5 Pizzas with 30% OFF\") is select-items, Talabat 2026 (bare \"30% OFF CAP 30\", no item mentioned) is entire-menu \u2014 so the comments, not the name, are the real signal, exactly as he said. Broadened CAMP_FC_SELECT_ITEMS_RE to catch \"best sellers?\" and an \"N + item-word\" pattern (\"3 Sandwiches\", \"5 Pizzas\", \"10 Items\", \"5 Menu Items\") alongside the existing literal \"select items\" phrase \u2014 verified this correctly reproduces both of Nikhil's real Pizza Week examples, and catches the original \"30% OFF Sandwiches\" case that started this whole investigation. This one regex is shared by three things (the dedicated select-items matcher, auto campaign-type inference, and the menu-wide exclusion from build 373), so all three get more accurate together. CAUGHT AND FIXED A REAL FLAW IN MY OWN FIRST VERSION before shipping: an explicit \"entire menu\" phrase was set to always override any item signal, which incorrectly flipped 9 real campaigns that Nikhil had explicitly named \"Select Items\" himself \u2014 their comments happened to describe the exclusion as \"entire menu except Combos\", and that incidental phrasing was wrongly beating his own deliberate naming. Restructured into two tiers: STRONG signals (the literal phrases \"select items\"/\"best sellers\" \u2014 Nikhil's own deliberate terminology) always win, full stop; WEAK signals (the item-count pattern, useful for campaigns with no explicit label at all, like disambiguating Pizza Week) can be overridden by an explicit \"entire menu\" phrase, which is the correct fix for the original 3 contradiction cases (campaigns actually NAMED \"Entire Menu\" whose comments incidentally mention \"3 Combos\"). Verified exhaustively: all 8 cases from this conversation still pass: all 9 previously-wrong \"Select Items\"-named campaigns now correctly stay excluded; the genuine 3 \"Entire Menu\"-named campaigns correctly remain included. Final sheet-wide impact: 408 of 1,533 real campaigns (about 27%) now correctly excluded from menu-wide forecast matching. Known residual gap, left alone rather than guessed at: a handful of campaigns name one specific product with no item count at all (e.g. \"25% OFF on Trio Box\") \u2014 too rare and too dependent on Nikhil's full menu vocabulary to pattern-match reliably without more evidence.",
+  "\ud83d\udc1b Found a second, larger contamination bug in the menu-wide Campaign Forecaster matcher \u2014 caught directly by Nikhil after confirming the Jul 10-12 \"30% OFF Sandwiches\" run (short-duration flagged in build 372) was genuinely intentional, not truncated. His actual point: that campaign shouldn't be in a MENU-WIDE forecast's comparison pool AT ALL, regardless of duration \u2014 it's a select-items campaign (only Sandwiches items discounted), a structurally different mechanism from an entire-menu discount, and select-items campaigns genuinely deliver lower volume uplift since far fewer orders qualify. Verified: campFcFindMatches (the menu-wide matcher) had NO exclusion logic at all \u2014 it pulled in ANY completed campaign with a matching percentage and cap, with zero check for whether that campaign was structurally select-items, BOGO, OFU, or a platform event. Every one of those has its OWN dedicated matcher elsewhere in the file, so a campaign like \"30% OFF Sandwiches\" could be silently double-counted into the wrong category, systematically biasing menu-wide forecasts DOWNWARD by mixing in a weaker comparison type \u2014 on top of, and independent from, the short-duration bug fixed in build 372. Fixed the safe, verifiable part: campFcFindMatches now excludes any campaign whose name/comments already match the existing CAMP_FC_SELECT_ITEMS_RE, CAMP_FC_BOGO_RE, CAMP_FC_OFU_RE, or CAMP_FC_PLATFORM_EVENT_RE patterns \u2014 low-risk, since these patterns are already used elsewhere in the file to classify campaigns into their own matchers; this just stops the same campaign being double-counted into a category it doesn't belong to. Verified against real campaign names: correctly excludes campaigns using known-type language (\"25% off select items\", \"BOGO deal\", \"OFU Item Keeta\", \"Flash Sale\", etc.). OPEN, NOT YET FIXED: \"30% OFF Sandwiches\" itself still is NOT excluded by this fix \u2014 confirmed directly by testing \u2014 because CAMP_FC_SELECT_ITEMS_RE only matches the literal phrase \"select items\", and naming a specific item category (\"Sandwiches\") never uses that phrase. Same open question for \"Pizza Week\", also visible in Nikhil's real match table \u2014 unknown whether that's also select-items-on-pizza or something else entirely. Deliberately did not guess a broader keyword pattern for this, since a wrong guess (too broad: dropping genuine menu-wide matches that happen to name a signature item; too narrow: missing more contamination cases) could make forecasts worse, not better \u2014 real naming-convention examples needed from Nikhil before extending this fix.",
   "\ud83c\udfaf Found the actual root cause of the systematic under-forecasting Nikhil has now shown three real examples of, by pushing on the one loose thread that didn't add up: the forecaster's own \"reality check\" kept citing \"Summer of BOGO\" as the closest recent match even AFTER the new Sep 4-6 BOGO campaign completed and became more recent history \u2014 which should have replaced it. Traced this to campFcDetectShortDuration: it compares a campaign's length against the MEDIAN duration of every other campaign sharing its exact name, and flags a big shortfall as a likely truncation (cut short by an issue, not a real reflection of the discount mechanic). For this brand's \"BOGO\" campaigns specifically, there are two real 3-day runs (Aug 14-16 and the new Sep 4-6) and two real 7-day runs (both in May) \u2014 a genuinely BIMODAL, intentional pattern, not an anomaly. The median-only check can't see bimodality: it saw a 3-day run against a 7-day median and flagged it, on BOTH 3-day campaigns, purely because more of the same-named history happened to be 7-day runs. Being flagged short-duration does two damaging things: it downweights a match to 30% of its normal influence in the weighted-percentile calculation (the same treatment as a one-off atypical event like a World Cup promo), and it excludes the match from the \"reality check\" headline entirely. Since the two flagged matches were the MOST RECENT and MOST RELEVANT comparables for a new 3-day BOGO forecast \u2014 exactly the ones that should carry the most weight \u2014 this silently gutted the forecast's best evidence every time, systematically pulling Expected down toward the older, less relevant 7-day and negative-outcome matches instead. Hand-verified this explains the numbers: recomputing the weighted percentiles WITH this flag applied reproduces figures close to what was actually shown (Optimistic recomputed at +44.3% vs the observed +45%, essentially exact), versus wildly off before accounting for it. Fixed campFcDetectShortDuration to first check whether ANY other same-named campaign ran at this EXACT duration before \u2014 if so, this length is an established, recurring pattern for this campaign name, not a truncation, regardless of what the median of all same-named runs says. Verified this doesn't regress the original case the detector was built and tested for (v302/v303): a genuinely cut-short 1-day run against a normal 2-day one, with no exact-duration precedent, is still correctly flagged. Also verified a third edge case (single comparison point, genuinely anomalous length) still flags correctly. This is the real, load-bearing fix for the pattern Nikhil flagged across three separate forecasts \u2014 the percentile-interpolation and stale-label fixes from build 371 were real bugs too, but this one is what was actually gutting the forecaster's best evidence.",
   "\ud83d\udc1b Found and fixed a real, PROVEN bug in the forecaster's percentile math, using the actual Sep-3 Deliveroo BOGO forecast (expected +6%, actual +50%) as the test case Nikhil asked for. Hand-traced the exact weighted-percentile calculation against the real 5-match historical pool that fed that forecast: one recent match (BOGO 14\u201316 Aug, +6% uplift) held 58% of the total weight, and its cumulative-weight span (~19%\u201377%) covered the 25th, 50th, AND 75th percentile thresholds all at once \u2014 so Conservative and Expected came back IDENTICAL (+6% and +6%), silently collapsing two supposedly-independent scenarios into one number, even though the underlying weighted evidence genuinely spanned -2% to +29%. Reproduced this exactly by hand (P25=P50=P75=+6.0% under the old method) before touching any code. Fixed campFcWeightedPercentile to interpolate between the MIDPOINT of each match's cumulative-weight span instead of returning the raw value of whichever match's span first crosses the threshold \u2014 the standard approach for weighted-percentile interpolation. Re-verified on the same real data: Conservative is now +1.2% (genuinely distinct from Expected's +6%), while Expected and Optimistic can still legitimately coincide when two OR MORE distinct historical matches happen to share the same real uplift value (as two of the five do here, both showing +6%) \u2014 that's real signal from thin historical data, not an artifact, and the fix correctly leaves it alone rather than manufacturing false precision. Verified monotonic ordering (P25\u2264P50\u2264P75) holds across 200 randomized weight distributions, plus sanity checks on single-point and equal-weight-pair edge cases. NOTE, stated plainly: this fix does not fully explain everything in the numbers Nikhil showed \u2014 Conservative and Optimistic from a fresh re-run matched this corrected methodology cleanly by hand-calculation, but Expected did not (calculated ~+27\u201331%, displayed +7%), and no code path was found that would explain that specific gap. Flagged back to Nikhil as still open, with a specific ask for how to pin it down further, rather than papering over an unresolved discrepancy.",
   "\ud83d\udc1b Fixed the Campaign Forecaster's historical-match header showing stale, irrelevant matching criteria for BOGO and other non-percentage campaign types \u2014 caught directly on the same real BOGO forecast, which displayed \"30% off \u00b18% \u00b7 cap AED 20 \u00b16\" even though BOGO matching uses neither a percentage nor a cap (campFcFindBogoMatches passes discPct=null \u2014 confirmed no percentage filtering happens for BOGO at all). The header text was unconditionally interpolating the campFcDiscPct/campFcCap global variables regardless of campFcType, so it kept showing whatever those defaulted to or were last set to, even for types where they're structurally meaningless. Added campFcMatchCriteriaLabel(), which mirrors exactly which filter each campaign type's match-finder actually applies \u2014 BOGO shows no percentage/cap at all, select-items/OFU/platform-event show only a percentage (no cap, since none of them use one), and the original menu-wide type keeps the existing percentage+cap text unchanged. Fixed in both places this text appeared: the historical-match table header and the no-matches-found fallback warning.",
@@ -2312,6 +2315,14 @@ async function parseKeetaXlsx(file){
   if(!rows.length)throw new Error("File is empty");
   const header=rows[0],headerIdx={};
   header.forEach((h,i)=>{headerIdx[h]=i;});
+  // v374: Keeta renamed this column from "Restaurant name" to "Store name" in a recent export
+  // format change — caught directly by Nikhil when a fresh download broke the upload entirely
+  // (the required-columns check below threw "Missing required columns: Restaurant name" on a
+  // perfectly valid file, just because the column itself was renamed, not actually missing).
+  // Alias whichever one is actually present onto the "Restaurant name" key, so every downstream
+  // reference in this function keeps working completely unchanged — future-proofs against Keeta
+  // renaming it again, or reverting to the old name, without needing another code change either way.
+  if(headerIdx["Restaurant name"]===undefined&&headerIdx["Store name"]!==undefined)headerIdx["Restaurant name"]=headerIdx["Store name"];
   const required=["Order no.","Restaurant name","Order status","Order time","Items","Original price","Customer paid","Promotion funded by merchant"];
   const missing=required.filter(c=>!(c in headerIdx));
   if(missing.length)throw new Error("Missing required columns: "+missing.join(", "));
@@ -13311,7 +13322,52 @@ function campFcFindHistoryMatches(brand,agg,pattern,discPct){
   out.sort((a,b)=>b.c.startDate.localeCompare(a.c.startDate));
   return out;
 }
-const CAMP_FC_SELECT_ITEMS_RE=/select\s*items?/i;
+// v374: broadened from matching only the literal phrase "select items", after inspecting ~1,533
+// real campaign rows across the whole sheet with Nikhil to find the actual naming conventions.
+// Verified: EVERY "Best Seller(s)"-named campaign (checked ~90 real instances, no exceptions)
+// lists a specific item count or named dishes in its comments — Nikhil confirmed this is a hard
+// rule: "Best Seller" in the name always means select-items. Also verified an "N + item-word"
+// pattern (e.g. "3 Sandwiches", "5 Pizzas", "10 Items", "5 Menu Items") reliably identifies
+// select-items campaigns whose name alone gives no hint at all — e.g. "Pizza Week" is genuinely
+// ambiguous by name (Nikhil confirmed it's used for BOTH select-items AND entire-menu campaigns
+// depending on the instance), but the comments always disambiguate: "5 Pizzas with 30% OFF" is
+// select-items, while a bare "30% OFF CAP 30" with no item mentioned is entire-menu — matching
+// his exact two real examples. Checked this pattern for false positives against all ~235 rows
+// that explicitly say "entire menu" and found only 3 contradictions, all genuinely entire-menu
+// campaigns whose comments happen to also mention "3 Combos" as an incidental add-on — handled
+// by CAMP_FC_MENU_WIDE_RE below, which is checked FIRST and always wins over an incidental item
+// mention. This single regex is shared by three things, so the fix improves all three at once:
+// finding select-items campaigns for a dedicated select-items forecast, auto-inferring campaign
+// type when applying an upcoming campaign, and excluding select-items history from menu-wide
+// forecasts. Known residual gap, left alone rather than guessed at: a handful of campaigns name
+// one specific product with no item count at all (e.g. "25% OFF on Trio Box") — too rare and too
+// dependent on Nikhil's full menu vocabulary to pattern-match reliably without more evidence.
+// v374: split into two tiers after finding a real flaw in the first single-regex version — 9 real
+// campaigns Nikhil explicitly named "Select Items" himself (his own deliberate categorization)
+// were getting WRONGLY reclassified as menu-wide, because their comments describe the exclusion
+// as "entire menu except Combos" — an explicit "entire menu" PHRASE describing what's carved OUT,
+// not genuine menu-wide coverage. An explicit, deliberate name should never lose to incidental
+// wording in the comments. STRONG = the literal phrase Nikhil actually uses ("select items",
+// "best sellers") — always wins, never overridden. WEAK = the item-count pattern ("3 Sandwiches",
+// "5 Pizzas") — genuinely useful for campaigns with no explicit label at all (this is what
+// disambiguates "Pizza Week" between its select-items and entire-menu real instances), but an
+// explicit "entire menu" phrase correctly overrides ONLY this weaker signal — that's the real
+// 3-case fix (campaigns named "Entire Menu" whose comments incidentally mention "3 Combos").
+const CAMP_FC_SELECT_ITEMS_STRONG_RE=/select\s*items?|best\s*sellers?/i;
+const CAMP_FC_SELECT_ITEMS_WEAK_RE=/\b\d+\s*(?:\w+\s+)?(items?|pizzas?|wings?|pastas?|sandwiches?|wraps?|dishes?|rolls?|meals?|combos?|bites?|salads?)\b/i;
+const CAMP_FC_SELECT_ITEMS_RE=new RegExp(CAMP_FC_SELECT_ITEMS_STRONG_RE.source+'|'+CAMP_FC_SELECT_ITEMS_WEAK_RE.source,'i');
+const CAMP_FC_MENU_WIDE_RE=/entire\s*menu|full\s*menu|menu\s*wide|all\s*(?:menu\s*)?items/i;
+// v374: the actual select/menu decision, tiered as above — used by campFcFindMatches' exclusion
+// check. The other two usages of CAMP_FC_SELECT_ITEMS_RE (the dedicated select-items matcher,
+// and type auto-inference) intentionally keep using the plain combined regex — a false-negative
+// there just means one match isn't found or the type dropdown isn't pre-filled, both harmless and
+// human-correctable, whereas getting the EXCLUSION decision wrong actively contaminates a
+// forecast, which is why only this specific decision needs the tiered priority.
+function campFcIsSelectItemsText(text){
+  if(CAMP_FC_SELECT_ITEMS_STRONG_RE.test(text))return true;
+  if(CAMP_FC_MENU_WIDE_RE.test(text))return false;
+  return CAMP_FC_SELECT_ITEMS_WEAK_RE.test(text);
+}
 function campFcFindSelectItemsMatches(brand,agg,discPct){
   return campFcFindHistoryMatches(brand,agg,CAMP_FC_SELECT_ITEMS_RE,discPct);
 }
@@ -13359,6 +13415,23 @@ function campFcFindMatches(brand,agg,discPct,cap){
   const done=campaignData.filter(c=>campStatus(c)==='Completed'&&c.brand===brand&&c.aggregator===agg);
   const out=[];
   for(const c of done){
+    const text=`${c.name||''} ${c.comments||''}`;
+    // v373: the menu-wide matcher had NO exclusion for campaigns that are structurally a
+    // DIFFERENT discount mechanism — select-items, BOGO, OFU, platform-event — as long as a
+    // percentage (and optionally a cap) happened to appear in the text. Caught directly by
+    // Nikhil: a menu-wide "30% off entire menu" forecast was being matched against "30% OFF
+    // Sandwiches" — a select-items campaign that only discounts one item category, which
+    // genuinely delivers lower volume uplift than a true menu-wide discount (fewer orders
+    // qualify), systematically biasing menu-wide forecasts DOWNWARD by mixing in a weaker,
+    // structurally different comparison. Exclude anything already recognized by the OTHER
+    // dedicated type regexes — this is a strict, low-risk correction: these patterns are
+    // already used elsewhere in the file to classify campaigns into their own separate
+    // matchers, so excluding them here just stops the SAME campaign being double-counted into
+    // a category it doesn't belong to. NOTE: "30% OFF Sandwiches" itself does NOT match
+    // CAMP_FC_SELECT_ITEMS_RE (that pattern only catches the literal phrase "select items"),
+    // so this specific campaign still isn't excluded by this fix alone — flagged back to
+    // Nikhil, real naming-convention examples needed before guessing at a broader pattern.
+    if(campFcIsSelectItemsText(text)||CAMP_FC_BOGO_RE.test(text)||CAMP_FC_OFU_RE.test(text)||CAMP_FC_PLATFORM_EVENT_RE.test(text))continue;
     const hp=parseInt(((c.comments||c.name||'').match(/(\d{1,3})\s*%/)||[])[1]||'0');
     if(!hp||Math.abs(hp-discPct)>8)continue;
     const capM=(c.comments||'').match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i);
@@ -13366,8 +13439,8 @@ function campFcFindMatches(brand,agg,discPct,cap){
     if(cap&&cCap&&Math.abs(cCap-cap)>6)continue;
     const a=campAnalysisV2(c);
     if(!a.hasData||!a.hasBaseline||a.ordersLift==null)continue;
-    const isAtypical=CAMP_FC_ATYPICAL_RE.test(`${c.name||''} ${c.comments||''}`);
-    const manualIssueFlag=CAMP_FC_MANUAL_ISSUE_RE.test(`${c.name||''} ${c.comments||''}`);
+    const isAtypical=CAMP_FC_ATYPICAL_RE.test(text);
+    const manualIssueFlag=CAMP_FC_MANUAL_ISSUE_RE.test(text);
     const truncation=manualIssueFlag?null:campFcDetectTruncation(c); // manual flag already covers it — don't also run the heuristic
     const shortDuration=(manualIssueFlag||truncation)?null:campFcDetectShortDuration(c,done);
     const isTruncated=manualIssueFlag||!!truncation||!!shortDuration;
