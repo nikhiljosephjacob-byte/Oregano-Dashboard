@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-382";
+const BUILD_VERSION="2026-08-13-383";
 const BUILD_NOTES=[
+  "\ud83d\udc1b Group C (3-way comparison) fixed across the Compare page \u2014 Nikhil found it only worked on the Overview tab: no way to reorder A/B/C, and Group C's data was completely invisible on Trend, Platforms, and Outlets. Confirmed via an old comment this was a deliberate, explicit scoping decision from when C was first built (\"the detailed tables stay A-vs-B only \u2014 extending those to a 3rd column would be a materially bigger change\"), not a bug \u2014 but a real, understandable gap from actually using the feature. Fixed all four pieces: (1) added a Swap B/C button alongside the existing Swap A/B \u2014 combined, these reach any ordering of the three; (2) the Trend chart now draws a third line for C with matching date-axis labels; (3) Platform Movement now shows a chained C-vs-B delta badge per row; (4) the Brand\u00d7Platform Breakdown table, its outlet drill-down, and the Per-Platform Breakdown table all gained full C columns (Orders, Net Sales, Discount, AOV, Profit, Ad Spend where applicable). One consistent rule throughout: C is always compared against B, not A \u2014 matching the chained-delta convention the Overview summary cards already established, so the comparison target reads the same no matter which part of the page you're on. A genuine bonus catch made while wiring in C's real color: the Trend tab header, the outlet drill-down's totals line, and the Per-Platform Breakdown table were all hardcoding #60A5FA/#F59E0B instead of the real CMP_A_CLR/CMP_B_CLR constants (#5B7FA6/#C98A3E) \u2014 a pre-existing mismatch against the chart's actual colors, unrelated to Nikhil's report but fixed as part of the same pass since it touched the same lines. Verified with a Node harness against realistic 3-window mock data (7 days each, three different volume multipliers) rather than just code review: confirmed platMove's C-vs-B delta computes exactly right (33,600 vs 28,000 \u2192 +20.0%, matching the built-in ratio precisely), confirmed the Brand\u00d7Platform table's C rows carry through the same exact ratio, and \u2014 since mkTable() has no built-in validation between header count and row-cell count \u2014 explicitly verified the Per-Platform Breakdown table's header array and row-cell array produce identical lengths (20 vs 20 with C active, 13 vs 13 without) using the real computed platMove data, not synthetic values, since a silent mismatch there would have misaligned every column with no error to catch it. Also caught and removed two small dead-code leftovers from earlier in this same build (an unused profDiffBC variable, an unused cCols variable) before they could confuse a future read of this code.",
   "\ud83c\udd95 Compare page PDF export rebuilt as a genuine drill-down report, per Nikhil's own framing after the earlier \"3 toggle options\" idea turned out to be a misunderstanding (that was a mockup review tool with 3 fake sample scenarios, not a real feature pattern). His actual ask, using his own example \u2014 deep-diving one aggregator's sales trend but wanting to see which brand drove it, each against its prior period, across Sales/Orders/AOV/Discount/Profitability/Ad Spend \u2014 called for one report that starts broad and genuinely earns its way deeper, removing duplicate information rather than repeating the same totals at every level. New core building block: cmpScopedMetrics(cfg,brand,agg,branch) constructs a synthetic narrowed sub-scope and reuses the exact same tested functions the top-level summary already calls (cmpComputeDisc, cmpComputeContribution, cmpAdSpendForCfg) \u2014 so a brand's numbers are computed the identical way the overall totals are, just on a narrower slice, not new aggregation math. Report structure is now: Executive Summary (combined) \u2192 Brand Comparison (full 6-metric table, shown only when more than one brand is actually in scope) \u2192 Platform Comparison (same pattern, shown only when more than one platform is in scope \u2014 replaces the old sales-only bars entirely, since a full table is more useful than showing the same story twice in two visual styles) \u2192 Trend chart + Campaigns \u2192 Outlet-Level Detail (now always included whenever there's genuine outlet granularity, not gated behind an exact single-brand-single-aggregator filter like before \u2014 organized one section per brand when more than one is present, flat list otherwise) \u2192 Conclusions. Each comparison cell shows the latest period's value plus its own Delta vs. the prior period, not every window's raw number side by side \u2014 with up to 6 metrics that would make the table unreadably wide. Tested with a Node harness against realistic 3-brand \u00d7 2-aggregator \u00d7 3-outlet mock data: verified exact ratio-correctness of the per-brand isolation (AED 90,720 / 60,480 / 36,288 \u2014 precisely matching the 1.5\u00d7/1.0\u00d7/0.6\u00d7 multipliers built into the test data, confirming cmpScopedMetrics correctly isolates each brand rather than leaking totals across brands), confirmed all three outlet-brand sections render (one early false alarm in my own test regex, double-checked directly against the real HTML before concluding it wasn't a real bug), and reverified the deep-mode edge case (single brand + single aggregator) correctly skips both comparison sections and falls back to a flat outlet list, exactly as before this rebuild. Caught and fixed one real bug while writing this: a dead line in the outlet-detail builder that computed an unused variable via repeated expensive cmpScopedMetrics calls \u2014 removed before it could slow down real exports for no reason.",
   "\ud83c\udd95 Compare page \"Export to PDF\" is now a real, working feature \u2014 the full arc from mockup to shipped build, built over several rounds with Nikhil (content and layout reviewed and refined first, Discount Burn added after he caught it missing from the mockup, real logos wired in once he pointed out the dashboard already had working ones rather than re-embedding copies, legend colors and page-density fixes along the way). Generates a genuine Executive Director-level PDF from LIVE cmpA/cmpB/cmpC data via the browser's own print-to-PDF (styled print CSS + window.print()) \u2014 there's no server-side PDF engine in this app, so this is the correct mechanism, not a workaround. A single \"\ud83d\udcc4 Export to PDF\" button now sits in the Compare page's top toolbar next to A\u2192B filters and Swap A/B. New data layer (cmpBuildReportData, cmpAggForBrandPlatform, cmpAggByOutlet, cmpAdSpendForCfg, cmpCampaignsForWindow) recomputes every number fresh from the real filters \u2014 Net Sales, Orders, AOV, Discount Burn (cmpComputeDisc), Net Contribution (cmpComputeContribution), Ad Spend (cmpAdSpendOverlap), and real campaigns overlapping each window (same overlap-day logic already proven in cmpCampaignImbalance) \u2014 same recompute-fresh pattern already used by cmpExportBreakdownCSV, not sample data and not reused render-scoped variables. Report adapts automatically to whatever's actually selected rather than needing hardcoded modes: Outlet-level detail when scope narrows to exactly one brand + one aggregator (the natural next level of depth once nothing's left to break down by), Brand\u00d7Platform otherwise; Platform Movement only appears when more than one aggregator is actually present in the real data. Narrative (cmpReportNarrative) extends the existing single-sentence auto-insight pattern already live elsewhere on this page into a fuller paragraph that also covers discount burn vs. sales growth. Conclusions (cmpReportConclusions) are rule-based on real computed deltas, not free-form judgment \u2014 thresholded good/bad bullets plus a bottom-line verdict. Real brand and aggregator logos throughout (cover, detail table rows, platform movement) via the dashboard's own existing logoImg()/LOGOS, not new embedded copies. Trend chart captured live from the real cmp-chart canvas via toDataURL(). Tested with a Node harness against realistic mock data across all three real scenarios (broad all-brands, deep single-brand+single-aggregator, and 3-way with Group C active) since a real browser isn't available in this environment \u2014 verified structurally clean HTML (zero orphaned tags, checked with an actual HTML parser, not eyeballed) and correct real-number output for all three. That testing caught one genuine bug before it shipped: the conclusions engine could produce a \"genuinely clean period\" bottom-line verdict while simultaneously listing a real cost concern (discount burn outpacing sales) in Worth Watching, because the bottom-line logic inferred \"no real concern\" from bad-list length rather than tracking it explicitly \u2014 same class of inconsistency Nikhil caught earlier when the Discount Burn KPI card existed but the narrative prose never mentioned it. Fixed with an explicit hasConcern flag computed before the harmless \"nothing crossed a threshold\" placeholder text is added, and reverified the fix directly against the same failing case.",
   "\ud83d\udd27 Smokeys brand logo updated \u2014 Nikhil supplied a new logo file (confirmed via direct pixel comparison against the previous upload that this was a genuine change, not a re-upload). Fixed in two places: the PDF report mockup (both embedded instances) and, more importantly, directly in index.html's LOGOS object \u2014 the actual source the live dashboard reads from at runtime for the Brands page, nav bar, and now the Compare page export above. Verified the updated index.html is still valid HTML/JS (all 13 logo keys intact, syntax-checked) and re-extracted the embedded entry to visually confirm the new logo renders with correct colors.",
@@ -5071,6 +5072,7 @@ function handleDelegatedClick(e){
   if(act==="cmpSubTab"){cmpSetSubTab(v1);return;}
   if(act==="cmpToggleExpand"){e.stopPropagation();cmpToggleExpand(v1,v2);return;}
   if(act==="cmpSwap"){cmpSwap();return;}
+  if(act==="cmpSwapBC"){cmpSwapBC();return;}
   if(act==="cmpCopy"){cmpCopyAtoB();return;}
   if(act==="cmpToggleC"){cmpToggleC();return;}
 }
@@ -18585,6 +18587,7 @@ function cmpPreset(side,p){const cfg=cmpCfgFor(side);cfg.preset=p;const today=dk
 function cmpClear(side){const cfg=cmpCfgFor(side);cfg.brands.clear();cfg.platforms.clear();cfg.branches.clear();renderCompare();}
 function cmpCopyAtoB(){cmpB.brands=new Set(cmpA.brands);cmpB.platforms=new Set(cmpA.platforms);cmpB.branches=new Set(cmpA.branches);renderCompare();}
 function cmpSwap(){const t=cmpA;cmpA=cmpB;cmpB=t;renderCompare();}
+function cmpSwapBC(){const t=cmpB;cmpB=cmpC;cmpC=t;renderCompare();}
 function cmpSetMetric(m){cmpMetric=m;renderCompare();}
 function cmpSetSubTab(t){
   // v188: the chart's canvas gets wiped out by the innerHTML replacement below whenever we
@@ -19702,13 +19705,24 @@ function renderCompare(){
     const b=sumR(bRecs);
     const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
     const profA=computeProfitability(aRecs,cmpProfDateRef).contribution,profB=computeProfitability(bRecs,cmpProfDateRef).contribution;
-    return{ag,clr:AC[ag]||"#888",a,b,oDiff:cmpDelta(b.orders,a.orders),sDiff:cmpDelta(b.sales,a.sales),aDiff:cmpDelta(aov_b,aov_a),profA,profB,profDiff:cmpDelta(profB,profA)};
-  }).filter(p=>p.a.orders>0||p.b.orders>0);
+    // v382: Group C's per-platform total + chained C-vs-B delta, only computed when active —
+    // Nikhil flagged Platform Movement was one of the tabs that never showed C at all. Chained
+    // (C vs B, not C vs A) matches how the Overview summary cards already treat 3-way deltas.
+    let cVal=null;
+    if(cmpCActive){
+      const cRecs=dC.filter(r=>r.aggregator===ag);
+      const c=sumR(cRecs);
+      const aov_c=c.orders>0?c.sales/c.orders:0;
+      const profC=computeProfitability(cRecs,cmpProfDateRef).contribution;
+      cVal={c,aov_c,profC,sDiffBC:cmpDelta(c.sales,b.sales)};
+    }
+    return{ag,clr:AC[ag]||"#888",a,b,oDiff:cmpDelta(b.orders,a.orders),sDiff:cmpDelta(b.sales,a.sales),aDiff:cmpDelta(aov_b,aov_a),profA,profB,profDiff:cmpDelta(profB,profA),...(cVal||{})};
+  }).filter(p=>p.a.orders>0||p.b.orders>0||(p.c&&p.c.orders>0));
   const movers=[...platMove].filter(p=>p.sDiff!=null).sort((x,y)=>y.sDiff-x.sDiff);
   const risers=movers.filter(p=>p.sDiff>0),fallers=movers.filter(p=>p.sDiff<0).reverse();
 
-  // Breakdown table: by brand × platform across the union of both sides
-  const keys=new Set([...dA,...dB].map(r=>`${r.brand}|${r.aggregator}`));
+  // Breakdown table: by brand × platform across the union of both sides (+ C when active)
+  const keys=new Set([...dA,...dB,...(cmpCActive?dC:[])].map(r=>`${r.brand}|${r.aggregator}`));
   const tableRows=[...keys].map(k=>{
     const[brand,ag]=k.split("|");
     const aRecs=dA.filter(r=>r.brand===brand&&r.aggregator===ag),bRecs=dB.filter(r=>r.brand===brand&&r.aggregator===ag);
@@ -19717,8 +19731,19 @@ function renderCompare(){
     const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
     const adA=cmpAdSpendOverlap(cmpA,brand,ag,null),adB=cmpAdSpendOverlap(cmpB,brand,ag,null);
     const profA=computeProfitability(aRecs,cmpProfDateRef).contribution,profB=computeProfitability(bRecs,cmpProfDateRef).contribution;
-    return{brand,ag,a,b,aov_a,aov_b,oDiff:cmpDelta(b.orders,a.orders),sDiff:cmpDelta(b.sales,a.sales),adA,adB,adDiff:cmpDelta(adB.spent,adA.spent),profA,profB,profDiff:cmpDelta(profB,profA)};
-  }).filter(r=>r.a.orders>0||r.b.orders>0);
+    // v382: Group C's own row values, chained against B (same convention as Platform Movement
+    // above) — only computed when active, so this table costs nothing extra otherwise.
+    let cVal=null;
+    if(cmpCActive){
+      const cRecs=dC.filter(r=>r.brand===brand&&r.aggregator===ag);
+      const c=sumR(cRecs);
+      const aov_c=c.orders>0?c.sales/c.orders:0;
+      const adC=cmpAdSpendOverlap(cmpC,brand,ag,null);
+      const profC=computeProfitability(cRecs,cmpProfDateRef).contribution;
+      cVal={c,aov_c,adC,profC};
+    }
+    return{brand,ag,a,b,aov_a,aov_b,oDiff:cmpDelta(b.orders,a.orders),sDiff:cmpDelta(b.sales,a.sales),adA,adB,adDiff:cmpDelta(adB.spent,adA.spent),profA,profB,profDiff:cmpDelta(profB,profA),...(cVal||{})};
+  }).filter(r=>r.a.orders>0||r.b.orders>0||(r.c&&r.c.orders>0));
   // v282: same redesign just approved and built for the Outlet drill-down table, applied here
   // too — Nikhil flagged this table still showing the old dense Δ-column format after that
   // build, since the earlier fix was scoped to the drill-down only. Split into "Sales & Volume"
@@ -19754,33 +19779,42 @@ function renderCompare(){
   </div>`;
   const topSalesVolumeHTML=topTableWrap(
     "Sales &amp; Volume","Orders, Net Sales, Discount, AOV — higher value highlighted (green = good, red = higher discount)",
-    `${topStickyTh("Brand · Platform","left")}${topStickyTh("A Orders")}${topStickyTh("B Orders")}${topStickyTh("A Net Sales")}${topStickyTh("B Net Sales")}${topStickyTh("A Disc.")}${topStickyTh("B Disc.")}${topStickyTh("A AOV")}${topStickyTh("B AOV")}`,
+    `${topStickyTh("Brand · Platform","left")}${topStickyTh("A Orders")}${topStickyTh("B Orders")}${cmpCActive?topStickyTh("C Orders"):""}${topStickyTh("A Net Sales")}${topStickyTh("B Net Sales")}${cmpCActive?topStickyTh("C Net Sales"):""}${topStickyTh("A Disc.")}${topStickyTh("B Disc.")}${cmpCActive?topStickyTh("C Disc."):""}${topStickyTh("A AOV")}${topStickyTh("B AOV")}${cmpCActive?topStickyTh("C AOV"):""}`,
     tableRows.map(r=>{
       const isExpanded=cmpExpandedRow===`${r.brand}|${r.ag}`;
+      // v382: C's pill chains against B (not A) — same convention as Platform Movement and the
+      // Overview summary cards' 3-way mode, so "which comparison is C measured against" reads
+      // consistently no matter which part of the Compare page you're looking at.
       return `<tr style="border-top:1px solid ${cmpBtnBorder}">
         <td style="padding:7px 9px">${rowLabel(r,isExpanded)}</td>
         <td style="text-align:right;padding:7px 9px">${topPillCell(r.a.orders,r.b.orders,true,topFInt)}</td>
         <td style="text-align:right;padding:7px 9px">${topPillCell(r.b.orders,r.a.orders,true,topFInt)}</td>
+        ${cmpCActive?`<td style="text-align:right;padding:7px 9px">${r.c?topPillCell(r.c.orders,r.b.orders,true,topFInt):'<span style="opacity:.5">—</span>'}</td>`:""}
         <td style="text-align:right;padding:7px 9px">${topPillCell(r.a.sales,r.b.sales,true,topFAed)}</td>
         <td style="text-align:right;padding:7px 9px">${topPillCell(r.b.sales,r.a.sales,true,topFAed)}</td>
+        ${cmpCActive?`<td style="text-align:right;padding:7px 9px">${r.c?topPillCell(r.c.sales,r.b.sales,true,topFAed):'<span style="opacity:.5">—</span>'}</td>`:""}
         <td style="text-align:right;padding:7px 9px">${topPillCell(r.a.disc||0,r.b.disc||0,false,topFAed)}</td>
         <td style="text-align:right;padding:7px 9px">${topPillCell(r.b.disc||0,r.a.disc||0,false,topFAed)}</td>
+        ${cmpCActive?`<td style="text-align:right;padding:7px 9px">${r.c?topPillCell(r.c.disc||0,r.b.disc||0,false,topFAed):'<span style="opacity:.5">—</span>'}</td>`:""}
         <td style="text-align:right;padding:7px 9px">${topPillCell(r.a.orders>0?r.aov_a:null,r.b.orders>0?r.aov_b:null,true,topFAov)}</td>
         <td style="text-align:right;padding:7px 9px">${topPillCell(r.b.orders>0?r.aov_b:null,r.a.orders>0?r.aov_a:null,true,topFAov)}</td>
+        ${cmpCActive?`<td style="text-align:right;padding:7px 9px">${(r.c&&r.c.orders>0)?topPillCell(r.aov_c,r.b.orders>0?r.aov_b:null,true,topFAov):'<span style="opacity:.5">—</span>'}</td>`:""}
       </tr>`;
     }).join('')
   );
   const topProfHTML=topTableWrap(
     "Profitability","Profit + Ad Spend — higher Profit highlighted green, higher Ad Spend highlighted red (cost-side assumption)",
-    `${topStickyTh("Brand · Platform","left")}${topStickyTh("A 💵 Profit")}${topStickyTh("B 💵 Profit")}${topStickyTh("A Ad Spend")}${topStickyTh("B Ad Spend")}`,
+    `${topStickyTh("Brand · Platform","left")}${topStickyTh("A 💵 Profit")}${topStickyTh("B 💵 Profit")}${cmpCActive?topStickyTh("C 💵 Profit"):""}${topStickyTh("A Ad Spend")}${topStickyTh("B Ad Spend")}${cmpCActive?topStickyTh("C Ad Spend"):""}`,
     tableRows.map(r=>{
       const isExpanded=cmpExpandedRow===`${r.brand}|${r.ag}`;
       return `<tr style="border-top:1px solid ${cmpBtnBorder}">
         <td style="padding:7px 9px">${rowLabel(r,isExpanded)}</td>
         <td style="text-align:right;padding:7px 9px">${topPillCell(r.profA,r.profB,true,topFAed)}</td>
         <td style="text-align:right;padding:7px 9px">${topPillCell(r.profB,r.profA,true,topFAed)}</td>
+        ${cmpCActive?`<td style="text-align:right;padding:7px 9px">${r.profC!=null?topPillCell(r.profC,r.profB,true,topFAed):'<span style="opacity:.5">—</span>'}</td>`:""}
         <td style="text-align:right;padding:7px 9px">${topPillCell(r.adA.hasData?r.adA.spent:null,r.adB.hasData?r.adB.spent:null,false,topFAed)}</td>
         <td style="text-align:right;padding:7px 9px">${topPillCell(r.adB.hasData?r.adB.spent:null,r.adA.hasData?r.adA.spent:null,false,topFAed)}</td>
+        ${cmpCActive?`<td style="text-align:right;padding:7px 9px">${r.adC?.hasData?topPillCell(r.adC.spent,r.adB.hasData?r.adB.spent:null,false,topFAed):'<span style="opacity:.5">—</span>'}</td>`:""}
       </tr>`;
     }).join('')
   );
@@ -19791,10 +19825,11 @@ function renderCompare(){
     const[xBrand,xAg]=cmpExpandedRow.split("|");
     const xBrandColor=BMAP[xBrand]?.c||'#f59e0b';
     const xAgColor=AC[xAg]||'#f59e0b';
-    // Build per-branch aggregates within this brand × platform on both sides
+    // Build per-branch aggregates within this brand × platform on both sides (+ C when active)
     const brSet=new Set([
       ...dA.filter(r=>r.brand===xBrand&&r.aggregator===xAg).map(r=>r.branch),
-      ...dB.filter(r=>r.brand===xBrand&&r.aggregator===xAg).map(r=>r.branch)
+      ...dB.filter(r=>r.brand===xBrand&&r.aggregator===xAg).map(r=>r.branch),
+      ...(cmpCActive?dC.filter(r=>r.brand===xBrand&&r.aggregator===xAg).map(r=>r.branch):[])
     ]);
     brSet.delete("(brand-level)"); // pseudo-branch for unattributed brand-level discount rows — not a real outlet
     const branchRows=[...brSet].map(branch=>{
@@ -19804,8 +19839,20 @@ function renderCompare(){
       const aov_a=a.orders>0?a.sales/a.orders:0,aov_b=b.orders>0?b.sales/b.orders:0;
       const adA=cmpAdSpendOverlap(cmpA,xBrand,xAg,branch),adB=cmpAdSpendOverlap(cmpB,xBrand,xAg,branch);
       const profA=computeProfitability(aRecs,cmpProfDateRef).contribution,profB=computeProfitability(bRecs,cmpProfDateRef).contribution;
-      return{branch,a,b,aov_a,aov_b,oDiff:cmpDelta(b.orders,a.orders),sDiff:cmpDelta(b.sales,a.sales),aDiff:cmpDelta(aov_b,aov_a),adA,adB,adDiff:cmpDelta(adB.spent,adA.spent),profA,profB,profDiff:cmpDelta(profB,profA)};
-    }).filter(r=>r.a.orders>0||r.b.orders>0);
+      // v382: Group C's per-outlet values, chained against B — same convention used throughout
+      // this rebuild, so the deepest level of the Compare page now also shows C, not just the
+      // Overview summary cards it was originally scoped to.
+      let cVal=null;
+      if(cmpCActive){
+        const cRecs=dC.filter(r=>r.brand===xBrand&&r.aggregator===xAg&&r.branch===branch);
+        const c=sumR(cRecs);
+        const aov_c=c.orders>0?c.sales/c.orders:0;
+        const adC=cmpAdSpendOverlap(cmpC,xBrand,xAg,branch);
+        const profC=computeProfitability(cRecs,cmpProfDateRef).contribution;
+        cVal={c,aov_c,adC,profC};
+      }
+      return{branch,a,b,aov_a,aov_b,oDiff:cmpDelta(b.orders,a.orders),sDiff:cmpDelta(b.sales,a.sales),aDiff:cmpDelta(aov_b,aov_a),adA,adB,adDiff:cmpDelta(adB.spent,adA.spent),profA,profB,profDiff:cmpDelta(profB,profA),...(cVal||{})};
+    }).filter(r=>r.a.orders>0||r.b.orders>0||(r.c&&r.c.orders>0));
     // v281: rebuilt per Nikhil's iterative feedback (5+ rounds of rendering review) — the old
     // single 16-column table (every metric × A/B/Δ) was too dense to read at a glance. Replaced
     // with two focused tables instead of one sprawling one: "Sales & Volume" (Orders, Net Sales,
@@ -19837,18 +19884,22 @@ function renderCompare(){
       <div style="border:1px solid ${cmpBtnBorder};border-radius:8px;overflow:hidden">
       <div style="max-height:360px;overflow-y:auto">
       <table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>
-        ${stickyThLeft("Outlet")}${stickyTh("A Orders")}${stickyTh("B Orders")}${stickyTh("A Net Sales")}${stickyTh("B Net Sales")}${stickyTh("A Disc.")}${stickyTh("B Disc.")}${stickyTh("A AOV")}${stickyTh("B AOV")}
+        ${stickyThLeft("Outlet")}${stickyTh("A Orders")}${stickyTh("B Orders")}${cmpCActive?stickyTh("C Orders"):""}${stickyTh("A Net Sales")}${stickyTh("B Net Sales")}${cmpCActive?stickyTh("C Net Sales"):""}${stickyTh("A Disc.")}${stickyTh("B Disc.")}${cmpCActive?stickyTh("C Disc."):""}${stickyTh("A AOV")}${stickyTh("B AOV")}${cmpCActive?stickyTh("C AOV"):""}
       </tr></thead><tbody>
       ${branchRows.map(r=>`<tr style="border-top:1px solid ${cmpBtnBorder}">
         <td style="padding:7px 9px;font-weight:700;color:${cmpBtnTxt}">${r.branch}</td>
         <td style="text-align:right;padding:7px 9px">${pillCell(r.a.orders,r.b.orders,true,fInt)}</td>
         <td style="text-align:right;padding:7px 9px">${pillCell(r.b.orders,r.a.orders,true,fInt)}</td>
+        ${cmpCActive?`<td style="text-align:right;padding:7px 9px">${r.c?pillCell(r.c.orders,r.b.orders,true,fInt):'<span style="opacity:.5">—</span>'}</td>`:""}
         <td style="text-align:right;padding:7px 9px">${pillCell(r.a.sales,r.b.sales,true,fAed)}</td>
         <td style="text-align:right;padding:7px 9px">${pillCell(r.b.sales,r.a.sales,true,fAed)}</td>
+        ${cmpCActive?`<td style="text-align:right;padding:7px 9px">${r.c?pillCell(r.c.sales,r.b.sales,true,fAed):'<span style="opacity:.5">—</span>'}</td>`:""}
         <td style="text-align:right;padding:7px 9px">${pillCell(r.a.disc||0,r.b.disc||0,false,fAed)}</td>
         <td style="text-align:right;padding:7px 9px">${pillCell(r.b.disc||0,r.a.disc||0,false,fAed)}</td>
+        ${cmpCActive?`<td style="text-align:right;padding:7px 9px">${r.c?pillCell(r.c.disc||0,r.b.disc||0,false,fAed):'<span style="opacity:.5">—</span>'}</td>`:""}
         <td style="text-align:right;padding:7px 9px">${pillCell(r.a.orders>0?r.aov_a:null,r.b.orders>0?r.aov_b:null,true,fAov)}</td>
         <td style="text-align:right;padding:7px 9px">${pillCell(r.b.orders>0?r.aov_b:null,r.a.orders>0?r.aov_a:null,true,fAov)}</td>
+        ${cmpCActive?`<td style="text-align:right;padding:7px 9px">${(r.c&&r.c.orders>0)?pillCell(r.aov_c,r.b.orders>0?r.aov_b:null,true,fAov):'<span style="opacity:.5">—</span>'}</td>`:""}
       </tr>`).join('')}
       </tbody></table>
       </div></div>
@@ -19859,14 +19910,16 @@ function renderCompare(){
       <div style="border:1px solid ${cmpBtnBorder};border-radius:8px;overflow:hidden">
       <div style="max-height:360px;overflow-y:auto">
       <table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>
-        ${stickyThLeft("Outlet")}${stickyTh("A 💵 Profit")}${stickyTh("B 💵 Profit")}${stickyTh("A Ad Spend")}${stickyTh("B Ad Spend")}
+        ${stickyThLeft("Outlet")}${stickyTh("A 💵 Profit")}${stickyTh("B 💵 Profit")}${cmpCActive?stickyTh("C 💵 Profit"):""}${stickyTh("A Ad Spend")}${stickyTh("B Ad Spend")}${cmpCActive?stickyTh("C Ad Spend"):""}
       </tr></thead><tbody>
       ${branchRows.map(r=>`<tr style="border-top:1px solid ${cmpBtnBorder}">
         <td style="padding:7px 9px;font-weight:700;color:${cmpBtnTxt}">${r.branch}</td>
         <td style="text-align:right;padding:7px 9px">${pillCell(r.profA,r.profB,true,fAed)}</td>
         <td style="text-align:right;padding:7px 9px">${pillCell(r.profB,r.profA,true,fAed)}</td>
+        ${cmpCActive?`<td style="text-align:right;padding:7px 9px">${r.profC!=null?pillCell(r.profC,r.profB,true,fAed):'<span style="opacity:.5">—</span>'}</td>`:""}
         <td style="text-align:right;padding:7px 9px">${pillCell(r.adA.hasData?r.adA.spent:null,r.adB.hasData?r.adB.spent:null,false,fAed)}</td>
         <td style="text-align:right;padding:7px 9px">${pillCell(r.adB.hasData?r.adB.spent:null,r.adA.hasData?r.adA.spent:null,false,fAed)}</td>
+        ${cmpCActive?`<td style="text-align:right;padding:7px 9px">${r.adC?.hasData?pillCell(r.adC.spent,r.adB.hasData?r.adB.spent:null,false,fAed):'<span style="opacity:.5">—</span>'}</td>`:""}
       </tr>`).join('')}
       </tbody></table>
       </div></div>
@@ -19878,13 +19931,18 @@ function renderCompare(){
     // the outlet rows add up to the brand total shown on the Breakdown table above.
     const totA=branchRows.reduce((s,r)=>({orders:s.orders+r.a.orders,sales:s.sales+r.a.sales,ad:s.ad+(r.adA.hasData?r.adA.spent:0),prof:s.prof+r.profA}),{orders:0,sales:0,ad:0,prof:0});
     const totB=branchRows.reduce((s,r)=>({orders:s.orders+r.b.orders,sales:s.sales+r.b.sales,ad:s.ad+(r.adB.hasData?r.adB.spent:0),prof:s.prof+r.profB}),{orders:0,sales:0,ad:0,prof:0});
+    // v382: Group C's own totals line, chained against B — plus fixed a pre-existing bug found
+    // while doing this: this line (and profLine/adSpendLine below) hardcoded #60A5FA/#F59E0B
+    // instead of the real CMP_A_CLR/CMP_B_CLR constants (#5B7FA6/#C98A3E) — a genuine color
+    // mismatch versus the chart and every other Compare page element, now using the real ones.
+    const totC=cmpCActive?branchRows.reduce((s,r)=>({orders:s.orders+(r.c?.orders||0),sales:s.sales+(r.c?.sales||0),ad:s.ad+(r.adC?.hasData?r.adC.spent:0),prof:s.prof+(r.profC||0)}),{orders:0,sales:0,ad:0,prof:0}):null;
     const totODiff=pctOf(totB.orders,totA.orders),totSDiff=pctOf(totB.sales,totA.sales);
-    const anyAdData=branchRows.some(r=>r.adA.hasData||r.adB.hasData);
+    const anyAdData=branchRows.some(r=>r.adA.hasData||r.adB.hasData||r.adC?.hasData);
     const adSpendLine=anyAdData
-      ?`<span><span style="color:${cmpMutedTxt}">Ad Spend:</span> <span style="color:#60A5FA">${fmtAEDTip(totA.ad)}</span> vs <span style="color:#F59E0B">${fmtAEDTip(totB.ad)}</span></span>`
+      ?`<span><span style="color:${cmpMutedTxt}">Ad Spend:</span> <span style="color:${CMP_A_CLR}">${fmtAEDTip(totA.ad)}</span> vs <span style="color:${CMP_B_CLR}">${fmtAEDTip(totB.ad)}</span>${totC?` vs <span style="color:${CMP_C_CLR}">${fmtAEDTip(totC.ad)}</span>`:""}</span>`
       :'';
-    const profLine=`<span><span style="color:${cmpMutedTxt}">💵 Profit:</span> <span style="color:#60A5FA">${fmtAEDTip(totA.prof)}</span> vs <span style="color:#F59E0B">${fmtAEDTip(totB.prof)}</span></span>`;
-    const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:12px;color:${cmpBtnTxt};margin-bottom:10px;padding:8px 12px;background:rgba(245,158,11,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><span><span style="color:#60A5FA">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAEDTip(totA.sales)}</span><span><span style="color:#F59E0B">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAEDTip(totB.sales)}</span><span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span>${profLine}${adSpendLine}</div></div>`;
+    const profLine=`<span><span style="color:${cmpMutedTxt}">💵 Profit:</span> <span style="color:${CMP_A_CLR}">${fmtAEDTip(totA.prof)}</span> vs <span style="color:${CMP_B_CLR}">${fmtAEDTip(totB.prof)}</span>${totC?` vs <span style="color:${CMP_C_CLR}">${fmtAEDTip(totC.prof)}</span>`:""}</span>`;
+    const totsLine=`<div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;font-size:12px;color:${cmpBtnTxt};margin-bottom:10px;padding:8px 12px;background:rgba(245,158,11,.06);border-left:3px solid ${xAgColor};border-radius:4px"><div><strong style="color:${xBrandColor}">${xBrand}</strong> · <strong style="color:${xAgColor}">${xAg}</strong> · ${branchRows.length} outlets with activity in either window</div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><span><span style="color:${CMP_A_CLR}">A:</span> ${totA.orders.toLocaleString()} ord · ${fmtAEDTip(totA.sales)}</span><span><span style="color:${CMP_B_CLR}">B:</span> ${totB.orders.toLocaleString()} ord · ${fmtAEDTip(totB.sales)}</span>${totC?`<span><span style="color:${CMP_C_CLR}">C:</span> ${totC.orders.toLocaleString()} ord · ${fmtAEDTip(totC.sales)}</span>`:""}<span style="color:${pctClr(totSDiff)};font-weight:700">Δ Net: ${fmtPct(totSDiff)}</span>${profLine}${adSpendLine}</div></div>`;
     outletDrillCard=branchRows.length
       ?`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown</span><span style="display:flex;gap:8px;align-items:center"><button onclick="cmpExportOutletCSV()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap">⬇ Export CSV</button><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid ${cmpBtnBorder};color:${cmpBtnTxt};padding:4px 10px;font-size:11px;border-radius:5px;cursor:pointer" title="Close drill-down">✕ close</button></span></div>${totsLine}${salesVolumeTable}${profTable}</div>`
       :`<div class="card" style="border:1px solid ${xAgColor}55"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span><span style="color:${xBrandColor}">${xBrand}</span> on <span style="color:${xAgColor}">${xAg}</span> — Outlet Breakdown</span><button data-act="cmpToggleExpand" data-v1="${xBrand}" data-v2="${xAg}" style="background:transparent;border:1px solid ${cmpBtnBorder};color:${cmpBtnTxt};padding:4px 10px;font-size:11px;border-radius:5px;cursor:pointer">✕ close</button></div><div style="color:${cmpMutedTxt};font-size:13px;padding:8px 0">No outlets with activity in either window for this combination.</div></div>`;
@@ -19939,6 +19997,11 @@ function renderCompare(){
     const rows=sorted.map(p=>{
       const bw=Math.min(Math.abs(p.sDiff)/40*80,80).toFixed(1);
       const isPos=p.sDiff>=0;const clr=pctClr(p.sDiff);
+      // v382: chained C-vs-B delta, shown only when Group C is active — Nikhil flagged this
+      // tab as one of several where C was invisible. Kept as a compact trailing badge rather
+      // than redesigning the bar itself, since the bar's left/right split is inherently a
+      // 2-sided (A vs B) visual and a 3rd bar direction doesn't have an obvious place in it.
+      const cBadge=(cmpCActive&&p.sDiffBC!=null)?'<div style="width:70px;flex-shrink:0;text-align:right;font-size:10.5px;font-weight:700;color:'+pctClr(p.sDiffBC)+'">C '+(p.sDiffBC>=0?'▲':'▼')+Math.abs(p.sDiffBC).toFixed(1)+'%</div>':(cmpCActive?'<div style="width:70px;flex-shrink:0"></div>':'');
       return'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid '+cmpFaintDivider+'">'
         +'<div style="width:70px;flex-shrink:0;font-size:12px;font-weight:700;color:'+(AC[p.ag]||'#888')+'">'+p.ag+'</div>'
         +'<div style="flex:1;display:flex;align-items:center">'
@@ -19948,6 +20011,7 @@ function renderCompare(){
         +'</div>'
         +'<div style="width:56px;flex-shrink:0;text-align:right;font-size:12px;font-weight:700;color:'+clr+'">'+(p.sDiff>=0?'+':'')+p.sDiff.toFixed(1)+'%</div>'
         +'<div style="width:72px;flex-shrink:0;text-align:right;font-size:11px;color:'+cmpBtnTxt+'">'+fmtAEDTip(p.b.sales)+'</div>'
+        +cBadge
         +'</div>';
     }).join('');
     return'<div class="card" style="margin-bottom:14px">'
@@ -19979,18 +20043,22 @@ function renderCompare(){
       ${cmpOutletCard(dA,dB,cmpCActive?dC:undefined)}
       ${cmpContribCard(contribA,contribB,salesDiff,{nA,nB},cmpCActive?contribC:undefined,dA,dB,cmpProfDateRef)}
     </div>`;
-  const trendTabHTML=`<div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>Trend — <span style="color:#60A5FA">A</span> vs <span style="color:#F59E0B">B</span> (aligned by day index)</span><div style="display:flex;gap:5px">${metricBtns}</div></div><div style="position:relative;height:220px"><canvas id="cmp-chart"></canvas></div><div style="font-size:11px;color:${cmpMutedTxt};margin-top:6px">Day 1 = first day of each window. This lets you compare windows of different years/lengths on the same axis.</div></div>`;
+  const trendTabHTML=`<div class="card"><div class="ct" style="display:flex;justify-content:space-between;align-items:center"><span>Trend — <span style="color:${CMP_A_CLR}">A</span> vs <span style="color:${CMP_B_CLR}">B</span>${cmpCActive?` vs <span style="color:${CMP_C_CLR}">C</span>`:""} (aligned by day index)</span><div style="display:flex;gap:5px">${metricBtns}</div></div><div style="position:relative;height:220px"><canvas id="cmp-chart"></canvas></div><div style="font-size:11px;color:${cmpMutedTxt};margin-top:6px">Day 1 = first day of each window. This lets you compare windows of different years/lengths on the same axis.</div></div>`;
   const platformsTabHTML=`${moversTile}
-    <div class="card"><div class="ct">Per-Platform Breakdown</div>${mkTable(["Platform","A Orders","B Orders","Δ Ord","A Net Sales","B Net Sales","Δ Net Sales","A 💵 Profit","B 💵 Profit","Δ Profit","A AOV","B AOV","Δ AOV"],platMove.map(p=>[
+    <div class="card"><div class="ct">Per-Platform Breakdown</div>${mkTable(["Platform","A Orders","B Orders","Δ Ord",...(cmpCActive?["C Orders","Δ Ord (C vs B)"]:[]),"A Net Sales","B Net Sales","Δ Net Sales",...(cmpCActive?["C Net Sales","Δ Sales (C vs B)"]:[]),"A 💵 Profit","B 💵 Profit","Δ Profit",...(cmpCActive?["C 💵 Profit","Δ Profit (C vs B)"]:[]),"A AOV","B AOV","Δ AOV",...(cmpCActive?["C AOV"]:[])],platMove.map(p=>[
       `<span style="color:${p.clr};font-weight:700">${p.ag}</span>`,
-      `<span style="color:#60A5FA">${p.a.orders.toLocaleString()}</span>`,`<span style="color:#F59E0B">${p.b.orders.toLocaleString()}</span>`,
+      `<span style="color:${CMP_A_CLR}">${p.a.orders.toLocaleString()}</span>`,`<span style="color:${CMP_B_CLR}">${p.b.orders.toLocaleString()}</span>`,
       `<span style="color:${pctClr(p.oDiff)};font-weight:700">${fmtPct(p.oDiff)}</span>`,
-      `<span style="color:#60A5FA">${fmtAEDTip(p.a.sales)}</span>`,`<span style="color:#F59E0B">${fmtAEDTip(p.b.sales)}</span>`,
+      ...(cmpCActive?[`<span style="color:${CMP_C_CLR}">${p.c?p.c.orders.toLocaleString():'—'}</span>`,`<span style="color:${pctClr(p.c?pctOf(p.c.orders,p.b.orders):null)};font-weight:700">${p.c?fmtPct(pctOf(p.c.orders,p.b.orders)):'—'}</span>`]:[]),
+      `<span style="color:${CMP_A_CLR}">${fmtAEDTip(p.a.sales)}</span>`,`<span style="color:${CMP_B_CLR}">${fmtAEDTip(p.b.sales)}</span>`,
       `<span style="color:${pctClr(p.sDiff)};font-weight:700">${fmtPct(p.sDiff)}</span>`,
+      ...(cmpCActive?[`<span style="color:${CMP_C_CLR}">${p.c?fmtAEDTip(p.c.sales):'—'}</span>`,`<span style="color:${pctClr(p.sDiffBC)};font-weight:700">${p.sDiffBC!=null?fmtPct(p.sDiffBC):'—'}</span>`]:[]),
       `<span style="color:#2ECC71">${fmtAEDTip(p.profA)}</span>`,`<span style="color:#2ECC71">${fmtAEDTip(p.profB)}</span>`,
       `<span style="color:${pctClr(p.profDiff)};font-weight:700">${fmtPct(p.profDiff)}</span>`,
-      `<span style="color:#60A5FA">${p.a.orders>0?'AED '+(p.a.sales/p.a.orders).toFixed(1):'—'}</span>`,`<span style="color:#F59E0B">${p.b.orders>0?'AED '+(p.b.sales/p.b.orders).toFixed(1):'—'}</span>`,
-      `<span style="color:${pctClr(p.aDiff)};font-weight:700">${fmtPct(p.aDiff)}</span>`
+      ...(cmpCActive?[`<span style="color:#2ECC71">${p.profC!=null?fmtAEDTip(p.profC):'—'}</span>`,`<span style="color:${pctClr(p.profC!=null?pctOf(p.profC,p.profB):null)};font-weight:700">${p.profC!=null?fmtPct(pctOf(p.profC,p.profB)):'—'}</span>`]:[]),
+      `<span style="color:${CMP_A_CLR}">${p.a.orders>0?'AED '+(p.a.sales/p.a.orders).toFixed(1):'—'}</span>`,`<span style="color:${CMP_B_CLR}">${p.b.orders>0?'AED '+(p.b.sales/p.b.orders).toFixed(1):'—'}</span>`,
+      `<span style="color:${pctClr(p.aDiff)};font-weight:700">${fmtPct(p.aDiff)}</span>`,
+      ...(cmpCActive?[`<span style="color:${CMP_C_CLR}">${(p.c&&p.c.orders>0)?'AED '+p.aov_c.toFixed(1):'—'}</span>`]:[])
     ]))}</div>`;
   const outletsTabHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px"><div class="ct" style="margin-bottom:0">Brand × Platform Breakdown <span style="color:${cmpMutedTxt};font-weight:400;text-transform:none;letter-spacing:0">· click a row to drill down to outlets</span></div><button onclick="cmpExportBreakdownCSV()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap">⬇ Export CSV</button></div>${topSalesVolumeHTML}${topProfHTML}</div>
     ${outletDrillCard}`;
@@ -19998,7 +20066,7 @@ function renderCompare(){
 
   pg.innerHTML=cmpStyleOverride+`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div style="font-size:18px;font-weight:800;color:${cmpTitleClr}">⚖️ Comparison</div>
-      <div style="display:flex;gap:8px"><button onclick="cmpExportPDF()" style="background:rgba(201,162,75,.12);border:1px solid rgba(201,162,75,.4);border-radius:6px;color:#C9A24B;padding:5px 12px;font-size:12px;cursor:pointer;font-weight:700" title="Generate an Executive Director-level PDF report for the current comparison">📄 Export to PDF</button><button data-act="cmpCopy" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:12px;cursor:pointer" title="Copy A's brand/platform/outlet filters to B">⎘ A→B filters</button><button data-act="cmpSwap" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:12px;cursor:pointer">⇄ Swap A/B</button></div>
+      <div style="display:flex;gap:8px"><button onclick="cmpExportPDF()" style="background:rgba(201,162,75,.12);border:1px solid rgba(201,162,75,.4);border-radius:6px;color:#C9A24B;padding:5px 12px;font-size:12px;cursor:pointer;font-weight:700" title="Generate an Executive Director-level PDF report for the current comparison">📄 Export to PDF</button><button data-act="cmpCopy" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:12px;cursor:pointer" title="Copy A's brand/platform/outlet filters to B">⎘ A→B filters</button><button data-act="cmpSwap" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:12px;cursor:pointer">⇄ Swap A/B</button>${cmpCActive?`<button data-act="cmpSwapBC" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:12px;cursor:pointer">⇄ Swap B/C</button>`:""}</div>
     </div>
     <div style="font-size:12px;color:${cmpSubTxt};font-weight:600;margin-bottom:12px">Pick any combination on each side — brands, platforms, outlets, and dates are fully independent. Example: Oregano+Lollorosso 11–13 May 2026 (A) vs the same 11–13 May 2025 (B).</div>
     ${yearBanner}
@@ -20009,7 +20077,7 @@ function renderCompare(){
     ${activeTabHTML}`;
 
   // Draw the overlaid trend chart (aligned by day index)
-  if(cmpSubTab==="trend")setTimeout(()=>cmpDrawChart(dA,dB),50);
+  if(cmpSubTab==="trend")setTimeout(()=>cmpDrawChart(dA,dB,cmpCActive?dC:null),50);
 }
 
 function cmpDayValues(data,start,end,metric){
@@ -20031,18 +20099,22 @@ function cmpDayValues(data,start,end,metric){
   }
   return out;
 }
-function cmpDrawChart(dA,dB){
+function cmpDrawChart(dA,dB,dC){
   const ctx=document.getElementById("cmp-chart")?.getContext("2d");if(!ctx)return;destroyChart("cmp-chart");
   const va=cmpDayValues(dA,cmpA.start,cmpA.end,cmpMetric);
   const vb=cmpDayValues(dB,cmpB.start,cmpB.end,cmpMetric);
-  const n=Math.max(va.length,vb.length,1);
+  const vc=dC?cmpDayValues(dC,cmpC.start,cmpC.end,cmpMetric):null;
+  const n=Math.max(va.length,vb.length,vc?vc.length:0,1);
   // v108: two-line axis labels — top line is the weekday, bottom line is BOTH sides' actual
   // dates stacked (e.g. "9 Jul · 2 Jul"), so the reader doesn't need to open the tooltip to see
   // which real calendar dates are being compared. Month abbreviation only shown once per side
   // until it changes, so a run of days doesn't repeat "Jul" on every tick.
+  // v382: extended to a 3rd date line when Group C is active — Nikhil flagged C was invisible
+  // on this tab entirely (only ever wired into the Overview summary cards when C was first
+  // built). Same per-side "only show the month when it changes" treatment, now for a/b/c.
   const addDays=(dstr,k)=>{const d=new Date(dstr+"T12:00:00");d.setDate(d.getDate()+k);return dk(d);};
   const wdShort=dstr=>new Date(dstr+"T12:00:00").toLocaleDateString("en-US",{weekday:"short"});
-  const moState={a:null,b:null};
+  const moState={a:null,b:null,c:null};
   const fmtOneDate=(dstr,side)=>{
     if(!dstr)return null;
     const d=new Date(dstr+"T12:00:00");
@@ -20054,21 +20126,25 @@ function cmpDrawChart(dA,dB){
   };
   const nAdays=cmpA.start?daysBetweenInclusive(cmpA.start,cmpA.end||cmpA.start):0;
   const nBdays=cmpB.start?daysBetweenInclusive(cmpB.start,cmpB.end||cmpB.start):0;
+  const nCdays=(dC&&cmpC.start)?daysBetweenInclusive(cmpC.start,cmpC.end||cmpC.start):0;
   const labels=Array.from({length:n},(_,i)=>{
     const dAi=(cmpA.start&&i<nAdays)?addDays(cmpA.start,i):null;
     const dBi=(cmpB.start&&i<nBdays)?addDays(cmpB.start,i):null;
-    const wd=dAi?wdShort(dAi):(dBi?wdShort(dBi):`Day ${i+1}`);
-    const dateLine=[fmtOneDate(dAi,'a'),fmtOneDate(dBi,'b')].filter(Boolean).join(" · ")||'';
+    const dCi=(dC&&cmpC.start&&i<nCdays)?addDays(cmpC.start,i):null;
+    const wd=dAi?wdShort(dAi):(dBi?wdShort(dBi):(dCi?wdShort(dCi):`Day ${i+1}`));
+    const dateLine=[fmtOneDate(dAi,'a'),fmtOneDate(dBi,'b'),fmtOneDate(dCi,'c')].filter(Boolean).join(" · ")||'';
     return dateLine?[wd,dateLine]:[wd];
   });
   const fmtV=v=>cmpMetric==="orders"?Math.round(v).toLocaleString():cmpMetric==="aov"?"AED "+v.toFixed(1):"AED "+Math.round(v).toLocaleString();
   const gridClr=_darkPage?"rgba(255,255,255,.08)":"#F1F5F9";
   const tickClr=_darkPage?DARK_THEME.textMuted:"#64748b";
   const legendClr=_darkPage?DARK_THEME.textSecondary:"#475569";
-  charts["cmp-chart"]=new Chart(ctx,{type:"line",data:{labels,datasets:[
+  const datasets=[
     {label:"A · "+cmpDateLabel(cmpA),data:va,borderColor:CMP_A_CLR,backgroundColor:CMP_A_CLR,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false},
     {label:"B · "+cmpDateLabel(cmpB),data:vb,borderColor:CMP_B_CLR,backgroundColor:CMP_B_CLR,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false}
-  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:legendClr,font:{size:11},boxWidth:12,padding:10}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label.split(" · ")[0]}: ${fmtV(c.raw)}`}}},scales:{x:{ticks:{color:tickClr,font:{size:10}},grid:{color:gridClr},border:{display:false}},y:{ticks:{color:tickClr,font:{size:10},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:gridClr},border:{display:false}}}}});
+  ];
+  if(vc)datasets.push({label:"C · "+cmpDateLabel(cmpC),data:vc,borderColor:CMP_C_CLR,backgroundColor:CMP_C_CLR,borderWidth:2,pointRadius:2,pointHoverRadius:5,tension:.3,fill:false});
+  charts["cmp-chart"]=new Chart(ctx,{type:"line",data:{labels,datasets},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:true,labels:{color:legendClr,font:{size:11},boxWidth:12,padding:10}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label.split(" · ")[0]}: ${fmtV(c.raw)}`}}},scales:{x:{ticks:{color:tickClr,font:{size:10}},grid:{color:gridClr},border:{display:false}},y:{ticks:{color:tickClr,font:{size:10},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:gridClr},border:{display:false}}}}});
 }
 
 // ═══════════════════════════════════════════════════════════════
