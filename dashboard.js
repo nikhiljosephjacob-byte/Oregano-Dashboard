@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-381";
+const BUILD_VERSION="2026-08-13-382";
 const BUILD_NOTES=[
+  "\ud83c\udd95 Compare page PDF export rebuilt as a genuine drill-down report, per Nikhil's own framing after the earlier \"3 toggle options\" idea turned out to be a misunderstanding (that was a mockup review tool with 3 fake sample scenarios, not a real feature pattern). His actual ask, using his own example \u2014 deep-diving one aggregator's sales trend but wanting to see which brand drove it, each against its prior period, across Sales/Orders/AOV/Discount/Profitability/Ad Spend \u2014 called for one report that starts broad and genuinely earns its way deeper, removing duplicate information rather than repeating the same totals at every level. New core building block: cmpScopedMetrics(cfg,brand,agg,branch) constructs a synthetic narrowed sub-scope and reuses the exact same tested functions the top-level summary already calls (cmpComputeDisc, cmpComputeContribution, cmpAdSpendForCfg) \u2014 so a brand's numbers are computed the identical way the overall totals are, just on a narrower slice, not new aggregation math. Report structure is now: Executive Summary (combined) \u2192 Brand Comparison (full 6-metric table, shown only when more than one brand is actually in scope) \u2192 Platform Comparison (same pattern, shown only when more than one platform is in scope \u2014 replaces the old sales-only bars entirely, since a full table is more useful than showing the same story twice in two visual styles) \u2192 Trend chart + Campaigns \u2192 Outlet-Level Detail (now always included whenever there's genuine outlet granularity, not gated behind an exact single-brand-single-aggregator filter like before \u2014 organized one section per brand when more than one is present, flat list otherwise) \u2192 Conclusions. Each comparison cell shows the latest period's value plus its own Delta vs. the prior period, not every window's raw number side by side \u2014 with up to 6 metrics that would make the table unreadably wide. Tested with a Node harness against realistic 3-brand \u00d7 2-aggregator \u00d7 3-outlet mock data: verified exact ratio-correctness of the per-brand isolation (AED 90,720 / 60,480 / 36,288 \u2014 precisely matching the 1.5\u00d7/1.0\u00d7/0.6\u00d7 multipliers built into the test data, confirming cmpScopedMetrics correctly isolates each brand rather than leaking totals across brands), confirmed all three outlet-brand sections render (one early false alarm in my own test regex, double-checked directly against the real HTML before concluding it wasn't a real bug), and reverified the deep-mode edge case (single brand + single aggregator) correctly skips both comparison sections and falls back to a flat outlet list, exactly as before this rebuild. Caught and fixed one real bug while writing this: a dead line in the outlet-detail builder that computed an unused variable via repeated expensive cmpScopedMetrics calls \u2014 removed before it could slow down real exports for no reason.",
   "\ud83c\udd95 Compare page \"Export to PDF\" is now a real, working feature \u2014 the full arc from mockup to shipped build, built over several rounds with Nikhil (content and layout reviewed and refined first, Discount Burn added after he caught it missing from the mockup, real logos wired in once he pointed out the dashboard already had working ones rather than re-embedding copies, legend colors and page-density fixes along the way). Generates a genuine Executive Director-level PDF from LIVE cmpA/cmpB/cmpC data via the browser's own print-to-PDF (styled print CSS + window.print()) \u2014 there's no server-side PDF engine in this app, so this is the correct mechanism, not a workaround. A single \"\ud83d\udcc4 Export to PDF\" button now sits in the Compare page's top toolbar next to A\u2192B filters and Swap A/B. New data layer (cmpBuildReportData, cmpAggForBrandPlatform, cmpAggByOutlet, cmpAdSpendForCfg, cmpCampaignsForWindow) recomputes every number fresh from the real filters \u2014 Net Sales, Orders, AOV, Discount Burn (cmpComputeDisc), Net Contribution (cmpComputeContribution), Ad Spend (cmpAdSpendOverlap), and real campaigns overlapping each window (same overlap-day logic already proven in cmpCampaignImbalance) \u2014 same recompute-fresh pattern already used by cmpExportBreakdownCSV, not sample data and not reused render-scoped variables. Report adapts automatically to whatever's actually selected rather than needing hardcoded modes: Outlet-level detail when scope narrows to exactly one brand + one aggregator (the natural next level of depth once nothing's left to break down by), Brand\u00d7Platform otherwise; Platform Movement only appears when more than one aggregator is actually present in the real data. Narrative (cmpReportNarrative) extends the existing single-sentence auto-insight pattern already live elsewhere on this page into a fuller paragraph that also covers discount burn vs. sales growth. Conclusions (cmpReportConclusions) are rule-based on real computed deltas, not free-form judgment \u2014 thresholded good/bad bullets plus a bottom-line verdict. Real brand and aggregator logos throughout (cover, detail table rows, platform movement) via the dashboard's own existing logoImg()/LOGOS, not new embedded copies. Trend chart captured live from the real cmp-chart canvas via toDataURL(). Tested with a Node harness against realistic mock data across all three real scenarios (broad all-brands, deep single-brand+single-aggregator, and 3-way with Group C active) since a real browser isn't available in this environment \u2014 verified structurally clean HTML (zero orphaned tags, checked with an actual HTML parser, not eyeballed) and correct real-number output for all three. That testing caught one genuine bug before it shipped: the conclusions engine could produce a \"genuinely clean period\" bottom-line verdict while simultaneously listing a real cost concern (discount burn outpacing sales) in Worth Watching, because the bottom-line logic inferred \"no real concern\" from bad-list length rather than tracking it explicitly \u2014 same class of inconsistency Nikhil caught earlier when the Discount Burn KPI card existed but the narrative prose never mentioned it. Fixed with an explicit hasConcern flag computed before the harmless \"nothing crossed a threshold\" placeholder text is added, and reverified the fix directly against the same failing case.",
   "\ud83d\udd27 Smokeys brand logo updated \u2014 Nikhil supplied a new logo file (confirmed via direct pixel comparison against the previous upload that this was a genuine change, not a re-upload). Fixed in two places: the PDF report mockup (both embedded instances) and, more importantly, directly in index.html's LOGOS object \u2014 the actual source the live dashboard reads from at runtime for the Brands page, nav bar, and now the Compare page export above. Verified the updated index.html is still valid HTML/JS (all 13 logo keys intact, syntax-checked) and re-extracted the embedded entry to visually confirm the new logo renders with correct colors.",
   "\ud83c\udd95 Compare page now shows real brand and aggregator logos next to the selected filter chips \u2014 select Oregano + Talabat and both logos appear right there, not just colored text. Initially started re-embedding fresh copies of logo files Nikhil uploaded separately, before he pointed out the dashboard already has real logos wired in and working across the Brands page, nav bar, and elsewhere (confirmed directly from his own screenshots). Found the actual mechanism: a robust, already-existing logoImg(name,size) function that reads from a LOGOS object (defined in index.html, outside dashboard.js itself \u2014 confirmed by tracing every LOGOS[...] reference and finding no local definition) with a graceful emoji fallback if a logo is missing or fails to load. Simply wired the Compare page's existing selectedChipsRow to call this same function \u2014 zero new logo data embedded in dashboard.js, guaranteed visual consistency with every other page that already shows these logos, since it's the exact same source and the exact same function, not a second copy.",
@@ -18994,6 +18995,30 @@ function cmpAdSpendForCfg(cfg,records){
   }
   return total;
 }
+// v382: the core reusable building block for the report's drill-down sections (Brand
+// Comparison, Platform Comparison) — Nikhil's own framing: "combine all 3 [scopes] together...
+// people who go to the pages below know they're digging deeper", using his real example of
+// wanting to see which BRAND drove one aggregator's performance, each against its own prior
+// period, across every real metric (Sales, Orders, AOV, Discount, Profitability, Ad Spend) —
+// not just sales. Rather than write new aggregation math per metric, this constructs a
+// synthetic sub-scope (same dates, narrowed to one brand and/or one aggregator and/or one
+// outlet) and reuses the exact same tested functions the top-level summary already calls
+// (cmpComputeDisc, cmpComputeContribution, cmpAdSpendForCfg) — so a brand's numbers here are
+// computed the identical way the overall totals are, just on a narrower slice.
+function cmpScopedMetrics(parentCfg,brand,agg,branch){
+  const cfg={start:parentCfg.start,end:parentCfg.end,preset:"custom",
+    brands:brand?new Set([brand]):parentCfg.brands,
+    platforms:agg?new Set([agg]):parentCfg.platforms,
+    branches:branch?new Set([branch]):parentCfg.branches};
+  const records=cmpData(cfg);
+  const orders=records.reduce((s,r)=>s+(r.orders||0),0);
+  const sales=records.reduce((s,r)=>s+(r.sales||0),0);
+  const aov=orders?sales/orders:0;
+  const disc=cmpComputeDisc(cfg);
+  const contribution=cmpComputeContribution(cfg);
+  const adSpend=cmpAdSpendForCfg(cfg,records);
+  return{orders,sales,aov,discBurn:disc.total,contribution,adSpend};
+}
 // Real campaigns overlapping this specific window, scoped to the same brand/aggregator filter
 // as the rest of the report — reuses the exact overlap-day logic already proven in
 // cmpCampaignImbalance, just returning the full list per window instead of an imbalance summary.
@@ -19131,57 +19156,92 @@ function cmpReportKPICards(d,prior){
     <div class="kpi"><div class="l">Net Contribution</div><div class="v">${fmtAEDExact(d.contribution)}</div><div class="sub">${pctSales(d.contribution)}</div><div class="d">${arrow(pc)}</div></div>
   </div><div class="data-quality">Discount figures: ${d.discSource==="exact"?"exact (uploaded order-level data)":"partially estimated — outlet-level exact data not fully available for this scope"}.</div>`;
 }
-function cmpReportDetailTable(data){
-  const deep=data[0].cfg.brands.size===1&&data[0].cfg.platforms.size===1;
-  const dateHeaders=data.map(d=>`<th>${d.dateLabel}</th>`).join("");
-  if(deep){
-    const outletNames=[...new Set(data.flatMap(d=>d.outlets.map(o=>o.outlet)))];
-    const rows=outletNames.map(name=>{
-      const cells=data.map(d=>{const o=d.outlets.find(x=>x.outlet===name);return`<td>${fmtAEDExact(o?.sales||0)}</td>`;}).join("");
-      const latestVal=data[data.length-1].outlets.find(x=>x.outlet===name)?.sales||0;
-      const priorVal=data[data.length-2].outlets.find(x=>x.outlet===name)?.sales||0;
-      const pct=pctOf(latestVal,priorVal);
-      return`<tr><td>${esc(name)}</td>${cells}<td class="${pct>=0?'pos':'neg'}">${fmtPct(pct)}</td></tr>`;
-    });
-    const totRow=data.map(d=>`<td>${fmtAEDExact(d.sales)}</td>`).join("");
-    const totPct=pctOf(data[data.length-1].sales,data[data.length-2].sales);
-    return`<div class="sec-title">Outlet-Level Performance</div><div class="sec-sub">Every outlet active for ${esc(data[0].label)}</div>
-      <table><thead><tr><th>Outlet</th>${dateHeaders}<th>Δ</th></tr></thead><tbody>
-      ${rows.join("")}<tr class="tot"><td>Total</td>${totRow}<td class="${totPct>=0?'pos':'neg'}">${fmtPct(totPct)}</td></tr>
-      </tbody></table>`;
-  }
-  const keys=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.brand+"|"+bp.aggregator)))];
-  const rows=keys.map(key=>{
-    const[brand,agg]=key.split("|");
-    const cells=data.map(d=>{const bp=d.brandPlatform.find(x=>x.brand===brand&&x.aggregator===agg);return`<td>${fmtAEDExact(bp?.sales||0)}</td>`;}).join("");
-    const latestVal=data[data.length-1].brandPlatform.find(x=>x.brand===brand&&x.aggregator===agg)?.sales||0;
-    const priorVal=data[data.length-2].brandPlatform.find(x=>x.brand===brand&&x.aggregator===agg)?.sales||0;
-    const pct=pctOf(latestVal,priorVal);
-    return`<tr><td>${logoImg(brand,16)}${esc(brand)} · ${esc(agg)}</td>${cells}<td class="${pct>=0?'pos':'neg'}">${fmtPct(pct)}</td></tr>`;
-  });
-  const totRow=data.map(d=>`<td>${fmtAEDExact(d.sales)}</td>`).join("");
-  const totPct=pctOf(data[data.length-1].sales,data[data.length-2].sales);
-  return`<div class="sec-title">Brand × Platform Performance</div><div class="sec-sub">Net sales across ${data.length===3?"all three windows":"both windows"}</div>
-    <table><thead><tr><th>Brand / Platform</th>${dateHeaders}<th>Δ</th></tr></thead><tbody>
-    ${rows.join("")}<tr class="tot"><td>Total</td>${totRow}<td class="${totPct>=0?'pos':'neg'}">${fmtPct(totPct)}</td></tr>
-    </tbody></table>`;
+// One comparison cell: the latest period's value plus a Δ vs the prior period, stacked —
+// deliberately NOT showing every window's raw value side by side, since with up to 6 metrics
+// that would make the table too wide to read. Latest-vs-prior is also the comparison people
+// actually reach for first; a 3-way (Group C) report still anchors on B vs A here, matching
+// how the KPI cards already treat the latest pair as primary.
+function cmpMetricCell(latest,prior,fmt){
+  const pct=pctOf(latest,prior);
+  const cls=pct==null?"":pct>=0?"pos":"neg";
+  const arrow=pct==null?"—":`${pct>=0?"▲":"▼"}${fmtPct(pct).replace(/^[+-]/,"")}`;
+  return`<td>${fmt(latest)}<div class="${cls}" style="font-size:8.5px;font-weight:700;margin-top:1px">${arrow}</div></td>`;
 }
-function cmpReportPlatformMovement(data){
-  const aggs=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.aggregator)))];
-  if(aggs.length<2)return"";
+// Shared builder for the two full-metric drill-down tables (Brand Comparison, Platform
+// Comparison) — same six-metric shape either way, just scoped differently. scopeFn(name,side)
+// returns a cmpScopedMetrics-shaped object for that name within that side's window.
+function cmpFullMetricsTable(title,sub,colLabel,names,scopeFn,data){
   const latest=data[data.length-1],prior=data[data.length-2];
-  const rows=aggs.map(agg=>{
-    const sum=d=>d.brandPlatform.filter(bp=>bp.aggregator===agg).reduce((s,bp)=>s+bp.sales,0);
-    const pct=pctOf(sum(latest),sum(prior));
-    return{agg,pct};
-  }).filter(r=>r.pct!=null).sort((a,b)=>b.pct-a.pct);
-  if(!rows.length)return"";
-  const maxAbs=Math.max(...rows.map(r=>Math.abs(r.pct)),1);
-  const bars=rows.map(r=>{
-    const w=Math.min(Math.abs(r.pct)/maxAbs*40,40);
-    return`<div class="mover-row">${logoImg(r.agg,16)}<div class="mover-name">${esc(r.agg)}</div><div class="mover-track"><div class="mover-fill" style="left:50%;width:${w}%;background:${r.pct>=0?'#15803d':'#b91c1c'}${r.pct<0?`;left:${50-w}%`:''}"></div></div><div class="mover-val ${r.pct>=0?'pos':'neg'}">${fmtPct(r.pct)}</div></div>`;
+  const rows=names.map(name=>{
+    const mL=scopeFn(name,latest),mP=scopeFn(name,prior);
+    return`<tr><td>${logoImg(name,16)}${esc(name)}</td>
+      ${cmpMetricCell(mL.sales,mP.sales,fmtAEDExact)}
+      ${cmpMetricCell(mL.orders,mP.orders,v=>v.toLocaleString())}
+      ${cmpMetricCell(mL.aov,mP.aov,fmtAEDExact)}
+      ${cmpMetricCell(mL.discBurn,mP.discBurn,fmtAEDExact)}
+      ${cmpMetricCell(mL.contribution,mP.contribution,fmtAEDExact)}
+      ${cmpMetricCell(mL.adSpend,mP.adSpend,fmtAEDExact)}</tr>`;
   }).join("");
-  return`<div class="sec-title" style="font-size:14.5px">Platform Movement</div><div class="sec-sub">Net sales change, ${prior.dateLabel} → ${latest.dateLabel}</div>${bars}`;
+  return`<div class="sec-title" style="font-size:14.5px">${title}</div><div class="sec-sub">${sub}</div>
+    <table><thead><tr><th>${colLabel}</th><th>Sales</th><th>Orders</th><th>AOV</th><th>Discount</th><th>Profit</th><th>Ad Spend</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+// v382: shown whenever more than one brand is actually in scope — this is the direct answer to
+// Nikhil's own example ("which brand worked well on this aggregator"). Skipped entirely when
+// there's only one brand, since that's already fully covered by the Executive Summary — the
+// whole point of this rebuild was removing exactly this kind of duplication.
+function cmpReportBrandComparison(data){
+  const brandCount=Math.max(...data.map(d=>d.brandCount));
+  if(brandCount<2)return"";
+  const names=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.brand)))];
+  return cmpFullMetricsTable("Brand Comparison","Each brand's own numbers, latest window vs. prior — not the totals repeated, the breakdown behind them","Brand",
+    names,(name,side)=>cmpScopedMetrics(side.cfg,name,null,null),data);
+}
+// Same pattern, scoped by aggregator instead — shown only when more than one platform is
+// actually in scope. Replaces the old sales-only Platform Movement bars: a full metrics table
+// is more useful here and avoids showing the same "which platform moved" story twice in two
+// different visual styles.
+function cmpReportPlatformComparison(data){
+  const aggCount=Math.max(...data.map(d=>d.aggCount));
+  if(aggCount<2)return"";
+  const names=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.aggregator)))];
+  return cmpFullMetricsTable("Platform Comparison","Each platform's own numbers, latest window vs. prior","Platform",
+    names,(name,side)=>cmpScopedMetrics(side.cfg,null,name,null),data);
+}
+// v382: outlet detail is now always included when there's genuine outlet granularity to show
+// (more than one outlet in scope) rather than being gated behind an exact single-brand +
+// single-aggregator filter — that gate made sense when this was the ONLY drill-down level;
+// now that Brand/Platform Comparison exist above it, outlet detail is the natural next, deepest
+// level regardless of how many brands are selected. Organized one section per brand when
+// there's more than one, so a reader can jump straight to the brand they care about instead of
+// scanning one long flat list — same structure Nikhil approved in the earlier "Multi-Brand"
+// mockup review. Scoped to Sales/Orders/Discount rather than the full six-metric set: at
+// dozens of outlets, Profit and Ad Spend are rarely tracked at that resolution and the extra
+// computation isn't worth it for this level specifically.
+function cmpReportOutletDetail(data){
+  const allOutlets=new Set(data.flatMap(d=>d.outlets.map(o=>o.outlet)));
+  if(allOutlets.size<2)return"";
+  const brandCount=Math.max(...data.map(d=>d.brandCount));
+  const latest=data[data.length-1],prior=data[data.length-2];
+  const outletRow=(name,brand)=>{
+    const mL=cmpScopedMetrics(latest.cfg,brand,null,name),mP=cmpScopedMetrics(prior.cfg,brand,null,name);
+    return`<tr><td>${esc(name)}</td>${cmpMetricCell(mL.sales,mP.sales,fmtAEDExact)}${cmpMetricCell(mL.orders,mP.orders,v=>v.toLocaleString())}${cmpMetricCell(mL.discBurn,mP.discBurn,fmtAEDExact)}</tr>`;
+  };
+  const head=`<thead><tr><th>Outlet</th><th>Sales</th><th>Orders</th><th>Discount</th></tr></thead>`;
+  if(brandCount<2){
+    const names=[...allOutlets];
+    return`<div class="sec-title">Outlet-Level Detail</div><div class="sec-sub">Every outlet active for ${esc(data[0].label)}</div>
+      <table>${head}<tbody>${names.map(n=>outletRow(n,null)).join("")}</tbody></table>`;
+  }
+  const brands=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.brand)))];
+  const sections=brands.map(brand=>{
+    // outlets that genuinely belong to this brand: check against raw records once, not per-row
+    const brandOutlets=[...new Set(cmpData({...latest.cfg,brands:new Set([brand])}).concat(cmpData({...prior.cfg,brands:new Set([brand])})).map(r=>r.branch).filter(b=>b!=="(brand-level)"))];
+    if(!brandOutlets.length)return"";
+    return`<div class="outlet-brand-group"><div class="outlet-brand-hd" style="color:${BMAP[brand]?.c||'#888'};border-color:${BMAP[brand]?.c||'#888'}">${logoImg(brand,16)}${esc(brand)}</div>
+      <table>${head}<tbody>${brandOutlets.map(n=>outletRow(n,brand)).join("")}</tbody></table></div>`;
+  }).join("");
+  return`<div class="sec-title">Outlet-Level Detail</div><div class="sec-sub">Organized one section per brand — the deepest level of this report</div>${sections}`;
 }
 function cmpReportCampaignsSection(data){
   const cols=data.map(d=>{
@@ -19247,6 +19307,8 @@ function cmpBuildReportHTML(data,chartImg){
     .camp-item{font-family:-apple-system,sans-serif;font-size:10px;padding:7px 0;border-bottom:1px dashed #e5e7eb;line-height:1.55}
     .camp-item .nm{font-weight:700;color:#1a1f2e}.camp-item .dt{color:#9ca3af}
     .camp-none{font-family:-apple-system,sans-serif;font-size:10.5px;color:#9ca3af;font-style:italic;padding:8px 0}
+    .outlet-brand-group{margin-bottom:20px}
+    .outlet-brand-hd{font-family:-apple-system,sans-serif;font-size:12px;font-weight:800;display:flex;align-items:center;gap:7px;padding:6px 0;border-bottom:2px solid;margin-bottom:6px}
     .concl-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
     .concl-box{border-radius:8px;padding:16px 18px;font-family:-apple-system,sans-serif}
     .concl-box.good{background:#f0fdf4;border:1px solid #bbf7d0}.concl-box.bad{background:#fef2f2;border:1px solid #fecaca}
@@ -19266,24 +19328,28 @@ function cmpBuildReportHTML(data,chartImg){
     <div class="exec-narrative">${narrative}</div>
     ${data[data.length-1].campaigns.length&&!data[data.length-2].campaigns.length?`<div class="caveat">⚠ A campaign ran in ${esc(data[data.length-1].dateLabel)} with no counterpart in ${esc(data[data.length-2].dateLabel)} — see Campaigns That Ran. Part of the movement above may reflect this rather than organic change.</div>`:""}
     ${cmpReportKPISummary(data)}
-    ${cmpReportPlatformMovement(data)}
     <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>2</span></div></div>`;
-  const p3=`<div class="page"><div class="runhdr"><div><div class="l">Trend, Profitability &amp; Campaigns</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page 3</div></div>
+  const brandCompHTML=cmpReportBrandComparison(data),platCompHTML=cmpReportPlatformComparison(data);
+  const p3=(brandCompHTML||platCompHTML)?`<div class="page"><div class="runhdr"><div><div class="l">Where It Came From</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page 3</div></div>
+    ${brandCompHTML}${platCompHTML}
+    <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>3</span></div></div>`:"";
+  const p4=`<div class="page"><div class="runhdr"><div><div class="l">Trend &amp; Campaigns</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page 4</div></div>
     ${chartImg?`<div class="sec-title" style="font-size:14.5px">Net Sales — Daily Trend</div><div class="chart-box"><img src="${chartImg}" alt="Trend chart"></div>`:""}
     ${cmpReportCampaignsSection(data)}
-    <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>3</span></div></div>`;
-  const p4=`<div class="page"><div class="runhdr"><div><div class="l">Detailed Breakdown</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page 4</div></div>
-    ${cmpReportDetailTable(data)}
     <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>4</span></div></div>`;
-  const p5=`<div class="page"><div class="runhdr"><div><div class="l">Conclusions</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page 5</div></div>
+  const outletHTML=cmpReportOutletDetail(data);
+  const p5=outletHTML?`<div class="page"><div class="runhdr"><div><div class="l">Outlet-Level Detail</div><div class="scope">${esc(dates)} — ${esc(scope)} · the deepest level of this report</div></div><div class="p">Oregano Group · Page 5</div></div>
+    ${outletHTML}
+    <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>5</span></div></div>`:"";
+  const p6=`<div class="page"><div class="runhdr"><div><div class="l">Conclusions</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page 6</div></div>
     <div class="sec-title">Explanation &amp; Verdict</div><div class="sec-sub">What moved, what it means, and what to watch</div>
     <div class="concl-grid">
       <div class="concl-box good"><div class="hd">✓ What's working</div><ul>${concl.good.map(g=>`<li>${esc(g)}</li>`).join("")}</ul></div>
       <div class="concl-box bad"><div class="hd">✗ Worth watching</div><ul>${concl.bad.map(b=>`<li>${esc(b)}</li>`).join("")}</ul></div>
     </div>
     <div class="concl-final"><b>Bottom line:</b> ${esc(bottomLine)}</div>
-    <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>5</span></div></div>`;
-  return`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Performance Comparison Report</title><style>${css}</style></head><body>${cover}${p2}${p3}${p4}${p5}</body></html>`;
+    <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>6</span></div></div>`;
+  return`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Performance Comparison Report</title><style>${css}</style></head><body>${cover}${p2}${p3}${p4}${p5}${p6}</body></html>`;
 }
 // Orchestrator: capture the live chart (if rendered), compute real data, build the HTML, open
 // a new window and hand off to the browser's own print-to-PDF.
