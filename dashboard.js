@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-378";
+const BUILD_VERSION="2026-08-13-379";
 const BUILD_NOTES=[
+  "\ud83d\udea8 URGENT FIX \u2014 caught a live data-corruption bug from a sheet edit that happened moments earlier. Nikhil added his new \"Discount Structure\" tag column at position H in Campaign Activations, which pushed the existing Status column from H to I. parseCampaigns() still read column H (row[7]) as Status by fixed index \u2014 meaning every campaign's status field was being silently set to a Discount Structure VALUE (\"Select Items\"/\"Entire Menu\"/\"BOGO\") instead of its real status, and much more seriously, the cancelled-campaign filter (which tests row[7] for literally the string \"cancelled\") could never match anymore \u2014 every cancelled campaign was flowing into live data as if it were real, on every single sheet refresh from the moment that column was added. Verified precisely against a real screenshot of the live sheet (Aggregator, Brand, Start Date, End Date, Branches/Locations, Comments, Name of Promotion, Discount Structure, Status \u2014 confirmed column-by-column) before touching anything. Fixed: Discount Structure now read from row[7], Status correctly shifted to row[8]. Verified with a realistic CSV matching the exact real layout: status field is correct again, a genuinely cancelled test row is fully filtered out, an untagged row correctly reads as untagged.",
+  "\ud83c\udd95 Wired the new Discount Structure tag into the Campaign Forecaster's matching logic as authoritative, closing the exact contamination gaps this column was built to fix. In campFcFindMatches (the menu-wide matcher): a campaign tagged Entire Menu now always belongs in the pool regardless of text, and one tagged Select Items or BOGO is always excluded, regardless of whether its wording would have tripped any regex \u2014 this is the real fix for \"Trio Box\"-style single-item campaigns (confirmed live in the sheet as \"Restaurant Picks\", 25% OFF on Trio Box) that no text pattern could reliably catch, since it names one specific product with no count and no category word. In campFcFindHistoryMatches (shared by the select-items and BOGO dedicated matchers): a campaign tagged with the matching Discount Structure value now counts as a real historical match even if its text wouldn't have triggered the pattern \u2014 so Trio Box now also correctly SURFACES as a genuine select-items comparison when forecasting a select-items campaign, not just excluded from menu-wide. campFcInferType (auto-fills the Structure dropdown from an upcoming campaign) now checks the tag FIRST, before any text pattern \u2014 verified against the real \"World Cup 2026\" row, tagged BOGO despite platform-event branding in its name: the tag correctly wins and infers 'bogo', matching what Nikhil actually confirmed the underlying mechanism is, not the surface branding. OFU and Platform Event are deliberately untouched by any of this \u2014 confirmed with Nikhil directly that both are orthogonal to menu-scope (OFU is a personalized-visibility targeting method, not a discount shape) and don't have a corresponding tag value; they keep working exactly as before, via existing text detection only. All of this reads Discount Structure as '' for any row Nikhil hasn't tagged, which correctly falls through to every existing text-based rule completely unchanged \u2014 nothing needs backfilling. Verified with real function extraction: tag correctly overrides text for World Cup 2026 (bogo, not platformEvent); an untagged BOGO campaign still correctly infers via text alone (no regression); Trio Box tagged Select Items is excluded from menu-wide even though confirmed separately that its text alone would NOT have excluded it \u2014 proving the tag is doing genuinely necessary work, not a redundant safety net.",
   "\ud83d\udc1b Fixed the exact remaining piece of the transparency bug from build 377 \u2014 caught directly when Nikhil used the new expand toggle. With all 10 matches finally visible, FTU 25% showed +1753% uplift, correctly dimmed and labeled \"statistical outlier \u00b7 excluded\" \u2014 but the \"Avg uplift\" stat right below the table was STILL including it. Verified by hand against the real numbers: (sum of the 9 real matches + 1753) / 10 = 187.5, rounds to the exact +187% that was displayed \u2014 while the 9 real, non-outlier matches actually average +13.6%. The table's own \"excluded\" label directly contradicted the summary stat sitting right beneath it: one said this row doesn't count, the other silently still counted it. Fixed by filtering the average to the same |upliftPct|<150 threshold the real scenario math and the table's own outlier styling already use, so the displayed number can never again disagree with what the table visually tells the user is excluded. Added a small \"(N statistical outliers excluded)\" note next to the average so this is stated plainly rather than silently correct. Verified against the exact real match set from Nikhil's screenshot: new average = +13.6%, 1 excluded, 9 counted \u2014 confirmed precisely, not estimated.",
   "\ud83d\udc1b Fixed a real transparency gap Nikhil hit directly: the historical-match table capped its VISIBLE rows at 8, but the \"Avg uplift\" stat right below it, and the \"N historical matches\" badge, were both computed from the FULL match array \u2014 silently including rows with no way to see or verify them. On a real forecast this showed \"10 historical matches\" with only 8 rows rendered and \"Avg uplift: +187%\", a figure the visible 8 rows couldn't remotely produce, and there was no way to expand and check why \u2014 confirmed directly: Nikhil could only see what was in the screenshot, nothing more. Investigated using the real sheet (since I have it and he was stuck): replicated campAnalysisV2's actual ordersLift formula against real Oregano x Talabat sales data for every real candidate campaign, and found a strong candidate for one of the two hidden rows \u2014 \"FTU 25%\" (Nov 20\u2013Dec 31, 2024): +989.3% uplift, driven by a baseline of just 1,708 orders from when Talabat was barely active yet for this brand \u2014 a tiny-baseline percentage-swing artifact, not a real reflection of promo strength. Couldn't reach full certainty on both hidden rows without live access, which is exactly the actual problem: Nikhil shouldn't need me to reverse-engineer his own sheet to check a number his own tool is showing him. Fixed properly: added a \"Show all N matches (used in the average below) \u2192\" toggle beneath the table, appearing whenever there are more than 8 real matches \u2014 expands to show everything feeding the average, collapses back to the compact 8-row view on request. Uses the existing renderCampaigns() re-render pattern already used by every other in-forecaster toggle (branch chips, collapse/expand) and confirmed campFcResult is a persistent global that survives the re-render untouched, so toggling redraws the SAME already-computed forecast with more or fewer rows \u2014 no re-run needed, and caught + fixed my own first-draft mistake of guessing a nonexistent campFcRender() function name before shipping, by checking what the other real toggles in this exact view actually call.",
   "\ud83d\udc1b Closed the remaining gap Nikhil caught live: \"30% OFF Sandwiches\" was STILL contaminating a menu-wide Talabat forecast after build 374's fix, because that campaign's real comments (\"30% OFF On Sandwiches Locations Except: DMC, Motorcity...\") name the item category with NO count attached \u2014 the build 374 pattern required a leading number (\"3 Sandwiches\" would have matched; bare \"Sandwiches\" didn't). Went back to the real sheet rather than patch blind: found this is a genuine SECOND select-items pattern (category named without a count) alongside the count-based one, confirmed with 2 more real examples (\"50% OFF on all Pizzas, Calzone, Pasta\", \"World Pizza Week \u2014 All Pizzas at 25% OFF\"). Added CAMP_FC_SELECT_ITEMS_CATEGORY_RE to catch \"on/all + specific category\" without requiring a count, deliberately excluding the generic words \"items\"/\"meals\"/\"menu\" from its word list so \"on all menu items\" still correctly stays menu-wide. While re-verifying against the full real sheet, ALSO found and fixed a real bug in my own build 374 fix: \"combos?\" in the count-based pattern was matching false positives \u2014 confirmed 4 real cases, including \"Got Your Back\", a recurring MAJOR campaign run many times, being wrongly excluded from every menu-wide forecast's comparison pool just because its comments mention combo pricing adjustments (\"Combos 86'd\", \"Combo Prices Increased\") as part of a standard menu-wide-except-combos structure, not because it's actually restricted to combos. Removed \"combos?\" from the count pattern entirely \u2014 verified only 1 genuine combo-only campaign exists in ~1,533 real campaigns (\"Fitness Week\", 2 Combos) against several confirmed false positives, a clear net improvement; that one case is now a known, accepted, small residual gap rather than guessed at. Verified exhaustively against the real sheet: all 10 confirmed false-positive cases now correctly classify as menu-wide, all 3 real gaps (Sandwiches, 2x Pizza cases) now correctly classify as select-items, and all previously-established regression cases (BOGO/OFU/platform-event exclusion, the tiered strong-signal-beats-entire-menu-override logic, Pizza Week's two genuinely different real instances) still pass \u2014 11/11 against the actual shipped JS regexes, not just a Python model. Sheet-wide impact: 406 of 1,533 campaigns now classified select-items (was 408 \u2014 a small net shift, precisely targeted: real false positives fixed, real gaps caught, everything else unchanged).",
@@ -9752,7 +9754,16 @@ function parseCampaigns(csv){
   for(let i=1;i<rows.length;i++){
     const row=rows[i];
     if(!row[0]?.trim()&&!row[1]?.trim())continue;
-    if((row[7]?.trim()||'').toLowerCase()==='cancelled')continue;
+    // v379: Nikhil inserted a new "Discount Structure" column at H (Aggregator, Brand, Start Date,
+    // End Date, Branches/Locations, Comments, Name of Promotion, Discount Structure, Status —
+    // confirmed directly against a real screenshot of the live sheet), which pushed Status from H
+    // to I. The old code still read row[7] as Status — meaning every campaign's status was being
+    // set to a Discount Structure VALUE ("Select Items"/"Entire Menu"/"BOGO") instead of its real
+    // status, and — much more seriously — the cancelled-filter check below (which tests row[7] for
+    // literally the string "cancelled") could never match anymore, silently letting every
+    // cancelled campaign flow into live data as if it were real. This wasn't a missing feature,
+    // it was active data corruption on every sheet refresh from the moment the column was added.
+    if((row[8]?.trim()||'').toLowerCase()==='cancelled')continue;
     const brandRaw=(row[1]||'').trim();
     if(EXCLUDED_BRANDS.has(brandRaw.toLowerCase()))continue;
     const sd=parseDate(row[2]),ed=parseDate(row[3]);
@@ -9760,7 +9771,13 @@ function parseCampaigns(csv){
     const brandFinal=normBrand(brandRaw);
     let outletFinal=row[4]?.trim()||'All';
     if(brandFinal==='Fyoozhen'&&/^dip$/i.test(outletFinal))outletFinal='DIP (Fyoozhen)';
-    recs.push({aggregator:normAgg(row[0]),brand:brandFinal,startDate:dk(sd),endDate:dk(ed),outlet:outletFinal,comments:row[5]?.trim()||'',name:row[6]?.trim()||'',status:row[7]?.trim()||'Completed',validity:row[8]?.trim()||'',addons:[]});
+    // v379: Discount Structure is the new authoritative campaign-type tag (Entire Menu / Select
+    // Items / BOGO), populated going forward per Nikhil's own tagging — normalized so downstream
+    // code can do a simple equality check rather than re-parsing free text. Untagged/older rows
+    // read as '' and fall through to the existing name/comment text-pattern guessing untouched.
+    const dsRaw=(row[7]||'').trim().toLowerCase();
+    const discountStructure=dsRaw==='entire menu'?'entireMenu':dsRaw==='select items'?'selectItems':dsRaw==='bogo'?'bogo':'';
+    recs.push({aggregator:normAgg(row[0]),brand:brandFinal,startDate:dk(sd),endDate:dk(ed),outlet:outletFinal,comments:row[5]?.trim()||'',name:row[6]?.trim()||'',discountStructure,status:row[8]?.trim()||'Completed',validity:row[9]?.trim()||'',addons:[]});
   }
   return mergeKeetaFDAddons(recs);
 }
@@ -13312,10 +13329,16 @@ function campFcTypeLabel(type,discPct,cap){
   if(type==='platformEvent')return discPct+'% off · platform event';
   return discPct+'% off'+(cap?' · cap AED '+cap:'');
 }
-function campFcFindHistoryMatches(brand,agg,pattern,discPct){
+function campFcFindHistoryMatches(brand,agg,pattern,discPct,dsType){
   if(!campLoaded)return[];
+  // v379: a campaign explicitly tagged with the matching Discount Structure value now counts as a
+  // match even when its name/comments don't happen to trip the regex — the tag is Nikhil's own
+  // stated fact about the campaign, strictly more reliable than any text pattern. dsType is only
+  // passed for select-items and BOGO (the two types this sheet column actually covers); OFU and
+  // platform-event have no corresponding tag value, so they're untouched and still purely
+  // text-matched, exactly as before.
   const done=campaignData.filter(c=>campStatus(c)==='Completed'&&c.brand===brand&&c.aggregator===agg
-    &&pattern.test(`${c.name||''} ${c.comments||''}`));
+    &&(pattern.test(`${c.name||''} ${c.comments||''}`)||(dsType&&c.discountStructure===dsType)));
   const out=[];
   for(const c of done){
     const hp=parseInt(((c.comments||c.name||'').match(/(\d{1,3})\s*%/)||[])[1]||'0');
@@ -13399,13 +13422,13 @@ function campFcIsSelectItemsText(text){
   return CAMP_FC_SELECT_ITEMS_WEAK_RE.test(text)||CAMP_FC_SELECT_ITEMS_CATEGORY_RE.test(text);
 }
 function campFcFindSelectItemsMatches(brand,agg,discPct){
-  return campFcFindHistoryMatches(brand,agg,CAMP_FC_SELECT_ITEMS_RE,discPct);
+  return campFcFindHistoryMatches(brand,agg,CAMP_FC_SELECT_ITEMS_RE,discPct,'selectItems');
 }
 // v251: BOGO / free-item-with-purchase — matches "BOGO", "buy one get one" (with common
 // separators/spacing variants), "buy 1 get 1", and "free item with purchase" style language.
 const CAMP_FC_BOGO_RE=/\bbogo\b|buy\s*(?:one|1)\s*get\s*(?:one|1)|free\s+item\s+(?:with|on)\s+purchase/i;
 function campFcFindBogoMatches(brand,agg){
-  return campFcFindHistoryMatches(brand,agg,CAMP_FC_BOGO_RE,null); // BOGO campaigns don't carry a discount% in the same sense, so no discPct filter
+  return campFcFindHistoryMatches(brand,agg,CAMP_FC_BOGO_RE,null,'bogo'); // BOGO campaigns don't carry a discount% in the same sense, so no discPct filter
 }
 // v252: single-item OFU-style — matches "OFU" as its own token (avoiding false hits inside an
 // unrelated word) and "Offers/Offer for You" language. Real patterns confirmed from this
@@ -13433,6 +13456,14 @@ function campFcFindPlatformEventMatches(brand,agg,discPct){
 // used only to PRE-fill the dropdown when applying an upcoming campaign, never silently, so
 // it's always visible and correctable before running the forecast.
 function campFcInferType(c){
+  // v379: Discount Structure tag checked first — it's Nikhil's own stated fact about the
+  // campaign, so it wins even when the text would otherwise suggest OFU/platform-event (e.g. the
+  // real "World Cup 2026" row tagged BOGO despite being a platform-branded event — the tag
+  // correctly says the underlying mechanism is BOGO, which is what the forecaster should match
+  // against). Untagged rows fall through to the existing text-based detection, unchanged.
+  if(c.discountStructure==='bogo')return'bogo';
+  if(c.discountStructure==='selectItems')return'selectItems';
+  if(c.discountStructure==='entireMenu')return'menu';
   const text=`${c.name||''} ${c.comments||''}`;
   if(CAMP_FC_OFU_RE.test(text))return'ofu';
   if(CAMP_FC_BOGO_RE.test(text))return'bogo';
@@ -13461,7 +13492,15 @@ function campFcFindMatches(brand,agg,discPct,cap){
     // CAMP_FC_SELECT_ITEMS_RE (that pattern only catches the literal phrase "select items"),
     // so this specific campaign still isn't excluded by this fix alone — flagged back to
     // Nikhil, real naming-convention examples needed before guessing at a broader pattern.
-    if(campFcIsSelectItemsText(text)||CAMP_FC_BOGO_RE.test(text)||CAMP_FC_OFU_RE.test(text)||CAMP_FC_PLATFORM_EVENT_RE.test(text))continue;
+    // v379: Discount Structure (the new sheet tag) is now checked FIRST and is authoritative when
+    // present — Nikhil has finished tagging real campaigns with it specifically to fix
+    // contamination cases like "Trio Box" that no text pattern could reliably catch (a single
+    // named product, no count, no category word — exactly the residual gap flagged in build 373).
+    // Untagged rows (older campaigns, or anything not yet tagged) fall through to the existing
+    // text-based guessing below, completely unchanged.
+    if(c.discountStructure==='entireMenu'){/* definitely belongs in this pool — skip all exclusion checks */}
+    else if(c.discountStructure==='selectItems'||c.discountStructure==='bogo')continue;
+    else if(campFcIsSelectItemsText(text)||CAMP_FC_BOGO_RE.test(text)||CAMP_FC_OFU_RE.test(text)||CAMP_FC_PLATFORM_EVENT_RE.test(text))continue;
     const hp=parseInt(((c.comments||c.name||'').match(/(\d{1,3})\s*%/)||[])[1]||'0');
     if(!hp||Math.abs(hp-discPct)>8)continue;
     const capM=(c.comments||'').match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i);
