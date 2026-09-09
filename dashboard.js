@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-387";
+const BUILD_VERSION="2026-08-13-389";
 const BUILD_NOTES=[
+  "🎯 Per Nikhil's direct follow-up: date-range LABELS across the dashboard now cap at the last date sales actually exist for, not the raw filter/calendar date — fixes the same root cause as the build-388 Ad Spend fix, but for every place a date range is shown to the user, not just the profitability popup's math. \"This Month\" was correctly anchoring its filter to today's real calendar date (by design, so month-rollover is honest — unchanged), but every label reading that date — the page header's period text, comparison-column headers, the profitability popup's own displayed range, the Compare page's date pills and its own profitability popup — was still showing through today even when today's sales genuinely hadn't synced yet, e.g. \"1 Sep → 9 Sep\" while Orders/AOV/Discount Burn were all silently only summing through the 8th. Added one shared dispEnd(start,end) helper — caps the end date at `latest` (allData's real max synced date) whenever that's earlier than the raw end, with an explicit bail-out to the raw end if capping would invert the range (the one case build-279's original comment described: right at a month rollover before any of the new month has synced yet, where the honest move is still showing the new month with zeros, not silently falling back to last month's dates). Wired into getPeriodLabel (main page header), profDateRanges (feeds the Overview/Brands/Outlets/Platforms profitability popup — this also means the per-key capping added in build 388 is now redundant in the common case but stays in place as a second layer, since an individual brand+aggregator's own data could in principle lag behind the global `latest`), cmpDateLabel (Compare page's A/B/C date pills), and the Compare page's own profRangeCur/profRangePrior (its equivalent profitability popup). Verified dispEnd directly against all four real cases: normal mid-month sync lag (correctly caps 9 Sep→8 Sep), a range already fully within synced data (unchanged), the month-rollover edge case with zero new-month data yet (correctly does NOT invert — stays showing the new month), and `latest` not yet loaded (passes through unchanged, safe for early page load). Re-ran the build-388 Node harness afterward — no regression, ad cost still correctly caps to real data per brand+aggregator group.",
+  "🐛 Fixed a real Ad Spend accuracy bug on the \"Why did profitability change?\" popup (Overview/Brands/Outlets/Platforms) — Nikhil caught it directly: checking Deliveroo showed AED 8,059 in CPC/Keywords cost for 1-9 Sep, but his real Ad Investments sheet (just updated) showed AED 6,265.6 consumed. Traced precisely against his real 37-row Deliveroo export: every row's Total Budget Consumed summed to exactly AED 6,265.56, matching his figure to the cent — so the literal spend wasn't wrong. The extra AED 1,793.75 was one legitimate extrapolated day (9 Sep, today) added per row at each row's real rate, per the existing known-through convention. Root cause wasn't the extrapolation logic itself (already correct, per build 387) — it was a mismatch this popup introduced: the \"This Month\" filter deliberately anchors its end date to the real calendar today (by design, so the dashboard is honest when the current day hasn't synced yet — see fSetPreset), but computeProfitabilityBreakdown's ad-cost calls were using that same calendar end date as cpcAdCostForRange's endDate, while the Net Sales figure directly above it in the same popup is summed only from rows that actually exist — which stop at yesterday, since today's sales hadn't synced. So the popup was pricing ad cost through today while counting sales only through yesterday: an extra day of cost with zero matching sales. Confirmed directly against Nikhil's real data before fixing: 37 real Deliveroo rows, budgetSpent summing to 6,265.56, one extra day's real-rate extrapolation per row (weekday-schedule-aware, so Fri-Sun-only rows correctly skip a Wednesday) summing to 1,793.75 — 6,265.56+1,793.75=8,059.31, exactly the popup's figure. Fixed by capping each brand+aggregator group's ad-cost end date to the last date THAT group actually has a real sales row for (tracked per-key, same lo/hi pattern computeProfitability already uses), falling back to the filter's own range end only when there's no data yet to compare against — so ad cost is always priced against exactly the days the sales total above it represents, no more and no less. The displayed date range label is untouched (still correctly shows the filter's real calendar window, per build 288) — only the ad-cost math changed. Verified with a Node harness against the exact bug scenario (sales rows through 8 Sep only, filter range running through 9 Sep): ad cost end date now correctly caps at 8 Sep instead of 9 Sep; re-verified no regression when data genuinely does cover the full range (most common case, e.g. a closed prior month) and when a brand+aggregator group has zero sales rows at all in the period (falls back to the old behavior, unchanged). As Nikhil pointed out, this also means tomorrow, once today's sales sync in and if the Ad Investments Remarks date is still showing 9-Sep (not updated again), the popup will correctly extrapolate cost for the 9th against the now-real 9th sales — same convention, now consistently applied.",
   "\ud83d\udc1b Fixed a real, significant Ad Spend accuracy bug on the Compare page \u2014 Nikhil caught it directly: he updates ad spend weekly (mostly Mondays) as a CUMULATIVE total consumed as of his last update, and the Careem \u00d7 Lollorosso report showed AED 551 for 1\u20137 Sep when he'd entered AED 2,362 that same week. Root cause: cmpAdSpendOverlap (built for this Compare-page feature) did its own naive flat-average proration \u2014 a row's total budgetSpent divided by its own FULL start\u2192end span, then scaled by however many days overlap the comparison window. That's the wrong operation entirely for a cumulative-total-updated-periodically data shape, and it was never the right approach: cpcAdCostForRange already existed, already correct, and already proven \u2014 it's the exact function powering CPC cost on the Ads Performance page and inside computeProfitability itself. It computes a literal, exact confirmed portion from real budgetSpent up to each row's own last-update boundary, and only extrapolates (at a real derived rate) for days after that, with proper outlet-scoping, pooled-budget splitting, and platform-funded exclusions already built in \u2014 none of which cmpAdSpendOverlap had. It was simply never reused when the Compare page's ad-spend figure was first built, reinvented instead of reused, and worse for it. Fixed by keeping cmpAdSpendOverlap's exact signature and return shape (so every existing caller throughout renderCompare() \u2014 the Breakdown table, movers tile, outlet drill-down \u2014 keeps working unchanged) but delegating its actual math to cpcAdCostForRange. Directly confirmed the date-offset convention already matches Nikhil's own description before trusting the fix: cpcAdCostForRange treats a row's updateDate as the day the update was MADE and computes knownThrough as the day BEFORE it \u2014 sheet updated 7 Sep parses to knownThrough=6 Sep, exactly matching his own words (\"consumed till 6th September 23:59\"), not a coincidence. Tested two realistic scenarios against the real numbers from his report: if the sheet row's own startDate spans a long period (e.g. a campaign running since early August), the fixed function correctly shows a smaller SHARE of the cumulative total for just one week (AED 446.86) rather than the full amount \u2014 mathematically correct when only a cumulative-to-date figure exists with no daily breakdown; if the row's startDate sits close to the start of that reporting week (matching a fresh row logged each Monday, which his weekly-update workflow suggests is the more likely real pattern), the fixed function returns AED 2,755.67 \u2014 very close to his real AED 2,362, with the small difference being one extra correctly-extrapolated day (7 Sep, past the last confirmed update) at his own real rate, not an error. Both numbers are a dramatic, confirmed improvement over the old flat AED 551 either way. This fix applies everywhere on the Compare page that reads Ad Spend, not just the PDF export, since cmpAdSpendOverlap is the single shared function all of those already call.",
   "\ud83d\ude80 Compare page \"Export to PDF\" rebuilt to match everything approved across many rounds of mockup review with Nikhil \u2014 the mockup's job was validating structure and layout before this exact build, and this ports every one of those fixes into the real feature, several of which come out MORE accurate here than the mockup could show since this runs inside the live dashboard with full data access. Key changes: (1) every comparison table now shows BOTH periods' real values stacked, not just latest+delta, via a new cmpPairedMetricCell \u2014 lets Nikhil verify the math himself; (2) a real, separate color-polarity bug was FOUND AND FIXED in cmpReportKPICards during testing that the earlier table-cell fix never touched \u2014 confirmed by testing the actual rendered Discount Burn card directly (a +15% mock increase rendered green/\"up\" before the fix), not caught by code review, since it was a fully separate code path with its own copy of the same bug; (3) Brand Comparison and Platform Comparison are now genuine separate pages (page numbers computed dynamically) \u2014 fixes a real pagination bug the mockup surfaced where a broad, many-platform scope pushed a chart onto a trailing page with an ugly gap before it, while narrow scopes happened to fit; (4) real SVG dual pie charts (sales split by brand, sales split by platform, both showing both periods) and a grouped bar chart with angled full platform names (previously would have truncated to 4 characters); (5) Discount Campaigns completely rebuilt \u2014 organized by brand then platform instead of by time window, and every campaign now shows REAL Incr. Contribution and ROI via campAnalysisCached(c), the exact function already proven on the live Campaigns page (genuine baseline-vs-during comparison, overlap-with-other-campaigns aware) \u2014 not the mockup's illustrative placeholders, since this code has real data to work with; (6) discount-depth text (\"25% off \u00b7 cap AED 20\") now uses campOfferLabel(), extracted as a new standalone function from campCardGrid's own inline logic so the report and the live Campaigns page share the exact same parsing \u2014 checks Comments before Name, strips co-funding percentages before extracting the real rate, and falls back to the campaign's own name (not a \"not found\" placeholder) when no rate is found anywhere; (7) Outlet-Level Detail gained AOV and real (not estimated) Contribution, since cmpScopedMetrics already computes genuine per-outlet contribution the same way it does for brand/platform \u2014 the mockup had to approximate this with a margin-rate estimate because its two source PDFs never contained real per-outlet figures; (8) Conclusions expanded with two new generalizable rules (AOV-vs-order-volume divergence, crediting a genuinely clean-growing brand/platform combo rather than only flagging decliners) and a fuller multi-sentence bottom line; (9) darker secondary text throughout, corrected break-inside/break-after rules (a whole outlet-brand-group or campaign column can no longer be forced to stay together when it's taller than a page \u2014 only the genuinely small atomic units are protected, with headings given break-after:avoid so they can't be orphaned from their own content), a solid separator between aggregator blocks in the campaigns section, and increased chart-box padding so legends don't crowd the border; (10) the cover now shows the actual brand(s) and aggregator (when narrowed to a few) in scope instead of just the generic corporate mark; (11) the exported document's <title> is now built from the real scope and dates (e.g. OreganoGroup_OreganoLollorosso_25Aug-7Sep2026_ComparisonReport), which is what a browser's Save-As dialog defaults to \u2014 Nikhil's explicit ask that the file states its own contents. Tested with a Node harness against realistic multi-brand, multi-platform mock data (not just code review) \u2014 verified structurally clean HTML with a real parser, correct sequential page numbering, real campaign data flowing through correctly (stubbed campAnalysisCached to test that THIS code calls and uses it correctly, not to re-test campAnalysisV2 itself, which is existing proven code), and specifically re-verified color polarity on both the KPI cards and the comparison tables after finding and fixing the KPI card bug.",
   "\ud83d\udc1b Group C (3-way comparison) fixed across the Compare page \u2014 Nikhil found it only worked on the Overview tab: no way to reorder A/B/C, and Group C's data was completely invisible on Trend, Platforms, and Outlets. Confirmed via an old comment this was a deliberate, explicit scoping decision from when C was first built (\"the detailed tables stay A-vs-B only \u2014 extending those to a 3rd column would be a materially bigger change\"), not a bug \u2014 but a real, understandable gap from actually using the feature. Fixed all four pieces: (1) added a Swap B/C button alongside the existing Swap A/B \u2014 combined, these reach any ordering of the three; (2) the Trend chart now draws a third line for C with matching date-axis labels; (3) Platform Movement now shows a chained C-vs-B delta badge per row; (4) the Brand\u00d7Platform Breakdown table, its outlet drill-down, and the Per-Platform Breakdown table all gained full C columns (Orders, Net Sales, Discount, AOV, Profit, Ad Spend where applicable). One consistent rule throughout: C is always compared against B, not A \u2014 matching the chained-delta convention the Overview summary cards already established, so the comparison target reads the same no matter which part of the page you're on. A genuine bonus catch made while wiring in C's real color: the Trend tab header, the outlet drill-down's totals line, and the Per-Platform Breakdown table were all hardcoding #60A5FA/#F59E0B instead of the real CMP_A_CLR/CMP_B_CLR constants (#5B7FA6/#C98A3E) \u2014 a pre-existing mismatch against the chart's actual colors, unrelated to Nikhil's report but fixed as part of the same pass since it touched the same lines. Verified with a Node harness against realistic 3-window mock data (7 days each, three different volume multipliers) rather than just code review: confirmed platMove's C-vs-B delta computes exactly right (33,600 vs 28,000 \u2192 +20.0%, matching the built-in ratio precisely), confirmed the Brand\u00d7Platform table's C rows carry through the same exact ratio, and \u2014 since mkTable() has no built-in validation between header count and row-cell count \u2014 explicitly verified the Per-Platform Breakdown table's header array and row-cell array produce identical lengths (20 vs 20 with C active, 13 vs 13 without) using the real computed platMove data, not synthetic values, since a silent mismatch there would have misaligned every column with no error to catch it. Also caught and removed two small dead-code leftovers from earlier in this same build (an unused profDiffBC variable, an unused cCols variable) before they could confuse a future read of this code.",
@@ -858,9 +860,12 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
     const m={};
     for(const r of recs){
       const k=r.brand+'|'+r.aggregator;
-      if(!m[k])m[k]={brand:r.brand,aggregator:r.aggregator,net:0,disc:0,mondayDisc:0,branches:new Set()};
+      if(!m[k])m[k]={brand:r.brand,aggregator:r.aggregator,net:0,disc:0,mondayDisc:0,branches:new Set(),lo:null,hi:null};
       m[k].net+=r.sales;m[k].disc+=(r.disc||0);
       if(r.branch&&r.branch!=='(brand-level)')m[k].branches.add(r.branch); // v357: in-view outlets for CPC scoping
+      // v388: per-key real data span — the last date THIS brand+aggregator actually has a synced
+      // sales row for, so ad cost never gets calculated past what the sales side is counting.
+      if(r.date){if(!m[k].lo||r.date<m[k].lo)m[k].lo=r.date;if(!m[k].hi||r.date>m[k].hi)m[k].hi=r.date;}
       // v291: Noon-Oregano BOGO reimbursement, specific campaign dates only — see brandContribution.
       if(r.aggregator==='Noon'&&r.brand==='Oregano'&&r.date&&NOON_OREGANO_BOGO_MONDAYS.has(r.date)){
         m[k].mondayDisc+=(r.disc||0);
@@ -887,7 +892,7 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
   const movers=[];
   let grossA=0,grossB=0,discA=0,discB=0,commA=0,commB=0,foodA=0,foodB=0,adCostA=0,adCostB=0;
   for(const key of allKeys){
-    const gA=groupsA[key]||{net:0,disc:0,mondayDisc:0,branches:new Set()},gB=groupsB[key]||{net:0,disc:0,mondayDisc:0,branches:new Set()};
+    const gA=groupsA[key]||{net:0,disc:0,mondayDisc:0,branches:new Set(),lo:null,hi:null},gB=groupsB[key]||{net:0,disc:0,mondayDisc:0,branches:new Set(),lo:null,hi:null};
     const[brand,aggregator]=key.split('|');
     const gGrossA=gA.net+gA.disc,gGrossB=gB.net+gB.disc;
     const rate=commissionRateFor(aggregator,brand,dateRef);
@@ -906,10 +911,27 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
     // v357: scope each period's CPC to the outlets in view (per-outlet budgets filter, brand-pooled
     // pro-rate) using that side's own range and its own in-view outlet set. Unfiltered views (the
     // group already covering every active outlet) fall back to the whole-brand total unchanged.
-    const _vbA=(rangeA.start&&rangeA.end)?cpcOutletScope(brand,aggregator,rangeA.start,rangeA.end,gA.branches,gA.net):null;
-    const _vbB=(rangeB.start&&rangeB.end)?cpcOutletScope(brand,aggregator,rangeB.start,rangeB.end,gB.branches,gB.net):null;
-    const gAdCostA=(rangeA.start&&rangeA.end)?cpcAdCostForRange(brand,aggregator,rangeA.start,rangeA.end,_vbA):0;
-    const gAdCostB=(rangeB.start&&rangeB.end)?cpcAdCostForRange(brand,aggregator,rangeB.start,rangeB.end,_vbB):0;
+    // v388: fixes a real bug Nikhil caught directly — rangeA/rangeB (above) is the FILTER's own
+    // calendar range (e.g. "This Month" deliberately runs through today's real calendar date, by
+    // design — see fSetPreset), which can sit a day ahead of the actual synced sales rows whenever
+    // today's data hasn't landed yet. gA.net/gGrossA above are summed only from rows that actually
+    // exist, so they silently stop at yesterday — but rangeA.end was still being passed straight
+    // into cpcAdCostForRange, extrapolating CPC cost for a day this popup counts zero sales for.
+    // Confirmed against Nikhil's real Deliveroo Ad Investments rows for 1-9 Sep: 37 rows summing
+    // to a real, literal AED 6,265.56 consumed (matching his own figure exactly) plus one extra
+    // extrapolated day (9 Sep, today) at each row's real rate = AED 1,793.75, landing on the
+    // popup's AED 8,059.31 — not a miscalculation, just correctly extrapolating for a day whose
+    // sales this specific comparison isn't counting. Fixed by capping the ad-cost end date to
+    // gA.hi/gB.hi — the last date THIS brand+aggregator group actually has a real sales row for —
+    // whenever that's earlier than the filter's calendar end, so ad cost is priced against exactly
+    // the same days the sales figures above it represent. Falls back to the filter's own range end
+    // when there's no data yet to compare against (gA.hi/gB.hi null), unchanged from before.
+    const adEndA=(gA.hi&&rangeA.end&&gA.hi<rangeA.end)?gA.hi:rangeA.end;
+    const adEndB=(gB.hi&&rangeB.end&&gB.hi<rangeB.end)?gB.hi:rangeB.end;
+    const _vbA=(rangeA.start&&adEndA)?cpcOutletScope(brand,aggregator,rangeA.start,adEndA,gA.branches,gA.net):null;
+    const _vbB=(rangeB.start&&adEndB)?cpcOutletScope(brand,aggregator,rangeB.start,adEndB,gB.branches,gB.net):null;
+    const gAdCostA=(rangeA.start&&adEndA)?cpcAdCostForRange(brand,aggregator,rangeA.start,adEndA,_vbA):0;
+    const gAdCostB=(rangeB.start&&adEndB)?cpcAdCostForRange(brand,aggregator,rangeB.start,adEndB,_vbB):0;
     const contribA=gA.net-gCommA-gFoodA-gAdCostA,contribB=gB.net-gCommB-gFoodB-gAdCostB;
     grossA+=gGrossA;grossB+=gGrossB;discA+=gA.disc;discB+=gB.disc;
     commA+=gCommA;commB+=gCommB;foodA+=gFoodA;foodB+=gFoodB;adCostA+=gAdCostA;adCostB+=gAdCostB;
@@ -959,7 +981,10 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
 // Jul (prior mo.)" text on the other KPI cards) instead of re-deriving from record presence.
 function profDateRanges(){
   const f=curFilters(),cr=getCompRange();
-  return{cur:{start:f.start,end:f.end},prior:{start:cr.s,end:cr.e}};
+  // v389: cap both ends at the last date sales actually exist for — see dispEnd — so the popup's
+  // own displayed range matches the sales total it's summing, and so the ad-cost calc it feeds
+  // (computeProfitabilityBreakdown) never prices a day the sales side isn't counting.
+  return{cur:{start:f.start,end:dispEnd(f.start,f.end)},prior:{start:cr.s,end:dispEnd(cr.s,cr.e)}};
 }
 function profitabilityTipId(currentRecords,priorRecords,dateRef,labelCur,labelPrior,rangeCur,rangePrior){
   return storeTip(()=>buildProfitabilityTipHTML(computeProfitabilityBreakdown(priorRecords,currentRecords,dateRef,rangePrior,rangeCur),labelPrior||'Prior period',labelCur||'Current period'));
@@ -4975,6 +5000,22 @@ function curFilters(){return pageFilters[curPage]||pageFilters.overview;}
 let tableSort={};
 
 // FILTER HELPERS
+// v389: caps a displayed period-end date at `latest` — the most recent date allData actually has
+// synced rows for — so date-range labels never claim data through a day that hasn't synced yet.
+// Real case Nikhil caught: "This Month" deliberately anchors its raw end to today's real calendar
+// date (see fSetPreset below — that part is unchanged, it's still needed for honest month-rollover
+// behavior), but every LABEL and calculation that reads that date should show/use the last day
+// sales genuinely exist for instead, e.g. "1→8 Sep" not "1→9 Sep" when the 9th hasn't synced.
+// Falls back to the raw end whenever capping would invert the range (end<start) — the one edge
+// case fSetPreset's own comment describes, right at a month rollover before any of the new
+// month's data has arrived — so that scenario still honestly shows the new month with zeros
+// rather than silently reverting to the old month's dates.
+function dispEnd(rawStart,rawEnd){
+  if(!rawEnd||typeof latest!=='string'||!latest)return rawEnd;
+  if(latest>=rawEnd)return rawEnd; // already within synced data, or fully in the past — unchanged
+  if(rawStart&&latest<rawStart)return rawEnd; // capping would invert the range — bail out safely
+  return latest;
+}
 function getLD(){const f=curFilters();return allData.filter(r=>{if(r.branch==='(brand-level)')return false;if(f.start&&r.date<f.start)return false;if(f.end&&r.date>f.end)return false;if(f.brands.size&&!f.brands.has(r.brand))return false;if(f.platforms.size&&!f.platforms.has(r.aggregator))return false;if(f.branches.size&&!f.branches.has(r.branch))return false;return true;});}
 function getCompRange(){
   const f=curFilters();
@@ -5012,7 +5053,7 @@ function getCompShort(){
   const suffix=(f.preset==="month"||f.preset==="lmonth")?" (prior mo.)":"";
   return`vs ${fmtShort(s)}–${fmtShort(e)}${suffix}`;
 }
-function getPeriodLabel(){const f=curFilters();if(!f.start)return"";if(f.start===f.end)return fmtDisp(f.start);return`${fmtDisp(f.start)} → ${fmtDisp(f.end)}`;}
+function getPeriodLabel(){const f=curFilters();if(!f.start)return"";const e=dispEnd(f.start,f.end);if(f.start===e)return fmtDisp(f.start);return`${fmtDisp(f.start)} → ${fmtDisp(e)}`;}
 function fSetPreset(p){const f=curFilters();f.preset=p;
   // CRITICAL: all presets are anchored to the REAL calendar date, not `latest` (the most recent
   // date in the sales data). Using `latest` caused "This Month" to show June on July 1 when no
@@ -18594,8 +18635,11 @@ function cmpLabel(cfg){
 }
 function cmpDateLabel(cfg){
   if(!cfg.start)return"—";
-  if(cfg.start===cfg.end)return fmtDisp(cfg.start);
-  return `${fmtShort(cfg.start)} → ${fmtShort(cfg.end)} ${cfg.end?.slice(0,4)||''}`;
+  // v389: same real-data cap as the main dashboard's getPeriodLabel — see dispEnd. Only matters
+  // for the "This Month"/custom-through-today case; closed historical windows are unaffected.
+  const e=dispEnd(cfg.start,cfg.end);
+  if(cfg.start===e)return fmtDisp(cfg.start);
+  return `${fmtShort(cfg.start)} → ${fmtShort(e)} ${e?.slice(0,4)||''}`;
 }
 
 // State mutators (side = 'A' | 'B')
@@ -18949,8 +18993,11 @@ function cmpContribCard(contribA,contribB,salesDiff,perDay,contribC,dA,dB,profDa
       <div style="font-size:11.5px;color:${T.muted};margin-top:3px">A ÷ ${perDay.nA}d · B ÷ ${perDay.nB}d</div>
     </div>`;
   }
-  const profRangeCur=cmpBIsLater()?{start:cmpB.start,end:cmpB.end}:{start:cmpA.start,end:cmpA.end};
-  const profRangePrior=cmpBIsLater()?{start:cmpA.start,end:cmpA.end}:{start:cmpB.start,end:cmpB.end};
+  // v389: cap each side's end date at the last day sales actually exist for — same fix as
+  // profDateRanges() on the main dashboard — so the Compare page's own profitability popup
+  // doesn't price ad cost (or display a range) past what its own sales total is counting.
+  const profRangeCur=cmpBIsLater()?{start:cmpB.start,end:dispEnd(cmpB.start,cmpB.end)}:{start:cmpA.start,end:dispEnd(cmpA.start,cmpA.end)};
+  const profRangePrior=cmpBIsLater()?{start:cmpA.start,end:dispEnd(cmpA.start,cmpA.end)}:{start:cmpB.start,end:dispEnd(cmpB.start,cmpB.end)};
   const profTipId=(dA&&dB)?profitabilityTipId(cmpBIsLater()?dB:dA,cmpBIsLater()?dA:dB,profDateRef||dk(new Date()),cmpDeltaLabel().split(' vs ')[0],cmpDeltaLabel().split(' vs ')[1],profRangeCur,profRangePrior):null;
   return `<div class="sm" ${profTipId?`data-ctip="${profTipId}" style="padding:15px 16px;cursor:help"`:`style="padding:15px 16px"`}>
     <div style="font-size:11.5px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.9px;margin-bottom:7px">💵 Profitability <span style="text-transform:none;font-weight:500;color:${T.vs}">· margin</span></div>
