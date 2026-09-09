@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-391";
+const BUILD_VERSION="2026-08-13-392";
 const BUILD_NOTES=[
+  "🐛 Reverted part of build 391 — Nikhil tested the \"remove `table` from break-inside:avoid\" change against a real export and it made pagination worse, not better. Traced why: Outlet-Level Detail has always been rendered as ONE .page div holding all brands' tables together (not one .page per brand), and .page uses min-height:297mm rather than a fixed height — so it was already overflowing across multiple physical printed sheets before build 391, with or without table atomicity; the running header/date-range title and page-number footer only ever render once per .page div, not once per physical sheet, either way. Removing table's atomicity didn't fix that underlying issue — it just let individual brand tables (Lollorosso, Smokeys) split mid-list between rows instead of jumping as a whole block once they didn't fit, which reads worse in practice: a table breaking mid-brand (e.g. between Town Square and Marina) is a harder read than an occasional gap before a table that jumps whole. Restored `table` to the atomic list, undoing that one part of 391 (the .camp-aggblock campaign fix and the bigger comparison-table logos from 391 are unaffected and stay). This is a genuine, still-open trade-off — atomic tables can leave a gap when a table almost-but-not-quite fits the remaining page; allowing splits avoids the gap but breaks brands apart mid-list — flagged honestly to Nikhil rather than guessing a third variant with no real browser available here to verify it against.",
   "🐛 Three real print/layout fixes on Compare's Export to PDF, all caught by Nikhil from an actual exported PDF (build 390's real-world test) — exactly the kind of issue only a rendered PDF surfaces, not the Node harness. (1) Outlet-Level Detail tables (Lollorosso, Smokeys) were jumping entirely to the top of a fresh page even with plenty of blank space left on the prior page — root cause: `table` was still in the global break-inside:avoid list, despite a comment right above it already explaining `.outlet-brand-group` had been deliberately removed from that same list for the exact same reason (a 14/15-row table can't be forced onto one page without leaving a gap) — `table` itself was just never removed, quietly defeating that earlier fix. Removed it; `tr` (already in the list) is the correct atomic unit, so a table can now break cleanly between rows instead of jumping whole, and the existing thead{display:table-header-group} repeats the column headers on the continuation page. (2) The Smokeys campaign card was splitting mid-list across pages 4-5 — one campaign item (\"Got Your Back\") landed on the next page fully orphaned from its own brand/aggregator/period headings, none of which repeat. `.camp-item` alone protects one item from splitting internally but does nothing to stop a page break landing between two sibling items in the same list. Added a new `.camp-aggblock` wrapper around each brand+aggregator's whole two-period block and gave it the same break-inside:avoid protection — genuinely small at Nikhil's real campaign counts (1-3 items per brand+aggregator+period), so this is the same \"protect the smallest real atomic unit\" principle used everywhere else in this report, one level up from a single item, not a blanket protection that could reintroduce the same big-gap problem for a brand with many campaigns. (3) Brand/Platform Comparison table logos bumped 16px→24px per Nikhil's direct ask, with brand-cell given a small gap so the larger logo doesn't crowd the brand name.",
   "🐛 Fixed a real comparison-window bug Nikhil caught directly — \"This Month\" correctly showed 1→8 Sep (capped to real synced data, build 389), but every \"vs prior\" figure on the page (Orders, Net Sales, AOV, Discount Burn, Profitability) was still comparing against \"1 Aug→9 Aug\" — 9 days of August against 8 days of September. Root cause: getCompRange() derives the prior-month comparison window from subMonth() of the CURRENT period's dates, but was using the raw, uncapped filter end (today, 9 Sep) to do it, not the capped end build 389 introduced for display. So the mismatch wasn't just cosmetic — the prior-period baseline genuinely included an extra day of August sales that had no equivalent day in September's real numbers, inflating the comparison baseline and skewing every %/absolute delta shown against it (all of \"+3.0%\", \"+6.6%\" etc. on the Overview KPI cards were computed against this wrong 9-day baseline). Fixed by having getCompRange() build the prior-period window from dispEnd(f.start,f.end) (the same real-data-capped end build 389 already computes) instead of the raw f.end, for both the month/lmonth same-dates comparison AND the trailing-N-days comparison used by other presets (7d/30d/custom), so a \"Last 7 Days\" filter with today's sales not yet synced compares 6 real days against 6 real days too, not 7 against 6. Verified directly: This Month filter (1-9 Sep raw, 1-8 Sep real data) now correctly returns 1 Aug→8 Aug as the comparison window, matching day-for-day; Last Month (a fully closed period, no capping needed) is unchanged. This also automatically corrects profDateRanges().prior (feeds the profitability popup) and getCompLabel/getCompShort's displayed \"vs 1 Aug-8 Aug\" text, since all three read from this same function.",
   "🎯 Per Nikhil's direct follow-up: date-range LABELS across the dashboard now cap at the last date sales actually exist for, not the raw filter/calendar date — fixes the same root cause as the build-388 Ad Spend fix, but for every place a date range is shown to the user, not just the profitability popup's math. \"This Month\" was correctly anchoring its filter to today's real calendar date (by design, so month-rollover is honest — unchanged), but every label reading that date — the page header's period text, comparison-column headers, the profitability popup's own displayed range, the Compare page's date pills and its own profitability popup — was still showing through today even when today's sales genuinely hadn't synced yet, e.g. \"1 Sep → 9 Sep\" while Orders/AOV/Discount Burn were all silently only summing through the 8th. Added one shared dispEnd(start,end) helper — caps the end date at `latest` (allData's real max synced date) whenever that's earlier than the raw end, with an explicit bail-out to the raw end if capping would invert the range (the one case build-279's original comment described: right at a month rollover before any of the new month has synced yet, where the honest move is still showing the new month with zeros, not silently falling back to last month's dates). Wired into getPeriodLabel (main page header), profDateRanges (feeds the Overview/Brands/Outlets/Platforms profitability popup — this also means the per-key capping added in build 388 is now redundant in the common case but stays in place as a second layer, since an individual brand+aggregator's own data could in principle lag behind the global `latest`), cmpDateLabel (Compare page's A/B/C date pills), and the Compare page's own profRangeCur/profRangePrior (its equivalent profitability popup). Verified dispEnd directly against all four real cases: normal mid-month sync lag (correctly caps 9 Sep→8 Sep), a range already fully within synced data (unchanged), the month-rollover edge case with zero new-month data yet (correctly does NOT invert — stays showing the new month), and `latest` not yet loaded (passes through unchanged, safe for early page load). Re-ran the build-388 Node harness afterward — no regression, ad cost still correctly caps to real data per brand+aggregator group.",
@@ -19518,30 +19519,36 @@ function cmpBuildReportHTML(data,chartImg){
   // table; .brand-cell added for correct logo/text alignment (previously drifted); chart-box
   // padding increased and .chart-legend/.chart-title added (new classes the chart functions
   // above already emit, previously undefined in this CSS).
-  // v391: three real print bugs Nikhil caught from an actual exported PDF (not the harness —
-  // exactly the kind of issue only a real rendered PDF surfaces). (1) `table` itself was still
-  // in the break-inside:avoid list below, even though the comment right above already explained
-  // .outlet-brand-group had been deliberately removed from it for the same reason — a 14/15-row
-  // Outlet-Level Detail table (Lollorosso, Smokeys) is exactly the "container too tall for one
-  // page" case that rule exists to prevent: forces the WHOLE table onto a fresh page the moment
-  // it doesn't fit the remaining space, leaving a large blank gap behind on the prior page (seen
-  // on pages 7-8 of Nikhil's real export). `table` removed from the list; `tr` alone (already
-  // present) is the correct atomic unit — thead{display:table-header-group} (already present)
-  // repeats the column headers on the continuation page. (2) The Smokeys campaign card was
-  // splitting mid-list across pages 4-5 in the real export — one campaign item ("Got Your Back")
-  // landed on page 5 fully orphaned from its own brand/aggregator/period-column headings, none of
-  // which repeat. `.camp-item` alone only stops an individual item from splitting internally; it
-  // does nothing to stop the page break landing BETWEEN two sibling items. Added a new
-  // `.camp-aggblock` class around each brand+aggregator's whole two-period block (both columns'
-  // items together) and added it to the atomic list — genuinely small at Nikhil's real campaign
-  // counts (1-3 items per brand+aggregator+period), so this is the same "protect the smallest
-  // real atomic unit" principle one level up, not a blanket whole-card protection that could
-  // reintroduce the same big-gap problem for a brand with many campaigns. (3) Brand/Platform
+  // v391: two real print bugs Nikhil caught from an actual exported PDF (not the harness —
+  // exactly the kind of issue only a real rendered PDF surfaces). (1) The Smokeys campaign card
+  // was splitting mid-list across pages 4-5 in the real export — one campaign item ("Got Your
+  // Back") landed on the next page fully orphaned from its own brand/aggregator/period-column
+  // headings, none of which repeat. `.camp-item` alone only stops an individual item from
+  // splitting internally; it does nothing to stop the page break landing BETWEEN two sibling
+  // items. Added a new `.camp-aggblock` class around each brand+aggregator's whole two-period
+  // block (both columns' items together) and added it to the atomic list — genuinely small at
+  // Nikhil's real campaign counts (1-3 items per brand+aggregator+period). (2) Brand/Platform
   // Comparison table logos bumped 16px→24px per Nikhil's direct ask, with brand-cell given a
   // small gap so the larger logo doesn't crowd the text.
+  // v392: REVERTED the other v391 change (removing `table` from break-inside:avoid) — Nikhil
+  // tested it against a real export and it made pagination worse, not better. What actually
+  // happened: Outlet-Level Detail has always been ONE .page div holding all brands' tables
+  // together (cmpReportOutletDetail returns one concatenated string, not one .page per brand),
+  // and .page uses min-height:297mm, not a fixed height — so it was ALREADY overflowing across
+  // multiple physical printed sheets before this build, with or without table atomicity; the
+  // running header/date-range title and page-number footer only ever render once per .page div,
+  // not per physical sheet, regardless of this setting. Removing `table`'s atomicity didn't fix
+  // that — it just let individual brand tables (Lollorosso, Smokeys) split mid-list between
+  // rows instead of jumping as a whole block, which read worse in practice: a table breaking
+  // between e.g. Town Square and Marina mid-brand is a harder read than an occasional gap before
+  // a table that jumps whole. Restored `table` to the atomic list — this is a real, unresolved
+  // trade-off (atomic tables can leave a gap when a table almost-but-not-quite fits; allowing
+  // splits avoids the gap but breaks brands apart mid-list) rather than a clean fix either way,
+  // flagged honestly to Nikhil rather than guessing a third variant without real-browser testing
+  // to verify it against.
   const css=`@page{size:A4;margin:0}*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Georgia','Times New Roman',serif;color:#1a1f2e;background:#fff}
     .page{width:210mm;min-height:297mm;padding:13mm 14mm;position:relative;page-break-after:always}
-    .chart-box,.concl-box,.camp-item,.camp-aggblock,.kpi,tr{break-inside:avoid;page-break-inside:avoid}
+    .chart-box,.concl-box,.camp-item,.camp-aggblock,.kpi,tr,table{break-inside:avoid;page-break-inside:avoid}
     thead{display:table-header-group}
     .runhdr{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid #d1d5db;padding-bottom:9px;margin-bottom:18px;font-family:-apple-system,sans-serif}
     .runhdr .l{font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#4b5563}
