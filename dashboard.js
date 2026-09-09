@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-383";
+const BUILD_VERSION="2026-08-13-386";
 const BUILD_NOTES=[
+  "\ud83d\ude80 Compare page \"Export to PDF\" rebuilt to match everything approved across many rounds of mockup review with Nikhil \u2014 the mockup's job was validating structure and layout before this exact build, and this ports every one of those fixes into the real feature, several of which come out MORE accurate here than the mockup could show since this runs inside the live dashboard with full data access. Key changes: (1) every comparison table now shows BOTH periods' real values stacked, not just latest+delta, via a new cmpPairedMetricCell \u2014 lets Nikhil verify the math himself; (2) a real, separate color-polarity bug was FOUND AND FIXED in cmpReportKPICards during testing that the earlier table-cell fix never touched \u2014 confirmed by testing the actual rendered Discount Burn card directly (a +15% mock increase rendered green/\"up\" before the fix), not caught by code review, since it was a fully separate code path with its own copy of the same bug; (3) Brand Comparison and Platform Comparison are now genuine separate pages (page numbers computed dynamically) \u2014 fixes a real pagination bug the mockup surfaced where a broad, many-platform scope pushed a chart onto a trailing page with an ugly gap before it, while narrow scopes happened to fit; (4) real SVG dual pie charts (sales split by brand, sales split by platform, both showing both periods) and a grouped bar chart with angled full platform names (previously would have truncated to 4 characters); (5) Discount Campaigns completely rebuilt \u2014 organized by brand then platform instead of by time window, and every campaign now shows REAL Incr. Contribution and ROI via campAnalysisCached(c), the exact function already proven on the live Campaigns page (genuine baseline-vs-during comparison, overlap-with-other-campaigns aware) \u2014 not the mockup's illustrative placeholders, since this code has real data to work with; (6) discount-depth text (\"25% off \u00b7 cap AED 20\") now uses campOfferLabel(), extracted as a new standalone function from campCardGrid's own inline logic so the report and the live Campaigns page share the exact same parsing \u2014 checks Comments before Name, strips co-funding percentages before extracting the real rate, and falls back to the campaign's own name (not a \"not found\" placeholder) when no rate is found anywhere; (7) Outlet-Level Detail gained AOV and real (not estimated) Contribution, since cmpScopedMetrics already computes genuine per-outlet contribution the same way it does for brand/platform \u2014 the mockup had to approximate this with a margin-rate estimate because its two source PDFs never contained real per-outlet figures; (8) Conclusions expanded with two new generalizable rules (AOV-vs-order-volume divergence, crediting a genuinely clean-growing brand/platform combo rather than only flagging decliners) and a fuller multi-sentence bottom line; (9) darker secondary text throughout, corrected break-inside/break-after rules (a whole outlet-brand-group or campaign column can no longer be forced to stay together when it's taller than a page \u2014 only the genuinely small atomic units are protected, with headings given break-after:avoid so they can't be orphaned from their own content), a solid separator between aggregator blocks in the campaigns section, and increased chart-box padding so legends don't crowd the border; (10) the cover now shows the actual brand(s) and aggregator (when narrowed to a few) in scope instead of just the generic corporate mark; (11) the exported document's <title> is now built from the real scope and dates (e.g. OreganoGroup_OreganoLollorosso_25Aug-7Sep2026_ComparisonReport), which is what a browser's Save-As dialog defaults to \u2014 Nikhil's explicit ask that the file states its own contents. Tested with a Node harness against realistic multi-brand, multi-platform mock data (not just code review) \u2014 verified structurally clean HTML with a real parser, correct sequential page numbering, real campaign data flowing through correctly (stubbed campAnalysisCached to test that THIS code calls and uses it correctly, not to re-test campAnalysisV2 itself, which is existing proven code), and specifically re-verified color polarity on both the KPI cards and the comparison tables after finding and fixing the KPI card bug.",
   "\ud83d\udc1b Group C (3-way comparison) fixed across the Compare page \u2014 Nikhil found it only worked on the Overview tab: no way to reorder A/B/C, and Group C's data was completely invisible on Trend, Platforms, and Outlets. Confirmed via an old comment this was a deliberate, explicit scoping decision from when C was first built (\"the detailed tables stay A-vs-B only \u2014 extending those to a 3rd column would be a materially bigger change\"), not a bug \u2014 but a real, understandable gap from actually using the feature. Fixed all four pieces: (1) added a Swap B/C button alongside the existing Swap A/B \u2014 combined, these reach any ordering of the three; (2) the Trend chart now draws a third line for C with matching date-axis labels; (3) Platform Movement now shows a chained C-vs-B delta badge per row; (4) the Brand\u00d7Platform Breakdown table, its outlet drill-down, and the Per-Platform Breakdown table all gained full C columns (Orders, Net Sales, Discount, AOV, Profit, Ad Spend where applicable). One consistent rule throughout: C is always compared against B, not A \u2014 matching the chained-delta convention the Overview summary cards already established, so the comparison target reads the same no matter which part of the page you're on. A genuine bonus catch made while wiring in C's real color: the Trend tab header, the outlet drill-down's totals line, and the Per-Platform Breakdown table were all hardcoding #60A5FA/#F59E0B instead of the real CMP_A_CLR/CMP_B_CLR constants (#5B7FA6/#C98A3E) \u2014 a pre-existing mismatch against the chart's actual colors, unrelated to Nikhil's report but fixed as part of the same pass since it touched the same lines. Verified with a Node harness against realistic 3-window mock data (7 days each, three different volume multipliers) rather than just code review: confirmed platMove's C-vs-B delta computes exactly right (33,600 vs 28,000 \u2192 +20.0%, matching the built-in ratio precisely), confirmed the Brand\u00d7Platform table's C rows carry through the same exact ratio, and \u2014 since mkTable() has no built-in validation between header count and row-cell count \u2014 explicitly verified the Per-Platform Breakdown table's header array and row-cell array produce identical lengths (20 vs 20 with C active, 13 vs 13 without) using the real computed platMove data, not synthetic values, since a silent mismatch there would have misaligned every column with no error to catch it. Also caught and removed two small dead-code leftovers from earlier in this same build (an unused profDiffBC variable, an unused cCols variable) before they could confuse a future read of this code.",
   "\ud83c\udd95 Compare page PDF export rebuilt as a genuine drill-down report, per Nikhil's own framing after the earlier \"3 toggle options\" idea turned out to be a misunderstanding (that was a mockup review tool with 3 fake sample scenarios, not a real feature pattern). His actual ask, using his own example \u2014 deep-diving one aggregator's sales trend but wanting to see which brand drove it, each against its prior period, across Sales/Orders/AOV/Discount/Profitability/Ad Spend \u2014 called for one report that starts broad and genuinely earns its way deeper, removing duplicate information rather than repeating the same totals at every level. New core building block: cmpScopedMetrics(cfg,brand,agg,branch) constructs a synthetic narrowed sub-scope and reuses the exact same tested functions the top-level summary already calls (cmpComputeDisc, cmpComputeContribution, cmpAdSpendForCfg) \u2014 so a brand's numbers are computed the identical way the overall totals are, just on a narrower slice, not new aggregation math. Report structure is now: Executive Summary (combined) \u2192 Brand Comparison (full 6-metric table, shown only when more than one brand is actually in scope) \u2192 Platform Comparison (same pattern, shown only when more than one platform is in scope \u2014 replaces the old sales-only bars entirely, since a full table is more useful than showing the same story twice in two visual styles) \u2192 Trend chart + Campaigns \u2192 Outlet-Level Detail (now always included whenever there's genuine outlet granularity, not gated behind an exact single-brand-single-aggregator filter like before \u2014 organized one section per brand when more than one is present, flat list otherwise) \u2192 Conclusions. Each comparison cell shows the latest period's value plus its own Delta vs. the prior period, not every window's raw number side by side \u2014 with up to 6 metrics that would make the table unreadably wide. Tested with a Node harness against realistic 3-brand \u00d7 2-aggregator \u00d7 3-outlet mock data: verified exact ratio-correctness of the per-brand isolation (AED 90,720 / 60,480 / 36,288 \u2014 precisely matching the 1.5\u00d7/1.0\u00d7/0.6\u00d7 multipliers built into the test data, confirming cmpScopedMetrics correctly isolates each brand rather than leaking totals across brands), confirmed all three outlet-brand sections render (one early false alarm in my own test regex, double-checked directly against the real HTML before concluding it wasn't a real bug), and reverified the deep-mode edge case (single brand + single aggregator) correctly skips both comparison sections and falls back to a flat outlet list, exactly as before this rebuild. Caught and fixed one real bug while writing this: a dead line in the outlet-detail builder that computed an unused variable via repeated expensive cmpScopedMetrics calls \u2014 removed before it could slow down real exports for no reason.",
   "\ud83c\udd95 Compare page \"Export to PDF\" is now a real, working feature \u2014 the full arc from mockup to shipped build, built over several rounds with Nikhil (content and layout reviewed and refined first, Discount Burn added after he caught it missing from the mockup, real logos wired in once he pointed out the dashboard already had working ones rather than re-embedding copies, legend colors and page-density fixes along the way). Generates a genuine Executive Director-level PDF from LIVE cmpA/cmpB/cmpC data via the browser's own print-to-PDF (styled print CSS + window.print()) \u2014 there's no server-side PDF engine in this app, so this is the correct mechanism, not a workaround. A single \"\ud83d\udcc4 Export to PDF\" button now sits in the Compare page's top toolbar next to A\u2192B filters and Swap A/B. New data layer (cmpBuildReportData, cmpAggForBrandPlatform, cmpAggByOutlet, cmpAdSpendForCfg, cmpCampaignsForWindow) recomputes every number fresh from the real filters \u2014 Net Sales, Orders, AOV, Discount Burn (cmpComputeDisc), Net Contribution (cmpComputeContribution), Ad Spend (cmpAdSpendOverlap), and real campaigns overlapping each window (same overlap-day logic already proven in cmpCampaignImbalance) \u2014 same recompute-fresh pattern already used by cmpExportBreakdownCSV, not sample data and not reused render-scoped variables. Report adapts automatically to whatever's actually selected rather than needing hardcoded modes: Outlet-level detail when scope narrows to exactly one brand + one aggregator (the natural next level of depth once nothing's left to break down by), Brand\u00d7Platform otherwise; Platform Movement only appears when more than one aggregator is actually present in the real data. Narrative (cmpReportNarrative) extends the existing single-sentence auto-insight pattern already live elsewhere on this page into a fuller paragraph that also covers discount burn vs. sales growth. Conclusions (cmpReportConclusions) are rule-based on real computed deltas, not free-form judgment \u2014 thresholded good/bad bullets plus a bottom-line verdict. Real brand and aggregator logos throughout (cover, detail table rows, platform movement) via the dashboard's own existing logoImg()/LOGOS, not new embedded copies. Trend chart captured live from the real cmp-chart canvas via toDataURL(). Tested with a Node harness against realistic mock data across all three real scenarios (broad all-brands, deep single-brand+single-aggregator, and 3-way with Group C active) since a real browser isn't available in this environment \u2014 verified structurally clean HTML (zero orphaned tags, checked with an actual HTML parser, not eyeballed) and correct real-number output for all three. That testing caught one genuine bug before it shipped: the conclusions engine could produce a \"genuinely clean period\" bottom-line verdict while simultaneously listing a real cost concern (discount burn outpacing sales) in Worth Watching, because the bottom-line logic inferred \"no real concern\" from bad-list length rather than tracking it explicitly \u2014 same class of inconsistency Nikhil caught earlier when the Discount Burn KPI card existed but the narrative prose never mentioned it. Fixed with an explicit hasConcern flag computed before the harmless \"nothing crossed a threshold\" placeholder text is added, and reverified the fix directly against the same failing case.",
@@ -10580,6 +10581,24 @@ function campCardExtraDetail(raw,offerText){
   const detail=trimmed.length>90?trimmed.slice(0,88)+'…':trimmed;
   return detail;
 }
+// Extracted from campCardGrid's inline offer computation so the same exact logic can be
+// reused by the Compare page's PDF export (v386) — was previously only inline there, no
+// other caller could reuse it. Behavior unchanged: comments checked before name, co-fund
+// percentages stripped before extracting the real discount rate, falls back to the
+// campaign's own name (not a "not found" placeholder) when nothing else matches.
+function campOfferLabel(c){
+  const txt=(c.comments||c.name||'').trim();
+  const isBOGO=/\b(bogo(?:f)?|buy\s*one\s*get\s*one|buy\s*1\s*get\s*1)\b/i.test(txt);
+  if(isBOGO){
+    const onSelect=/select\s+(items?|menu)/i.test(txt);
+    return onSelect?'BOGO · select items':'BOGO';
+  }
+  const cleanedTxt=txt.replace(/\d{1,2}\s*%\s*(co[\s-]?fund(?:ed|ing)?|funded\s+by|deliveroo\s+share|platform\s+share)/gi,'');
+  const pm=cleanedTxt.match(/(\d{1,2})\s*%\s*(?:off|discount|disc)\b/i)||cleanedTxt.match(/(\d{1,2})\s*%/);
+  const capM=txt.match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i)||txt.match(/(?:aed\s*)?(\d{1,4})\s*cap/i);
+  const pct=pm?`${pm[1]}% off`:(c.name||'');
+  return capM?`${pct} · cap AED ${capM[1]}`:pct;
+}
 function campCardGrid(camps,showProfit){
   const T=campTheme();
   if(!camps.length)return `<div class="card"><div style="text-align:center;padding:30px;color:${T.muted}">No campaigns match your filters.</div></div>`;
@@ -10642,19 +10661,7 @@ function campCardGrid(camps,showProfit){
       metricsHTML=`<div style="font-size:11.5px;color:#F59E0B;margin-top:10px;font-weight:600">Starts in ${daysToStart} day${daysToStart!==1?'s':''}</div>`;
     }
     const coFundChip=(()=>{const p=parseCampComment(c).coFundedPctOfDiscount;return p>0?`<span style="font-size:10px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:2px 7px;border-radius:6px">🤝 ${Math.round(p*100)}%</span>`:'';})();
-    const offer=(()=>{
-      const txt=(c.comments||c.name||'').trim();
-      const isBOGO=/\b(bogo(?:f)?|buy\s*one\s*get\s*one|buy\s*1\s*get\s*1)\b/i.test(txt);
-      if(isBOGO){
-        const onSelect=/select\s+(items?|menu)/i.test(txt);
-        return onSelect?'BOGO · select items':'BOGO';
-      }
-      const cleanedTxt=txt.replace(/\d{1,2}\s*%\s*(co[\s-]?fund(?:ed|ing)?|funded\s+by|deliveroo\s+share|platform\s+share)/gi,'');
-      const pm=cleanedTxt.match(/(\d{1,2})\s*%\s*(?:off|discount|disc)\b/i)||cleanedTxt.match(/(\d{1,2})\s*%/);
-      const capM=txt.match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i)||txt.match(/(?:aed\s*)?(\d{1,4})\s*cap/i);
-      const pct=pm?`${pm[1]}% off`:(c.name||'');
-      return capM?`${pct} · cap AED ${capM[1]}`:pct;
-    })();
+    const offer=campOfferLabel(c);
     const dateStrCompact=(()=>{
       const s=fmtShort(c.startDate),e=fmtShort(c.endDate);
       return s===e?s:`${s}–${e}`;
@@ -19042,7 +19049,7 @@ function cmpCampaignsForWindow(cfg){
     if(brandsAllowed&&c.brand!=="All Brands"&&!brandsAllowed.has(c.brand))continue;
     if(aggsAllowed&&!aggsAllowed.has(c.aggregator))continue;
     if(overlapDays(c.startDate,c.endDate,cfg.start,cfg.end||cfg.start)>0){
-      out.push({name:c.name,brand:c.brand,aggregator:c.aggregator,startDate:c.startDate,endDate:c.endDate,discountStructure:c.discountStructure});
+      out.push({name:c.name,brand:c.brand,aggregator:c.aggregator,startDate:c.startDate,endDate:c.endDate,discountStructure:c.discountStructure,raw:c});
     }
   }
   return out.sort((a,b)=>a.startDate<b.startDate?-1:1);
@@ -19115,13 +19122,28 @@ function cmpReportConclusions(data){
   }
   if(discPct!=null&&salesPct!=null&&discPct>salesPct+8)bad.push(`Discount burn (${fmtPct(discPct)}) outpaced sales growth (${fmtPct(salesPct)}) — a meaningful share of the gain may be discount-funded rather than organic.`);
   if(adPct!=null&&salesPct!=null&&adPct>salesPct+10)bad.push(`Ad spend (${fmtPct(adPct)}) grew well ahead of sales (${fmtPct(salesPct)}) — ROAS is likely softening.`);
+  // v386: AOV vs. order-volume divergence — a real, generalizable pattern worth calling out
+  // on its own rather than leaving buried in the KPI cards, since "sales grew but orders fell"
+  // and "sales grew because orders grew" tell very different stories about what actually drove it.
+  const orderPct=pctOf(latest.orders,prior.orders),aovPct=pctOf(latest.aov,prior.aov);
+  if(orderPct!=null&&aovPct!=null&&Math.sign(orderPct)!==Math.sign(aovPct)&&Math.abs(aovPct)>=3){
+    good.push(`AOV ${aovPct>=0?"rose":"fell"} ${fmtPct(aovPct).replace(/^[+-]/,"")} even as order volume ${orderPct>=0?"grew":"fell"} ${fmtPct(orderPct).replace(/^[+-]/,"")} — ${aovPct>=0?"spending per order is doing the work, not pure volume":"volume is carrying growth despite a softer basket size"}.`);
+  }
   const movers=latest.brandPlatform.map(bp=>{
     const priorRow=prior.brandPlatform.find(p=>p.brand===bp.brand&&p.aggregator===bp.aggregator);
-    return{...bp,pct:priorRow?pctOf(bp.sales,priorRow.sales):null};
+    const priorDisc=cmpScopedMetrics(prior.cfg,bp.brand,bp.aggregator,null).discBurn;
+    const latestDisc=cmpScopedMetrics(latest.cfg,bp.brand,bp.aggregator,null).discBurn;
+    return{...bp,pct:priorRow?pctOf(bp.sales,priorRow.sales):null,discPct:pctOf(latestDisc,priorDisc)};
   }).filter(m=>m.pct!=null);
   const declining=movers.filter(m=>m.pct<=-8);
   const growing=movers.filter(m=>m.pct>=8);
   if(declining.length&&growing.length)bad.push(`${declining.map(d=>`${d.brand} · ${d.aggregator}`).join(", ")} declined while others grew — worth checking whether this is isolated or a broader pattern.`);
+  // v386: credit where it's due — a brand/platform combo growing well WITHOUT its discount
+  // growing faster is a genuinely clean result worth naming, not just flagging the declining
+  // ones. Picks the single strongest clean grower rather than listing every one, to keep this
+  // proportionate to how the "bad" side names specific combos rather than every mover.
+  const cleanGrowers=growing.filter(m=>m.discPct==null||m.discPct<=m.pct+5).sort((a,b)=>b.pct-a.pct);
+  if(cleanGrowers.length)good.push(`${cleanGrowers[0].brand} · ${cleanGrowers[0].aggregator} delivered clean growth (${fmtPct(cleanGrowers[0].pct)} sales) without discount spend growing materially faster — a sustainable pattern, not one propped up by heavier discounting.`);
   if(latest.campaigns.length&&!prior.campaigns.length)bad.push(`A campaign ran in ${latest.dateLabel} with no counterpart in ${prior.dateLabel} — part of the movement above may be campaign-driven rather than organic. See Campaigns That Ran.`);
   // v381 fix: hasConcern is captured BEFORE the "nothing crossed a threshold" placeholder is
   // pushed into bad — Nikhil's earlier catch on the Discount Burn narrative (KPI card added but
@@ -19139,101 +19161,216 @@ function cmpReportBottomLine(data,concl){
   const latest=data[data.length-1],prior=data[data.length-2];
   const salesPct=pctOf(latest.sales,prior.sales);
   if(salesPct==null)return"Not enough data in one window to draw a comparison.";
-  if(concl.hasConcern&&salesPct>0)return`Sales grew, but the supporting detail (see Worth Watching) suggests some of that growth came with real cost — worth a closer read before treating the headline number alone as the story.`;
-  if(concl.hasConcern)return`A mixed period — some real positives alongside points worth watching before drawing firm conclusions.`;
-  return`A genuinely clean period — sales, margin, and cost all moved in a healthy direction together.`;
+  // v386: expanded from one sentence to a fuller paragraph per Nikhil's direct feedback — names
+  // roughly how many real concerns surfaced and points back at the specific bullets rather than
+  // speaking only in the abstract, so the bottom line reads as a genuine synthesis of what's
+  // above it, not a generic template sentence.
+  const realBad=concl.bad.filter(b=>!b.startsWith("Nothing in the data"));
+  const realGood=concl.good.filter(g=>!g.startsWith("No metric cleared"));
+  if(realBad.length>=2&&salesPct>0){
+    return`The headline number (sales ${fmtPct(salesPct)}) looks straightforwardly positive, but ${realBad.length} separate items in Worth Watching above suggest the underlying picture is more mixed than that headline alone implies — worth reading each of those before treating the group-wide result as uniformly healthy. ${realGood.length?`That said, ${realGood.length===1?"one real positive":realGood.length+" real positives"} also held up alongside those concerns, so this isn't a one-sided story either way.`:""}`;
+  }
+  if(realBad.length===1&&salesPct>0){
+    return`Sales grew ${fmtPct(salesPct)}, and most of the supporting detail backs that up — but one specific item in Worth Watching is worth a closer read before treating the headline number alone as the full story.`;
+  }
+  if(concl.hasConcern){
+    return`A mixed period — ${realGood.length} real positive${realGood.length===1?"":"s"} alongside ${realBad.length} point${realBad.length===1?"":"s"} worth watching, with no single factor dominating either way. Worth reading both sides above before drawing a firm conclusion for this period.`;
+  }
+  return`A genuinely clean period — sales, margin, and cost all moved in a healthy direction together, and nothing in the underlying detail contradicts that headline. ${realGood.length>=2?"The specific positives above (not just the top-line number) are worth carrying into the next review as a pattern to watch for, not just a one-off result.":""}`;
 }
 function cmpReportKPICards(d,prior){
   const pd=prior?pctOf(d.sales,prior.sales):null,po=prior?pctOf(d.orders,prior.orders):null,
     pa=prior?pctOf(d.aov,prior.aov):null,pdisc=prior?pctOf(d.discBurn,prior.discBurn):null,
     pad=prior?pctOf(d.adSpend,prior.adSpend):null,pc=prior?pctOf(d.contribution,prior.contribution):null;
-  const arrow=p=>p==null?"":p>=0?`<span class="up">▲${fmtPct(p).replace("+","")}</span>`:`<span class="down">▼${fmtPct(p).replace("-","")}</span>`;
+  // v386 fix: this KPI-card arrow() was a SEPARATE, undiscovered copy of the same color-
+  // polarity bug already fixed everywhere else in this file — colored every increase green
+  // regardless of metric. Caught only by testing the actual rendered Discount Burn card
+  // directly (a +15% mock increase rendered with the "up"/green class), not by code review —
+  // the table-cell fix earlier didn't touch this function at all since it's a fully separate
+  // code path. Now takes higherIsGood the same way every other metric cell in this file does.
+  const arrow=(p,higherIsGood)=>{
+    if(p==null)return"";
+    const isIncrease=p>=0;
+    const good=higherIsGood?isIncrease:!isIncrease;
+    return`<span class="${good?'up':'down'}">${isIncrease?"▲":"▼"}${fmtPct(p).replace(/^[+-]/,"")}</span>`;
+  };
   const pctSales=v=>d.sales?((v/d.sales)*100).toFixed(1)+"% of net sales":"";
   return`<div class="kpi-group-lbl">Revenue</div><div class="kpi-grid g3b">
-    <div class="kpi"><div class="l">Net Sales</div><div class="v">${fmtAEDExact(d.sales)}</div><div class="d">${arrow(pd)}</div></div>
-    <div class="kpi"><div class="l">Orders</div><div class="v">${d.orders.toLocaleString()}</div><div class="d">${arrow(po)}</div></div>
-    <div class="kpi"><div class="l">AOV</div><div class="v">${fmtAEDExact(d.aov)}</div><div class="d">${arrow(pa)}</div></div>
+    <div class="kpi"><div class="l">Net Sales</div><div class="v">${fmtAEDExact(d.sales)}</div><div class="d">${arrow(pd,true)}</div></div>
+    <div class="kpi"><div class="l">Orders</div><div class="v">${d.orders.toLocaleString()}</div><div class="d">${arrow(po,true)}</div></div>
+    <div class="kpi"><div class="l">AOV</div><div class="v">${fmtAEDExact(d.aov)}</div><div class="d">${arrow(pa,true)}</div></div>
   </div><div class="kpi-group-lbl">Cost &amp; Profitability</div><div class="kpi-grid g3b">
-    <div class="kpi"><div class="l">Discount Burn</div><div class="v">${fmtAEDExact(d.discBurn)}</div><div class="sub">${pctSales(d.discBurn)}</div><div class="d">${arrow(pdisc)}</div></div>
-    <div class="kpi"><div class="l">Ad Spend</div><div class="v">${fmtAEDExact(d.adSpend)}</div><div class="sub">${pctSales(d.adSpend)}</div><div class="d">${arrow(pad)}</div></div>
-    <div class="kpi"><div class="l">Net Contribution</div><div class="v">${fmtAEDExact(d.contribution)}</div><div class="sub">${pctSales(d.contribution)}</div><div class="d">${arrow(pc)}</div></div>
+    <div class="kpi"><div class="l">Discount Burn</div><div class="v">${fmtAEDExact(d.discBurn)}</div><div class="sub">${pctSales(d.discBurn)}</div><div class="d">${arrow(pdisc,false)}</div></div>
+    <div class="kpi"><div class="l">Ad Spend</div><div class="v">${fmtAEDExact(d.adSpend)}</div><div class="sub">${pctSales(d.adSpend)}</div><div class="d">${arrow(pad,false)}</div></div>
+    <div class="kpi"><div class="l">Net Contribution</div><div class="v">${fmtAEDExact(d.contribution)}</div><div class="sub">${pctSales(d.contribution)}</div><div class="d">${arrow(pc,true)}</div></div>
   </div><div class="data-quality">Discount figures: ${d.discSource==="exact"?"exact (uploaded order-level data)":"partially estimated — outlet-level exact data not fully available for this scope"}.</div>`;
 }
-// One comparison cell: the latest period's value plus a Δ vs the prior period, stacked —
-// deliberately NOT showing every window's raw value side by side, since with up to 6 metrics
-// that would make the table too wide to read. Latest-vs-prior is also the comparison people
-// actually reach for first; a 3-way (Group C) report still anchors on B vs A here, matching
-// how the KPI cards already treat the latest pair as primary.
-function cmpMetricCell(latest,prior,fmt){
-  const pct=pctOf(latest,prior);
-  const cls=pct==null?"":pct>=0?"pos":"neg";
-  const arrow=pct==null?"—":`${pct>=0?"▲":"▼"}${fmtPct(pct).replace(/^[+-]/,"")}`;
-  return`<td>${fmt(latest)}<div class="${cls}" style="font-size:8.5px;font-weight:700;margin-top:1px">${arrow}</div></td>`;
+// v386: replaces the old latest+delta-only cell. Nikhil's explicit ask after reviewing the
+// mockup: show BOTH periods' real values, not just the latest with a computed percentage —
+// lets him verify the math himself. higherIsGood fixes a real, separate bug the mockup
+// review caught: the old cell colored every increase green regardless of what the metric
+// was, so Discount Burn and Ad Spend going UP (bad) showed green, and going DOWN (good)
+// showed red. Confirmed this was live in dashboard.js too, not just the mockup — every
+// caller below is now updated to pass the correct polarity per column.
+function cmpPairedMetricCell(valA,valB,fmt,higherIsGood,clrA,clrB){
+  valA=valA||0;valB=valB||0;
+  let arrow="—",dcolor="#9ca3af";
+  if(valA){
+    const pct=((valB-valA)/valA)*100;
+    const isIncrease=pct>=0;
+    const good=higherIsGood?isIncrease:!isIncrease;
+    dcolor=good?"#15803d":"#b91c1c";
+    arrow=`${isIncrease?"▲":"▼"}${Math.abs(pct).toFixed(1)}%`;
+  }
+  return`<td style="text-align:right;padding:6px 9px">
+    <div style="font-size:9.5px;color:${clrA}">${fmt(valA)}</div>
+    <div style="font-size:10.5px;font-weight:700;color:${clrB}">${fmt(valB)} <span style="font-size:8.5px;font-weight:700;color:${dcolor}">${arrow}</span></div>
+  </td>`;
+}
+// Same rendering, but for callers that already have a % change directly (e.g. outlet rows,
+// where the underlying record set makes back-solving a prior value from latest+% safer to
+// avoid than error-prone) — avoids any division-by-zero edge case entirely.
+function cmpMetricCellFromPct(latest,pct,fmt,higherIsGood){
+  let arrow="—",dcolor="#9ca3af";
+  if(pct!=null){
+    const isIncrease=pct>=0;
+    const good=higherIsGood?isIncrease:!isIncrease;
+    dcolor=good?"#15803d":"#b91c1c";
+    arrow=`${isIncrease?"▲":"▼"}${Math.abs(pct).toFixed(1)}%`;
+  }
+  return`<td style="text-align:right;padding:6px 9px">${fmt(latest)}<div style="font-size:8.5px;font-weight:700;margin-top:1px;color:${dcolor}">${arrow}</div></td>`;
+}
+// SVG pie chart — JS port of the same chart used in the mockup review, so the shipped
+// feature matches exactly what was approved rather than a fresh re-implementation.
+function cmpSvgPie(slices,size){
+  size=size||120;
+  const total=slices.reduce((s,x)=>s+x.v,0);
+  if(total<=0)return"";
+  const cx=size/2,cy=size/2,r=size/2-4;
+  let angle=-90;
+  const paths=slices.map(({v,c})=>{
+    const frac=v/total,sweep=frac*360;
+    const x1=cx+r*Math.cos(angle*Math.PI/180),y1=cy+r*Math.sin(angle*Math.PI/180);
+    const angle2=angle+sweep;
+    const x2=cx+r*Math.cos(angle2*Math.PI/180),y2=cy+r*Math.sin(angle2*Math.PI/180);
+    const large=sweep>180?1:0;
+    const d=`M${cx},${cy} L${x1.toFixed(1)},${y1.toFixed(1)} A${r},${r} 0 ${large} 1 ${x2.toFixed(1)},${y2.toFixed(1)} Z`;
+    angle=angle2;
+    return`<path d="${d}" fill="${c}"/>`;
+  }).join("");
+  return`<svg viewBox="0 0 ${size} ${size}" style="width:${size}px;height:${size}px">${paths}</svg>`;
+}
+// SVG grouped bar chart (A/B paired bars per category) with angled full-length labels —
+// the mockup's original truncated names ("Deli","Tala") were flagged as illegible; angling
+// makes room for full names without needing an unreasonably wide chart.
+function cmpSvgBarGrouped(items,clrA,clrB){
+  const sizeW=560,sizeH=190,bottomMargin=55;
+  if(!items.length)return"";
+  const maxV=Math.max(...items.map(i=>Math.max(i.a,i.b)))||1;
+  const n=items.length,groupW=(sizeW-20)/n,barW=groupW*0.32;
+  const bars=items.map((it,i)=>{
+    const gx=10+i*groupW;
+    const ha=(it.a/maxV)*(sizeH-bottomMargin-15),hb=(it.b/maxV)*(sizeH-bottomMargin-15);
+    const xa=gx+groupW*0.14,xb=xa+barW+3,baseY=sizeH-bottomMargin;
+    const labelX=gx+groupW/2,labelY=baseY+12;
+    return`<rect x="${xa.toFixed(1)}" y="${(baseY-ha).toFixed(1)}" width="${barW.toFixed(1)}" height="${ha.toFixed(1)}" fill="${clrA}" rx="2"/>
+      <rect x="${xb.toFixed(1)}" y="${(baseY-hb).toFixed(1)}" width="${barW.toFixed(1)}" height="${hb.toFixed(1)}" fill="${clrB}" rx="2"/>
+      <text x="${labelX.toFixed(1)}" y="${labelY}" font-size="9" fill="#4b5563" text-anchor="end" font-family="-apple-system,sans-serif" transform="rotate(-40 ${labelX.toFixed(1)} ${labelY})">${esc(it.label)}</text>`;
+  }).join("");
+  return`<svg viewBox="0 0 ${sizeW} ${sizeH}" style="width:100%;height:170px">${bars}</svg>`;
 }
 // Shared builder for the two full-metric drill-down tables (Brand Comparison, Platform
 // Comparison) — same six-metric shape either way, just scoped differently. scopeFn(name,side)
 // returns a cmpScopedMetrics-shaped object for that name within that side's window.
-function cmpFullMetricsTable(title,sub,colLabel,names,scopeFn,data){
+// v386: each column now gets its correct higherIsGood polarity (Discount/Ad Spend are
+// cost metrics — down is good) and shows both periods via cmpPairedMetricCell.
+function cmpFullMetricsTable(title,sub,colLabel,names,scopeFn,data,clrA,clrB){
   const latest=data[data.length-1],prior=data[data.length-2];
   const rows=names.map(name=>{
     const mL=scopeFn(name,latest),mP=scopeFn(name,prior);
-    return`<tr><td>${logoImg(name,16)}${esc(name)}</td>
-      ${cmpMetricCell(mL.sales,mP.sales,fmtAEDExact)}
-      ${cmpMetricCell(mL.orders,mP.orders,v=>v.toLocaleString())}
-      ${cmpMetricCell(mL.aov,mP.aov,fmtAEDExact)}
-      ${cmpMetricCell(mL.discBurn,mP.discBurn,fmtAEDExact)}
-      ${cmpMetricCell(mL.contribution,mP.contribution,fmtAEDExact)}
-      ${cmpMetricCell(mL.adSpend,mP.adSpend,fmtAEDExact)}</tr>`;
+    return`<tr><td><div class="brand-cell">${logoImg(name,16)}${esc(name)}</div></td>
+      ${cmpPairedMetricCell(mP.sales,mL.sales,fmtAEDExact,true,clrA,clrB)}
+      ${cmpPairedMetricCell(mP.orders,mL.orders,v=>v.toLocaleString(),true,clrA,clrB)}
+      ${cmpPairedMetricCell(mP.aov,mL.aov,fmtAEDExact,true,clrA,clrB)}
+      ${cmpPairedMetricCell(mP.discBurn,mL.discBurn,fmtAEDExact,false,clrA,clrB)}
+      ${cmpPairedMetricCell(mP.contribution,mL.contribution,fmtAEDExact,true,clrA,clrB)}
+      ${cmpPairedMetricCell(mP.adSpend,mL.adSpend,fmtAEDExact,false,clrA,clrB)}</tr>`;
   }).join("");
   return`<div class="sec-title" style="font-size:14.5px">${title}</div><div class="sec-sub">${sub}</div>
-    <table><thead><tr><th>${colLabel}</th><th>Sales</th><th>Orders</th><th>AOV</th><th>Discount</th><th>Profit</th><th>Ad Spend</th></tr></thead>
+    <table><thead><tr><th>${colLabel}</th><th>Sales</th><th>Orders</th><th>AOV</th><th>Discount</th><th>Contribution</th><th>Ad Spend</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
 }
-// v382: shown whenever more than one brand is actually in scope — this is the direct answer to
-// Nikhil's own example ("which brand worked well on this aggregator"). Skipped entirely when
-// there's only one brand, since that's already fully covered by the Executive Summary — the
-// whole point of this rebuild was removing exactly this kind of duplication.
+// v386: Brand Comparison now returns CONTENT ONLY (no page wrapper) — cmpBuildReportHTML
+// wraps it in its own .page. Adds the dual sales-split pie (both periods) approved in the
+// mockup review. Still shown only when more than one brand is actually in scope.
 function cmpReportBrandComparison(data){
   const brandCount=Math.max(...data.map(d=>d.brandCount));
   if(brandCount<2)return"";
+  const latest=data[data.length-1],prior=data[data.length-2];
+  const clrA=cmpClrFor(prior.key),clrB=cmpClrFor(latest.key);
   const names=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.brand)))];
-  return cmpFullMetricsTable("Brand Comparison","Each brand's own numbers, latest window vs. prior — not the totals repeated, the breakdown behind them","Brand",
-    names,(name,side)=>cmpScopedMetrics(side.cfg,name,null,null),data);
+  const table=cmpFullMetricsTable("Brand Comparison","Both periods shown directly — not the totals repeated, the breakdown behind them","Brand",
+    names,(name,side)=>cmpScopedMetrics(side.cfg,name,null,null),data,clrA,clrB);
+  const sliceFor=side=>names.map(n=>({label:n,v:cmpScopedMetrics(side.cfg,n,null,null).sales,c:BMAP[n]?.c||"#888"}));
+  const pieA=sliceFor(prior),pieB=sliceFor(latest);
+  const legend=names.map(n=>`<div class="li"><span class="sw" style="background:${BMAP[n]?.c||'#888'}"></span>${esc(n)}</div>`).join("");
+  const pieSection=`<div class="chart-box"><div class="chart-title">Sales Split by Brand — both periods</div>
+    <div style="display:flex;align-items:flex-start;justify-content:space-around;gap:8px;padding:4px 8px">
+      <div style="text-align:center"><div style="font-size:9px;color:${clrA};font-weight:700;margin-bottom:4px">${esc(prior.dateLabel)}</div>${cmpSvgPie(pieA.map(x=>({v:x.v,c:x.c})),120)}</div>
+      <div style="text-align:center"><div style="font-size:9px;color:${clrB};font-weight:700;margin-bottom:4px">${esc(latest.dateLabel)}</div>${cmpSvgPie(pieB.map(x=>({v:x.v,c:x.c})),120)}</div>
+    </div><div class="chart-legend" style="justify-content:center;margin-top:10px;padding:0 8px">${legend}</div></div>`;
+  return table+pieSection;
 }
-// Same pattern, scoped by aggregator instead — shown only when more than one platform is
-// actually in scope. Replaces the old sales-only Platform Movement bars: a full metrics table
-// is more useful here and avoids showing the same "which platform moved" story twice in two
-// different visual styles.
+// v386: Platform Comparison, same pattern — now its OWN page (was previously crammed onto
+// the same page as Brand Comparison, which caused a real pagination bug on broad,
+// many-platform scopes: the chart would spill onto a trailing page with an ugly gap before
+// it, while narrow scopes fit fine — inconsistent, and looked unfinished on exactly the
+// scopes an Executive Director would review most carefully). Adds the platform-wide
+// sales-split pie AND the grouped bar chart, both using real platform totals.
 function cmpReportPlatformComparison(data){
   const aggCount=Math.max(...data.map(d=>d.aggCount));
   if(aggCount<2)return"";
+  const latest=data[data.length-1],prior=data[data.length-2];
+  const clrA=cmpClrFor(prior.key),clrB=cmpClrFor(latest.key);
   const names=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.aggregator)))];
-  return cmpFullMetricsTable("Platform Comparison","Each platform's own numbers, latest window vs. prior","Platform",
-    names,(name,side)=>cmpScopedMetrics(side.cfg,null,name,null),data);
+  const table=cmpFullMetricsTable("Platform Comparison","Both periods shown directly, same layout as Brand Comparison","Platform",
+    names,(name,side)=>cmpScopedMetrics(side.cfg,null,name,null),data,clrA,clrB);
+  const barItems=names.map(n=>({label:n,a:cmpScopedMetrics(prior.cfg,null,n,null).sales,b:cmpScopedMetrics(latest.cfg,null,n,null).sales}));
+  const barSection=`<div class="chart-box" style="margin-top:10px;padding:16px 18px"><div class="chart-title">Net Sales by Platform — <span style="color:${clrA}">${esc(prior.dateLabel)}</span> vs <span style="color:${clrB}">${esc(latest.dateLabel)}</span></div>${cmpSvgBarGrouped(barItems,clrA,clrB)}</div>`;
+  const sliceFor=side=>names.map(n=>({label:n,v:cmpScopedMetrics(side.cfg,null,n,null).sales,c:AC[n]||"#888"}));
+  const pieA=sliceFor(prior),pieB=sliceFor(latest);
+  const legend=names.map(n=>`<div class="li"><span class="sw" style="background:${AC[n]||'#888'}"></span>${esc(n)}</div>`).join("");
+  const pieSection=`<div class="chart-box" style="margin-top:10px;padding:16px 18px"><div class="chart-title">Sales Split by Platform — both periods</div>
+    <div style="display:flex;align-items:flex-start;justify-content:space-around;gap:8px;padding:4px 8px">
+      <div style="text-align:center"><div style="font-size:9px;color:${clrA};font-weight:700;margin-bottom:4px">${esc(prior.dateLabel)}</div>${cmpSvgPie(pieA.map(x=>({v:x.v,c:x.c})),120)}</div>
+      <div style="text-align:center"><div style="font-size:9px;color:${clrB};font-weight:700;margin-bottom:4px">${esc(latest.dateLabel)}</div>${cmpSvgPie(pieB.map(x=>({v:x.v,c:x.c})),120)}</div>
+    </div><div class="chart-legend" style="justify-content:center;margin-top:10px;padding:0 10px;flex-wrap:wrap">${legend}</div></div>`;
+  return table+barSection+pieSection;
 }
-// v382: outlet detail is now always included when there's genuine outlet granularity to show
-// (more than one outlet in scope) rather than being gated behind an exact single-brand +
-// single-aggregator filter — that gate made sense when this was the ONLY drill-down level;
-// now that Brand/Platform Comparison exist above it, outlet detail is the natural next, deepest
-// level regardless of how many brands are selected. Organized one section per brand when
-// there's more than one, so a reader can jump straight to the brand they care about instead of
-// scanning one long flat list — same structure Nikhil approved in the earlier "Multi-Brand"
-// mockup review. Scoped to Sales/Orders/Discount rather than the full six-metric set: at
-// dozens of outlets, Profit and Ad Spend are rarely tracked at that resolution and the extra
-// computation isn't worth it for this level specifically.
+// v386: now includes AOV and Contribution — the mockup had to ESTIMATE contribution at
+// outlet level (brand's overall margin rate × outlet sales) because its two source PDFs
+// never contained real per-outlet contribution. The live feature doesn't have that
+// constraint: cmpScopedMetrics already computes genuine per-outlet contribution the exact
+// same way it does for brand/platform, so this shows the real number, not an approximation.
 function cmpReportOutletDetail(data){
   const allOutlets=new Set(data.flatMap(d=>d.outlets.map(o=>o.outlet)));
   if(allOutlets.size<2)return"";
   const brandCount=Math.max(...data.map(d=>d.brandCount));
   const latest=data[data.length-1],prior=data[data.length-2];
+  const clrA=cmpClrFor(prior.key),clrB=cmpClrFor(latest.key);
   const outletRow=(name,brand)=>{
     const mL=cmpScopedMetrics(latest.cfg,brand,null,name),mP=cmpScopedMetrics(prior.cfg,brand,null,name);
-    return`<tr><td>${esc(name)}</td>${cmpMetricCell(mL.sales,mP.sales,fmtAEDExact)}${cmpMetricCell(mL.orders,mP.orders,v=>v.toLocaleString())}${cmpMetricCell(mL.discBurn,mP.discBurn,fmtAEDExact)}</tr>`;
+    return`<tr><td>${esc(name)}</td>
+      ${cmpPairedMetricCell(mP.sales,mL.sales,fmtAEDExact,true,clrA,clrB)}
+      ${cmpPairedMetricCell(mP.orders,mL.orders,v=>v.toLocaleString(),true,clrA,clrB)}
+      ${cmpPairedMetricCell(mP.aov,mL.aov,fmtAEDExact,true,clrA,clrB)}
+      ${cmpPairedMetricCell(mP.discBurn,mL.discBurn,fmtAEDExact,false,clrA,clrB)}
+      ${cmpPairedMetricCell(mP.contribution,mL.contribution,fmtAEDExact,true,clrA,clrB)}</tr>`;
   };
-  const head=`<thead><tr><th>Outlet</th><th>Sales</th><th>Orders</th><th>Discount</th></tr></thead>`;
+  const head=`<thead><tr><th>Outlet</th><th>Sales</th><th>Orders</th><th>AOV</th><th>Discount</th><th>Contribution</th></tr></thead>`;
   if(brandCount<2){
     const names=[...allOutlets];
-    return`<div class="sec-title">Outlet-Level Detail</div><div class="sec-sub">Every outlet active for ${esc(data[0].label)}</div>
+    return`<div class="sec-title">Outlet-Level Detail</div><div class="sec-sub">Every outlet active for ${esc(data[0].label)} — both periods shown directly</div>
       <table>${head}<tbody>${names.map(n=>outletRow(n,null)).join("")}</tbody></table>`;
   }
   const brands=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.brand)))];
@@ -19244,15 +19381,54 @@ function cmpReportOutletDetail(data){
     return`<div class="outlet-brand-group"><div class="outlet-brand-hd" style="color:${BMAP[brand]?.c||'#888'};border-color:${BMAP[brand]?.c||'#888'}">${logoImg(brand,16)}${esc(brand)}</div>
       <table>${head}<tbody>${brandOutlets.map(n=>outletRow(n,brand)).join("")}</tbody></table></div>`;
   }).join("");
-  return`<div class="sec-title">Outlet-Level Detail</div><div class="sec-sub">Organized one section per brand — the deepest level of this report</div>${sections}`;
+  return`<div class="sec-title">Outlet-Level Detail</div><div class="sec-sub">Organized one section per brand, both periods shown directly — the deepest level of this report</div>${sections}`;
 }
+// v386: complete rewrite, per Nikhil's direct feedback that the old by-window list "doesn't
+// help in deciding anything." Now organized by brand, then platform, so the same combination
+// compares directly across both windows — and critically, every campaign shows its REAL
+// Incr. Contribution and ROI via campAnalysisCached(c), the exact function already proven on
+// the live Campaigns page (genuine baseline-vs-during comparison, with overlap-with-other-
+// campaigns awareness) — not an approximation, since this code runs inside the live
+// dashboard with full data access, unlike the static-PDF mockup that could only preview the
+// layout with illustrative placeholder numbers.
 function cmpReportCampaignsSection(data){
-  const cols=data.map(d=>{
-    const items=d.campaigns.length?d.campaigns.map(c=>`<div class="camp-item"><div class="nm">${esc(c.name)}</div><div class="dt">${esc(c.brand)} × ${esc(c.aggregator)} · ${fmtShort(c.startDate)}–${fmtShort(c.endDate)}</div></div>`).join(""):
-      `<div class="camp-none">No campaigns found in this window for the active scope.</div>`;
-    return`<div class="camp-col" style="width:${data.length===3?'32%':'48%'}"><div class="camp-hd" style="border-color:${cmpClrFor(d.key)}">${esc(d.dateLabel)}</div>${items}</div>`;
+  const latest=data[data.length-1],prior=data[data.length-2];
+  const clrA=cmpClrFor(prior.key),clrB=cmpClrFor(latest.key);
+  const brandsInScope=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.brand)))];
+  const sections=brandsInScope.map(brand=>{
+    const campsPrior=prior.campaigns.filter(c=>c.brand===brand);
+    const campsLatest=latest.campaigns.filter(c=>c.brand===brand);
+    if(!campsPrior.length&&!campsLatest.length)return"";
+    const aggs=[...new Set([...campsPrior,...campsLatest].map(c=>c.aggregator))].sort();
+    const campItem=c=>{
+      const a=campAnalysisCached(c.raw);
+      const incr=a.hasData?a.incrContribTotal:null;
+      const roi=a.hasData?a.discountROI:null;
+      const incrClr=incr==null?"#9ca3af":incr>=0?"#15803d":"#b91c1c";
+      const offer=campOfferLabel(c.raw);
+      const dtLine=offer===c.name?`${fmtShort(c.startDate)}–${fmtShort(c.endDate)}`:`${esc(offer)} · ${fmtShort(c.startDate)}–${fmtShort(c.endDate)}`;
+      const metrics=a.hasData?`<div style="display:flex;gap:12px;margin-top:4px">
+          <div><span style="font-size:7.5px;color:#9ca3af;text-transform:uppercase;font-weight:700">Incr. Contribution</span><br><span style="font-size:11px;font-weight:800;color:${incrClr}">${incr>=0?"+":""}${fmtAEDExact(incr)}</span></div>
+          <div><span style="font-size:7.5px;color:#9ca3af;text-transform:uppercase;font-weight:700">ROI</span><br><span style="font-size:11px;font-weight:800;color:${incrClr}">${roi!=null?roi.toFixed(2)+"×":"—"}</span></div>
+        </div>`:`<div style="font-size:9px;color:#9ca3af;margin-top:4px;font-style:italic">No sales data yet for this campaign's window</div>`;
+      return`<div class="camp-item"><div class="nm">${esc(c.name)}</div><div class="dt">${dtLine}</div>${metrics}</div>`;
+    };
+    const aggBlocks=aggs.map((agg,idx)=>{
+      const pItems=campsPrior.filter(c=>c.aggregator===agg),lItems=campsLatest.filter(c=>c.aggregator===agg);
+      const listOrNone=items=>items.length?items.map(campItem).join(""):`<div class="camp-none" style="padding:4px 0">None</div>`;
+      const sep=idx===0?"":'<div style="border-top:2px solid #d1d5db;margin:10px 0 12px;break-after:avoid;page-break-after:avoid"></div>';
+      return`${sep}<div style="margin-bottom:10px"><div style="font-family:-apple-system,sans-serif;font-size:10.5px;font-weight:800;color:#374151;margin-bottom:4px;break-after:avoid;page-break-after:avoid">${logoImg(agg,14)}${esc(agg)}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div><div style="font-size:8.5px;color:${clrA};font-weight:700;margin-bottom:3px;break-after:avoid;page-break-after:avoid">${esc(prior.dateLabel)}</div>${listOrNone(pItems)}</div>
+          <div><div style="font-size:8.5px;color:${clrB};font-weight:700;margin-bottom:3px;break-after:avoid;page-break-after:avoid">${esc(latest.dateLabel)}</div>${listOrNone(lItems)}</div>
+        </div></div>`;
+    }).join("");
+    return`<div style="margin-bottom:16px;border:1px solid #e5e7eb;border-radius:8px;padding:12px 14px">
+      <div style="display:flex;align-items:center;font-family:-apple-system,sans-serif;font-size:12.5px;font-weight:800;color:#1a1f2e;margin-bottom:6px;break-after:avoid;page-break-after:avoid">${logoImg(brand,18)}${esc(brand)}</div>
+      ${aggBlocks}
+    </div>`;
   }).join("");
-  return`<div class="sec-title" style="font-size:14.5px">Campaigns That Ran</div><div class="sec-sub">Filtered to the same brand / platform / outlet scope as this report</div><div>${cols}</div>`;
+  return`<div class="sec-title" style="font-size:14.5px">Discount Campaigns — by Brand</div><div class="sec-sub">Organized by brand, then platform, so the same combination compares directly across both windows. Incr. Contribution and ROI are computed per campaign against a real baseline period, the same calculation already used on the Campaigns page.</div>${sections}`;
 }
 function cmpReportKPISummary(data){
   return data.map((d,i)=>cmpReportKPICards(d,i>0?data[i-1]:null)).join("");
@@ -19264,65 +19440,83 @@ function cmpBuildReportHTML(data,chartImg){
   const narrative=cmpReportNarrative(data);
   const concl=cmpReportConclusions(data);
   const bottomLine=cmpReportBottomLine(data,concl);
+  // v386: darker secondary text throughout (#9ca3af -> #6b7280/#4b5563) — flagged as hard to
+  // read in print; .camp-col removed from the break-inside list (columns got tall once
+  // Incr. Contribution/ROI were added, forcing a whole column together caused real rendering
+  // bugs) and .camp-item added instead (the correct, small atomic unit); .outlet-brand-group
+  // removed from break-inside (same reasoning — a 14-row table can't be forced onto one page)
+  // and .outlet-brand-hd gets break-after:avoid so the heading can't be orphaned from its own
+  // table; .brand-cell added for correct logo/text alignment (previously drifted); chart-box
+  // padding increased and .chart-legend/.chart-title added (new classes the chart functions
+  // above already emit, previously undefined in this CSS).
   const css=`@page{size:A4;margin:0}*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Georgia','Times New Roman',serif;color:#1a1f2e;background:#fff}
     .page{width:210mm;min-height:297mm;padding:13mm 14mm;position:relative;page-break-after:always}
-    table,.chart-box,.concl-box,.camp-col,.kpi,.outlet-brand-group,tr{break-inside:avoid;page-break-inside:avoid}
+    table,.chart-box,.concl-box,.camp-item,.kpi,tr{break-inside:avoid;page-break-inside:avoid}
     thead{display:table-header-group}
     .runhdr{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid #d1d5db;padding-bottom:9px;margin-bottom:18px;font-family:-apple-system,sans-serif}
-    .runhdr .l{font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#6b7280}
-    .runhdr .scope{font-size:11px;color:#C9A24B;font-weight:700;margin-top:2px}
-    .runhdr .p{font-size:10px;color:#9ca3af;text-align:right}
+    .runhdr .l{font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#4b5563}
+    .runhdr .scope{font-size:11px;color:#B8863B;font-weight:700;margin-top:2px}
+    .runhdr .p{font-size:10px;color:#6b7280;text-align:right}
     .cover{display:flex;flex-direction:column;height:265mm}
     .cover-top{display:flex;align-items:center;gap:14px;padding-bottom:26px;border-bottom:2px solid #C9A24B}
     .cover-logo{width:52px;height:52px;border-radius:8px;object-fit:cover;box-shadow:0 1px 4px rgba(0,0,0,.15)}
     .cover-brand .name{font-size:15px;font-weight:800;letter-spacing:.5px;font-family:-apple-system,sans-serif}
-    .cover-brand .sub{font-size:11px;color:#6b7280;font-family:-apple-system,sans-serif;margin-top:1px}
+    .cover-brand .sub{font-size:11px;color:#4b5563;font-family:-apple-system,sans-serif;margin-top:1px}
     .cover-mid{flex:1;display:flex;flex-direction:column;justify-content:center}
-    .cover-label{font-family:-apple-system,sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#C9A24B;margin-bottom:14px}
+    .cover-label{font-family:-apple-system,sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#B8863B;margin-bottom:14px}
     .cover-title{font-size:28px;font-weight:400;line-height:1.3;margin-bottom:20px}
+    .cover-scope-logos{display:flex;align-items:center;gap:10px;margin-bottom:20px}
+    .cover-scope-logos img{width:44px;height:44px;border-radius:8px;object-fit:contain;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.12)}
     .cover-windows{font-family:-apple-system,sans-serif;font-size:13px;color:#374151;line-height:2.1}
     .cover-windows .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px}
-    .cover-scope-box{font-family:-apple-system,sans-serif;font-size:11.5px;color:#6b7280;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px 14px;margin-top:16px}
-    .cover-bottom{font-family:-apple-system,sans-serif;font-size:10px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:12px;display:flex;justify-content:space-between}
+    .cover-scope-box{font-family:-apple-system,sans-serif;font-size:11.5px;color:#4b5563;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px 14px;margin-top:16px}
+    .cover-bottom{font-family:-apple-system,sans-serif;font-size:10px;color:#6b7280;border-top:1px solid #e5e7eb;padding-top:12px;display:flex;justify-content:space-between}
     .sec-title{font-size:17px;font-weight:400;margin-bottom:3px}
-    .sec-sub{font-family:-apple-system,sans-serif;font-size:10.5px;color:#9ca3af;margin-bottom:12px}
+    .sec-sub{font-family:-apple-system,sans-serif;font-size:10.5px;color:#6b7280;margin-bottom:12px}
     .exec-narrative{font-size:12.5px;line-height:1.8;color:#374151;margin-bottom:14px}
     .exec-narrative .lead{font-weight:700;color:#1a1f2e}
-    .caveat{font-family:-apple-system,sans-serif;font-size:10.5px;color:#92400e;background:#fef3e2;border-left:3px solid #C9A24B;padding:7px 11px;margin:11px 0;line-height:1.55}
+    .caveat{font-family:-apple-system,sans-serif;font-size:10.5px;color:#7c4a03;background:#fef3e2;border-left:3px solid #C9A24B;padding:7px 11px;margin:11px 0;line-height:1.55}
     .kpi-grid{display:grid;gap:9px;margin:11px 0 6px}.kpi-grid.g3b{grid-template-columns:repeat(3,1fr)}
-    .kpi-group-lbl{font-family:-apple-system,sans-serif;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:#9ca3af;margin:12px 0 6px}.kpi-group-lbl:first-child{margin-top:0}
-    .kpi{font-family:-apple-system,sans-serif;border:1px solid #e5e7eb;border-radius:7px;padding:10px 11px;break-inside:avoid}
-    .kpi .l{font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#9ca3af;margin-bottom:4px}
-    .kpi .v{font-size:16px;font-weight:800}.kpi .sub{font-size:9px;color:#6b7280;margin-top:2px}.kpi .d{font-size:9.5px;font-weight:700;margin-top:2px}
-    .data-quality{font-family:-apple-system,sans-serif;font-size:9px;color:#9ca3af;font-style:italic;margin-bottom:12px}
-    table{width:100%;border-collapse:collapse;font-family:-apple-system,sans-serif;font-size:10px;margin-bottom:12px}
-    th{text-align:right;font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#6b7280;padding:6px 7px;border-bottom:2px solid #1a1f2e}
+    .kpi-group-lbl{font-family:-apple-system,sans-serif;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:#6b7280;margin:12px 0 6px}.kpi-group-lbl:first-child{margin-top:0}
+    .kpi{font-family:-apple-system,sans-serif;border:1px solid #e5e7eb;border-radius:7px;padding:10px 11px}
+    .kpi .l{font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#6b7280;margin-bottom:4px}
+    .kpi .v{font-size:16px;font-weight:800}.kpi .sub{font-size:9px;color:#4b5563;margin-top:2px}.kpi .d{font-size:9.5px;font-weight:700;margin-top:2px}
+    .data-quality{font-family:-apple-system,sans-serif;font-size:9px;color:#6b7280;font-style:italic;margin-bottom:12px}
+    table{width:100%;border-collapse:collapse;font-family:-apple-system,sans-serif;font-size:10px;margin-bottom:14px}
+    th{text-align:right;font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#4b5563;padding:6px 7px;border-bottom:2px solid #1a1f2e}
     th:first-child{text-align:left}td{padding:6px 7px;border-bottom:1px solid #eee;text-align:right}td:first-child{text-align:left;font-weight:700}
     tr.tot td{font-weight:800;border-top:2px solid #1a1f2e;border-bottom:none;padding-top:10px}
+    .brand-cell{display:inline-flex;align-items:center}
     .pos{color:#15803d;font-weight:700}.neg{color:#b91c1c;font-weight:700}.up{color:#15803d}.down{color:#b91c1c}
     img.tag{display:inline-block;width:16px;height:16px;border-radius:4px;margin-right:6px;vertical-align:middle;object-fit:cover;box-shadow:0 0 0 1px rgba(0,0,0,.08)}
-    .mover-row{display:flex;align-items:center;gap:9px;padding:6px 0;font-family:-apple-system,sans-serif;font-size:11px;border-bottom:1px solid #f3f4f6}
-    .mover-name{width:85px;font-weight:700}.mover-track{flex:1;height:14px;background:#f3f4f6;border-radius:3px;position:relative}
-    .mover-fill{position:absolute;top:0;bottom:0;border-radius:3px}.mover-val{width:55px;text-align:right;font-weight:700}
-    .chart-box{border:1px solid #e5e7eb;border-radius:7px;padding:11px;margin-bottom:12px}.chart-box img{width:100%;display:block}
-    .camp-col{display:inline-block;vertical-align:top;margin-right:1.8%}
-    .camp-hd{font-family:-apple-system,sans-serif;font-size:10.5px;font-weight:800;color:#1a1f2e;padding-bottom:6px;margin-bottom:8px;border-bottom:2px solid #C9A24B}
-    .camp-item{font-family:-apple-system,sans-serif;font-size:10px;padding:7px 0;border-bottom:1px dashed #e5e7eb;line-height:1.55}
-    .camp-item .nm{font-weight:700;color:#1a1f2e}.camp-item .dt{color:#9ca3af}
-    .camp-none{font-family:-apple-system,sans-serif;font-size:10.5px;color:#9ca3af;font-style:italic;padding:8px 0}
-    .outlet-brand-group{margin-bottom:20px}
-    .outlet-brand-hd{font-family:-apple-system,sans-serif;font-size:12px;font-weight:800;display:flex;align-items:center;gap:7px;padding:6px 0;border-bottom:2px solid;margin-bottom:6px}
-    .concl-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
-    .concl-box{border-radius:8px;padding:16px 18px;font-family:-apple-system,sans-serif}
+    .chart-box{border:1px solid #e5e7eb;border-radius:7px;padding:16px 18px;margin-bottom:12px}.chart-box img{width:100%;display:block}
+    .chart-title{font-family:-apple-system,sans-serif;font-size:10.5px;font-weight:800;color:#374151;margin-bottom:8px}
+    .chart-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;font-family:-apple-system,sans-serif;font-size:9px;color:#374151}
+    .chart-legend .li{display:flex;align-items:center;gap:5px}.chart-legend .sw{display:inline-block;width:9px;height:9px;border-radius:2px}
+    .camp-item{font-family:-apple-system,sans-serif;font-size:9.5px;padding:6px 0;border-bottom:1px dashed #e5e7eb;line-height:1.5}
+    .camp-item .nm{font-weight:700;color:#1a1f2e}.camp-item .dt{color:#6b7280}
+    .camp-none{font-family:-apple-system,sans-serif;font-size:10.5px;color:#6b7280;font-style:italic;padding:8px 0}
+    .outlet-brand-group{margin-bottom:18px}
+    .outlet-brand-hd{font-family:-apple-system,sans-serif;font-size:12px;font-weight:800;display:flex;align-items:center;gap:7px;padding:6px 0;border-bottom:2px solid;margin-bottom:6px;break-after:avoid;page-break-after:avoid}
+    .concl-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px}
+    .concl-box{border-radius:8px;padding:15px 17px;font-family:-apple-system,sans-serif}
     .concl-box.good{background:#f0fdf4;border:1px solid #bbf7d0}.concl-box.bad{background:#fef2f2;border:1px solid #fecaca}
-    .concl-box .hd{font-size:12px;font-weight:800;margin-bottom:10px}.concl-box.good .hd{color:#15803d}.concl-box.bad .hd{color:#b91c1c}
-    .concl-box ul{padding-left:16px;font-size:11px;line-height:1.8;color:#374151}
-    .concl-final{margin-top:18px;font-size:12.5px;line-height:1.8;color:#374151;border-top:2px solid #1a1f2e;padding-top:14px}
-    .footer{position:absolute;bottom:12mm;left:14mm;right:14mm;display:flex;justify-content:space-between;font-family:-apple-system,sans-serif;font-size:9px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:7px}
+    .concl-box .hd{font-size:12px;font-weight:800;margin-bottom:9px}.concl-box.good .hd{color:#15803d}.concl-box.bad .hd{color:#b91c1c}
+    .concl-box ul{padding-left:15px;font-size:10.5px;line-height:1.75;color:#374151}
+    .concl-final{margin-top:16px;font-size:12px;line-height:1.8;color:#374151;border-top:2px solid #1a1f2e;padding-top:13px}
+    .footer{position:absolute;bottom:12mm;left:14mm;right:14mm;display:flex;justify-content:space-between;font-family:-apple-system,sans-serif;font-size:9px;color:#6b7280;border-top:1px solid #e5e7eb;padding-top:7px}
     @media print{.page{page-break-after:always}}`;
+  // v386: scope-aware cover logos — shows the actual brand(s) (and aggregator, if narrowed to
+  // a few) in scope, not just the generic Oregano corporate mark standing in for everything.
+  const cfg0=data[0].cfg;
+  const scopeBrands=cfg0.brands.size?[...cfg0.brands]:[];
+  const scopeAggs=(cfg0.platforms.size&&cfg0.platforms.size<=3)?[...cfg0.platforms]:[];
+  const scopeLogos=[...new Set([...scopeBrands,...scopeAggs])];
+  const scopeLogosHTML=scopeLogos.map(n=>logoImg(n,44).replace(/margin-right:\d+px;?/,"")).join("");
   const cover=`<div class="page cover">
     <div class="cover-top"><img src="${(typeof LOGOS!=="undefined"&&LOGOS["Oregano"])||""}" class="cover-logo" alt=""><div class="cover-brand"><div class="name">OREGANO GROUP</div><div class="sub">Multi-Brand F&amp;B Performance Reporting</div></div></div>
     <div class="cover-mid"><div class="cover-label">Performance Comparison Report</div><div class="cover-title">${esc(scope)}<br>Sales &amp; Profitability Review</div>
+      ${scopeLogosHTML?`<div class="cover-scope-logos">${scopeLogosHTML}</div>`:""}
       <div class="cover-windows">${data.map(d=>`<div><span class="dot" style="background:${cmpClrFor(d.key)}"></span><b>${esc(d.dateLabel)}</b></div>`).join("")}</div>
       <div class="cover-scope-box">Scope: ${esc(scope)}</div></div>
     <div class="cover-bottom"><span>Generated ${fmtDisp(dk(new Date()))}</span><span>Confidential — Internal Use Only</span></div></div>`;
@@ -19332,27 +19526,56 @@ function cmpBuildReportHTML(data,chartImg){
     ${data[data.length-1].campaigns.length&&!data[data.length-2].campaigns.length?`<div class="caveat">⚠ A campaign ran in ${esc(data[data.length-1].dateLabel)} with no counterpart in ${esc(data[data.length-2].dateLabel)} — see Campaigns That Ran. Part of the movement above may reflect this rather than organic change.</div>`:""}
     ${cmpReportKPISummary(data)}
     <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>2</span></div></div>`;
-  const brandCompHTML=cmpReportBrandComparison(data),platCompHTML=cmpReportPlatformComparison(data);
-  const p3=(brandCompHTML||platCompHTML)?`<div class="page"><div class="runhdr"><div><div class="l">Where It Came From</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page 3</div></div>
-    ${brandCompHTML}${platCompHTML}
-    <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>3</span></div></div>`:"";
-  const p4=`<div class="page"><div class="runhdr"><div><div class="l">Trend &amp; Campaigns</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page 4</div></div>
+  // v386: Brand and Platform Comparison are now genuinely separate pages, not crammed onto
+  // one — a broad, many-platform scope produced a real pagination bug when they shared a
+  // page (the platform chart could spill onto a trailing page with an ugly gap before it),
+  // while a narrow scope happened to fit fine. Splitting them means page numbers after this
+  // point are no longer fixed — computed below instead of hardcoded.
+  const brandCompHTML=cmpReportBrandComparison(data);
+  const platCompHTML=cmpReportPlatformComparison(data);
+  let pageNum=3;
+  const pages=[cover,p2];
+  if(brandCompHTML){
+    pages.push(`<div class="page"><div class="runhdr"><div><div class="l">Where It Came From</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page ${pageNum}</div></div>
+      ${brandCompHTML}
+      <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>${pageNum}</span></div></div>`);
+    pageNum++;
+  }
+  if(platCompHTML){
+    pages.push(`<div class="page"><div class="runhdr"><div><div class="l">Where It Came From — Platforms</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page ${pageNum}</div></div>
+      ${platCompHTML}
+      <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>${pageNum}</span></div></div>`);
+    pageNum++;
+  }
+  pages.push(`<div class="page"><div class="runhdr"><div><div class="l">Trend &amp; Campaigns</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page ${pageNum}</div></div>
     ${chartImg?`<div class="sec-title" style="font-size:14.5px">Net Sales — Daily Trend</div><div class="chart-box"><img src="${chartImg}" alt="Trend chart"></div>`:""}
     ${cmpReportCampaignsSection(data)}
-    <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>4</span></div></div>`;
+    <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>${pageNum}</span></div></div>`);
+  pageNum++;
   const outletHTML=cmpReportOutletDetail(data);
-  const p5=outletHTML?`<div class="page"><div class="runhdr"><div><div class="l">Outlet-Level Detail</div><div class="scope">${esc(dates)} — ${esc(scope)} · the deepest level of this report</div></div><div class="p">Oregano Group · Page 5</div></div>
-    ${outletHTML}
-    <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>5</span></div></div>`:"";
-  const p6=`<div class="page"><div class="runhdr"><div><div class="l">Conclusions</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page 6</div></div>
+  if(outletHTML){
+    pages.push(`<div class="page"><div class="runhdr"><div><div class="l">Outlet-Level Detail</div><div class="scope">${esc(dates)} — ${esc(scope)} · the deepest level of this report</div></div><div class="p">Oregano Group · Page ${pageNum}</div></div>
+      ${outletHTML}
+      <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>${pageNum}</span></div></div>`);
+    pageNum++;
+  }
+  pages.push(`<div class="page"><div class="runhdr"><div><div class="l">Conclusions</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page ${pageNum}</div></div>
     <div class="sec-title">Explanation &amp; Verdict</div><div class="sec-sub">What moved, what it means, and what to watch</div>
     <div class="concl-grid">
       <div class="concl-box good"><div class="hd">✓ What's working</div><ul>${concl.good.map(g=>`<li>${esc(g)}</li>`).join("")}</ul></div>
       <div class="concl-box bad"><div class="hd">✗ Worth watching</div><ul>${concl.bad.map(b=>`<li>${esc(b)}</li>`).join("")}</ul></div>
     </div>
     <div class="concl-final"><b>Bottom line:</b> ${esc(bottomLine)}</div>
-    <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>6</span></div></div>`;
-  return`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Performance Comparison Report</title><style>${css}</style></head><body>${cover}${p2}${p3}${p4}${p5}${p6}</body></html>`;
+    <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>${pageNum}</span></div></div>`);
+  // v386: dynamic <title> so the browser's "Save As" dialog defaults to a filename that
+  // states the report's actual contents, not a generic "Performance Comparison Report" —
+  // Nikhil's explicit ask. Scope and dates are sanitized (spaces/arrows stripped) since
+  // those characters are awkward or invalid in filenames on most OSes.
+  const fnScope=scope.replace(/\s+/g,"").replace(/·/g,"-").replace(/\+/g,"");
+  const fnD1=data[0].dateLabel.split("→")[0].trim().replace(/\s+/g,"");
+  const fnD2=data[data.length-1].dateLabel.split("→")[1].trim().replace(/\s+/g,"");
+  const filename=`OreganoGroup_${fnScope}_${fnD1}-${fnD2}_ComparisonReport`;
+  return{html:`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(filename)}</title><style>${css}</style></head><body>${pages.join("\n")}</body></html>`,filename};
 }
 // Orchestrator: capture the live chart (if rendered), compute real data, build the HTML, open
 // a new window and hand off to the browser's own print-to-PDF.
@@ -19364,10 +19587,13 @@ function cmpExportPDF(){
     if(canvas&&canvas.width>0)chartImg=canvas.toDataURL("image/png");
   }catch(e){/* chart not rendered on current sub-tab — report proceeds without it */}
   const data=cmpBuildReportData();
-  const html=cmpBuildReportHTML(data,chartImg);
+  const{html,filename}=cmpBuildReportHTML(data,chartImg);
   const w=window.open("","_blank");
   if(!w){alert("Please allow pop-ups to export the report.");return;}
   w.document.open();w.document.write(html);w.document.close();
+  // filename is already baked into the document's <title> (cmpBuildReportHTML sets it),
+  // which is what the browser's print/Save-As dialog uses as the default filename —
+  // Nikhil's explicit ask that the exported file states its own contents.
   w.onload=()=>{setTimeout(()=>w.print(),300);};
 }
 // v172: Cancellation Monitor page. Reads via getAllCancellations(), which combines each
