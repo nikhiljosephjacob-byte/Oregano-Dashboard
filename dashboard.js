@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-393";
+const BUILD_VERSION="2026-08-13-394";
 const BUILD_NOTES=[
+  "✨ Daily Digest — phase 1 of the new Overview-page feature Nikhil asked for: an always-visible section at the top of Overview showing what happened yesterday, independent of whatever brand/platform/date filter is currently selected on the rest of the page. Built and tested against a mockup first (three review rounds — logos/badges, brand-level study, action-required checklist — iterated in a standalone HTML sample before any of it touched dashboard.js). This build ships the two foundational sections: 'Yesterday at a glance' (Orders/Net Sales/AOV/Discount Burn/Ad Spend/Net Contribution vs the same weekday last week) and 'This week so far' (trailing 7 days ending yesterday — NOT a calendar Mon-Sun week — compared three ways: vs the immediate prior week, vs exactly 4 weeks back for weekday alignment since 28 is divisible by 7 and a calendar-month shift isn't, and vs the same calendar dates last year). New reusable data-layer functions: digestDateRanges() (all periods anchored off `latest`, the real last-synced date, not calendar today) and digestPeriodTotals(start,end) (aggregates orders/sales/discount/contribution/ad-spend across ALL brands+platforms for an explicit range, reusing computeProfitability rather than reimplementing its commission/food-cost/ad-cost math a second time). Rendering reuses the existing kpiCard() and mkTable() helpers rather than inventing new card/table markup, and sits inside a <details open> block matching the same collapsible pattern already used elsewhere (e.g. the critical-notices bar). Verified with a Node harness: all 6 computed date ranges checked against the exact worked example Nikhil gave (opening on 10 Sep → yesterday 9 Sep, this week 3-9 Sep, last week 27 Aug-2 Sep, 4-weeks-back 6-12 Aug, last year same calendar dates); digestPeriodTotals verified to correctly exclude (brand-level) rows and out-of-range dates, and to sum inclusively across a multi-day range — using a stubbed flat-margin brandContribution so the test isolates the aggregation/date logic from the already-proven commission math. Brand-level study, the aggregator×brand matrix, per-brand outlet highlights, campaign spotlight, ad investment snapshot, watch list, and the action-required checklist are reviewed in the mockup but NOT yet built into dashboard.js — later phases, coming once phase 1 is confirmed against real data. One open decision before the action-required checklist phase: how 'actioned' checkbox state should persist (written back to a sheet vs kept local to Nikhil's browser) — not yet decided.",
   "🐛 Found the real reason the pagination fix wasn't landing — Nikhil confirmed builds 391 and 392 looked identical, no visible change at all, which was the actual tell. `break-inside:avoid` set directly on a `<table>` element is a known-unreliable rule in Chromium's print engine — a table has its own internal layout/fragmentation model that generally overrides break-inside set on the table box itself, so the `table` selector in this report's atomic list was very likely never doing anything in build 390, 391, or 392, regardless of whether it was present or removed — explaining why toggling it produced no observed difference either way. `break-inside:avoid` DOES work reliably on an ordinary block element (a plain div) — and `.outlet-brand-group` already IS exactly that: a div wrapping each brand's heading together with its table. It just never had the rule applied to IT directly. Moved the atomic protection there — `.outlet-brand-group{break-inside:avoid}` — keeping `table` in the list too as a harmless no-op for any print engine that does honor it. This is the fix build 386's original .outlet-brand-group removal and every round of table-selector tinkering since (390-392) were circling without landing on: same intent throughout (protect the smallest real atomic unit, the established print-CSS lesson from earlier builds), just never applied to the right element. Needs a real re-export to confirm, same as every print/layout fix in this project — no browser available in this environment to verify Chromium's table-fragmentation behavior directly.",
   "🐛 Reverted part of build 391 — Nikhil tested the \"remove `table` from break-inside:avoid\" change against a real export and it made pagination worse, not better. Traced why: Outlet-Level Detail has always been rendered as ONE .page div holding all brands' tables together (not one .page per brand), and .page uses min-height:297mm rather than a fixed height — so it was already overflowing across multiple physical printed sheets before build 391, with or without table atomicity; the running header/date-range title and page-number footer only ever render once per .page div, not once per physical sheet, either way. Removing table's atomicity didn't fix that underlying issue — it just let individual brand tables (Lollorosso, Smokeys) split mid-list between rows instead of jumping as a whole block once they didn't fit, which reads worse in practice: a table breaking mid-brand (e.g. between Town Square and Marina) is a harder read than an occasional gap before a table that jumps whole. Restored `table` to the atomic list, undoing that one part of 391 (the .camp-aggblock campaign fix and the bigger comparison-table logos from 391 are unaffected and stay). This is a genuine, still-open trade-off — atomic tables can leave a gap when a table almost-but-not-quite fits the remaining page; allowing splits avoids the gap but breaks brands apart mid-list — flagged honestly to Nikhil rather than guessing a third variant with no real browser available here to verify it against.",
   "🐛 Three real print/layout fixes on Compare's Export to PDF, all caught by Nikhil from an actual exported PDF (build 390's real-world test) — exactly the kind of issue only a rendered PDF surfaces, not the Node harness. (1) Outlet-Level Detail tables (Lollorosso, Smokeys) were jumping entirely to the top of a fresh page even with plenty of blank space left on the prior page — root cause: `table` was still in the global break-inside:avoid list, despite a comment right above it already explaining `.outlet-brand-group` had been deliberately removed from that same list for the exact same reason (a 14/15-row table can't be forced onto one page without leaving a gap) — `table` itself was just never removed, quietly defeating that earlier fix. Removed it; `tr` (already in the list) is the correct atomic unit, so a table can now break cleanly between rows instead of jumping whole, and the existing thead{display:table-header-group} repeats the column headers on the continuation page. (2) The Smokeys campaign card was splitting mid-list across pages 4-5 — one campaign item (\"Got Your Back\") landed on the next page fully orphaned from its own brand/aggregator/period headings, none of which repeat. `.camp-item` alone protects one item from splitting internally but does nothing to stop a page break landing between two sibling items in the same list. Added a new `.camp-aggblock` wrapper around each brand+aggregator's whole two-period block and gave it the same break-inside:avoid protection — genuinely small at Nikhil's real campaign counts (1-3 items per brand+aggregator+period), so this is the same \"protect the smallest real atomic unit\" principle used everywhere else in this report, one level up from a single item, not a blanket protection that could reintroduce the same big-gap problem for a brand with many campaigns. (3) Brand/Platform Comparison table logos bumped 16px→24px per Nikhil's direct ask, with brand-cell given a small gap so the larger logo doesn't crowd the brand name.",
@@ -839,6 +840,53 @@ function computeProfitability(records,dateStr){
   }
   return{contribution,gross,adCost:adCostTotal};
 }
+// DAILY DIGEST — date ranges (v394)
+// Computes the fixed set of periods the Overview page's Daily Digest section compares, all
+// anchored off `latest` (the real last date allData has synced rows for — see dispEnd/build 389),
+// not the calendar "today", since that's genuinely what "yesterday" means when the dashboard is
+// opened before today's sales have synced. Per Nikhil's own definitions:
+//   - yesterday / sameDayLastWeek: a single day each, for the "at a glance" KPI cards.
+//   - thisWeek: trailing 7 days ending yesterday (NOT a calendar Mon-Sun week) — e.g. opening the
+//     dashboard on 10 Sep shows "this week" as 3-9 Sep.
+//   - lastWeek: the immediately preceding 7-day block (27 Aug-2 Sep in the same example).
+//   - fourWeeksBack: exactly 28 days before thisWeek, not "1 calendar month back" — 28 is
+//     divisible by 7, so the weekdays line up exactly (both start on the same weekday thisWeek
+//     does), which a straight calendar-month shift would NOT give (subMonth(3 Sep)=3 Aug, a
+//     different weekday than 3 Sep in most years).
+//   - lastYear: same calendar dates one year back (via subYear, leap-day safe), not a weekday-
+//     aligned 52-weeks-back window — confirmed with Nikhil as the simpler, more intuitive read
+//     even though the weekdays won't always match.
+function digestDateRanges(){
+  const y=latest;
+  const thisWeek={start:subDays(y,6),end:y};
+  return{
+    yesterday:{start:y,end:y},
+    sameDayLastWeek:{start:subDays(y,7),end:subDays(y,7)},
+    thisWeek,
+    lastWeek:{start:subDays(y,13),end:subDays(y,7)},
+    fourWeeksBack:{start:subDays(y,34),end:subDays(y,28)},
+    lastYear:{start:subYear(thisWeek.start),end:subYear(thisWeek.end)}
+  };
+}
+// DAILY DIGEST — period totals (v394)
+// Aggregates orders/sales/discount/contribution/ad spend across ALL brands and platforms for an
+// explicit date range, independent of the page's current filter state (the digest always shows
+// the same fixed periods regardless of what brand/platform/outlet filter is active elsewhere on
+// the page). Reuses computeProfitability for the contribution/ad-cost math rather than
+// reimplementing the brand+aggregator-grouped commission/food-cost/ad-cost logic a second time —
+// same function the KPI cards and profitability popup already rely on, just fed a different
+// (explicit-range, unfiltered) record set instead of the UI filter's `ld`/`pd`.
+function digestPeriodTotals(startDate,endDate){
+  const recs=allData.filter(r=>r.branch!=="(brand-level)"&&r.date>=startDate&&r.date<=endDate);
+  const t=sumR(recs);
+  const prof=computeProfitability(recs,endDate);
+  return{
+    orders:t.orders,sales:t.sales,disc:t.disc,
+    aov:t.orders>0?t.sales/t.orders:0,
+    contribution:prof.contribution,gross:prof.gross,adCost:prof.adCost,
+    margin:t.sales>0?prof.contribution/t.sales*100:0
+  };
+}
 // v284: explains WHY profitability moved between two record sets, not just by how much. A
 // single number ("profit down 16.8%") hides which of several genuinely different stories is
 // actually true — did gross demand drop, did discount burn get heavier, did the platform/brand
@@ -1088,6 +1136,15 @@ function subMonth(k){
   const lastDayOfTarget=new Date(targetYear,targetMonth+1,0).getDate();
   const targetDay=Math.min(d.getDate(),lastDayOfTarget);
   return dk(new Date(targetYear,targetMonth,targetDay));
+}
+// Subtract one calendar year, clamping Feb 29 → Feb 28 on a non-leap target year. Used for the
+// Daily Digest's "same dates last year" comparison — see digestDateRanges().
+function subYear(k){
+  const d=new Date(k+"T12:00:00");
+  const targetYear=d.getFullYear()-1;
+  const isLeapTarget=(targetYear%4===0&&targetYear%100!==0)||targetYear%400===0;
+  const day=(d.getMonth()===1&&d.getDate()===29&&!isLeapTarget)?28:d.getDate();
+  return dk(new Date(targetYear,d.getMonth(),day));
 }
 function fmtDisp(k){if(!k)return"";return new Date(k+"T12:00:00").toLocaleDateString("en-AE",{weekday:"short",day:"numeric",month:"short",year:"numeric"});}
 function fmtShort(k){if(!k)return"";return new Date(k+"T12:00:00").toLocaleDateString("en-AE",{day:"numeric",month:"short"});}
@@ -5604,6 +5661,7 @@ function renderOverview(){
 
   document.getElementById("page-overview").innerHTML=makeFilterBar()+
     failedBrandBanner("every figure on this page, including the profitability breakdown, only reflects the brands that DID load")+
+    renderDailyDigest()+
     // v158/v159: scoped style override — .card/.sm/.g2/.ct/.fbar are defined in an external
     // stylesheet this file doesn't control, so overriding their colors here (scoped to
     // #page-overview via the ID prefix, which wins on specificity without needing !important)
@@ -5669,6 +5727,73 @@ function renderOverview(){
   },50);
 }
 
+// DAILY DIGEST — render (v394, phase 1: Yesterday + This Week comparison)
+// Sits at the top of the Overview page, independent of the page's own date/brand/platform
+// filters — it always shows the same fixed "what happened" periods (see digestDateRanges), so
+// opening the dashboard any day gives the same kind of answer regardless of what filter was left
+// selected last. Phase 1 covers the two headline sections (Yesterday at a glance, This Week so
+// far); brand-level study, the aggregator×brand matrix, outlet highlights, campaign spotlight, ad
+// investment snapshot, watch list, and the action-required checklist are later phases, reviewed
+// as a mockup first (per the established mockup-before-build pattern) before being wired in here.
+function renderDailyDigest(){
+  const dr=digestDateRanges();
+  const y=digestPeriodTotals(dr.yesterday.start,dr.yesterday.end);
+  const ySame=digestPeriodTotals(dr.sameDayLastWeek.start,dr.sameDayLastWeek.end);
+  const tw=digestPeriodTotals(dr.thisWeek.start,dr.thisWeek.end);
+  const lw=digestPeriodTotals(dr.lastWeek.start,dr.lastWeek.end);
+  const fwb=digestPeriodTotals(dr.fourWeeksBack.start,dr.fourWeeksBack.end);
+  const ly=digestPeriodTotals(dr.lastYear.start,dr.lastYear.end);
+
+  const T=_darkPage?{muted:DARK_THEME.textMuted,label:DARK_THEME.textSecondary,value:DARK_THEME.textPrimary,border:DARK_THEME.cardBorder,panelBg:DARK_THEME.card}
+    :{muted:"#64748b",label:"#94a3b8",value:"#0F172A",border:"#EDE7D9",panelBg:"#fff"};
+
+  const kpis=`<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:16px">
+    ${kpiCard("Orders",y.orders.toLocaleString(),`vs ${fmtDisp(dr.sameDayLastWeek.start)}: ${ySame.orders.toLocaleString()}`,pctOf(y.orders,ySame.orders))}
+    ${kpiCard("Net Sales",fmtAEDTip(y.sales),`vs ${fmtDisp(dr.sameDayLastWeek.start)}: ${fmtAEDTip(ySame.sales)}`,pctOf(y.sales,ySame.sales))}
+    ${kpiCard("AOV",`AED ${y.aov.toFixed(1)}`,`vs ${fmtDisp(dr.sameDayLastWeek.start)}: AED ${ySame.aov.toFixed(1)}`,pctOf(y.aov,ySame.aov))}
+    ${kpiCard("Discount Burn",fmtAEDTip(y.disc),`${(y.sales+y.disc)>0?(y.disc/(y.sales+y.disc)*100).toFixed(1):"0.0"}% of gross`,pctOf(y.disc,ySame.disc),null,null,true)}
+    ${kpiCard("Ad Spend",fmtAEDTip(y.adCost),`${y.sales>0?(y.adCost/y.sales*100).toFixed(1):"0.0"}% of sales`,pctOf(y.adCost,ySame.adCost),null,null,true)}
+    ${kpiCard("Net Contribution",fmtAEDTip(y.contribution),`${y.margin.toFixed(1)}% margin`,pctOf(y.contribution,ySame.contribution))}
+  </div>`;
+
+  // Each row's comparison chips: green/red is relative to whether higher is actually good for
+  // that metric (Discount Burn and Ad Spend are inverted — a smaller number is the win).
+  const chip=(curVal,baseVal,higherIsGood)=>{
+    const p=pctOf(curVal,baseVal);
+    if(p==null)return`<span style="color:${T.muted}">—</span>`;
+    const good=higherIsGood?p>=0:p<0;
+    return`<span style="color:${good?"#15803d":"#b91c1c"};font-weight:800">${fmtPct(p)}</span>`;
+  };
+  const weekHeads=["Metric","This week",`vs last week<br><span style="font-weight:400;font-size:9px;color:${T.muted}">${fmtShort(dr.lastWeek.start)}–${fmtShort(dr.lastWeek.end)}</span>`,
+    `vs 4 weeks ago<br><span style="font-weight:400;font-size:9px;color:${T.muted}">${fmtShort(dr.fourWeeksBack.start)}–${fmtShort(dr.fourWeeksBack.end)}</span>`,
+    `vs last year<br><span style="font-weight:400;font-size:9px;color:${T.muted}">${fmtShort(dr.lastYear.start)}–${fmtShort(dr.lastYear.end)}</span>`];
+  const weekRow2=(label,key,fmtFn,higherIsGood=true)=>[
+    `<span style="font-weight:700">${label}</span>`,
+    fmtFn(tw[key]),
+    chip(tw[key],lw[key],higherIsGood),
+    chip(tw[key],fwb[key],higherIsGood),
+    chip(tw[key],ly[key],higherIsGood)
+  ];
+  const weekRows=[
+    weekRow2("Orders","orders",v=>v.toLocaleString()),
+    weekRow2("Net Sales","sales",fmtAEDTip),
+    weekRow2("AOV","aov",v=>`AED ${v.toFixed(1)}`),
+    weekRow2("Discount Burn","disc",v=>fmtAEDTip(v),false),
+    weekRow2("Ad Spend","adCost",v=>fmtAEDTip(v),false),
+    weekRow2("Net Contribution","contribution",v=>fmtAEDTip(v))
+  ];
+  const weekTable=mkTable(weekHeads,weekRows);
+
+  return`<details open style="margin-bottom:16px;border:1px solid ${T.border};border-radius:10px;background:${T.panelBg};overflow:hidden">
+    <summary style="cursor:pointer;font-size:13px;font-weight:800;color:${T.value};padding:12px 16px;user-select:none;list-style:none">📋 Daily Digest — ${fmtDisp(dr.yesterday.start)} <span style="font-weight:400;color:${T.muted};font-size:11px">yesterday's numbers, always shown regardless of the filters below</span></summary>
+    <div style="padding:0 16px 16px">
+      <div style="font-size:11px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Yesterday at a glance</div>
+      ${kpis}
+      <div style="font-size:11px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">This week so far — ${fmtShort(dr.thisWeek.start)}–${fmtShort(dr.thisWeek.end)}</div>
+      ${weekTable}
+    </div>
+  </details>`;
+}
 // BRANDS
 function renderBrands(){
   const b=BMAP[selBrand];const ld=getLD().filter(r=>r.brand===selBrand),pd=getPD().filter(r=>r.brand===selBrand);
