@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-396";
+const BUILD_VERSION="2026-08-13-397";
 const BUILD_NOTES=[
+  "🐛 Real co-funding commission bug, caught and precisely specified by Nikhil with a worked example: AED 100 cart, 30% off cap 30 (AED 30 discount), 50-50 co-funded by the aggregator — the aggregator charges commission on Gross minus OUR share of the discount only (100-15=85), not on the full customer-facing net (100-30=70), because their own AED 15 subsidy doesn't reduce what THEY consider the sale worth for their own cut. Every forward-looking forecast tool that synthesizes a hypothetical 'net sales' figure from a formula (rather than reading real aggregator-reported data, which already reflects this correctly) had this backwards — commission was being computed on the customer-facing net (70), understating commission cost by AED 3/order in the worked example, which overstated every co-funded scenario's contribution by the same amount. Confirmed this does NOT affect real historical campaign analysis (computeProfitability, campAnalysisV2's actual/baseline contribution, the Compare/Overview/Brands pages) — those all read real 'net sales' directly from each aggregator's own export, which already reflects however that aggregator actually charges commission; there's no formula to get wrong there. Fixed in the four places that DO synthesize a hypothetical net: campBeCompute() (Break-Even Calculator, commPo was custNetAOV*cr → now effectivePo*cr), campFcRunScenario() and campFcRunScenarioSelectItems() (Campaign Forecaster, both now pass campGross-merchantDisc into brandContribution() instead of the customer-facing campNet), and campAnalysisV2's 'what-if lower discount depth' elasticity counterfactual plus its break-even-depth solver (both real-campaign features that still synthesize a hypothetical net for a depth that wasn't actually run). Every fix is identical to the prior behavior whenever co-funding is 0% — the common case — and only changes the number when co-funding is genuinely set. Verified with a Node harness against Nikhil's exact worked example: all three forecasting functions now correctly produce AED 4,300 contribution (was silently wrong before), and confirmed byte-identical output at 0% co-funding.",
+  "✨ Campaign Forecaster — historical match rows are now expandable, per Nikhil's approved mockup (campfc_bec_v2.html, Option A). The compact table (Campaign/Days/Uplift/Orders/Sales/Disc/ROI) is unchanged; clicking a row reveals a Before/During comparison — baseline period (its own date range, Orders/day, Sales/day, AOV) next to the campaign period (same three metrics) — using fields campAnalysisV2 already computes (bs/cs/bDays/bStart/bEnd) that just weren't previously exposed on the match object. New campFcExpandedMatches state (per-row toggle, same pattern as the existing campFcShowAllMatches). Verified the generated HTML is structurally balanced (21/21 divs in a representative expanded row) using Nikhil's own Pizza Week example from the approved mockup.",
   "✨ Campaign Break-Even Calculator — added a compact mini P&L (Gross Sales → Discount → Net Sales → Commission → Food+Pkg → Net Contribution) to each of the 5 scenario cards, filling the empty space Nikhil pointed out below the orders/day figures. Almost entirely free: mkScenario() already computes grossSales, discBurn, effectiveRev, foodCost, and commCost for all four campaign scenarios (flat/break-even/+10%/+20%) — they were just never surfaced in the card. Only the Baseline card's `d` object needed backfilling, derived from fields campBeCompute() already returns (baseGrossAOV, baseNetAOV, fp, cr, baseOrders) rather than changing that function's return shape. One real correctness catch made during the build, not just a display exercise: a naive waterfall (Gross Sales - full Discount Burn - Commission - Food) would NOT reconcile to the Net Contribution figure whenever platform co-funding (campBeCoFund) is set above 0%, because contribution is based on OUR net cost after the platform's rebate, not the full customer-facing discount — the existing 'Per-order economics' panel already handles this exact distinction with separate 'Customer pays' vs 'Our revenue' rows, for the same reason. Fixed by showing 'Discount' as our share only (discBurn - platRebate, both already returned by mkScenario, no new field needed) and 'Net Sales' as the co-funding-aware effectiveRev — identical to the naive version whenever co-funding is 0% (the common case), but now the waterfall adds up exactly in every case. Verified with a Node harness across all 5 scenarios, both at 0% and 50% co-funding: Gross Sales - Discount - Commission - Food = Net Contribution to the cent in all 10 cases. Kept deliberately small (9px labels, 10px values) to fit five cards' worth of P&L breakdown in one row without wrapping, matching the existing card's own font scale rather than introducing a new size.",
   "🔄 Daily Digest converted from an Overview-page fixture (build 394) to an export/PDF — Nikhil's direct correction after seeing phase 1 live: he'd asked for it on the Overview page during the earlier design round, but seeing it actually pushing his existing KPI cards down changed his mind. Removed renderDailyDigest() from renderOverview()'s output entirely; added a small '📄 Export Daily Digest' button in its place, same visual treatment as Compare's '📄 Export to PDF' button. Rather than inventing a second report styling system, extracted Compare's entire print CSS out of cmpBuildReportHTML into a new shared reportBaseCSS() function (cmpBuildReportHTML now just calls const css=reportBaseCSS()) — every print/pagination fix already proven there across builds 388-393 (table-vs-div break-inside reliability, .camp-aggblock, .outlet-brand-group atomicity, bigger logos) now benefits this report too, and any future fix only needs to land once. Built digestBuildReportHTML() (cover page + one content page: 'Yesterday at a glance' KPI cards, 'This week so far' 3-way comparison table) reusing the exact same .kpi/.kpi-grid/table markup patterns Compare's own Executive Summary page already uses — digestKPICards() mirrors cmpReportKPICards()'s arrow()/polarity logic directly rather than reinventing it, only diverging to drop the 'discount figures partially estimated' caveat line, since that's about Compare's specific exact-vs-estimated discount-source tracking and doesn't apply here (the Digest sums the same allData.disc figures the rest of the dashboard uses unqualified). digestExportPDF() mirrors cmpExportPDF()'s window.open/write/print flow exactly. digestDateRanges()/digestPeriodTotals() (the data layer from build 394, already tested) are unchanged. Verified with a Node harness: the generated report HTML has balanced divs (55/55) and tables (1/1), contains the expected title/branding/section text, built against a full multi-month mock dataset covering every comparison period including last year. Brand-level study, the aggregator×brand matrix, outlet highlights, campaign spotlight, ad investment snapshot, watch list, and the action-required checklist remain un-built — same later-phase status as build 394, just now targeting the export report instead of an Overview-page section.",
   "✨ Daily Digest — phase 1 of the new Overview-page feature Nikhil asked for: an always-visible section at the top of Overview showing what happened yesterday, independent of whatever brand/platform/date filter is currently selected on the rest of the page. Built and tested against a mockup first (three review rounds — logos/badges, brand-level study, action-required checklist — iterated in a standalone HTML sample before any of it touched dashboard.js). This build ships the two foundational sections: 'Yesterday at a glance' (Orders/Net Sales/AOV/Discount Burn/Ad Spend/Net Contribution vs the same weekday last week) and 'This week so far' (trailing 7 days ending yesterday — NOT a calendar Mon-Sun week — compared three ways: vs the immediate prior week, vs exactly 4 weeks back for weekday alignment since 28 is divisible by 7 and a calendar-month shift isn't, and vs the same calendar dates last year). New reusable data-layer functions: digestDateRanges() (all periods anchored off `latest`, the real last-synced date, not calendar today) and digestPeriodTotals(start,end) (aggregates orders/sales/discount/contribution/ad-spend across ALL brands+platforms for an explicit range, reusing computeProfitability rather than reimplementing its commission/food-cost/ad-cost math a second time). Rendering reuses the existing kpiCard() and mkTable() helpers rather than inventing new card/table markup, and sits inside a <details open> block matching the same collapsible pattern already used elsewhere (e.g. the critical-notices bar). Verified with a Node harness: all 6 computed date ranges checked against the exact worked example Nikhil gave (opening on 10 Sep → yesterday 9 Sep, this week 3-9 Sep, last week 27 Aug-2 Sep, 4-weeks-back 6-12 Aug, last year same calendar dates); digestPeriodTotals verified to correctly exclude (brand-level) rows and out-of-range dates, and to sum inclusively across a multi-day range — using a stubbed flat-margin brandContribution so the test isolates the aggregation/date logic from the already-proven commission math. Brand-level study, the aggregator×brand matrix, per-brand outlet highlights, campaign spotlight, ad investment snapshot, watch list, and the action-required checklist are reviewed in the mockup but NOT yet built into dashboard.js — later phases, coming once phase 1 is confirmed against real data. One open decision before the action-required checklist phase: how 'actioned' checkbox state should persist (written back to a sheet vs kept local to Nikhil's browser) — not yet decided.",
@@ -11685,12 +11687,16 @@ function campAnalysisV2(c){
       // gross sales at this scenario (incremental orders valued at baseline gross AOV)
       const scGrossPerDay=scTotalOrdersPerDay*baseGrossAOV;
       const scDiscPerDay=scGrossPerDay*depth;
-      const scNetPerDay=scGrossPerDay-scDiscPerDay;
       // our discount cost (apply same co-funding)
       const scOurDiscPerDay=scDiscPerDay*(1-coFundedPct);
       // contribution (single representative brand cost basis; for All Brands use scope-weighted later)
       const brandForCost=c.brand==='All Brands'?(brandsInScope[0]||'Oregano'):c.brand;
-      const scContribPerDay=brandContribution(c.aggregator,brandForCost,scNetPerDay,scGrossPerDay,dref);
+      // v397: same commission-base fix as campBeCompute/the Forecaster — commission is charged on
+      // Gross minus OUR share of the discount (scGrossPerDay-scOurDiscPerDay), not on the full
+      // customer-facing net (scGrossPerDay-scDiscPerDay, which this "what-if lower depth"
+      // projection has no other use for once this fix is applied). Identical result whenever
+      // coFundedPct=0.
+      const scContribPerDay=brandContribution(c.aggregator,brandForCost,scGrossPerDay-scOurDiscPerDay,scGrossPerDay,dref);
       const scIncrContribPerDay=scContribPerDay-baseContribPerDay;
       // headline % this depth corresponds to on the platform (scaled from the observed headline→depth ratio)
       const scenarioHeadlinePct=headlineRatio?Math.round(depth*headlineRatio*100):null;
@@ -11716,8 +11722,10 @@ function campAnalysisV2(c){
     for(let d=0.80;d>=0.0;d-=0.01){
       const retain=Math.pow(d/actualDiscDepth,elasticity);
       const scTotalOrders=(bs.orders/bDays)+incrOrdersPerDay*retain;
-      const scGross=scTotalOrders*baseGrossAOV;const scNet=scGross*(1-d);
-      const scContrib=brandContribution(c.aggregator,brandForCost,scNet,scGross,dref)-baseContribPerDay;
+      const scGross=scTotalOrders*baseGrossAOV;
+      // v397: same commission-base fix — our share of the discount only, not the full depth.
+      const scOurDisc=scGross*d*(1-coFundedPct);
+      const scContrib=brandContribution(c.aggregator,brandForCost,scGross-scOurDisc,scGross,dref)-baseContribPerDay;
       if(scContrib>0){breakEvenDepth=d;break;}
     }
   }
@@ -13320,6 +13328,14 @@ let campFcBrand='',campFcAgg='',campFcStart='',campFcEnd='';
 // no way to expand and check why. Default stays compact (8 rows) for the common case; this toggle
 // lets it show everything on request instead of hiding data behind an unreachable ceiling.
 let campFcShowAllMatches=false;
+// v397: which historical-match rows are expanded to show their before/during breakdown. Indices
+// are relative to the currently-displayed slice (resets naturally on a fresh forecast run, same
+// as campFcShowAllMatches, since a new run means these indices no longer refer to the same rows).
+let campFcExpandedMatches=new Set();
+function campFcToggleMatchExpand(idx){
+  if(campFcExpandedMatches.has(idx))campFcExpandedMatches.delete(idx);else campFcExpandedMatches.add(idx);
+  renderCampaigns();
+}
 let campFcDiscPct=30,campFcCap=20,campFcCoFund=true,campFcCoFundPct=50;
 // v250: campaign structure type — 'menu' is the original, unchanged model. 'selectItems' is the
 // new type, using real historical per-order discount data instead of a discPct/cap formula.
@@ -13567,7 +13583,13 @@ function campFcFindHistoryMatches(brand,agg,pattern,discPct,dsType){
     const truncation=manualIssueFlag?null:campFcDetectTruncation(c);
     const shortDuration=(manualIssueFlag||truncation)?null:campFcDetectShortDuration(c,done);
     const isTruncated=manualIssueFlag||!!truncation||!!shortDuration;
-    out.push({c,discPct:hp,cap:null,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales,campOrdersPerDay:a.cs.orders/a.cDays,campSalesPerDay:a.cs.sales/a.cDays,isAtypical,isTruncated,truncationDetail:truncation,shortDurationDetail:shortDuration,manualIssueFlag});
+    out.push({c,discPct:hp,cap:null,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales,campOrdersPerDay:a.cs.orders/a.cDays,campSalesPerDay:a.cs.sales/a.cDays,
+      // v397: before/during breakdown for the Forecaster's expandable match rows — all already
+      // computed by campAnalysisV2 (a.bs/a.bDays/a.bStart/a.bEnd), just not previously exposed on
+      // this match object.
+      baseOrdersPerDay:a.bDays>0?a.bs.orders/a.bDays:null,baseAOV:a.bs.orders>0?a.bs.sales/a.bs.orders:null,
+      campAOV:a.cs.orders>0?a.cs.sales/a.cs.orders:null,bStart:a.bStart,bEnd:a.bEnd,
+      isAtypical,isTruncated,truncationDetail:truncation,shortDurationDetail:shortDuration,manualIssueFlag});
   }
   out.sort((a,b)=>b.c.startDate.localeCompare(a.c.startDate));
   return out;
@@ -13730,7 +13752,10 @@ function campFcFindMatches(brand,agg,discPct,cap){
     const truncation=manualIssueFlag?null:campFcDetectTruncation(c); // manual flag already covers it — don't also run the heuristic
     const shortDuration=(manualIssueFlag||truncation)?null:campFcDetectShortDuration(c,done);
     const isTruncated=manualIssueFlag||!!truncation||!!shortDuration;
-    out.push({c,discPct:hp,cap:cCap,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales,campOrdersPerDay:a.cs.orders/a.cDays,campSalesPerDay:a.cs.sales/a.cDays,isAtypical,isTruncated,truncationDetail:truncation,shortDurationDetail:shortDuration,manualIssueFlag});
+    out.push({c,discPct:hp,cap:cCap,upliftPct:a.ordersLift,incrContribPerDay:a.incrContribPerDay,discountROI:a.discountROI,ourDiscPerDay:a.ourDiscPerDay,cDays:a.cDays,campNet:a.cs.sales,baseNet:a.bs.sales,campOrdersPerDay:a.cs.orders/a.cDays,campSalesPerDay:a.cs.sales/a.cDays,
+      baseOrdersPerDay:a.bDays>0?a.bs.orders/a.bDays:null,baseAOV:a.bs.orders>0?a.bs.sales/a.bs.orders:null,
+      campAOV:a.cs.orders>0?a.cs.sales/a.cs.orders:null,bStart:a.bStart,bEnd:a.bEnd,
+      isAtypical,isTruncated,truncationDetail:truncation,shortDurationDetail:shortDuration,manualIssueFlag});
   }
   // Most recent campaigns first — the display only shows the top 8, and recent campaigns
   // are more relevant for a forecast than old ones. All matches are still used in the
@@ -13855,7 +13880,12 @@ function campFcRunScenarioSelectItems(baseline,uplift,histDiscPerOrder,coFundPct
   // implied by histDiscPerOrder against gross, same spirit as the menu-wide model's netAOV.
   const netAOV=grossAOV-histDiscPerOrder;
   const campNet=allOrd*netAOV,campGross=allOrd*grossAOV;
-  const campContrib=brandContribution(agg,brand,campNet,campGross,dateStr);
+  // v397: commission-base fix, same as campBeCompute — the aggregator charges commission on Gross
+  // minus OUR share of the discount only (campGross-merchantDisc), not on the full customer-facing
+  // net (campNet, which still uses the FULL discount and stays correct for "what we actually
+  // sold" reporting elsewhere in this object). campGross-merchantDisc === campNet whenever
+  // coFundPct=0, so this only changes the number when co-funding is genuinely set.
+  const campContrib=brandContribution(agg,brand,campGross-merchantDisc,campGross,dateStr);
   const baseNet=baseline.dailyNet*nDays,baseGross=baseline.dailyGross*nDays;
   const baseContrib=brandContribution(agg,brand,baseNet,baseGross,dateStr);
   const incrContrib=campContrib-baseContrib;
@@ -13877,7 +13907,8 @@ function campFcRunScenario(baseline,uplift,discPct,cap,coFundPct,agg,brand,nDays
   const totalDisc=allOrd*effDisc;
   const merchantDisc=totalDisc*(1-coFundPct/100);
   const aggCoDisc=totalDisc*(coFundPct/100);
-  const campContrib=brandContribution(agg,brand,campNet,campGross,dateStr);
+  // v397: same commission-base fix as campBeCompute/campFcRunScenarioSelectItems.
+  const campContrib=brandContribution(agg,brand,campGross-merchantDisc,campGross,dateStr);
   const baseNet=baseline.dailyNet*nDays,baseGross=baseline.dailyGross*nDays;
   const baseContrib=brandContribution(agg,brand,baseNet,baseGross,dateStr);
   const incrContrib=campContrib-baseContrib;
@@ -14349,7 +14380,16 @@ function campBeCompute(){
   const custNetAOV=baseGrossAOV-discPo;
   const effectivePo=baseGrossAOV-ourDiscPo;
   const foodPo=baseGrossAOV*fp;
-  const commPo=custNetAOV*cr;
+  // v397: real commission-methodology fix per Nikhil's worked example — the aggregator charges
+  // commission on Gross minus OUR share of the discount only (effectivePo), not on the full
+  // customer-facing net (custNetAOV). Worked example: AED 100 cart, 30% off cap 30 (AED 30
+  // discount), 50-50 co-funded — commission is charged on 100-15=85, not on 100-30=70, because
+  // the platform's own AED 15 subsidy doesn't reduce what THEY consider the sale worth for their
+  // own cut. Was custNetAOV*cr (70-based here) — understated commission cost by AED 3/order in
+  // this example, which overstated contribution by the same amount for every co-funded order.
+  // Identical result whenever coFundPct=0 (custNetAOV===effectivePo in that case, the common
+  // case), only actually changes the number when co-funding is genuinely set.
+  const commPo=effectivePo*cr;
   const contribPo=effectivePo-foodPo-commPo;
   const bFoodPo=baseGrossAOV*fp;
   const bCommPo=baseNetAOV*cr;
@@ -14535,7 +14575,7 @@ function campBeHTML(){
     ['Customer pays',fmA(R.custNetAOV),T.text,'Net AOV after discount'],
     ['Our revenue',fmA(R.effectivePo),ac,campBeCoFund>0?'After platform rebate':'Effective receipt/order'],
     ['Food + pkg','– '+fmA(R.foodPo),'#FB923C',Math.round(R.fp*100)+'% of gross'],
-    ['Commission','– '+fmA(R.commPo),'#FB923C',Math.round(R.cr*100)+'% of cust. net']
+    ['Commission','– '+fmA(R.commPo),'#FB923C',Math.round(R.cr*100)+'% of our revenue']
   ];
   const econContribBase={v:fmA(R.bContribPo),c:CBE_COLORS[0]};
   const econContribCampaign={v:fmA(R.contribPo),c:R.contribPo>R.bContribPo*0.6?CBE_COLORS[2]:'#FBBF24'};
@@ -14839,18 +14879,21 @@ function campFcHTML(){
     const flagsHTML=flags.map(f=>`<div style="display:flex;align-items:flex-start;gap:8px;font-size:12px;padding:8px 10px;border-radius:6px;margin-bottom:6px;background:${f.lvl==='warn'?'rgba(245,158,11,.08)':T.rowBg};border:0.5px solid ${f.lvl==='warn'?'rgba(245,158,11,.4)':T.border}">`
       +`<span style="font-size:14px;flex-shrink:0;margin-top:1px">${f.lvl==='warn'?'⚠️':'ℹ️'}</span><span style="color:${f.lvl==='warn'?'#92400e':T.secondary}">${f.msg}</span></div>`).join('');
 
-    // v110: Match table — "excluded" is now ONLY for genuine statistical outliers (±150% swings,
-    // almost always a data issue). Short campaigns are no longer penalized (that was the bug).
-    // Named one-off events get their own distinct "atypical" flag instead of being dimmed the
-    // same as an outlier — they're still real data, just down-weighted in the calculation.
-    const matchRows=r.matches.slice(0,campFcShowAllMatches?r.matches.length:8).map(m=>{
+    // v397: expandable before/during breakdown per row, per Nikhil's ask — approved from the
+    // mockup (campfc_bec_v2.html). Table itself stays exactly as compact as before; clicking a
+    // row reveals its baseline (before) period next to the campaign (during) period, using fields
+    // campFcFindHistoryMatches/campFcFindMatches now expose (baseOrdersPerDay, baseAOV, campAOV,
+    // bStart, bEnd) — all already computed by campAnalysisV2, nothing new calculated here.
+    const matchRows=r.matches.slice(0,campFcShowAllMatches?r.matches.length:8).map((m,idx)=>{
       const ic=m.discountROI!=null?(m.discountROI>=0?'#22C55E':'#EF4444'):T.muted;
       const isOutlier=Math.abs(m.upliftPct||0)>=150;
       const dimmed=isOutlier;
       const flagHTML=isOutlier
         ?'<span style="font-size:8px;color:#EF4444;background:rgba(239,68,68,.1);padding:1px 5px;border-radius:4px;margin-left:4px">⚠ statistical outlier · excluded</span>'
         :(m.isAtypical?'<span style="font-size:8px;color:#F59E0B;background:rgba(245,158,11,.1);padding:1px 5px;border-radius:4px;margin-left:4px">🎪 atypical event · down-weighted</span>':'');
-      return`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr;gap:4px;padding:8px 0;border-bottom:0.5px solid ${T.rowBg2};font-size:13px;align-items:center${dimmed?';opacity:.45':''}">`
+      const isOpen=campFcExpandedMatches.has(idx);
+      const chev=`<span style="color:${T.muted};font-size:10px;transition:transform .15s;display:inline-block;transform:rotate(${isOpen?90:0}deg)">▶</span>`;
+      const row=`<div onclick="campFcToggleMatchExpand(${idx})" style="cursor:pointer;display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr 0.3fr;gap:4px;padding:8px 0;border-bottom:0.5px solid ${T.rowBg2};font-size:13px;align-items:center${dimmed?';opacity:.45':''}">`
       +`<div style="color:${T.secondary}">${m.c.name||m.c.comments||'—'}${flagHTML}<div style="font-size:11px;color:${T.label}">${m.c.startDate} – ${m.c.endDate}</div></div>`
       +`<div style="color:${T.label}">${m.cDays}d</div>`
       +`<div style="color:${(m.upliftPct||0)>=0?'#16a34a':'#dc2626'};font-weight:600">${m.upliftPct!=null?fP(m.upliftPct):'—'}</div>`
@@ -14858,7 +14901,22 @@ function campFcHTML(){
       +`<div style="color:${T.text}">${m.campSalesPerDay!=null?fA(m.campSalesPerDay):'—'}</div>`
       +`<div style="color:#F59E0B">${m.ourDiscPerDay!=null&&m.ourDiscPerDay>0?fA(m.ourDiscPerDay):'—'}</div>`
       +`<div><span style="font-size:10px;font-weight:600;color:${ic}">${m.discountROI!=null?m.discountROI.toFixed(2)+'×':'—'}</span></div>`
-      +'</div>';}).join('');
+      +`<div style="text-align:right">${chev}</div>`
+      +'</div>';
+      const hasBeforeAfter=m.baseOrdersPerDay!=null&&m.baseAOV!=null&&m.campAOV!=null;
+      const detail=(isOpen&&hasBeforeAfter)?(()=>{
+        const col=(label,color,dateRange,opd,sales,aov)=>`<div><div style="font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:${color};margin-bottom:6px">${label}${dateRange?` — ${dateRange}`:''}</div>`
+          +`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:11.5px"><span style="color:${T.muted}">Orders/day</span><span style="font-weight:700;color:${T.text}">${Math.round(opd).toLocaleString()}</span></div>`
+          +`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:11.5px"><span style="color:${T.muted}">Sales/day</span><span style="font-weight:700;color:${T.text}">${fA(sales)}</span></div>`
+          +`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:11.5px"><span style="color:${T.muted}">AOV</span><span style="font-weight:700;color:${T.text}">${fA(aov)}</span></div></div>`;
+        return`<div style="padding:4px 0 12px;display:grid;grid-template-columns:1fr 1fr;gap:14px;background:${T.rowBg};border-radius:8px;padding:12px 14px;margin-bottom:6px">`
+          +col('Before',T.muted,m.bStart&&m.bEnd?`${fmtShort(m.bStart)}–${fmtShort(m.bEnd)}`:'',m.baseOrdersPerDay,(m.baseOrdersPerDay||0)*(m.baseAOV||0),m.baseAOV)
+          +col('During (campaign)',accent,`${fmtShort(m.c.startDate)}–${fmtShort(m.c.endDate)}`,m.campOrdersPerDay,m.campSalesPerDay,m.campAOV)
+          +`<div style="grid-column:1/3;text-align:center;font-size:11px;color:${T.muted};padding-top:6px;border-top:0.5px dashed ${T.border}">Uplift <strong style="color:${(m.upliftPct||0)>=0?'#16a34a':'#dc2626'}">${fP(m.upliftPct)}</strong> orders · <strong style="color:${ic}">${m.discountROI!=null?m.discountROI.toFixed(2)+'×':'—'} ROI</strong> on ${m.ourDiscPerDay!=null?fA(m.ourDiscPerDay*m.cDays):'—'} merchant discount</div>`
+          +'</div>';
+      })():'';
+      return row+detail;}).join('');
+
 
     resultsHTML=`<div style="border-top:0.5px solid ${T.border};margin-top:14px;padding-top:14px">`
     +staleBanner
@@ -14867,7 +14925,7 @@ function campFcHTML(){
     +bPill(r.brand,22)+aPill(r.agg,22)
     +`<span style="background:rgba(34,197,94,.1);color:#16a34a;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">${r.matches.length} historical match${r.matches.length!==1?'es':''}</span>`
     +`<span style="font-size:10px;color:${T.label}">· ${campFcMatchCriteriaLabel()} · <em style="opacity:.7">dimmed = statistical outlier · excluded</em></span></div>`
-    +`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr;gap:4px;padding:5px 0;border-bottom:0.5px solid ${T.border};font-size:11px;font-weight:600;color:${T.label};text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Days</div><div>Uplift</div><div>Orders/day</div><div>Sales/day</div><div>Disc/day</div><div>ROI</div></div>`
+    +`<div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr 0.3fr;gap:4px;padding:5px 0;border-bottom:0.5px solid ${T.border};font-size:11px;font-weight:600;color:${T.label};text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Days</div><div>Uplift</div><div>Orders/day</div><div>Sales/day</div><div>Disc/day</div><div>ROI</div><div></div></div>`
     +matchRows
     +(r.matches.length>8?`<div onclick="campFcShowAllMatches=!campFcShowAllMatches;renderCampaigns()" style="cursor:pointer;font-size:11px;font-weight:700;color:#60A5FA;padding:8px 0 2px;text-align:center">${campFcShowAllMatches?'↑ Show fewer':'Show all '+r.matches.length+' matches (used in the average below) →'}</div>`:'')
     +(()=>{
