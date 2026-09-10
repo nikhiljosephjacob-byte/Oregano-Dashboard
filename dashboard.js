@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-394";
+const BUILD_VERSION="2026-08-13-395";
 const BUILD_NOTES=[
+  "🔄 Daily Digest converted from an Overview-page fixture (build 394) to an export/PDF — Nikhil's direct correction after seeing phase 1 live: he'd asked for it on the Overview page during the earlier design round, but seeing it actually pushing his existing KPI cards down changed his mind. Removed renderDailyDigest() from renderOverview()'s output entirely; added a small '📄 Export Daily Digest' button in its place, same visual treatment as Compare's '📄 Export to PDF' button. Rather than inventing a second report styling system, extracted Compare's entire print CSS out of cmpBuildReportHTML into a new shared reportBaseCSS() function (cmpBuildReportHTML now just calls const css=reportBaseCSS()) — every print/pagination fix already proven there across builds 388-393 (table-vs-div break-inside reliability, .camp-aggblock, .outlet-brand-group atomicity, bigger logos) now benefits this report too, and any future fix only needs to land once. Built digestBuildReportHTML() (cover page + one content page: 'Yesterday at a glance' KPI cards, 'This week so far' 3-way comparison table) reusing the exact same .kpi/.kpi-grid/table markup patterns Compare's own Executive Summary page already uses — digestKPICards() mirrors cmpReportKPICards()'s arrow()/polarity logic directly rather than reinventing it, only diverging to drop the 'discount figures partially estimated' caveat line, since that's about Compare's specific exact-vs-estimated discount-source tracking and doesn't apply here (the Digest sums the same allData.disc figures the rest of the dashboard uses unqualified). digestExportPDF() mirrors cmpExportPDF()'s window.open/write/print flow exactly. digestDateRanges()/digestPeriodTotals() (the data layer from build 394, already tested) are unchanged. Verified with a Node harness: the generated report HTML has balanced divs (55/55) and tables (1/1), contains the expected title/branding/section text, built against a full multi-month mock dataset covering every comparison period including last year. Brand-level study, the aggregator×brand matrix, outlet highlights, campaign spotlight, ad investment snapshot, watch list, and the action-required checklist remain un-built — same later-phase status as build 394, just now targeting the export report instead of an Overview-page section.",
   "✨ Daily Digest — phase 1 of the new Overview-page feature Nikhil asked for: an always-visible section at the top of Overview showing what happened yesterday, independent of whatever brand/platform/date filter is currently selected on the rest of the page. Built and tested against a mockup first (three review rounds — logos/badges, brand-level study, action-required checklist — iterated in a standalone HTML sample before any of it touched dashboard.js). This build ships the two foundational sections: 'Yesterday at a glance' (Orders/Net Sales/AOV/Discount Burn/Ad Spend/Net Contribution vs the same weekday last week) and 'This week so far' (trailing 7 days ending yesterday — NOT a calendar Mon-Sun week — compared three ways: vs the immediate prior week, vs exactly 4 weeks back for weekday alignment since 28 is divisible by 7 and a calendar-month shift isn't, and vs the same calendar dates last year). New reusable data-layer functions: digestDateRanges() (all periods anchored off `latest`, the real last-synced date, not calendar today) and digestPeriodTotals(start,end) (aggregates orders/sales/discount/contribution/ad-spend across ALL brands+platforms for an explicit range, reusing computeProfitability rather than reimplementing its commission/food-cost/ad-cost math a second time). Rendering reuses the existing kpiCard() and mkTable() helpers rather than inventing new card/table markup, and sits inside a <details open> block matching the same collapsible pattern already used elsewhere (e.g. the critical-notices bar). Verified with a Node harness: all 6 computed date ranges checked against the exact worked example Nikhil gave (opening on 10 Sep → yesterday 9 Sep, this week 3-9 Sep, last week 27 Aug-2 Sep, 4-weeks-back 6-12 Aug, last year same calendar dates); digestPeriodTotals verified to correctly exclude (brand-level) rows and out-of-range dates, and to sum inclusively across a multi-day range — using a stubbed flat-margin brandContribution so the test isolates the aggregation/date logic from the already-proven commission math. Brand-level study, the aggregator×brand matrix, per-brand outlet highlights, campaign spotlight, ad investment snapshot, watch list, and the action-required checklist are reviewed in the mockup but NOT yet built into dashboard.js — later phases, coming once phase 1 is confirmed against real data. One open decision before the action-required checklist phase: how 'actioned' checkbox state should persist (written back to a sheet vs kept local to Nikhil's browser) — not yet decided.",
   "🐛 Found the real reason the pagination fix wasn't landing — Nikhil confirmed builds 391 and 392 looked identical, no visible change at all, which was the actual tell. `break-inside:avoid` set directly on a `<table>` element is a known-unreliable rule in Chromium's print engine — a table has its own internal layout/fragmentation model that generally overrides break-inside set on the table box itself, so the `table` selector in this report's atomic list was very likely never doing anything in build 390, 391, or 392, regardless of whether it was present or removed — explaining why toggling it produced no observed difference either way. `break-inside:avoid` DOES work reliably on an ordinary block element (a plain div) — and `.outlet-brand-group` already IS exactly that: a div wrapping each brand's heading together with its table. It just never had the rule applied to IT directly. Moved the atomic protection there — `.outlet-brand-group{break-inside:avoid}` — keeping `table` in the list too as a harmless no-op for any print engine that does honor it. This is the fix build 386's original .outlet-brand-group removal and every round of table-selector tinkering since (390-392) were circling without landing on: same intent throughout (protect the smallest real atomic unit, the established print-CSS lesson from earlier builds), just never applied to the right element. Needs a real re-export to confirm, same as every print/layout fix in this project — no browser available in this environment to verify Chromium's table-fragmentation behavior directly.",
   "🐛 Reverted part of build 391 — Nikhil tested the \"remove `table` from break-inside:avoid\" change against a real export and it made pagination worse, not better. Traced why: Outlet-Level Detail has always been rendered as ONE .page div holding all brands' tables together (not one .page per brand), and .page uses min-height:297mm rather than a fixed height — so it was already overflowing across multiple physical printed sheets before build 391, with or without table atomicity; the running header/date-range title and page-number footer only ever render once per .page div, not once per physical sheet, either way. Removing table's atomicity didn't fix that underlying issue — it just let individual brand tables (Lollorosso, Smokeys) split mid-list between rows instead of jumping as a whole block once they didn't fit, which reads worse in practice: a table breaking mid-brand (e.g. between Town Square and Marina) is a harder read than an occasional gap before a table that jumps whole. Restored `table` to the atomic list, undoing that one part of 391 (the .camp-aggblock campaign fix and the bigger comparison-table logos from 391 are unaffected and stay). This is a genuine, still-open trade-off — atomic tables can leave a gap when a table almost-but-not-quite fits the remaining page; allowing splits avoids the gap but breaks brands apart mid-list — flagged honestly to Nikhil rather than guessing a third variant with no real browser available here to verify it against.",
@@ -5660,8 +5661,12 @@ function renderOverview(){
   const heads=["","Orders","Net Sales","AOV","Discount Burn","Depth %","💵 Profitability",`Δ Orders <span style="font-weight:400;color:#8393AB">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#8393AB">${compShort}</span>`];
 
   document.getElementById("page-overview").innerHTML=makeFilterBar()+
+    // v395: Daily Digest export button — per Nikhil's correction, this is an export/PDF (same
+    // model as Compare's "Export to PDF"), NOT a permanent fixture on this page. Placed as its
+    // own small bar right under the filter bar rather than inside makeFilterBar() itself, since
+    // that function is shared across every page and this button is Overview-specific.
+    `<div style="display:flex;justify-content:flex-end;margin:10px 0"><button onclick="digestExportPDF()" style="background:rgba(201,162,75,.12);border:1px solid rgba(201,162,75,.4);border-radius:6px;color:#C9A24B;padding:6px 14px;font-size:12px;cursor:pointer;font-weight:700" title="Generate a PDF: yesterday's numbers + this week vs last week / 4 weeks back / last year">📄 Export Daily Digest</button></div>`+
     failedBrandBanner("every figure on this page, including the profitability breakdown, only reflects the brands that DID load")+
-    renderDailyDigest()+
     // v158/v159: scoped style override — .card/.sm/.g2/.ct/.fbar are defined in an external
     // stylesheet this file doesn't control, so overriding their colors here (scoped to
     // #page-overview via the ID prefix, which wins on specificity without needing !important)
@@ -5727,15 +5732,40 @@ function renderOverview(){
   },50);
 }
 
-// DAILY DIGEST — render (v394, phase 1: Yesterday + This Week comparison)
-// Sits at the top of the Overview page, independent of the page's own date/brand/platform
-// filters — it always shows the same fixed "what happened" periods (see digestDateRanges), so
-// opening the dashboard any day gives the same kind of answer regardless of what filter was left
-// selected last. Phase 1 covers the two headline sections (Yesterday at a glance, This Week so
-// far); brand-level study, the aggregator×brand matrix, outlet highlights, campaign spotlight, ad
-// investment snapshot, watch list, and the action-required checklist are later phases, reviewed
-// as a mockup first (per the established mockup-before-build pattern) before being wired in here.
-function renderDailyDigest(){
+// DAILY DIGEST — export report (v395)
+// Per Nikhil's direct correction after seeing phase 1 live: NOT embedded on the Overview page —
+// an export/PDF instead, same model as Compare's "Export to PDF". Reuses reportBaseCSS() (the
+// same CSS Compare's report uses, extracted to a shared function in this build specifically so
+// this reuse was possible) and the same .kpi/.kpi-grid/table markup patterns already proven
+// there, rather than inventing new report styling. digestDateRanges()/digestPeriodTotals() (the
+// data layer, unchanged from phase 1) still do all the actual computation.
+function digestKPICards(d,prior){
+  // Small variant of cmpReportKPICards' arrow()/markup pattern — not calling that function
+  // directly because its trailing data-quality line ("Discount figures: partially estimated...")
+  // is about Compare's specific exact-vs-estimated discount-source tracking, which doesn't apply
+  // here (the Digest sums the same allData.disc figures the rest of the dashboard uses
+  // unqualified, e.g. Overview's own Discount Burn KPI card).
+  const pd=prior?pctOf(d.sales,prior.sales):null,po=prior?pctOf(d.orders,prior.orders):null,
+    pa=prior?pctOf(d.aov,prior.aov):null,pdisc=prior?pctOf(d.disc,prior.disc):null,
+    pad=prior?pctOf(d.adCost,prior.adCost):null,pc=prior?pctOf(d.contribution,prior.contribution):null;
+  const arrow=(p,higherIsGood)=>{
+    if(p==null)return"";
+    const isIncrease=p>=0;
+    const good=higherIsGood?isIncrease:!isIncrease;
+    return`<span class="${good?'up':'down'}">${isIncrease?"▲":"▼"}${fmtPct(p).replace(/^[+-]/,"")}</span>`;
+  };
+  const pctSales=v=>d.sales?((v/d.sales)*100).toFixed(1)+"% of net sales":"";
+  return`<div class="kpi-group-lbl">Revenue</div><div class="kpi-grid g3b">
+    <div class="kpi"><div class="l">Net Sales</div><div class="v">${fmtAEDExact(d.sales)}</div><div class="d">${arrow(pd,true)}</div></div>
+    <div class="kpi"><div class="l">Orders</div><div class="v">${d.orders.toLocaleString()}</div><div class="d">${arrow(po,true)}</div></div>
+    <div class="kpi"><div class="l">AOV</div><div class="v">${fmtAEDExact(d.aov)}</div><div class="d">${arrow(pa,true)}</div></div>
+  </div><div class="kpi-group-lbl">Cost &amp; Profitability</div><div class="kpi-grid g3b">
+    <div class="kpi"><div class="l">Discount Burn</div><div class="v">${fmtAEDExact(d.disc)}</div><div class="sub">${pctSales(d.disc)}</div><div class="d">${arrow(pdisc,false)}</div></div>
+    <div class="kpi"><div class="l">Ad Spend</div><div class="v">${fmtAEDExact(d.adCost)}</div><div class="sub">${pctSales(d.adCost)}</div><div class="d">${arrow(pad,false)}</div></div>
+    <div class="kpi"><div class="l">Net Contribution</div><div class="v">${fmtAEDExact(d.contribution)}</div><div class="sub">${pctSales(d.contribution)}</div><div class="d">${arrow(pc,true)}</div></div>
+  </div>`;
+}
+function digestBuildReportHTML(){
   const dr=digestDateRanges();
   const y=digestPeriodTotals(dr.yesterday.start,dr.yesterday.end);
   const ySame=digestPeriodTotals(dr.sameDayLastWeek.start,dr.sameDayLastWeek.end);
@@ -5744,55 +5774,48 @@ function renderDailyDigest(){
   const fwb=digestPeriodTotals(dr.fourWeeksBack.start,dr.fourWeeksBack.end);
   const ly=digestPeriodTotals(dr.lastYear.start,dr.lastYear.end);
 
-  const T=_darkPage?{muted:DARK_THEME.textMuted,label:DARK_THEME.textSecondary,value:DARK_THEME.textPrimary,border:DARK_THEME.cardBorder,panelBg:DARK_THEME.card}
-    :{muted:"#64748b",label:"#94a3b8",value:"#0F172A",border:"#EDE7D9",panelBg:"#fff"};
-
-  const kpis=`<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:16px">
-    ${kpiCard("Orders",y.orders.toLocaleString(),`vs ${fmtDisp(dr.sameDayLastWeek.start)}: ${ySame.orders.toLocaleString()}`,pctOf(y.orders,ySame.orders))}
-    ${kpiCard("Net Sales",fmtAEDTip(y.sales),`vs ${fmtDisp(dr.sameDayLastWeek.start)}: ${fmtAEDTip(ySame.sales)}`,pctOf(y.sales,ySame.sales))}
-    ${kpiCard("AOV",`AED ${y.aov.toFixed(1)}`,`vs ${fmtDisp(dr.sameDayLastWeek.start)}: AED ${ySame.aov.toFixed(1)}`,pctOf(y.aov,ySame.aov))}
-    ${kpiCard("Discount Burn",fmtAEDTip(y.disc),`${(y.sales+y.disc)>0?(y.disc/(y.sales+y.disc)*100).toFixed(1):"0.0"}% of gross`,pctOf(y.disc,ySame.disc),null,null,true)}
-    ${kpiCard("Ad Spend",fmtAEDTip(y.adCost),`${y.sales>0?(y.adCost/y.sales*100).toFixed(1):"0.0"}% of sales`,pctOf(y.adCost,ySame.adCost),null,null,true)}
-    ${kpiCard("Net Contribution",fmtAEDTip(y.contribution),`${y.margin.toFixed(1)}% margin`,pctOf(y.contribution,ySame.contribution))}
-  </div>`;
-
-  // Each row's comparison chips: green/red is relative to whether higher is actually good for
-  // that metric (Discount Burn and Ad Spend are inverted — a smaller number is the win).
-  const chip=(curVal,baseVal,higherIsGood)=>{
-    const p=pctOf(curVal,baseVal);
-    if(p==null)return`<span style="color:${T.muted}">—</span>`;
-    const good=higherIsGood?p>=0:p<0;
-    return`<span style="color:${good?"#15803d":"#b91c1c"};font-weight:800">${fmtPct(p)}</span>`;
+  const arrowCell=(cur,base,higherIsGood)=>{
+    const p=pctOf(cur,base);
+    if(p==null)return`<span class="sub">—</span>`;
+    const isIncrease=p>=0;
+    const good=higherIsGood?isIncrease:!isIncrease;
+    return`<span class="${good?"up":"down"}">${isIncrease?"▲":"▼"}${fmtPct(p).replace(/^[+-]/,"")}</span>`;
   };
-  const weekHeads=["Metric","This week",`vs last week<br><span style="font-weight:400;font-size:9px;color:${T.muted}">${fmtShort(dr.lastWeek.start)}–${fmtShort(dr.lastWeek.end)}</span>`,
-    `vs 4 weeks ago<br><span style="font-weight:400;font-size:9px;color:${T.muted}">${fmtShort(dr.fourWeeksBack.start)}–${fmtShort(dr.fourWeeksBack.end)}</span>`,
-    `vs last year<br><span style="font-weight:400;font-size:9px;color:${T.muted}">${fmtShort(dr.lastYear.start)}–${fmtShort(dr.lastYear.end)}</span>`];
-  const weekRow2=(label,key,fmtFn,higherIsGood=true)=>[
-    `<span style="font-weight:700">${label}</span>`,
-    fmtFn(tw[key]),
-    chip(tw[key],lw[key],higherIsGood),
-    chip(tw[key],fwb[key],higherIsGood),
-    chip(tw[key],ly[key],higherIsGood)
-  ];
-  const weekRows=[
-    weekRow2("Orders","orders",v=>v.toLocaleString()),
-    weekRow2("Net Sales","sales",fmtAEDTip),
-    weekRow2("AOV","aov",v=>`AED ${v.toFixed(1)}`),
-    weekRow2("Discount Burn","disc",v=>fmtAEDTip(v),false),
-    weekRow2("Ad Spend","adCost",v=>fmtAEDTip(v),false),
-    weekRow2("Net Contribution","contribution",v=>fmtAEDTip(v))
-  ];
-  const weekTable=mkTable(weekHeads,weekRows);
+  const weekRow=(label,key,fmtFn,higherIsGood=true)=>
+    `<tr><td>${label}</td><td style="text-align:right">${fmtFn(tw[key])}</td><td style="text-align:right">${arrowCell(tw[key],lw[key],higherIsGood)}</td><td style="text-align:right">${arrowCell(tw[key],fwb[key],higherIsGood)}</td><td style="text-align:right">${arrowCell(tw[key],ly[key],higherIsGood)}</td></tr>`;
+  const weekTable=`<table><thead><tr><th>Metric</th><th>This week</th><th>vs last week</th><th>vs 4 weeks ago</th><th>vs last year</th></tr></thead><tbody>
+    ${weekRow("Orders","orders",v=>v.toLocaleString())}
+    ${weekRow("Net Sales","sales",fmtAEDExact)}
+    ${weekRow("AOV","aov",fmtAEDExact)}
+    ${weekRow("Discount Burn","disc",fmtAEDExact,false)}
+    ${weekRow("Ad Spend","adCost",fmtAEDExact,false)}
+    ${weekRow("Net Contribution","contribution",fmtAEDExact)}
+  </tbody></table>`;
 
-  return`<details open style="margin-bottom:16px;border:1px solid ${T.border};border-radius:10px;background:${T.panelBg};overflow:hidden">
-    <summary style="cursor:pointer;font-size:13px;font-weight:800;color:${T.value};padding:12px 16px;user-select:none;list-style:none">📋 Daily Digest — ${fmtDisp(dr.yesterday.start)} <span style="font-weight:400;color:${T.muted};font-size:11px">yesterday's numbers, always shown regardless of the filters below</span></summary>
-    <div style="padding:0 16px 16px">
-      <div style="font-size:11px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Yesterday at a glance</div>
-      ${kpis}
-      <div style="font-size:11px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">This week so far — ${fmtShort(dr.thisWeek.start)}–${fmtShort(dr.thisWeek.end)}</div>
-      ${weekTable}
-    </div>
-  </details>`;
+  const css=reportBaseCSS();
+  const cover=`<div class="page cover">
+    <div class="cover-top"><img src="${(typeof LOGOS!=="undefined"&&LOGOS["Oregano"])||""}" class="cover-logo" alt=""><div class="cover-brand"><div class="name">OREGANO GROUP</div><div class="sub">Multi-Brand F&amp;B Performance Reporting</div></div></div>
+    <div class="cover-mid"><div class="cover-label">Daily Digest</div><div class="cover-title">What happened yesterday</div>
+      <div class="cover-windows"><div><span class="dot" style="background:#C9A24B"></span><b>${esc(fmtDisp(dr.yesterday.start))}</b></div><div><span class="dot" style="background:#94a3b8"></span>Week to date: ${esc(fmtShort(dr.thisWeek.start))}–${esc(fmtShort(dr.thisWeek.end))}</div></div>
+      <div class="cover-scope-box">Scope: All brands, all platforms</div></div>
+    <div class="cover-bottom"><span>Generated ${esc(fmtDisp(dk(new Date())))}</span><span>Confidential — Internal Use Only</span></div></div>`;
+  const p2=`<div class="page"><div class="runhdr"><div><div class="l">Daily Digest</div><div class="scope">${esc(fmtDisp(dr.yesterday.start))}</div></div><div class="p">Oregano Group · Page 2</div></div>
+    <div class="sec-title">Yesterday at a glance</div><div class="sec-sub">vs ${esc(fmtDisp(dr.sameDayLastWeek.start))} (same weekday last week)</div>
+    ${digestKPICards(y,ySame)}
+    <div class="sec-title" style="margin-top:20px">This week so far</div><div class="sec-sub">${esc(fmtShort(dr.thisWeek.start))}–${esc(fmtShort(dr.thisWeek.end))} · vs last week (${esc(fmtShort(dr.lastWeek.start))}–${esc(fmtShort(dr.lastWeek.end))}), 4 weeks back (${esc(fmtShort(dr.fourWeeksBack.start))}–${esc(fmtShort(dr.fourWeeksBack.end))}), and last year (${esc(fmtDisp(dr.lastYear.start))}–${esc(fmtDisp(dr.lastYear.end))})</div>
+    ${weekTable}
+    <div class="footer"><span>Oregano Group — Daily Digest</span><span>2</span></div>
+  </div>`;
+  const filename=`OreganoGroup_DailyDigest_${dr.yesterday.start}`;
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(filename)}</title><style>${css}</style></head><body>${cover}${p2}</body></html>`;
+  return{html,filename};
+}
+function digestExportPDF(){
+  const{html}=digestBuildReportHTML();
+  const w=window.open("","_blank");
+  if(!w){alert("Please allow pop-ups to export the report.");return;}
+  w.document.open();w.document.write(html);w.document.close();
+  w.onload=()=>{setTimeout(()=>w.print(),300);};
 }
 // BRANDS
 function renderBrands(){
@@ -19631,60 +19654,13 @@ function cmpReportKPISummary(data){
 }
 // Assembles the full print-ready HTML document. chartImg is a data-URL PNG captured from the
 // live cmp-chart canvas by the caller — this function only handles layout/content.
-function cmpBuildReportHTML(data,chartImg){
-  const scope=data[0].label,dates=data.map(d=>d.dateLabel).join(" · ");
-  const narrative=cmpReportNarrative(data);
-  const concl=cmpReportConclusions(data);
-  const bottomLine=cmpReportBottomLine(data,concl);
-  // v386: darker secondary text throughout (#9ca3af -> #6b7280/#4b5563) — flagged as hard to
-  // read in print; .camp-col removed from the break-inside list (columns got tall once
-  // Incr. Contribution/ROI were added, forcing a whole column together caused real rendering
-  // bugs) and .camp-item added instead (the correct, small atomic unit); .outlet-brand-group
-  // removed from break-inside (same reasoning — a 14-row table can't be forced onto one page)
-  // and .outlet-brand-hd gets break-after:avoid so the heading can't be orphaned from its own
-  // table; .brand-cell added for correct logo/text alignment (previously drifted); chart-box
-  // padding increased and .chart-legend/.chart-title added (new classes the chart functions
-  // above already emit, previously undefined in this CSS).
-  // v391: two real print bugs Nikhil caught from an actual exported PDF (not the harness —
-  // exactly the kind of issue only a real rendered PDF surfaces). (1) The Smokeys campaign card
-  // was splitting mid-list across pages 4-5 in the real export — one campaign item ("Got Your
-  // Back") landed on the next page fully orphaned from its own brand/aggregator/period-column
-  // headings, none of which repeat. `.camp-item` alone only stops an individual item from
-  // splitting internally; it does nothing to stop the page break landing BETWEEN two sibling
-  // items. Added a new `.camp-aggblock` class around each brand+aggregator's whole two-period
-  // block (both columns' items together) and added it to the atomic list — genuinely small at
-  // Nikhil's real campaign counts (1-3 items per brand+aggregator+period). (2) Brand/Platform
-  // Comparison table logos bumped 16px→24px per Nikhil's direct ask, with brand-cell given a
-  // small gap so the larger logo doesn't crowd the text.
-  // v392: REVERTED the other v391 change (removing `table` from break-inside:avoid) — Nikhil
-  // tested it against a real export and it made pagination worse, not better. What actually
-  // happened: Outlet-Level Detail has always been ONE .page div holding all brands' tables
-  // together (cmpReportOutletDetail returns one concatenated string, not one .page per brand),
-  // and .page uses min-height:297mm, not a fixed height — so it was ALREADY overflowing across
-  // multiple physical printed sheets before this build, with or without table atomicity; the
-  // running header/date-range title and page-number footer only ever render once per .page div,
-  // not per physical sheet, regardless of this setting. Removing `table`'s atomicity didn't fix
-  // that — it just let individual brand tables (Lollorosso, Smokeys) split mid-list between
-  // rows instead of jumping as a whole block, which read worse in practice: a table breaking
-  // between e.g. Town Square and Marina mid-brand is a harder read than an occasional gap before
-  // a table that jumps whole. Restored `table` to the atomic list.
-  // v393: v392's revert changed NOTHING — Nikhil confirmed no visible difference between build
-  // 391 and 392 at all, which is the real tell: `break-inside:avoid` applied directly to a
-  // `<table>` element is a known-unreliable rule in Chromium's print engine (a table has its own
-  // internal fragmentation model that generally overrides break-inside set on the table box
-  // itself) — so the `table` selector in the atomic list was very likely never actually doing
-  // anything, in build 390, 391, or 392. `break-inside:avoid` DOES work reliably on an ordinary
-  // block element (a plain div), which is exactly what `.outlet-brand-group` already is — it
-  // wraps each brand's heading AND its table together, and just never had the rule applied to
-  // IT. Moved the atomic protection there instead: `.outlet-brand-group{break-inside:avoid}`,
-  // keeping `table` in the list too as a harmless no-op fallback for any engine that does honor
-  // it. This is the fix build 386's original .outlet-brand-group removal and build 390-392's
-  // repeated table-selector tinkering were both circling without landing on — same intent
-  // (protect the smallest real atomic unit, per the established print-CSS lesson), correct
-  // element this time. Needs a real re-export to confirm, same as every print fix in this
-  // project — no browser available in this environment to verify Chromium's fragmentation
-  // behavior directly.
-  const css=`@page{size:A4;margin:0}*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Georgia','Times New Roman',serif;color:#1a1f2e;background:#fff}
+// Shared print/PDF report CSS — used by every generated report (Compare's cmpBuildReportHTML,
+// the Daily Digest export). Extracted to one function (v395) so every print/pagination fix
+// applied here (builds 388-393: table-vs-div break-inside reliability, .camp-aggblock,
+// .outlet-brand-group atomicity, bigger comparison-table logos) benefits every report that
+// reuses it, rather than each report carrying its own copy that silently drifts out of sync.
+function reportBaseCSS(){
+  return`@page{size:A4;margin:0}*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Georgia','Times New Roman',serif;color:#1a1f2e;background:#fff}
     .page{width:210mm;min-height:297mm;padding:13mm 14mm;position:relative;page-break-after:always}
     .chart-box,.concl-box,.camp-item,.camp-aggblock,.kpi,tr,table{break-inside:avoid;page-break-inside:avoid}
     thead{display:table-header-group}
@@ -19741,6 +19717,61 @@ function cmpBuildReportHTML(data,chartImg){
     .concl-final{margin-top:16px;font-size:12px;line-height:1.8;color:#374151;border-top:2px solid #1a1f2e;padding-top:13px}
     .footer{position:absolute;bottom:12mm;left:14mm;right:14mm;display:flex;justify-content:space-between;font-family:-apple-system,sans-serif;font-size:9px;color:#6b7280;border-top:1px solid #e5e7eb;padding-top:7px}
     @media print{.page{page-break-after:always}}`;
+}
+function cmpBuildReportHTML(data,chartImg){
+  const scope=data[0].label,dates=data.map(d=>d.dateLabel).join(" · ");
+  const narrative=cmpReportNarrative(data);
+  const concl=cmpReportConclusions(data);
+  const bottomLine=cmpReportBottomLine(data,concl);
+  // v386: darker secondary text throughout (#9ca3af -> #6b7280/#4b5563) — flagged as hard to
+  // read in print; .camp-col removed from the break-inside list (columns got tall once
+  // Incr. Contribution/ROI were added, forcing a whole column together caused real rendering
+  // bugs) and .camp-item added instead (the correct, small atomic unit); .outlet-brand-group
+  // removed from break-inside (same reasoning — a 14-row table can't be forced onto one page)
+  // and .outlet-brand-hd gets break-after:avoid so the heading can't be orphaned from its own
+  // table; .brand-cell added for correct logo/text alignment (previously drifted); chart-box
+  // padding increased and .chart-legend/.chart-title added (new classes the chart functions
+  // above already emit, previously undefined in this CSS).
+  // v391: two real print bugs Nikhil caught from an actual exported PDF (not the harness —
+  // exactly the kind of issue only a real rendered PDF surfaces). (1) The Smokeys campaign card
+  // was splitting mid-list across pages 4-5 in the real export — one campaign item ("Got Your
+  // Back") landed on the next page fully orphaned from its own brand/aggregator/period-column
+  // headings, none of which repeat. `.camp-item` alone only stops an individual item from
+  // splitting internally; it does nothing to stop the page break landing BETWEEN two sibling
+  // items. Added a new `.camp-aggblock` class around each brand+aggregator's whole two-period
+  // block (both columns' items together) and added it to the atomic list — genuinely small at
+  // Nikhil's real campaign counts (1-3 items per brand+aggregator+period). (2) Brand/Platform
+  // Comparison table logos bumped 16px→24px per Nikhil's direct ask, with brand-cell given a
+  // small gap so the larger logo doesn't crowd the text.
+  // v392: REVERTED the other v391 change (removing `table` from break-inside:avoid) — Nikhil
+  // tested it against a real export and it made pagination worse, not better. What actually
+  // happened: Outlet-Level Detail has always been ONE .page div holding all brands' tables
+  // together (cmpReportOutletDetail returns one concatenated string, not one .page per brand),
+  // and .page uses min-height:297mm, not a fixed height — so it was ALREADY overflowing across
+  // multiple physical printed sheets before this build, with or without table atomicity; the
+  // running header/date-range title and page-number footer only ever render once per .page div,
+  // not per physical sheet, regardless of this setting. Removing `table`'s atomicity didn't fix
+  // that — it just let individual brand tables (Lollorosso, Smokeys) split mid-list between
+  // rows instead of jumping as a whole block, which read worse in practice: a table breaking
+  // between e.g. Town Square and Marina mid-brand is a harder read than an occasional gap before
+  // a table that jumps whole. Restored `table` to the atomic list.
+  // v393: v392's revert changed NOTHING — Nikhil confirmed no visible difference between build
+  // 391 and 392 at all, which is the real tell: `break-inside:avoid` applied directly to a
+  // `<table>` element is a known-unreliable rule in Chromium's print engine (a table has its own
+  // internal fragmentation model that generally overrides break-inside set on the table box
+  // itself) — so the `table` selector in the atomic list was very likely never actually doing
+  // anything, in build 390, 391, or 392. `break-inside:avoid` DOES work reliably on an ordinary
+  // block element (a plain div), which is exactly what `.outlet-brand-group` already is — it
+  // wraps each brand's heading AND its table together, and just never had the rule applied to
+  // IT. Moved the atomic protection there instead: `.outlet-brand-group{break-inside:avoid}`,
+  // keeping `table` in the list too as a harmless no-op fallback for any engine that does honor
+  // it. This is the fix build 386's original .outlet-brand-group removal and build 390-392's
+  // repeated table-selector tinkering were both circling without landing on — same intent
+  // (protect the smallest real atomic unit, per the established print-CSS lesson), correct
+  // element this time. Needs a real re-export to confirm, same as every print fix in this
+  // project — no browser available in this environment to verify Chromium's fragmentation
+  // behavior directly.
+  const css=reportBaseCSS();
   // v386: scope-aware cover logos — shows the actual brand(s) (and aggregator, if narrowed to
   // a few) in scope, not just the generic Oregano corporate mark standing in for everything.
   const cfg0=data[0].cfg;
