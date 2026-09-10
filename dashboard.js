@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-398";
+const BUILD_VERSION="2026-08-13-399";
 const BUILD_NOTES=[
+  "🐛 Real miss caught by Nikhil — the Forecaster's scenario cards (Conservative/Expected/Optimistic) still looked exactly like the original screenshot from the start of this whole redesign ('Incr. Orders 61, +20/day'), because the actual scCard() rebuild never happened — I built the before/during match expansion (397) and the Break-Even card (398) instead and the original core ask (absolute orders/day and sales/day leading the card) got dropped along the way. Built now, matching the originally-approved Option A mockup: absolute orders/day leads the card (28px headline), with the incremental delta as a smaller chip underneath ('+29/day vs baseline (+10%)') instead of being the headline number. Net sales/day (absolute) and Contribution/day (incremental, tooltip unchanged) sit side by side below that. ROI and total-discount figures moved behind a per-card 'Show discount & ROI detail' toggle, same interaction pattern as the match-row expansion built in 397 (new campFcScenarioDetailOpen state + campFcToggleScenarioDetail()). The absolute figures use sc.totalOrders/r.nDays and sc.campNet/r.nDays — both fields campFcRunScenario() already returns, no new computation. Verified directly against Nikhil's own real screenshot numbers (Expected: 281 baseline + 29/day incremental, 3-day campaign): the new card computes exactly 310 orders/day and AED 21,597 net sales/day — identical to what the page's own 'Orders comparison' table already independently shows for the same scenario, a genuine cross-check against a real, already-correct number on the same page rather than just internal consistency.",
   "✨ Break-Even Calculator card — built the full approved mockup (be_calc_v6.html, four rounds of review). (1) Bigger text throughout: mini P&L rows 9px→10.5px, headline orders/day 24px→23px, Net Contribution 14px→16.5px — all 5 cards still fit one row. (2) Discount is now three explicit lines whenever co-funding is actually set — Discount Total and Aggregator Funding are informational (no minus sign, neither is itself subtracted), Brand Funded is the only one actually subtracted to reach Net Sales below it — replacing build 396's single '– AED [full total]' line that Nikhil correctly flagged as looking like a wrong calculation once the total and the actually-subtracted amount diverged. Falls back to the original single-line form whenever co-funding is 0%. Baseline never shows the three-line split regardless of the co-funding toggle, since its own discount is organic historical discount (build 396), never platform-co-funded. (3) Commission and Food+Pkg labels now show their rate in brackets beside the LABEL — 'Commission (15%)', 'Food+Pkg (28%)' — not beside the amount (tried beside the amount first per Nikhil's initial ask, moved per his direct follow-up). (4) Contribution vs baseline now shows absolute AED alongside the % for all four non-baseline scenarios — '– AED 4,110 (-18.2%) vs baseline' instead of just the percentage. Verified with a Node harness: the discount-line logic correctly branches on co-funding status and campaign-vs-baseline; the absolute-diff math checks out against the mockup's own worked numbers; a full 5-card render is structurally balanced (88/88 divs) with the rate suffixes appearing exactly once per card (5/5) and the three-line split appearing on exactly the 4 non-baseline cards (4/4).",
   "🐛 Real co-funding commission bug, caught and precisely specified by Nikhil with a worked example: AED 100 cart, 30% off cap 30 (AED 30 discount), 50-50 co-funded by the aggregator — the aggregator charges commission on Gross minus OUR share of the discount only (100-15=85), not on the full customer-facing net (100-30=70), because their own AED 15 subsidy doesn't reduce what THEY consider the sale worth for their own cut. Every forward-looking forecast tool that synthesizes a hypothetical 'net sales' figure from a formula (rather than reading real aggregator-reported data, which already reflects this correctly) had this backwards — commission was being computed on the customer-facing net (70), understating commission cost by AED 3/order in the worked example, which overstated every co-funded scenario's contribution by the same amount. Confirmed this does NOT affect real historical campaign analysis (computeProfitability, campAnalysisV2's actual/baseline contribution, the Compare/Overview/Brands pages) — those all read real 'net sales' directly from each aggregator's own export, which already reflects however that aggregator actually charges commission; there's no formula to get wrong there. Fixed in the four places that DO synthesize a hypothetical net: campBeCompute() (Break-Even Calculator, commPo was custNetAOV*cr → now effectivePo*cr), campFcRunScenario() and campFcRunScenarioSelectItems() (Campaign Forecaster, both now pass campGross-merchantDisc into brandContribution() instead of the customer-facing campNet), and campAnalysisV2's 'what-if lower discount depth' elasticity counterfactual plus its break-even-depth solver (both real-campaign features that still synthesize a hypothetical net for a depth that wasn't actually run). Every fix is identical to the prior behavior whenever co-funding is 0% — the common case — and only changes the number when co-funding is genuinely set. Verified with a Node harness against Nikhil's exact worked example: all three forecasting functions now correctly produce AED 4,300 contribution (was silently wrong before), and confirmed byte-identical output at 0% co-funding.",
   "✨ Campaign Forecaster — historical match rows are now expandable, per Nikhil's approved mockup (campfc_bec_v2.html, Option A). The compact table (Campaign/Days/Uplift/Orders/Sales/Disc/ROI) is unchanged; clicking a row reveals a Before/During comparison — baseline period (its own date range, Orders/day, Sales/day, AOV) next to the campaign period (same three metrics) — using fields campAnalysisV2 already computes (bs/cs/bDays/bStart/bEnd) that just weren't previously exposed on the match object. New campFcExpandedMatches state (per-row toggle, same pattern as the existing campFcShowAllMatches). Verified the generated HTML is structurally balanced (21/21 divs in a representative expanded row) using Nikhil's own Pizza Week example from the approved mockup.",
@@ -13337,6 +13338,13 @@ function campFcToggleMatchExpand(idx){
   if(campFcExpandedMatches.has(idx))campFcExpandedMatches.delete(idx);else campFcExpandedMatches.add(idx);
   renderCampaigns();
 }
+// v399: which scenario cards (Conservative/Expected/Optimistic) have their discount/ROI detail
+// expanded — same per-item toggle pattern as campFcExpandedMatches above.
+let campFcScenarioDetailOpen=new Set();
+function campFcToggleScenarioDetail(key){
+  if(campFcScenarioDetailOpen.has(key))campFcScenarioDetailOpen.delete(key);else campFcScenarioDetailOpen.add(key);
+  renderCampaigns();
+}
 let campFcDiscPct=30,campFcCap=20,campFcCoFund=true,campFcCoFundPct=50;
 // v250: campaign structure type — 'menu' is the original, unchanged model. 'selectItems' is the
 // new type, using real historical per-order discount data instead of a discPct/cap formula.
@@ -14789,26 +14797,44 @@ function campFcHTML(){
     const curSnapshot={brand:campFcBrand,agg:campFcAgg,start:campFcStart,end:campFcEnd,type:campFcType,discPct:campFcDiscPct,cap:campFcCap,coFund:campFcCoFund,coFundPct:campFcCoFundPct,branches:[...campFcBranches].sort().join(',')};
     const isStale=r.inputSnapshot&&Object.keys(curSnapshot).some(k=>curSnapshot[k]!==r.inputSnapshot[k]);
     const staleBanner=isStale?`<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.4);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#F59E0B;font-weight:600">⚠️ The form has changed since these results were generated — click Run Forecast again to update them.</div>`:'';
-    const scCard=(label,sc,isMain)=>{
+    // v399: real Option A card redesign — this was the ORIGINAL ask from the start of this whole
+    // Forecaster redesign, and got missed in the shuffle while I built the before/during matches
+    // and the Break-Even card instead. Absolute orders/day and sales/day now lead the card
+    // (sc.totalOrders/campNet are campaign-period totals campFcRunScenario already computes;
+    // dividing by r.nDays — already used elsewhere, e.g. the comparison table below — gives the
+    // absolute daily figure with no new computation), with the incremental delta as a smaller
+    // chip underneath rather than the headline. ROI/total-discount detail moved behind a per-card
+    // "Show detail" toggle, same interaction pattern as the match-row expansion just built.
+    const scCard=(label,sc,isMain,key)=>{
       if(!sc)return'';
       const ic=sc.incrContrib>=0?'#22C55E':'#EF4444';
       const tipId=storeTip(()=>buildFcCalcTipHTML(sc,r.brand,r.agg,campFcDiscPct,campFcCap,r.coFP,campFcStart));
       const roiC=sc.roi==null?T.muted:sc.roi>=0.5?'#22C55E':sc.roi>=0?'#FBBF24':'#EF4444';
       const roiTxt=sc.roi!=null?sc.roi.toFixed(2)+'×':'—';
       const mainBorder=isMain?`border:1.5px solid ${accent}`:`border:0.5px solid ${T.border}`;
-      return`<div style="background:${T.panelBg};border-radius:10px;${mainBorder};padding:20px 22px;flex:1;min-width:0">`
+      const absOrdersPerDay=sc.totalOrders/r.nDays;
+      const absSalesPerDay=sc.campNet/r.nDays;
+      const deltaGood=sc.incrOrdersPerDay>=0;
+      const isOpen=campFcScenarioDetailOpen.has(key);
+      const detailToggle=`<div onclick="campFcToggleScenarioDetail('${key}')" style="margin-top:12px;padding-top:10px;border-top:0.5px solid ${T.border};cursor:pointer;font-size:11px;color:${T.muted};font-weight:600;text-align:center">${isOpen?'Hide':'Show'} discount &amp; ROI detail ${isOpen?'▴':'▾'}</div>`;
+      const detailBody=isOpen?`<div style="margin-top:8px;font-size:11.5px;color:${T.label};line-height:2.1">`
+        +`<div style="display:flex;justify-content:space-between"><span>Merchant discount/day</span><strong style="color:#F59E0B">${fA(sc.merchantDiscPerDay)}</strong></div>`
+        +`<div style="display:flex;justify-content:space-between"><span>ROI on discount</span><strong style="color:${roiC}">${roiTxt}</strong></div>`
+        +`<div style="display:flex;justify-content:space-between"><span>Total orders (campaign)</span><strong style="color:${T.text}">${sc.totalOrders.toLocaleString()}</strong></div>`
+        +`<div style="display:flex;justify-content:space-between"><span>Total merchant disc.</span><strong style="color:#F59E0B">${fA(sc.merchantDisc)}</strong></div>`
+        +'</div>':'';
+      return`<div style="background:${T.panelBg};border-radius:10px;${mainBorder};padding:18px 20px;flex:1;min-width:0">`
       +(isMain?`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><span style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${accent}">${label}</span><span style="font-size:9px;background:${accent}22;color:${accent};padding:2px 7px;border-radius:999px;font-weight:600">Most likely</span></div>`
-      :`<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${T.muted};margin-bottom:14px">${label}</div>`)
-      +`<div style="font-size:13px;color:${T.muted};margin-bottom:6px">Uplift vs baseline</div><div style="font-size:30px;font-weight:800;color:${isMain?accent:T.text};margin-bottom:14px;line-height:1">${fP(sc.upliftPct)}</div>`
-      +`<div style="display:flex;gap:12px;margin-bottom:18px"><div style="flex:1"><div style="font-size:11px;color:${T.muted};font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Incr. orders</div><div style="font-size:20px;font-weight:700;color:${T.text}">${sc.incrOrders.toLocaleString()}</div><div style="font-size:14px;color:${T.label}">+${Math.round(sc.incrOrdersPerDay)}/day</div></div>`
-      +`<div style="flex:1"><div style="font-size:11px;color:${T.muted};font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Merchant disc.</div><div style="font-size:20px;font-weight:700;color:#F59E0B">${fA(sc.merchantDisc)}</div><div style="font-size:14px;color:${T.label}">${fA(sc.merchantDiscPerDay)}/day</div></div></div>`
-      +`<div style="border-top:0.5px solid ${T.border};padding-top:16px;cursor:help" data-ctip="${tipId}">`
-      +`<div style="font-size:11px;color:${T.muted};font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Incr. contribution <span style="font-size:9px;opacity:.5">ⓘ hover</span></div>`
-      +`<div style="font-size:26px;font-weight:800;color:${ic};line-height:1">${sc.incrContrib>=0?'+':''}${fA(sc.incrContrib)}</div>`
-      +`<div style="font-size:15px;color:${T.label};margin-top:3px">${fA(sc.incrContribPerDay)}/day</div>`
-      +`<div style="margin-top:16px;font-size:11px;color:${T.muted};font-weight:600;text-transform:uppercase;letter-spacing:.5px">ROI on discount</div>`
-      +`<div style="font-size:22px;font-weight:800;color:${roiC};line-height:1">${roiTxt}</div>`
-      +'</div></div>';
+      :`<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${T.muted};margin-bottom:10px">${label}</div>`)
+      +`<div style="font-size:28px;font-weight:800;color:${isMain?accent:T.text};line-height:1">${Math.round(absOrdersPerDay).toLocaleString()}</div>`
+      +`<div style="font-size:11px;color:${T.muted}">orders / day</div>`
+      +`<div style="margin-top:5px;font-size:12px;font-weight:700;color:${deltaGood?'#22C55E':'#EF4444'}">${deltaGood?'+':''}${Math.round(sc.incrOrdersPerDay)}/day vs baseline (${fP(sc.upliftPct)})</div>`
+      +`<div style="display:flex;gap:12px;margin-top:16px">`
+      +`<div style="flex:1"><div style="font-size:10px;color:${T.muted};font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">Net sales/day</div><div style="font-size:17px;font-weight:700;color:${T.text}">${fA(absSalesPerDay)}</div></div>`
+      +`<div style="flex:1;cursor:help" data-ctip="${tipId}"><div style="font-size:10px;color:${T.muted};font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">Contribution/day <span style="font-size:9px;opacity:.5">ⓘ hover</span></div><div style="font-size:17px;font-weight:700;color:${ic}">${sc.incrContribPerDay>=0?'+':''}${fA(sc.incrContribPerDay)}</div></div>`
+      +'</div>'
+      +detailToggle+detailBody
+      +'</div>';
     };
 
     // Comparison table data
@@ -14964,9 +14990,9 @@ function campFcHTML(){
     +realityCheckHTML
     // Three scenarios
     +`<div style="display:flex;gap:10px;margin:14px 0;flex-wrap:wrap">`
-    +scCard('Conservative',r.conservative,false)
-    +scCard('Expected',r.expected,true)
-    +scCard('Optimistic',r.optimistic,false)
+    +scCard('Conservative',r.conservative,false,'conservative')
+    +scCard('Expected',r.expected,true,'expected')
+    +scCard('Optimistic',r.optimistic,false,'optimistic')
     +'</div>'
     // Comparison table
     +`<div style="margin-bottom:12px">`
