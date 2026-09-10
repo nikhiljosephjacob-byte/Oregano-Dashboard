@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-397";
+const BUILD_VERSION="2026-08-13-398";
 const BUILD_NOTES=[
+  "✨ Break-Even Calculator card — built the full approved mockup (be_calc_v6.html, four rounds of review). (1) Bigger text throughout: mini P&L rows 9px→10.5px, headline orders/day 24px→23px, Net Contribution 14px→16.5px — all 5 cards still fit one row. (2) Discount is now three explicit lines whenever co-funding is actually set — Discount Total and Aggregator Funding are informational (no minus sign, neither is itself subtracted), Brand Funded is the only one actually subtracted to reach Net Sales below it — replacing build 396's single '– AED [full total]' line that Nikhil correctly flagged as looking like a wrong calculation once the total and the actually-subtracted amount diverged. Falls back to the original single-line form whenever co-funding is 0%. Baseline never shows the three-line split regardless of the co-funding toggle, since its own discount is organic historical discount (build 396), never platform-co-funded. (3) Commission and Food+Pkg labels now show their rate in brackets beside the LABEL — 'Commission (15%)', 'Food+Pkg (28%)' — not beside the amount (tried beside the amount first per Nikhil's initial ask, moved per his direct follow-up). (4) Contribution vs baseline now shows absolute AED alongside the % for all four non-baseline scenarios — '– AED 4,110 (-18.2%) vs baseline' instead of just the percentage. Verified with a Node harness: the discount-line logic correctly branches on co-funding status and campaign-vs-baseline; the absolute-diff math checks out against the mockup's own worked numbers; a full 5-card render is structurally balanced (88/88 divs) with the rate suffixes appearing exactly once per card (5/5) and the three-line split appearing on exactly the 4 non-baseline cards (4/4).",
   "🐛 Real co-funding commission bug, caught and precisely specified by Nikhil with a worked example: AED 100 cart, 30% off cap 30 (AED 30 discount), 50-50 co-funded by the aggregator — the aggregator charges commission on Gross minus OUR share of the discount only (100-15=85), not on the full customer-facing net (100-30=70), because their own AED 15 subsidy doesn't reduce what THEY consider the sale worth for their own cut. Every forward-looking forecast tool that synthesizes a hypothetical 'net sales' figure from a formula (rather than reading real aggregator-reported data, which already reflects this correctly) had this backwards — commission was being computed on the customer-facing net (70), understating commission cost by AED 3/order in the worked example, which overstated every co-funded scenario's contribution by the same amount. Confirmed this does NOT affect real historical campaign analysis (computeProfitability, campAnalysisV2's actual/baseline contribution, the Compare/Overview/Brands pages) — those all read real 'net sales' directly from each aggregator's own export, which already reflects however that aggregator actually charges commission; there's no formula to get wrong there. Fixed in the four places that DO synthesize a hypothetical net: campBeCompute() (Break-Even Calculator, commPo was custNetAOV*cr → now effectivePo*cr), campFcRunScenario() and campFcRunScenarioSelectItems() (Campaign Forecaster, both now pass campGross-merchantDisc into brandContribution() instead of the customer-facing campNet), and campAnalysisV2's 'what-if lower discount depth' elasticity counterfactual plus its break-even-depth solver (both real-campaign features that still synthesize a hypothetical net for a depth that wasn't actually run). Every fix is identical to the prior behavior whenever co-funding is 0% — the common case — and only changes the number when co-funding is genuinely set. Verified with a Node harness against Nikhil's exact worked example: all three forecasting functions now correctly produce AED 4,300 contribution (was silently wrong before), and confirmed byte-identical output at 0% co-funding.",
   "✨ Campaign Forecaster — historical match rows are now expandable, per Nikhil's approved mockup (campfc_bec_v2.html, Option A). The compact table (Campaign/Days/Uplift/Orders/Sales/Disc/ROI) is unchanged; clicking a row reveals a Before/During comparison — baseline period (its own date range, Orders/day, Sales/day, AOV) next to the campaign period (same three metrics) — using fields campAnalysisV2 already computes (bs/cs/bDays/bStart/bEnd) that just weren't previously exposed on the match object. New campFcExpandedMatches state (per-row toggle, same pattern as the existing campFcShowAllMatches). Verified the generated HTML is structurally balanced (21/21 divs in a representative expanded row) using Nikhil's own Pizza Week example from the approved mockup.",
   "✨ Campaign Break-Even Calculator — added a compact mini P&L (Gross Sales → Discount → Net Sales → Commission → Food+Pkg → Net Contribution) to each of the 5 scenario cards, filling the empty space Nikhil pointed out below the orders/day figures. Almost entirely free: mkScenario() already computes grossSales, discBurn, effectiveRev, foodCost, and commCost for all four campaign scenarios (flat/break-even/+10%/+20%) — they were just never surfaced in the card. Only the Baseline card's `d` object needed backfilling, derived from fields campBeCompute() already returns (baseGrossAOV, baseNetAOV, fp, cr, baseOrders) rather than changing that function's return shape. One real correctness catch made during the build, not just a display exercise: a naive waterfall (Gross Sales - full Discount Burn - Commission - Food) would NOT reconcile to the Net Contribution figure whenever platform co-funding (campBeCoFund) is set above 0%, because contribution is based on OUR net cost after the platform's rebate, not the full customer-facing discount — the existing 'Per-order economics' panel already handles this exact distinction with separate 'Customer pays' vs 'Our revenue' rows, for the same reason. Fixed by showing 'Discount' as our share only (discBurn - platRebate, both already returned by mkScenario, no new field needed) and 'Net Sales' as the co-funding-aware effectiveRev — identical to the naive version whenever co-funding is 0% (the common case), but now the waterfall adds up exactly in every case. Verified with a Node harness across all 5 scenarios, both at 0% and 50% co-funding: Gross Sales - Discount - Commission - Food = Net Contribution to the cent in all 10 cases. Kept deliberately small (9px labels, 10px values) to fit five cards' worth of P&L breakdown in one row without wrapping, matching the existing card's own font scale rather than introducing a new size.",
@@ -14656,39 +14657,52 @@ function campBeHTML(){
   let cardsHTML='';
   SCEN.forEach(function(sc,i){
     const isOn=i===0;
-    // v396: compact mini P&L per Nikhil's ask — Gross Sales → Discount → Net Sales → Commission
-    // → Food+Pkg → Net Contribution, using fields mkScenario() already computes for every
-    // scenario except Baseline (backfilled just above). Kept deliberately tiny (9px label /
-    // 10px value) since five cards + this breakdown all have to fit one row without wrapping —
-    // matches the existing card's own font scale (labels already run 9-11px here) rather than
-    // introducing a new, larger size that would force the breakdown to wrap or overflow.
-    function miniRow(label,val,color){
-      return'<div style="display:flex;justify-content:space-between;padding:1.5px 0;font-size:9px;line-height:1.35"><span style="color:'+T.muted+'">'+label+'</span><span style="font-weight:700;color:'+(color||T.label)+'">'+val+'</span></div>';
+    // v398: bigger text throughout per Nikhil's approved mockup (be_calc_v6.html) — mini P&L rows
+    // bumped 9px/10px → 10.5px, headline orders/day 24px → 23px, Net Contribution 14px → 16.5px —
+    // confirmed all 5 cards still fit one row at this size before shipping.
+    function miniRow(label,val,color,labelSuffix){
+      const lbl=labelSuffix?(label+' <span style="color:#818CF8;font-weight:700">'+labelSuffix+'</span>'):label;
+      return'<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;line-height:1.4"><span style="color:'+T.muted+'">'+lbl+'</span><span style="font-weight:700;color:'+(color||T.label)+'">'+val+'</span></div>';
     }
-    // v396: "Discount" here is OUR share of the discount (excludes whatever the platform
-    // co-funds), derived from fields mkScenario() already returns (discBurn - platRebate) rather
-    // than a new one — this is what keeps Gross Sales → Discount → Net Sales → Contribution
-    // adding up exactly even when campBeCoFund is set. Identical to the full discount burn
-    // whenever co-funding is 0% (the common case), which is most of the time this tool is used.
+    // v398: Discount is now three explicit lines when co-funding is actually set (per Nikhil's
+    // approved mockup) — Discount Total and Aggregator Funding are informational (no minus sign,
+    // neither is itself subtracted), Brand Funded is the only one actually subtracted to reach Net
+    // Sales below it. Only applies to the four campaign scenarios — Baseline's own discBurn is
+    // organic historical discount (see build 396's backfill), never platform-co-funded, so it
+    // always stays a single plain "Discount" line regardless of the campBeCoFund toggle. Falls
+    // back to the original single-line form whenever co-funding is 0% (the common case) — same
+    // output as before in that case.
     const ourDiscBurn=sc.d.discBurn-(sc.d.platRebate||0);
+    const discLines=(sc.key!=='base'&&sc.d.platRebate>0)
+      ?miniRow('Discount Total',fmA(sc.d.discBurn))
+        +miniRow('Aggregator Funding',fmA(sc.d.platRebate))
+        +miniRow('Brand Funded','– '+fmA(ourDiscBurn),'#F87171')
+      :miniRow('Discount',ourDiscBurn>0?('– '+fmA(ourDiscBurn)):fmA(0),ourDiscBurn>0?'#F87171':undefined);
     const pnl='<div style="margin-top:7px;padding-top:7px;border-top:1px solid '+T.border+'66">'
       +miniRow('Gross Sales',fmA(sc.d.grossSales))
-      +miniRow('Discount','– '+fmA(ourDiscBurn),'#F87171')
+      +discLines
       +miniRow('Net Sales',fmA(sc.d.effectiveRev))
-      +miniRow('Commission','– '+fmA(sc.d.commCost),'#FB923C')
-      +miniRow('Food+Pkg','– '+fmA(sc.d.foodCost),'#FB923C')
+      +miniRow('Commission','– '+fmA(sc.d.commCost),'#FB923C','('+Math.round(R.cr*100)+'%)')
+      +miniRow('Food+Pkg','– '+fmA(sc.d.foodCost),'#FB923C','('+Math.round(R.fp*100)+'%)')
       +'</div>';
-    cardsHTML+='<div id="cbe-card-'+i+'" onmouseenter="campBeHover('+i+')" onmouseleave="campBeUnhover()" style="background:'+(isOn?('linear-gradient(160deg,'+sc.col+'2A,'+T.panelBg+')'):T.panelBg)+';border:1.5px solid '+(isOn?sc.col:T.border)+';border-radius:14px;padding:14px 13px;box-shadow:'+(isOn?('0 0 22px '+sc.col+'55'):'none')+';transform:'+(isOn?'translateY(-3px)':'none')+';cursor:pointer;transition:'+TR+'">'
-      +'<div style="font-size:11px;font-weight:800;color:'+sc.col+';text-transform:uppercase;letter-spacing:.4px">'+sc.label+'</div>'
-      +'<div style="font-size:9px;color:'+T.label+';margin-bottom:6px">'+sc.sub+'</div>'
-      +'<div style="font-size:24px;font-weight:800;color:'+T.text+';line-height:1">'+fmN(sc.d.opd)+'</div>'
+    // v398: contribution vs baseline now shows absolute AED alongside the % for all four
+    // non-baseline scenarios, per Nikhil's ask — was % only.
+    const vsBaseTxt=sc.key==='base'?'reference':(()=>{
+      const diff=sc.d.contrib-R.bContrib;
+      const diffColor=diff>=0?'#22C55E':'#EF4444';
+      return'<b style="color:'+diffColor+'">'+(diff>=0?'+':'– ')+fmA(Math.abs(diff))+'</b> ('+fmP(sc.d.contribVsBase,1)+') vs baseline';
+    })();
+    cardsHTML+='<div id="cbe-card-'+i+'" onmouseenter="campBeHover('+i+')" onmouseleave="campBeUnhover()" style="background:'+(isOn?('linear-gradient(160deg,'+sc.col+'2A,'+T.panelBg+')'):T.panelBg)+';border:1.5px solid '+(isOn?sc.col:T.border)+';border-radius:14px;padding:13px 11px;box-shadow:'+(isOn?('0 0 22px '+sc.col+'55'):'none')+';transform:'+(isOn?'translateY(-3px)':'none')+';cursor:pointer;transition:'+TR+'">'
+      +'<div style="font-size:11.5px;font-weight:800;color:'+sc.col+';text-transform:uppercase;letter-spacing:.3px">'+sc.label+'</div>'
+      +'<div style="font-size:9.5px;color:'+T.label+';margin-bottom:7px">'+sc.sub+'</div>'
+      +'<div style="font-size:23px;font-weight:800;color:'+T.text+';line-height:1">'+fmN(sc.d.opd)+'</div>'
       +'<div style="font-size:10px;color:'+T.muted+'">orders / day</div>'
-      +'<div style="font-size:11px;color:'+T.label+';margin-top:2px">'+fmN(sc.d.orders,0)+' total</div>'
+      +'<div style="font-size:10.5px;color:'+T.label+';margin-top:2px">'+fmN(sc.d.orders,0)+' total</div>'
       +pnl
-      +'<div style="margin-top:7px;padding-top:7px;border-top:1px solid '+T.border+'66">'
-      +'<div style="font-size:8.5px;font-weight:700;color:'+T.muted+';text-transform:uppercase;letter-spacing:.4px">Net Contribution</div>'
-      +'<div style="font-size:14px;font-weight:800;color:'+sc.col+'">'+fmA(sc.d.contrib)+'</div>'
-      +'<div style="font-size:10px;color:'+T.label+'">'+(sc.key==='base'?'reference':(fmP(sc.d.contribVsBase,0)+' vs baseline'))+'</div>'
+      +'<div style="margin-top:8px;padding-top:8px;border-top:1px solid '+T.border+'66">'
+      +'<div style="font-size:9.5px;font-weight:700;color:'+T.muted+';text-transform:uppercase;letter-spacing:.3px">Net Contribution</div>'
+      +'<div style="font-size:16.5px;font-weight:800;color:'+sc.col+'">'+fmA(sc.d.contrib)+'</div>'
+      +'<div style="font-size:10.5px;color:'+T.label+'">'+vsBaseTxt+'</div>'
       +'</div></div>';
   });
   const econCardsRow='<div style="display:grid;grid-template-columns:300px 1fr;gap:14px">'+econPanel+'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">'+cardsHTML+'</div></div>';
