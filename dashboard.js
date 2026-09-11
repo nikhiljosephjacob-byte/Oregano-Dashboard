@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-402";
+const BUILD_VERSION="2026-08-13-404";
 const BUILD_NOTES=[
+  "🐛 Did a full audit against the approved mockup before shipping this time, per Nikhil's direct ask, rather than fixing one thing and waiting to be told about the next. Found and fixed three real things, not just the one asked about. (1) The co-fund toggle switch itself was never actually built in either tool — both used a plain Yes/No dropdown (Forecaster) or a bare number input (Break-Even) instead of the sliding pill switch shown in the mockup. Built a real interactive toggle (checkbox-based, styled as the green/gray pill with a sliding circle) in both — Forecaster toggles the existing boolean coFund field; Break-Even (which only ever had a single 0-100 percentage, no separate boolean) toggles between 0 and a 50% default. (2) Auditing the toggle's wiring surfaced a second, unrelated real bug: the Forecaster's coFund select had no renderCampaigns() call, unlike the 'type' select right next to it — meaning toggling co-funding silently updated the state but didn't immediately show/hide the Platform % field until some other interaction happened to redraw the page. Checking whether this was an isolated case or a pattern found a THIRD instance: the shared sel() helper (used for Brand/Aggregator) had the exact same gap — changing Brand or Aggregator didn't immediately refresh the Branches chip list or the brand×aggregator summary pill, both of which are computed from those same fields elsewhere in the same render. Fixed at the shared sel() helper (safe — confirmed via grep it's only ever used for these two fields in this form) rather than patching each call site. Checked Break-Even's own Brand/Aggregator/Discount-type selects for the same pattern — already correct, this class of bug was specific to the Forecaster's form. (3) Confirmed and am flagging explicitly, not silently: the 'How we got the baseline' section (build 400) shows ONE real 30-day trailing window, not the mockup's two-window depiction (Prior week / Same days last month) — this is deliberate, not a miss: that two-window layout is how the Break-Even Calculator genuinely works, but the Forecaster's real campFcBaseline() only ever computes a single trailing window, so showing two would mean fabricating a second one that doesn't correspond to anything actually calculated. Verified with direct tag-balance checks on both rewritten forms: campFcHTML fully balanced (125/125 divs), campBeHTML fully balanced (96/96 divs, 1/1 label).",
+  "🐛 Two real issues Nikhil caught directly by testing the live page against the approved mockup and actually clicking the delete button, not just looking at it. (1) Forecast History delete failed with an empty 'Delete failed: ' message — confirms the unverified assumption flagged in build 400 (that /api/forecast/delete exists and expects an id field) was wrong, or at least unconfirmed either way, since both data.error and res.statusText came back empty, telling us nothing. Improved campFcDeleteForecast() to surface the actual HTTP status code and raw response body instead — doesn't fix the underlying gap (still needs checking directly against the real backend), but the next failure will actually say why instead of nothing. (2) A real, concrete mismatch between build 400's Campaign Forecaster form and the mockup it was supposed to match (campfc_fullpage.html, Option B): the mockup puts the Comments field inside the 'What & when' column and the Run Forecast button as a full-width element INSIDE the same card, right after the two columns — build 400 left both in their pre-redesign positions (Comments as a separate collapsed accordion below the card, Run Forecast as a standalone button further down), which is exactly why the live page still read as the old layout even though the two-column split itself was technically in place. Fixed by moving Comments into 'What & when' (now a visible textarea, not a collapsed accordion) and moving Run Forecast to be the final element inside the same 'Campaign details' card. The branch-selector chips and brand×aggregator summary pill aren't part of the (simplified) mockup at all, but are real necessary confirmation UI — kept, moved inside the same card too so the whole thing reads as one cohesive card rather than a card followed by loose elements below it. Verified the full campFcHTML return block is still tag-balanced (19/19 divs) after the restructure — caught and fixed one real mistake in this same edit before shipping: my first pass deleted the outer container's own closing </div> by accident while restructuring around it.",
   "✨ Daily Digest export — built out the remaining sections from the approved v3 mockup that were explicitly deferred back in builds 394/395 (Nikhil caught the gap directly when the real PDF only had 'Yesterday' + 'This week', matching exactly what those two builds said was and wasn't done). All five remaining sections built now: Brand-level study (per-brand Sales/Orders/AOV/Discount/Contribution/Ad Spend, WoW plus 4wk/LY badges on contribution), Aggregator × brand matrix (contribution WoW heatmap across Talabat/Deliveroo/Careem), Outlet-level highlights (top gainer/decliner per brand), Campaign spotlight (best/worst currently-running campaign by incremental contribution, via campAnalysisV2 — the same real analysis the Campaigns page itself uses), Ad investment snapshot (spend vs allocated by aggregator from real cpcData, plus two real pacing flags: rows already at 'Critical' status and rows past the halfway point of their run with under 15% consumed), Watch list (biggest outlet swings across all brands), and Action Required (auto-generated from the above — a static checklist glyph, not an interactive checkbox, since this is a printed/exported document). digestPeriodTotals() extended with optional brand/aggregator filters (backward compatible — omitted behaves exactly as before) rather than writing a second aggregation function; new digestOutletTotals() computed once and shared between Outlet highlights and Watch list rather than twice. digestExportPDF() is now async — campaignData/cpcData may not be loaded yet if the Digest is exported without visiting Campaigns/Ads Performance first, so it now loads both (same fetch pattern those pages already use) before building the report, rather than silently omitting those sections. Verified with a Node harness against realistic mock data spanning 5 brands × 3 aggregators plus campaign/ad-investment records: full report HTML is structurally balanced (126/126 divs, 6/6 tables, 34/34 rows), every new section's heading is present, and the campaign spotlight correctly surfaces both the seeded best (+contribution) and worst (-contribution) campaigns by name.",
   "🐛 Real bug in the \"What's New\" popup itself, caught directly by Nikhil: it's titled \"What's new in THIS update\" but was always showing the last 8 accumulated changelog entries on every hard refresh, not just the latest one — a growing list that got worse every build. Root cause: the popup correctly checks localStorage's lastSeen version to decide WHETHER to show at all, but the actual rendering always sliced BUILD_NOTES.slice(0,8) regardless of how many builds had happened since — that gating never fed into how many notes got shown. A prior build had even explicitly confirmed and relied on \"shows the first 8\" as the intended design when deciding how many old entries to keep around, which is exactly backwards from what was actually wanted. Fixed to always show just the single most recent entry, matching the popup's own title. BUILD_NOTES entries don't carry a version tag each, so there's no way to precisely reconstruct 'everything since your last visit' — but that's not what was asked for; one hard refresh should show one build's worth of news, not a rolling backlog.",
   "✨ Campaign Forecaster + Break-Even Calculator — the full page redesign approved from campfc_fullpage.html (Form Option B). (1) Both forms rebuilt as a two-column split — 'What & when' (brand/aggregator/dates) next to 'Deal terms' (discount mechanics, co-fund as a toggle+% row) — replacing the old stacked full-width sections; the Forecaster's upcoming-campaign picker is now a dropdown instead of a row of pill buttons. Same underlying fields/handlers throughout, layout change only. (2) Forecaster results reordered per Nikhil's explicit list: Scenarios first, then a new 'How we got the baseline' section (previously the 30-day baseline was only ever implicit — a comparison-table row, a save-payload field — never explained as its own thing; now shows the real window dates, avg orders/day, net/gross AOV, and the seasonality adjustment, all fields campFcBaseline()/campFcRun() already compute), then 'Similar campaigns' wrapping the existing historical-match table in a native <details>, collapsed by default per Nikhil's direct answer, then the supplementary comparison table/flags/export kept below. Forecast History was already last in DOM order — needed no repositioning. (3) Forecast History rows now have a ✕ on the right; clicking asks native confirm() before deleting, per Nikhil's direct answer, then calls a new campFcDeleteForecast(id) and removes the row locally on success. FLAGGED HONESTLY: this assumes a record id field and a /api/forecast/delete endpoint following the exact same pattern as the existing save/list calls — neither has been directly observed (this save/list pair was the only precedent in the codebase to copy from), so this needs confirming against the real backend before relying on it. Verified everything else with direct tag-balance checks on all three rewritten blocks (Forecaster results 52/52 divs + 1/1 details, Forecaster form 11/11, Break-Even form 29/29) plus a full syntax check — no live browser available here to confirm the visual layout matches the approved mockup pixel-for-pixel.",
@@ -14480,13 +14482,27 @@ function campFcHistoryHTML(){
 // /api/forecast/list) — but neither an id field nor a delete endpoint has been directly observed
 // in this codebase (this save/list pair is the only such pattern here to copy from), so this
 // needs confirming against the real backend before relying on it.
+// v403: improved error surfacing — Nikhil hit exactly the failure mode I flagged as an unverified
+// assumption in build 400 ("Delete failed: " with nothing after it, meaning both data.error and
+// res.statusText came back empty — gives no way to tell whether the endpoint doesn't exist, the
+// id field is wrong, or something else). Now surfaces the actual HTTP status code and raw
+// response body so the real cause is diagnosable, instead of an empty message. This does NOT fix
+// the underlying issue — /api/forecast/delete and the id field were never confirmed against the
+// real backend, and that still needs checking directly (see the build-400 note) — but at least
+// the next failure will say WHY.
 async function campFcDeleteForecast(id){
   if(!confirm('Delete this saved forecast? This can\'t be undone.'))return;
   const sess=getActiveSession();
   if(!sess||!sess.sessionId){alert('Not logged in — cannot delete.');return;}
   try{
     const res=await fetch('/api/forecast/delete',{method:'POST',headers:{'Content-Type':'application/json','X-Session-Id':sess.sessionId},body:JSON.stringify({id})});
-    if(!res.ok){const data=await res.json().catch(()=>({}));alert('Delete failed: '+(data.error||res.statusText));return;}
+    if(!res.ok){
+      const raw=await res.text().catch(()=>'');
+      let msg=raw;
+      try{const data=JSON.parse(raw);msg=data.error||raw;}catch(e){/* not JSON, use raw text as-is */}
+      alert('Delete failed (HTTP '+res.status+'): '+(msg||'empty response — /api/forecast/delete may not exist on the backend yet, or the id field it expects is different'));
+      return;
+    }
     campFcHistory=campFcHistory.filter(f=>f.id!==id); // optimistic local removal, avoids a full refetch
     renderCampaigns();
   }catch(e){alert('Network error — delete failed: '+e.message);}
@@ -14743,10 +14759,14 @@ function campBeHTML(){
     +(campBeDiscType==='bogo'?'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Free item (% of cart)</div><input type="number" value="'+campBeFreeItemPct+'" min="5" max="60" onchange="campBeFreeItemPct=+this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>':'')
     +(campBeDiscType==='select'?'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Attach rate %</div><input type="number" value="'+campBeAttach+'" min="1" max="100" onchange="campBeAttach=+this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>':'')
     +'</div>'
-    +'<div style="display:flex;align-items:center;gap:8px;background:'+T.inputBg+';border:1px solid '+T.border+';border-radius:7px;padding:8px 11px">'
+    +'<div style="display:flex;align-items:center;gap:10px;background:'+T.inputBg+';border:1px solid '+T.border+';border-radius:7px;padding:8px 11px">'
+    +'<label style="position:relative;display:inline-block;width:34px;height:18px;flex-shrink:0;cursor:pointer">'
+    +'<input type="checkbox" '+(campBeCoFund>0?'checked':'')+' onchange="campBeCoFund=this.checked?50:0;campBeResult=null;renderCampaigns()" style="position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer">'
+    +'<span style="position:absolute;inset:0;background:'+(campBeCoFund>0?'#22C55E':T.border)+';border-radius:999px;transition:.15s;pointer-events:none"></span>'
+    +'<span style="position:absolute;top:2px;'+(campBeCoFund>0?'right':'left')+':2px;width:14px;height:14px;background:#fff;border-radius:50%;transition:.15s;pointer-events:none"></span>'
+    +'</label>'
     +'<span style="font-size:12px;font-weight:600;color:'+T.text+';flex:1">Platform co-funds</span>'
-    +'<input type="number" value="'+campBeCoFund+'" min="0" max="100" onchange="campBeCoFund=+this.value;campBeResult=null;renderCampaigns()" style="width:56px;background:'+T.panelBg+';border:1px solid '+T.border+';border-radius:5px;color:'+T.text+';padding:4px 6px;font-size:11.5px;font-weight:600;text-align:center">'
-    +'<span style="font-size:11.5px;color:'+T.muted+'">%</span>'
+    +(campBeCoFund>0?('<input type="number" value="'+campBeCoFund+'" min="1" max="100" onchange="campBeCoFund=+this.value;campBeResult=null;renderCampaigns()" style="width:52px;background:'+T.panelBg+';border:1px solid '+T.border+';border-radius:5px;color:'+T.text+';padding:4px 6px;font-size:11.5px;font-weight:600;text-align:center"><span style="font-size:11.5px;color:'+T.muted+'">%</span>'):'')
     +'</div>'
     +'</div>'
     +'</div>'
@@ -15298,7 +15318,15 @@ function campFcHTML(){
 
   // Form
   const today=dk(new Date());
-  const sel=(k,opts,cur)=>`<select onchange="campFcSet('${k}',this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600"><option value="">—</option>${opts}</select>`;
+  // v404: found while auditing against the mockup — sel() (Brand/Aggregator) had no
+  // renderCampaigns() call, unlike the 'type' select right next to it in Deal terms. Brand/
+  // Aggregator changes DO have visible downstream dependencies within this same form — the
+  // Branches chip list and the brand×aggregator summary pill are both computed from
+  // campFcBrand/campFcAgg at the top of this function, so without an explicit re-render they'd
+  // silently go stale until some other interaction happened to redraw the page. sel() is only
+  // ever used for these two fields in this form, so fixed at the shared helper rather than at
+  // each call site.
+  const sel=(k,opts,cur)=>`<select onchange="campFcSet('${k}',this.value);renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600"><option value="">—</option>${opts}</select>`;
   // v366: same color-scheme gap as the Break-Even Calculator (build 365) — without it, the native
   // date picker icon and popup default to light mode and are nearly invisible on this dark panel.
   const inp=(k,type,cur,min,max)=>`<input type="${type}" value="${cur}" min="${min}" max="${max}" onchange="campFcSet('${k}',this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600;box-sizing:border-box;color-scheme:${T.inputScheme}">`;
@@ -15332,7 +15360,8 @@ function campFcHTML(){
       const whatWhenCol=`<div style="background:${T.rowBg};border-radius:10px;padding:14px 16px">
         <div style="font-size:11px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">🏷️ What &amp; when</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">${fld('Brand',sel('brand',bOpts,campFcBrand))}${fld('Aggregator',sel('agg',aOpts,campFcAgg))}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">${fld('Start',inp('start','date',campFcStart,'2025-01-01','2030-12-31'))}${fld('End',inp('end','date',campFcEnd,'2025-01-01','2030-12-31'))}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">${fld('Start',inp('start','date',campFcStart,'2025-01-01','2030-12-31'))}${fld('End',inp('end','date',campFcEnd,'2025-01-01','2030-12-31'))}</div>
+        ${fld('Comments (optional)',`<textarea onchange="campFcSet('comments',this.value)" placeholder="e.g. live in select locations only, or BOGO exclusive to Noon with no commission charged on these orders" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 8px;font-size:12px;min-height:40px;font-family:inherit;box-sizing:border-box;resize:vertical">${campFcComments}</textarea>`)}
       </div>`;
       const dealTermsCol=`<div style="background:${T.rowBg};border-radius:10px;padding:14px 16px">
         <div style="font-size:11px;font-weight:800;color:#F59E0B;text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">🎯 Deal terms</div>
@@ -15348,23 +15377,36 @@ function campFcHTML(){
           ${campFcType!=='bogo'?fld('Discount %',inp('discPct','number',campFcDiscPct,1,90)):''}
           ${campFcType==='menu'?fld('Cap AED',inp('cap','number',campFcCap,1,999)):''}
         </div>
-        <div style="display:flex;align-items:center;gap:8px;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:7px;padding:8px 11px">
-          <span style="font-size:12px;font-weight:600;color:${T.text};flex:1">Co-funded by ${campFcAgg||'platform'}?</span>
-          <select onchange="campFcSet('coFund',this.value)" style="background:${T.panelBg};border:0.5px solid ${T.border};border-radius:5px;color:${T.text};padding:4px 8px;font-size:11.5px;font-weight:600"><option value="true"${campFcCoFund?' selected':''}>Yes</option><option value="false"${!campFcCoFund?' selected':''}>No</option></select>
-          ${campFcCoFund?`<input type="number" value="${campFcCoFundPct}" onchange="campFcSet('coFundPct',this.value)" style="width:52px;background:${T.panelBg};border:0.5px solid ${T.border};border-radius:5px;color:${T.text};padding:4px 6px;font-size:11.5px;font-weight:600;text-align:center"><span style="font-size:11.5px;color:${T.muted}">%</span>`:''}
+        <div style="display:flex;align-items:center;gap:10px;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:7px;padding:8px 11px">
+          <label style="position:relative;display:inline-block;width:34px;height:18px;flex-shrink:0;cursor:pointer">
+            <input type="checkbox" ${campFcCoFund?"checked":""} onchange="campFcSet('coFund',this.checked?'true':'false');renderCampaigns()" style="position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer">
+            <span style="position:absolute;inset:0;background:${campFcCoFund?"#22C55E":T.border};border-radius:999px;transition:.15s;pointer-events:none"></span>
+            <span style="position:absolute;top:2px;${campFcCoFund?"right":"left"}:2px;width:14px;height:14px;background:#fff;border-radius:50%;transition:.15s;pointer-events:none"></span>
+          </label>
+          <span style="font-size:12px;font-weight:600;color:${T.text};flex:1">Co-funded by ${campFcAgg||"platform"}</span>
+          ${campFcCoFund?`<input type="number" value="${campFcCoFundPct}" onchange="campFcSet('coFundPct',this.value)" style="width:52px;background:${T.panelBg};border:0.5px solid ${T.border};border-radius:5px;color:${T.text};padding:4px 6px;font-size:11.5px;font-weight:600;text-align:center"><span style="font-size:11.5px;color:${T.muted}">%</span>`:""}
         </div>
       </div>`;
+      // v403: Nikhil caught a real, concrete gap between the approved mockup and what actually
+      // shipped in build 400 — the mockup (campfc_fullpage.html) puts Comments inside the "What &
+      // when" column (moved above) and the Run Forecast button as a full-width element INSIDE
+      // this same card, right after the two columns — build 400 left both in their pre-redesign
+      // positions (Comments as a separate collapsed accordion below, Run Forecast as a standalone
+      // button further down), which is why it still looked like the old layout even though the
+      // two-column split itself was in place. Branches/brand-summary-pill aren't in the
+      // (simplified) mockup at all — kept here since they're real, necessary confirmation UI —
+      // but moved inside this same card too, ending with Run Forecast last, so the whole thing
+      // reads as the one cohesive card the mockup shows rather than a card followed by loose
+      // elements below it.
+      const summaryPill=(campFcBrand&&campFcAgg)?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:${T.panelBg};border-radius:6px;border:0.5px solid ${T.border}">`+bPill(campFcBrand,22)+`<span style="font-size:12.5px;font-weight:700;color:${T.text}">${campFcBrand}</span>`+`<span style="color:${T.label};font-size:12.5px">×</span>`+aPill(campFcAgg,22)+`<span style="font-size:12.5px;font-weight:700;color:${T.text}">${campFcAgg}</span>`+`<span style="font-size:10.5px;color:${T.muted};margin-left:4px">${campFcTypeLabel(campFcType,campFcDiscPct,campFcCap)}${campFcCoFund?' · '+campFcCoFundPct+'% co-funded':''}</span></div>`:'';
+      const branchesBlock=branches.length?`<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:600;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">Branches <span style="font-weight:400;text-transform:none">(all selected by default · tap to deselect)</span></div>${branchChips}</div>`:'';
       return sectionCard('📋','Campaign details',
-        upcomingDD+`<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">`+whatWhenCol+dealTermsCol+'</div>');
+        upcomingDD+`<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">`+whatWhenCol+dealTermsCol+'</div>'
+        +summaryPill+branchesBlock
+        +`<button onclick="campFcRun()" style="width:100%;background:linear-gradient(135deg,${accent},#4E8FEA);border:none;border-radius:8px;color:#0B1220;padding:11px;font-size:13px;cursor:pointer;font-weight:800">▶ Run Forecast</button>`);
     })()
   )
-  +(campFcCollapsed?'':
-    `${(campFcBrand&&campFcAgg?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:${T.rowBg};border-radius:6px;border:0.5px solid ${T.border}">`+bPill(campFcBrand,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcBrand}</span>`+`<span style="color:${T.label};font-size:13px">×</span>`+aPill(campFcAgg,24)+`<span style="font-size:13px;font-weight:700;color:${T.text}">${campFcAgg}</span>`+`<span style="font-size:11px;color:${T.muted};margin-left:4px">${campFcTypeLabel(campFcType,campFcDiscPct,campFcCap)}${campFcCoFund?' · '+campFcCoFundPct+'% co-funded':''}</span></div>`:'')}`
-    +(branches.length?`<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:600;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">Branches <span style="font-weight:400;text-transform:none">(all selected by default · tap to deselect)</span></div>${branchChips}</div>`:'')
-    +`<div style="background:${T.rowBg};border:0.5px solid ${T.border};border-radius:8px;padding:10px 14px;margin-bottom:10px"><details><summary style="font-size:11px;font-weight:700;color:${T.muted};cursor:pointer;list-style:none">💬 Additional comments <span style="font-weight:400;text-transform:none">(optional)</span></summary><textarea onchange="campFcSet('comments',this.value)" placeholder="e.g. live in select locations only, or BOGO exclusive to Noon with no commission charged on these orders" style="width:100%;margin-top:8px;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 8px;font-size:12px;min-height:44px;font-family:inherit;box-sizing:border-box;resize:vertical">${campFcComments}</textarea></details></div>`
-    +`<button onclick="campFcRun()" style="background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.4);border-radius:6px;color:${accent};padding:6px 18px;font-size:12px;cursor:pointer;font-weight:700">▶ Run Forecast</button>`
-    +resultsHTML
-  )
+  +(campFcCollapsed?'':resultsHTML)
   +'</div>'
   +historyPanel;
 }
