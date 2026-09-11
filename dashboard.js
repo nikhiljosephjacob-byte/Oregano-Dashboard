@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-405";
+const BUILD_VERSION="2026-08-13-406";
 const BUILD_NOTES=[
+  "✨ Break-Even Calculator — BOGO and Select-Items no longer ask you to guess a percentage. Built after Nikhil directly asked 'shouldn't the dashboard learn this itself?' and confirmed with a real screenshot that 6 completed Oregano × Deliveroo BOGO campaigns exist (May–Sep 2026) — plus the 11–13 Sep one that's actually running right now, the exact case this whole conversation was about. The real screenshot also surfaced something the fix needed to handle correctly: co-funding % varies campaign to campaign (35% on some, 50-50 on others, 60-40 on one) — so a naive average of past discount amounts would be meaningless. New campBeFindHistoricalDiscPerOrder() filters completed campaigns for the same brand+aggregator+structure (BOGO or Select Items — using the discountStructure field a prior build already normalized from the sheet's own column), runs each through campAnalysisV2, and uses totalCustomerDisc — the FULL discount already reconstructed independent of that specific campaign's own co-funding split — divided by real orders, so campaigns with different historical splits can be safely averaged together; the CURRENT campaign's own co-funding % is applied separately. Order-weighted average across matches. When real matches exist, the form shows exactly how many and the resulting AED/order average, with a 'Use this' toggle (on by default) to fall back to the manual estimate fields if Nikhil wants to override for a specific reason; when no matches exist for that brand+aggregator, says so plainly and uses the manual estimate as before — no silent guessing either way. Verified with a Node harness modeling the real screenshot's 6 completed campaigns plus a currently-Running one and a wrong-aggregator one (both correctly excluded): match count, total orders, and the order-weighted average all come out exact.",
   "🐛 Daily Digest's Aggregator × brand matrix was hardcoded to just 3 aggregators (Talabat/Deliveroo/Careem), caught directly by Nikhil from the real PDF — copied straight from the original mockup's illustrative scope (build 402) without checking whether the real report should cover all 7 platforms the group actually operates on. Fixed to use the same global AGGS list (Deliveroo/Talabat/Noon/Careem/Keeta/Smiles/Instashop) every other page already reads from, instead of a local hardcoded array — combos with no real data (e.g. a brand not live on a given platform, like most brands not being on Instashop) correctly show '—', same as any other zero-data cell in this table already did before this fix. Verified with a Node harness using a brand present on all 7 platforms and a second brand present on only 2 (Talabat/Careem, matching a realistic real-world pattern) — the second brand's row correctly shows real percentages on exactly those two columns and '—' on the other five.",
   "🐛 Did a full audit against the approved mockup before shipping this time, per Nikhil's direct ask, rather than fixing one thing and waiting to be told about the next. Found and fixed three real things, not just the one asked about. (1) The co-fund toggle switch itself was never actually built in either tool — both used a plain Yes/No dropdown (Forecaster) or a bare number input (Break-Even) instead of the sliding pill switch shown in the mockup. Built a real interactive toggle (checkbox-based, styled as the green/gray pill with a sliding circle) in both — Forecaster toggles the existing boolean coFund field; Break-Even (which only ever had a single 0-100 percentage, no separate boolean) toggles between 0 and a 50% default. (2) Auditing the toggle's wiring surfaced a second, unrelated real bug: the Forecaster's coFund select had no renderCampaigns() call, unlike the 'type' select right next to it — meaning toggling co-funding silently updated the state but didn't immediately show/hide the Platform % field until some other interaction happened to redraw the page. Checking whether this was an isolated case or a pattern found a THIRD instance: the shared sel() helper (used for Brand/Aggregator) had the exact same gap — changing Brand or Aggregator didn't immediately refresh the Branches chip list or the brand×aggregator summary pill, both of which are computed from those same fields elsewhere in the same render. Fixed at the shared sel() helper (safe — confirmed via grep it's only ever used for these two fields in this form) rather than patching each call site. Checked Break-Even's own Brand/Aggregator/Discount-type selects for the same pattern — already correct, this class of bug was specific to the Forecaster's form. (3) Confirmed and am flagging explicitly, not silently: the 'How we got the baseline' section (build 400) shows ONE real 30-day trailing window, not the mockup's two-window depiction (Prior week / Same days last month) — this is deliberate, not a miss: that two-window layout is how the Break-Even Calculator genuinely works, but the Forecaster's real campFcBaseline() only ever computes a single trailing window, so showing two would mean fabricating a second one that doesn't correspond to anything actually calculated. Verified with direct tag-balance checks on both rewritten forms: campFcHTML fully balanced (125/125 divs), campBeHTML fully balanced (96/96 divs, 1/1 label).",
   "🐛 Two real issues Nikhil caught directly by testing the live page against the approved mockup and actually clicking the delete button, not just looking at it. (1) Forecast History delete failed with an empty 'Delete failed: ' message — confirms the unverified assumption flagged in build 400 (that /api/forecast/delete exists and expects an id field) was wrong, or at least unconfirmed either way, since both data.error and res.statusText came back empty, telling us nothing. Improved campFcDeleteForecast() to surface the actual HTTP status code and raw response body instead — doesn't fix the underlying gap (still needs checking directly against the real backend), but the next failure will actually say why instead of nothing. (2) A real, concrete mismatch between build 400's Campaign Forecaster form and the mockup it was supposed to match (campfc_fullpage.html, Option B): the mockup puts the Comments field inside the 'What & when' column and the Run Forecast button as a full-width element INSIDE the same card, right after the two columns — build 400 left both in their pre-redesign positions (Comments as a separate collapsed accordion below the card, Run Forecast as a standalone button further down), which is exactly why the live page still read as the old layout even though the two-column split itself was technically in place. Fixed by moving Comments into 'What & when' (now a visible textarea, not a collapsed accordion) and moving Run Forecast to be the final element inside the same 'Campaign details' card. The branch-selector chips and brand×aggregator summary pill aren't part of the (simplified) mockup at all, but are real necessary confirmation UI — kept, moved inside the same card too so the whole thing reads as one cohesive card rather than a card followed by loose elements below it. Verified the full campFcHTML return block is still tag-balanced (19/19 divs) after the restructure — caught and fixed one real mistake in this same edit before shipping: my first pass deleted the outer container's own closing </div> by accident while restructuring around it.",
@@ -14580,6 +14581,7 @@ function aPill(agg,sz=20){const clr=AC[agg]||'#888';return`<span style="display:
 // packaging cost is charged on gross (the kitchen makes the food regardless of the discount).
 let campBeBrand=(typeof BR!=='undefined'&&BR[0])?BR[0].n:'Oregano',campBeAgg='Talabat',campBeDiscType='pct_cap';
 let campBeDiscPct=30,campBeCap=20,campBeCoFund=0,campBeAttach=60,campBeFreeItemPct=25;
+let campBeUseHistorical=true;
 let campBeStart='',campBeEnd='',campBePriorStart='',campBePriorEnd='';
 let campBeMonthStart='',campBeMonthEnd='',campBeShowDateEdit=false;
 let campBeResult=null;
@@ -14647,10 +14649,20 @@ function campBeCompute(){
   const campDays=(campBeStart&&campBeEnd)?Math.max(1,Math.round((new Date(campBeEnd+'T12:00:00')-new Date(campBeStart+'T12:00:00'))/86400000)+1):7;
   const baseOrders=Math.round(baseOpd*campDays);
   let discPo=0;
+  // v406: BOGO/Select-Items now default to a real historical average when past completed
+  // campaigns exist for this brand+aggregator — campBeUseHistorical (default true) lets Nikhil
+  // fall back to the manual estimate fields below if he wants to override it for a specific reason.
+  let histMatch=null;
   if(campBeDiscType==='pct_cap')discPo=Math.min(baseGrossAOV*campBeDiscPct/100,campBeCap>0?campBeCap:9999);
   else if(campBeDiscType==='menu')discPo=baseGrossAOV*campBeDiscPct/100;
-  else if(campBeDiscType==='select')discPo=Math.min(baseGrossAOV*(campBeAttach/100)*(campBeDiscPct/100),campBeCap>0?campBeCap:9999);
-  else if(campBeDiscType==='bogo')discPo=baseGrossAOV*campBeFreeItemPct/100;
+  else if(campBeDiscType==='select'){
+    histMatch=campBeFindHistoricalDiscPerOrder(campBeBrand,campBeAgg,'select');
+    discPo=(histMatch&&campBeUseHistorical)?histMatch.avgDiscPerOrder:Math.min(baseGrossAOV*(campBeAttach/100)*(campBeDiscPct/100),campBeCap>0?campBeCap:9999);
+  }
+  else if(campBeDiscType==='bogo'){
+    histMatch=campBeFindHistoricalDiscPerOrder(campBeBrand,campBeAgg,'bogo');
+    discPo=(histMatch&&campBeUseHistorical)?histMatch.avgDiscPerOrder:baseGrossAOV*campBeFreeItemPct/100;
+  }
   const platDiscPo=discPo*(campBeCoFund/100);
   const ourDiscPo=discPo*(1-campBeCoFund/100);
   const custNetAOV=baseGrossAOV-discPo;
@@ -14690,12 +14702,39 @@ function campBeCompute(){
     foodPo:foodPo,commPo:commPo,contribPo:contribPo,
     bContribPo:bContribPo,bContrib:bContrib,impossible:contribPo<=0,
     prior:prior,month:month,
-    flat:flatScenario,be:mkScenario(1.00),p10:mkScenario(1.10),p20:mkScenario(1.20)};
+    flat:flatScenario,be:mkScenario(1.00),p10:mkScenario(1.10),p20:mkScenario(1.20),histMatch:histMatch};
 }
 // v368: dial geometry helpers — same math verified earlier for the approved mockup (CX must equal
 // viewBox width/2, confirmed by dividing the actual viewBox value rather than re-asserting a
 // carried-over constant, which is exactly the bug that caused the dial to render off-center twice).
 function campBePolar(cx,cy,r,deg){const rad=(deg-90)*Math.PI/180;return{x:cx+r*Math.cos(rad),y:cy+r*Math.sin(rad)};}
+// v406: real historical discount-per-order lookup for BOGO/Select-Items, replacing the "guess a
+// percentage" manual fields with an actual average pulled from past completed campaigns — built
+// after Nikhil directly asked "shouldn't the dashboard learn this itself?" and confirmed via a
+// real screenshot that 6 completed Oregano x Deliveroo BOGO campaigns exist (May-Sep 2026),
+// varying in co-funding split campaign to campaign (35%, 50-50, 60-40). Uses campAnalysisV2's
+// totalCustomerDisc — the FULL discount, already reconstructed to the real total regardless of
+// that specific campaign's own co-funding split (not ourDiscPerDay, which reflects only THAT
+// campaign's split) — divided by real orders, so campaigns with different historical co-funding
+// %'s can be safely averaged together on a like-for-like basis; the CURRENT campaign's own
+// co-funding % (set elsewhere in this form) is applied separately wherever this result is used.
+// Order-weighted average across matches, same spirit as the Forecaster's own weighting.
+function campBeFindHistoricalDiscPerOrder(brand,agg,discType){
+  if(typeof campLoaded==='undefined'||!campLoaded||typeof campaignData==='undefined')return null;
+  const structureKey=discType==='bogo'?'bogo':discType==='select'?'selectItems':null;
+  if(!structureKey)return null;
+  const candidates=campaignData.filter(c=>c.brand===brand&&c.aggregator===agg&&c.discountStructure===structureKey&&c.status==='Completed');
+  const matches=[];
+  for(const c of candidates){
+    const a=campAnalysisV2(c);
+    if(!a||!a.hasData||!a.cs||!(a.cs.orders>0)||a.totalCustomerDisc==null||a.totalCustomerDisc<0)continue;
+    matches.push({c,discPerOrder:a.totalCustomerDisc/a.cs.orders,orders:a.cs.orders});
+  }
+  if(!matches.length)return null;
+  const totalOrders=matches.reduce((s,m)=>s+m.orders,0);
+  const avgDiscPerOrder=matches.reduce((s,m)=>s+m.discPerOrder*m.orders,0)/totalOrders;
+  return{avgDiscPerOrder,matchCount:matches.length,totalOrders,matches};
+}
 function campBeArcPath(cx,cy,r,a1,a2){const p1=campBePolar(cx,cy,r,a1),p2=campBePolar(cx,cy,r,a2);const large=(a2-a1<=180)?0:1;return'M '+p1.x+' '+p1.y+' A '+r+' '+r+' 0 '+large+' 1 '+p2.x+' '+p2.y;}
 // v369: compact day+date range for the econ panel's Discount/order subtitle — Nikhil pointed out
 // that baseline can carry a real organic discount (small vouchers, standing combos) even with no
@@ -14766,6 +14805,14 @@ function campBeHTML(){
     +(campBeDiscType==='bogo'?'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Free item (% of cart)</div><input type="number" value="'+campBeFreeItemPct+'" min="5" max="60" onchange="campBeFreeItemPct=+this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>':'')
     +(campBeDiscType==='select'?'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Attach rate %</div><input type="number" value="'+campBeAttach+'" min="1" max="100" onchange="campBeAttach=+this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>':'')
     +'</div>'
+    +((campBeDiscType==='bogo'||campBeDiscType==='select')?(R&&R.histMatch?
+      '<div style="display:flex;align-items:center;gap:8px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.3);border-radius:7px;padding:8px 11px;margin-bottom:10px;font-size:11px">'
+      +'<span style="color:#22C55E;font-weight:700">✓ '+R.histMatch.matchCount+' real past campaign'+(R.histMatch.matchCount!==1?'s':'')+'</span>'
+      +'<span style="color:'+T.muted+'">— avg '+fmA(R.histMatch.avgDiscPerOrder)+'/order'+(campBeUseHistorical?', used instead of the estimate below':'')+'</span>'
+      +'<label style="margin-left:auto;display:flex;align-items:center;gap:5px;cursor:pointer;font-size:10px;color:'+T.muted+'"><input type="checkbox" '+(campBeUseHistorical?'checked':'')+' onchange="campBeUseHistorical=this.checked;campBeResult=null;renderCampaigns()" style="cursor:pointer">Use this</label>'
+      +'</div>'
+      :'<div style="font-size:10px;color:'+T.muted+';margin-bottom:10px">No completed '+(campBeDiscType==='bogo'?'BOGO':'Select-Items')+' campaigns found for '+esc(campBeBrand)+' × '+esc(campBeAgg)+' — using your estimate below.</div>'
+    ):'')
     +'<div style="display:flex;align-items:center;gap:10px;background:'+T.inputBg+';border:1px solid '+T.border+';border-radius:7px;padding:8px 11px">'
     +'<label style="position:relative;display:inline-block;width:34px;height:18px;flex-shrink:0;cursor:pointer">'
     +'<input type="checkbox" '+(campBeCoFund>0?'checked':'')+' onchange="campBeCoFund=this.checked?50:0;campBeResult=null;renderCampaigns()" style="position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer">'
