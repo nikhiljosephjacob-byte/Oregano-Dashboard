@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-410";
+const BUILD_VERSION="2026-08-13-411";
 const BUILD_NOTES=[
+  "🐛 Three real bugs in the Campaign Planner, all caught directly by Nikhil from the live page. (1) THE BIG ONE — the chart never rendered at all, no animation, no data, just empty boxes. Root cause: the entire chart-drawing logic was embedded as a literal <script> tag inside campPlanHTML()'s own returned HTML string — but a <script> tag inserted via element.innerHTML= is inert; browsers never execute it, full stop. Every other animated feature in this codebase already works around this the right way — campBeStartAuto() (the Break-Even Calculator's own working animation) is a genuinely separate, top-level function that renderCampaigns() calls explicitly AFTER the innerHTML assignment, never embedded in the HTML itself. Extracted the whole chart into a new standalone campPlanRenderChart(), wired into renderCampaigns() the exact same way (campPlanStopChartAuto() before the innerHTML swap, campPlanRenderChart() after) — mirroring the one proven pattern in this file rather than inventing a new one. This also explains why the cards and form rendered fine while the chart stayed empty: static HTML needs no script to display, only the dynamically-drawn SVG did, and that script never ran. (2) Full P&L wasn't showing — build 408 shipped a simplified 2-line card (orders/day + Net Contribution) instead of the full Gross Sales -> Discount Total/Aggregator Funding/Brand Funded -> Net Sales -> Commission -> Food+Pkg -> Net Contribution breakdown already established as the real Break-Even Calculator's own card format. campPlanCompute() now returns the full per-order economics multiplied out per scenario (new pnlAt() helper) rather than just orders+contribution, and the cards render all of it, matching the approved format exactly. (3) The 'negative contribution' confusion — Optimistic's card read '– AED 1,047 (-6.8%)' directly under 'AED 14,366/day', which reads at a glance like the contribution itself is negative; it isn't, that's the DELTA vs baseline. Added explicit 'vs baseline:' wording before the delta so the two can't be conflated. Verified all three fixes with a Node harness: no <script> tag in the output (was the actual bug), full P&L line items present, delta wording present, div-balanced HTML (119/119), and the P&L figures tie out exactly the same as before this refactor (Gross-Discount-Commission-Food=Contribution for every scenario, break-even's contribution still matches baseline to the cent). NOT a bug, confirmed by re-deriving the math by hand: 'even Optimistic doesn't clear break-even' is a real, mathematically consistent finding for a 30%-off-cap-30, 50-50 co-funded deal against this brand's historical uplift range — not something this fix changed or should paper over.",
   "🧹 Trimmed BUILD_NOTES from 167 entries (250KB, 12.9% of the whole file) down to the most recent 15, per Nikhil's direct question 'is all this required in the code?'. Checked before answering rather than assuming: the only place BUILD_NOTES is ever read is the What's New popup, which since build 401 only shows BUILD_NOTES.slice(0,1) — every entry beyond the very first has been pure dead weight shipped to every user on every page load since that fix, same conclusion an earlier cleanup already reached once before at a different threshold (126→30, back when the popup still showed 8). Verified this trim changes nothing functionally: BUILD_NOTES[0] is untouched, the popup's own slice(0,1) call is untouched, only entries beyond index 14 were removed. File dropped from 1,942,335 to 1,717,735 characters (~11.6% smaller). Extracted and rebuilt the array using Node's own parser (via a matched-bracket scan handling escaped quotes correctly) rather than a naive string/line split, to avoid corrupting any entry that happens to contain a comma or quote inside its text.",
   "🐛 Real runtime bug caught immediately by Nikhil testing the live page — 'fA is not defined', crashing the whole Campaign Planner page on load. Root cause: fA() isn't a global function anywhere in this codebase — it's a small helper (const fA=v=>'AED '+...) that many functions define locally for their own use, repeated rather than shared. My Node test for build 408 mocked fA() myself in the test harness to make the test runnable, which meant the test could never have caught this — it was validating against a function that doesn't exist in the real file. Fixed by adding the same local fA definition directly inside campPlanHTML(), matching the exact pattern already used elsewhere (campFcHTML, campBeHTML, campDetailV2HTML all define it the same way). Re-verified this time WITHOUT mocking fA in the test harness, relying solely on the function's own local definition, and also audited every other identifier campPlanHTML calls (extracted the full function body properly this time, via brace-counting rather than a naive line-range grep that had silently stopped partway through and given false confidence) — esc(), BR, AGGS, and campTheme() are all confirmed genuinely global, no other undefined-reference risk found.",
   "✨ New page — Campaign Planner. Combines the Forecaster and Break-Even Calculator into one shared-input view, addressing Nikhil's direct correction: 'the calculations must be based on the filters applied while forecasting for that particular campaign' — the mockup's numbers were illustrative constants (fixed 22%/23%/AOV94), which is NOT how this actually works. New campPlanCompute() reuses the real functions already proven elsewhere: campFcBaseline() for the real 30-day baseline, campFcFindMatches()/campFcWeightedPercentile()/campFcSeasonality() for the Forecaster's real historically-derived Conservative/Expected/Optimistic uplift — the exact same logic campFcRun() already uses, not a duplicate — and commissionRateFor(agg,brand,dateStr)/foodPkgPct(brand) for the REAL per-brand/aggregator commission and food-cost rates driving Break-even, instead of a fixed assumption. Break-even is solved directly (baseline contribution ÷ real per-order campaign contribution, using the same commission-base-is-Gross-minus-OUR-share fix from build 397) rather than routed through campBeCompute()'s own scenario-search — verified this ties out exactly (break-even's contribution matches baseline to the cent) with a Node harness. KNOWN LIMITATION, flagged rather than hidden: this does NOT yet use the BOGO/Select-Items real historical discount lookup from builds 406/407 — those two structures use the same formula-based estimate the Forecaster's menu-wide path already uses. New animated dual-panel chart (Orders/day, Contribution/day) plus full P&L cards, both fed by real computed numbers, not sample data. Fixed the centering complaint directly: each panel's vertical margins are now computed from how many text lines that specific panel has (Orders carries AOV+Sales/day, Contribution doesn't), with equal space reserved above the topmost point and below the bottommost — the chart sits centered in its box now instead of low. Verified with a Node harness end-to-end: the compute layer (break-even ties to baseline exactly, Conservative≤Expected≤Optimistic ordering holds) and the render layer (structurally balanced HTML: 83/83 divs, 1/1 script tags, 2/2 svg tags, both the pre-run form-only state and the full results state). Caught and fixed two of my own mistakes before shipping — an accidentally-deleted function declaration during the initial edit, and an unescaped apostrophe inside a template literal — both via the same syntax-check-before-ship discipline used throughout this project.",
@@ -5359,7 +5360,7 @@ function restructureTabIcons(){
     t.innerHTML=`<span class="tab-icon" style="flex-shrink:0;display:inline-flex;justify-content:center;width:18px">${icon}</span><span class="tab-label">${label}</span>`;
   });
 }
-function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>{t.classList.toggle("act",t.dataset.pg===page);});document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};ovTrendMetric='sales';brTrendMetric='sales';if(typeof campBeStopAuto==='function')campBeStopAuto();renderPage(page);}
+function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>{t.classList.toggle("act",t.dataset.pg===page);});document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};ovTrendMetric='sales';brTrendMetric='sales';if(typeof campBeStopAuto==='function')campBeStopAuto();if(typeof campPlanStopChartAuto==='function')campPlanStopChartAuto();renderPage(page);}
 
 // ── MOBILE NAV DRAWER ──
 // Slides in from the left on tap of hamburger. Overlay dims the page. Any tap on a nav item or
@@ -13490,18 +13491,107 @@ function campPlanHTML(){
       </div>`;
 
   const CATS=[
-    {name:'Baseline',icon:'🏁',color:'#818CF8',orders:r.baseline.orders,contrib:r.baseline.contribDay,sales:r.baseline.salesDay,sub:'No campaign'},
-    {name:'Conservative',icon:'🛡️',color:'#A5B4FC',orders:r.conservative.orders,contrib:r.conservative.contribDay,sales:r.conservative.salesDay,sub:'If uplift undershoots'},
-    {name:'Expected',icon:'🎯',color:'#60A5FA',orders:r.expected.orders,contrib:r.expected.contribDay,sales:r.expected.salesDay,sub:'Best real-data estimate'},
-    {name:'Break-even',icon:'⚖️',color:'#F1F5F9',orders:r.breakEven?r.breakEven.orders:r.baseline.orders,contrib:r.breakEven?r.breakEven.contribDay:r.baseline.contribDay,sales:r.breakEven?r.breakEven.salesDay:r.baseline.salesDay,sub:'Matches baseline profit'},
-    {name:'Optimistic',icon:'🚀',color:'#FFD700',orders:r.optimistic.orders,contrib:r.optimistic.contribDay,sales:r.optimistic.salesDay,sub:'Best case, if it lands'}
+    {name:'Baseline',icon:'🏁',color:'#818CF8',sub:'No campaign',pnl:r.baseline},
+    {name:'Conservative',icon:'🛡️',color:'#A5B4FC',sub:'If uplift undershoots',pnl:r.conservative},
+    {name:'Expected',icon:'🎯',color:'#60A5FA',sub:'Best real-data estimate',pnl:r.expected},
+    {name:'Break-even',icon:'⚖️',color:'#F1F5F9',sub:'Matches baseline profit',pnl:r.breakEven||r.baseline},
+    {name:'Optimistic',icon:'🚀',color:'#FFD700',sub:'Best case, if it lands',pnl:r.optimistic}
   ];
 
-  const chartScript=`<script>
-(function(){
-  const CATS=${JSON.stringify(CATS)};
-  const AOV=${r.grossAOV.toFixed(2)};
+  const svgPanel=(id,vbHeight)=>`<div style="background:#0B1220;border-radius:14px;padding:20px 20px 6px;margin-bottom:14px">
+    <svg viewBox="0 0 950 ${vbHeight}" id="${id}" style="display:block;width:100%;height:auto;overflow:visible">
+      <defs>
+        <linearGradient id="${id}Grad" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#818CF8"/><stop offset="35%" stop-color="#60A5FA"/><stop offset="65%" stop-color="#F1F5F9"/><stop offset="100%" stop-color="#FFD700"/></linearGradient>
+        <linearGradient id="${id}Area" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#60A5FA" stop-opacity="0.18"/><stop offset="100%" stop-color="#60A5FA" stop-opacity="0"/></linearGradient>
+        <filter id="${id}Glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <clipPath id="${id}ClipA"><rect class="clipAboveRect" x="0" y="0" width="950" height="${vbHeight}"/></clipPath>
+        <clipPath id="${id}ClipB"><rect class="clipBelowRect" x="0" y="0" width="950" height="0"/></clipPath>
+      </defs>
+      <line class="zeroLine" x1="70" y1="0" x2="880" y2="0" stroke="#3A4875" stroke-width="1" stroke-dasharray="4 4"/>
+      <text class="zeroLbl" x="875" y="0" font-size="9" fill="#6B7A99" text-anchor="end">baseline level</text>
+      <path class="areaPath" fill="url(#${id}Area)" style="opacity:0;transition:opacity .6s ease-out"/>
+      <path class="lineN" fill="none" stroke="url(#${id}Grad)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" filter="url(#${id}Glow)" clip-path="url(#${id}ClipA)"/>
+      <path class="lineR" fill="none" stroke="#EF4444" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" filter="url(#${id}Glow)" clip-path="url(#${id}ClipB)"/>
+      <g class="ptsGroup"></g>
+    </svg>
+  </div>`;
+
+  // v411: full P&L per card, matching the real Break-Even Calculator's own card format exactly
+  // (Gross Sales -> Discount Total/Aggregator Funding/Brand Funded -> Net Sales -> Commission ->
+  // Food+Pkg -> Net Contribution) — the simplified 2-line card shipped in build 408 was never what
+  // was expected. Also clarifies the vs-baseline delta with explicit "vs baseline" wording, so a
+  // negative DELTA (contribution lower than baseline) can't be misread as the contribution itself
+  // being negative — Net Contribution is always shown as its own absolute, unsigned figure.
+  const cards=CATS.map((cat,i)=>{
+    const p=cat.pnl,isBase=cat.name==='Baseline';
+    const diff=p.contribDay-r.baseline.contribDay;
+    const diffPct=r.baseline.contribDay?diff/r.baseline.contribDay*100:0;
+    const discLines=isBase?'':`
+      <div style="display:flex;justify-content:space-between;padding:1.5px 0;font-size:9.5px;color:${T.muted}"><span>Discount Total</span><span style="font-weight:700;color:${T.secondary}">${fA(p.discTotalDay)}</span></div>
+      <div style="display:flex;justify-content:space-between;padding:1.5px 0 1.5px 8px;font-size:9px;color:${T.muted}"><span>↳ Aggregator Funding</span><span style="font-weight:700;color:${T.secondary}">${fA(p.aggFundDay)}</span></div>
+      <div style="display:flex;justify-content:space-between;padding:1.5px 0 1.5px 8px;font-size:9px;color:${T.muted}"><span>↳ Brand Funded</span><span style="font-weight:700;color:#F87171">– ${fA(p.brandFundDay)}</span></div>`;
+    return `<div class="campPlanCard" data-idx="${i}" data-acc="${cat.color}" style="background:${T.panelBg};border-radius:11px;flex:1;min-width:0;padding:12px 11px;border:1.5px solid ${T.border};cursor:pointer;transition:all .25s">
+      <div style="display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:800;text-transform:uppercase;color:${cat.color}">${cat.icon} ${cat.name}</div>
+      <div style="font-size:8.5px;color:${T.muted};margin-bottom:5px">${cat.sub}</div>
+      <div style="font-size:18px;font-weight:800;color:${T.text};line-height:1">${p.orders.toFixed(1)}</div>
+      <div style="font-size:9px;color:${T.muted}">orders/day</div>
+      <div style="margin-top:7px;padding-top:7px;border-top:0.5px solid ${T.border}88">
+        <div style="display:flex;justify-content:space-between;padding:1.5px 0;font-size:9.5px;color:${T.muted}"><span>Gross Sales</span><span style="font-weight:700;color:${T.secondary}">${fA(p.grossDay)}</span></div>
+        ${discLines}
+        <div style="display:flex;justify-content:space-between;padding:1.5px 0;font-size:9.5px;color:${T.muted}"><span>Net Sales</span><span style="font-weight:700;color:${T.secondary}">${fA(p.netSalesDay)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:1.5px 0;font-size:9.5px;color:${T.muted}"><span>Commission (${(r.commRate*100).toFixed(0)}%)</span><span style="font-weight:700;color:#FB923C">– ${fA(p.commDay)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:1.5px 0;font-size:9.5px;color:${T.muted}"><span>Food+Pkg (${(r.foodRate*100).toFixed(0)}%)</span><span style="font-weight:700;color:#FB923C">– ${fA(p.foodDay)}</span></div>
+      </div>
+      <div style="margin-top:7px;padding-top:7px;border-top:0.5px solid ${T.border}88">
+        <div style="font-size:9px;font-weight:700;color:${T.muted};text-transform:uppercase">Net Contribution</div>
+        <div style="font-size:14px;font-weight:800;color:${cat.color}">${fA(p.contribDay)}/day</div>
+        <div style="font-size:9.5px;color:${T.muted}">${isBase?'reference':'vs baseline: '+(diff>=0?'+':'– ')+fA(Math.abs(diff))+' ('+(diff>=0?'+':'')+diffPct.toFixed(1)+'%)'}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px"><span style="font-size:19px">🎢</span><div style="font-size:15.5px;font-weight:800;color:${T.text}">Campaign Planner</div><div style="font-size:10.5px;color:${T.muted};margin-left:4px">Forecast and break-even together — is what's likely enough to clear what's needed?</div></div>
+  ${form}
+  ${verdict}
+  <div style="font-size:11.5px;font-weight:800;color:${T.muted};margin:14px 0 6px">📦 Orders / day <span style="font-weight:400">— real commission ${(r.commRate*100).toFixed(0)}% · food+pkg ${(r.foodRate*100).toFixed(0)}% for ${esc(campPlanBrand)} × ${esc(campPlanAgg)}</span></div>
+  ${svgPanel('svgPlanOrders',300)}
+  <div style="font-size:11.5px;font-weight:800;color:${T.muted};margin:14px 0 6px">💰 Contribution / day</div>
+  ${svgPanel('svgPlanContrib',264)}
+  <div style="font-size:11px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.5px;margin:20px 0 8px">Full P&amp;L per category</div>
+  <div style="display:flex;gap:9px">${cards}</div>`;
+}
+
+// v411: real architecture bug — a <script> tag inserted via element.innerHTML is inert; browsers
+// never execute it. Every other function in this codebase that renders a page via pg.innerHTML=
+// (renderCampaigns included) already works around this by defining its post-render JS as a real,
+// separately-declared global function and calling it explicitly AFTER the innerHTML assignment
+// (see campBeStartAuto(), called at the end of renderCampaigns() — the exact working pattern this
+// mirrors). The previous build embedded the whole chart as a string-literal <script> block inside
+// campPlanHTML()'s own return value, which is exactly the case that never runs — matching the
+// reported symptom precisely (static HTML/cards rendered fine, since those need no script; the
+// dynamically-drawn SVG chart stayed empty, since its script never executed at all).
+let campPlanChartTimer=null,campPlanChartActiveIdx=-1,campPlanChartStarted=false,campPlanChartPointTimers=[],campPlanChartCycleTimeout=null;
+function campPlanStopChartAuto(){
+  clearInterval(campPlanChartTimer);campPlanChartTimer=null;
+  clearTimeout(campPlanChartCycleTimeout);
+  campPlanChartPointTimers.forEach(t=>clearTimeout(t));campPlanChartPointTimers=[];
+  campPlanChartStarted=false;campPlanChartActiveIdx=-1;
+}
+function campPlanRenderChart(){
+  if(!campPlanResult)return;
+  campPlanStopChartAuto();
+  const r=campPlanResult;
+  const CATS=[
+    {name:'Baseline',icon:'🏁',color:'#818CF8',pnl:r.baseline},
+    {name:'Conservative',icon:'🛡️',color:'#A5B4FC',pnl:r.conservative},
+    {name:'Expected',icon:'🎯',color:'#60A5FA',pnl:r.expected},
+    {name:'Break-even',icon:'⚖️',color:'#F1F5F9',pnl:r.breakEven||r.baseline},
+    {name:'Optimistic',icon:'🚀',color:'#FFD700',pnl:r.optimistic}
+  ];
+  const AOV=r.grossAOV;
   const X=[100,288,475,663,850];
+  const drawDurMs=2000;
+
   function computeY(values,ytop,ybot){
     const vmin=Math.min.apply(null,values), vmax=Math.max.apply(null,values);
     const span=(vmax-vmin)||1;
@@ -13516,9 +13606,6 @@ function campPlanHTML(){
     }
     return cum.map(function(c){return c/total;});
   }
-  const drawDurMs=2000;
-  let timer=null, activeIdx=-1, started=false, pointTimers=[];
-
   function renderPanel(svgId, values, valueFmt, extraLines, ytop, ybot, vbHeight){
     const svg=document.getElementById(svgId);
     if(!svg)return;
@@ -13571,24 +13658,9 @@ function campPlanHTML(){
         '<foreignObject x="'+(x-12)+'" y="'+(y-12)+'" width="24" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:18px;line-height:1">'+cat.icon+'</div></foreignObject>';
       g.appendChild(grp);
       const delay=fracs[i]*drawDurMs;
-      pointTimers.push(setTimeout(function(){grp.style.opacity='1';grp.style.transform='scale(1)';}, delay));
+      campPlanChartPointTimers.push(setTimeout(function(){grp.style.opacity='1';grp.style.transform='scale(1)';}, delay));
     });
-    pointTimers.push(setTimeout(function(){area.classList.add('show');}, drawDurMs));
-  }
-
-  function render(){
-    pointTimers.forEach(function(t){clearTimeout(t);}); pointTimers=[];
-    const ordersArr=CATS.map(function(c){return c.orders;});
-    const contribArr=CATS.map(function(c){return c.contrib;});
-    // symmetric top/bottom margins so the chart sits centered in its box, not low —
-    // Orders panel: 4 text lines -> textBlock=92, 30px margin each side -> ytop=122, span=130, viewBox=300
-    renderPanel('svgPlanOrders', ordersArr, function(v){return Math.round(v).toLocaleString()+'/day';},
-      function(cat){return ['AOV AED '+AOV.toFixed(0), 'Sales AED '+Math.round(cat.sales).toLocaleString()+'/day'];}, 122, 252, 300);
-    // Contribution panel: 2 text lines -> textBlock=56, 30px margin each side -> ytop=86, span=130, viewBox=264
-    renderPanel('svgPlanContrib', contribArr, function(v){return 'AED '+Math.round(v).toLocaleString()+'/day';}, null, 86, 216, 264);
-    bindEvents();
-    clearTimeout(window.__campPlanCycleTimeout);
-    window.__campPlanCycleTimeout=setTimeout(beginCycle, drawDurMs+400);
+    campPlanChartPointTimers.push(setTimeout(function(){area.classList.add('show');}, drawDurMs));
   }
   function bindEvents(){
     document.querySelectorAll('.campPlanCard').forEach(function(c){
@@ -13612,62 +13684,20 @@ function campPlanHTML(){
       const ring=p.querySelector('.gRing');
       if(ring)ring.style.filter=on?'drop-shadow(0 0 10px currentColor)':'none';
     });
-    activeIdx=i;
+    campPlanChartActiveIdx=i;
   }
-  function startCycle(){clearInterval(timer);timer=setInterval(function(){setActive((activeIdx+1)%5);},1800);}
-  function pauseOn(i){clearInterval(timer);setActive(i);}
+  function startCycle(){clearInterval(campPlanChartTimer);campPlanChartTimer=setInterval(function(){setActive((campPlanChartActiveIdx+1)%5);},1800);}
+  function pauseOn(i){clearInterval(campPlanChartTimer);setActive(i);}
   function resumeCycle(){startCycle();}
-  function beginCycle(){if(started)return;started=true;setActive(0);startCycle();}
-  window.campPlanReplay=function(){started=false;activeIdx=-1;render();};
-  render();
-})();
-</script>`;
+  function beginCycle(){if(campPlanChartStarted)return;campPlanChartStarted=true;setActive(0);startCycle();}
 
-  const svgPanel=(id,vbHeight)=>`<div style="background:#0B1220;border-radius:14px;padding:20px 20px 6px;margin-bottom:14px">
-    <svg viewBox="0 0 950 ${vbHeight}" id="${id}" style="display:block;width:100%;height:auto;overflow:visible">
-      <defs>
-        <linearGradient id="${id}Grad" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#818CF8"/><stop offset="35%" stop-color="#60A5FA"/><stop offset="65%" stop-color="#F1F5F9"/><stop offset="100%" stop-color="#FFD700"/></linearGradient>
-        <linearGradient id="${id}Area" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#60A5FA" stop-opacity="0.18"/><stop offset="100%" stop-color="#60A5FA" stop-opacity="0"/></linearGradient>
-        <filter id="${id}Glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-        <clipPath id="${id}ClipA"><rect class="clipAboveRect" x="0" y="0" width="950" height="${vbHeight}"/></clipPath>
-        <clipPath id="${id}ClipB"><rect class="clipBelowRect" x="0" y="0" width="950" height="0"/></clipPath>
-      </defs>
-      <line class="zeroLine" x1="70" y1="0" x2="880" y2="0" stroke="#3A4875" stroke-width="1" stroke-dasharray="4 4"/>
-      <text class="zeroLbl" x="875" y="0" font-size="9" fill="#6B7A99" text-anchor="end">baseline level</text>
-      <path class="areaPath" fill="url(#${id}Area)" style="opacity:0;transition:opacity .6s ease-out" onload=""/>
-      <path class="lineN" fill="none" stroke="url(#${id}Grad)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" filter="url(#${id}Glow)" clip-path="url(#${id}ClipA)"/>
-      <path class="lineR" fill="none" stroke="#EF4444" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" filter="url(#${id}Glow)" clip-path="url(#${id}ClipB)"/>
-      <g class="ptsGroup"></g>
-    </svg>
-  </div>`;
-
-  const cards=CATS.map((cat,i)=>{
-    const isBase=cat.name==='Baseline';
-    const diff=cat.contrib-r.baseline.contribDay;
-    const diffPct=r.baseline.contribDay?diff/r.baseline.contribDay*100:0;
-    return `<div class="campPlanCard" data-idx="${i}" data-acc="${cat.color}" style="background:${T.panelBg};border-radius:11px;flex:1;padding:13px 12px;border:1.5px solid ${T.border};cursor:pointer;transition:all .25s">
-      <div style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:800;text-transform:uppercase;color:${cat.color}">${cat.icon} ${cat.name}</div>
-      <div style="font-size:9px;color:${T.muted};margin-bottom:6px">${cat.sub}</div>
-      <div style="font-size:19px;font-weight:800;color:${T.text};line-height:1">${cat.orders.toFixed(1)}</div>
-      <div style="font-size:9.5px;color:${T.muted}">orders/day</div>
-      <div style="margin-top:8px;padding-top:8px;border-top:0.5px solid ${T.border}88">
-        <div style="font-size:9.5px;font-weight:700;color:${T.muted};text-transform:uppercase">Net Contribution</div>
-        <div style="font-size:15px;font-weight:800;color:${cat.color}">${fA(cat.contrib)}/day</div>
-        <div style="font-size:10px;color:${T.muted}">${isBase?'reference':((diff>=0?'+':'– ')+fA(Math.abs(diff))+' ('+(diff>=0?'+':'')+diffPct.toFixed(1)+'%)')}</div>
-      </div>
-    </div>`;
-  }).join('');
-
-  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px"><span style="font-size:19px">🎢</span><div style="font-size:15.5px;font-weight:800;color:${T.text}">Campaign Planner</div><div style="font-size:10.5px;color:${T.muted};margin-left:4px">Forecast and break-even together — is what's likely enough to clear what's needed?</div></div>
-  ${form}
-  ${verdict}
-  <div style="font-size:11.5px;font-weight:800;color:${T.muted};margin:14px 0 6px">📦 Orders / day <span style="font-weight:400">— real commission ${(r.commRate*100).toFixed(0)}% · food+pkg ${(r.foodRate*100).toFixed(0)}% for ${esc(campPlanBrand)} × ${esc(campPlanAgg)}</span></div>
-  ${svgPanel('svgPlanOrders',300)}
-  <div style="font-size:11.5px;font-weight:800;color:${T.muted};margin:14px 0 6px">💰 Contribution / day</div>
-  ${svgPanel('svgPlanContrib',264)}
-  <div style="font-size:11px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.5px;margin:20px 0 8px">Full P&amp;L per category</div>
-  <div style="display:flex;gap:10px">${cards}</div>
-  ${chartScript}`;
+  const ordersArr=CATS.map(function(c){return c.pnl.orders;});
+  const contribArr=CATS.map(function(c){return c.pnl.contribDay;});
+  renderPanel('svgPlanOrders', ordersArr, function(v){return Math.round(v).toLocaleString()+'/day';},
+    function(cat){return ['AOV AED '+AOV.toFixed(0), 'Sales AED '+Math.round(cat.pnl.grossDay).toLocaleString()+'/day'];}, 122, 252, 300);
+  renderPanel('svgPlanContrib', contribArr, function(v){return 'AED '+Math.round(v).toLocaleString()+'/day';}, null, 86, 216, 264);
+  bindEvents();
+  campPlanChartCycleTimeout=setTimeout(beginCycle, drawDurMs+400);
 }
 // v377: the match table was hardcoded to show only the top 8 rows, but the "N historical matches"
 // badge and the "Avg uplift" stat right below the table were both computed from the FULL match
@@ -14411,18 +14441,35 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
   const baselineContribDay=baselineOrders*contribPoBaseline;
   const breakEvenOrders=contribPoCampaign>0?baselineContribDay/contribPoCampaign:null;
 
+  // v411: full P&L per scenario, not just orders+contribution — Nikhil's direct ask after the
+  // real dashboard only showed a 2-line summary card, not the full Gross->Discount->Net->
+  // Commission->Food->Contribution breakdown the mockups all showed. All figures below are the
+  // same real per-order economics already computed above, multiplied out per scenario's own
+  // order count — no new calculation, just exposing what was already being computed.
+  function pnlAt(orders,isBaseline){
+    const grossDay=orders*grossAOV;
+    const discTotalDay=isBaseline?0:orders*fullDiscPerOrder;
+    const aggFundDay=isBaseline?0:orders*(fullDiscPerOrder-ourDiscPerOrder);
+    const brandFundDay=isBaseline?0:orders*ourDiscPerOrder;
+    const netSalesDay=grossDay-brandFundDay; // commission base, matches commBaseAOV*orders
+    const commDay=netSalesDay*commRate;
+    const foodDay=grossDay*foodRate;
+    const contribDay=netSalesDay-commDay-foodDay;
+    return{orders,grossDay,discTotalDay,aggFundDay,brandFundDay,netSalesDay,commDay,foodDay,contribDay};
+  }
+
   function scenarioAt(uplift){
     const orders=baselineOrders*(1+uplift);
-    return {orders,contribDay:orders*contribPoCampaign,salesDay:orders*grossAOV,upliftPct:uplift*100};
+    return Object.assign(pnlAt(orders,false),{upliftPct:uplift*100});
   }
 
   return{
     grossAOV,commRate,foodRate,nDays,matches,seas,
-    baseline:{orders:baselineOrders,contribDay:baselineContribDay,salesDay:baselineOrders*grossAOV},
+    baseline:Object.assign(pnlAt(baselineOrders,true),{upliftPct:0}),
     conservative:scenarioAt(cU),
     expected:scenarioAt(eU),
     optimistic:scenarioAt(oU),
-    breakEven:breakEvenOrders!=null?{orders:breakEvenOrders,contribDay:baselineContribDay,salesDay:breakEvenOrders*grossAOV,upliftPct:(breakEvenOrders/baselineOrders-1)*100}:null
+    breakEven:breakEvenOrders!=null?Object.assign(pnlAt(breakEvenOrders,false),{upliftPct:(breakEvenOrders/baselineOrders-1)*100}):null
   };
 }
 
@@ -15769,8 +15816,10 @@ async function renderCampaigns(){
     // firing against elements that no longer exist. Restarted after the new DOM is in place, only
     // when the breakeven tool is actually open and has a computed result to animate.
     campBeStopAuto();
+    if(typeof campPlanStopChartAuto==='function')campPlanStopChartAuto();
     pg.innerHTML=`${styleOverride}${header}${campDataFreshnessStrip()}${attention}${topChrome}${toolBack}${main}`;
     if(campTab==='breakeven'&&campBeScenCache)campBeStartAuto();
+    if(campTab==='planner'&&campPlanResult)campPlanRenderChart();
     if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
     if(campTab==='detail'&&selCamp){const c=selCamp;const imp=campImpact(c);if(campStatus(c)!=='Upcoming'&&imp.hasData){const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&(c.brand==='All Brands'||r.brand===c.brand)&&(c.aggregator==='All'||r.aggregator===c.aggregator)));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-camp',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}}
   }catch(err){pg.innerHTML=`${styleOverride}<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Render error</div><div style="color:${T.muted};font-size:12px">${err.message}</div></div>`;}
