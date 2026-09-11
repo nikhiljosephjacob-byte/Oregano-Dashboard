@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-411";
+const BUILD_VERSION="2026-08-13-412";
 const BUILD_NOTES=[
+  "✨ Forecast calibration — the highest-leverage fix from Nikhil's own diagnosis: every forecast run so far has been beaten by the real campaign result, in one consistent direction. Rather than guess which structural variable explains the gap, new campFcCalibrationBias(brand,agg) learns directly from the real track record already sitting in Forecast History: pulls every saved forecast matched to a COMPLETED real campaign (reusing the existing campFcMatchActual — not a new matching engine), computes the real gap between what was forecasted (Expected) and what actually happened, and recency-weights it (90-day half-life — deliberately slower-moving than the 45-day half-life used for a single campaign's own uplift match, since this calibrates the METHOD's accuracy, not any one campaign). Requires at least 3 matched brand+aggregator-specific samples before trusting a specific figure; falls back to the whole account's pooled history otherwise, rather than calibrating off 1-2 noisy points — and returns null cleanly when there's no usable history yet, changing nothing. The resulting bias shifts Conservative/Expected/Optimistic by the same amount, preserving their relative spread rather than collapsing them together. Wired into both campFcRun() (the real Forecaster) and campPlanCompute() (Campaign Planner) — same calibration logic, not duplicated separately. Surfaced transparently, not silently: both pages now show '📐 Calibrated +X.Xpts vs raw historical uplift, based on N of your own past forecasts vs their real result' — including an honest note when it's using the whole-account fallback rather than brand+aggregator-specific history. Verified with a Node harness: no history returns null (no behavior change); 3+ brand-specific completed forecasts correctly compute and apply a recency-weighted bias while excluding still-Running and unmatched records; insufficient brand-specific samples correctly fall back to the pooled account-wide figure; the calibration shift lands exactly on Expected's uplift (verified to the same decimal as calib.biasPts) with Conservative<=Expected<=Optimistic still holding afterward. Caught and fixed the same mistake as build 408 while editing — an accidentally-deleted function declaration during the first pass at wiring this in — via the same syntax-check-before-shipping discipline. Separately confirmed, not changed: the 'is the parser comparing apples to oranges' concern (entire-menu forecasts matching against select-items historical campaigns) was ALREADY fixed in an earlier build (v373/v379, predating this session) — discountStructure is checked first and authoritative for tagged campaigns, with a multi-tier text-pattern fallback for untagged older rows.",
   "🐛 Three real bugs in the Campaign Planner, all caught directly by Nikhil from the live page. (1) THE BIG ONE — the chart never rendered at all, no animation, no data, just empty boxes. Root cause: the entire chart-drawing logic was embedded as a literal <script> tag inside campPlanHTML()'s own returned HTML string — but a <script> tag inserted via element.innerHTML= is inert; browsers never execute it, full stop. Every other animated feature in this codebase already works around this the right way — campBeStartAuto() (the Break-Even Calculator's own working animation) is a genuinely separate, top-level function that renderCampaigns() calls explicitly AFTER the innerHTML assignment, never embedded in the HTML itself. Extracted the whole chart into a new standalone campPlanRenderChart(), wired into renderCampaigns() the exact same way (campPlanStopChartAuto() before the innerHTML swap, campPlanRenderChart() after) — mirroring the one proven pattern in this file rather than inventing a new one. This also explains why the cards and form rendered fine while the chart stayed empty: static HTML needs no script to display, only the dynamically-drawn SVG did, and that script never ran. (2) Full P&L wasn't showing — build 408 shipped a simplified 2-line card (orders/day + Net Contribution) instead of the full Gross Sales -> Discount Total/Aggregator Funding/Brand Funded -> Net Sales -> Commission -> Food+Pkg -> Net Contribution breakdown already established as the real Break-Even Calculator's own card format. campPlanCompute() now returns the full per-order economics multiplied out per scenario (new pnlAt() helper) rather than just orders+contribution, and the cards render all of it, matching the approved format exactly. (3) The 'negative contribution' confusion — Optimistic's card read '– AED 1,047 (-6.8%)' directly under 'AED 14,366/day', which reads at a glance like the contribution itself is negative; it isn't, that's the DELTA vs baseline. Added explicit 'vs baseline:' wording before the delta so the two can't be conflated. Verified all three fixes with a Node harness: no <script> tag in the output (was the actual bug), full P&L line items present, delta wording present, div-balanced HTML (119/119), and the P&L figures tie out exactly the same as before this refactor (Gross-Discount-Commission-Food=Contribution for every scenario, break-even's contribution still matches baseline to the cent). NOT a bug, confirmed by re-deriving the math by hand: 'even Optimistic doesn't clear break-even' is a real, mathematically consistent finding for a 30%-off-cap-30, 50-50 co-funded deal against this brand's historical uplift range — not something this fix changed or should paper over.",
   "🧹 Trimmed BUILD_NOTES from 167 entries (250KB, 12.9% of the whole file) down to the most recent 15, per Nikhil's direct question 'is all this required in the code?'. Checked before answering rather than assuming: the only place BUILD_NOTES is ever read is the What's New popup, which since build 401 only shows BUILD_NOTES.slice(0,1) — every entry beyond the very first has been pure dead weight shipped to every user on every page load since that fix, same conclusion an earlier cleanup already reached once before at a different threshold (126→30, back when the popup still showed 8). Verified this trim changes nothing functionally: BUILD_NOTES[0] is untouched, the popup's own slice(0,1) call is untouched, only entries beyond index 14 were removed. File dropped from 1,942,335 to 1,717,735 characters (~11.6% smaller). Extracted and rebuilt the array using Node's own parser (via a matched-bracket scan handling escaped quotes correctly) rather than a naive string/line split, to avoid corrupting any entry that happens to contain a comma or quote inside its text.",
   "🐛 Real runtime bug caught immediately by Nikhil testing the live page — 'fA is not defined', crashing the whole Campaign Planner page on load. Root cause: fA() isn't a global function anywhere in this codebase — it's a small helper (const fA=v=>'AED '+...) that many functions define locally for their own use, repeated rather than shared. My Node test for build 408 mocked fA() myself in the test harness to make the test runnable, which meant the test could never have caught this — it was validating against a function that doesn't exist in the real file. Fixed by adding the same local fA definition directly inside campPlanHTML(), matching the exact pattern already used elsewhere (campFcHTML, campBeHTML, campDetailV2HTML all define it the same way). Re-verified this time WITHOUT mocking fA in the test harness, relying solely on the function's own local definition, and also audited every other identifier campPlanHTML calls (extracted the full function body properly this time, via brace-counting rather than a naive line-range grep that had silently stopped partway through and given false confidence) — esc(), BR, AGGS, and campTheme() are all confirmed genuinely global, no other undefined-reference risk found.",
@@ -13412,6 +13413,48 @@ function buildFcCalcTipHTML(sc,brand,agg,discPct,cap,coFundPct,dateStr){
 // ═══════════════════════════════════════════════════════════════════
 let campFcBrand='',campFcAgg='',campFcStart='',campFcEnd='';
 let campPlanBrand='',campPlanAgg='',campPlanStart='',campPlanEnd='',campPlanType='menu',campPlanDiscPct=30,campPlanCap=30,campPlanCoFund=false,campPlanCoFundPct=50,campPlanBranches=new Set(),campPlanResult=null;
+// v412: forecast calibration — learns from your own real forecast-vs-actual track record
+// instead of guessing at which structural variable (momentum, co-funding, trend) explains the
+// underestimation, per Nikhil's own diagnosis: every forecast so far has been beaten by the real
+// campaign. Pulls every saved forecast that has since been matched to a COMPLETED real campaign
+// (via the existing campFcMatchActual — not a new matching engine) and computes the real gap
+// between what was forecasted (the Expected scenario) and what actually happened. That gap,
+// recency-weighted, becomes a correction applied to ALL THREE scenarios equally — preserving the
+// spread between Conservative/Expected/Optimistic, just recentering the whole distribution on
+// what this brand+aggregator (or, with too little specific history, the whole account) has
+// actually delivered versus what was predicted. Requires a minimum sample size before trusting a
+// brand+aggregator-specific figure; falls back to a broader pool otherwise rather than
+// calibrating off 1-2 noisy data points. Running campaigns (status==='Running') are excluded —
+// only a genuinely finished result is real evidence of forecast accuracy.
+function campFcCalibrationBias(brand,agg){
+  if(!campFcHistory||!campFcHistory.length||typeof campLoaded==='undefined'||!campLoaded)return null;
+  const MIN_SAMPLES=3;
+  const records=campFcHistory.map(f=>{
+    const match=campFcMatchActual(f);
+    if(!match||match.actualUpliftPct==null||match.status==='Running')return null;
+    const exp=f.scenarios&&f.scenarios.expected;
+    if(!exp||exp.upliftPct==null)return null;
+    return{brand:f.brand,agg:f.agg,savedAt:f.savedAt,biasPts:match.actualUpliftPct-exp.upliftPct};
+  }).filter(Boolean);
+  if(!records.length)return null;
+
+  const specific=records.filter(r=>r.brand===brand&&r.agg===agg);
+  const usePool=specific.length>=MIN_SAMPLES?specific:records;
+  const scopeLabel=specific.length>=MIN_SAMPLES?(brand+' × '+agg):'all brands/aggregators — not enough history for '+brand+' × '+agg+' specifically yet';
+
+  const weighted=usePool.map(r=>{
+    const daysAgo=Math.max(1,daysBetweenInclusive(r.savedAt.slice(0,10),dk(new Date())));
+    // 90-day half-life — deliberately slower-moving than the 45-day half-life used for a single
+    // campaign's own uplift match, since this is meant to be a stable calibration of the
+    // FORECASTING METHOD's own accuracy, not a fresh read on any one campaign's performance.
+    return{u:r.biasPts,w:Math.exp(-daysAgo/90)};
+  });
+  const totalW=weighted.reduce((s,x)=>s+x.w,0);
+  if(totalW<=0)return null;
+  const biasPts=weighted.reduce((s,x)=>s+x.u*x.w,0)/totalW;
+  return{biasPts,sampleCount:usePool.length,scopeLabel,isSpecific:specific.length>=MIN_SAMPLES};
+}
+
 function campPlanRun(){
   if(!campPlanBrand||!campPlanAgg||!campPlanStart||!campPlanEnd){alert('Please fill in Brand, Aggregator, Start and End dates.');return;}
   campPlanResult=campPlanCompute(campPlanBrand,campPlanAgg,campPlanStart,campPlanEnd,campPlanType,campPlanDiscPct,campPlanCap,campPlanCoFund,campPlanCoFundPct,campPlanBranches);
@@ -13480,14 +13523,17 @@ function campPlanHTML(){
   const beVsBase=r.breakEven?((r.baseline.orders>0)?(r.breakEven.orders/r.baseline.orders-1)*100:null):null;
   const optClears=r.breakEven&&r.optimistic.orders>=r.breakEven.orders;
   const verdictBad=!r.breakEven||r.expected.orders<r.breakEven.orders;
+  const calibNote=r.calib?`<div style="font-size:10.5px;color:#4ADE80;margin-top:7px;padding-top:7px;border-top:0.5px dashed ${T.border}">📐 Calibrated ${r.calib.biasPts>=0?'+':''}${r.calib.biasPts.toFixed(1)}pts vs raw historical uplift, based on ${r.calib.sampleCount} of your own past forecast${r.calib.sampleCount!==1?'s':''} vs their real result${r.calib.isSpecific?'':' (not enough history for '+esc(campPlanBrand)+' × '+esc(campPlanAgg)+' specifically yet, using the whole account)'}.</div>`:'';
   const verdict=verdictBad
     ?`<div style="border-radius:10px;padding:15px 18px;margin-bottom:14px;background:#EF44441A;border:1px solid #EF444455">
         <div style="font-size:13.5px;font-weight:800;color:#F87171">⚠️ Likely to fall short of break-even at this discount depth</div>
         <div style="font-size:11.5px;color:${T.secondary};margin-top:5px;line-height:1.6">Your Expected forecast is <strong>${r.expected.upliftPct>=0?'+':''}${r.expected.upliftPct.toFixed(0)}% uplift</strong> (${Math.round(r.expected.orders)}/day) — break-even needs <strong>${r.breakEven?(r.breakEven.upliftPct>=0?'+':'')+r.breakEven.upliftPct.toFixed(0)+'%':'—'}</strong> (${r.breakEven?Math.round(r.breakEven.orders):'—'}/day)${optClears?'':', and even Optimistic does not clear it either'}.</div>
+        ${calibNote}
       </div>`
     :`<div style="border-radius:10px;padding:15px 18px;margin-bottom:14px;background:#22C55E1A;border:1px solid #22C55E55">
         <div style="font-size:13.5px;font-weight:800;color:#4ADE80">✓ Expected forecast clears break-even</div>
         <div style="font-size:11.5px;color:${T.secondary};margin-top:5px;line-height:1.6">Your Expected forecast is <strong>+${r.expected.upliftPct.toFixed(0)}% uplift</strong> (${Math.round(r.expected.orders)}/day) — comfortably above the <strong>+${r.breakEven.upliftPct.toFixed(0)}%</strong> (${Math.round(r.breakEven.orders)}/day) needed to break even.</div>
+        ${calibNote}
       </div>`;
 
   const CATS=[
@@ -14417,6 +14463,17 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
   if(eU<cU)eU=cU;
   if(oU<eU)oU=eU;
 
+  // v412: forecast calibration — shift all three scenarios by the recency-weighted average gap
+  // between what this method has forecasted before and what actually happened, per Nikhil's own
+  // observation that every past forecast has been beaten by the real result. Applied AFTER the
+  // ordering enforcement above so Conservative<=Expected<=Optimistic still holds afterward (a
+  // uniform shift preserves the ordering either way, but this keeps the invariant explicit).
+  const calib=campFcCalibrationBias(brand,agg);
+  if(calib){
+    const shift=calib.biasPts/100;
+    cU+=shift;eU+=shift;oU+=shift;
+  }
+
   // Real per-brand/aggregator economics — the actual fix for "must be based on the filters
   // applied": commission and food+pkg rates come from the same real functions the rest of the
   // dashboard uses for this exact brand+aggregator, not a fixed assumption.
@@ -14464,7 +14521,7 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
   }
 
   return{
-    grossAOV,commRate,foodRate,nDays,matches,seas,
+    grossAOV,commRate,foodRate,nDays,matches,seas,calib,
     baseline:Object.assign(pnlAt(baselineOrders,true),{upliftPct:0}),
     conservative:scenarioAt(cU),
     expected:scenarioAt(eU),
@@ -14534,6 +14591,15 @@ function campFcRun(){
   // reasonable and still produce an inversion when they interact, exactly what happened above.
   if(eU<cU)eU=cU;
   if(oU<eU)oU=eU;
+  // v412: same calibration as campPlanCompute — shift all three scenarios by this brand+
+  // aggregator's real forecast-vs-actual track record (falling back to the whole account's
+  // history when there isn't enough of a specific one yet), per Nikhil's own observation that
+  // every past forecast has undershot the real result.
+  const calib=campFcCalibrationBias(brand,agg);
+  if(calib){
+    const shift=calib.biasPts/100;
+    cU+=shift;eU+=shift;oU+=shift;
+  }
   const coFP=campFcCoFund?campFcCoFundPct:0;
   let runSc;
   if(campFcType==='selectItems'||campFcType==='bogo'||campFcType==='ofu'||campFcType==='platformEvent'){
@@ -14603,7 +14669,7 @@ function campFcRun(){
     pwNet:pwRecs.length?pwRecs.reduce((s,r)=>s+r.sales,0)/pwDays:null,
     recCamp,conc,closestMatch,
     coFP,coFundPct:campFcCoFundPct,
-    generatedAt:new Date().toISOString(),
+    generatedAt:new Date().toISOString(),calib,
     // v258: snapshot of the exact inputs this result came from — compared against current form
     // state on every render so a "these results are from a different setup, re-run to update"
     // banner can show. Addresses the most likely explanation for "projections aren't changing":
@@ -15566,6 +15632,7 @@ function campFcHTML(){
             <div style="background:${T.panelBg};border-radius:8px;padding:9px;text-align:center"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Seasonality</div><div style="font-size:15px;font-weight:800;color:${r.seasonality.pct>=0?'#22C55E':'#EF4444'};margin-top:3px">${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</div></div>
           </div>
           ${r.seasonality.method?`<div style="font-size:10px;color:${T.muted};margin-top:8px">${esc(r.seasonality.method)}</div>`:''}
+          ${r.calib?`<div style="font-size:10px;color:#4ADE80;margin-top:8px;padding-top:8px;border-top:0.5px dashed ${T.border}">📐 Calibrated ${r.calib.biasPts>=0?'+':''}${r.calib.biasPts.toFixed(1)}pts vs raw historical uplift, based on ${r.calib.sampleCount} of your own past forecast${r.calib.sampleCount!==1?'s':''} vs their real completed result${r.calib.isSpecific?'':' (not enough history for '+esc(r.brand)+' × '+esc(r.agg)+' specifically yet, using the whole account)'}.</div>`:''}
         </div>
       </div>`;
     })()
