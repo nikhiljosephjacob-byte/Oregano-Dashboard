@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-412";
+const BUILD_VERSION="2026-08-13-413";
 const BUILD_NOTES=[
+  "🎨 Campaign Planner — sized to actually fit both charts and the P&L cards on one screen, per Nikhil's direct ask, while going the OPPOSITE direction on the P&L cards themselves since he separately pointed out they had real unused space and the text was too small to read. Charts: combined the Orders panel's separate AOV and Sales/day lines into one ('AOV 105 · Sales 25,650/day'), cutting it from 4 text lines to 3; tightened per-line spacing (18px->14px) and top/bottom margins (20px->14px) throughout; shrunk the ring radius slightly (18->15). Recomputed both viewBoxes from these tighter constants rather than just guessing smaller numbers — Orders 300->172, Contribution 264->156, roughly halving each chart's rendered height while keeping every text line's position verified to stay within bounds (checked directly: topmost text and ring-bottom both land inside the viewBox with near-symmetric margins on both charts, not just visually eyeballed). Wrapper padding/margins also tightened (20px->10px, 14px->8px). Combined, this cuts the two charts' total footprint by roughly 40%. Cards: bumped every size up now that the charts free real room — orders/day headline 18px->21px, Net Contribution 14px->17px, every P&L row 9-9.5px->10-10.5px, sub-rows (Aggregator Funding/Brand Funded) no longer a whole size smaller than their parent row. Verified with a Node harness: full P&L cards still present and correctly formatted, both new compact viewBox heights (172/156) confirmed in the output, div-balanced HTML (119/119) — same structural check as every build before it, just applied to a resize instead of new functionality.",
   "✨ Forecast calibration — the highest-leverage fix from Nikhil's own diagnosis: every forecast run so far has been beaten by the real campaign result, in one consistent direction. Rather than guess which structural variable explains the gap, new campFcCalibrationBias(brand,agg) learns directly from the real track record already sitting in Forecast History: pulls every saved forecast matched to a COMPLETED real campaign (reusing the existing campFcMatchActual — not a new matching engine), computes the real gap between what was forecasted (Expected) and what actually happened, and recency-weights it (90-day half-life — deliberately slower-moving than the 45-day half-life used for a single campaign's own uplift match, since this calibrates the METHOD's accuracy, not any one campaign). Requires at least 3 matched brand+aggregator-specific samples before trusting a specific figure; falls back to the whole account's pooled history otherwise, rather than calibrating off 1-2 noisy points — and returns null cleanly when there's no usable history yet, changing nothing. The resulting bias shifts Conservative/Expected/Optimistic by the same amount, preserving their relative spread rather than collapsing them together. Wired into both campFcRun() (the real Forecaster) and campPlanCompute() (Campaign Planner) — same calibration logic, not duplicated separately. Surfaced transparently, not silently: both pages now show '📐 Calibrated +X.Xpts vs raw historical uplift, based on N of your own past forecasts vs their real result' — including an honest note when it's using the whole-account fallback rather than brand+aggregator-specific history. Verified with a Node harness: no history returns null (no behavior change); 3+ brand-specific completed forecasts correctly compute and apply a recency-weighted bias while excluding still-Running and unmatched records; insufficient brand-specific samples correctly fall back to the pooled account-wide figure; the calibration shift lands exactly on Expected's uplift (verified to the same decimal as calib.biasPts) with Conservative<=Expected<=Optimistic still holding afterward. Caught and fixed the same mistake as build 408 while editing — an accidentally-deleted function declaration during the first pass at wiring this in — via the same syntax-check-before-shipping discipline. Separately confirmed, not changed: the 'is the parser comparing apples to oranges' concern (entire-menu forecasts matching against select-items historical campaigns) was ALREADY fixed in an earlier build (v373/v379, predating this session) — discountStructure is checked first and authoritative for tagged campaigns, with a multi-tier text-pattern fallback for untagged older rows.",
   "🐛 Three real bugs in the Campaign Planner, all caught directly by Nikhil from the live page. (1) THE BIG ONE — the chart never rendered at all, no animation, no data, just empty boxes. Root cause: the entire chart-drawing logic was embedded as a literal <script> tag inside campPlanHTML()'s own returned HTML string — but a <script> tag inserted via element.innerHTML= is inert; browsers never execute it, full stop. Every other animated feature in this codebase already works around this the right way — campBeStartAuto() (the Break-Even Calculator's own working animation) is a genuinely separate, top-level function that renderCampaigns() calls explicitly AFTER the innerHTML assignment, never embedded in the HTML itself. Extracted the whole chart into a new standalone campPlanRenderChart(), wired into renderCampaigns() the exact same way (campPlanStopChartAuto() before the innerHTML swap, campPlanRenderChart() after) — mirroring the one proven pattern in this file rather than inventing a new one. This also explains why the cards and form rendered fine while the chart stayed empty: static HTML needs no script to display, only the dynamically-drawn SVG did, and that script never ran. (2) Full P&L wasn't showing — build 408 shipped a simplified 2-line card (orders/day + Net Contribution) instead of the full Gross Sales -> Discount Total/Aggregator Funding/Brand Funded -> Net Sales -> Commission -> Food+Pkg -> Net Contribution breakdown already established as the real Break-Even Calculator's own card format. campPlanCompute() now returns the full per-order economics multiplied out per scenario (new pnlAt() helper) rather than just orders+contribution, and the cards render all of it, matching the approved format exactly. (3) The 'negative contribution' confusion — Optimistic's card read '– AED 1,047 (-6.8%)' directly under 'AED 14,366/day', which reads at a glance like the contribution itself is negative; it isn't, that's the DELTA vs baseline. Added explicit 'vs baseline:' wording before the delta so the two can't be conflated. Verified all three fixes with a Node harness: no <script> tag in the output (was the actual bug), full P&L line items present, delta wording present, div-balanced HTML (119/119), and the P&L figures tie out exactly the same as before this refactor (Gross-Discount-Commission-Food=Contribution for every scenario, break-even's contribution still matches baseline to the cent). NOT a bug, confirmed by re-deriving the math by hand: 'even Optimistic doesn't clear break-even' is a real, mathematically consistent finding for a 30%-off-cap-30, 50-50 co-funded deal against this brand's historical uplift range — not something this fix changed or should paper over.",
   "🧹 Trimmed BUILD_NOTES from 167 entries (250KB, 12.9% of the whole file) down to the most recent 15, per Nikhil's direct question 'is all this required in the code?'. Checked before answering rather than assuming: the only place BUILD_NOTES is ever read is the What's New popup, which since build 401 only shows BUILD_NOTES.slice(0,1) — every entry beyond the very first has been pure dead weight shipped to every user on every page load since that fix, same conclusion an earlier cleanup already reached once before at a different threshold (126→30, back when the popup still showed 8). Verified this trim changes nothing functionally: BUILD_NOTES[0] is untouched, the popup's own slice(0,1) call is untouched, only entries beyond index 14 were removed. File dropped from 1,942,335 to 1,717,735 characters (~11.6% smaller). Extracted and rebuilt the array using Node's own parser (via a matched-bracket scan handling escaped quotes correctly) rather than a naive string/line split, to avoid corrupting any entry that happens to contain a comma or quote inside its text.",
@@ -13544,7 +13545,7 @@ function campPlanHTML(){
     {name:'Optimistic',icon:'🚀',color:'#FFD700',sub:'Best case, if it lands',pnl:r.optimistic}
   ];
 
-  const svgPanel=(id,vbHeight)=>`<div style="background:#0B1220;border-radius:14px;padding:20px 20px 6px;margin-bottom:14px">
+  const svgPanel=(id,vbHeight)=>`<div style="background:#0B1220;border-radius:14px;padding:10px 16px 4px;margin-bottom:8px">
     <svg viewBox="0 0 950 ${vbHeight}" id="${id}" style="display:block;width:100%;height:auto;overflow:visible">
       <defs>
         <linearGradient id="${id}Grad" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#818CF8"/><stop offset="35%" stop-color="#60A5FA"/><stop offset="65%" stop-color="#F1F5F9"/><stop offset="100%" stop-color="#FFD700"/></linearGradient>
@@ -13572,26 +13573,30 @@ function campPlanHTML(){
     const p=cat.pnl,isBase=cat.name==='Baseline';
     const diff=p.contribDay-r.baseline.contribDay;
     const diffPct=r.baseline.contribDay?diff/r.baseline.contribDay*100:0;
+    // v413: bigger text throughout per Nikhil's direct ask — the cards had real unused space,
+    // so every size below is bumped (labels 9.5-10px, sub-rows now indented but same size as
+    // their parent instead of a whole size smaller, headline orders/day 18px->21px, Net
+    // Contribution 14px->17px) rather than leaving legibility as an afterthought.
     const discLines=isBase?'':`
-      <div style="display:flex;justify-content:space-between;padding:1.5px 0;font-size:9.5px;color:${T.muted}"><span>Discount Total</span><span style="font-weight:700;color:${T.secondary}">${fA(p.discTotalDay)}</span></div>
-      <div style="display:flex;justify-content:space-between;padding:1.5px 0 1.5px 8px;font-size:9px;color:${T.muted}"><span>↳ Aggregator Funding</span><span style="font-weight:700;color:${T.secondary}">${fA(p.aggFundDay)}</span></div>
-      <div style="display:flex;justify-content:space-between;padding:1.5px 0 1.5px 8px;font-size:9px;color:${T.muted}"><span>↳ Brand Funded</span><span style="font-weight:700;color:#F87171">– ${fA(p.brandFundDay)}</span></div>`;
-    return `<div class="campPlanCard" data-idx="${i}" data-acc="${cat.color}" style="background:${T.panelBg};border-radius:11px;flex:1;min-width:0;padding:12px 11px;border:1.5px solid ${T.border};cursor:pointer;transition:all .25s">
-      <div style="display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:800;text-transform:uppercase;color:${cat.color}">${cat.icon} ${cat.name}</div>
-      <div style="font-size:8.5px;color:${T.muted};margin-bottom:5px">${cat.sub}</div>
-      <div style="font-size:18px;font-weight:800;color:${T.text};line-height:1">${p.orders.toFixed(1)}</div>
-      <div style="font-size:9px;color:${T.muted}">orders/day</div>
+      <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;color:${T.muted}"><span>Discount Total</span><span style="font-weight:700;color:${T.secondary}">${fA(p.discTotalDay)}</span></div>
+      <div style="display:flex;justify-content:space-between;padding:2px 0 2px 10px;font-size:10px;color:${T.muted}"><span>↳ Aggregator Funding</span><span style="font-weight:700;color:${T.secondary}">${fA(p.aggFundDay)}</span></div>
+      <div style="display:flex;justify-content:space-between;padding:2px 0 2px 10px;font-size:10px;color:${T.muted}"><span>↳ Brand Funded</span><span style="font-weight:700;color:#F87171">– ${fA(p.brandFundDay)}</span></div>`;
+    return `<div class="campPlanCard" data-idx="${i}" data-acc="${cat.color}" style="background:${T.panelBg};border-radius:11px;flex:1;min-width:0;padding:12px 12px;border:1.5px solid ${T.border};cursor:pointer;transition:all .25s">
+      <div style="display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:800;text-transform:uppercase;color:${cat.color}">${cat.icon} ${cat.name}</div>
+      <div style="font-size:9.5px;color:${T.muted};margin-bottom:5px">${cat.sub}</div>
+      <div style="font-size:21px;font-weight:800;color:${T.text};line-height:1">${p.orders.toFixed(1)}</div>
+      <div style="font-size:10px;color:${T.muted}">orders/day</div>
       <div style="margin-top:7px;padding-top:7px;border-top:0.5px solid ${T.border}88">
-        <div style="display:flex;justify-content:space-between;padding:1.5px 0;font-size:9.5px;color:${T.muted}"><span>Gross Sales</span><span style="font-weight:700;color:${T.secondary}">${fA(p.grossDay)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;color:${T.muted}"><span>Gross Sales</span><span style="font-weight:700;color:${T.secondary}">${fA(p.grossDay)}</span></div>
         ${discLines}
-        <div style="display:flex;justify-content:space-between;padding:1.5px 0;font-size:9.5px;color:${T.muted}"><span>Net Sales</span><span style="font-weight:700;color:${T.secondary}">${fA(p.netSalesDay)}</span></div>
-        <div style="display:flex;justify-content:space-between;padding:1.5px 0;font-size:9.5px;color:${T.muted}"><span>Commission (${(r.commRate*100).toFixed(0)}%)</span><span style="font-weight:700;color:#FB923C">– ${fA(p.commDay)}</span></div>
-        <div style="display:flex;justify-content:space-between;padding:1.5px 0;font-size:9.5px;color:${T.muted}"><span>Food+Pkg (${(r.foodRate*100).toFixed(0)}%)</span><span style="font-weight:700;color:#FB923C">– ${fA(p.foodDay)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;color:${T.muted}"><span>Net Sales</span><span style="font-weight:700;color:${T.secondary}">${fA(p.netSalesDay)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;color:${T.muted}"><span>Commission (${(r.commRate*100).toFixed(0)}%)</span><span style="font-weight:700;color:#FB923C">– ${fA(p.commDay)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;color:${T.muted}"><span>Food+Pkg (${(r.foodRate*100).toFixed(0)}%)</span><span style="font-weight:700;color:#FB923C">– ${fA(p.foodDay)}</span></div>
       </div>
       <div style="margin-top:7px;padding-top:7px;border-top:0.5px solid ${T.border}88">
-        <div style="font-size:9px;font-weight:700;color:${T.muted};text-transform:uppercase">Net Contribution</div>
-        <div style="font-size:14px;font-weight:800;color:${cat.color}">${fA(p.contribDay)}/day</div>
-        <div style="font-size:9.5px;color:${T.muted}">${isBase?'reference':'vs baseline: '+(diff>=0?'+':'– ')+fA(Math.abs(diff))+' ('+(diff>=0?'+':'')+diffPct.toFixed(1)+'%)'}</div>
+        <div style="font-size:10px;font-weight:700;color:${T.muted};text-transform:uppercase">Net Contribution</div>
+        <div style="font-size:17px;font-weight:800;color:${cat.color}">${fA(p.contribDay)}/day</div>
+        <div style="font-size:10.5px;color:${T.muted}">${isBase?'reference':'vs baseline: '+(diff>=0?'+':'– ')+fA(Math.abs(diff))+' ('+(diff>=0?'+':'')+diffPct.toFixed(1)+'%)'}</div>
       </div>
     </div>`;
   }).join('');
@@ -13600,9 +13605,9 @@ function campPlanHTML(){
   ${form}
   ${verdict}
   <div style="font-size:11.5px;font-weight:800;color:${T.muted};margin:14px 0 6px">📦 Orders / day <span style="font-weight:400">— real commission ${(r.commRate*100).toFixed(0)}% · food+pkg ${(r.foodRate*100).toFixed(0)}% for ${esc(campPlanBrand)} × ${esc(campPlanAgg)}</span></div>
-  ${svgPanel('svgPlanOrders',300)}
+  ${svgPanel('svgPlanOrders',172)}
   <div style="font-size:11.5px;font-weight:800;color:${T.muted};margin:14px 0 6px">💰 Contribution / day</div>
-  ${svgPanel('svgPlanContrib',264)}
+  ${svgPanel('svgPlanContrib',156)}
   <div style="font-size:11px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.5px;margin:20px 0 8px">Full P&amp;L per category</div>
   <div style="display:flex;gap:9px">${cards}</div>`;
 }
@@ -13667,7 +13672,7 @@ function campPlanRenderChart(){
     const d='M'+pts.map(function(p){return p[0]+','+p[1].toFixed(1);}).join(' L');
     const lineN=svg.querySelector('.lineN'), lineR=svg.querySelector('.lineR'), area=svg.querySelector('.areaPath');
     lineN.setAttribute('d',d); lineR.setAttribute('d',d);
-    area.setAttribute('d', d+' L850,'+(vbHeight-20)+' L100,'+(vbHeight-20)+' Z');
+    area.setAttribute('d', d+' L850,'+(vbHeight-14)+' L100,'+(vbHeight-14)+' Z');
     area.classList.remove('show');
     [lineN,lineR].forEach(function(line){
       line.style.transition='none';
@@ -13689,19 +13694,21 @@ function campPlanRenderChart(){
       const belowBase = values[i] < baseVal;
       const ringColor = belowBase ? '#EF4444' : cat.color;
       const extra = extraLines ? extraLines(cat) : [];
-      const totalLines=2+extra.length, lineGap=18;
-      const nameY = y - (20 + totalLines*lineGap);
+      // v413: tightened from 18px to 14px per-line gap and reduced headroom, to compact the chart
+      // vertically per Nikhil's direct ask — both charts + the P&L row need to fit one screen.
+      const totalLines=2+extra.length, lineGap=14;
+      const nameY = y - (14 + totalLines*lineGap);
       const extraSvg = extra.map(function(t,j){return '<text class="gSub2" x="'+x+'" y="'+(nameY+(j+2)*lineGap)+'" font-size="9.5" fill="#94A3B8" text-anchor="middle">'+t+'</text>';}).join('');
       const grp=document.createElementNS(ns,'g');
       grp.setAttribute('class','gPt'); grp.setAttribute('data-idx',i); grp.style.color=cat.color;
       grp.style.opacity='0'; grp.style.transformOrigin='center'; grp.style.transformBox='fill-box'; grp.style.transform='scale(.3)';
       grp.style.transition='opacity .35s,transform .35s cubic-bezier(.34,1.56,.64,1)';
       grp.innerHTML=
-        '<text x="'+x+'" y="'+nameY+'" font-size="12.5" font-weight="800" fill="'+cat.color+'" text-anchor="middle">'+cat.name+'</text>'+
-        '<text x="'+x+'" y="'+(nameY+lineGap)+'" font-size="10.5" font-weight="700" fill="#CBD5E1" text-anchor="middle">'+valueFmt(values[i])+'</text>'+
+        '<text x="'+x+'" y="'+nameY+'" font-size="12" font-weight="800" fill="'+cat.color+'" text-anchor="middle">'+cat.name+'</text>'+
+        '<text x="'+x+'" y="'+(nameY+lineGap)+'" font-size="10" font-weight="700" fill="#CBD5E1" text-anchor="middle">'+valueFmt(values[i])+'</text>'+
         extraSvg+
-        '<circle class="gRing" cx="'+x+'" cy="'+y+'" r="18" fill="#0F1729" stroke="'+ringColor+'" stroke-width="3" style="color:'+ringColor+';transition:filter .25s"/>'+
-        '<foreignObject x="'+(x-12)+'" y="'+(y-12)+'" width="24" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:18px;line-height:1">'+cat.icon+'</div></foreignObject>';
+        '<circle class="gRing" cx="'+x+'" cy="'+y+'" r="15" fill="#0F1729" stroke="'+ringColor+'" stroke-width="3" style="color:'+ringColor+';transition:filter .25s"/>'+
+        '<foreignObject x="'+(x-10)+'" y="'+(y-10)+'" width="20" height="20"><div xmlns="http://www.w3.org/1999/xhtml" style="width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:15px;line-height:1">'+cat.icon+'</div></foreignObject>';
       g.appendChild(grp);
       const delay=fracs[i]*drawDurMs;
       campPlanChartPointTimers.push(setTimeout(function(){grp.style.opacity='1';grp.style.transform='scale(1)';}, delay));
@@ -13739,9 +13746,13 @@ function campPlanRenderChart(){
 
   const ordersArr=CATS.map(function(c){return c.pnl.orders;});
   const contribArr=CATS.map(function(c){return c.pnl.contribDay;});
+  // v413: compacted per Nikhil's direct ask — both charts + the P&L row need to fit one screen
+  // without scrolling. AOV+Sales combined onto one line (3 text lines total instead of 4) and
+  // both viewBoxes roughly halved (300->172, 264->156), using the same tightened lineGap/margins
+  // renderPanel now uses throughout.
   renderPanel('svgPlanOrders', ordersArr, function(v){return Math.round(v).toLocaleString()+'/day';},
-    function(cat){return ['AOV AED '+AOV.toFixed(0), 'Sales AED '+Math.round(cat.pnl.grossDay).toLocaleString()+'/day'];}, 122, 252, 300);
-  renderPanel('svgPlanContrib', contribArr, function(v){return 'AED '+Math.round(v).toLocaleString()+'/day';}, null, 86, 216, 264);
+    function(cat){return ['AOV '+AOV.toFixed(0)+' · Sales '+Math.round(cat.pnl.grossDay).toLocaleString()+'/day'];}, 72, 142, 172);
+  renderPanel('svgPlanContrib', contribArr, function(v){return 'AED '+Math.round(v).toLocaleString()+'/day';}, null, 58, 128, 156);
   bindEvents();
   campPlanChartCycleTimeout=setTimeout(beginCycle, drawDurMs+400);
 }
