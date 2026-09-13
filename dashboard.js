@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-418";
+const BUILD_VERSION="2026-08-13-419";
 const BUILD_NOTES=[
+  "🐛 Real, confirmed baseline-contamination bug — Nikhil's own suspicion checked directly against the code rather than assumed, and it lines up almost exactly: modeling his real scenario (a genuine 1-8 Sep BOGO campaign for Lollorosso × Deliveroo, sitting inside the naive 30-day trailing window computed from a mid-September sync date) reproduces a baseline of ~81 orders/day from the OLD logic — the same number his real screenshot showed. Root cause: campFcBaseline() took a flat trailing 30-day window with no check for whether a DIFFERENT campaign was already running on any of those days, so a recent campaign's own uplift silently bled into the 'no campaign' reference point, while showing zero discount cost against it. campFcMomentum() (build 415) had the identical exposure for the same reason — a recent campaign inflating either half of its trailing comparison. Fixed both through one shared helper: new campFcContaminatedDates(brand,agg) marks every date this brand+aggregator had a REAL campaign running (any status except Upcoming, which hasn't happened yet and can't contaminate past data), and campFcCleanTrailingDates() scans backward skipping those days, extending the lookback as needed — capped at 90 days total so a very promo-heavy brand+aggregator doesn't silently reach back months; if even that isn't enough clean data, returns whatever it found rather than hanging or failing. campFcBaseline() and campFcMomentum() both now build their windows from clean dates only, changing only their date-selection logic — not their surrounding math. Verified directly against the modeled real scenario: contaminated-date detection correctly finds exactly the 8 real campaign days and no others; the clean baseline comes out to the true organic rate (60/day in the model) instead of the inflated ~81/day the old flat-window logic produces (matching Nikhil's real number almost exactly); momentum correctly reads as flat instead of showing a fake uptick from the same contaminated week. Also verified two edge cases: an Upcoming campaign correctly contaminates nothing, and a worst-case fully-contaminated 90-day lookback correctly returns fewer clean days rather than hanging.",
   "✨🐛 Four real, verified fixes to Campaign Planner in one pass. (1) Wired in the real BOGO/Select-Items historical discount lookup (campBeFindHistoricalDiscPerOrder, built in 406/407 for the standalone Break-Even Calculator) — Campaign Planner had been shipped without it (flagged as a known limitation back in build 408's own notes), meaning a BOGO forecast was modeling its discount cost as a flat % of the whole cart (e.g. 35% of AOV, ~AED 35/order) instead of what a real BOGO actually costs (giving away one item — verified against realistic numbers at ~AED 12.5/order). That overestimate was the direct cause of a Lollorosso BOGO forecast showing contribution collapsing at order counts real historical BOGO campaigns for that same brand+aggregator had never needed. Discount % now hides itself when a real match is found, exactly like the standalone tool. (2) Date inputs were missing color-scheme:dark — every other date input in this codebase already sets this (a real, established fix from build 365/366), Campaign Planner's just never got it, which is why its calendar icon rendered in the browser's default (invisible-on-dark) color. (3) Campaign Planner had no 'Back to campaigns' button — the shared toolBack element explicitly checked for only 'forecaster'/'breakeven', never added 'planner' to the list when the page was built. (4) Real, separately-caught bug: typing in the campaign search box froze after every character, requiring a re-click to continue. Root cause: campSetSearch() called the full renderCampaigns() on every keystroke, which replaces the entire page via innerHTML= — a brand-new DOM node for the search input each time, so the browser drops focus and cursor position after every character, and the full re-render itself is expensive enough to add visible lag on top. Fixed two ways: renderCampaigns() now captures the focused element's id+selection range before the innerHTML swap and restores both right after (fixes this for ANY text input on this page, not just search), and campSetSearch() itself is now debounced 180ms so a normal typing burst doesn't trigger the expensive re-render once per letter. Verified the BOGO fix directly: modeling the exact real numbers, break-even now needs ~90 orders/day instead of the ~180 the formula-based estimate had been demanding.",
   "🐛 Real, serious bug caught by Nikhil directly — a Lollorosso × Deliveroo BOGO forecast came back at +142% to +177% uplift, wildly above anything the brand has ever actually done, even in the Conservative case. Traced precisely: with no Lollorosso-specific calibration history yet, campFcCalibrationBias()'s fallback used to reach all the way to the WHOLE pooled history across every brand — which in practice meant Lollorosso silently inherited Oregano's own real +53pt correction (since virtually every saved forecast so far is for Oregano), on top of Lollorosso's own momentum adjustment. 'Oregano has been underestimated by 53 points' has no logical bearing on a completely different brand's forecast, and compounding it with momentum's own multiplier explains the gap between the reality-check match's own +57% and the wildly higher +142-177% shown as the actual scenarios. Fixed: fallback now stops at the BRAND boundary — same brand across any aggregator is a reasonable middle tier (aggregators within one brand plausibly share more in common than two unrelated brands do), but if even that doesn't meet the minimum sample size, calibration now returns null (no adjustment at all) rather than ever crossing into a different brand's numbers. Verified directly against the exact real scenario: reconstructed Nikhil's actual saved history (all Oregano) and confirmed a Lollorosso×Deliveroo request now correctly returns null instead of the leaked +53pts, while Oregano's own legitimate calibration is completely unaffected. Momentum was never the cross-brand culprit — it was already scoped per-brand+aggregator by construction — so this fix should be the full correction for what Nikhil saw. Also fixed a smaller, related display bug found in the same investigation: the reality-check banner showed '0% off' for BOGO historical matches, since BOGO campaigns don't carry a real discount percentage but the text always appended one regardless — now omitted entirely when there's no real percentage to show, for BOGO and any other non-percentage match type.",
   "🐛 Real bug found while answering Nikhil's own question — 'can't you cross-check my saved forecasts yourself instead of me doing it manually?' Answer: the app already does this automatically, every time (campFcMatchActual + campFcCalibrationBias, built in 412/415) — no manual entry needed. But checking whether that loop was actually working as well as it could surfaced a real, structural gap: campFcMatchActual() always compared discount percentages regardless of campaign type, but campFcSaveForecast() explicitly saves discPct=null for BOGO forecasts (there's no meaningful '% off' for a BOGO deal). The match logic extracted whatever number appeared first in the real campaign's own comments — for BOGO campaigns that's usually the CO-FUNDING percentage ('35% Co-Funding', '50-50'), not a discount depth — and rejected every candidate since that number compared against null always looked more than 8 points apart. The entire BOGO campaign type could never match its real result, no matter how complete and real the outcome was — directly explaining why all of Nikhil's saved Deliveroo/BOGO forecasts showed 'No matching campaign run yet.' Fixed: BOGO and Select-Items forecasts now match on the real discountStructure field instead (with the same text-pattern fallback for untagged older rows that the Forecaster's own campFcFindBogoMatches()/campFcFindSelectItemsMatches() already use to FIND these for forecasting in the first place) — no percentage comparison for either type at all now. Menu-wide matching (which was already working, per the real +87%/+183%/+28% actuals already showing correctly in Nikhil's screenshot) is completely unchanged. Verified directly against the exact real failure case: a BOGO forecast with discPct=null against a real completed campaign whose comments say '...Co-Funded 50-50 By Deliveroo' — confirmed the old logic rejects it (0 candidates) and the new logic correctly matches it and pulls its real uplift. Also verified: a wrong-structure candidate (entireMenu) is still correctly rejected for a BOGO forecast, existing menu-type matching is provably unchanged (still matches on 30%/cap 30 exactly as before), and an untagged BOGO campaign (no discountStructure field at all) still matches via the text-pattern fallback. This means every BOGO forecast Nikhil has already saved should start finding its real result the next time Forecast History loads — direct, real learning signal for calibration that was previously being silently thrown away.",
@@ -13513,8 +13514,12 @@ function campFcMomentum(brand,agg,campaignStart){
   const end=subDays(campaignStart,1);
   const mid=subDays(end,44);
   const start=subDays(mid,44);
-  const recentRecs=allData.filter(r=>r.branch!=="(brand-level)"&&r.brand===brand&&r.aggregator===agg&&r.date>mid&&r.date<=end);
-  const priorRecs=allData.filter(r=>r.branch!=="(brand-level)"&&r.brand===brand&&r.aggregator===agg&&r.date>=start&&r.date<=mid);
+  // v419: same contamination exclusion as campFcBaseline, and for the identical reason — a
+  // recent campaign sitting inside either half would make campaign-driven orders look like
+  // organic momentum (or mask a real decline behind a campaign-driven bump).
+  const contaminated=campFcContaminatedDates(brand,agg);
+  const recentRecs=allData.filter(r=>r.branch!=="(brand-level)"&&r.brand===brand&&r.aggregator===agg&&r.date>mid&&r.date<=end&&!contaminated.has(r.date));
+  const priorRecs=allData.filter(r=>r.branch!=="(brand-level)"&&r.brand===brand&&r.aggregator===agg&&r.date>=start&&r.date<=mid&&!contaminated.has(r.date));
   const recentDays=new Set(recentRecs.map(r=>r.date)).size;
   const priorDays=new Set(priorRecs.map(r=>r.date)).size;
   if(recentDays<10||priorDays<10)return null;
@@ -13942,10 +13947,49 @@ function campFcEarliestSafeDate(brand,agg,branches){
   }
   return latestOpen;
 }
+// v419: shared "clean trailing window" helper — real bug confirmed by checking the code directly
+// after Nikhil's suspicion: campFcBaseline() took a flat trailing window with no check for
+// whether a DIFFERENT campaign was already running on some of those days. A BOGO campaign that
+// ran 1-8 Sep sits inside the 30-day window computed in mid-September — inflating the "no
+// campaign" baseline with campaign-driven orders, while showing zero discount cost against them.
+// campFcMomentum() (build 415) has the identical exposure for the same reason, so both are fixed
+// through this one shared helper rather than patching each separately.
+function campFcContaminatedDates(brand,agg){
+  const dates=new Set();
+  if(typeof campaignData==='undefined'||!campaignData)return dates;
+  campaignData.forEach(c=>{
+    if(c.brand!==brand||c.aggregator!==agg)return;
+    if(campStatus(c)==='Upcoming')return; // hasn't happened yet, can't contaminate past data
+    let d=new Date(c.startDate+'T12:00:00');
+    const end=new Date(c.endDate+'T12:00:00');
+    let guard=0;
+    while(d<=end&&guard<400){dates.add(dk(d));d.setDate(d.getDate()+1);guard++;}
+  });
+  return dates;
+}
+// Scans backward from endDate (inclusive), skipping any date this brand+aggregator had a real
+// campaign running, collecting up to neededDays clean dates. Capped at maxLookback total days
+// scanned so a very promo-heavy brand+aggregator doesn't silently reach back months — if even
+// that isn't enough, returns whatever clean days it did find rather than failing outright.
+function campFcCleanTrailingDates(brand,agg,endDate,neededDays,maxLookback){
+  const contaminated=campFcContaminatedDates(brand,agg);
+  const clean=[];
+  const cursor=new Date(endDate+'T12:00:00');
+  let scanned=0;
+  while(clean.length<neededDays&&scanned<maxLookback){
+    const k=dk(cursor);
+    if(!contaminated.has(k))clean.push(k);
+    cursor.setDate(cursor.getDate()-1);
+    scanned++;
+  }
+  return clean;
+}
 function campFcBaseline(brand,agg,branches,days){
   if(!latest)return null;
-  const endD=latest,startD=subDays(endD,29);
-  const recs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)'&&r.date>=startD&&r.date<=endD&&(branches.size===0||branches.has(r.branch)));
+  const cleanDates=campFcCleanTrailingDates(brand,agg,latest,30,90);
+  if(!cleanDates.length)return null;
+  const dateSet=new Set(cleanDates);
+  const recs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)'&&dateSet.has(r.date)&&(branches.size===0||branches.has(r.branch)));
   if(!recs.length)return null;
   const nDays=[...new Set(recs.map(r=>r.date))].length||1;
   const tNet=recs.reduce((s,r)=>s+r.sales,0);
@@ -13954,6 +13998,7 @@ function campFcBaseline(brand,agg,branches,days){
   const tGross=tNet+tDisc;
   return{dailyNet:tNet/nDays,dailyOrders:tOrd/nDays,dailyGross:tGross/nDays,grossAOV:tOrd>0?tGross/tOrd:0,netAOV:tOrd>0?tNet/tOrd:0,refDays:nDays};
 }
+
 
 // v110: named one-off events (festivals, World Cup, Eid, etc.) drive uplift through footfall/
 // occasion, not through the discount mechanic itself — averaging them in alongside a routine
