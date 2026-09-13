@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-417";
+const BUILD_VERSION="2026-08-13-418";
 const BUILD_NOTES=[
+  "✨🐛 Four real, verified fixes to Campaign Planner in one pass. (1) Wired in the real BOGO/Select-Items historical discount lookup (campBeFindHistoricalDiscPerOrder, built in 406/407 for the standalone Break-Even Calculator) — Campaign Planner had been shipped without it (flagged as a known limitation back in build 408's own notes), meaning a BOGO forecast was modeling its discount cost as a flat % of the whole cart (e.g. 35% of AOV, ~AED 35/order) instead of what a real BOGO actually costs (giving away one item — verified against realistic numbers at ~AED 12.5/order). That overestimate was the direct cause of a Lollorosso BOGO forecast showing contribution collapsing at order counts real historical BOGO campaigns for that same brand+aggregator had never needed. Discount % now hides itself when a real match is found, exactly like the standalone tool. (2) Date inputs were missing color-scheme:dark — every other date input in this codebase already sets this (a real, established fix from build 365/366), Campaign Planner's just never got it, which is why its calendar icon rendered in the browser's default (invisible-on-dark) color. (3) Campaign Planner had no 'Back to campaigns' button — the shared toolBack element explicitly checked for only 'forecaster'/'breakeven', never added 'planner' to the list when the page was built. (4) Real, separately-caught bug: typing in the campaign search box froze after every character, requiring a re-click to continue. Root cause: campSetSearch() called the full renderCampaigns() on every keystroke, which replaces the entire page via innerHTML= — a brand-new DOM node for the search input each time, so the browser drops focus and cursor position after every character, and the full re-render itself is expensive enough to add visible lag on top. Fixed two ways: renderCampaigns() now captures the focused element's id+selection range before the innerHTML swap and restores both right after (fixes this for ANY text input on this page, not just search), and campSetSearch() itself is now debounced 180ms so a normal typing burst doesn't trigger the expensive re-render once per letter. Verified the BOGO fix directly: modeling the exact real numbers, break-even now needs ~90 orders/day instead of the ~180 the formula-based estimate had been demanding.",
   "🐛 Real, serious bug caught by Nikhil directly — a Lollorosso × Deliveroo BOGO forecast came back at +142% to +177% uplift, wildly above anything the brand has ever actually done, even in the Conservative case. Traced precisely: with no Lollorosso-specific calibration history yet, campFcCalibrationBias()'s fallback used to reach all the way to the WHOLE pooled history across every brand — which in practice meant Lollorosso silently inherited Oregano's own real +53pt correction (since virtually every saved forecast so far is for Oregano), on top of Lollorosso's own momentum adjustment. 'Oregano has been underestimated by 53 points' has no logical bearing on a completely different brand's forecast, and compounding it with momentum's own multiplier explains the gap between the reality-check match's own +57% and the wildly higher +142-177% shown as the actual scenarios. Fixed: fallback now stops at the BRAND boundary — same brand across any aggregator is a reasonable middle tier (aggregators within one brand plausibly share more in common than two unrelated brands do), but if even that doesn't meet the minimum sample size, calibration now returns null (no adjustment at all) rather than ever crossing into a different brand's numbers. Verified directly against the exact real scenario: reconstructed Nikhil's actual saved history (all Oregano) and confirmed a Lollorosso×Deliveroo request now correctly returns null instead of the leaked +53pts, while Oregano's own legitimate calibration is completely unaffected. Momentum was never the cross-brand culprit — it was already scoped per-brand+aggregator by construction — so this fix should be the full correction for what Nikhil saw. Also fixed a smaller, related display bug found in the same investigation: the reality-check banner showed '0% off' for BOGO historical matches, since BOGO campaigns don't carry a real discount percentage but the text always appended one regardless — now omitted entirely when there's no real percentage to show, for BOGO and any other non-percentage match type.",
   "🐛 Real bug found while answering Nikhil's own question — 'can't you cross-check my saved forecasts yourself instead of me doing it manually?' Answer: the app already does this automatically, every time (campFcMatchActual + campFcCalibrationBias, built in 412/415) — no manual entry needed. But checking whether that loop was actually working as well as it could surfaced a real, structural gap: campFcMatchActual() always compared discount percentages regardless of campaign type, but campFcSaveForecast() explicitly saves discPct=null for BOGO forecasts (there's no meaningful '% off' for a BOGO deal). The match logic extracted whatever number appeared first in the real campaign's own comments — for BOGO campaigns that's usually the CO-FUNDING percentage ('35% Co-Funding', '50-50'), not a discount depth — and rejected every candidate since that number compared against null always looked more than 8 points apart. The entire BOGO campaign type could never match its real result, no matter how complete and real the outcome was — directly explaining why all of Nikhil's saved Deliveroo/BOGO forecasts showed 'No matching campaign run yet.' Fixed: BOGO and Select-Items forecasts now match on the real discountStructure field instead (with the same text-pattern fallback for untagged older rows that the Forecaster's own campFcFindBogoMatches()/campFcFindSelectItemsMatches() already use to FIND these for forecasting in the first place) — no percentage comparison for either type at all now. Menu-wide matching (which was already working, per the real +87%/+183%/+28% actuals already showing correctly in Nikhil's screenshot) is completely unchanged. Verified directly against the exact real failure case: a BOGO forecast with discPct=null against a real completed campaign whose comments say '...Co-Funded 50-50 By Deliveroo' — confirmed the old logic rejects it (0 candidates) and the new logic correctly matches it and pulls its real uplift. Also verified: a wrong-structure candidate (entireMenu) is still correctly rejected for a BOGO forecast, existing menu-type matching is provably unchanged (still matches on 30%/cap 30 exactly as before), and an untagged BOGO campaign (no discountStructure field at all) still matches via the text-pattern fallback. This means every BOGO forecast Nikhil has already saved should start finding its real result the next time Forecast History loads — direct, real learning signal for calibration that was previously being silently thrown away.",
   "✨ Recent momentum + a real calibration bug fixed, both verified against Nikhil's own real Forecast History screenshot. (1) Real bug caught before it could quietly distort calibration: the same real 11-13 Sep Oregano×Talabat campaign had been saved and re-saved 5 times across different builds while the model was being iterated on — all 5 rows carry the identical real actual (+87%). Without deduplicating, that one campaign would have outweighed every other genuinely distinct result 5-to-1, purely because it got re-saved more often, not because it's more representative. campFcCalibrationBias() now dedupes by (brand, aggregator, campaign dates), keeping only the most-recently-saved forecast per distinct real campaign — verified directly against the real screenshot data: correctly collapses 6 raw Talabat rows down to 2 distinct real campaigns, correctly falls back to the 3-campaign account-wide pool since Talabat-specific alone doesn't meet the minimum sample size, and the resulting +53.0pt bias matches a hand-computed check exactly. (2) New campFcMomentum(brand,agg,campaignStart) — real daily-sales trend for this specific brand+aggregator, completely independent of any past campaign match (which is the point: a match from months ago can't see a change that's happened since). Trailing 90 real days split into two ~45-day halves, compared as a ratio; requires 10+ real days in EACH half or returns null (no adjustment) rather than compute something noisy off a handful of days; bounded 0.7x-1.5x so one unusual stretch can't dominate a forecast on its own. Applied as a multiplier alongside the existing seasonality factor — same architectural slot, not a new mechanism grafted on. Wired into both campFcRun() and campPlanCompute(), shown transparently ('📈 Recent momentum: +43% — last ~45 real days averaging 400/day vs 280/day the ~45 days before that') right next to the existing calibration note. Verified in isolation (genuine upward/flat trends, insufficient-data returns null, brand-level and wrong-brand/aggregator rows correctly excluded, bounds correctly clamp an extreme ratio) and end-to-end together with calibration: modeling Nikhil's real 11-13 Sep numbers (a genuine recent upturn for Oregano×Talabat plus the deduped +53pt calibration), Expected comes out to +69.2% — dramatically closer to the real +87% than the previous ~12-22% forecasts, while still properly bounded rather than just forced to match, and Conservative<=Expected<=Optimistic still holds throughout.",
@@ -10626,7 +10627,17 @@ function applyCampFilters(camps){
     return true;
   });
 }
-function campSetSearch(v){campSearchQ=v;renderCampaigns();}
+let campSearchDebounce=null;
+function campSetSearch(v){
+  campSearchQ=v;
+  // v419: debounced alongside the focus-restore fix above — without this, every keystroke still
+  // triggers the full expensive re-render immediately, which is the other half of what read as
+  // "freezing": the render itself takes long enough that fast typing visibly lags even once focus
+  // is no longer lost. 180ms is short enough to still feel live, long enough to skip a render for
+  // every single character during a normal typing burst.
+  clearTimeout(campSearchDebounce);
+  campSearchDebounce=setTimeout(renderCampaigns,180);
+}
 function campSetQuickFilter(f){campQuickFilter=campQuickFilter===f?'all':f;renderCampaigns();}
 function campSetCardSort(v){campCardSort=v;renderCampaigns();}
 function sortCampCards(camps){
@@ -10724,7 +10735,7 @@ function campFilterBar(){
   const sortOpts=[['contribution','Contribution ↓'],['roi','ROI ↓'],['end','End date'],['lift','Order lift ↓']];
   const sortDD=`<select onchange="campSetCardSort(this.value)" style="padding:6px 10px;border-radius:7px;border:1px solid ${T.border};background:${T.panelBg};color:${T.muted};font-size:11px;font-weight:600;cursor:pointer">${sortOpts.map(([k,l])=>`<option value="${k}" ${campCardSort===k?'selected':''}>Sort: ${l}</option>`).join('')}</select>`;
   const toolbarRow=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:11px;align-items:center">
-    <input type="text" placeholder="Search campaigns…" value="${esc(campSearchQ)}" oninput="campSetSearch(this.value)" style="flex:1;min-width:180px;background:${T.panelBg};border:1px solid ${T.border};border-radius:7px;padding:7px 12px;font-size:12px;color:${T.text};outline:none">
+    <input type="text" id="camp-search-inp" placeholder="Search campaigns…" value="${esc(campSearchQ)}" oninput="campSetSearch(this.value)" style="flex:1;min-width:180px;background:${T.panelBg};border:1px solid ${T.border};border-radius:7px;padding:7px 12px;font-size:12px;color:${T.text};outline:none">
     ${quickChip('winning','✅ Winning')}${quickChip('losing','❌ Losing')}${quickChip('ending','⏳ Ending soon')}
     ${sortDD}
   </div>`;
@@ -13545,8 +13556,8 @@ function campPlanHTML(){
           <div><div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;margin-bottom:4px">Aggregator</div><select onchange="campPlanAgg=this.value;campPlanResult=null;renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 9px;font-size:12px;font-weight:600">${aOpts}</select></div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <div><div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;margin-bottom:4px">Start</div><input type="date" value="${campPlanStart}" onchange="campPlanStart=this.value;campPlanResult=null;renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 9px;font-size:12px;font-weight:600"></div>
-          <div><div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;margin-bottom:4px">End</div><input type="date" value="${campPlanEnd}" onchange="campPlanEnd=this.value;campPlanResult=null;renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 9px;font-size:12px;font-weight:600"></div>
+          <div><div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;margin-bottom:4px">Start</div><input type="date" value="${campPlanStart}" onchange="campPlanStart=this.value;campPlanResult=null;renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 9px;font-size:12px;font-weight:600;color-scheme:${T.inputScheme}"></div>
+          <div><div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;margin-bottom:4px">End</div><input type="date" value="${campPlanEnd}" onchange="campPlanEnd=this.value;campPlanResult=null;renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 9px;font-size:12px;font-weight:600;color-scheme:${T.inputScheme}"></div>
         </div>
       </div>
       <div style="background:${T.rowBg};border-radius:10px;padding:14px 16px">
@@ -13557,9 +13568,16 @@ function campPlanHTML(){
           <option value="bogo"${campPlanType==='bogo'?' selected':''}>BOGO / free item</option>
         </select></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-          <div><div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;margin-bottom:4px">Discount %</div><input type="number" value="${campPlanDiscPct}" onchange="campPlanDiscPct=+this.value;campPlanResult=null;renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 9px;font-size:12px;font-weight:600"></div>
+          ${(campPlanType==='bogo'||campPlanType==='selectItems')&&campPlanResult&&campPlanResult.histMatch?'':`<div><div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;margin-bottom:4px">Discount %</div><input type="number" value="${campPlanDiscPct}" onchange="campPlanDiscPct=+this.value;campPlanResult=null;renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 9px;font-size:12px;font-weight:600"></div>`}
           ${campPlanType==='menu'?`<div><div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;margin-bottom:4px">Cap AED</div><input type="number" value="${campPlanCap}" onchange="campPlanCap=+this.value;campPlanResult=null;renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 9px;font-size:12px;font-weight:600"></div>`:''}
         </div>
+        ${(campPlanType==='bogo'||campPlanType==='selectItems')?(campPlanResult&&campPlanResult.histMatch?
+          `<div style="display:flex;align-items:center;gap:8px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.3);border-radius:7px;padding:8px 11px;margin-bottom:10px;font-size:11px">
+            <span style="color:#22C55E;font-weight:700">✓ ${campPlanResult.histMatch.matchCount} real past campaign${campPlanResult.histMatch.matchCount!==1?'s':''}</span>
+            <span style="color:${T.muted}">— avg AED ${campPlanResult.histMatch.avgDiscPerOrder.toFixed(0)}/order — no need to estimate a %</span>
+          </div>`
+          :`<div style="font-size:10px;color:${T.muted};margin-bottom:10px">${campPlanResult?'No completed '+(campPlanType==='bogo'?'BOGO':'Select-Items')+' campaigns found for '+esc(campPlanBrand)+' × '+esc(campPlanAgg)+' — using your estimate above.':'Run once to check for a real historical average for this brand × aggregator.'}</div>`
+        ):''}
         <div style="display:flex;align-items:center;gap:8px;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:7px;padding:8px 11px">
           <label style="position:relative;display:inline-block;width:34px;height:18px;flex-shrink:0;cursor:pointer">
             <input type="checkbox" ${campPlanCoFund?'checked':''} onchange="campPlanCoFund=this.checked;campPlanResult=null;renderCampaigns()" style="position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer">
@@ -14554,7 +14572,15 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
   const coFP=coFund?coFundPct:0;
 
   const grossAOV=baseline.grossAOV||60;
-  const fullDiscPerOrder=type==='menu'?Math.min(grossAOV*discPct/100,cap>0?cap:9999):grossAOV*discPct/100;
+  // v418: real historical BOGO/Select-Items discount lookup, wired in from the standalone
+  // Break-Even Calculator (built in 406/407) — Campaign Planner was shipped without this
+  // (explicitly flagged as a known limitation in build 408's own notes), which is why it kept
+  // asking for a manual Discount % even for BOGO deals, and why a BOGO forecast's economics were
+  // being modeled as if it were a flat X%-off-the-whole-cart discount — nowhere close to a real
+  // BOGO's actual cost (giving away one item, not a percentage of the entire order). Reuses
+  // campBeFindHistoricalDiscPerOrder() directly rather than duplicating that lookup.
+  const histMatch=(type==='bogo'||type==='selectItems')?campBeFindHistoricalDiscPerOrder(brand,agg,type==='bogo'?'bogo':'select'):null;
+  const fullDiscPerOrder=histMatch?histMatch.avgDiscPerOrder:(type==='menu'?Math.min(grossAOV*discPct/100,cap>0?cap:9999):grossAOV*discPct/100);
   const ourDiscPerOrder=fullDiscPerOrder*(1-coFP/100);
   // v397 fix reused here: commission base is Gross minus OUR share of the discount only, not the
   // full customer-facing discount.
@@ -14593,7 +14619,7 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
   }
 
   return{
-    grossAOV,commRate,foodRate,nDays,matches,seas,calib,mom,
+    grossAOV,commRate,foodRate,nDays,matches,seas,calib,mom,histMatch,
     baseline:Object.assign(pnlAt(baselineOrders,true),{upliftPct:0}),
     conservative:scenarioAt(cU),
     expected:scenarioAt(eU),
@@ -15873,6 +15899,14 @@ function campFcHTML(){
 
 async function renderCampaigns(){
   const pg=document.getElementById('page-campaigns');if(!pg)return;
+  // v419: real bug caught by Nikhil — typing in the campaign search box froze after every single
+  // character, requiring a re-click before the next letter would register. Root cause: campSetSearch()
+  // triggers this same full renderCampaigns() on every keystroke, which replaces the ENTIRE page via
+  // pg.innerHTML= — a brand new DOM node for the search input every time, even though it looks
+  // identical, so the browser drops focus and cursor position after each character. Captured here
+  // (before any of the render work below) and restored right after the innerHTML swap.
+  const _focusedId=(pg.contains(document.activeElement)&&document.activeElement.id)?document.activeElement.id:null;
+  const _focusedSel=(_focusedId&&typeof document.activeElement.selectionStart==='number')?{start:document.activeElement.selectionStart,end:document.activeElement.selectionEnd}:null;
   const T=campTheme();
   const styleOverride=_darkPage?`<style>
     #page-campaigns{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
@@ -15976,7 +16010,7 @@ async function renderCampaigns(){
     // once. campKPIStrip() itself is left in place (unused for now) rather than deleted outright,
     // in case a differently-scoped version of it is useful in the redesign.
     const topChrome=(campTab==='detail'||campTab==='forecaster'||campTab==='breakeven')?'':forecasterCTA+statusTable;
-    const toolBack=(campTab==='forecaster'||campTab==='breakeven')?`<div style="margin-bottom:10px;padding:8px 12px;background:rgba(255,255,255,.04);border-radius:8px;border:1px solid ${T.border};display:flex;align-items:center;gap:10px"><button onclick="campTab='browse';renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.3);border-radius:7px;color:${T.label};padding:6px 13px;font-size:12px;cursor:pointer;font-weight:700">← Back to campaigns</button><span style="color:${T.border}">|</span><span style="font-size:13px;font-weight:700;color:${campTab==='forecaster'?'#fbbf24':'#93C5FD'}">${campTab==='forecaster'?'🔮 Campaign Forecaster':'🎯 Campaign Break-Even Calculator'}</span></div>`:'';
+    const toolBack=(campTab==='forecaster'||campTab==='breakeven'||campTab==='planner')?`<div style="margin-bottom:10px;padding:8px 12px;background:rgba(255,255,255,.04);border-radius:8px;border:1px solid ${T.border};display:flex;align-items:center;gap:10px"><button onclick="campTab='browse';renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.3);border-radius:7px;color:${T.label};padding:6px 13px;font-size:12px;cursor:pointer;font-weight:700">← Back to campaigns</button><span style="color:${T.border}">|</span><span style="font-size:13px;font-weight:700;color:${campTab==='forecaster'?'#fbbf24':campTab==='breakeven'?'#93C5FD':'#4ADE80'}">${campTab==='forecaster'?'🔮 Campaign Forecaster':campTab==='breakeven'?'🎯 Campaign Break-Even Calculator':'🎢 Campaign Planner'}</span></div>`:'';
     // v368: the auto-play timer targets specific DOM nodes by id — those nodes are about to be
     // destroyed by the innerHTML replacement below, so the timer MUST stop first or it keeps
     // firing against elements that no longer exist. Restarted after the new DOM is in place, only
@@ -15984,6 +16018,7 @@ async function renderCampaigns(){
     campBeStopAuto();
     if(typeof campPlanStopChartAuto==='function')campPlanStopChartAuto();
     pg.innerHTML=`${styleOverride}${header}${campDataFreshnessStrip()}${attention}${topChrome}${toolBack}${main}`;
+    if(_focusedId){const _el=document.getElementById(_focusedId);if(_el){_el.focus();if(_focusedSel&&_el.setSelectionRange){try{_el.setSelectionRange(_focusedSel.start,_focusedSel.end);}catch(e){}}}}
     if(campTab==='breakeven'&&campBeScenCache)campBeStartAuto();
     if(campTab==='planner'&&campPlanResult)campPlanRenderChart();
     if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
