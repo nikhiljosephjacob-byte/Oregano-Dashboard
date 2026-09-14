@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-423";
+const BUILD_VERSION="2026-08-13-424";
 const BUILD_NOTES=[
+  "✨🐛 Two real fixes from Nikhil's direct review of a live forecast. (1) Rounding: Baseline's orders/day headline showed '248.9' instead of a whole number — fixed to round (249), matching how every other number on the page already displays. (2) THE REAL ONE — AOV was assumed flat at baseline's level for every scenario, when Nikhil pointed out (and it's visible in his own past campaigns) that a live discount genuinely changes what customers order, and he'd already worked out the real number by hand: 34,038÷400 orders = AED 85 net AOV during a campaign that was modeled at a flat AED 100. New campFcCampaignAOVRatio(matches,coFund) derives a REAL ratio (campAOV÷baseAOV, both already computed per historical match from campAnalysisV2's real bs/cs figures — no new lookup) averaged across the SAME matches already feeding the uplift %, and — per Nikhil's own specific observation — splits by co-funding status when there's enough data to trust the split (>=2 matches in the matching bucket, same specific-vs-pooled fallback pattern already used for calibration), falling back to the pooled average otherwise. Bounded 0.5-1.1 so a handful of noisy matches can't extrapolate to something absurd. The resulting campaignAOV now drives Gross Sales for every scenario except Baseline (which keeps its own real pre-campaign AOV), and %-based discount types (menu, or BOGO/Select-Items with no real historical average yet) now compute their percentage against the campaign-period AOV, not the flat pre-campaign one — a 30% discount is naturally 30% of what the cart actually looks like during the campaign. Real historical BOGO/Select-Items discounts (histMatch, build 418) are untouched — those already reflect whatever AOV shift happened during those exact real campaigns, so the ratio isn't double-applied on top. Shown transparently, not silently: '📉 Real AOV drop applied: campaign AOV X vs baseline Y (Z%), from N real past campaigns [with/without] the same co-funding status.' Verified thoroughly: the co-funding split directly reproduces Nikhil's stated pattern (non-co-funded showing a bigger drop than co-funded, confirmed numerically); insufficient co-fund-specific samples correctly fall back to the pooled average; an extreme ratio correctly clamps to the 0.5 floor; every scenario's P&L still ties out exactly (Gross-Discount-Commission-Food=Contribution, checked line by line) with the new variable AOV; break-even still matches baseline's contribution to the cent; and the full page renders structurally balanced (195/195 divs) with the rounded orders display, the correct per-category AOV in the chart (derived directly from each point's own P&L rather than a separately-tracked variable that could drift out of sync), and the new transparency note all present and showing real, correctly-differentiated numbers.",
   "✨🐛 Merge, piece 4 (batch 4: comparison table + flags — the piece deliberately deferred from build 422) — plus a real wording bug caught and fixed in the standalone Forecaster while investigating it. Campaign Planner now has the full Orders Comparison table (current baseline vs prior week, last year same dates, and the most recent past campaign) and the flags panel (concurrent-campaign warnings, seasonality notes, missing-history warnings, salary-week mismatch), ported from campFcRun()/campFcHTML() reusing the exact same real functions — campFcCleanWindowSearch, campFcWeekOfMonthPos, campFcHasDiscDataForPeriod, campAnalysisV2 — rather than re-deriving any of this a second time. THE FIND: two of the Forecaster's own flag messages had gone stale the moment build 419 shipped — they said the baseline 'may include its own promo activity' and 'necessarily includes some level of concurrent promotion,' both written before 419 existed, when the baseline genuinely was a naive uncorrected window. Since 419, campFcBaseline() already excludes contaminated days itself — so a message implying the number above might still be dirty was actively misleading about a fix that had already shipped. Reworded both to reflect reality: the clean-window flag is now framed as an independent corroborating cross-check alongside an already-clean baseline, not the only honest option; the Keeta-specific flag now says the baseline already excludes what it could within a 90-day lookback but couldn't fully avoid overlap for that aggregator specifically. Fixed at the source, so both tools show the corrected wording, not just Planner's new copy. Verified end-to-end: campPlanCompute() now returns lyOrders/lyNet/lyHasDisc/pwOrders/pwNet/recCamp/cleanWindowCompare/weekOfMonthMismatch, checked against a real scenario with genuine last-year, prior-week, and historical-campaign data (caught and fixed a bug in my OWN test data along the way — an overly-long mock data loop was accidentally duplicating into the 'last year' comparison window, inflating it; not a bug in the actual code, confirmed by narrowing the test data and re-checking the number landed exactly on the expected value). Full page renders structurally balanced (189/189 divs) with the comparison table, all four comparison rows, and the flags panel all present and showing real data — and confirmed the corrected (not stale) flag wording made it through the port.",
   "✨🐛 Merge, piece 3 of several (batch 3: results parity — Baseline explainer, Similar Campaigns, Export) — plus a real display-accuracy gap in the standalone Forecaster found and fixed along the way. (1) THE FIND: while porting 'How we got the baseline' into Campaign Planner, checked how the Forecaster's own version displays its window — it hardcoded 'latest, latest-29' for the date range shown to the user, completely independent of what campFcBaseline() actually uses internally after the build-419 contamination fix (which can skip contaminated days and extend the lookback further back, with gaps). The DISPLAY had quietly gone slightly inaccurate the moment 419 shipped — it could show a date range that doesn't match which days were really used. Fixed at the source: campFcBaseline() now returns the REAL window it used (windowStart/windowEnd = the actual earliest/latest clean dates, not a naive guess; excludedDays = how many calendar days in that span were skipped) so both tools can say so honestly — 'X days excluded (another campaign was running)' when that's genuinely true, nothing fabricated when it isn't. Fixed the Forecaster's own display too, not just Planner's new one. (2) Campaign Planner now has: the corrected Baseline explainer; Similar Campaigns as a real expandable match table (same match objects as the Forecaster — same campFcFindMatches/campFcFindBogoMatches/campFcFindSelectItemsMatches this already reuses — including the Before/During per-row breakdown, not a simplified static version); and its own Export (campPlanExport(), modeled on campFcExport()'s workbook structure but built from Planner's own native scenario fields rather than forcing Forecaster's different field names onto data that doesn't have them — and includes Break-even as its own row, which the standalone Forecaster's export never had since Forecaster doesn't compute a break-even target). Comparison table + flags (prior-week/last-year/recent-campaign comparisons) intentionally NOT included this round — they need real new computation logic in campPlanCompute() that doesn't exist yet, and rushing that into an already-large batch risked doing it carelessly; queued as its own next piece. (3) Caught and fixed a real bug before shipping, same class as build 409: fP (the percentage formatter) is locally-scoped inside campFcHTML() too, not global — used it while porting the match table without checking first. This time audited the ENTIRE campPlanHTML() function properly (full brace-counted extraction, every external identifier checked against its real definition) rather than assuming — confirmed everything else genuinely is global. Verified thoroughly: baselineMeta correctly detects a real contamination scenario (8 excluded days, window correctly extending back to compensate) with an exact hand-checked match; the full page renders structurally balanced both with the match row collapsed (163/163 divs, 1/1 details) and expanded (175/175 divs) with the Before/During breakdown showing; the export's row data was built end-to-end and checked cell-by-cell for undefined values — none found across both sheets.",
   "✨ Merge, piece 2 of several (batch 2: form parity) — Campaign Planner now has the same Upcoming-campaign picker, Branches multi-select, Comments field, and brand×aggregator summary pill the standalone Forecaster already has. New campPlanApplyUpcoming() mirrors campFcApplyUpcoming() field-for-field (brand/agg/branches/dates/discount%/cap/co-fund/inferred type/comments), reusing the exact same real functions (parseCampComment, campFcInferType, campFcUpcomingCampaigns, campFcGetBranches) rather than re-deriving any of that logic a second time — only the destination state (campPlan* instead of campFc*) differs. Branches chips and the summary pill reuse the same bPill/aPill/campFcTypeLabel helpers the Forecaster's own form already uses, so they render identically. campPlanComments is now a real saved field too, flowing into the same Save payload from build 420 instead of the placeholder null it shipped with. Verified end-to-end: applying a real upcoming campaign correctly sets every field (brand, aggregator, both dates, inferred BOGO type, parsed 50-50 co-fund, comments text) and correctly forces a re-run; branch chips toggle correctly; the full page — both the pre-run form-only state and the full results state — renders structurally balanced (31/31 and 128/128 divs respectively) with the upcoming dropdown, comments field, summary pill, and branch chips all present and showing real data. Batch 3 (results parity — baseline explainer, Similar Campaigns, comparison table/flags, export) is next, as its own separately-tested piece.",
@@ -13567,6 +13568,30 @@ function campFcMomentum(brand,agg,campaignStart){
   return{momentum,recentOrders,priorOrders,recentDays,priorDays,windowStart:start,windowEnd:end};
 }
 
+// v424: real AOV-drop modeling — Nikhil's own direct observation, checked against data already
+// computed for the historical matches (campAOV/baseAOV, from campAnalysisV2's real bs/cs figures)
+// rather than adding a new lookup. The model had been assuming AOV stays flat at baseline's level
+// for every scenario, which isn't what actually happens — a live discount changes what customers
+// order (minimum-to-qualify baskets, item-mix shifts), and Nikhil's own past campaigns show this
+// consistently, with co-funded deals showing a smaller drop than non-co-funded ones. Derives a
+// real ratio (campAOV/baseAOV, averaged across the SAME matches already used for the uplift %)
+// rather than assuming a fixed percentage, and splits by co-funding status when there's enough
+// data to trust the split (>=2 matches in the matching bucket) — same specific-vs-pooled fallback
+// pattern already used for calibration, not a new mechanism.
+function campFcCampaignAOVRatio(matches,coFund){
+  const withAOV=matches.filter(m=>m.campAOV!=null&&m.baseAOV!=null&&m.baseAOV>0&&Math.abs(m.upliftPct||0)<150);
+  if(!withAOV.length)return null;
+  const withCoFundInfo=withAOV.map(m=>{
+    const parsed=parseCampComment(m.c);
+    return{ratio:m.campAOV/m.baseAOV,isCoFunded:(parsed.coFundedPctOfDiscount||0)>0};
+  });
+  const MIN_SAMPLES=2;
+  const matchingCoFund=withCoFundInfo.filter(m=>m.isCoFunded===!!coFund);
+  const usePool=matchingCoFund.length>=MIN_SAMPLES?matchingCoFund:withCoFundInfo;
+  const avgRatio=usePool.reduce((s,m)=>s+m.ratio,0)/usePool.length;
+  // bounded 0.5-1.1 so a handful of noisy matches can't extrapolate to something absurd
+  return{ratio:Math.min(1.1,Math.max(0.5,avgRatio)),sampleCount:usePool.length,isCoFundSpecific:matchingCoFund.length>=MIN_SAMPLES,totalSamples:withAOV.length};
+}
 function campPlanRun(){
   if(!campPlanBrand||!campPlanAgg||!campPlanStart||!campPlanEnd){alert('Please fill in Brand, Aggregator, Start and End dates.');return;}
   campPlanResult=campPlanCompute(campPlanBrand,campPlanAgg,campPlanStart,campPlanEnd,campPlanType,campPlanDiscPct,campPlanCap,campPlanCoFund,campPlanCoFundPct,campPlanBranches);
@@ -13710,16 +13735,17 @@ function campPlanHTML(){
   const verdictBad=!r.breakEven||r.expected.orders<r.breakEven.orders;
   const calibNote=r.calib?`<div style="font-size:10.5px;color:#4ADE80;margin-top:7px;padding-top:7px;border-top:0.5px dashed ${T.border}">📐 Calibrated ${r.calib.biasPts>=0?'+':''}${r.calib.biasPts.toFixed(1)}pts vs raw historical uplift, based on ${r.calib.sampleCount} of your own past forecast${r.calib.sampleCount!==1?'s':''} vs their real result${r.calib.isSpecific?'':' (not enough history for '+esc(campPlanBrand)+' × '+esc(campPlanAgg)+' specifically yet, using the whole account)'}.</div>`:'';
   const momNote=r.mom?`<div style="font-size:10.5px;color:#60A5FA;margin-top:5px">📈 Recent momentum: ${r.mom.momentum>=1?'+':''}${((r.mom.momentum-1)*100).toFixed(0)}% — last ~45 real days averaging ${Math.round(r.mom.recentOrders)}/day vs ${Math.round(r.mom.priorOrders)}/day the ~45 days before that.</div>`:'';
+  const aovNote=r.aovRatio?`<div style="font-size:10.5px;color:#F59E0B;margin-top:5px">📉 Real AOV drop applied: campaign AOV ${fA(r.campaignAOV)} vs baseline ${fA(r.grossAOV)} (${((r.aovRatio.ratio-1)*100).toFixed(0)}%), from ${r.aovRatio.sampleCount} real past campaign${r.aovRatio.sampleCount!==1?'s':''}${r.aovRatio.isCoFundSpecific?' with the same co-funding status':' (not enough co-funding-specific history yet, using all past campaigns)'}.</div>`:'';
   const verdict=verdictBad
     ?`<div style="border-radius:10px;padding:15px 18px;margin-bottom:14px;background:#EF44441A;border:1px solid #EF444455">
         <div style="font-size:13.5px;font-weight:800;color:#F87171">⚠️ Likely to fall short of break-even at this discount depth</div>
         <div style="font-size:11.5px;color:${T.secondary};margin-top:5px;line-height:1.6">Your Expected forecast is <strong>${r.expected.upliftPct>=0?'+':''}${r.expected.upliftPct.toFixed(0)}% uplift</strong> (${Math.round(r.expected.orders)}/day) — break-even needs <strong>${r.breakEven?(r.breakEven.upliftPct>=0?'+':'')+r.breakEven.upliftPct.toFixed(0)+'%':'—'}</strong> (${r.breakEven?Math.round(r.breakEven.orders):'—'}/day)${optClears?'':', and even Optimistic does not clear it either'}.</div>
-        ${calibNote}${momNote}
+        ${calibNote}${momNote}${aovNote}
       </div>`
     :`<div style="border-radius:10px;padding:15px 18px;margin-bottom:14px;background:#22C55E1A;border:1px solid #22C55E55">
         <div style="font-size:13.5px;font-weight:800;color:#4ADE80">✓ Expected forecast clears break-even</div>
         <div style="font-size:11.5px;color:${T.secondary};margin-top:5px;line-height:1.6">Your Expected forecast is <strong>+${r.expected.upliftPct.toFixed(0)}% uplift</strong> (${Math.round(r.expected.orders)}/day) — comfortably above the <strong>+${r.breakEven.upliftPct.toFixed(0)}%</strong> (${Math.round(r.breakEven.orders)}/day) needed to break even.</div>
-        ${calibNote}${momNote}
+        ${calibNote}${momNote}${aovNote}
       </div>`;
 
   const CATS=[
@@ -13768,7 +13794,7 @@ function campPlanHTML(){
     return `<div class="campPlanCard" data-idx="${i}" data-acc="${cat.color}" style="background:${T.panelBg};border-radius:11px;flex:1;min-width:0;padding:12px 12px;border:1.5px solid ${T.border};cursor:pointer;transition:all .25s">
       <div style="display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:800;text-transform:uppercase;color:${cat.color}">${cat.icon} ${cat.name}</div>
       <div style="font-size:9.5px;color:${T.muted};margin-bottom:5px">${cat.sub}</div>
-      <div style="font-size:21px;font-weight:800;color:${T.text};line-height:1">${p.orders.toFixed(1)}</div>
+      <div style="font-size:21px;font-weight:800;color:${T.text};line-height:1">${Math.round(p.orders).toLocaleString()}</div>
       <div style="font-size:10px;color:${T.muted}">orders/day</div>
       <div style="margin-top:7px;padding-top:7px;border-top:0.5px solid ${T.border}88">
         <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;color:${T.muted}"><span>Gross Sales</span><span style="font-weight:700;color:${T.secondary}">${fA(p.grossDay)}</span></div>
@@ -14068,7 +14094,7 @@ function campPlanRenderChart(){
   // both viewBoxes roughly halved (300->172, 264->156), using the same tightened lineGap/margins
   // renderPanel now uses throughout.
   renderPanel('svgPlanOrders', ordersArr, function(v){return Math.round(v).toLocaleString()+'/day';},
-    function(cat){return ['AOV '+AOV.toFixed(0)+' · Sales '+Math.round(cat.pnl.grossDay).toLocaleString()+'/day'];}, 72, 142, 172);
+    function(cat){return ['AOV '+Math.round(cat.pnl.grossDay/cat.pnl.orders)+' · Sales '+Math.round(cat.pnl.grossDay).toLocaleString()+'/day'];}, 72, 142, 172);
   renderPanel('svgPlanContrib', contribArr, function(v){return 'AED '+Math.round(v).toLocaleString()+'/day';}, null, 58, 128, 156);
   bindEvents();
   campPlanChartCycleTimeout=setTimeout(beginCycle, drawDurMs+400);
@@ -14862,6 +14888,15 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
   const coFP=coFund?coFundPct:0;
 
   const grossAOV=baseline.grossAOV||60;
+  // v424: real AOV-drop adjustment — derived from the SAME historical matches already used for
+  // the uplift %, not a new lookup. A live discount changes what customers order; assuming AOV
+  // stays flat at baseline's level was the gap Nikhil pointed out directly. When histMatch is
+  // used below (BOGO/Select-Items with a real historical discount-per-order average), that figure
+  // already reflects whatever AOV shift happened during those exact campaigns — this ratio is
+  // NOT double-applied on top of it; it only affects the campaignAOV used for Gross Sales, which
+  // matters regardless of how the discount cost itself was derived.
+  const aovRatio=campFcCampaignAOVRatio(matches,coFund);
+  const campaignAOV=aovRatio?grossAOV*aovRatio.ratio:grossAOV;
   // v418: real historical BOGO/Select-Items discount lookup, wired in from the standalone
   // Break-Even Calculator (built in 406/407) — Campaign Planner was shipped without this
   // (explicitly flagged as a known limitation in build 408's own notes), which is why it kept
@@ -14870,17 +14905,22 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
   // BOGO's actual cost (giving away one item, not a percentage of the entire order). Reuses
   // campBeFindHistoricalDiscPerOrder() directly rather than duplicating that lookup.
   const histMatch=(type==='bogo'||type==='selectItems')?campBeFindHistoricalDiscPerOrder(brand,agg,type==='bogo'?'bogo':'select'):null;
-  const fullDiscPerOrder=histMatch?histMatch.avgDiscPerOrder:(type==='menu'?Math.min(grossAOV*discPct/100,cap>0?cap:9999):grossAOV*discPct/100);
+  // v424: %-based discount types (menu, or BOGO/Select-Items with no real historical average yet)
+  // now compute their percentage against campaignAOV, not the flat pre-campaign grossAOV — a 30%
+  // discount is naturally 30% of what the cart actually looks like during the campaign, not what
+  // it looked like before the campaign started.
+  const fullDiscPerOrder=histMatch?histMatch.avgDiscPerOrder:(type==='menu'?Math.min(campaignAOV*discPct/100,cap>0?cap:9999):campaignAOV*discPct/100);
   const ourDiscPerOrder=fullDiscPerOrder*(1-coFP/100);
   // v397 fix reused here: commission base is Gross minus OUR share of the discount only, not the
   // full customer-facing discount.
-  const commBaseAOV=grossAOV-ourDiscPerOrder;
-  const foodPo=grossAOV*foodRate;
+  const commBaseAOV=campaignAOV-ourDiscPerOrder;
+  const campaignFoodPo=campaignAOV*foodRate;
   const commPo=commBaseAOV*commRate;
-  const contribPoCampaign=commBaseAOV-foodPo-commPo;
+  const contribPoCampaign=commBaseAOV-campaignFoodPo-commPo;
 
+  const baseFoodPo=grossAOV*foodRate;
   const baseCommPo=grossAOV*commRate; // baseline has zero discount, so commission base = full gross
-  const contribPoBaseline=grossAOV-foodPo-baseCommPo;
+  const contribPoBaseline=grossAOV-baseFoodPo-baseCommPo;
 
   const baselineOrders=baseline.dailyOrders;
   const baselineContribDay=baselineOrders*contribPoBaseline;
@@ -14892,7 +14932,12 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
   // same real per-order economics already computed above, multiplied out per scenario's own
   // order count — no new calculation, just exposing what was already being computed.
   function pnlAt(orders,isBaseline){
-    const grossDay=orders*grossAOV;
+    // v424: baseline uses its own real (pre-campaign) AOV; every other scenario uses the
+    // real campaign-period AOV derived above — this is the one line that actually applies the
+    // AOV-drop fix, everything downstream (food/commission/net/contribution) already flowed
+    // from grossDay before and needs no separate change.
+    const useAOV=isBaseline?grossAOV:campaignAOV;
+    const grossDay=orders*useAOV;
     const discTotalDay=isBaseline?0:orders*fullDiscPerOrder;
     const aggFundDay=isBaseline?0:orders*(fullDiscPerOrder-ourDiscPerOrder);
     const brandFundDay=isBaseline?0:orders*ourDiscPerOrder;
@@ -14935,7 +14980,7 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
   const weekOfMonthMismatch=campWeekPos!==baselineWeekPos?{campaign:campWeekPos,baseline:baselineWeekPos}:null;
 
   return{
-    grossAOV,commRate,foodRate,nDays,matches,seas,calib,mom,histMatch,
+    grossAOV,campaignAOV,aovRatio,commRate,foodRate,nDays,matches,seas,calib,mom,histMatch,
     baselineMeta:{windowStart:baseline.windowStart,windowEnd:baseline.windowEnd,excludedDays:baseline.excludedDays,refDays:baseline.refDays},
     lyOrders:lyRecs.length?lyRecs.reduce((s,r)=>s+r.orders,0)/lyDays:null,
     lyNet:lyRecs.length?lyRecs.reduce((s,r)=>s+r.sales,0)/lyDays:null,
