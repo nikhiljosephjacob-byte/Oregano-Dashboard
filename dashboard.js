@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-427";
+const BUILD_VERSION="2026-08-13-429";
 const BUILD_NOTES=[
+  "🔍 Diagnostic build for the real discount discrepancy Nikhil reported (sheet shows AED 81 for a real campaign — Oregano × Noon, AUH Locations only, 40% OFF CAP 20, New Customers Only, 11-16 Sep — but the dashboard's own campaign P&L showed AED 4). Traced this by hand as far as static code reading allows before adding instrumentation: (1) ruled out the overlap-detection guard in allocateCampaignDiscount() as the cause — it only fires when another campaign shares the SAME brand+aggregator, and checking Nikhil's real Campaign Activations screenshot confirms no other Oregano×Noon campaign exists in this window to trigger it; (2) verified campOutlets()'s branch-scope resolution for 'AUH Locations only' looks structurally correct — it strips the qualifier words down to the bare 'auh' keyword and resolves against AUH_OUTLETS (Al Forsan, Al Reem, Reem Island, WTC, Al Reef), which are genuinely Abu Dhabi outlets, exactly matching the code's own documented test case for this pattern. Neither hypothesis panned out on paper, and there's no special-casing anywhere in the discount pipeline for 'New Customers Only' campaigns specifically (confirmed directly — no new-user/FTU-restriction logic exists in campAnalysisV2 or allocateCampaignDiscount at all), which may be its own separate gap. Rather than keep guessing at a root cause this consequential, added a new diagnostic log (gated to only branch-scoped campaigns, so it doesn't spam the console for the common 'All locations' case) that surfaces exactly what this function computes for a real campaign: the resolved outlet set, whether the exact-data or sales-weighted-estimate path ran, the computed allocatedDisc, whether overlap fired, and the raw pre-correction discount figures. Opening this specific campaign's detail view will now print a [DISC-ALLOC] line with the real numbers — next step is Nikhil sharing that console output so the actual failure point can be pinpointed precisely instead of reasoned about in the abstract.",
+  "🐛 Real bug in the Compare report, confirmed directly from an actual exported PDF Nikhil shared — selecting 3 date ranges silently dropped the earliest one from every deep-dive section. Root cause: cmpFullMetricsTable (Brand Comparison, Platform Comparison) and cmpReportOutletDetail all independently derived their 'prior'/'latest' periods by just grabbing the LAST TWO entries of the full selected-periods array (data[data.length-1]/data[data.length-2]) — correct for the common 2-period case, but silently discarding every earlier period the moment 3+ were selected. The Executive Summary never had this problem, because it already uses the right pattern (data.map((d,i)=>i>0?[data[i-1],d]:null) — every period compared against the one immediately before it). The deep-dive sections just never got the same treatment. Fixed by extracting that exact convention into a new shared cmpConsecutivePairs(data) helper, and having all three functions loop over every consecutive pair instead of computing just one — a 2-period scope still produces exactly one comparison section (unchanged, verified), a 3-period scope now produces two (Feb-vs-Aug, then Aug-vs-Sep, each getting its own table + pie/bar charts), each pair page-broken from the next. Verified directly against the real scenario from Nikhil's PDF: reconstructed his exact 3 periods and confirmed all three date labels now appear across the Brand Comparison sections (previously only 2 of 3 did), with exactly 2 comparison tables generated as expected — one per real transition, nothing silently dropped.",
   "🐛 Real gap caught directly by Nikhil — a Select-Items forecast now saves successfully (build 426 fixed the outright rejection) but doesn't appear in the Forecast History list below it. Investigated by diffing Campaign Planner's save payload against the standalone Forecaster's — proven working, since that's where every real saved forecast Nikhil has shown so far actually came from — field by field, programmatically rather than eyeballing it. Found exactly one structural difference: source:'planner', a traceability field I added myself in build 420, thinking it would be harmless metadata. It's never existed in the Forecaster's own payload, was never confirmed against the backend, and is the single most likely explanation if the list endpoint does any kind of schema validation or filtering that doesn't know what to do with an unexpected field — the save write might succeed while the read/list path silently excludes or mishandles the record. Removed it — Planner's payload is now structurally identical to the Forecaster's, confirmed both by the field-by-field diff and by actually building a real payload through the fixed function and checking its keys directly (17 keys, no source, matching exactly). FLAGGED HONESTLY, same as the cap fix: this is my strongest, most isolated lead based on comparing what's provably different between a payload that's never had this problem and one that has — not something confirmed against backend code I can't see. If a saved forecast still doesn't appear after this build, that rules out this specific field and points to something else in the list/read path, not this save logic.",
   "🐛 Real save failure caught directly from Nikhil's own error message — 'missing_cap' shown next to the Save button on a Select-Items forecast. Traced precisely: campPlanSaveForecast() sends cap:null for anything that isn't menu-wide (Select-Items and BOGO don't have a cap in the same sense), and the backend appears to treat that null as equivalent to a missing required field, rejecting the save outright. Checking whether this was specific to the new Campaign Planner save path or something deeper found the SAME exact pattern already sitting in the standalone Forecaster's campFcSaveForecast() (cap:campFcType==='menu'?campFcCap:null) — meaning this has likely been a latent bug in the Forecaster too, the whole time, just never triggered because this may be the first Select-Items/BOGO save attempt through either tool. Fixed both: cap now sends 0 instead of null for non-menu types, a valid number the backend's validation should accept as 'no cap applies' rather than 'field missing'. FLAGGED HONESTLY, same discipline as every other unverified-backend-assumption in this project (the /api/forecast/delete endpoint from build 400, the field names it expects): this fix is inferred from the error string alone, not confirmed against actual backend validation code, which isn't visible from here — if 'missing_cap' persists after this build, or a different missing_X error appears, that's the next thing to trace, not something this fix can be certain closes on its own. Verified the payload itself: captured a real Select-Items save attempt end-to-end and confirmed cap now serializes as 0, not null, with discPct correctly still passing through unchanged for this type.",
   "🐛 Real gap caught by Nikhil — selecting BOGO in Campaign Planner still asked for Discount %, even though this exact thing was supposedly fixed back in build 418. Root cause: the check was gated behind campPlanResult.histMatch, which only exists AFTER clicking 'Run Combined Analysis' — so simply picking BOGO from the Structure dropdown (before running anything) left campPlanResult null, and the field fell back to showing by design, not by bug, just not the design Nikhil expected. Campaign Planner deliberately uses an explicit-Run model (unlike the standalone Break-Even Calculator, which recomputes live on every change) — but there was no real reason THIS specific check needed to wait for a full run, since campBeFindHistoricalDiscPerOrder() is a small, independent lookup, not part of the heavier campPlanCompute() pipeline. Now computed fresh on every render directly from the current brand/aggregator/type (a new formHistMatch, decoupled from campPlanResult entirely) — the field hides, or the real-match banner shows, the instant BOGO or Select-Items is picked, matching the standalone tool's live feel for this one piece even though the rest of Planner still needs an explicit Run. Verified directly against Nikhil's exact scenario: BOGO selected, brand+aggregator with real historical data, campPlanResult still null (Run not yet clicked) — field correctly hidden, banner correctly shows the real match count and AED/order average immediately; confirmed the opposite case (no real data for the selected brand+aggregator) still correctly falls back to the manual field with an accurate message, not a stale 'run once to check' prompt that no longer applies now that the check doesn't wait for a run.",
@@ -11627,6 +11629,20 @@ function campAnalysisV2(c){
   // overlap detection. Replaces the raw cs.disc which would double-count when campaigns overlap.
   const alloc=allocateCampaignDiscount(c,effStart,effEnd);
   const allocatedDisc=alloc.allocatedDisc;
+  // v429: diagnostic logging — Nikhil reported a real, large discount discrepancy (sheet shows
+  // AED 81 for a real branch-scoped, New-Customers-Only campaign; the dashboard's own P&L showed
+  // AED 4). Traced the branch-scope resolution and the overlap-detection guard by hand — both
+  // look structurally correct for this exact case (no other same-brand+aggregator campaign to
+  // overlap with, "AUH Locations only" resolves to the real AUH outlet set) — but confirming the
+  // ACTUAL root cause needs to see what this function really computes for the real campaign,
+  // not what the code appears to do on paper. Gated to only scoped (non-"All") campaigns, so this
+  // doesn't spam the console for the common case — logs the resolved outlet set, which allocation
+  // path ran (exact vs estimated), the computed allocatedDisc, and whether overlap fired, so the
+  // next time this specific campaign (or any other branch-scoped one) is opened, the real numbers
+  // are visible instead of guessed at.
+  if(outletSet){
+    console.log(`[DISC-ALLOC] ${c.brand} × ${c.aggregator} (${[...outletSet].join(',')}) ${effStart}–${effEnd}: source=${alloc.source} allocatedDisc=${allocatedDisc.toFixed(2)} hadOverlap=${alloc.hadOverlap} overlapDays=${(alloc.overlapDays||[]).length} rawCampDisc=${campC.disc.toFixed(2)} rawSumDisc=${cs.disc.toFixed(2)}`);
+  }
   // Patch campC.gross: the discount record is attached to branch="(brand-level)" which gets filtered
   // OUT by scoped campaigns (e.g. AUH-only Flash Sale). So campC.disc=0 and gross=net, which is wrong.
   // The correct gross = net + allocatedDisc (our campaign's proportional share of the day's discount).
@@ -20897,8 +20913,14 @@ function cmpSvgBarGrouped(items,clrA,clrB){
 // returns a cmpScopedMetrics-shaped object for that name within that side's window.
 // v386: each column now gets its correct higherIsGood polarity (Discount/Ad Spend are
 // cost metrics — down is good) and shows both periods via cmpPairedMetricCell.
-function cmpFullMetricsTable(title,sub,colLabel,names,scopeFn,data,clrA,clrB){
-  const latest=data[data.length-1],prior=data[data.length-2];
+// v428: real bug caught by Nikhil from an actual 3-period exported report — this used to derive
+// prior/latest by just taking the LAST two entries of the full data array internally
+// (data[data.length-1]/data[data.length-2]), silently dropping every earlier period whenever 3+
+// were selected — the Executive Summary correctly loops through every consecutive pair
+// (data.map((d,i)=>i>0?[data[i-1],d]:null)), but this table never got that same treatment. Now
+// takes prior/latest as explicit parameters instead of deriving them, so the caller decides
+// which pair — making it a genuinely reusable per-pair builder instead of a "last pair only" one.
+function cmpFullMetricsTable(title,sub,colLabel,names,scopeFn,prior,latest,clrA,clrB){
   const rows=names.map(name=>{
     const mL=scopeFn(name,latest),mP=scopeFn(name,prior);
     return`<tr><td><div class="brand-cell">${logoImg(name,24)}${esc(name)}</div></td>
@@ -20913,26 +20935,36 @@ function cmpFullMetricsTable(title,sub,colLabel,names,scopeFn,data,clrA,clrB){
     <table><thead><tr><th>${colLabel}</th><th>Sales</th><th>Orders</th><th>AOV</th><th>Discount</th><th>Contribution</th><th>Ad Spend</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
 }
+// v428: every consecutive pair in data, same convention cmpReportKPICards already uses for the
+// Executive Summary — [data[0],data[1]], [data[1],data[2]], ... — so a 2-period scope still
+// produces exactly one pair (unchanged behavior) and a 3+-period scope now produces one pair per
+// transition instead of silently keeping only the last one.
+function cmpConsecutivePairs(data){
+  const pairs=[];
+  for(let i=1;i<data.length;i++)pairs.push([data[i-1],data[i]]);
+  return pairs;
+}
 // v386: Brand Comparison now returns CONTENT ONLY (no page wrapper) — cmpBuildReportHTML
 // wraps it in its own .page. Adds the dual sales-split pie (both periods) approved in the
 // mockup review. Still shown only when more than one brand is actually in scope.
 function cmpReportBrandComparison(data){
   const brandCount=Math.max(...data.map(d=>d.brandCount));
   if(brandCount<2)return"";
-  const latest=data[data.length-1],prior=data[data.length-2];
-  const clrA=cmpClrFor(prior.key),clrB=cmpClrFor(latest.key);
   const names=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.brand)))];
-  const table=cmpFullMetricsTable("Brand Comparison","Both periods shown directly — not the totals repeated, the breakdown behind them","Brand",
-    names,(name,side)=>cmpScopedMetrics(side.cfg,name,null,null),data,clrA,clrB);
-  const sliceFor=side=>names.map(n=>({label:n,v:cmpScopedMetrics(side.cfg,n,null,null).sales,c:BMAP[n]?.c||"#888"}));
-  const pieA=sliceFor(prior),pieB=sliceFor(latest);
-  const legend=names.map(n=>`<div class="li"><span class="sw" style="background:${BMAP[n]?.c||'#888'}"></span>${esc(n)}</div>`).join("");
-  const pieSection=`<div class="chart-box"><div class="chart-title">Sales Split by Brand — both periods</div>
-    <div style="display:flex;align-items:flex-start;justify-content:space-around;gap:8px;padding:4px 8px">
-      <div style="text-align:center"><div style="font-size:9px;color:${clrA};font-weight:700;margin-bottom:4px">${esc(prior.dateLabel)}</div>${cmpSvgPie(pieA.map(x=>({v:x.v,c:x.c})),120)}</div>
-      <div style="text-align:center"><div style="font-size:9px;color:${clrB};font-weight:700;margin-bottom:4px">${esc(latest.dateLabel)}</div>${cmpSvgPie(pieB.map(x=>({v:x.v,c:x.c})),120)}</div>
-    </div><div class="chart-legend" style="justify-content:center;margin-top:10px;padding:0 8px">${legend}</div></div>`;
-  return table+pieSection;
+  return cmpConsecutivePairs(data).map(([prior,latest])=>{
+    const clrA=cmpClrFor(prior.key),clrB=cmpClrFor(latest.key);
+    const table=cmpFullMetricsTable("Brand Comparison","Both periods shown directly — not the totals repeated, the breakdown behind them","Brand",
+      names,(name,side)=>cmpScopedMetrics(side.cfg,name,null,null),prior,latest,clrA,clrB);
+    const sliceFor=side=>names.map(n=>({label:n,v:cmpScopedMetrics(side.cfg,n,null,null).sales,c:BMAP[n]?.c||"#888"}));
+    const pieA=sliceFor(prior),pieB=sliceFor(latest);
+    const legend=names.map(n=>`<div class="li"><span class="sw" style="background:${BMAP[n]?.c||'#888'}"></span>${esc(n)}</div>`).join("");
+    const pieSection=`<div class="chart-box"><div class="chart-title">Sales Split by Brand — both periods</div>
+      <div style="display:flex;align-items:flex-start;justify-content:space-around;gap:8px;padding:4px 8px">
+        <div style="text-align:center"><div style="font-size:9px;color:${clrA};font-weight:700;margin-bottom:4px">${esc(prior.dateLabel)}</div>${cmpSvgPie(pieA.map(x=>({v:x.v,c:x.c})),120)}</div>
+        <div style="text-align:center"><div style="font-size:9px;color:${clrB};font-weight:700;margin-bottom:4px">${esc(latest.dateLabel)}</div>${cmpSvgPie(pieB.map(x=>({v:x.v,c:x.c})),120)}</div>
+      </div><div class="chart-legend" style="justify-content:center;margin-top:10px;padding:0 8px">${legend}</div></div>`;
+    return table+pieSection;
+  }).join('<div style="page-break-before:always"></div>');
 }
 // v386: Platform Comparison, same pattern — now its OWN page (was previously crammed onto
 // the same page as Brand Comparison, which caused a real pagination bug on broad,
@@ -20943,58 +20975,62 @@ function cmpReportBrandComparison(data){
 function cmpReportPlatformComparison(data){
   const aggCount=Math.max(...data.map(d=>d.aggCount));
   if(aggCount<2)return"";
-  const latest=data[data.length-1],prior=data[data.length-2];
-  const clrA=cmpClrFor(prior.key),clrB=cmpClrFor(latest.key);
   const names=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.aggregator)))];
-  const table=cmpFullMetricsTable("Platform Comparison","Both periods shown directly, same layout as Brand Comparison","Platform",
-    names,(name,side)=>cmpScopedMetrics(side.cfg,null,name,null),data,clrA,clrB);
-  const barItems=names.map(n=>({label:n,a:cmpScopedMetrics(prior.cfg,null,n,null).sales,b:cmpScopedMetrics(latest.cfg,null,n,null).sales}));
-  const barSection=`<div class="chart-box" style="margin-top:10px;padding:16px 18px"><div class="chart-title">Net Sales by Platform — <span style="color:${clrA}">${esc(prior.dateLabel)}</span> vs <span style="color:${clrB}">${esc(latest.dateLabel)}</span></div>${cmpSvgBarGrouped(barItems,clrA,clrB)}</div>`;
-  const sliceFor=side=>names.map(n=>({label:n,v:cmpScopedMetrics(side.cfg,null,n,null).sales,c:AC[n]||"#888"}));
-  const pieA=sliceFor(prior),pieB=sliceFor(latest);
-  const legend=names.map(n=>`<div class="li"><span class="sw" style="background:${AC[n]||'#888'}"></span>${esc(n)}</div>`).join("");
-  const pieSection=`<div class="chart-box" style="margin-top:10px;padding:16px 18px"><div class="chart-title">Sales Split by Platform — both periods</div>
-    <div style="display:flex;align-items:flex-start;justify-content:space-around;gap:8px;padding:4px 8px">
-      <div style="text-align:center"><div style="font-size:9px;color:${clrA};font-weight:700;margin-bottom:4px">${esc(prior.dateLabel)}</div>${cmpSvgPie(pieA.map(x=>({v:x.v,c:x.c})),120)}</div>
-      <div style="text-align:center"><div style="font-size:9px;color:${clrB};font-weight:700;margin-bottom:4px">${esc(latest.dateLabel)}</div>${cmpSvgPie(pieB.map(x=>({v:x.v,c:x.c})),120)}</div>
-    </div><div class="chart-legend" style="justify-content:center;margin-top:10px;padding:0 10px;flex-wrap:wrap">${legend}</div></div>`;
-  return table+barSection+pieSection;
+  return cmpConsecutivePairs(data).map(([prior,latest])=>{
+    const clrA=cmpClrFor(prior.key),clrB=cmpClrFor(latest.key);
+    const table=cmpFullMetricsTable("Platform Comparison","Both periods shown directly, same layout as Brand Comparison","Platform",
+      names,(name,side)=>cmpScopedMetrics(side.cfg,null,name,null),prior,latest,clrA,clrB);
+    const barItems=names.map(n=>({label:n,a:cmpScopedMetrics(prior.cfg,null,n,null).sales,b:cmpScopedMetrics(latest.cfg,null,n,null).sales}));
+    const barSection=`<div class="chart-box" style="margin-top:10px;padding:16px 18px"><div class="chart-title">Net Sales by Platform — <span style="color:${clrA}">${esc(prior.dateLabel)}</span> vs <span style="color:${clrB}">${esc(latest.dateLabel)}</span></div>${cmpSvgBarGrouped(barItems,clrA,clrB)}</div>`;
+    const sliceFor=side=>names.map(n=>({label:n,v:cmpScopedMetrics(side.cfg,null,n,null).sales,c:AC[n]||"#888"}));
+    const pieA=sliceFor(prior),pieB=sliceFor(latest);
+    const legend=names.map(n=>`<div class="li"><span class="sw" style="background:${AC[n]||'#888'}"></span>${esc(n)}</div>`).join("");
+    const pieSection=`<div class="chart-box" style="margin-top:10px;padding:16px 18px"><div class="chart-title">Sales Split by Platform — both periods</div>
+      <div style="display:flex;align-items:flex-start;justify-content:space-around;gap:8px;padding:4px 8px">
+        <div style="text-align:center"><div style="font-size:9px;color:${clrA};font-weight:700;margin-bottom:4px">${esc(prior.dateLabel)}</div>${cmpSvgPie(pieA.map(x=>({v:x.v,c:x.c})),120)}</div>
+        <div style="text-align:center"><div style="font-size:9px;color:${clrB};font-weight:700;margin-bottom:4px">${esc(latest.dateLabel)}</div>${cmpSvgPie(pieB.map(x=>({v:x.v,c:x.c})),120)}</div>
+      </div><div class="chart-legend" style="justify-content:center;margin-top:10px;padding:0 10px;flex-wrap:wrap">${legend}</div></div>`;
+    return table+barSection+pieSection;
+  }).join('<div style="page-break-before:always"></div>');
 }
 // v386: now includes AOV and Contribution — the mockup had to ESTIMATE contribution at
 // outlet level (brand's overall margin rate × outlet sales) because its two source PDFs
 // never contained real per-outlet contribution. The live feature doesn't have that
 // constraint: cmpScopedMetrics already computes genuine per-outlet contribution the exact
 // same way it does for brand/platform, so this shows the real number, not an approximation.
+// v428: same fix as Brand/Platform Comparison — loops every consecutive pair instead of only
+// the last one, so a 3+-period scope shows every transition's outlet detail, not just the latest.
 function cmpReportOutletDetail(data){
   const allOutlets=new Set(data.flatMap(d=>d.outlets.map(o=>o.outlet)));
   if(allOutlets.size<2)return"";
   const brandCount=Math.max(...data.map(d=>d.brandCount));
-  const latest=data[data.length-1],prior=data[data.length-2];
-  const clrA=cmpClrFor(prior.key),clrB=cmpClrFor(latest.key);
-  const outletRow=(name,brand)=>{
-    const mL=cmpScopedMetrics(latest.cfg,brand,null,name),mP=cmpScopedMetrics(prior.cfg,brand,null,name);
-    return`<tr><td>${esc(name)}</td>
-      ${cmpPairedMetricCell(mP.sales,mL.sales,fmtAEDExact,true,clrA,clrB)}
-      ${cmpPairedMetricCell(mP.orders,mL.orders,v=>v.toLocaleString(),true,clrA,clrB)}
-      ${cmpPairedMetricCell(mP.aov,mL.aov,fmtAEDExact,true,clrA,clrB)}
-      ${cmpPairedMetricCell(mP.discBurn,mL.discBurn,fmtAEDExact,false,clrA,clrB)}
-      ${cmpPairedMetricCell(mP.contribution,mL.contribution,fmtAEDExact,true,clrA,clrB)}</tr>`;
-  };
   const head=`<thead><tr><th>Outlet</th><th>Sales</th><th>Orders</th><th>AOV</th><th>Discount</th><th>Contribution</th></tr></thead>`;
-  if(brandCount<2){
-    const names=[...allOutlets];
-    return`<div class="sec-title">Outlet-Level Detail</div><div class="sec-sub">Every outlet active for ${esc(data[0].label)} — both periods shown directly</div>
-      <table>${head}<tbody>${names.map(n=>outletRow(n,null)).join("")}</tbody></table>`;
-  }
-  const brands=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.brand)))];
-  const sections=brands.map(brand=>{
-    // outlets that genuinely belong to this brand: check against raw records once, not per-row
-    const brandOutlets=[...new Set(cmpData({...latest.cfg,brands:new Set([brand])}).concat(cmpData({...prior.cfg,brands:new Set([brand])})).map(r=>r.branch).filter(b=>b!=="(brand-level)"))];
-    if(!brandOutlets.length)return"";
-    return`<div class="outlet-brand-group"><div class="outlet-brand-hd" style="color:${BMAP[brand]?.c||'#888'};border-color:${BMAP[brand]?.c||'#888'}">${logoImg(brand,16)}${esc(brand)}</div>
-      <table>${head}<tbody>${brandOutlets.map(n=>outletRow(n,brand)).join("")}</tbody></table></div>`;
-  }).join("");
-  return`<div class="sec-title">Outlet-Level Detail</div><div class="sec-sub">Organized one section per brand, both periods shown directly — the deepest level of this report</div>${sections}`;
+  return cmpConsecutivePairs(data).map(([prior,latest])=>{
+    const clrA=cmpClrFor(prior.key),clrB=cmpClrFor(latest.key);
+    const outletRow=(name,brand)=>{
+      const mL=cmpScopedMetrics(latest.cfg,brand,null,name),mP=cmpScopedMetrics(prior.cfg,brand,null,name);
+      return`<tr><td>${esc(name)}</td>
+        ${cmpPairedMetricCell(mP.sales,mL.sales,fmtAEDExact,true,clrA,clrB)}
+        ${cmpPairedMetricCell(mP.orders,mL.orders,v=>v.toLocaleString(),true,clrA,clrB)}
+        ${cmpPairedMetricCell(mP.aov,mL.aov,fmtAEDExact,true,clrA,clrB)}
+        ${cmpPairedMetricCell(mP.discBurn,mL.discBurn,fmtAEDExact,false,clrA,clrB)}
+        ${cmpPairedMetricCell(mP.contribution,mL.contribution,fmtAEDExact,true,clrA,clrB)}</tr>`;
+    };
+    if(brandCount<2){
+      const names=[...allOutlets];
+      return`<div class="sec-title">Outlet-Level Detail</div><div class="sec-sub">Every outlet active for ${esc(data[0].label)} — both periods shown directly</div>
+        <table>${head}<tbody>${names.map(n=>outletRow(n,null)).join("")}</tbody></table>`;
+    }
+    const brands=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.brand)))];
+    const sections=brands.map(brand=>{
+      // outlets that genuinely belong to this brand: check against raw records once, not per-row
+      const brandOutlets=[...new Set(cmpData({...latest.cfg,brands:new Set([brand])}).concat(cmpData({...prior.cfg,brands:new Set([brand])})).map(r=>r.branch).filter(b=>b!=="(brand-level)"))];
+      if(!brandOutlets.length)return"";
+      return`<div class="outlet-brand-group"><div class="outlet-brand-hd" style="color:${BMAP[brand]?.c||'#888'};border-color:${BMAP[brand]?.c||'#888'}">${logoImg(brand,16)}${esc(brand)}</div>
+        <table>${head}<tbody>${brandOutlets.map(n=>outletRow(n,brand)).join("")}</tbody></table></div>`;
+    }).join("");
+    return`<div class="sec-title">Outlet-Level Detail</div><div class="sec-sub">Organized one section per brand, both periods shown directly — the deepest level of this report</div>${sections}`;
+  }).join('<div style="page-break-before:always"></div>');
 }
 // v386: complete rewrite, per Nikhil's direct feedback that the old by-window list "doesn't
 // help in deciding anything." Now organized by brand, then platform, so the same combination
