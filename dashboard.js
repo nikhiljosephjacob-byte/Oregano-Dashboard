@@ -13,8 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-419";
+const BUILD_VERSION="2026-08-13-423";
 const BUILD_NOTES=[
+  "✨🐛 Merge, piece 4 (batch 4: comparison table + flags — the piece deliberately deferred from build 422) — plus a real wording bug caught and fixed in the standalone Forecaster while investigating it. Campaign Planner now has the full Orders Comparison table (current baseline vs prior week, last year same dates, and the most recent past campaign) and the flags panel (concurrent-campaign warnings, seasonality notes, missing-history warnings, salary-week mismatch), ported from campFcRun()/campFcHTML() reusing the exact same real functions — campFcCleanWindowSearch, campFcWeekOfMonthPos, campFcHasDiscDataForPeriod, campAnalysisV2 — rather than re-deriving any of this a second time. THE FIND: two of the Forecaster's own flag messages had gone stale the moment build 419 shipped — they said the baseline 'may include its own promo activity' and 'necessarily includes some level of concurrent promotion,' both written before 419 existed, when the baseline genuinely was a naive uncorrected window. Since 419, campFcBaseline() already excludes contaminated days itself — so a message implying the number above might still be dirty was actively misleading about a fix that had already shipped. Reworded both to reflect reality: the clean-window flag is now framed as an independent corroborating cross-check alongside an already-clean baseline, not the only honest option; the Keeta-specific flag now says the baseline already excludes what it could within a 90-day lookback but couldn't fully avoid overlap for that aggregator specifically. Fixed at the source, so both tools show the corrected wording, not just Planner's new copy. Verified end-to-end: campPlanCompute() now returns lyOrders/lyNet/lyHasDisc/pwOrders/pwNet/recCamp/cleanWindowCompare/weekOfMonthMismatch, checked against a real scenario with genuine last-year, prior-week, and historical-campaign data (caught and fixed a bug in my OWN test data along the way — an overly-long mock data loop was accidentally duplicating into the 'last year' comparison window, inflating it; not a bug in the actual code, confirmed by narrowing the test data and re-checking the number landed exactly on the expected value). Full page renders structurally balanced (189/189 divs) with the comparison table, all four comparison rows, and the flags panel all present and showing real data — and confirmed the corrected (not stale) flag wording made it through the port.",
+  "✨🐛 Merge, piece 3 of several (batch 3: results parity — Baseline explainer, Similar Campaigns, Export) — plus a real display-accuracy gap in the standalone Forecaster found and fixed along the way. (1) THE FIND: while porting 'How we got the baseline' into Campaign Planner, checked how the Forecaster's own version displays its window — it hardcoded 'latest, latest-29' for the date range shown to the user, completely independent of what campFcBaseline() actually uses internally after the build-419 contamination fix (which can skip contaminated days and extend the lookback further back, with gaps). The DISPLAY had quietly gone slightly inaccurate the moment 419 shipped — it could show a date range that doesn't match which days were really used. Fixed at the source: campFcBaseline() now returns the REAL window it used (windowStart/windowEnd = the actual earliest/latest clean dates, not a naive guess; excludedDays = how many calendar days in that span were skipped) so both tools can say so honestly — 'X days excluded (another campaign was running)' when that's genuinely true, nothing fabricated when it isn't. Fixed the Forecaster's own display too, not just Planner's new one. (2) Campaign Planner now has: the corrected Baseline explainer; Similar Campaigns as a real expandable match table (same match objects as the Forecaster — same campFcFindMatches/campFcFindBogoMatches/campFcFindSelectItemsMatches this already reuses — including the Before/During per-row breakdown, not a simplified static version); and its own Export (campPlanExport(), modeled on campFcExport()'s workbook structure but built from Planner's own native scenario fields rather than forcing Forecaster's different field names onto data that doesn't have them — and includes Break-even as its own row, which the standalone Forecaster's export never had since Forecaster doesn't compute a break-even target). Comparison table + flags (prior-week/last-year/recent-campaign comparisons) intentionally NOT included this round — they need real new computation logic in campPlanCompute() that doesn't exist yet, and rushing that into an already-large batch risked doing it carelessly; queued as its own next piece. (3) Caught and fixed a real bug before shipping, same class as build 409: fP (the percentage formatter) is locally-scoped inside campFcHTML() too, not global — used it while porting the match table without checking first. This time audited the ENTIRE campPlanHTML() function properly (full brace-counted extraction, every external identifier checked against its real definition) rather than assuming — confirmed everything else genuinely is global. Verified thoroughly: baselineMeta correctly detects a real contamination scenario (8 excluded days, window correctly extending back to compensate) with an exact hand-checked match; the full page renders structurally balanced both with the match row collapsed (163/163 divs, 1/1 details) and expanded (175/175 divs) with the Before/During breakdown showing; the export's row data was built end-to-end and checked cell-by-cell for undefined values — none found across both sheets.",
+  "✨ Merge, piece 2 of several (batch 2: form parity) — Campaign Planner now has the same Upcoming-campaign picker, Branches multi-select, Comments field, and brand×aggregator summary pill the standalone Forecaster already has. New campPlanApplyUpcoming() mirrors campFcApplyUpcoming() field-for-field (brand/agg/branches/dates/discount%/cap/co-fund/inferred type/comments), reusing the exact same real functions (parseCampComment, campFcInferType, campFcUpcomingCampaigns, campFcGetBranches) rather than re-deriving any of that logic a second time — only the destination state (campPlan* instead of campFc*) differs. Branches chips and the summary pill reuse the same bPill/aPill/campFcTypeLabel helpers the Forecaster's own form already uses, so they render identically. campPlanComments is now a real saved field too, flowing into the same Save payload from build 420 instead of the placeholder null it shipped with. Verified end-to-end: applying a real upcoming campaign correctly sets every field (brand, aggregator, both dates, inferred BOGO type, parsed 50-50 co-fund, comments text) and correctly forces a re-run; branch chips toggle correctly; the full page — both the pre-run form-only state and the full results state — renders structurally balanced (31/31 and 128/128 divs respectively) with the upcoming dropdown, comments field, summary pill, and branch chips all present and showing real data. Batch 3 (results parity — baseline explainer, Similar Campaigns, comparison table/flags, export) is next, as its own separately-tested piece.",
+  "✨ Merge, piece 1 of several — Campaign Planner now saves to the exact same Forecast History as the standalone Forecaster, per Nikhil's confirmed direction (shared history, sequential small builds rather than one large combined change). New campPlanSaveForecast() maps Planner's own per-day scenario shape (orders/contribDay/netSalesDay/brandFundDay) into the identical payload schema campFcSaveForecast() already sends — same /api/forecast/save endpoint, same field names — field-for-field equivalents computed from Planner's own numbers (totalOrders=orders×days, incrContribPerDay=contribDay-baseline.contribDay, roi=incremental contribution÷brand-funded discount, etc.), not a duplicate of the Forecaster's own internal math. This means campFcMatchActual() and campFcCalibrationBias() needed ZERO changes — a Planner-sourced save is indistinguishable from a Forecaster-sourced one to both, verified directly: built a real payload through the new function and confirmed the UNMODIFIED matching code correctly finds and pulls its real result. Campaign Planner's results page now also shows the shared Forecast History table directly (same campFcHistoryHTML(), not a duplicate), with a note clarifying it's shared between both tools. Verified end-to-end: full payload structure checked field-by-field (has scenarios.expected.upliftPct for calibration, brand/agg/dates for matching, discPct correctly nulled for BOGO/kept for menu, tagged source:'planner' for traceability), the shared-history cache invalidates correctly after a successful save so the next view refetches, and the full page renders structurally balanced (140/140 divs) with the save button, shared-history section, and an actual saved record all present and correct. First of several planned pieces closing the audit-table gap between Campaign Planner and the two standalone tools — remaining: form parity (Upcoming-campaign picker, Branches, Comments, brand×agg summary pill) and results parity (baseline explainer, Similar Campaigns, comparison table/flags, export), each to follow as its own tested batch.",
   "🐛 Real, confirmed baseline-contamination bug — Nikhil's own suspicion checked directly against the code rather than assumed, and it lines up almost exactly: modeling his real scenario (a genuine 1-8 Sep BOGO campaign for Lollorosso × Deliveroo, sitting inside the naive 30-day trailing window computed from a mid-September sync date) reproduces a baseline of ~81 orders/day from the OLD logic — the same number his real screenshot showed. Root cause: campFcBaseline() took a flat trailing 30-day window with no check for whether a DIFFERENT campaign was already running on any of those days, so a recent campaign's own uplift silently bled into the 'no campaign' reference point, while showing zero discount cost against it. campFcMomentum() (build 415) had the identical exposure for the same reason — a recent campaign inflating either half of its trailing comparison. Fixed both through one shared helper: new campFcContaminatedDates(brand,agg) marks every date this brand+aggregator had a REAL campaign running (any status except Upcoming, which hasn't happened yet and can't contaminate past data), and campFcCleanTrailingDates() scans backward skipping those days, extending the lookback as needed — capped at 90 days total so a very promo-heavy brand+aggregator doesn't silently reach back months; if even that isn't enough clean data, returns whatever it found rather than hanging or failing. campFcBaseline() and campFcMomentum() both now build their windows from clean dates only, changing only their date-selection logic — not their surrounding math. Verified directly against the modeled real scenario: contaminated-date detection correctly finds exactly the 8 real campaign days and no others; the clean baseline comes out to the true organic rate (60/day in the model) instead of the inflated ~81/day the old flat-window logic produces (matching Nikhil's real number almost exactly); momentum correctly reads as flat instead of showing a fake uptick from the same contaminated week. Also verified two edge cases: an Upcoming campaign correctly contaminates nothing, and a worst-case fully-contaminated 90-day lookback correctly returns fewer clean days rather than hanging.",
   "✨🐛 Four real, verified fixes to Campaign Planner in one pass. (1) Wired in the real BOGO/Select-Items historical discount lookup (campBeFindHistoricalDiscPerOrder, built in 406/407 for the standalone Break-Even Calculator) — Campaign Planner had been shipped without it (flagged as a known limitation back in build 408's own notes), meaning a BOGO forecast was modeling its discount cost as a flat % of the whole cart (e.g. 35% of AOV, ~AED 35/order) instead of what a real BOGO actually costs (giving away one item — verified against realistic numbers at ~AED 12.5/order). That overestimate was the direct cause of a Lollorosso BOGO forecast showing contribution collapsing at order counts real historical BOGO campaigns for that same brand+aggregator had never needed. Discount % now hides itself when a real match is found, exactly like the standalone tool. (2) Date inputs were missing color-scheme:dark — every other date input in this codebase already sets this (a real, established fix from build 365/366), Campaign Planner's just never got it, which is why its calendar icon rendered in the browser's default (invisible-on-dark) color. (3) Campaign Planner had no 'Back to campaigns' button — the shared toolBack element explicitly checked for only 'forecaster'/'breakeven', never added 'planner' to the list when the page was built. (4) Real, separately-caught bug: typing in the campaign search box froze after every character, requiring a re-click to continue. Root cause: campSetSearch() called the full renderCampaigns() on every keystroke, which replaces the entire page via innerHTML= — a brand-new DOM node for the search input each time, so the browser drops focus and cursor position after every character, and the full re-render itself is expensive enough to add visible lag on top. Fixed two ways: renderCampaigns() now captures the focused element's id+selection range before the innerHTML swap and restores both right after (fixes this for ANY text input on this page, not just search), and campSetSearch() itself is now debounced 180ms so a normal typing burst doesn't trigger the expensive re-render once per letter. Verified the BOGO fix directly: modeling the exact real numbers, break-even now needs ~90 orders/day instead of the ~180 the formula-based estimate had been demanding.",
   "🐛 Real, serious bug caught by Nikhil directly — a Lollorosso × Deliveroo BOGO forecast came back at +142% to +177% uplift, wildly above anything the brand has ever actually done, even in the Conservative case. Traced precisely: with no Lollorosso-specific calibration history yet, campFcCalibrationBias()'s fallback used to reach all the way to the WHOLE pooled history across every brand — which in practice meant Lollorosso silently inherited Oregano's own real +53pt correction (since virtually every saved forecast so far is for Oregano), on top of Lollorosso's own momentum adjustment. 'Oregano has been underestimated by 53 points' has no logical bearing on a completely different brand's forecast, and compounding it with momentum's own multiplier explains the gap between the reality-check match's own +57% and the wildly higher +142-177% shown as the actual scenarios. Fixed: fallback now stops at the BRAND boundary — same brand across any aggregator is a reasonable middle tier (aggregators within one brand plausibly share more in common than two unrelated brands do), but if even that doesn't meet the minimum sample size, calibration now returns null (no adjustment at all) rather than ever crossing into a different brand's numbers. Verified directly against the exact real scenario: reconstructed Nikhil's actual saved history (all Oregano) and confirmed a Lollorosso×Deliveroo request now correctly returns null instead of the leaked +53pts, while Oregano's own legitimate calibration is completely unaffected. Momentum was never the cross-brand culprit — it was already scoped per-brand+aggregator by construction — so this fix should be the full correction for what Nikhil saw. Also fixed a smaller, related display bug found in the same investigation: the reality-check banner showed '0% off' for BOGO historical matches, since BOGO campaigns don't carry a real discount percentage but the text always appended one regardless — now omitted entirely when there's no real percentage to show, for BOGO and any other non-percentage match type.",
@@ -13429,7 +13433,40 @@ function buildFcCalcTipHTML(sc,brand,agg,discPct,cap,coFundPct,dateStr){
 // CAMPAIGN FORECASTER  (v100)
 // ═══════════════════════════════════════════════════════════════════
 let campFcBrand='',campFcAgg='',campFcStart='',campFcEnd='';
-let campPlanBrand='',campPlanAgg='',campPlanStart='',campPlanEnd='',campPlanType='menu',campPlanDiscPct=30,campPlanCap=30,campPlanCoFund=false,campPlanCoFundPct=50,campPlanBranches=new Set(),campPlanResult=null;
+let campPlanBrand='',campPlanAgg='',campPlanStart='',campPlanEnd='',campPlanType='menu',campPlanDiscPct=30,campPlanCap=30,campPlanCoFund=false,campPlanCoFundPct=50,campPlanBranches=new Set(),campPlanResult=null,campPlanComments='';
+function campPlanToggleBranch(b){if(campPlanBranches.has(b))campPlanBranches.delete(b);else campPlanBranches.add(b);}
+let campPlanShowAllMatches=false,campPlanExpandedMatches=new Set();
+function campPlanToggleMatchExpand(idx){if(campPlanExpandedMatches.has(idx))campPlanExpandedMatches.delete(idx);else campPlanExpandedMatches.add(idx);renderCampaigns();}
+function campPlanMatchCriteriaLabel(){
+  if(campPlanType==='bogo')return'BOGO / free-item campaigns';
+  if(campPlanType==='selectItems')return campPlanDiscPct+'% off (select items) ±8%';
+  return campPlanDiscPct+'% off ±8% · cap AED '+campPlanCap+' ±6';
+}
+// v421: Batch 2 of the merge — form parity. Mirrors campFcApplyUpcoming() field-for-field
+// (brand/agg/branches/dates/discount%/cap/co-fund/type/comments), just writing to campPlan*
+// state instead of campFc*. Reuses the exact same real functions (parseCampComment,
+// campFcInferType) rather than re-deriving any of this logic a second time.
+function campPlanApplyUpcoming(idx){
+  const upcoming=campFcUpcomingCampaigns();
+  const c=upcoming[idx];
+  if(!c)return;
+  campPlanBrand=c.brand==='All Brands'?(BR[0]&&BR[0].n)||campPlanBrand:c.brand;
+  campPlanAgg=c.aggregator&&c.aggregator!=='All'?c.aggregator:campPlanAgg;
+  campPlanBranches=new Set();
+  campPlanStart=c.startDate;
+  campPlanEnd=c.endDate;
+  const hp=parseInt((`${c.name||''} ${c.comments||''}`.match(/(\d{1,3})\s*%/)||[])[1]||'0');
+  if(hp)campPlanDiscPct=hp;
+  const capM=(c.comments||'').match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i);
+  if(capM)campPlanCap=parseInt(capM[1]);
+  const parsed=parseCampComment(c);
+  if(parsed.coFundedPctOfDiscount!=null){campPlanCoFund=parsed.coFundedPctOfDiscount>0;campPlanCoFundPct=Math.round(parsed.coFundedPctOfDiscount*100)||campPlanCoFundPct;}
+  campPlanType=campFcInferType(c);
+  campPlanComments=c.comments||'';
+  campPlanResult=null;
+  renderCampaigns();
+}
+
 // v412: forecast calibration — learns from your own real forecast-vs-actual track record
 // instead of guessing at which structural variable (momentum, co-funding, trend) explains the
 // underestimation, per Nikhil's own diagnosis: every forecast so far has been beaten by the real
@@ -13536,6 +13573,55 @@ function campPlanRun(){
   if(!campPlanResult){alert('No sales data found for '+campPlanBrand+' on '+campPlanAgg+'. Upload data first.');return;}
   renderCampaigns();
 }
+let campPlanSaving=false,campPlanSaveMsg='';
+// v420: first piece of the Forecaster/Break-Even -> Campaign Planner merge — Save + Forecast
+// History, chosen to go first since it's what lets calibration start learning from Planner-run
+// forecasts too, per Nikhil's explicit confirmation this should be ONE shared history, not two.
+// Maps Planner's own per-day scenario shape (orders/contribDay/netSalesDay/brandFundDay) into the
+// exact same payload schema campFcSaveForecast() already sends, field for field, so
+// campFcHistoryHTML()/campFcMatchActual()/campFcCalibrationBias() all work identically regardless
+// of which tool produced the save — none of those three needed a single change.
+async function campPlanSaveForecast(){
+  if(!campPlanResult||campPlanSaving)return;
+  const sess=getActiveSession();
+  if(!sess||!sess.sessionId){campPlanSaveMsg='⚠ Not logged in — cannot save.';renderCampaigns();return;}
+  campPlanSaving=true;campPlanSaveMsg='';renderCampaigns();
+  const r=campPlanResult;
+  const nDays=r.nDays||1;
+  const trim=sc=>sc?{
+    upliftPct:sc.upliftPct,
+    totalOrders:sc.orders*nDays,
+    incrOrders:(sc.orders-r.baseline.orders)*nDays,
+    incrOrdersPerDay:sc.orders-r.baseline.orders,
+    campNet:sc.netSalesDay*nDays,
+    merchantDisc:sc.brandFundDay*nDays,
+    merchantDiscPerDay:sc.brandFundDay,
+    incrContrib:(sc.contribDay-r.baseline.contribDay)*nDays,
+    incrContribPerDay:sc.contribDay-r.baseline.contribDay,
+    roi:sc.brandFundDay>0?(sc.contribDay-r.baseline.contribDay)/sc.brandFundDay:null
+  }:null;
+  const closest=r.matches&&r.matches.length?r.matches[0]:null;
+  const payload={
+    brand:campPlanBrand,agg:campPlanAgg,discPct:campPlanType==='bogo'?null:campPlanDiscPct,cap:campPlanType==='menu'?campPlanCap:null,
+    type:campPlanType,comments:campPlanComments||null,
+    coFund:campPlanCoFund,coFundPct:campPlanCoFund?campPlanCoFundPct:null,
+    start:campPlanStart,end:campPlanEnd,branches:[...campPlanBranches],
+    baseline:{dailyOrders:r.baseline.orders,dailyNet:r.baseline.netSalesDay,grossAOV:r.grossAOV},
+    seasonality:{factor:r.seas?r.seas.factor:1,pct:r.seas?r.seas.pct:0,method:r.seas?r.seas.method:''},
+    scenarios:{conservative:trim(r.conservative),expected:trim(r.expected),optimistic:trim(r.optimistic)},
+    closestMatch:closest?{name:closest.c.name||closest.c.comments||null,startDate:closest.c.startDate,endDate:closest.c.endDate,upliftPct:closest.upliftPct,discountROI:closest.discountROI}:null,
+    matchCount:r.matches?r.matches.length:0,
+    algoVersion:BUILD_VERSION,
+    source:'planner'
+  };
+  try{
+    const res=await fetch('/api/forecast/save',{method:'POST',headers:{'Content-Type':'application/json','X-Session-Id':sess.sessionId},body:JSON.stringify(payload)});
+    const data=await res.json();
+    campPlanSaveMsg=res.ok?'✅ Saved':'⚠ '+(data.error||'Save failed');
+    if(res.ok)campFcHistory=null; // same shared history cache the Forecaster already uses
+  }catch(e){campPlanSaveMsg='⚠ Network error — save failed';}
+  campPlanSaving=false;renderCampaigns();
+}
 // v407: Campaign Planner page — shared input feeding campPlanCompute() (real historical uplift +
 // real per-brand/aggregator economics), rendered as an animated dual-panel chart (Orders/day,
 // Contribution/day) plus full P&L cards. Chart JS adapted from the reviewed mockup, with two
@@ -13545,14 +13631,29 @@ function campPlanRun(){
 function campPlanHTML(){
   const T=campTheme();
   const fA=v=>'AED '+Math.round(Math.abs(v)).toLocaleString();
+  // v422: fP is locally-scoped inside campFcHTML() too, not global — same class of gap as fA
+  // (build 409). Caught this time by testing before shipping rather than after.
+  const fP=v=>(v>=0?'+':'')+Math.round(v)+'%';
   if(!campPlanBrand&&BR&&BR[0])campPlanBrand=BR[0].n;
   if(!campPlanAgg)campPlanAgg='Talabat';
   const bOpts=BR.map(b=>`<option value="${b.n}"${b.n===campPlanBrand?' selected':''}>${b.n}</option>`).join('');
   const aOpts=AGGS.map(a=>`<option value="${a}"${a===campPlanAgg?' selected':''}>${a}</option>`).join('');
   const accent='#4ADE80';
 
+  const upcoming=campFcUpcomingCampaigns();
+  const upcomingDD=upcoming.length?`<select onchange="if(this.value!=='')campPlanApplyUpcoming(this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:7px;color:${T.text};padding:9px 11px;font-size:12px;font-weight:600;margin-bottom:12px">
+    <option value="">📅 Pull from an upcoming campaign…</option>
+    ${upcoming.map((c,i)=>`<option value="${i}">${esc(c.brand)} × ${esc(c.aggregator)} · ${esc(c.name||c.comments||'Campaign')} · ${fmtShort(c.startDate)}-${fmtShort(c.endDate)}</option>`).join('')}
+  </select>`:'';
+  const branches=campFcGetBranches(campPlanBrand,campPlanAgg);
+  const allSelected=campPlanBranches.size===0;
+  const branchChips=branches.map(b=>{const sel=allSelected||campPlanBranches.has(b);return`<span onclick="campPlanToggleBranch('${esc(b)}');campPlanResult=null;renderCampaigns()" style="display:inline-flex;align-items:center;gap:3px;font-size:11px;padding:2px 8px;border-radius:999px;cursor:pointer;margin:2px;border:0.5px solid ${sel?accent:T.border};background:${sel?accent+'18':'transparent'};color:${sel?accent:T.label}">${b}</span>`;}).join('');
+  const branchesBlock=branches.length?`<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:600;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">Branches <span style="font-weight:400;text-transform:none">(all selected by default · tap to deselect)</span></div>${branchChips}</div>`:'';
+  const summaryPill=(campPlanBrand&&campPlanAgg)?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:${T.panelBg};border-radius:6px;border:0.5px solid ${T.border}">`+bPill(campPlanBrand,22)+`<span style="font-size:12.5px;font-weight:700;color:${T.text}">${campPlanBrand}</span>`+`<span style="color:${T.label};font-size:12.5px">×</span>`+aPill(campPlanAgg,22)+`<span style="font-size:12.5px;font-weight:700;color:${T.text}">${campPlanAgg}</span>`+`<span style="font-size:10.5px;color:${T.muted};margin-left:4px">${campFcTypeLabel(campPlanType,campPlanDiscPct,campPlanCap)}${campPlanCoFund?' · '+campPlanCoFundPct+'% co-funded':''}</span></div>`:'';
+
   const form=`<div style="background:${T.panelBg};border:0.5px solid ${T.border};border-radius:12px;padding:16px 18px;margin-bottom:14px">
     <div style="display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;color:${accent};margin-bottom:12px">📋 Campaign details</div>
+    ${upcomingDD}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
       <div style="background:${T.rowBg};border-radius:10px;padding:14px 16px">
         <div style="font-size:11px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">🏷️ What &amp; when</div>
@@ -13560,10 +13661,11 @@ function campPlanHTML(){
           <div><div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;margin-bottom:4px">Brand</div><select onchange="campPlanBrand=this.value;campPlanResult=null;renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 9px;font-size:12px;font-weight:600">${bOpts}</select></div>
           <div><div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;margin-bottom:4px">Aggregator</div><select onchange="campPlanAgg=this.value;campPlanResult=null;renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 9px;font-size:12px;font-weight:600">${aOpts}</select></div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
           <div><div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;margin-bottom:4px">Start</div><input type="date" value="${campPlanStart}" onchange="campPlanStart=this.value;campPlanResult=null;renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 9px;font-size:12px;font-weight:600;color-scheme:${T.inputScheme}"></div>
           <div><div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;margin-bottom:4px">End</div><input type="date" value="${campPlanEnd}" onchange="campPlanEnd=this.value;campPlanResult=null;renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 9px;font-size:12px;font-weight:600;color-scheme:${T.inputScheme}"></div>
         </div>
+        <div><div style="font-size:9.5px;color:${T.muted};font-weight:700;text-transform:uppercase;margin-bottom:4px">Comments (optional)</div><textarea onchange="campPlanComments=this.value" placeholder="e.g. live in select locations only, or BOGO exclusive to Noon with no commission charged on these orders" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 8px;font-size:12px;min-height:40px;font-family:inherit;box-sizing:border-box;resize:vertical">${campPlanComments}</textarea></div>
       </div>
       <div style="background:${T.rowBg};border-radius:10px;padding:14px 16px">
         <div style="font-size:11px;font-weight:800;color:#F59E0B;text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">🎯 Deal terms</div>
@@ -13594,6 +13696,7 @@ function campPlanHTML(){
         </div>
       </div>
     </div>
+    ${summaryPill}${branchesBlock}
     <button onclick="campPlanRun()" style="margin-top:14px;width:100%;background:linear-gradient(135deg,${accent},#22C55E);border:none;border-radius:8px;color:#0B1220;padding:11px;font-size:13px;cursor:pointer;font-weight:800">▶ Run Combined Analysis</button>
   </div>`;
 
@@ -13690,7 +13793,141 @@ function campPlanHTML(){
   <div style="font-size:11.5px;font-weight:800;color:${T.muted};margin:14px 0 6px">💰 Contribution / day <span style="font-weight:400">— dashed line = baseline level</span></div>
   ${svgPanel('svgPlanContrib',156)}
   <div style="font-size:11px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.5px;margin:20px 0 8px">Full P&amp;L per category</div>
-  <div style="display:flex;gap:9px">${cards}</div>`;
+  <div style="display:flex;gap:9px">${cards}</div>
+  ${(()=>{
+    // v422 (batch 3): "How we got the baseline" — ported from the Forecaster, using the REAL
+    // clean window (post-419 contamination fix) rather than a naive latest/latest-29 guess.
+    const bm=r.baselineMeta;
+    const netAOV=r.baseline.orders>0?r.baseline.netSalesDay/r.baseline.orders:0;
+    const excludedNote=bm.excludedDays>0?` — ${bm.excludedDays} day${bm.excludedDays!==1?'s':''} excluded (another campaign was running)`:'';
+    return `<div style="margin:20px 0 8px">
+      <div style="font-size:11px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">How we got the baseline</div>
+      <div style="background:${T.rowBg};border:0.5px solid ${T.border};border-radius:10px;padding:14px 16px">
+        <div style="font-size:12px;color:${T.secondary};display:flex;align-items:center;gap:6px">${bPill(campPlanBrand,16)}${campPlanBrand}<span style="color:${T.muted}">×</span>${aPill(campPlanAgg,16)}${campPlanAgg}<span style="color:${T.muted};font-weight:400">— trailing ${bm.refDays} clean day${bm.refDays!==1?'s':''}</span></div>
+        <div style="font-size:11px;color:${T.muted};margin-top:2px">${bm.windowStart} – ${bm.windowEnd}${excludedNote}</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px">
+          <div style="background:${T.panelBg};border-radius:8px;padding:9px;text-align:center"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Avg orders/day</div><div style="font-size:15px;font-weight:800;color:${T.text};margin-top:3px">${Math.round(r.baseline.orders).toLocaleString()}</div></div>
+          <div style="background:${T.panelBg};border-radius:8px;padding:9px;text-align:center"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Net AOV</div><div style="font-size:15px;font-weight:800;color:${T.text};margin-top:3px">${fA(netAOV)}</div></div>
+          <div style="background:${T.panelBg};border-radius:8px;padding:9px;text-align:center"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Gross AOV</div><div style="font-size:15px;font-weight:800;color:${T.text};margin-top:3px">${fA(r.grossAOV)}</div></div>
+        </div>
+      </div>
+    </div>`;
+  })()}
+  ${(()=>{
+    // Similar campaigns — ported from the Forecaster, same match objects (r.matches comes from
+    // the exact same campFcFindMatches/campFcFindBogoMatches/campFcFindSelectItemsMatches this
+    // reuses), same expandable before/during row, collapsed by default.
+    if(!r.matches.length)return `<div style="font-size:11px;color:#F59E0B;padding:8px;background:rgba(245,158,11,.08);border-radius:6px;margin-bottom:10px">No exact matches — using fallback estimates. Consider selecting a comparable past campaign.</div>`;
+    const matchRows=r.matches.slice(0,campPlanShowAllMatches?r.matches.length:8).map((m,idx)=>{
+      const ic=m.discountROI!=null?(m.discountROI>=0?'#22C55E':'#EF4444'):T.muted;
+      const isOutlier=Math.abs(m.upliftPct||0)>=150;
+      const flagHTML=isOutlier
+        ?'<span style="font-size:8px;color:#EF4444;background:rgba(239,68,68,.1);padding:1px 5px;border-radius:4px;margin-left:4px">⚠ statistical outlier · excluded</span>'
+        :(m.isAtypical?'<span style="font-size:8px;color:#F59E0B;background:rgba(245,158,11,.1);padding:1px 5px;border-radius:4px;margin-left:4px">🎪 atypical event · down-weighted</span>':'');
+      const isOpen=campPlanExpandedMatches.has(idx);
+      const chev=`<span style="color:${T.muted};font-size:10px;transition:transform .15s;display:inline-block;transform:rotate(${isOpen?90:0}deg)">▶</span>`;
+      const row=`<div onclick="campPlanToggleMatchExpand(${idx})" style="cursor:pointer;display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr 0.3fr;gap:4px;padding:8px 0;border-bottom:0.5px solid ${T.border};font-size:13px;align-items:center${isOutlier?';opacity:.45':''}">`
+      +`<div style="color:${T.secondary}">${m.c.name||m.c.comments||'—'}${flagHTML}<div style="font-size:11px;color:${T.muted}">${m.c.startDate} – ${m.c.endDate}</div></div>`
+      +`<div style="color:${T.muted}">${m.cDays}d</div>`
+      +`<div style="color:${(m.upliftPct||0)>=0?'#16a34a':'#dc2626'};font-weight:600">${m.upliftPct!=null?fP(m.upliftPct):'—'}</div>`
+      +`<div style="color:${T.text}">${m.campOrdersPerDay!=null?Math.round(m.campOrdersPerDay).toLocaleString():'—'}</div>`
+      +`<div style="color:${T.text}">${m.campSalesPerDay!=null?fA(m.campSalesPerDay):'—'}</div>`
+      +`<div style="color:#F59E0B">${m.ourDiscPerDay!=null&&m.ourDiscPerDay>0?fA(m.ourDiscPerDay):'—'}</div>`
+      +`<div><span style="font-size:10px;font-weight:600;color:${ic}">${m.discountROI!=null?m.discountROI.toFixed(2)+'×':'—'}</span></div>`
+      +`<div style="text-align:right">${chev}</div>`
+      +'</div>';
+      const hasBeforeAfter=m.baseOrdersPerDay!=null&&m.baseAOV!=null&&m.campAOV!=null;
+      const detail=(isOpen&&hasBeforeAfter)?(()=>{
+        const col=(label,color,dateRange,opd,sales,aov)=>`<div><div style="font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:${color};margin-bottom:6px">${label}${dateRange?` — ${dateRange}`:''}</div>`
+          +`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:11.5px"><span style="color:${T.muted}">Orders/day</span><span style="font-weight:700;color:${T.text}">${Math.round(opd).toLocaleString()}</span></div>`
+          +`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:11.5px"><span style="color:${T.muted}">Sales/day</span><span style="font-weight:700;color:${T.text}">${fA(sales)}</span></div>`
+          +`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:11.5px"><span style="color:${T.muted}">AOV</span><span style="font-weight:700;color:${T.text}">${fA(aov)}</span></div></div>`;
+        return`<div style="padding:4px 0 12px;display:grid;grid-template-columns:1fr 1fr;gap:14px;background:${T.rowBg};border-radius:8px;padding:12px 14px;margin-bottom:6px">`
+          +col('Before',T.muted,m.bStart&&m.bEnd?`${fmtShort(m.bStart)}–${fmtShort(m.bEnd)}`:'',m.baseOrdersPerDay,(m.baseOrdersPerDay||0)*(m.baseAOV||0),m.baseAOV)
+          +col('During (campaign)',accent,`${fmtShort(m.c.startDate)}–${fmtShort(m.c.endDate)}`,m.campOrdersPerDay,m.campSalesPerDay,m.campAOV)
+          +`<div style="grid-column:1/3;text-align:center;font-size:11px;color:${T.muted};padding-top:6px;border-top:0.5px dashed ${T.border}">Uplift <strong style="color:${(m.upliftPct||0)>=0?'#16a34a':'#dc2626'}">${fP(m.upliftPct)}</strong> orders · <strong style="color:${ic}">${m.discountROI!=null?m.discountROI.toFixed(2)+'×':'—'} ROI</strong> on ${m.ourDiscPerDay!=null?fA(m.ourDiscPerDay*m.cDays):'—'} merchant discount</div>`
+          +'</div>';
+      })():'';
+      return row+detail;
+    }).join('');
+    return `<details style="margin:14px 0;border:0.5px solid ${T.border};border-radius:10px;overflow:hidden">
+      <summary style="cursor:pointer;padding:12px 14px;font-size:12px;font-weight:700;color:${T.secondary};list-style:none;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        ${bPill(campPlanBrand,20)}${aPill(campPlanAgg,20)}
+        <span style="background:rgba(34,197,94,.1);color:#16a34a;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">${r.matches.length} historical match${r.matches.length!==1?'es':''}</span>
+        <span style="font-size:10px;color:${T.muted}">used to build the scenarios above · click to view</span>
+      </summary>
+      <div style="padding:0 14px 14px">
+        <div style="font-size:10px;color:${T.muted};margin-bottom:6px">${campPlanMatchCriteriaLabel()} · <em style="opacity:.7">dimmed = statistical outlier · excluded</em></div>
+        <div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr 0.3fr;gap:4px;padding:5px 0;border-bottom:0.5px solid ${T.border};font-size:11px;font-weight:600;color:${T.muted};text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Days</div><div>Uplift</div><div>Orders/day</div><div>Sales/day</div><div>Disc/day</div><div>ROI</div><div></div></div>
+        ${matchRows}
+        ${r.matches.length>8?`<div onclick="campPlanShowAllMatches=!campPlanShowAllMatches;renderCampaigns()" style="cursor:pointer;font-size:11px;font-weight:700;color:#60A5FA;padding:8px 0 2px;text-align:center">${campPlanShowAllMatches?'↑ Show fewer':'Show all '+r.matches.length+' matches (used in the average below) →'}</div>`:''}
+      </div>
+    </details>`;
+  })()}
+  ${(()=>{
+    // v423 (batch 4): comparison table + flags — ported from the Forecaster, reusing the exact
+    // same fields campPlanCompute() now computes above (lyOrders/pwOrders/recCamp/
+    // cleanWindowCompare/weekOfMonthMismatch), same real functions (campAnalysisV2,
+    // campFcMatchCriteriaLabel-equivalent, campFcHasDiscDataForPeriod already reflected in
+    // r.lyHasDisc). Flag wording for the clean-window cross-check already reflects build 419's
+    // reality (baseline above is already contamination-excluded) since that fix landed in the
+    // shared source text before this port, not copied from the stale pre-419 version.
+    const fP=v=>(v>=0?'+':'')+Math.round(v)+'%';
+    const cmpRow=(label,ord,net,vs1Pct,vs1Label,vs2Pct,vs2Label,note='')=>{
+      const chip=(pct,lbl)=>pct!=null?`<span style="font-size:10px;background:${pct>=0?'rgba(34,197,94,.1)':'rgba(239,68,68,.1)'};color:${pct>=0?'#16a34a':'#dc2626'};padding:2px 8px;border-radius:999px;font-weight:600">${fP(pct)}</span><span style="font-size:11px;color:${T.muted};margin-left:4px">${lbl}</span>`:`<span style="color:${T.muted};font-size:10px">—</span>`;
+      return`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:9px 0;border-bottom:0.5px solid ${T.rowBg2};font-size:13px;align-items:center">`
+      +`<div style="color:${T.secondary};font-weight:600">${label}${note?`<div style="font-size:9px;color:${T.muted};font-weight:400">${note}</div>`:''}</div>`
+      +`<div style="color:${T.text}">${ord!=null?Math.round(ord).toLocaleString():'—'}</div>`
+      +`<div style="color:${T.text}">${net!=null?fA(net):'—'}</div>`
+      +`<div>${chip(vs1Pct,vs1Label)}</div>`
+      +`<div>${chip(vs2Pct,vs2Label)}</div>`
+      +'</div>';
+    };
+    const pctOf2=(b,a)=>a>0?(b/a-1)*100:null;
+    const baseOrd=r.baseline.orders,baseNet=r.baseline.netSalesDay;
+    const pwPct=r.pwOrders!=null?pctOf2(baseOrd,r.pwOrders):null;
+    const lyPct=r.lyOrders!=null?pctOf2(baseOrd,r.lyOrders):null;
+    const recA=r.recCamp?campAnalysisV2(r.recCamp):null;
+    const recOrd=recA?recA.cs.orders/recA.cDays:null;
+    const recNet=recA?recA.cs.sales/recA.cDays:null;
+    const recPct=recOrd!=null?pctOf2(baseOrd,recOrd):null;
+
+    const flags=[];
+    if(r.conc.length){flags.push({lvl:'warn',msg:`<strong>Concurrent campaign:</strong> "${r.conc[0].name||r.conc[0].comments||'—'}" overlaps this window on ${esc(campPlanBrand)} × ${esc(campPlanAgg)}. Forecast does not adjust for campaign-on-campaign dilution.`});}
+    if(!r.lyHasDisc){flags.push({lvl:'info',msg:`No discount data on record for ${fmtShort(r.lyStart)}–${fmtShort(r.lyEnd)} ${r.lyStart.slice(0,4)} yet. Year-over-year comparison shows sales only — no burn figures from that period to compare.`});}
+    if(r.seas&&r.seas.pct!==0){flags.push({lvl:'info',msg:`Seasonality correction applied: <strong>${r.seas.pct>0?'+':''}${r.seas.pct}%</strong> vs periods when historical matches ran (${r.matches.length} campaign${r.matches.length!==1?'s':''}).`});}
+    if(!r.matches.length){flags.push({lvl:'warn',msg:`No exact historical matches found for ${esc(campPlanBrand)} × ${esc(campPlanAgg)} at ${campPlanMatchCriteriaLabel()}. Fallback uplifts used. Find and select a comparable past campaign for better accuracy.`});}
+    if(r.cleanWindowCompare){
+      const cw=r.cleanWindowCompare;
+      flags.push({lvl:'info',msg:`<strong>Independent cross-check:</strong> ${fmtShort(cw.start)}–${fmtShort(cw.end)} (${cw.daysAgo} days ago) had no overlapping campaign for ${esc(campPlanBrand)} × ${esc(campPlanAgg)}. That period averaged <strong>${cw.dailyOrders.toFixed(0)} orders/day</strong>, ${fmtAED(cw.dailyNet)}/day net — a separate corroborating data point alongside the (already contamination-excluded) baseline above.`});
+    }else if(campPlanAgg==='Keeta'){
+      flags.push({lvl:'warn',msg:`<strong>No fully clean stretch found for Keeta</strong> even after extending the lookback. The baseline above already excludes whatever contaminated days it could within a 90-day lookback, but couldn't fully avoid overlap. Treat "uplift vs baseline" with that in mind.`});
+    }
+    if(r.weekOfMonthMismatch){flags.push({lvl:'info',msg:`<strong>Salary-week mismatch:</strong> this campaign falls in week ${r.weekOfMonthMismatch.campaign} of the month, while the baseline comparison window falls in week ${r.weekOfMonthMismatch.baseline}. Spending patterns can shift across the month — a real, checkable confound, not corrected numerically here.`});}
+
+    const flagsHTML=flags.map(f=>`<div style="display:flex;gap:8px;padding:8px 10px;background:${f.lvl==='warn'?'rgba(245,158,11,.08)':'rgba(96,165,250,.08)'};border-radius:6px;margin-bottom:6px;font-size:11.5px;color:${T.secondary};line-height:1.5"><span>${f.lvl==='warn'?'⚠️':'ℹ️'}</span><span>${f.msg}</span></div>`).join('');
+
+    return `<div style="margin:14px 0">
+      <div style="font-size:13px;font-weight:700;color:${T.secondary};margin-bottom:10px">Orders comparison · ${campPlanStart} – ${campPlanEnd} baseline vs comparable periods</div>
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:5px 0;border-bottom:0.5px solid ${T.border};font-size:11px;font-weight:600;color:${T.muted};text-transform:uppercase;letter-spacing:.5px"><div>Period</div><div>Avg orders/day</div><div>Avg net/day</div><div>vs prior week</div><div>vs last year</div></div>
+      ${cmpRow('Current baseline ('+r.baselineMeta.refDays+'d)',baseOrd,baseNet,pwPct,'vs prior wk',lyPct,'vs '+r.lyStart.slice(0,4))}
+      ${(()=>{const xOrd=r.expected.orders,xNet=r.expected.netSalesDay,xPct=pctOf2(xOrd,baseOrd);return`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:8px 0 8px 10px;border-bottom:0.5px solid #BFD8F7;font-size:11px;align-items:center;background:rgba(96,165,250,.07);border-left:3px solid #60A5FA;margin-left:-2px"><div style="color:#0C447C;font-weight:700">Expected forecast · campaign on<div style="font-size:11px;color:#185FA5;font-weight:400">Projected · ${campPlanStart} – ${campPlanEnd}</div></div><div style="font-size:13px;font-weight:700;color:#0C447C">${Math.round(xOrd).toLocaleString()}</div><div style="font-size:13px;font-weight:700;color:#0C447C">${fA(xNet)}</div><div>${xPct!=null?`<span style="font-size:10px;background:${xPct>=0?'rgba(34,197,94,.1)':'rgba(239,68,68,.1)'};color:${xPct>=0?'#16a34a':'#dc2626'};padding:1px 6px;border-radius:999px;font-weight:600">${fP(xPct)}</span> <span style="font-size:9px;color:${T.muted}">vs baseline</span>`:'—'}</div><div><span style="color:${T.muted};font-size:10px">—</span></div></div>`;})()}
+      ${r.pwOrders!=null?cmpRow('Prior week ('+subDays(campPlanStart,7)+' – '+subDays(campPlanStart,1)+')',r.pwOrders,r.pwNet,null,'',null,''):''}
+      ${recA!=null?cmpRow('Last campaign: '+(r.recCamp.name||r.recCamp.comments||'—').slice(0,30),recOrd,recNet,recPct,'vs baseline',null,'',r.recCamp.startDate+' – '+r.recCamp.endDate):''}
+      ${r.lyOrders!=null?cmpRow('Same dates, last year',r.lyOrders,r.lyNet,null,'',null,'',r.lyHasDisc?'':'Sales only · no discount data'):''}
+    </div>
+    ${flagsHTML?`<div style="margin-bottom:10px">${flagsHTML}</div>`:''}`;
+  })()}
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+    <button onclick="campPlanSaveForecast()" ${campPlanSaving?'disabled':''} style="background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.35);border-radius:6px;color:#60A5FA;padding:5px 14px;font-size:11px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px">${campPlanSaving?'Saving…':'📌 Save this forecast'}</button>
+    ${campPlanSaveMsg?`<span style="font-size:11px;color:${campPlanSaveMsg.startsWith('✅')?'#22C55E':'#EF4444'};align-self:center">${campPlanSaveMsg}</span>`:''}
+    <button onclick="campPlanExport()" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#16a34a;padding:5px 14px;font-size:11px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px">⬇ Export forecast + post-campaign tracker</button>
+  </div>
+  <div style="background:${T.panelBg};border:0.5px solid ${T.border};border-radius:12px;padding:14px 16px;margin-top:14px">
+    <div style="font-size:13px;font-weight:700;color:${T.text};margin-bottom:4px">📜 Forecast History</div>
+    <div style="font-size:10px;color:${T.muted};margin-bottom:8px">Every saved forecast, compared against the real campaign once one matching those parameters actually runs — shared with the Campaign Forecaster, regardless of which tool a given forecast was saved from.</div>
+    ${campFcHistoryHTML()}
+  </div>`;
 }
 
 // v411: real architecture bug — a <script> tag inserted via element.innerHTML is inert; browsers
@@ -13996,7 +14233,15 @@ function campFcBaseline(brand,agg,branches,days){
   const tOrd=recs.reduce((s,r)=>s+r.orders,0);
   const tDisc=recs.reduce((s,r)=>s+(r.disc||0),0);
   const tGross=tNet+tDisc;
-  return{dailyNet:tNet/nDays,dailyOrders:tOrd/nDays,dailyGross:tGross/nDays,grossAOV:tOrd>0?tGross/tOrd:0,netAOV:tOrd>0?tNet/tOrd:0,refDays:nDays};
+  // v422: window metadata for honest display — cleanDates is collected newest-first by
+  // campFcCleanTrailingDates, so [0] and [last] are the actual most-recent/oldest days USED,
+  // which can differ from a naive "latest, latest-29" range whenever contaminated days were
+  // skipped and the lookback had to extend further back to compensate. excludedDays is how many
+  // calendar days within that span were skipped, so "How we got the baseline" can say so
+  // explicitly instead of implying every day in the range was used.
+  const windowEnd=cleanDates[0],windowStart=cleanDates[cleanDates.length-1];
+  const excludedDays=Math.max(0,daysBetweenInclusive(windowStart,windowEnd)-cleanDates.length);
+  return{dailyNet:tNet/nDays,dailyOrders:tOrd/nDays,dailyGross:tGross/nDays,grossAOV:tOrd>0?tGross/tOrd:0,netAOV:tOrd>0?tNet/tOrd:0,refDays:nDays,windowStart,windowEnd,excludedDays};
 }
 
 
@@ -14663,8 +14908,42 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
     return Object.assign(pnlAt(orders,false),{upliftPct:uplift*100});
   }
 
+  // v423 (batch 4): comparison-table + flags data — ported from campFcRun(), reusing the exact
+  // same real functions (campFcCleanWindowSearch, campFcWeekOfMonthPos, campFcHasDiscDataForPeriod,
+  // campAnalysisV2) rather than re-deriving any of this a second time. Only the source of
+  // brand/agg/dates/branches differs (this function's own parameters instead of campFc* globals).
+  const lyStart=(parseInt(start.slice(0,4))-1)+start.slice(4);
+  const lyEnd=(parseInt(end.slice(0,4))-1)+end.slice(4);
+  const lyRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date>=lyStart&&r.date<=lyEnd&&r.branch!=='(brand-level)'&&(branches.size===0||branches.has(r.branch)));
+  const lyDays=[...new Set(lyRecs.map(r=>r.date))].length||1;
+  const pwEnd=subDays(start,1),pwStart=subDays(pwEnd,6);
+  const pwRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date>=pwStart&&r.date<=pwEnd&&r.branch!=='(brand-level)'&&(branches.size===0||branches.has(r.branch)));
+  const pwDays=[...new Set(pwRecs.map(r=>r.date))].length||1;
+  const recCamp=campLoaded?[...campaignData].filter(c=>campStatus(c)==='Completed'&&c.brand===brand&&c.aggregator===agg).sort((a,b)=>b.endDate.localeCompare(a.endDate))[0]:null;
+  const conc=campLoaded?campaignData.filter(c=>{const st=campStatus(c);if(st==='Cancelled')return false;if(c.brand!==brand||c.aggregator!==agg)return false;return c.startDate<=end&&c.endDate>=start;}):[];
+  const cleanWindow=campFcCleanWindowSearch(brand,agg,branches,nDays,start);
+  let cleanWindowCompare=null;
+  if(cleanWindow){
+    const cwRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date>=cleanWindow.start&&r.date<=cleanWindow.end&&r.branch!=='(brand-level)'&&(branches.size===0||branches.has(r.branch)));
+    const cwDays=[...new Set(cwRecs.map(r=>r.date))].length||1;
+    if(cwRecs.length){
+      cleanWindowCompare={start:cleanWindow.start,end:cleanWindow.end,dailyOrders:cwRecs.reduce((s,r)=>s+r.orders,0)/cwDays,dailyNet:cwRecs.reduce((s,r)=>s+r.sales,0)/cwDays,daysAgo:daysBetweenInclusive(cleanWindow.end,start)};
+    }
+  }
+  const campWeekPos=campFcWeekOfMonthPos(start);
+  const baselineWeekPos=campFcWeekOfMonthPos(subDays(start,28));
+  const weekOfMonthMismatch=campWeekPos!==baselineWeekPos?{campaign:campWeekPos,baseline:baselineWeekPos}:null;
+
   return{
     grossAOV,commRate,foodRate,nDays,matches,seas,calib,mom,histMatch,
+    baselineMeta:{windowStart:baseline.windowStart,windowEnd:baseline.windowEnd,excludedDays:baseline.excludedDays,refDays:baseline.refDays},
+    lyOrders:lyRecs.length?lyRecs.reduce((s,r)=>s+r.orders,0)/lyDays:null,
+    lyNet:lyRecs.length?lyRecs.reduce((s,r)=>s+r.sales,0)/lyDays:null,
+    lyHasDisc:campFcHasDiscDataForPeriod(brand,agg,lyStart,lyEnd),
+    lyStart,lyEnd,
+    pwOrders:pwRecs.length?pwRecs.reduce((s,r)=>s+r.orders,0)/pwDays:null,
+    pwNet:pwRecs.length?pwRecs.reduce((s,r)=>s+r.sales,0)/pwDays:null,
+    recCamp,conc,cleanWindowCompare,weekOfMonthMismatch,
     baseline:Object.assign(pnlAt(baselineOrders,true),{upliftPct:0}),
     conservative:scenarioAt(cU),
     expected:scenarioAt(eU),
@@ -15045,6 +15324,55 @@ function campFcExport(){
 
 function bPill(brand,sz=20){const clr=BMAP[brand]?.c||'#888';return`<span style="display:inline-flex;align-items:center;justify-content:center;width:${sz}px;height:${sz}px;border-radius:5px;background:${clr}22;border:1px solid ${clr}55;font-size:${Math.round(sz*.55)}px;font-weight:800;color:${clr};flex-shrink:0">${brand.slice(0,1)}</span>`;}
 function aPill(agg,sz=20){const clr=AC[agg]||'#888';return`<span style="display:inline-flex;align-items:center;justify-content:center;width:${sz}px;height:${sz}px;border-radius:5px;background:${clr}22;border:1px solid ${clr}55;font-size:${Math.round(sz*.55)}px;font-weight:800;color:${clr};flex-shrink:0">${agg.slice(0,1)}</span>`;}
+// v422 (batch 3): Campaign Planner's own export — modeled on campFcExport()'s workbook structure
+// (same load-XLSX-from-CDN pattern, same two-sheet shape), but built from Planner's OWN native
+// per-scenario fields (grossDay/netSalesDay/contribDay/brandFundDay) rather than forcing
+// Forecaster's different field names onto data that doesn't have them (effDisc/incrNet don't
+// exist on Planner's scenario objects, and fabricating them would mean exporting numbers nobody
+// actually computed). Includes Break-even as its own row — real information Planner has that the
+// standalone Forecaster's export never did, since Forecaster doesn't compute a break-even target.
+function campPlanExport(){
+  if(!campPlanResult)return;
+  const r=campPlanResult;const fA=v=>Math.round(v);
+  const load=(src,cb)=>{if(window.XLSX){cb();return;}const s=document.createElement('script');s.src=src;s.onload=cb;document.head.appendChild(s);};
+  load('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',()=>{
+    const wb=XLSX.utils.book_new();
+    const scenarios=[
+      ['Baseline',r.baseline],['Conservative',r.conservative],['Expected',r.expected],
+      ['Break-even',r.breakEven||r.baseline],['Optimistic',r.optimistic]
+    ];
+    const f1=[
+      ['CAMPAIGN PLANNER RECORD','','','','Generated:',new Date().toISOString()],[''],
+      ['CONFIGURATION',''],
+      ['Brand',campPlanBrand],['Aggregator',campPlanAgg],['Start Date',campPlanStart],['End Date',campPlanEnd],
+      ['Duration (days)',r.nDays],['Structure',campPlanType],
+      ['Discount %',campPlanType==='bogo'?'n/a (real historical avg used)':campPlanDiscPct],['Cap AED',campPlanType==='menu'?campPlanCap:'n/a'],
+      ['Co-funded',campPlanCoFund?'Yes':'No'],['Co-fund %',campPlanCoFund?campPlanCoFundPct:'n/a'],
+      ['Branches',campPlanBranches.size?[...campPlanBranches].join(', '):'All'],[''],
+      ['BASELINE',''],
+      ['Window',r.baselineMeta.windowStart+' – '+r.baselineMeta.windowEnd+' ('+r.baselineMeta.refDays+' clean days'+(r.baselineMeta.excludedDays>0?', '+r.baselineMeta.excludedDays+' excluded':'')+')'],
+      ['Daily avg orders',r.baseline.orders.toFixed(1)],
+      ['Gross AOV','AED '+fA(r.grossAOV)],[''],
+      ['REAL ECONOMICS USED',''],
+      ['Commission rate',(r.commRate*100).toFixed(0)+'%'],['Food+Pkg rate',(r.foodRate*100).toFixed(0)+'%'],
+      ['Real historical discount lookup',r.histMatch?('YES — AED '+r.histMatch.avgDiscPerOrder.toFixed(0)+'/order from '+r.histMatch.matchCount+' real past campaigns'):'No (formula-based estimate used)'],
+      [''],
+      ['SCENARIOS','Orders/day','Uplift %','Gross Sales/day','Discount Total/day','Brand Funded/day','Net Sales/day','Net Contribution/day'],
+      ...scenarios.map(([name,sc])=>[name,fA(sc.orders),sc.upliftPct!=null?fA(sc.upliftPct):'—',fA(sc.grossDay),fA(sc.discTotalDay||0),fA(sc.brandFundDay||0),fA(sc.netSalesDay),fA(sc.contribDay)]),
+      [''],
+      ['POST-CAMPAIGN ACTUALS (fill in after campaign ends)','Orders/day','Uplift %','Net Contribution/day','ACTUAL orders/day','ACTUAL contribution/day'],
+      ...scenarios.map(([name,sc])=>[name,fA(sc.orders),sc.upliftPct!=null?fA(sc.upliftPct):'—',fA(sc.contribDay),'','']),
+    ];
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(f1),'Planner');
+    const f2=[['Historical Matches Used','','','','',''],
+      ['Campaign Name','Dates','Days','Disc %','Cap','Uplift %','Contribution/day','ROI'],
+      ...r.matches.map(m=>[m.c.name||m.c.comments||'—',m.c.startDate+' – '+m.c.endDate,m.cDays,m.discPct,m.cap||'—',m.upliftPct!=null?fA(m.upliftPct):'n/a',m.incrContribPerDay!=null?fA(m.incrContribPerDay):'n/a',m.discountROI!=null?m.discountROI.toFixed(2)+'×':'n/a'])
+    ];
+    if(r.matches.length)XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(f2),'Historical Matches');
+    XLSX.writeFile(wb,`Planner_${campPlanBrand}_${campPlanAgg}_${campPlanStart}.xlsx`);
+  });
+}
+
 // v364: Campaign Break-Even Calculator — full tool rendering function.
 // Baseline is auto-built from allData (prior week + same days last month, averaged), so the user
 // never has to type historical numbers by hand. Comparison dates are auto-filled from the campaign
@@ -15673,13 +16001,15 @@ function campFcHTML(){
     if(!r.lyHasDisc){flags.push({lvl:'info',msg:`No discount data on record for ${fmtShort(r.lyStart)}–${fmtShort(r.lyEnd)} ${r.lyStart.slice(0,4)} yet. Year-over-year comparison shows sales only — no burn figures from that period to compare.`});}
     if(r.seasonality.pct!==0){flags.push({lvl:'info',msg:`Seasonality correction applied: <strong>${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong> vs periods when historical matches ran (${r.matches.length} campaign${r.matches.length!==1?'s':''}).`});}
     if(!r.matches.length){flags.push({lvl:'warn',msg:`No exact historical matches found for ${r.brand} × ${r.agg} at ${campFcMatchCriteriaLabel()}. Fallback uplifts used: conservative 10%, expected 20%, optimistic 35%. Find and select a comparable past campaign for better accuracy.`});}
-    // v154: genuine clean-baseline comparison, when one exists. Doesn't change the scenario
-    // numbers above — surfaces what a real campaign-free period actually shows, next to them.
+    // v154: genuine clean-baseline comparison, when one exists. v423: reworded — since build 419,
+    // campFcBaseline() ITSELF already excludes contaminated days from the baseline above (not a
+    // naive flat window anymore), so this is an independent corroborating cross-check now, not
+    // "the only honest option because the number above might be dirty" the way it read before.
     if(r.cleanWindowCompare){
       const cw=r.cleanWindowCompare;
-      flags.push({lvl:'info',msg:`<strong>Genuinely clean baseline found:</strong> ${fmtShort(cw.start)}–${fmtShort(cw.end)} (${cw.daysAgo} days ago) had no overlapping campaign for ${r.brand} × ${r.agg}. That period averaged <strong>${cw.dailyOrders.toFixed(0)} orders/day</strong>, ${fmtAED(cw.dailyNet)}/day net — worth comparing against the baseline above, which may include its own promo activity.`});
+      flags.push({lvl:'info',msg:`<strong>Independent cross-check:</strong> ${fmtShort(cw.start)}–${fmtShort(cw.end)} (${cw.daysAgo} days ago) had no overlapping campaign for ${r.brand} × ${r.agg}. That period averaged <strong>${cw.dailyOrders.toFixed(0)} orders/day</strong>, ${fmtAED(cw.dailyNet)}/day net — a separate corroborating data point alongside the (already contamination-excluded) baseline above.`});
     }else if(r.agg==='Keeta'){
-      flags.push({lvl:'warn',msg:`<strong>No clean baseline exists for Keeta.</strong> Checked as far back as the data goes — Keeta has run a campaign on the vast majority of its live days for this brand, with no multi-day gap found. The baseline above necessarily includes some level of concurrent promotion; treat "uplift vs baseline" with that in mind.`});
+      flags.push({lvl:'warn',msg:`<strong>No fully clean stretch found for Keeta</strong> even after extending the lookback. Keeta has run a campaign on the vast majority of its live days for this brand — the baseline above already excludes whatever contaminated days it could within a 90-day lookback, but couldn't fully avoid overlap. Treat "uplift vs baseline" with that in mind.`});
     }
     // v154: salary-week mismatch — doesn't correct the numbers (no validated correction factor
     // exists), just flags a real, checkable confound between the campaign and its comparison
@@ -15784,16 +16114,17 @@ function campFcHTML(){
     +scCard('Expected',r.expected,true,'expected')
     +scCard('Optimistic',r.optimistic,false,'optimistic')
     +'</div>'
-    // 2. How we got the baseline — real fields campFcBaseline() already returns (dailyOrders,
-    // netAOV, grossAOV, refDays), plus the exact same 30-day window campFcBaseline() itself uses
-    // (latest, subDays(latest,29)) reconstructed here for display only — no new computation.
+    // 2. How we got the baseline — real fields campFcBaseline() already returns, including (as of
+    // v422) the ACTUAL clean window used, not a naive latest/latest-29 guess — those can now
+    // differ whenever contaminated days were skipped and the lookback extended to compensate.
     +(()=>{
-      const baseEnd=latest,baseStart=subDays(latest,29);
+      const baseEnd=r.baseline.windowEnd||latest,baseStart=r.baseline.windowStart||subDays(latest,29);
+      const excludedNote=r.baseline.excludedDays>0?` — ${r.baseline.excludedDays} day${r.baseline.excludedDays!==1?'s':''} excluded (another campaign was running)`:'';
       return`<div style="margin-bottom:14px">
         <div style="font-size:11px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">How we got the baseline</div>
         <div style="background:${T.rowBg};border:0.5px solid ${T.border};border-radius:10px;padding:14px 16px">
-          <div style="font-size:12px;color:${T.secondary};display:flex;align-items:center;gap:6px">${bPill(r.brand,16)}${r.brand}<span style="color:${T.label}">×</span>${aPill(r.agg,16)}${r.agg}<span style="color:${T.label};font-weight:400">— trailing 30 days</span></div>
-          <div style="font-size:11px;color:${T.muted};margin-top:2px">${baseStart} – ${baseEnd} (${r.baseline.refDays} day${r.baseline.refDays!==1?'s':''} with data)</div>
+          <div style="font-size:12px;color:${T.secondary};display:flex;align-items:center;gap:6px">${bPill(r.brand,16)}${r.brand}<span style="color:${T.label}">×</span>${aPill(r.agg,16)}${r.agg}<span style="color:${T.label};font-weight:400">— trailing ${r.baseline.refDays} clean day${r.baseline.refDays!==1?'s':''}</span></div>
+          <div style="font-size:11px;color:${T.muted};margin-top:2px">${baseStart} – ${baseEnd}${excludedNote}</div>
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px">
             <div style="background:${T.panelBg};border-radius:8px;padding:9px;text-align:center"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Avg orders/day</div><div style="font-size:15px;font-weight:800;color:${T.text};margin-top:3px">${Math.round(r.baseline.dailyOrders).toLocaleString()}</div></div>
             <div style="background:${T.panelBg};border-radius:8px;padding:9px;text-align:center"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Net AOV</div><div style="font-size:15px;font-weight:800;color:${T.text};margin-top:3px">${fA(r.baseline.netAOV)}</div></div>
