@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-430";
+const BUILD_VERSION="2026-08-13-431";
 const BUILD_NOTES=[
+  "🐛 Real root cause found and fixed for the discount discrepancy Nikhil traced across three builds (429, 430) — a genuine, confirmed bug, not a data-entry issue. Build 430's diagnostic log showed the raw per-day discount entries summing to exactly AED 20+1+60=81, matching Nikhil's real sheet total precisely — confirming the DATA itself was never wrong, and pointing squarely at allocateCampaignDiscount()'s own sales-weighted split. Found it: that function's own design comment explicitly states 'Solo campaign edge case: union = just my branches → my share = 100% of day's discount' — but the actual code computed brandTotalSales as the sum across the brand's ENTIRE outlet list (all 14 Oregano×Noon outlets), not the 'union of campaign-covered branches' the comment describes as correct. For this real campaign — confirmed solo, no other Oregano×Noon campaign running concurrently — that meant a genuinely 100%-owned AED 81 discount got diluted down to just the AUH outlets' small share of TOTAL brand sales (AED 3.84), even though there was no other campaign to share it with. Verified the exact mechanism with realistic sales figures before touching anything: the buggy formula reproduces AED 3.82 (matching the reported 3.84almost exactly), the fixed formula reproduces exactly AED 81. Fixed by changing the denominator to the sales across myBranches plus any OTHER non-overlapping campaigns' own branches actually running that same day — genuinely competing claims on the same discount pool — instead of every outlet in the brand, campaign or no campaign. Verified this doesn't regress the common case: a brand-wide ('All') campaign already has myBranches equal to every outlet, so its covered scope is unchanged either way (still gets 100% as before); and verified a genuine two-concurrent-outlet-scoped-campaigns scenario now correctly splits the discount between just those two campaigns' own outlets, excluding outlets with no campaign running at all — matching the function's own documented design intent exactly, for the first time. Also preserved (build 430's) rawDisc field through parsing as a secondary safeguard, and left both diagnostic logs in place for this build so Nikhil can directly confirm the campaign now reads AED 81 before they get cleaned up in a later pass.",
   "🔍 Second diagnostic pass on the discount discrepancy, now with a specific, high-confidence hypothesis. Build 429's log confirmed the allocation logic itself is reading real per-branch data correctly (allocatedDisc, rawCampDisc, and rawSumDisc all matched exactly at 3.84) — meaning the bug, if there is one, has to be upstream, in how the raw sheet gets parsed into daily records in the first place. Traced parseBrand()'s 'hybrid discount model' (v083) — it decides per (aggregator, date) whether a Disc entry is 'per-outlet' (2+ outlets with different non-zero values, used directly) or 'brand-level' (one total, spread proportionally by sales across ALL outlets for that brand+aggregator). Hypothesis: this campaign is scoped to just 3 of Oregano's many Noon outlets (Al Forsan, Al Reem, Al Reef). On a day where only ONE of those 3 has a non-zero redemption — plausible for a narrow, new-customers-only promo with sparse daily redemptions — the '2+ outlets' threshold for per-outlet detection fails, so it gets misclassified as a brand-level total and spread across EVERY Oregano×Noon outlet dashboard-wide (Dubai included), not just the 3 AUH ones the discount actually belongs to — diluting a real, concentrated AED 81 into a tiny fraction landing back on AUH specifically. This is a real, plausible failure mode for any campaign scoped to a small subset of outlets, not something specific to this one campaign — which is exactly the systemic risk Nikhil was worried about. Added a second, tightly-gated diagnostic (Oregano/Noon/these exact 3 dates only, so it can't spam the console for anything else this function processes) that logs the raw per-outlet Disc entries for each day and which format got chosen, plus the resulting brandTotal when format A fires. This will either confirm the hypothesis outright (format A firing with a single small entry, and no genuine brand-wide promo actually running that day) or rule it out cleanly — next step is Nikhil reloading the campaign detail view once more and sharing the new [DISC-FORMAT] console lines.",
   "🔍 Diagnostic build for the real discount discrepancy Nikhil reported (sheet shows AED 81 for a real campaign — Oregano × Noon, AUH Locations only, 40% OFF CAP 20, New Customers Only, 11-16 Sep — but the dashboard's own campaign P&L showed AED 4). Traced this by hand as far as static code reading allows before adding instrumentation: (1) ruled out the overlap-detection guard in allocateCampaignDiscount() as the cause — it only fires when another campaign shares the SAME brand+aggregator, and checking Nikhil's real Campaign Activations screenshot confirms no other Oregano×Noon campaign exists in this window to trigger it; (2) verified campOutlets()'s branch-scope resolution for 'AUH Locations only' looks structurally correct — it strips the qualifier words down to the bare 'auh' keyword and resolves against AUH_OUTLETS (Al Forsan, Al Reem, Reem Island, WTC, Al Reef), which are genuinely Abu Dhabi outlets, exactly matching the code's own documented test case for this pattern. Neither hypothesis panned out on paper, and there's no special-casing anywhere in the discount pipeline for 'New Customers Only' campaigns specifically (confirmed directly — no new-user/FTU-restriction logic exists in campAnalysisV2 or allocateCampaignDiscount at all), which may be its own separate gap. Rather than keep guessing at a root cause this consequential, added a new diagnostic log (gated to only branch-scoped campaigns, so it doesn't spam the console for the common 'All locations' case) that surfaces exactly what this function computes for a real campaign: the resolved outlet set, whether the exact-data or sales-weighted-estimate path ran, the computed allocatedDisc, whether overlap fired, and the raw pre-correction discount figures. Opening this specific campaign's detail view will now print a [DISC-ALLOC] line with the real numbers — next step is Nikhil sharing that console output so the actual failure point can be pinpointed precisely instead of reasoned about in the abstract.",
   "🐛 Real bug in the Compare report, confirmed directly from an actual exported PDF Nikhil shared — selecting 3 date ranges silently dropped the earliest one from every deep-dive section. Root cause: cmpFullMetricsTable (Brand Comparison, Platform Comparison) and cmpReportOutletDetail all independently derived their 'prior'/'latest' periods by just grabbing the LAST TWO entries of the full selected-periods array (data[data.length-1]/data[data.length-2]) — correct for the common 2-period case, but silently discarding every earlier period the moment 3+ were selected. The Executive Summary never had this problem, because it already uses the right pattern (data.map((d,i)=>i>0?[data[i-1],d]:null) — every period compared against the one immediately before it). The deep-dive sections just never got the same treatment. Fixed by extracting that exact convention into a new shared cmpConsecutivePairs(data) helper, and having all three functions loop over every consecutive pair instead of computing just one — a 2-period scope still produces exactly one comparison section (unchanged, verified), a 3-period scope now produces two (Feb-vs-Aug, then Aug-vs-Sep, each getting its own table + pie/bar charts), each pair page-broken from the next. Verified directly against the real scenario from Nikhil's PDF: reconstructed his exact 3 periods and confirmed all three date labels now appear across the Brand Comparison sections (previously only 2 of 3 did), with exactly 2 comparison tables generated as expected — one per real transition, nothing silently dropped.",
@@ -4312,15 +4313,19 @@ function parseBrand(csv,brand){
     // Per-outlet detection: 2+ outlets with DIFFERENT non-zero values (ignoring summary row)
     const isPerOutlet=nonZeroOutlet.length>=2&&uniqueOutletValues.size>=2;
 
-    // v430: targeted diagnostic — Nikhil's real, confirmed discrepancy (AED 81 real vs AED 3.84
-    // computed, same exact 3-day window, same 3 AUH outlets) for a campaign scoped to just 3 of
-    // Oregano's many Noon outlets. Hypothesis: on a day where only ONE of those 3 outlets has a
-    // non-zero redemption, isPerOutlet's ">=2 outlets" threshold fails, the entry gets treated as
-    // a brand-level total, and gets spread proportionally by sales across EVERY Oregano×Noon
-    // outlet (Dubai-wide too) instead of staying within the campaign's own 3-outlet scope —
-    // diluting a real, concentrated AUH discount into a tiny fraction landing back on AUH.
-    // Gated tightly (Oregano, Noon, these exact 3 dates only) so this can't spam the console for
-    // every brand/aggregator/date this function processes.
+    // v431: real bug confirmed by Nikhil's own diagnostic log — a genuine, concentrated AED 81
+    // discount (20+1+60 across 3 days, exactly matching his sheet total) landed on only ONE
+    // outlet each day (varying: Al Reem, then Marina, then Al Reem again), so the ">=2 outlets"
+    // per-outlet threshold failed every single day, misclassifying each as a brand-level total
+    // and spreading it across EVERY Oregano×Noon outlet dashboard-wide — diluting a real,
+    // narrow-scope discount down to a tiny fraction (AED 3.84) landing back on the 3 outlets it
+    // actually belonged to. Preserving the RAW, pre-spread per-outlet value here (rawDisc) so a
+    // campaign scoped to specific outlets can use the real recorded value directly instead of the
+    // diluted spread-share — without touching the spread logic itself, which is still correct for
+    // genuinely brand-wide promotions recorded as a single total on one row.
+    const rawDiscByBranch={};
+    outletEntries.forEach(e=>{rawDiscByBranch[e.branch]=(rawDiscByBranch[e.branch]||0)+e.disc;});
+
     const [_dgAgg,_dgDate]=dk2.split("|");
     if(brand==='Oregano'&&_dgAgg==='Noon'&&['2026-09-11','2026-09-12','2026-09-13'].includes(_dgDate)){
       console.log(`[DISC-FORMAT] Oregano/Noon/${_dgDate}: outletEntries=${JSON.stringify(outletEntries)} isPerOutlet=${isPerOutlet} (nonZeroOutlet=${nonZeroOutlet.length}, uniqueVals=${uniqueOutletValues.size})`);
@@ -4332,11 +4337,11 @@ function parseBrand(csv,brand){
       const discByBranch={};
       nonZeroOutlet.forEach(e=>{discByBranch[e.branch]=(discByBranch[e.branch]||0)+e.disc;});
       if(group){
-        group.recs.forEach(r=>{r.disc=discByBranch[r.branch]||0;});
+        group.recs.forEach(r=>{r.disc=discByBranch[r.branch]||0;r.rawDisc=rawDiscByBranch[r.branch]||0;});
         Object.entries(discByBranch).forEach(([br,d])=>{
           if(!group.recs.find(r=>r.branch===br)){
             const [agg,date]=dk2.split("|");
-            recs.push({brand,branch:br,date,aggregator:agg,sales:0,orders:0,disc:d,aov:0});
+            recs.push({brand,branch:br,date,aggregator:agg,sales:0,orders:0,disc:d,rawDisc:rawDiscByBranch[br]||0,aov:0});
           }
         });
       }
@@ -4352,15 +4357,15 @@ function parseBrand(csv,brand){
       }
       if(exactOutletDisc&&group){
         // Use exact per-outlet amounts as-is (Q1 answer: exact wins over Sheet total)
-        group.recs.forEach(r=>{r.disc=exactOutletDisc[r.branch]||0;});
+        group.recs.forEach(r=>{r.disc=exactOutletDisc[r.branch]||0;r.rawDisc=rawDiscByBranch[r.branch]||0;});
       }else if(group&&group.totalSales>0){
         // No exact data — fall back to proportional spread by sales
-        group.recs.forEach(r=>{r.disc=brandTotal*(r.sales/group.totalSales);});
+        group.recs.forEach(r=>{r.disc=brandTotal*(r.sales/group.totalSales);r.rawDisc=rawDiscByBranch[r.branch]||0;});
       }else if(group&&group.recs.length>0){
         const share=brandTotal/group.recs.length;
-        group.recs.forEach(r=>{r.disc=share;});
+        group.recs.forEach(r=>{r.disc=share;r.rawDisc=rawDiscByBranch[r.branch]||0;});
       }else{
-        recs.push({brand,branch:"(brand-level)",date,aggregator:agg,sales:0,orders:0,disc:brandTotal,aov:0});
+        recs.push({brand,branch:"(brand-level)",date,aggregator:agg,sales:0,orders:0,disc:brandTotal,rawDisc:brandTotal,aov:0});
       }
     }
   });
@@ -11391,13 +11396,27 @@ function allocateCampaignDiscount(c,start,end){
       }
       let share;
       if(!overlap){
-        // Non-overlap case — sales-weighted share (existing behaviour)
+        // v431: real bug found and fixed — brandTotalSales was summing the ENTIRE brand's sales
+        // (all outlets), not the "union of campaign-covered branches" this function's own comment
+        // above describes as correct ("Solo campaign edge case: union = just my branches → my
+        // share = 100% of day's discount"). For a genuinely solo, outlet-scoped campaign (confirmed:
+        // Nikhil's real Oregano×Noon AUH campaign has no other Oregano×Noon campaign running
+        // concurrently), this diluted a real AED 81 discount down to AED 3.84 — the campaign's own
+        // AUH outlets' small share of TOTAL brand sales, when it should have received the full
+        // day's discount since there was no other campaign to share it with. Fixed: the
+        // denominator is now sales across myBranches plus any OTHER non-overlapping campaigns'
+        // own branches running that same day (liveOthers) — genuinely competing claims on the
+        // same discount pool — not outlets with no campaign running at all, which have no claim
+        // on it whatsoever. For a brand-wide ("All") campaign this is unchanged: myBranches already
+        // equals every outlet, so the covered scope is still the whole brand either way.
         const daySales=dailySales[key]||{};
+        const coveredBranches=new Set(myBranches);
+        liveOthers.forEach(o=>{(campOutlets(o)||allBrandBranches).forEach(b=>coveredBranches.add(b));});
         let mySales=0,brandTotalSales=0;
         for(const b of myBranches)mySales+=daySales[b]||0;
-        for(const v of Object.values(daySales))brandTotalSales+=v;
+        for(const b of coveredBranches)brandTotalSales+=daySales[b]||0;
         if(brandTotalSales>0)share=dayTotal*(mySales/brandTotalSales);
-        else{const _M=brandTotalBranches(c.brand,c.aggregator)||1;const _myN=myBranches.size||_M;share=(_myN/_M)*dayTotal;}
+        else{const _M=coveredBranches.size||1;const _myN=myBranches.size||_M;share=(_myN/_M)*dayTotal;}
       }else{
         overlapDays.push(key);
         // Overlap: use observed ratio if available; else declared %; else equal split
