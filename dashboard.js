@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-438";
+const BUILD_VERSION="2026-08-13-439";
 const BUILD_NOTES=[
+  "✨ Three real requests from Nikhil, all from the same screenshot and thread. (1) Forecast History is now visible the moment Campaign Planner opens, not gated behind running a new forecast first — moved the shared campFcHistoryHTML() render into the pre-Run early-return branch too, same shared function, not a duplicate. (2) The genuine HTTP 404 on /api/forecast/delete confirms that endpoint doesn't exist on the backend — not something fixable from this file, since dashboard.js only calls whatever the backend actually exposes; flagged honestly rather than guessing at another endpoint shape. Given delete doesn't work, addressed the actual pain it was blocking — a campaign forecasted 5 times with completely unchanged inputs (brand/agg/dates/type/discPct/cap/coFundPct all identical) cluttering the list. History now groups by those exact inputs and shows only the most-recently-saved one per group, with a visible '+N earlier forecasts hidden here (still in history, not deleted)' note — a display-only dedupe, since nothing is actually removed from the backend, just collapsed in the view. (3) Nikhil directly asked whether old saved forecasts needed checking against the build-438 baseline fix and pushed back on being asked to do that manually — fair. History now automatically flags any record saved before build 438 whose brand×aggregator is STILL hitting the degraded-baseline fallback right now (the same frequent-campaign pattern that caused the bug tends to persist), with an honest '⚠ pre-438 · may understate this forecast's saved contribution/ROI' note — checking 'still degraded now' as a proxy for 'was degraded at save time,' flagged as a maybe, not asserted as certain, since the two aren't guaranteed identical. Verified all three: reconstructed the exact 5-duplicate screenshot scenario and confirmed only 1 row renders with the correct latest values and a '+4 earlier' note; confirmed a pre-438 record for a currently-degraded brand×aggregator gets flagged while a post-438 record for the same pair correctly doesn't; re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "🐛 Real, confirmed bug caught by Nikhil from an actual P&L screenshot — Lollorosso × Careem's Baseline showed Gross Sales identical to Net Sales (AED 5,979 = AED 5,979), and Break-even came out at 170 orders/day, which Nikhil correctly flagged as too high for a 30% CAP 20 campaign on Careem's low commission. Traced it precisely: that baseline window was the build-433 degraded fallback (visible right there in the same screenshot's amber warning — no clean 90-day window found, so the baseline includes real campaign-affected, discounted days), but campPlanCompute()'s P&L builder had a hardcoded 'baseline has zero discount' assumption, applied completely unconditionally, in two separate places — the per-scenario P&L card builder (pnlAt) and the break-even calculation itself (contribPoBaseline). That assumption is only valid for a genuinely CLEAN baseline; for a degraded one it silently zeroed out real discount the window actually contains, overstating baseline Net Sales and Net Contribution, which directly overstates the break-even order count needed to clear it. Fixed both: when the baseline is degraded, its real per-order discount rate is now derived from the gap baseline.dailyGross/baseline.dailyNet already capture (both already reflect the true, contaminated-window numbers) instead of being assumed away. Since a daily-sales record only carries a total discount, not who funded it, the derived discount is conservatively treated as fully brand-funded — the assumption that understates baseline contribution rather than overstates it, erring toward a safer, lower, more achievable break-even target rather than a falsely generous one. Verified precisely: reconstructed Nikhil's real scenario (a genuinely exhausted 90-day lookback, confirmed isDegraded:true) and confirmed Gross now correctly differs from Net and break-even drops as expected; separately confirmed a genuinely clean baseline (isDegraded:false) is completely unaffected — Gross still exactly equals Net, matching existing, correct behavior for the common case. Re-ran the full top-to-bottom script execution test given the standing lesson from build 434 — zero uncaught errors.",
   "✨ 'Pull from an upcoming campaign' dropdown now excludes campaigns that already have a saved forecast — Nikhil's own request, since the list was getting cluttered with ones that don't need another pass. Reuses campFcMatchSaved(c) directly, the same already-proven function powering the card badge (435) and the detail view's own forecast-comparison banner, so 'already forecasted' means exactly the same thing here as everywhere else. Verified: a mock upcoming campaign with a matching saved forecast is correctly excluded while one without a match is correctly kept; re-ran the full top-to-bottom script execution test (zero uncaught errors) given the standing lesson from build 434 that a syntax check alone isn't sufficient.",
   "🎨🐛 Two fixes from Nikhil's real screenshots. (1) Overview page: moved the Export Daily Digest button off its own dedicated row and into the same line as the date label, on the right — added a new dateExtra option to the shared makeFilterBar(opts), defaulting to empty so every other page calling it is completely unaffected; Overview now passes the button through it instead of rendering a separate div below the bar. (2) Real UI collision, not a bug in the matching logic itself: the card's existing 'Hybrid' data-source tag already uses 🔮 as part of its own icon ('🟢🔮 Hybrid', meaning partial-exact-data-plus-estimation — completely unrelated to forecasting), and build 435's new Forecasted badge used the same emoji, so on cards showing both they visually blended into what read as 'the symbol beside Hybrid' rather than two distinct things — exactly what Nikhil described. Switched the Forecasted badge to 📋, matching the detail view's own forecast-comparison banner icon, so the two surfaces read consistently and no longer collide with Hybrid's own icon. Verified both: rendered makeFilterBar() with and without dateExtra, confirming the button appears inline with the date on Overview and leaks into nothing else; re-ran the full top-to-bottom script execution test (zero uncaught errors) and Campaign Planner's own functional test, both still passing.",
@@ -13817,7 +13818,17 @@ function campPlanHTML(){
   </div>`;
 
   if(!campPlanResult){
-    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><span style="font-size:18px">🎢</span><div style="font-size:15px;font-weight:800;color:${T.text}">Campaign Planner</div><div style="font-size:10px;color:${T.muted};margin-left:4px">Forecast and break-even together — is what's likely enough to clear what's needed?</div></div>${form}`;
+    // v439: real request from Nikhil — Forecast History was only ever shown after running at
+    // least one forecast on this visit, since it lived inside the post-Run results branch below.
+    // Now shown in the pre-Run state too, so the history is visible the moment the page opens,
+    // not gated behind running something new first. Same shared campFcHistoryHTML(), not a
+    // separate render — whatever's already been saved (from either tool) shows immediately.
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><span style="font-size:18px">🎢</span><div style="font-size:15px;font-weight:800;color:${T.text}">Campaign Planner</div><div style="font-size:10px;color:${T.muted};margin-left:4px">Forecast and break-even together — is what's likely enough to clear what's needed?</div></div>${form}
+    <div style="background:${T.panelBg};border:0.5px solid ${T.border};border-radius:12px;padding:14px 16px;margin-top:14px">
+      <div style="font-size:13px;font-weight:700;color:${T.text};margin-bottom:4px">📜 Forecast History</div>
+      <div style="font-size:10px;color:${T.muted};margin-bottom:8px">Every saved forecast, compared against the real campaign once one matching those parameters actually runs — shared with the Campaign Forecaster, regardless of which tool a given forecast was saved from.</div>
+      ${campFcHistoryHTML()}
+    </div>`;
   }
 
   const r=campPlanResult;
@@ -15103,7 +15114,24 @@ function campFcHistoryHTML(){
   }
   if(campFcHistoryError)return `<div style="font-size:12px;color:#EF4444;padding:10px 0">⚠ ${campFcHistoryError}</div>`;
   if(!campFcHistory.length)return `<div style="font-size:12px;color:${T.label};padding:14px 0">No saved forecasts yet — run one above and click "Save this forecast".</div>`;
-  const rows=campFcHistory.map(f=>{
+  // v439: real requests from Nikhil, both from the same screenshot — a campaign forecasted 5 times
+  // with unchanged inputs (brand/agg/dates/type/discPct/cap/coFundPct all identical) cluttered the
+  // list with every re-run, and /api/forecast/delete's confirmed HTTP 404 (a genuine backend gap,
+  // not fixable from this file) means there's no working way to clean those up manually either.
+  // This is a DISPLAY-only dedupe, not a delete — the backend still holds every record, only the
+  // most-recently-saved one per identical-inputs group renders here, with older duplicates
+  // collapsed into a visible "N earlier" note rather than silently hidden, so nothing looks lost.
+  const groups=new Map();
+  campFcHistory.forEach(f=>{
+    const key=[f.brand,f.agg,f.start,f.end,f.type||'menu',f.discPct,f.cap,f.coFundPct].join('|');
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(f);
+  });
+  const deduped=[...groups.values()].map(g=>{
+    g.sort((a,b)=>b.savedAt.localeCompare(a.savedAt));
+    return{latest:g[0],dupCount:g.length-1};
+  }).sort((a,b)=>b.latest.savedAt.localeCompare(a.latest.savedAt));
+  const rows=deduped.map(({latest:f,dupCount})=>{
     const match=campFcMatchActual(f);
     const exp=f.scenarios?.expected;
     const savedDate=fmtShort(f.savedAt.slice(0,10));
@@ -15118,8 +15146,29 @@ function campFcHistoryHTML(){
         actualHTML=`<span style="color:${T.label};font-size:11px">Campaign matched (${match.c.name||'—'}) — not enough data yet</span>`;
       }
     }
+    // v439: automatic flag for the build-438 degraded-baseline fix — Nikhil directly asked
+    // whether older saved forecasts needed manual review; this checks it instead of asking him
+    // to. A record saved before build 438 (compared numerically, not just as a string, since
+    // "-379" > "-4" as text) whose brand×aggregator is STILL degraded right now (the same
+    // frequent-campaign pattern that caused the bug tends to persist) had its saved Incremental
+    // Contribution/ROI computed against an overstated baseline — the uplift %/order counts
+    // themselves were never affected (pure order-count math, untouched by that bug). Re-checking
+    // "still degraded now" is a proxy for "was degraded at save time", not a certainty — flagged
+    // as "may be", not asserted as fact.
+    const buildNum=parseInt((f.algoVersion||'').split('-').pop())||0;
+    const isPre438=f.algoVersion&&buildNum<438;
+    let degradedFlag='';
+    if(isPre438){
+      try{
+        const curBaseline=campFcBaseline(f.brand,f.agg,new Set(),30);
+        if(curBaseline&&curBaseline.isDegraded){
+          degradedFlag=`<div style="font-size:9.5px;color:#F59E0B;margin-top:2px" title="Saved on build ${esc(f.algoVersion)}, before the build-438 fix. This brand×aggregator is still hitting the degraded-baseline fallback now, which is what makes this worth a look — not a certainty that it was degraded back then too.">⚠ pre-438 · may understate this forecast's saved contribution/ROI</div>`;
+        }
+      }catch(e){}
+    }
+    const dupNote=dupCount>0?`<div style="font-size:9.5px;color:${T.label};margin-top:2px">+${dupCount} earlier forecast${dupCount!==1?'s':''} for these same inputs, hidden here (still in history, not deleted)</div>`:'';
     return `<div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1.4fr 1fr 0.3fr;gap:8px;padding:9px 0;border-bottom:0.5px solid ${T.rowBg2};font-size:12px;align-items:center">
-      <div><div style="font-weight:700;color:${T.text}">${bPill(f.brand,18)} ${f.brand} <span style="color:${T.label}">×</span> ${f.agg}</div><div style="font-size:10px;color:${T.label};margin-top:2px">${campFcTypeLabel(f.type||'menu',f.discPct,f.cap)} · saved ${savedDate} by ${f.savedByName||f.savedBy||'—'}</div></div>
+      <div><div style="font-weight:700;color:${T.text}">${bPill(f.brand,18)} ${f.brand} <span style="color:${T.label}">×</span> ${f.agg}</div><div style="font-size:10px;color:${T.label};margin-top:2px">${campFcTypeLabel(f.type||'menu',f.discPct,f.cap)} · saved ${savedDate} by ${f.savedByName||f.savedBy||'—'}</div>${degradedFlag}${dupNote}</div>
       <div style="color:${T.muted}">${f.start} – ${f.end}</div>
       <div>${exp?`<strong style="color:#60A5FA">${exp.upliftPct>=0?'+':''}${Math.round(exp.upliftPct)}%</strong>`:'—'}</div>
       <div>${actualHTML}</div>
