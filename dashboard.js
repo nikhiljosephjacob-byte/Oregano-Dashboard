@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-431";
+const BUILD_VERSION="2026-08-13-432";
 const BUILD_NOTES=[
+  "🗑️ Retired the standalone Campaign Forecaster and Break-Even Calculator — Nikhil's own call, made explicitly once Campaign Planner reached full parity with both (Save/History in 420, form parity in 421, results parity in 422, comparison+flags in 423). Did this carefully rather than a blind deletion, given the risk of quietly breaking Planner (which reuses a large amount of the SAME underlying logic these two pages were built on): ran a full dependency audit first — extracted every identifier called by campFcHTML()/campBeHTML()/campFcRun() and cross-checked each one against what Campaign Planner's own functions (campPlanHTML/campPlanCompute/campPlanRenderChart/campPlanSaveForecast/etc.) actually call, then did a whole-file scan confirming zero real references to any removal candidate remained anywhere outside comments and BUILD_NOTES text (caught and correctly excluded several false positives from my own comments, e.g. 'ported from campFcRun()' explanatory text, which isn't a real function call). Removed 21 functions total — the two page-rendering functions themselves (campFcHTML: 42.5KB, campBeHTML: 30KB) plus campFcRun() (11.3KB) and 18 exclusive helpers (campFcApplyUpcoming, campFcExport, campFcSaveForecast, campFcRunScenario/campFcRunScenarioSelectItems, campBeCompute, and others) — everything Campaign Planner genuinely shares (campFcBaseline, campFcFindMatches/campFcFindBogoMatches/campFcFindSelectItemsMatches, campFcMomentum, campFcCalibrationBias, campFcHistoryHTML, campFcUpcomingCampaigns, campFcGetBranches, campFcTypeLabel, campFcWeightedPercentile, campFcSeasonality, campFcCleanWindowSearch, campFcWeekOfMonthPos, campFcHasDiscDataForPeriod, and more) is completely untouched. Also updated routing (renderCampaigns() no longer branches on 'forecaster'/'breakeven'), the toolBack header, and the launcher — down to a single full-width Campaign Planner card instead of the old two/three-card grid — and removed one now-dead line (a campBeStartAuto() call gated on a campTab value that can no longer occur). Verified end-to-end after the removal: full syntax check, a whole-file scan confirming zero dangling references to anything removed, and a complete campPlanCompute()+campPlanHTML() run confirming Planner still computes and renders correctly (break-even still ties to baseline exactly, full page still structurally balanced). File size: 1,830,800 -> 1,744,615 characters, a real ~4.7% reduction — this only meaningfully helps initial page load/parse time, not runtime performance elsewhere, since unused function definitions cost nothing at runtime until called; Planner's own performance is unaffected either way, since it never called these two pages' rendering functions to begin with.",
   "🐛 Real root cause found and fixed for the discount discrepancy Nikhil traced across three builds (429, 430) — a genuine, confirmed bug, not a data-entry issue. Build 430's diagnostic log showed the raw per-day discount entries summing to exactly AED 20+1+60=81, matching Nikhil's real sheet total precisely — confirming the DATA itself was never wrong, and pointing squarely at allocateCampaignDiscount()'s own sales-weighted split. Found it: that function's own design comment explicitly states 'Solo campaign edge case: union = just my branches → my share = 100% of day's discount' — but the actual code computed brandTotalSales as the sum across the brand's ENTIRE outlet list (all 14 Oregano×Noon outlets), not the 'union of campaign-covered branches' the comment describes as correct. For this real campaign — confirmed solo, no other Oregano×Noon campaign running concurrently — that meant a genuinely 100%-owned AED 81 discount got diluted down to just the AUH outlets' small share of TOTAL brand sales (AED 3.84), even though there was no other campaign to share it with. Verified the exact mechanism with realistic sales figures before touching anything: the buggy formula reproduces AED 3.82 (matching the reported 3.84almost exactly), the fixed formula reproduces exactly AED 81. Fixed by changing the denominator to the sales across myBranches plus any OTHER non-overlapping campaigns' own branches actually running that same day — genuinely competing claims on the same discount pool — instead of every outlet in the brand, campaign or no campaign. Verified this doesn't regress the common case: a brand-wide ('All') campaign already has myBranches equal to every outlet, so its covered scope is unchanged either way (still gets 100% as before); and verified a genuine two-concurrent-outlet-scoped-campaigns scenario now correctly splits the discount between just those two campaigns' own outlets, excluding outlets with no campaign running at all — matching the function's own documented design intent exactly, for the first time. Also preserved (build 430's) rawDisc field through parsing as a secondary safeguard, and left both diagnostic logs in place for this build so Nikhil can directly confirm the campaign now reads AED 81 before they get cleaned up in a later pass.",
   "🔍 Second diagnostic pass on the discount discrepancy, now with a specific, high-confidence hypothesis. Build 429's log confirmed the allocation logic itself is reading real per-branch data correctly (allocatedDisc, rawCampDisc, and rawSumDisc all matched exactly at 3.84) — meaning the bug, if there is one, has to be upstream, in how the raw sheet gets parsed into daily records in the first place. Traced parseBrand()'s 'hybrid discount model' (v083) — it decides per (aggregator, date) whether a Disc entry is 'per-outlet' (2+ outlets with different non-zero values, used directly) or 'brand-level' (one total, spread proportionally by sales across ALL outlets for that brand+aggregator). Hypothesis: this campaign is scoped to just 3 of Oregano's many Noon outlets (Al Forsan, Al Reem, Al Reef). On a day where only ONE of those 3 has a non-zero redemption — plausible for a narrow, new-customers-only promo with sparse daily redemptions — the '2+ outlets' threshold for per-outlet detection fails, so it gets misclassified as a brand-level total and spread across EVERY Oregano×Noon outlet dashboard-wide (Dubai included), not just the 3 AUH ones the discount actually belongs to — diluting a real, concentrated AED 81 into a tiny fraction landing back on AUH specifically. This is a real, plausible failure mode for any campaign scoped to a small subset of outlets, not something specific to this one campaign — which is exactly the systemic risk Nikhil was worried about. Added a second, tightly-gated diagnostic (Oregano/Noon/these exact 3 dates only, so it can't spam the console for anything else this function processes) that logs the raw per-outlet Disc entries for each day and which format got chosen, plus the resulting brandTotal when format A fires. This will either confirm the hypothesis outright (format A firing with a single small entry, and no genuine brand-wide promo actually running that day) or rule it out cleanly — next step is Nikhil reloading the campaign detail view once more and sharing the new [DISC-FORMAT] console lines.",
   "🔍 Diagnostic build for the real discount discrepancy Nikhil reported (sheet shows AED 81 for a real campaign — Oregano × Noon, AUH Locations only, 40% OFF CAP 20, New Customers Only, 11-16 Sep — but the dashboard's own campaign P&L showed AED 4). Traced this by hand as far as static code reading allows before adding instrumentation: (1) ruled out the overlap-detection guard in allocateCampaignDiscount() as the cause — it only fires when another campaign shares the SAME brand+aggregator, and checking Nikhil's real Campaign Activations screenshot confirms no other Oregano×Noon campaign exists in this window to trigger it; (2) verified campOutlets()'s branch-scope resolution for 'AUH Locations only' looks structurally correct — it strips the qualifier words down to the bare 'auh' keyword and resolves against AUH_OUTLETS (Al Forsan, Al Reem, Reem Island, WTC, Al Reef), which are genuinely Abu Dhabi outlets, exactly matching the code's own documented test case for this pattern. Neither hypothesis panned out on paper, and there's no special-casing anywhere in the discount pipeline for 'New Customers Only' campaigns specifically (confirmed directly — no new-user/FTU-restriction logic exists in campAnalysisV2 or allocateCampaignDiscount at all), which may be its own separate gap. Rather than keep guessing at a root cause this consequential, added a new diagnostic log (gated to only branch-scoped campaigns, so it doesn't spam the console for the common 'All locations' case) that surfaces exactly what this function computes for a real campaign: the resolved outlet set, whether the exact-data or sales-weighted-estimate path ran, the computed allocatedDisc, whether overlap fired, and the raw pre-correction discount figures. Opening this specific campaign's detail view will now print a [DISC-ALLOC] line with the real numbers — next step is Nikhil sharing that console output so the actual failure point can be pinpointed precisely instead of reasoned about in the abstract.",
@@ -14179,17 +14180,9 @@ let campFcShowAllMatches=false;
 // are relative to the currently-displayed slice (resets naturally on a fresh forecast run, same
 // as campFcShowAllMatches, since a new run means these indices no longer refer to the same rows).
 let campFcExpandedMatches=new Set();
-function campFcToggleMatchExpand(idx){
-  if(campFcExpandedMatches.has(idx))campFcExpandedMatches.delete(idx);else campFcExpandedMatches.add(idx);
-  renderCampaigns();
-}
 // v399: which scenario cards (Conservative/Expected/Optimistic) have their discount/ROI detail
 // expanded — same per-item toggle pattern as campFcExpandedMatches above.
 let campFcScenarioDetailOpen=new Set();
-function campFcToggleScenarioDetail(key){
-  if(campFcScenarioDetailOpen.has(key))campFcScenarioDetailOpen.delete(key);else campFcScenarioDetailOpen.add(key);
-  renderCampaigns();
-}
 let campFcDiscPct=30,campFcCap=20,campFcCoFund=true,campFcCoFundPct=50;
 // v250: campaign structure type — 'menu' is the original, unchanged model. 'selectItems' is the
 // new type, using real historical per-order discount data instead of a discPct/cap formula.
@@ -14197,20 +14190,6 @@ let campFcType='menu';
 let campFcComments='';
 let campFcBranches=new Set(),campFcResult=null,campFcCollapsed=false;
 
-function campFcSet(k,v){
-  if(k==='brand'){campFcBrand=v;campFcBranches=new Set();}
-  else if(k==='agg'){campFcAgg=v;campFcBranches=new Set();}
-  else if(k==='start')campFcStart=v;
-  else if(k==='end')campFcEnd=v;
-  else if(k==='discPct')campFcDiscPct=+v;
-  else if(k==='cap')campFcCap=+v;
-  else if(k==='coFund')campFcCoFund=v==='true';
-  else if(k==='coFundPct')campFcCoFundPct=+v;
-  else if(k==='type')campFcType=v;
-  else if(k==='comments')campFcComments=v;
-  else if(k==='collapsed'){campFcCollapsed=(v==='true');renderCampaigns();}
-}
-function campFcToggleBranch(b){if(campFcBranches.has(b))campFcBranches.delete(b);else campFcBranches.add(b);}
 
 // v254: "forecast from an upcoming campaign" — the feature Nikhil originally asked for as a
 // futuristic idea. Finds campaigns whose start date is still in the future (campStatus computes
@@ -14225,29 +14204,6 @@ function campFcUpcomingCampaigns(){
 // — confirmed limitation is the sheet doesn't label a campaign's structure explicitly, so this
 // is a best-effort guess from free text that should be checked, not blindly trusted, before
 // running the forecast.
-function campFcApplyUpcoming(idx){
-  const upcoming=campFcUpcomingCampaigns();
-  const c=upcoming[idx];
-  if(!c)return;
-  campFcBrand=c.brand==='All Brands'?(BR[0]&&BR[0].n)||campFcBrand:c.brand;
-  campFcAgg=c.aggregator&&c.aggregator!=='All'?c.aggregator:campFcAgg;
-  campFcBranches=new Set();
-  campFcStart=c.startDate;
-  campFcEnd=c.endDate;
-  // v254: check name+comments combined, not comments-over-name — confirmed via testing that
-  // picking comments whenever it's non-empty (even without a %) misses a % that's only in the
-  // name, e.g. "Keeta City Level Campaign 20% OFF" with comments like "cap 20, co-funded 60:40".
-  const hp=parseInt((`${c.name||''} ${c.comments||''}`.match(/(\d{1,3})\s*%/)||[])[1]||'0');
-  if(hp)campFcDiscPct=hp;
-  const capM=(c.comments||'').match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i);
-  if(capM)campFcCap=parseInt(capM[1]);
-  const parsed=parseCampComment(c);
-  if(parsed.coFundedPctOfDiscount!=null){campFcCoFund=parsed.coFundedPctOfDiscount>0;campFcCoFundPct=Math.round(parsed.coFundedPctOfDiscount*100)||campFcCoFundPct;}
-  campFcType=campFcInferType(c);
-  campFcComments=c.comments||'';
-  campFcCollapsed=false;
-  renderCampaigns();
-}
 
 function campFcGetBranches(brand,agg){
   return[...new Set(allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)').map(r=>r.branch))].sort();
@@ -14575,9 +14531,6 @@ function campFcFindBogoMatches(brand,agg){
 // unrelated word) and "Offers/Offer for You" language. Real patterns confirmed from this
 // brand's actual campaign history: "OFU Item Keeta", "Offers for You 50% OFF 1 Item".
 const CAMP_FC_OFU_RE=/\bofu\b|offers?\s+for\s+you/i;
-function campFcFindOfuMatches(brand,agg,discPct){
-  return campFcFindHistoryMatches(brand,agg,CAMP_FC_OFU_RE,discPct);
-}
 // v253: platform-wide event — grounded in the actual recurring event names seen in this
 // brand's real campaign history: "Keeta Week", "Keeta City Level Campaign", "Keeta Flash
 // Sale", "Showcase 50% OFF". Deliberately NOT a generalized "[word] week" pattern — tested that
@@ -14585,9 +14538,6 @@ function campFcFindOfuMatches(brand,agg,discPct){
 // silently pollute the historical match set with unrelated campaigns. Matches "Keeta Week"
 // specifically (the one confirmed instance) rather than guessing at other aggregators' naming.
 const CAMP_FC_PLATFORM_EVENT_RE=/\bcity\s+level\s+campaign\b|\bflash\s+sale\b|\bshowcase\b|\bkeeta\s+week\b/i;
-function campFcFindPlatformEventMatches(brand,agg,discPct){
-  return campFcFindHistoryMatches(brand,agg,CAMP_FC_PLATFORM_EVENT_RE,discPct);
-}
 // v254: infers a campaign's structure type from its name/comments text, reusing the exact same
 // patterns already used for matching that type's history — so "what type does this look like"
 // and "what history counts as this type" never drift apart. Checked most-specific-first (OFU
@@ -14770,58 +14720,6 @@ function campFcWeekOfMonthPos(dateStr){
 // that type and applies it to the projected order volume — what actually happened, not a
 // formula guess. Name kept as-is (not renamed to something generic) to avoid touching every
 // call site for a cosmetic rename; the function itself works identically for both types.
-function campFcRunScenarioSelectItems(baseline,uplift,histDiscPerOrder,coFundPct,agg,brand,nDays,dateStr){
-  if(!baseline||histDiscPerOrder==null)return null;
-  const grossAOV=baseline.grossAOV||60;
-  const allOrd=(baseline.dailyOrders*(1+uplift))*nDays;
-  const totalDisc=allOrd*histDiscPerOrder;
-  const merchantDisc=totalDisc*(1-coFundPct/100);
-  const aggCoDisc=totalDisc*(coFundPct/100);
-  // Net AOV for select-items campaigns can't assume the full discount applies to every order the
-  // same way a menu-wide cap does — approximate using the historical average net-per-order
-  // implied by histDiscPerOrder against gross, same spirit as the menu-wide model's netAOV.
-  const netAOV=grossAOV-histDiscPerOrder;
-  const campNet=allOrd*netAOV,campGross=allOrd*grossAOV;
-  // v397: commission-base fix, same as campBeCompute — the aggregator charges commission on Gross
-  // minus OUR share of the discount only (campGross-merchantDisc), not on the full customer-facing
-  // net (campNet, which still uses the FULL discount and stays correct for "what we actually
-  // sold" reporting elsewhere in this object). campGross-merchantDisc === campNet whenever
-  // coFundPct=0, so this only changes the number when co-funding is genuinely set.
-  const campContrib=brandContribution(agg,brand,campGross-merchantDisc,campGross,dateStr);
-  const baseNet=baseline.dailyNet*nDays,baseGross=baseline.dailyGross*nDays;
-  const baseContrib=brandContribution(agg,brand,baseNet,baseGross,dateStr);
-  const incrContrib=campContrib-baseContrib;
-  const roi=merchantDisc>0?incrContrib/merchantDisc:null;
-  const incrOrd=Math.round(baseline.dailyOrders*uplift*nDays);
-  return{upliftPct:uplift*100,totalOrders:Math.round(allOrd),incrOrders:incrOrd,incrOrdersPerDay:baseline.dailyOrders*uplift,
-    campNet,campGross,baseNet,baseGross,campContrib,baseContrib,
-    incrNet:campNet-baseNet,incrNetPerDay:(campNet-baseNet)/nDays,
-    merchantDisc,merchantDiscPerDay:merchantDisc/nDays,aggCoDisc,totalDisc,
-    incrContrib,incrContribPerDay:incrContrib/nDays,roi,effDisc:histDiscPerOrder,grossAOV,netAOV};
-}
-function campFcRunScenario(baseline,uplift,discPct,cap,coFundPct,agg,brand,nDays,dateStr){
-  if(!baseline)return null;
-  const grossAOV=baseline.grossAOV||60;
-  const effDisc=Math.min(grossAOV*discPct/100,cap);
-  const netAOV=grossAOV-effDisc;
-  const allOrd=(baseline.dailyOrders*(1+uplift))*nDays;
-  const campNet=allOrd*netAOV,campGross=allOrd*grossAOV;
-  const totalDisc=allOrd*effDisc;
-  const merchantDisc=totalDisc*(1-coFundPct/100);
-  const aggCoDisc=totalDisc*(coFundPct/100);
-  // v397: same commission-base fix as campBeCompute/campFcRunScenarioSelectItems.
-  const campContrib=brandContribution(agg,brand,campGross-merchantDisc,campGross,dateStr);
-  const baseNet=baseline.dailyNet*nDays,baseGross=baseline.dailyGross*nDays;
-  const baseContrib=brandContribution(agg,brand,baseNet,baseGross,dateStr);
-  const incrContrib=campContrib-baseContrib;
-  const roi=merchantDisc>0?incrContrib/merchantDisc:null;
-  const incrOrd=Math.round(baseline.dailyOrders*uplift*nDays);
-  return{upliftPct:uplift*100,totalOrders:Math.round(allOrd),incrOrders:incrOrd,incrOrdersPerDay:baseline.dailyOrders*uplift,
-    campNet,campGross,baseNet,baseGross,campContrib,baseContrib,
-    incrNet:campNet-baseNet,incrNetPerDay:(campNet-baseNet)/nDays,
-    merchantDisc,merchantDiscPerDay:merchantDisc/nDays,aggCoDisc,totalDisc,
-    incrContrib,incrContribPerDay:incrContrib/nDays,roi,effDisc,grossAOV,netAOV};
-}
 
 // v110: weighted percentile — each match contributes proportional to its weight instead of
 // counting equally. A weight of 1 = full vote; a weight of 0.3 = counts for 3/10 of a vote.
@@ -14884,13 +14782,6 @@ function campFcHasDiscDataForPeriod(brand,agg,start,end){
 // (campFcFindBogoMatches passes discPct=null — no percentage filtering happens at all). This
 // mirrors exactly which filter each type's match-finder actually applies, so the label can never
 // again claim a criterion the matching itself doesn't use.
-function campFcMatchCriteriaLabel(){
-  if(campFcType==='bogo')return'BOGO / free-item campaigns';
-  if(campFcType==='selectItems')return campFcDiscPct+'% off (select items) ±8%';
-  if(campFcType==='ofu')return campFcDiscPct+'% off (OFU) ±8%';
-  if(campFcType==='platformEvent')return campFcDiscPct+'% off (platform event) ±8%';
-  return campFcDiscPct+'% off ±8% · cap AED '+campFcCap+' ±6';
-}
 // v407: Campaign Planner — combines the Forecaster's real historical uplift derivation with real
 // per-brand/aggregator economics for the discount/break-even side, per Nikhil's explicit
 // correction: "the calculations must be based on the filters applied," not fixed assumptions.
@@ -15066,192 +14957,12 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
   };
 }
 
-function campFcRun(){
-  const brand=campFcBrand,agg=campFcAgg;
-  if(!brand||!agg||!campFcStart||!campFcEnd){alert('Please fill in Brand, Aggregator, Start and End dates.');return;}
-  const nDays=Math.max(1,Math.round((new Date(campFcEnd+'T12:00:00')-new Date(campFcStart+'T12:00:00'))/86400000)+1);
-  const baseline=campFcBaseline(brand,agg,campFcBranches,nDays);
-  if(!baseline){alert('No sales data found for '+brand+' on '+agg+'. Upload data first.');return;}
-  const matches=campFcType==='selectItems'?campFcFindSelectItemsMatches(brand,agg,campFcDiscPct)
-    :campFcType==='bogo'?campFcFindBogoMatches(brand,agg)
-    :campFcType==='ofu'?campFcFindOfuMatches(brand,agg,campFcDiscPct)
-    :campFcType==='platformEvent'?campFcFindPlatformEventMatches(brand,agg,campFcDiscPct)
-    :campFcFindMatches(brand,agg,campFcDiscPct,campFcCap);
-  const seas=campFcSeasonality(brand,agg,campFcStart);
-  // v415: recent momentum — same real daily-sales trend check as campPlanCompute.
-  const mom=campFcMomentum(brand,agg,campFcStart);
-  const momFactor=mom?mom.momentum:1;
-  // v110: the closest available real-world evidence — same brand/agg/discount depth, most
-  // recent, not a named one-off event — surfaced prominently as a "reality check" regardless
-  // of how the weighted scenarios come out. Prevents a losing repeat from getting buried.
-  // v301: now ALSO skips truncated campaigns (cut short mid-run, manually flagged or auto-
-  // detected) when picking this headline match — a broken measurement isn't "the closest recent
-  // match" in any meaningful sense, and Nikhil's exact complaint was this exact case (a July
-  // Flash Sale stopped mid-day due to an issue) dominating the reality-check line. Falls back to
-  // the closest truncated match ONLY if literally nothing else qualifies, so there's still some
-  // evidence shown rather than none — but the fallback is clearly marked, never silent.
-  const cleanMatches=matches.filter(m=>!m.isAtypical&&!m.isTruncated&&m.upliftPct!=null&&Math.abs(m.upliftPct)<150);
-  const closestMatch=cleanMatches[0]||matches.find(m=>!m.isAtypical&&m.upliftPct!=null&&Math.abs(m.upliftPct)<150)||null;
-  let cU=0.10,eU=0.20,oU=0.35;
-  if(matches.length){
-    // Only true statistical outliers get dropped entirely (data errors / freak swings).
-    // Everything else — including short campaigns and named events — stays in, just weighted.
-    const usable=matches.filter(m=>m.upliftPct!=null&&Math.abs(m.upliftPct)<150);
-    const useM=usable.length?usable:matches.filter(m=>m.upliftPct!=null);
-    const weighted=useM.map(m=>{
-      const daysAgo=Math.max(1,daysBetweenInclusive(m.c.endDate,campFcStart));
-      const recencyW=Math.exp(-daysAgo/45); // ~31-day half-life — a repeat from last week outweighs one from 5 months ago
-      // v301: truncated campaigns down-weighted the same way atypical events are — a cut-short
-      // run isn't a reliable read on what the discount mechanic itself would do, same reasoning
-      // as isAtypical, just a different cause (operational failure vs an unusual occasion).
-      const typeW=(m.isAtypical||m.isTruncated)?0.3:1; // named events / cut-short runs count for 3/10 of a normal promo match
-      return{u:m.upliftPct/100,w:recencyW*typeW};
-    });
-    if(weighted.length){
-      cU=Math.max(-0.20,campFcWeightedPercentile(weighted,25)*seas.factor*momFactor);
-      eU=Math.max(-0.10,campFcWeightedPercentile(weighted,50)*seas.factor*momFactor);
-      // v304: fixes a real bug Nikhil caught — Optimistic showing LOWER uplift than Expected.
-      // Root cause: oU had a hard Math.min(0.75,...) ceiling that made sense as a general sanity
-      // bound, but wasn't designed for the case where the ACTUAL weighted evidence legitimately
-      // exceeds it — which is exactly what happened once the v301-303 truncation fixes correctly
-      // down-weighted the broken July match, leaving the genuinely strong June result (+140%)
-      // dominating the weighting. Expected's median landed at +129% (uncapped), Optimistic's 75th
-      // percentile was raw +129% too but got clamped down to +75% — an artifact of the cap, not a
-      // real forecast disagreement. Raised the ceiling to accommodate real large uplifts, but the
-      // actual fix is the assertion below: whatever the raw percentile math produces, Optimistic
-      // is never allowed to end up below Expected, and Expected never below Conservative — the
-      // three scenarios are a genuine ordering by construction, not just by convention, so this
-      // class of inversion can't recur even if some other input combination hits a similar edge.
-      oU=Math.min(2.0,Math.max(0.05,campFcWeightedPercentile(weighted,75)*seas.factor*momFactor));
-    }
-  }else{cU*=seas.factor*momFactor;eU*=seas.factor*momFactor;oU*=seas.factor*momFactor;}
-  // Enforce Conservative ≤ Expected ≤ Optimistic regardless of how each was derived — caps,
-  // floors, and percentile math on three separately-computed values can each be individually
-  // reasonable and still produce an inversion when they interact, exactly what happened above.
-  if(eU<cU)eU=cU;
-  if(oU<eU)oU=eU;
-  // v412: same calibration as campPlanCompute — shift all three scenarios by this brand+
-  // aggregator's real forecast-vs-actual track record (falling back to the whole account's
-  // history when there isn't enough of a specific one yet), per Nikhil's own observation that
-  // every past forecast has undershot the real result.
-  const calib=campFcCalibrationBias(brand,agg);
-  if(calib){
-    const shift=calib.biasPts/100;
-    cU+=shift;eU+=shift;oU+=shift;
-  }
-  const coFP=campFcCoFund?campFcCoFundPct:0;
-  let runSc;
-  if(campFcType==='selectItems'||campFcType==='bogo'||campFcType==='ofu'||campFcType==='platformEvent'){
-    // Recency-weighted median discount-per-order across matched historical campaigns — same
-    // weighting spirit as the uplift percentiles above, applied to what the discount actually
-    // cost per order rather than a formula estimate. Same math for select-items and BOGO —
-    // both derive their discount cost from real history rather than a formula.
-    const discWeighted=matches.filter(m=>m.ourDiscPerDay!=null&&m.campOrdersPerDay>0).map(m=>{
-      const daysAgo=Math.max(1,daysBetweenInclusive(m.c.endDate,campFcStart));
-      const recencyW=Math.exp(-daysAgo/45);
-      const typeW=(m.isAtypical||m.isTruncated)?0.3:1;
-      return{u:m.ourDiscPerDay/m.campOrdersPerDay,w:recencyW*typeW};
-    });
-    const histDiscPerOrder=discWeighted.length?campFcWeightedPercentile(discWeighted,50):null;
-    runSc=u=>campFcRunScenarioSelectItems(baseline,u,histDiscPerOrder,coFP,agg,brand,nDays,campFcStart);
-  }else{
-    runSc=u=>campFcRunScenario(baseline,u,campFcDiscPct,campFcCap,coFP,agg,brand,nDays,campFcStart);
-  }
-  // Last year comparison
-  const lyStart=(parseInt(campFcStart.slice(0,4))-1)+campFcStart.slice(4);
-  const lyEnd=(parseInt(campFcEnd.slice(0,4))-1)+campFcEnd.slice(4);
-  const lyRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date>=lyStart&&r.date<=lyEnd&&r.branch!=='(brand-level)'&&(campFcBranches.size===0||campFcBranches.has(r.branch)));
-  const lyDays=[...new Set(lyRecs.map(r=>r.date))].length||1;
-  // Prior week
-  const pwEnd=subDays(campFcStart,1),pwStart=subDays(pwEnd,6);
-  const pwRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date>=pwStart&&r.date<=pwEnd&&r.branch!=='(brand-level)'&&(campFcBranches.size===0||campFcBranches.has(r.branch)));
-  const pwDays=[...new Set(pwRecs.map(r=>r.date))].length||1;
-  // Most recent campaign in history
-  const recCamp=campLoaded?[...campaignData].filter(c=>campStatus(c)==='Completed'&&c.brand===brand&&c.aggregator===agg).sort((a,b)=>b.endDate.localeCompare(a.endDate))[0]:null;
-  // Concurrent campaigns
-  const conc=campLoaded?campaignData.filter(c=>{const st=campStatus(c);if(st==='Cancelled')return false;if(c.brand!==brand||c.aggregator!==agg)return false;return c.startDate<=campFcEnd&&c.endDate>=campFcStart;}):[];
-  // v154: genuine clean-baseline comparison, ADDITIVE context alongside the existing weighted
-  // scenarios above — doesn't change any number the model already produces, surfaces a new
-  // signal next to them. Confirmed empirically this only exists for 4 of 5 aggregators; Keeta
-  // genuinely has none (99% campaign-day coverage, longest gap found was 2 days) — cleanWindow
-  // being null for Keeta is the expected, correct outcome, not a failure to find one.
-  const cleanWindow=campFcCleanWindowSearch(brand,agg,campFcBranches,nDays,campFcStart);
-  let cleanWindowCompare=null;
-  if(cleanWindow){
-    const cwRecs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.date>=cleanWindow.start&&r.date<=cleanWindow.end&&r.branch!=='(brand-level)'&&(campFcBranches.size===0||campFcBranches.has(r.branch)));
-    const cwDays=[...new Set(cwRecs.map(r=>r.date))].length||1;
-    if(cwRecs.length){
-      cleanWindowCompare={
-        start:cleanWindow.start,end:cleanWindow.end,
-        dailyOrders:cwRecs.reduce((s,r)=>s+r.orders,0)/cwDays,
-        dailyNet:cwRecs.reduce((s,r)=>s+r.sales,0)/cwDays,
-        daysAgo:daysBetweenInclusive(cleanWindow.end,campFcStart)
-      };
-    }
-  }
-  // v154: week-of-month flag — doesn't correct anything numerically (no validated correction
-  // factor exists yet), just surfaces a real, checkable confound: salary-week timing mismatch
-  // between the campaign and whichever window it's being compared against.
-  const campWeekPos=campFcWeekOfMonthPos(campFcStart);
-  const baselineWeekPos=campFcWeekOfMonthPos(subDays(campFcStart,28)); // the naive "4 weeks ago" window used elsewhere
-  const weekOfMonthMismatch=campWeekPos!==baselineWeekPos?{campaign:campWeekPos,baseline:baselineWeekPos}:null;
-  campFcResult={
-    baseline,matches,seasonality:seas,nDays,brand,agg,
-    conservative:runSc(cU),expected:runSc(eU),optimistic:runSc(oU),
-    cU,eU,oU,
-    cleanWindowCompare,weekOfMonthMismatch,
-    lyOrders:lyRecs.length?lyRecs.reduce((s,r)=>s+r.orders,0)/lyDays:null,
-    lyNet:lyRecs.length?lyRecs.reduce((s,r)=>s+r.sales,0)/lyDays:null,
-    lyHasDisc:campFcHasDiscDataForPeriod(brand,agg,lyStart,lyEnd),
-    lyStart,lyEnd, // v367: kept so the "no discount data" flag message can name the actual period instead of a hardcoded month
-    pwOrders:pwRecs.length?pwRecs.reduce((s,r)=>s+r.orders,0)/pwDays:null,
-    pwNet:pwRecs.length?pwRecs.reduce((s,r)=>s+r.sales,0)/pwDays:null,
-    recCamp,conc,closestMatch,
-    coFP,coFundPct:campFcCoFundPct,
-    generatedAt:new Date().toISOString(),calib,mom,
-    // v258: snapshot of the exact inputs this result came from — compared against current form
-    // state on every render so a "these results are from a different setup, re-run to update"
-    // banner can show. Addresses the most likely explanation for "projections aren't changing":
-    // the form updates immediately when you change a field, but the results below it don't
-    // recompute until Run Forecast is clicked again — this makes that gap visible instead of
-    // silently showing stale numbers that look unchanged.
-    inputSnapshot:{brand,agg,start:campFcStart,end:campFcEnd,type:campFcType,discPct:campFcDiscPct,cap:campFcCap,coFund:campFcCoFund,coFundPct:campFcCoFundPct,branches:[...campFcBranches].sort().join(',')}
-  };
-  renderCampaigns();
-}
 
 // ── v111: Forecast log — save, list, and match-to-actual ──
 let campFcHistory=null,campFcHistoryLoading=false,campFcHistoryError=null;
 let campFcSaving=false,campFcSaveMsg='';
 
-async function campFcSaveForecast(){
-  if(!campFcResult||campFcSaving)return;
-  const sess=getActiveSession();
-  if(!sess||!sess.sessionId){campFcSaveMsg='⚠ Not logged in — cannot save.';renderCampaigns();return;}
-  campFcSaving=true;campFcSaveMsg='';renderCampaigns();
-  const r=campFcResult;
-  const trim=sc=>sc?{upliftPct:sc.upliftPct,totalOrders:sc.totalOrders,incrOrders:sc.incrOrders,incrOrdersPerDay:sc.incrOrdersPerDay,campNet:sc.campNet,merchantDisc:sc.merchantDisc,merchantDiscPerDay:sc.merchantDiscPerDay,incrContrib:sc.incrContrib,incrContribPerDay:sc.incrContribPerDay,roi:sc.roi}:null;
-  const payload={
-    brand:r.brand,agg:r.agg,discPct:campFcType==='bogo'?null:campFcDiscPct,cap:campFcType==='menu'?campFcCap:0,
-    type:campFcType,comments:campFcComments||null,
-    coFund:campFcCoFund,coFundPct:campFcCoFund?campFcCoFundPct:null,
-    start:campFcStart,end:campFcEnd,branches:[...campFcBranches],
-    baseline:{dailyOrders:r.baseline.dailyOrders,dailyNet:r.baseline.dailyNet,grossAOV:r.baseline.grossAOV},
-    seasonality:{factor:r.seasonality.factor,pct:r.seasonality.pct,method:r.seasonality.method},
-    scenarios:{conservative:trim(r.conservative),expected:trim(r.expected),optimistic:trim(r.optimistic)},
-    closestMatch:r.closestMatch?{name:r.closestMatch.c.name||r.closestMatch.c.comments||null,startDate:r.closestMatch.c.startDate,endDate:r.closestMatch.c.endDate,upliftPct:r.closestMatch.upliftPct,discountROI:r.closestMatch.discountROI}:null,
-    matchCount:r.matches.length,
-    algoVersion:BUILD_VERSION
-  };
-  try{
-    const res=await fetch('/api/forecast/save',{method:'POST',headers:{'Content-Type':'application/json','X-Session-Id':sess.sessionId},body:JSON.stringify(payload)});
-    const data=await res.json();
-    campFcSaveMsg=res.ok?'✅ Saved':'⚠ '+(data.error||'Save failed');
-    if(res.ok)campFcHistory=null; // force refetch next time history is viewed
-  }catch(e){campFcSaveMsg='⚠ Network error — save failed';}
-  campFcSaving=false;renderCampaigns();
-}
-
+async 
 async function campFcLoadHistory(){
   if(campFcHistoryLoading)return;
   const sess=getActiveSession();
@@ -15384,57 +15095,6 @@ async function campFcDeleteForecast(id){
   }catch(e){alert('Network error — delete failed: '+e.message);}
 }
 
-function campFcExport(){
-  if(!campFcResult)return;
-  const r=campFcResult;const fA=v=>Math.round(v);
-  const load=(src,cb)=>{if(window.XLSX){cb();return;}const s=document.createElement('script');s.src=src;s.onload=cb;document.head.appendChild(s);};
-  load('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',()=>{
-    const wb=XLSX.utils.book_new();
-    // Sheet 1: Forecast record
-    const f1=[
-      ['CAMPAIGN FORECAST RECORD','','','','Generated:',r.generatedAt],[''],
-      ['CONFIGURATION',''],
-      ['Brand',r.brand],['Aggregator',r.agg],['Start Date',campFcStart],['End Date',campFcEnd],
-      ['Duration (days)',r.nDays],['Discount %',campFcDiscPct],['Cap AED',campFcCap],
-      ['Co-funded',campFcCoFund?'Yes':'No'],['Co-fund %',campFcCoFundPct],
-      ['Branches',campFcBranches.size?[...campFcBranches].join(', '):'All'],[''],
-      ['BASELINE (last 30 days)',''],
-      ['Daily avg orders',r.baseline.dailyOrders.toFixed(1)],
-      ['Daily avg net sales','AED '+fA(r.baseline.dailyNet)],
-      ['Gross AOV','AED '+fA(r.baseline.grossAOV)],
-      ['Effective discount/order','AED '+fA(r.conservative.effDisc)],[''],
-      ['SEASONALITY',''],
-      ['Factor',r.seasonality.factor.toFixed(2)+'×'],
-      ['Adjustment',r.seasonality.pct>0?'+':''+(r.seasonality.pct)+'%'],[''],
-      ['FORECAST SCENARIOS','','Conservative','Expected','Optimistic'],
-      ['Uplift vs baseline','%',fA(r.conservative.upliftPct),fA(r.expected.upliftPct),fA(r.optimistic.upliftPct)],
-      ['Incremental orders','total',r.conservative.incrOrders,r.expected.incrOrders,r.optimistic.incrOrders],
-      ['Incremental orders','per day',fA(r.conservative.incrOrdersPerDay),fA(r.expected.incrOrdersPerDay),fA(r.optimistic.incrOrdersPerDay)],
-      ['Total merchant discount','AED',fA(r.conservative.merchantDisc),fA(r.expected.merchantDisc),fA(r.optimistic.merchantDisc)],
-      ['Merchant discount','AED/day',fA(r.conservative.merchantDiscPerDay),fA(r.expected.merchantDiscPerDay),fA(r.optimistic.merchantDiscPerDay)],
-      ['Incremental net revenue','AED',fA(r.conservative.incrNet),fA(r.expected.incrNet),fA(r.optimistic.incrNet)],
-      ['Incremental net revenue','AED/day',fA(r.conservative.incrNetPerDay),fA(r.expected.incrNetPerDay),fA(r.optimistic.incrNetPerDay)],
-      ['Incremental contribution','AED',fA(r.conservative.incrContrib),fA(r.expected.incrContrib),fA(r.optimistic.incrContrib)],
-      ['Incremental contribution','AED/day',fA(r.conservative.incrContribPerDay),fA(r.expected.incrContribPerDay),fA(r.optimistic.incrContribPerDay)],
-      ['ROI','×',r.conservative.roi!=null?r.conservative.roi.toFixed(2):'n/a',r.expected.roi!=null?r.expected.roi.toFixed(2):'n/a',r.optimistic.roi!=null?r.optimistic.roi.toFixed(2):'n/a'],[''],
-      ['POST-CAMPAIGN ACTUALS (fill in after campaign ends)','','Conservative','Expected','Optimistic','ACTUAL'],
-      ['Uplift vs baseline','%',fA(r.conservative.upliftPct),fA(r.expected.upliftPct),fA(r.optimistic.upliftPct),''],
-      ['Incremental orders','total',r.conservative.incrOrders,r.expected.incrOrders,r.optimistic.incrOrders,''],
-      ['Total merchant discount','AED',fA(r.conservative.merchantDisc),fA(r.expected.merchantDisc),fA(r.optimistic.merchantDisc),''],
-      ['Incremental contribution','AED',fA(r.conservative.incrContrib),fA(r.expected.incrContrib),fA(r.optimistic.incrContrib),''],
-      ['ROI','×',r.conservative.roi!=null?r.conservative.roi.toFixed(2):'n/a',r.expected.roi!=null?r.expected.roi.toFixed(2):'n/a',r.optimistic.roi!=null?r.optimistic.roi.toFixed(2):'n/a',''],
-      ['Closest scenario','','','','',''],
-    ];
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(f1),'Forecast');
-    // Sheet 2: Historical matches
-    const f2=[['Historical Matches Used','','','','',''],
-      ['Campaign Name','Dates','Days','Disc %','Cap','Uplift %','Contribution/day','ROI'],
-      ...r.matches.map(m=>[m.c.name||m.c.comments||'—',m.c.startDate+' – '+m.c.endDate,m.cDays,m.discPct,m.cap||'—',m.upliftPct!=null?fA(m.upliftPct):'n/a',m.incrContribPerDay!=null?fA(m.incrContribPerDay):'n/a',m.discountROI!=null?m.discountROI.toFixed(2)+'×':'n/a'])
-    ];
-    if(r.matches.length)XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(f2),'Historical Matches');
-    XLSX.writeFile(wb,`Forecast_${r.brand}_${r.agg}_${campFcStart}.xlsx`);
-  });
-}
 
 function bPill(brand,sz=20){const clr=BMAP[brand]?.c||'#888';return`<span style="display:inline-flex;align-items:center;justify-content:center;width:${sz}px;height:${sz}px;border-radius:5px;background:${clr}22;border:1px solid ${clr}55;font-size:${Math.round(sz*.55)}px;font-weight:800;color:${clr};flex-shrink:0">${brand.slice(0,1)}</span>`;}
 function aPill(agg,sz=20){const clr=AC[agg]||'#888';return`<span style="display:inline-flex;align-items:center;justify-content:center;width:${sz}px;height:${sz}px;border-radius:5px;background:${clr}22;border:1px solid ${clr}55;font-size:${Math.round(sz*.55)}px;font-weight:800;color:${clr};flex-shrink:0">${agg.slice(0,1)}</span>`;}
@@ -15521,14 +15181,6 @@ function campBeSameDaysLastMonth(start,end){
   const me=new Date(e);me.setMonth(me.getMonth()-1);
   return{start:dk(ms),end:dk(me)};
 }
-function campBeAutoFillDates(){
-  if(!campBeStart)return;
-  const priorEnd=campBeDateOffset(campBeStart,-1);
-  const priorStart=campBeDateOffset(campBeStart,-7);
-  campBePriorStart=priorStart;campBePriorEnd=priorEnd;
-  const r=campBeSameDaysLastMonth(priorStart,priorEnd);
-  campBeMonthStart=r.start;campBeMonthEnd=r.end;
-}
 function campBeGetBaseline(brand,agg,start,end){
   if(!start||!end||!allData||!allData.length)return null;
   const rows=allData.filter(function(r){return r.brand===brand&&r.aggregator===agg&&r.date>=start&&r.date<=end&&r.sales>0;});
@@ -15550,76 +15202,6 @@ function campBeGetBaseline(brand,agg,start,end){
   });
   return{opd:opd,netAOV:netAOV,grossAOV:grossAOV,totalOrders:totalOrders,totalNet:totalNet,days:days,
     hasCampaign:campDuring.length>0,campNames:campDuring.map(function(c){return c.name||'';}).filter(Boolean)};
-}
-function campBeCompute(){
-  const fp=foodPkgPct(campBeBrand);
-  const cr=commissionRateFor(campBeAgg,campBeBrand,campBeStart||dk(new Date()));
-  const prior=campBeGetBaseline(campBeBrand,campBeAgg,campBePriorStart,campBePriorEnd);
-  const month=campBeGetBaseline(campBeBrand,campBeAgg,campBeMonthStart,campBeMonthEnd);
-  const sources=[];
-  if(prior&&prior.opd>0)sources.push(prior);
-  if(month&&month.opd>0)sources.push(month);
-  if(!sources.length)return null;
-  const baseOpd=sources.reduce(function(s,r){return s+r.opd;},0)/sources.length;
-  const baseGrossAOV=sources.reduce(function(s,r){return s+r.grossAOV;},0)/sources.length;
-  const baseNetAOV=sources.reduce(function(s,r){return s+r.netAOV;},0)/sources.length;
-  const campDays=(campBeStart&&campBeEnd)?Math.max(1,Math.round((new Date(campBeEnd+'T12:00:00')-new Date(campBeStart+'T12:00:00'))/86400000)+1):7;
-  const baseOrders=Math.round(baseOpd*campDays);
-  let discPo=0;
-  // v406: BOGO/Select-Items now default to a real historical average when past completed
-  // campaigns exist for this brand+aggregator — campBeUseHistorical (default true) lets Nikhil
-  // fall back to the manual estimate fields below if he wants to override it for a specific reason.
-  let histMatch=null;
-  if(campBeDiscType==='pct_cap')discPo=Math.min(baseGrossAOV*campBeDiscPct/100,campBeCap>0?campBeCap:9999);
-  else if(campBeDiscType==='menu')discPo=baseGrossAOV*campBeDiscPct/100;
-  else if(campBeDiscType==='select'){
-    histMatch=campBeFindHistoricalDiscPerOrder(campBeBrand,campBeAgg,'select');
-    discPo=(histMatch&&campBeUseHistorical)?histMatch.avgDiscPerOrder:Math.min(baseGrossAOV*(campBeAttach/100)*(campBeDiscPct/100),campBeCap>0?campBeCap:9999);
-  }
-  else if(campBeDiscType==='bogo'){
-    histMatch=campBeFindHistoricalDiscPerOrder(campBeBrand,campBeAgg,'bogo');
-    discPo=(histMatch&&campBeUseHistorical)?histMatch.avgDiscPerOrder:baseGrossAOV*campBeFreeItemPct/100;
-  }
-  const platDiscPo=discPo*(campBeCoFund/100);
-  const ourDiscPo=discPo*(1-campBeCoFund/100);
-  const custNetAOV=baseGrossAOV-discPo;
-  const effectivePo=baseGrossAOV-ourDiscPo;
-  const foodPo=baseGrossAOV*fp;
-  // v397: real commission-methodology fix per Nikhil's worked example — the aggregator charges
-  // commission on Gross minus OUR share of the discount only (effectivePo), not on the full
-  // customer-facing net (custNetAOV). Worked example: AED 100 cart, 30% off cap 30 (AED 30
-  // discount), 50-50 co-funded — commission is charged on 100-15=85, not on 100-30=70, because
-  // the platform's own AED 15 subsidy doesn't reduce what THEY consider the sale worth for their
-  // own cut. Was custNetAOV*cr (70-based here) — understated commission cost by AED 3/order in
-  // this example, which overstated contribution by the same amount for every co-funded order.
-  // Identical result whenever coFundPct=0 (custNetAOV===effectivePo in that case, the common
-  // case), only actually changes the number when co-funding is genuinely set.
-  const commPo=effectivePo*cr;
-  const contribPo=effectivePo-foodPo-commPo;
-  const bFoodPo=baseGrossAOV*fp;
-  const bCommPo=baseNetAOV*cr;
-  const bContribPo=baseNetAOV-bFoodPo-bCommPo;
-  const bContrib=bContribPo*baseOrders;
-  function mkScenario(mult){
-    if(contribPo<=0)return null;
-    const orders=Math.ceil(bContrib*mult/contribPo);
-    return{orders:orders,opd:orders/campDays,ordersVsBase:(orders-baseOrders)/baseOrders*100,
-      grossSales:orders*baseGrossAOV,discBurn:orders*discPo,custNetSales:orders*custNetAOV,
-      platRebate:orders*platDiscPo,effectiveRev:orders*effectivePo,
-      foodCost:orders*foodPo,commCost:orders*commPo,
-      contrib:orders*contribPo,contribVsBase:(orders*contribPo-bContrib)/bContrib*100};
-  }
-  const flatScenario={orders:baseOrders,opd:baseOpd,ordersVsBase:0,
-    grossSales:baseOrders*baseGrossAOV,discBurn:baseOrders*discPo,custNetSales:baseOrders*custNetAOV,
-    platRebate:baseOrders*platDiscPo,effectiveRev:baseOrders*effectivePo,
-    foodCost:baseOrders*foodPo,commCost:baseOrders*commPo,
-    contrib:baseOrders*contribPo,contribVsBase:(baseOrders*contribPo-bContrib)/bContrib*100};
-  return{fp:fp,cr:cr,baseGrossAOV:baseGrossAOV,baseNetAOV:baseNetAOV,baseOpd:baseOpd,baseOrders:baseOrders,campDays:campDays,
-    discPo:discPo,platDiscPo:platDiscPo,ourDiscPo:ourDiscPo,custNetAOV:custNetAOV,effectivePo:effectivePo,
-    foodPo:foodPo,commPo:commPo,contribPo:contribPo,
-    bContribPo:bContribPo,bContrib:bContrib,impossible:contribPo<=0,
-    prior:prior,month:month,
-    flat:flatScenario,be:mkScenario(1.00),p10:mkScenario(1.10),p20:mkScenario(1.20),histMatch:histMatch};
 }
 // v368: dial geometry helpers — same math verified earlier for the approved mockup (CX must equal
 // viewBox width/2, confirmed by dividing the actual viewBox value rather than re-asserting a
@@ -15652,7 +15234,6 @@ function campBeFindHistoricalDiscPerOrder(brand,agg,discType){
   const avgDiscPerOrder=matches.reduce((s,m)=>s+m.discPerOrder*m.orders,0)/totalOrders;
   return{avgDiscPerOrder,matchCount:matches.length,totalOrders,matches};
 }
-function campBeArcPath(cx,cy,r,a1,a2){const p1=campBePolar(cx,cy,r,a1),p2=campBePolar(cx,cy,r,a2);const large=(a2-a1<=180)?0:1;return'M '+p1.x+' '+p1.y+' A '+r+' '+r+' 0 '+large+' 1 '+p2.x+' '+p2.y;}
 // v369: compact day+date range for the econ panel's Discount/order subtitle — Nikhil pointed out
 // that baseline can carry a real organic discount (small vouchers, standing combos) even with no
 // new campaign running, and asked to see exactly which dates that number came from, with the day
@@ -15660,315 +15241,6 @@ function campBeArcPath(cx,cy,r,a1,a2){const p1=campBePolar(cx,cy,r,a1),p2=campBe
 // gives "Tue 25 – Mon 31 Aug" for the common same-month case, or "Sat 25 Jul – Fri 31 Jul" style
 // when the window spans two months (a real case: if a campaign starts early in the month, the
 // prior-week comparison window can cross the previous month's end).
-function campBeCompactRange(start,end){
-  if(!start||!end)return'';
-  const s=new Date(start+'T12:00:00'),e=new Date(end+'T12:00:00');
-  const wd=d=>d.toLocaleDateString('en-US',{weekday:'short'});
-  const dm=d=>d.toLocaleDateString('en-US',{day:'numeric',month:'short'});
-  if(s.getMonth()===e.getMonth()&&s.getFullYear()===e.getFullYear())
-    return wd(s)+' '+s.getDate()+' – '+wd(e)+' '+e.getDate()+' '+e.toLocaleDateString('en-US',{month:'short'});
-  return wd(s)+' '+dm(s)+' – '+wd(e)+' '+dm(e);
-}
-function campBeHTML(){
-  const T=campTheme();
-  if(!campLoaded)return'';
-  function fmA(n){return n==null?'—':'AED '+Math.round(Math.abs(n)).toLocaleString();}
-  function fmP(n,d){d=d||0;return n==null?'—':(n>=0?'+':'')+n.toFixed(d)+'%';}
-  function fmN(n,d){if(d===undefined)d=1;return n==null?'—':d?n.toFixed(d):Math.round(n).toLocaleString();}
-  const ac='#60A5FA';
-  const cardStyle='background:'+T.panelBg+';border:1px solid '+T.border+';border-radius:12px;padding:14px 16px;margin-bottom:12px';
-  function secLabel(txt,clr){return'<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:'+(clr||T.muted)+';margin-bottom:10px">'+txt+'</div>';}
-  // v365: color-scheme is REQUIRED on every date input, or the browser defaults its native
-  // calendar icon + popup picker to light mode — which is nearly invisible against this dark
-  // panel (the exact bug Nikhil hit: no visible way to open a calendar). Every other date input
-  // in the dashboard already sets this; fldStyle is shared by selects/number fields too but the
-  // property is harmless on those.
-  const fldStyle='background:'+T.inputBg+';border:1px solid '+T.border+';border-radius:7px;color:'+T.text+';padding:7px 10px;font-size:12px;font-weight:600;width:100%;color-scheme:'+T.inputScheme;
-  const bOpts=BR.map(function(b){return'<option value="'+b.n+'"'+(b.n===campBeBrand?' selected':'')+'>'+b.n+'</option>';}).join('');
-  const aOpts=AGGS.filter(function(a){return a!=='Smiles'&&a!=='Instashop';}).map(function(a){return'<option value="'+a+'"'+(a===campBeAgg?' selected':'')+'>'+a+'</option>';}).join('');
-  const dtOptsList=[{v:'pct_cap',l:'% Off with Cap'},{v:'menu',l:'Menu-wide % Off'},{v:'select',l:'Select Items'},{v:'bogo',l:'BOGO / Free Item'}];
-  const dtOpts=dtOptsList.map(function(o){return'<option value="'+o.v+'"'+(o.v===campBeDiscType?' selected':'')+'>'+o.l+'</option>';}).join('');
-  const hasBaseDates=campBePriorStart&&campBeMonthStart;
-  const R=hasBaseDates?campBeCompute():null;
-  campBeResult=R;
-  function periodWarn(p,label){
-    if(!p)return'<span style="color:'+T.muted+';font-size:11px">No data found for '+label+'</span>';
-    if(p.hasCampaign)return'<span style="color:#FBBF24;font-size:10px">⚠ Campaign running in '+label+': '+p.campNames.slice(0,2).join(', ')+'</span>';
-    return'<span style="color:#22C55E;font-size:10px">✓ Clean baseline period</span>';
-  }
-  // v400: Option B form redesign, matching the Forecaster's — two-column split ("What & when" |
-  // "Deal terms") instead of stacked full-width rows. Same underlying fields/handlers, same
-  // commission/food-pkg summary line kept below — layout change only.
-  let setup='<div style="'+cardStyle+'">'
-    +secLabel('Campaign setup',ac)
-    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">'
-    +'<div style="background:'+T.rowBg+';border-radius:10px;padding:14px 16px">'
-    +'<div style="font-size:11px;font-weight:800;color:'+T.muted+';text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">🏷️ What &amp; when</div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
-    +'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Brand</div><select onchange="campBeBrand=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'">'+bOpts+'</select></div>'
-    +'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Aggregator</div><select onchange="campBeAgg=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'">'+aOpts+'</select></div>'
-    +'</div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
-    +'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Start date</div><input type="date" value="'+campBeStart+'" onchange="campBeStart=this.value;campBeAutoFillDates();campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>'
-    +'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">End date</div><input type="date" value="'+campBeEnd+'" onchange="campBeEnd=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>'
-    +'</div>'
-    +'</div>'
-    +'<div style="background:'+T.rowBg+';border-radius:10px;padding:14px 16px">'
-    +'<div style="font-size:11px;font-weight:800;color:#F59E0B;text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">🎯 Deal terms</div>'
-    +'<div style="margin-bottom:10px"><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Discount type</div><select onchange="campBeDiscType=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'">'+dtOpts+'</select></div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
-    +(campBeDiscType!=='bogo'?'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Discount %</div><input type="number" value="'+campBeDiscPct+'" min="1" max="90" onchange="campBeDiscPct=+this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>':'')
-    +((campBeDiscType==='pct_cap'||campBeDiscType==='select')?'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Cap (AED, 0=none)</div><input type="number" value="'+campBeCap+'" min="0" onchange="campBeCap=+this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>':'')
-    +(campBeDiscType==='bogo'&&!(R&&R.histMatch&&campBeUseHistorical)?'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Free item (% of cart)</div><input type="number" value="'+campBeFreeItemPct+'" min="5" max="60" onchange="campBeFreeItemPct=+this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>':'')
-    +(campBeDiscType==='select'&&!(R&&R.histMatch&&campBeUseHistorical)?'<div><div style="font-size:10px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:4px">Attach rate %</div><input type="number" value="'+campBeAttach+'" min="1" max="100" onchange="campBeAttach=+this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>':'')
-    +'</div>'
-    +((campBeDiscType==='bogo'||campBeDiscType==='select')?(R&&R.histMatch?
-      '<div style="display:flex;align-items:center;gap:8px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.3);border-radius:7px;padding:8px 11px;margin-bottom:10px;font-size:11px">'
-      +'<span style="color:#22C55E;font-weight:700">✓ '+R.histMatch.matchCount+' real past campaign'+(R.histMatch.matchCount!==1?'s':'')+'</span>'
-      +'<span style="color:'+T.muted+'">— avg '+fmA(R.histMatch.avgDiscPerOrder)+'/order'+(campBeUseHistorical?' — no need to estimate a %':'')+'</span>'
-      +'<label style="margin-left:auto;display:flex;align-items:center;gap:5px;cursor:pointer;font-size:10px;color:'+T.muted+'"><input type="checkbox" '+(campBeUseHistorical?'checked':'')+' onchange="campBeUseHistorical=this.checked;campBeResult=null;renderCampaigns()" style="cursor:pointer">Use this</label>'
-      +'</div>'
-      :'<div style="font-size:10px;color:'+T.muted+';margin-bottom:10px">No completed '+(campBeDiscType==='bogo'?'BOGO':'Select-Items')+' campaigns found for '+esc(campBeBrand)+' × '+esc(campBeAgg)+' — using your estimate below.</div>'
-    ):'')
-    +'<div style="display:flex;align-items:center;gap:10px;background:'+T.inputBg+';border:1px solid '+T.border+';border-radius:7px;padding:8px 11px">'
-    +'<label style="position:relative;display:inline-block;width:34px;height:18px;flex-shrink:0;cursor:pointer">'
-    +'<input type="checkbox" '+(campBeCoFund>0?'checked':'')+' onchange="campBeCoFund=this.checked?50:0;campBeResult=null;renderCampaigns()" style="position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer">'
-    +'<span style="position:absolute;inset:0;background:'+(campBeCoFund>0?'#22C55E':T.border)+';border-radius:999px;transition:.15s;pointer-events:none"></span>'
-    +'<span style="position:absolute;top:2px;'+(campBeCoFund>0?'right':'left')+':2px;width:14px;height:14px;background:#fff;border-radius:50%;transition:.15s;pointer-events:none"></span>'
-    +'</label>'
-    +'<span style="font-size:12px;font-weight:600;color:'+T.text+';flex:1">Platform co-funds</span>'
-    +(campBeCoFund>0?('<input type="number" value="'+campBeCoFund+'" min="1" max="100" onchange="campBeCoFund=+this.value;campBeResult=null;renderCampaigns()" style="width:52px;background:'+T.panelBg+';border:1px solid '+T.border+';border-radius:5px;color:'+T.text+';padding:4px 6px;font-size:11.5px;font-weight:600;text-align:center"><span style="font-size:11.5px;color:'+T.muted+'">%</span>'):'')
-    +'</div>'
-    +'</div>'
-    +'</div>'
-    +(R?'<div style="margin-top:10px;padding:7px 12px;background:rgba(255,255,255,.03);border-radius:7px;font-size:11px;color:'+T.muted+';display:flex;gap:14px;flex-wrap:wrap">'
-      +'<span>Commission: <strong style="color:'+T.text+'">'+Math.round(R.cr*100)+'%</strong> of cust. net</span>'
-      +'<span>Food + pkg: <strong style="color:'+T.text+'">'+Math.round(R.fp*100)+'%</strong> of gross</span>'
-      +'<span>Discount/order: <strong style="color:#F87171">'+fmA(R.discPo)+'</strong></span>'
-      +(campBeCoFund>0?'<span>Our share: <strong style="color:#F87171">'+fmA(R.ourDiscPo)+'</strong> · Platform covers: <strong style="color:#22C55E">'+fmA(R.platDiscPo)+'</strong></span>':'')
-      +'</div>':'')
-    +'</div>';
-  let baseCard='<div style="'+cardStyle+'">'
-    +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'
-    +secLabel('Baseline — auto-pulled from your data',T.muted)
-    +'<button onclick="campBeShowDateEdit=!campBeShowDateEdit;renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid '+T.border+';border-radius:6px;color:'+T.label+';padding:4px 10px;font-size:11px;cursor:pointer;font-weight:600;margin-top:-6px">'+(campBeShowDateEdit?'Hide dates ↑':'Change dates ↓')+'</button>'
-    +'</div>';
-  if(!campBeStart){
-    baseCard+='<div style="color:'+T.muted+';font-size:12px">Enter the campaign start date above — comparison dates will fill automatically.</div>';
-  }else{
-    baseCard+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:'+(R?'10px':'0')+'">'
-      +'<div style="padding:10px 12px;background:'+T.inputBg+';border-radius:8px;border:1px solid '+T.border+'">'
-      +'<div style="font-size:10px;font-weight:700;color:'+T.muted+';text-transform:uppercase;margin-bottom:6px">Prior week</div>'
-      +(campBeShowDateEdit
-        ?'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px"><input type="date" value="'+campBePriorStart+'" onchange="campBePriorStart=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"><input type="date" value="'+campBePriorEnd+'" onchange="campBePriorEnd=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>'
-        :'<div style="font-size:12px;font-weight:600;color:'+T.text+';margin-bottom:5px">'+fmtDisp(campBePriorStart)+' → '+fmtDisp(campBePriorEnd)+'</div>')
-      +'<div style="margin-bottom:4px">'+periodWarn(R?R.prior:null,'prior week')+'</div>'
-      +(R&&R.prior?'<div style="font-size:13px;font-weight:800;color:'+T.text+'">'+fmN(R.prior.opd)+'/day · '+fmA(R.prior.netAOV)+' net AOV</div>':'')
-      +'</div>'
-      +'<div style="padding:10px 12px;background:'+T.inputBg+';border-radius:8px;border:1px solid '+T.border+'">'
-      +'<div style="font-size:10px;font-weight:700;color:'+T.muted+';text-transform:uppercase;margin-bottom:6px">Same days last month</div>'
-      +(campBeShowDateEdit
-        ?'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px"><input type="date" value="'+campBeMonthStart+'" onchange="campBeMonthStart=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"><input type="date" value="'+campBeMonthEnd+'" onchange="campBeMonthEnd=this.value;campBeResult=null;renderCampaigns()" style="'+fldStyle+'"></div>'
-        :'<div style="font-size:12px;font-weight:600;color:'+T.text+';margin-bottom:5px">'+fmtDisp(campBeMonthStart)+' → '+fmtDisp(campBeMonthEnd)+'</div>')
-      +'<div style="margin-bottom:4px">'+periodWarn(R?R.month:null,'last month')+'</div>'
-      +(R&&R.month?'<div style="font-size:13px;font-weight:800;color:'+T.text+'">'+fmN(R.month.opd)+'/day · '+fmA(R.month.netAOV)+' net AOV</div>':'')
-      +'</div>'
-      +'</div>';
-    if(R){
-      const bstats=[['Avg orders/day',fmN(R.baseOpd),T.text],['Net AOV',fmA(R.baseNetAOV),T.text],['Total orders ('+R.campDays+'d)',''+R.baseOrders,T.text],['Baseline contribution',fmA(R.bContrib),'#22C55E']];
-      baseCard+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">'
-        +bstats.map(function(x){return'<div style="padding:9px 10px;background:'+T.inputBg+';border-radius:7px;border:1px solid '+T.border+';text-align:center"><div style="font-size:9px;color:'+T.muted+';font-weight:700;text-transform:uppercase;margin-bottom:3px">'+x[0]+'</div><div style="font-size:17px;font-weight:800;color:'+x[2]+'">'+x[1]+'</div></div>';}).join('')
-        +'</div>';
-    }
-  }
-  baseCard+='</div>';
-  if(!R)return setup+baseCard;
-  if(R.impossible){
-    return setup+baseCard+'<div style="'+cardStyle+';border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.06)">'
-      +'<div style="font-size:14px;font-weight:800;color:#F87171;margin-bottom:6px">⛔ No break-even possible at these terms</div>'
-      +'<div style="font-size:12px;color:#FCA5A5;line-height:1.6">Contribution per order = <strong>'+fmA(R.contribPo)+'</strong>. Every additional order deepens the loss. Reduce the discount, lower the cap, or increase platform co-funding.</div></div>';
-  }
-  // v368: Cool Contrast palette, approved after comparing options across many iterations.
-  const CBE_COLORS=['#818CF8','#F43F5E','#22D3EE','#2DD4BF','#EAB308'];
-  const CBE_LABELS=['Baseline','Loss','Break-even','Profit','Stretch'];
-  // v396: Baseline's `d` previously only carried orders/opd/contrib — enough for the top of the
-  // card, but not the Gross Sales/Discount/Net Sales/Commission/Food+pkg breakdown Nikhil asked
-  // to add below it. Derived here from fields campBeCompute() already returns (baseGrossAOV,
-  // baseNetAOV, fp, cr, baseOrders) rather than changing campBeCompute's return shape — these are
-  // the exact same terms mkScenario() uses internally for the other four scenarios (bFoodPo=
-  // baseGrossAOV*fp, bCommPo=baseNetAOV*cr), just not previously exposed on the object this card
-  // reads from.
-  const baseGrossSales=R.baseOrders*R.baseGrossAOV,baseDiscBurn=(R.baseGrossAOV-R.baseNetAOV)*R.baseOrders,
-    baseCustNetSales=R.baseNetAOV*R.baseOrders,baseFoodCost=R.baseGrossAOV*R.fp*R.baseOrders,baseCommCost=R.baseNetAOV*R.cr*R.baseOrders;
-  const SCEN=[
-    {key:'base',label:'Baseline',sub:'No campaign',col:CBE_COLORS[0],d:{orders:R.baseOrders,opd:R.baseOpd,ordersVsBase:0,contrib:R.bContrib,contribVsBase:0,
-      grossSales:baseGrossSales,discBurn:baseDiscBurn,custNetSales:baseCustNetSales,effectiveRev:baseCustNetSales,foodCost:baseFoodCost,commCost:baseCommCost}},
-    {key:'flat',label:'Flat orders',sub:'Same volume + discount',col:CBE_COLORS[1],d:R.flat},
-    {key:'be',label:'Break-even',sub:'Match baseline',col:CBE_COLORS[2],d:R.be},
-    {key:'p10',label:'+10% profit',sub:'10% above baseline',col:CBE_COLORS[3],d:R.p10},
-    {key:'p20',label:'+20% profit',sub:'20% above baseline',col:CBE_COLORS[4],d:R.p20}
-  ];
-  // Two real per-order economics profiles. Baseline (index 0) uses the REAL historical gap
-  // between gross and net AOV — real sales data can show a small organic discount (minor
-  // vouchers, standing combos) even with no new campaign running, so this is not hardcoded to
-  // zero. The four campaign scenarios all share IDENTICAL per-order economics, since only order
-  // volume differs between them, not the campaign terms.
-  // v369: which dates the baseline's organic discount was actually computed from — only the
-  // periods that genuinely contributed (R.prior / R.month can each be null if that window had no
-  // sales data), not just both blindly.
-  const baseDiscDateRef=(function(){
-    const parts=[];
-    if(R.prior)parts.push(campBeCompactRange(campBePriorStart,campBePriorEnd));
-    if(R.month)parts.push(campBeCompactRange(campBeMonthStart,campBeMonthEnd));
-    return parts.length?('From '+parts.join(' & ')):'Organic, from your own sales data';
-  })();
-  const econBase=[
-    ['Gross AOV',fmA(R.baseGrossAOV),T.text,'Baseline order size'],
-    ['Discount / order',(R.baseGrossAOV-R.baseNetAOV)>0.5?('– '+fmA(R.baseGrossAOV-R.baseNetAOV)):'AED 0',T.muted,baseDiscDateRef],
-    ['Customer pays',fmA(R.baseNetAOV),T.text,'Net AOV'],
-    ['Our revenue',fmA(R.baseNetAOV),ac,'No campaign running'],
-    ['Food + pkg','– '+fmA(R.baseGrossAOV*R.fp),'#FB923C',Math.round(R.fp*100)+'% of gross'],
-    ['Commission','– '+fmA(R.baseNetAOV*R.cr),'#FB923C',Math.round(R.cr*100)+'% of net']
-  ];
-  const econCampaign=[
-    ['Gross AOV',fmA(R.baseGrossAOV),T.text,'Baseline order size'],
-    ['Discount / order','– '+fmA(R.discPo),'#F43F5E',campBeCoFund>0?('Platform covers '+campBeCoFund+'%'):'100% our cost'],
-    ['Customer pays',fmA(R.custNetAOV),T.text,'Net AOV after discount'],
-    ['Our revenue',fmA(R.effectivePo),ac,campBeCoFund>0?'After platform rebate':'Effective receipt/order'],
-    ['Food + pkg','– '+fmA(R.foodPo),'#FB923C',Math.round(R.fp*100)+'% of gross'],
-    ['Commission','– '+fmA(R.commPo),'#FB923C',Math.round(R.cr*100)+'% of our revenue']
-  ];
-  const econContribBase={v:fmA(R.bContribPo),c:CBE_COLORS[0]};
-  const econContribCampaign={v:fmA(R.contribPo),c:R.contribPo>R.bContribPo*0.6?CBE_COLORS[2]:'#FBBF24'};
-  // Cache for campBeSetActive to consume on hover/auto-play, without a full re-render.
-  campBeScenCache={scen:SCEN,econBase:econBase,econCampaign:econCampaign,econContribBase:econContribBase,econContribCampaign:econContribCampaign,colors:CBE_COLORS,campDays:R.campDays};
-  campBeActiveIdx=0;
-
-  // ── Dial geometry — verified: CX must equal viewBox width/2 (420/2=210). ──
-  const CX=210,CY=182,ARC_R=130,NEEDLE_LEN=106,ARC_STROKE=18,LABEL_ARC_R=ARC_R+ARC_STROKE/2+22,GAP_DEG=2.5;
-  const ZONE_BOUNDS=[[-90,-54],[-54,-18],[-18,18],[18,54],[54,90]];
-  const ZONE_DEG=[-72,-36,0,36,72];
-  const TR='all .7s cubic-bezier(.4,0,.2,1)';
-
-  const s0=SCEN[0];
-  const heroHTML='<div id="cbe-hero" style="background:linear-gradient(135deg,'+s0.col+'22,'+s0.col+'05);border:1.5px solid '+s0.col+'77;border-radius:20px;padding:26px 30px;margin-bottom:14px;box-shadow:0 0 50px '+s0.col+'22;position:relative;overflow:hidden;transition:'+TR+'">'
-    +'<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:20px;position:relative">'
-    +'<div>'
-    +'<div id="cbe-hero-label" style="font-size:11px;font-weight:800;letter-spacing:1.2px;color:'+s0.col+';text-transform:uppercase;margin-bottom:8px;transition:'+TR+'">'+s0.label+'</div>'
-    +'<div style="display:flex;align-items:baseline;gap:12px">'
-    +'<span id="cbe-hero-opd" style="font-size:52px;font-weight:800;color:'+T.text+';line-height:1;transition:'+TR+'">'+fmN(s0.d.opd)+'</span>'
-    +'<span style="font-size:18px;font-weight:600;color:'+T.muted+'">orders / day</span>'
-    +'</div>'
-    +'<div id="cbe-hero-sub" style="font-size:14px;color:'+T.label+';margin-top:6px">'+fmN(s0.d.orders,0)+' orders total over '+R.campDays+' days</div>'
-    +'</div>'
-    +'<div style="text-align:right">'
-    +'<div style="font-size:10px;font-weight:700;color:'+T.muted+';text-transform:uppercase;letter-spacing:1px">Net contribution</div>'
-    +'<div id="cbe-hero-contrib" style="font-size:26px;font-weight:800;color:'+s0.col+';transition:'+TR+'">'+fmA(s0.d.contrib)+'</div>'
-    +'</div></div></div>';
-
-  let defsSVG='',zonesSVG='',tagsSVG='';
-  for(let i=0;i<5;i++){
-    const b=ZONE_BOUNDS[i],col=CBE_COLORS[i],isOn=i===0;
-    const gA=b[0]+GAP_DEG,gB=b[1]-GAP_DEG;
-    defsSVG+='<path id="labelPath-'+i+'" d="'+campBeArcPath(CX,CY,LABEL_ARC_R,b[0],b[1])+'" fill="none"></path>';
-    zonesSVG+='<path id="cbe-zone-'+i+'" d="'+campBeArcPath(CX,CY,ARC_R,gA,gB)+'" fill="none" stroke="'+col+'" stroke-width="'+(isOn?22:18)+'" opacity="'+(isOn?1:0.85)+'" style="transition:'+TR+';filter:'+(isOn?('drop-shadow(0 0 14px '+col+') drop-shadow(0 0 4px '+col+')'):('drop-shadow(0 0 5px '+col+'99)'))+'"></path>';
-    tagsSVG+='<text id="cbe-tag-'+i+'" font-size="'+(isOn?15:13)+'" font-weight="800" fill="'+col+'" style="transition:'+TR+';opacity:'+(isOn?1:0.75)+';filter:'+(isOn?('drop-shadow(0 0 6px '+col+'cc)'):'none')+'"><textPath href="#labelPath-'+i+'" startOffset="50%" text-anchor="middle">'+CBE_LABELS[i]+'</textPath></text>';
-  }
-  const dialSVG='<svg width="420" height="220" viewBox="0 0 420 220"><defs>'+defsSVG+'</defs>'+zonesSVG+tagsSVG
-    +'<line id="cbe-needle" x1="'+CX+'" y1="'+CY+'" x2="'+CX+'" y2="'+(CY-NEEDLE_LEN)+'" stroke="'+CBE_COLORS[0]+'" stroke-width="5" stroke-linecap="round" style="filter:drop-shadow(0 0 8px '+CBE_COLORS[0]+');transform:rotate('+ZONE_DEG[0]+'deg);transform-origin:'+CX+'px '+CY+'px;transition:transform .9s cubic-bezier(.22,1.4,.36,1)"></line>'
-    +'<circle id="cbe-needle-pivot" cx="'+CX+'" cy="'+CY+'" r="9" fill="'+CBE_COLORS[0]+'" style="transition:'+TR+'"></circle>'
-    +'</svg>';
-
-  let trackHTML='<div style="position:relative;height:96px">'
-    +'<div style="position:absolute;top:38px;left:6%;right:6%;height:4px;border-radius:2px;background:linear-gradient(90deg,'+CBE_COLORS.join(',')+')"></div>';
-  SCEN.forEach(function(sc,i){
-    const pos=6+i*(88/4),isOn=i===0;
-    trackHTML+='<div onmouseenter="campBeHover('+i+')" onmouseleave="campBeUnhover()" style="position:absolute;left:'+pos+'%;top:0;transform:translateX(-50%);text-align:center;width:120px;cursor:pointer">'
-      +'<div id="cbe-circle-'+i+'" style="width:'+(isOn?32:20)+'px;height:'+(isOn?32:20)+'px;border-radius:50%;background:'+T.panelBg+';border:3px solid '+sc.col+';margin:0 auto;margin-top:'+(isOn?18:24)+'px;box-shadow:'+(isOn?('0 0 20px '+sc.col):'none')+';transition:'+TR+'"></div>'
-      +'<div id="cbe-circle-val-'+i+'" style="font-size:'+(isOn?15:12)+'px;font-weight:800;color:'+sc.col+';margin-top:8px;transition:'+TR+'">'+fmN(sc.d.opd)+'/day</div>'
-      +'<div style="font-size:10px;color:'+T.label+';margin-top:2px">'+sc.label+'</div>'
-      +'</div>';
-  });
-  trackHTML+='</div>';
-
-  const dialCard='<div style="background:'+T.panelBg+';border:1px solid '+T.border+';padding:16px;border-radius:16px;display:flex;flex-direction:column;align-items:center">'+dialSVG
-    +'<div style="text-align:center;margin-top:-4px"><div style="font-size:11px;font-weight:700;color:'+T.muted+';text-transform:uppercase;letter-spacing:1px">Needle tracks</div><div id="cbe-needle-label" style="font-size:14px;font-weight:800;color:'+CBE_COLORS[0]+';margin-top:2px;transition:'+TR+'">'+SCEN[0].label+'</div></div></div>';
-  const trackCard='<div style="background:'+T.panelBg+';border:1px solid '+T.border+';padding:20px 24px;border-radius:16px">'
-    +secLabel('Your journey to profit',T.muted)+trackHTML+'</div>';
-  const dialTrackRow='<div style="display:grid;grid-template-columns:460px 1fr;gap:14px;margin-bottom:14px">'+dialCard+trackCard+'</div>';
-
-  let econRowsHTML='';
-  econBase.forEach(function(row,i){
-    // v369: subtitle shown only under Discount/order (index 1) — the one row where the source
-    // (real historical dates, or the campaign's own terms) genuinely needs to be traceable.
-    // The other rows are self-explanatory and stay compact.
-    const subLine=(i===1)?('<div id="cbe-econ-sub-'+i+'" style="font-size:9.5px;color:'+T.muted+';margin-top:2px;text-align:right;transition:'+TR+'">'+row[3]+'</div>'):'';
-    econRowsHTML+='<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:10px 0;border-bottom:'+(i<5?('1px solid '+T.border+'66'):'none')+'"><span style="font-size:13px;color:'+T.label+';padding-top:2px">'+row[0]+'</span><span style="text-align:right"><span id="cbe-econ-val-'+i+'" style="font-size:16px;font-weight:800;color:'+row[2]+';transition:'+TR+';display:block">'+row[1]+'</span>'+subLine+'</span></div>';
-  });
-  const econPanel='<div id="cbe-econ-panel" style="background:'+T.panelBg+';border:1.5px solid '+T.border+';border-radius:16px;padding:18px 20px;box-shadow:none;transition:'+TR+'">'
-    +'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:'+T.muted+'">Per-order economics</div>'
-    +'<span id="cbe-econ-badge" style="font-size:10px;font-weight:700;color:'+CBE_COLORS[0]+';transition:'+TR+'">no campaign</span></div>'
-    +econRowsHTML
-    +'<div id="cbe-econ-contrib-box" style="margin-top:12px;padding:12px 14px;background:'+CBE_COLORS[0]+'1A;border:1px solid '+CBE_COLORS[0]+'55;border-radius:10px;text-align:center;transition:'+TR+'">'
-    +'<div id="cbe-econ-contrib-label" style="font-size:10px;font-weight:700;color:'+CBE_COLORS[0]+';text-transform:uppercase;letter-spacing:.5px;transition:'+TR+'">Contribution / order</div>'
-    +'<div id="cbe-econ-contrib-val" style="font-size:22px;font-weight:800;color:'+CBE_COLORS[0]+';margin-top:4px;transition:'+TR+'">'+econContribBase.v+'</div>'
-    +'</div></div>';
-
-  let cardsHTML='';
-  SCEN.forEach(function(sc,i){
-    const isOn=i===0;
-    // v398: bigger text throughout per Nikhil's approved mockup (be_calc_v6.html) — mini P&L rows
-    // bumped 9px/10px → 10.5px, headline orders/day 24px → 23px, Net Contribution 14px → 16.5px —
-    // confirmed all 5 cards still fit one row at this size before shipping.
-    function miniRow(label,val,color,labelSuffix){
-      const lbl=labelSuffix?(label+' <span style="color:#818CF8;font-weight:700">'+labelSuffix+'</span>'):label;
-      return'<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;line-height:1.4"><span style="color:'+T.muted+'">'+lbl+'</span><span style="font-weight:700;color:'+(color||T.label)+'">'+val+'</span></div>';
-    }
-    // v398: Discount is now three explicit lines when co-funding is actually set (per Nikhil's
-    // approved mockup) — Discount Total and Aggregator Funding are informational (no minus sign,
-    // neither is itself subtracted), Brand Funded is the only one actually subtracted to reach Net
-    // Sales below it. Only applies to the four campaign scenarios — Baseline's own discBurn is
-    // organic historical discount (see build 396's backfill), never platform-co-funded, so it
-    // always stays a single plain "Discount" line regardless of the campBeCoFund toggle. Falls
-    // back to the original single-line form whenever co-funding is 0% (the common case) — same
-    // output as before in that case.
-    const ourDiscBurn=sc.d.discBurn-(sc.d.platRebate||0);
-    const discLines=(sc.key!=='base'&&sc.d.platRebate>0)
-      ?miniRow('Discount Total',fmA(sc.d.discBurn))
-        +miniRow('Aggregator Funding',fmA(sc.d.platRebate))
-        +miniRow('Brand Funded','– '+fmA(ourDiscBurn),'#F87171')
-      :miniRow('Discount',ourDiscBurn>0?('– '+fmA(ourDiscBurn)):fmA(0),ourDiscBurn>0?'#F87171':undefined);
-    const pnl='<div style="margin-top:7px;padding-top:7px;border-top:1px solid '+T.border+'66">'
-      +miniRow('Gross Sales',fmA(sc.d.grossSales))
-      +discLines
-      +miniRow('Net Sales',fmA(sc.d.effectiveRev))
-      +miniRow('Commission','– '+fmA(sc.d.commCost),'#FB923C','('+Math.round(R.cr*100)+'%)')
-      +miniRow('Food+Pkg','– '+fmA(sc.d.foodCost),'#FB923C','('+Math.round(R.fp*100)+'%)')
-      +'</div>';
-    // v398: contribution vs baseline now shows absolute AED alongside the % for all four
-    // non-baseline scenarios, per Nikhil's ask — was % only.
-    const vsBaseTxt=sc.key==='base'?'reference':(()=>{
-      const diff=sc.d.contrib-R.bContrib;
-      const diffColor=diff>=0?'#22C55E':'#EF4444';
-      return'<b style="color:'+diffColor+'">'+(diff>=0?'+':'– ')+fmA(Math.abs(diff))+'</b> ('+fmP(sc.d.contribVsBase,1)+') vs baseline';
-    })();
-    cardsHTML+='<div id="cbe-card-'+i+'" onmouseenter="campBeHover('+i+')" onmouseleave="campBeUnhover()" style="background:'+(isOn?('linear-gradient(160deg,'+sc.col+'2A,'+T.panelBg+')'):T.panelBg)+';border:1.5px solid '+(isOn?sc.col:T.border)+';border-radius:14px;padding:13px 11px;box-shadow:'+(isOn?('0 0 22px '+sc.col+'55'):'none')+';transform:'+(isOn?'translateY(-3px)':'none')+';cursor:pointer;transition:'+TR+'">'
-      +'<div style="font-size:11.5px;font-weight:800;color:'+sc.col+';text-transform:uppercase;letter-spacing:.3px">'+sc.label+'</div>'
-      +'<div style="font-size:9.5px;color:'+T.label+';margin-bottom:7px">'+sc.sub+'</div>'
-      +'<div style="font-size:23px;font-weight:800;color:'+T.text+';line-height:1">'+fmN(sc.d.opd)+'</div>'
-      +'<div style="font-size:10px;color:'+T.muted+'">orders / day</div>'
-      +'<div style="font-size:10.5px;color:'+T.label+';margin-top:2px">'+fmN(sc.d.orders,0)+' total</div>'
-      +pnl
-      +'<div style="margin-top:8px;padding-top:8px;border-top:1px solid '+T.border+'66">'
-      +'<div style="font-size:9.5px;font-weight:700;color:'+T.muted+';text-transform:uppercase;letter-spacing:.3px">Net Contribution</div>'
-      +'<div style="font-size:16.5px;font-weight:800;color:'+sc.col+'">'+fmA(sc.d.contrib)+'</div>'
-      +'<div style="font-size:10.5px;color:'+T.label+'">'+vsBaseTxt+'</div>'
-      +'</div></div>';
-  });
-  const econCardsRow='<div style="display:grid;grid-template-columns:300px 1fr;gap:14px">'+econPanel+'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">'+cardsHTML+'</div></div>';
-
-  return setup+baseCard+heroHTML+dialTrackRow+econCardsRow;
-}
 // v368: targeted DOM updates for the hover/auto-play interactions — deliberately NOT going through
 // renderCampaigns()/pg.innerHTML, which would tear down and recreate every node on each tick and
 // kill the CSS transitions declared above (they only animate on the SAME persisting element across
@@ -16028,364 +15300,7 @@ function campBeSetActive(idx){
 }
 function campBeStopAuto(){if(campBeAutoTimer){clearInterval(campBeAutoTimer);campBeAutoTimer=null;}}
 function campBeStartAuto(){campBeStopAuto();if(!campBeScenCache)return;campBeAutoTimer=setInterval(function(){campBeSetActive((campBeActiveIdx+1)%5);},1800);}
-function campBeHover(idx){campBeStopAuto();campBeSetActive(idx);}
-function campBeUnhover(){campBeStartAuto();}
 
-function campFcHTML(){
-  const T=campTheme();
-  if(!campLoaded)return''; // don't render until campaigns are loaded
-  const fA=v=>'AED '+Math.round(Math.abs(v)).toLocaleString();
-  const fP=v=>(v>=0?'+':'')+Math.round(v)+'%';
-  const accent='#60A5FA';
-  const bOpts=BR.map(b=>`<option value="${b.n}"${b.n===campFcBrand?' selected':''}>${b.n}</option>`).join('');
-  const aOpts=AGGS.map(a=>`<option value="${a}"${a===campFcAgg?' selected':''}>${a}</option>`).join('');
-  const branches=campFcBrand&&campFcAgg?campFcGetBranches(campFcBrand,campFcAgg):[];
-  const allSelected=campFcBranches.size===0;
-  const branchChips=branches.map(b=>{const sel=allSelected||campFcBranches.has(b);return`<span onclick="campFcToggleBranch('${esc(b)}');renderCampaigns()" style="display:inline-flex;align-items:center;gap:3px;font-size:11px;padding:2px 8px;border-radius:999px;cursor:pointer;margin:2px;border:0.5px solid ${sel?accent:T.border};background:${sel?accent+'18':'transparent'};color:${sel?accent:T.label}">${b}</span>`;}).join('');
-
-  let resultsHTML='';
-  if(campFcResult&&!campFcCollapsed){
-    const r=campFcResult;
-    const curSnapshot={brand:campFcBrand,agg:campFcAgg,start:campFcStart,end:campFcEnd,type:campFcType,discPct:campFcDiscPct,cap:campFcCap,coFund:campFcCoFund,coFundPct:campFcCoFundPct,branches:[...campFcBranches].sort().join(',')};
-    const isStale=r.inputSnapshot&&Object.keys(curSnapshot).some(k=>curSnapshot[k]!==r.inputSnapshot[k]);
-    const staleBanner=isStale?`<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.4);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#F59E0B;font-weight:600">⚠️ The form has changed since these results were generated — click Run Forecast again to update them.</div>`:'';
-    // v399: real Option A card redesign — this was the ORIGINAL ask from the start of this whole
-    // Forecaster redesign, and got missed in the shuffle while I built the before/during matches
-    // and the Break-Even card instead. Absolute orders/day and sales/day now lead the card
-    // (sc.totalOrders/campNet are campaign-period totals campFcRunScenario already computes;
-    // dividing by r.nDays — already used elsewhere, e.g. the comparison table below — gives the
-    // absolute daily figure with no new computation), with the incremental delta as a smaller
-    // chip underneath rather than the headline. ROI/total-discount detail moved behind a per-card
-    // "Show detail" toggle, same interaction pattern as the match-row expansion just built.
-    const scCard=(label,sc,isMain,key)=>{
-      if(!sc)return'';
-      const ic=sc.incrContrib>=0?'#22C55E':'#EF4444';
-      const tipId=storeTip(()=>buildFcCalcTipHTML(sc,r.brand,r.agg,campFcDiscPct,campFcCap,r.coFP,campFcStart));
-      const roiC=sc.roi==null?T.muted:sc.roi>=0.5?'#22C55E':sc.roi>=0?'#FBBF24':'#EF4444';
-      const roiTxt=sc.roi!=null?sc.roi.toFixed(2)+'×':'—';
-      const mainBorder=isMain?`border:1.5px solid ${accent}`:`border:0.5px solid ${T.border}`;
-      const absOrdersPerDay=sc.totalOrders/r.nDays;
-      const absSalesPerDay=sc.campNet/r.nDays;
-      const deltaGood=sc.incrOrdersPerDay>=0;
-      const isOpen=campFcScenarioDetailOpen.has(key);
-      const detailToggle=`<div onclick="campFcToggleScenarioDetail('${key}')" style="margin-top:12px;padding-top:10px;border-top:0.5px solid ${T.border};cursor:pointer;font-size:11px;color:${T.muted};font-weight:600;text-align:center">${isOpen?'Hide':'Show'} discount &amp; ROI detail ${isOpen?'▴':'▾'}</div>`;
-      const detailBody=isOpen?`<div style="margin-top:8px;font-size:11.5px;color:${T.label};line-height:2.1">`
-        +`<div style="display:flex;justify-content:space-between"><span>Merchant discount/day</span><strong style="color:#F59E0B">${fA(sc.merchantDiscPerDay)}</strong></div>`
-        +`<div style="display:flex;justify-content:space-between"><span>ROI on discount</span><strong style="color:${roiC}">${roiTxt}</strong></div>`
-        +`<div style="display:flex;justify-content:space-between"><span>Total orders (campaign)</span><strong style="color:${T.text}">${sc.totalOrders.toLocaleString()}</strong></div>`
-        +`<div style="display:flex;justify-content:space-between"><span>Total merchant disc.</span><strong style="color:#F59E0B">${fA(sc.merchantDisc)}</strong></div>`
-        +'</div>':'';
-      return`<div style="background:${T.panelBg};border-radius:10px;${mainBorder};padding:18px 20px;flex:1;min-width:0">`
-      +(isMain?`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><span style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${accent}">${label}</span><span style="font-size:9px;background:${accent}22;color:${accent};padding:2px 7px;border-radius:999px;font-weight:600">Most likely</span></div>`
-      :`<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${T.muted};margin-bottom:10px">${label}</div>`)
-      +`<div style="font-size:28px;font-weight:800;color:${isMain?accent:T.text};line-height:1">${Math.round(absOrdersPerDay).toLocaleString()}</div>`
-      +`<div style="font-size:11px;color:${T.muted}">orders / day</div>`
-      +`<div style="margin-top:5px;font-size:12px;font-weight:700;color:${deltaGood?'#22C55E':'#EF4444'}">${deltaGood?'+':''}${Math.round(sc.incrOrdersPerDay)}/day vs baseline (${fP(sc.upliftPct)})</div>`
-      +`<div style="display:flex;gap:12px;margin-top:16px">`
-      +`<div style="flex:1"><div style="font-size:10px;color:${T.muted};font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">Net sales/day</div><div style="font-size:17px;font-weight:700;color:${T.text}">${fA(absSalesPerDay)}</div></div>`
-      +`<div style="flex:1;cursor:help" data-ctip="${tipId}"><div style="font-size:10px;color:${T.muted};font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">Contribution/day <span style="font-size:9px;opacity:.5">ⓘ hover</span></div><div style="font-size:17px;font-weight:700;color:${ic}">${sc.incrContribPerDay>=0?'+':''}${fA(sc.incrContribPerDay)}</div></div>`
-      +'</div>'
-      +detailToggle+detailBody
-      +'</div>';
-    };
-
-    // Comparison table data
-    const cmpRow=(label,ord,net,vs1Pct,vs1Label,vs2Pct,vs2Label,note='')=>{
-      const chip=(pct,lbl)=>pct!=null?`<span style="font-size:10px;background:${pct>=0?'rgba(34,197,94,.1)':'rgba(239,68,68,.1)'};color:${pct>=0?'#16a34a':'#dc2626'};padding:2px 8px;border-radius:999px;font-weight:600">${fP(pct)}</span><span style="font-size:11px;color:${T.label};margin-left:4px">${lbl}</span>`:`<span style="color:${T.label};font-size:10px">—</span>`;
-      return`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:9px 0;border-bottom:0.5px solid ${T.rowBg2};font-size:13px;align-items:center">`
-      +`<div style="color:${T.secondary};font-weight:600">${label}${note?`<div style="font-size:9px;color:${T.label};font-weight:400">${note}</div>`:''}</div>`
-      +`<div style="color:${T.text}">${ord!=null?Math.round(ord).toLocaleString():'—'}</div>`
-      +`<div style="color:${T.text}">${net!=null?fA(net):'—'}</div>`
-      +`<div>${chip(vs1Pct,vs1Label)}</div>`
-      +`<div>${chip(vs2Pct,vs2Label)}</div>`
-      +'</div>';
-    };
-    const pctOf2=(b,a)=>a>0?(b/a-1)*100:null;
-    const baseOrd=r.baseline.dailyOrders,baseNet=r.baseline.dailyNet;
-    const pwPct=r.pwOrders!=null?pctOf2(baseOrd,r.pwOrders):null;
-    const lyPct=r.lyOrders!=null?pctOf2(baseOrd,r.lyOrders):null;
-    const recA=r.recCamp?campAnalysisV2(r.recCamp):null;
-    const recOrd=recA?recA.cs.orders/recA.cDays:null;
-    const recNet=recA?recA.cs.sales/recA.cDays:null;
-    const recPct=recOrd!=null?pctOf2(baseOrd,recOrd):null;
-
-    // Flags
-    const flags=[];
-    if(r.conc.length){flags.push({lvl:'warn',msg:`<strong>Concurrent campaign:</strong> "${r.conc[0].name||r.conc[0].comments||'—'}" overlaps this window on ${r.brand} × ${r.agg}. Forecast does not adjust for campaign-on-campaign dilution.`});}
-    if(!r.lyHasDisc){flags.push({lvl:'info',msg:`No discount data on record for ${fmtShort(r.lyStart)}–${fmtShort(r.lyEnd)} ${r.lyStart.slice(0,4)} yet. Year-over-year comparison shows sales only — no burn figures from that period to compare.`});}
-    if(r.seasonality.pct!==0){flags.push({lvl:'info',msg:`Seasonality correction applied: <strong>${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</strong> vs periods when historical matches ran (${r.matches.length} campaign${r.matches.length!==1?'s':''}).`});}
-    if(!r.matches.length){flags.push({lvl:'warn',msg:`No exact historical matches found for ${r.brand} × ${r.agg} at ${campFcMatchCriteriaLabel()}. Fallback uplifts used: conservative 10%, expected 20%, optimistic 35%. Find and select a comparable past campaign for better accuracy.`});}
-    // v154: genuine clean-baseline comparison, when one exists. v423: reworded — since build 419,
-    // campFcBaseline() ITSELF already excludes contaminated days from the baseline above (not a
-    // naive flat window anymore), so this is an independent corroborating cross-check now, not
-    // "the only honest option because the number above might be dirty" the way it read before.
-    if(r.cleanWindowCompare){
-      const cw=r.cleanWindowCompare;
-      flags.push({lvl:'info',msg:`<strong>Independent cross-check:</strong> ${fmtShort(cw.start)}–${fmtShort(cw.end)} (${cw.daysAgo} days ago) had no overlapping campaign for ${r.brand} × ${r.agg}. That period averaged <strong>${cw.dailyOrders.toFixed(0)} orders/day</strong>, ${fmtAED(cw.dailyNet)}/day net — a separate corroborating data point alongside the (already contamination-excluded) baseline above.`});
-    }else if(r.agg==='Keeta'){
-      flags.push({lvl:'warn',msg:`<strong>No fully clean stretch found for Keeta</strong> even after extending the lookback. Keeta has run a campaign on the vast majority of its live days for this brand — the baseline above already excludes whatever contaminated days it could within a 90-day lookback, but couldn't fully avoid overlap. Treat "uplift vs baseline" with that in mind.`});
-    }
-    // v154: salary-week mismatch — doesn't correct the numbers (no validated correction factor
-    // exists), just flags a real, checkable confound between the campaign and its comparison
-    // window's position in the month.
-    if(r.weekOfMonthMismatch){
-      flags.push({lvl:'info',msg:`<strong>Salary-week mismatch:</strong> this campaign falls in ${r.weekOfMonthMismatch.campaign}, but the "4 weeks ago" baseline window falls in ${r.weekOfMonthMismatch.baseline}. UAE F&B demand is typically stronger in the first/last week of the month — worth keeping in mind when reading the uplift %.`});
-    }
-    // v154: same-campaign trend — when there's no clean baseline to compare against (the
-    // Keeta case), the next best signal isn't "vs no-promo", it's "is this promo itself
-    // trending up or down across its own recent repeats". Uses the same historical matches
-    // already gathered above, just reads them as a sequence instead of collapsing them into
-    // one weighted number.
-    const recentMatches=r.matches.filter(m=>m.upliftPct!=null&&!m.isAtypical).slice(0,3);
-    if(!r.cleanWindowCompare&&recentMatches.length>=2){
-      const seq=recentMatches.slice().reverse(); // oldest-of-the-three first, for a natural reading order
-      const seqTxt=seq.map(m=>`${fmtShort(m.c.startDate)}: <strong style="color:${m.upliftPct>=0?'#16a34a':'#dc2626'}">${m.upliftPct>=0?'+':''}${Math.round(m.upliftPct)}%</strong>`).join(' → ');
-      const trend=recentMatches[0].upliftPct-recentMatches[recentMatches.length-1].upliftPct;
-      const trendWord=trend>5?'improving':trend<-5?'declining':'holding steady';
-      flags.push({lvl:'info',msg:`<strong>Same-campaign trend</strong> (last ${recentMatches.length} runs, most recent last): ${seqTxt} — ${trendWord}. With no clean baseline available, this trajectory is the more reliable read than the vs-baseline uplift %.`});
-    }
-
-    // v110: reality-check banner — the closest real recent match's ACTUAL result, shown
-    // prominently regardless of what the weighted scenarios say. Can't get buried by rosier math.
-    const cm=r.closestMatch;
-    const realityCheckHTML=cm?(()=>{
-      const roiClr=cm.discountROI==null?T.muted:cm.discountROI>=0?'#16a34a':'#dc2626';
-      const roiTxt=cm.discountROI!=null?cm.discountROI.toFixed(2)+'×':'n/a';
-      const upliftClr=(cm.upliftPct||0)>=0?'#16a34a':'#dc2626';
-      const warn=(cm.discountROI!=null&&cm.discountROI<0)||cm.isTruncated;
-      // v301: if this closest match is itself a known cut-short campaign (only possible when NO
-      // clean match existed at all — closestMatch skips truncated ones otherwise), say so
-      // explicitly rather than presenting a broken measurement with the same confidence as a
-      // clean one. Nikhil's exact complaint: a truncated campaign silently became "the closest
-      // recent match" with no indication it wasn't a fair read.
-      const truncNote=cm.isTruncated
-        ?(cm.manualIssueFlag
-          ?` ⚠️ <strong>This campaign was flagged as an incomplete/problem run</strong> (per its comment) — its result reflects an operational issue, not the discount mechanic itself. Shown only because no clean comparable campaign exists; treat this number with real caution.`
-          :cm.truncationDetail
-            ?` ⚠️ <strong>This campaign's last day (${fmtShort(cm.truncationDetail.lastDate)}) shows a sudden volume collapse</strong> (${cm.truncationDetail.lastVal} orders vs ~${cm.truncationDetail.otherAvg}/day for the rest of its run) — the signature of a campaign cut short mid-run, not genuine demand. Shown only because no clean comparable campaign exists; treat this number with real caution.`
-            :` ⚠️ <strong>This ran ${cm.shortDurationDetail.cDuration} day${cm.shortDurationDetail.cDuration===1?'':'s'} — well short of the ${cm.shortDurationDetail.medianDuration}-day median for the ${cm.shortDurationDetail.sameNamedCount} other "${cm.c.name}" campaign${cm.shortDurationDetail.sameNamedCount===1?'':'s'} on this brand+aggregator.</strong> A likely sign it was cut short and its recorded end date reflects when it actually stopped, not when it was planned to. Shown only because no clean comparable campaign exists; treat this number with real caution.`)
-        :'';
-      return `<div style="display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border-radius:8px;margin-bottom:12px;background:${warn?'rgba(239,68,68,.08)':'rgba(59,130,246,.08)'};border:1px solid ${warn?'rgba(239,68,68,.35)':'rgba(59,130,246,.3)'}">`
-        +`<span style="font-size:16px;flex-shrink:0">${warn?'⚠️':'ℹ️'}</span>`
-        +`<div style="font-size:12.5px;line-height:1.6;color:${T.text}"><strong>Reality check:</strong> the closest recent match — ${cm.c.name||cm.c.comments||'this campaign'} (${cm.c.startDate} – ${cm.c.endDate}${cm.discPct?', '+cm.discPct+'% off':''}${cm.cap?' · cap AED '+cm.cap:''}) — actually delivered <strong style="color:${upliftClr}">${fP(cm.upliftPct)}</strong> uplift with <strong style="color:${roiClr}">${roiTxt} ROI</strong>${(cm.discountROI!=null&&cm.discountROI<0)?' — it lost money on a contribution basis.':'.'}${cm.isTruncated?'':' This match is already the largest single input to the scenarios below.'}${truncNote}</div>`
-        +`</div>`;
-    })():'';
-    const flagsHTML=flags.map(f=>`<div style="display:flex;align-items:flex-start;gap:8px;font-size:12px;padding:8px 10px;border-radius:6px;margin-bottom:6px;background:${f.lvl==='warn'?'rgba(245,158,11,.08)':T.rowBg};border:0.5px solid ${f.lvl==='warn'?'rgba(245,158,11,.4)':T.border}">`
-      +`<span style="font-size:14px;flex-shrink:0;margin-top:1px">${f.lvl==='warn'?'⚠️':'ℹ️'}</span><span style="color:${f.lvl==='warn'?'#92400e':T.secondary}">${f.msg}</span></div>`).join('');
-
-    // v397: expandable before/during breakdown per row, per Nikhil's ask — approved from the
-    // mockup (campfc_bec_v2.html). Table itself stays exactly as compact as before; clicking a
-    // row reveals its baseline (before) period next to the campaign (during) period, using fields
-    // campFcFindHistoryMatches/campFcFindMatches now expose (baseOrdersPerDay, baseAOV, campAOV,
-    // bStart, bEnd) — all already computed by campAnalysisV2, nothing new calculated here.
-    const matchRows=r.matches.slice(0,campFcShowAllMatches?r.matches.length:8).map((m,idx)=>{
-      const ic=m.discountROI!=null?(m.discountROI>=0?'#22C55E':'#EF4444'):T.muted;
-      const isOutlier=Math.abs(m.upliftPct||0)>=150;
-      const dimmed=isOutlier;
-      const flagHTML=isOutlier
-        ?'<span style="font-size:8px;color:#EF4444;background:rgba(239,68,68,.1);padding:1px 5px;border-radius:4px;margin-left:4px">⚠ statistical outlier · excluded</span>'
-        :(m.isAtypical?'<span style="font-size:8px;color:#F59E0B;background:rgba(245,158,11,.1);padding:1px 5px;border-radius:4px;margin-left:4px">🎪 atypical event · down-weighted</span>':'');
-      const isOpen=campFcExpandedMatches.has(idx);
-      const chev=`<span style="color:${T.muted};font-size:10px;transition:transform .15s;display:inline-block;transform:rotate(${isOpen?90:0}deg)">▶</span>`;
-      const row=`<div onclick="campFcToggleMatchExpand(${idx})" style="cursor:pointer;display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr 0.3fr;gap:4px;padding:8px 0;border-bottom:0.5px solid ${T.rowBg2};font-size:13px;align-items:center${dimmed?';opacity:.45':''}">`
-      +`<div style="color:${T.secondary}">${m.c.name||m.c.comments||'—'}${flagHTML}<div style="font-size:11px;color:${T.label}">${m.c.startDate} – ${m.c.endDate}</div></div>`
-      +`<div style="color:${T.label}">${m.cDays}d</div>`
-      +`<div style="color:${(m.upliftPct||0)>=0?'#16a34a':'#dc2626'};font-weight:600">${m.upliftPct!=null?fP(m.upliftPct):'—'}</div>`
-      +`<div style="color:${T.text}">${m.campOrdersPerDay!=null?Math.round(m.campOrdersPerDay).toLocaleString():'—'}</div>`
-      +`<div style="color:${T.text}">${m.campSalesPerDay!=null?fA(m.campSalesPerDay):'—'}</div>`
-      +`<div style="color:#F59E0B">${m.ourDiscPerDay!=null&&m.ourDiscPerDay>0?fA(m.ourDiscPerDay):'—'}</div>`
-      +`<div><span style="font-size:10px;font-weight:600;color:${ic}">${m.discountROI!=null?m.discountROI.toFixed(2)+'×':'—'}</span></div>`
-      +`<div style="text-align:right">${chev}</div>`
-      +'</div>';
-      const hasBeforeAfter=m.baseOrdersPerDay!=null&&m.baseAOV!=null&&m.campAOV!=null;
-      const detail=(isOpen&&hasBeforeAfter)?(()=>{
-        const col=(label,color,dateRange,opd,sales,aov)=>`<div><div style="font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:${color};margin-bottom:6px">${label}${dateRange?` — ${dateRange}`:''}</div>`
-          +`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:11.5px"><span style="color:${T.muted}">Orders/day</span><span style="font-weight:700;color:${T.text}">${Math.round(opd).toLocaleString()}</span></div>`
-          +`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:11.5px"><span style="color:${T.muted}">Sales/day</span><span style="font-weight:700;color:${T.text}">${fA(sales)}</span></div>`
-          +`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:11.5px"><span style="color:${T.muted}">AOV</span><span style="font-weight:700;color:${T.text}">${fA(aov)}</span></div></div>`;
-        return`<div style="padding:4px 0 12px;display:grid;grid-template-columns:1fr 1fr;gap:14px;background:${T.rowBg};border-radius:8px;padding:12px 14px;margin-bottom:6px">`
-          +col('Before',T.muted,m.bStart&&m.bEnd?`${fmtShort(m.bStart)}–${fmtShort(m.bEnd)}`:'',m.baseOrdersPerDay,(m.baseOrdersPerDay||0)*(m.baseAOV||0),m.baseAOV)
-          +col('During (campaign)',accent,`${fmtShort(m.c.startDate)}–${fmtShort(m.c.endDate)}`,m.campOrdersPerDay,m.campSalesPerDay,m.campAOV)
-          +`<div style="grid-column:1/3;text-align:center;font-size:11px;color:${T.muted};padding-top:6px;border-top:0.5px dashed ${T.border}">Uplift <strong style="color:${(m.upliftPct||0)>=0?'#16a34a':'#dc2626'}">${fP(m.upliftPct)}</strong> orders · <strong style="color:${ic}">${m.discountROI!=null?m.discountROI.toFixed(2)+'×':'—'} ROI</strong> on ${m.ourDiscPerDay!=null?fA(m.ourDiscPerDay*m.cDays):'—'} merchant discount</div>`
-          +'</div>';
-      })():'';
-      return row+detail;}).join('');
-
-
-    // v400: reordered per Nikhil's explicit ask — Scenarios first, then a new "How we got the
-    // baseline" section (previously the baseline was only ever implicit, scattered across a
-    // comparison-table row and a save-payload field, never explained as its own thing), then
-    // "Similar campaigns" wrapping the existing match table in a <details> — collapsed by default
-    // per Nikhil's direct answer — then the supplementary comparison table/flags/export. Forecast
-    // History (historyPanel, appended after this whole card) was already last in DOM order, so it
-    // needed no repositioning — just the delete-X treatment added separately below.
-    resultsHTML=`<div style="border-top:0.5px solid ${T.border};margin-top:14px;padding-top:14px">`
-    +staleBanner
-    +realityCheckHTML
-    // 1. Scenarios
-    +`<div style="display:flex;gap:10px;margin:14px 0;flex-wrap:wrap">`
-    +scCard('Conservative',r.conservative,false,'conservative')
-    +scCard('Expected',r.expected,true,'expected')
-    +scCard('Optimistic',r.optimistic,false,'optimistic')
-    +'</div>'
-    // 2. How we got the baseline — real fields campFcBaseline() already returns, including (as of
-    // v422) the ACTUAL clean window used, not a naive latest/latest-29 guess — those can now
-    // differ whenever contaminated days were skipped and the lookback extended to compensate.
-    +(()=>{
-      const baseEnd=r.baseline.windowEnd||latest,baseStart=r.baseline.windowStart||subDays(latest,29);
-      const excludedNote=r.baseline.excludedDays>0?` — ${r.baseline.excludedDays} day${r.baseline.excludedDays!==1?'s':''} excluded (another campaign was running)`:'';
-      return`<div style="margin-bottom:14px">
-        <div style="font-size:11px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">How we got the baseline</div>
-        <div style="background:${T.rowBg};border:0.5px solid ${T.border};border-radius:10px;padding:14px 16px">
-          <div style="font-size:12px;color:${T.secondary};display:flex;align-items:center;gap:6px">${bPill(r.brand,16)}${r.brand}<span style="color:${T.label}">×</span>${aPill(r.agg,16)}${r.agg}<span style="color:${T.label};font-weight:400">— trailing ${r.baseline.refDays} clean day${r.baseline.refDays!==1?'s':''}</span></div>
-          <div style="font-size:11px;color:${T.muted};margin-top:2px">${baseStart} – ${baseEnd}${excludedNote}</div>
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px">
-            <div style="background:${T.panelBg};border-radius:8px;padding:9px;text-align:center"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Avg orders/day</div><div style="font-size:15px;font-weight:800;color:${T.text};margin-top:3px">${Math.round(r.baseline.dailyOrders).toLocaleString()}</div></div>
-            <div style="background:${T.panelBg};border-radius:8px;padding:9px;text-align:center"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Net AOV</div><div style="font-size:15px;font-weight:800;color:${T.text};margin-top:3px">${fA(r.baseline.netAOV)}</div></div>
-            <div style="background:${T.panelBg};border-radius:8px;padding:9px;text-align:center"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Gross AOV</div><div style="font-size:15px;font-weight:800;color:${T.text};margin-top:3px">${fA(r.baseline.grossAOV)}</div></div>
-            <div style="background:${T.panelBg};border-radius:8px;padding:9px;text-align:center"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Seasonality</div><div style="font-size:15px;font-weight:800;color:${r.seasonality.pct>=0?'#22C55E':'#EF4444'};margin-top:3px">${r.seasonality.pct>0?'+':''}${r.seasonality.pct}%</div></div>
-          </div>
-          ${r.seasonality.method?`<div style="font-size:10px;color:${T.muted};margin-top:8px">${esc(r.seasonality.method)}</div>`:''}
-          ${r.calib?`<div style="font-size:10px;color:#4ADE80;margin-top:8px;padding-top:8px;border-top:0.5px dashed ${T.border}">📐 Calibrated ${r.calib.biasPts>=0?'+':''}${r.calib.biasPts.toFixed(1)}pts vs raw historical uplift, based on ${r.calib.sampleCount} of your own past forecast${r.calib.sampleCount!==1?'s':''} vs their real completed result${r.calib.isSpecific?'':' (not enough history for '+esc(r.brand)+' × '+esc(r.agg)+' specifically yet, using the whole account)'}.</div>`:''}
-          ${r.mom?`<div style="font-size:10px;color:#60A5FA;margin-top:5px">📈 Recent momentum: ${r.mom.momentum>=1?'+':''}${((r.mom.momentum-1)*100).toFixed(0)}% — last ~45 real days averaging ${Math.round(r.mom.recentOrders)}/day vs ${Math.round(r.mom.priorOrders)}/day the ~45 days before that.</div>`:''}
-        </div>
-      </div>`;
-    })()
-    // 3. Similar campaigns — the existing match table, now collapsed by default
-    +(r.matches.length?`<details style="margin-bottom:14px;border:0.5px solid ${T.border};border-radius:10px;overflow:hidden">
-      <summary style="cursor:pointer;padding:12px 14px;font-size:12px;font-weight:700;color:${T.secondary};list-style:none;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        ${bPill(r.brand,20)}${aPill(r.agg,20)}
-        <span style="background:rgba(34,197,94,.1);color:#16a34a;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700">${r.matches.length} historical match${r.matches.length!==1?'es':''}</span>
-        <span style="font-size:10px;color:${T.label}">used to build the scenarios above · click to view</span>
-      </summary>
-      <div style="padding:0 14px 14px">
-        <div style="font-size:10px;color:${T.label};margin-bottom:6px">${campFcMatchCriteriaLabel()} · <em style="opacity:.7">dimmed = statistical outlier · excluded</em></div>
-        <div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr 0.3fr;gap:4px;padding:5px 0;border-bottom:0.5px solid ${T.border};font-size:11px;font-weight:600;color:${T.label};text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Days</div><div>Uplift</div><div>Orders/day</div><div>Sales/day</div><div>Disc/day</div><div>ROI</div><div></div></div>
-        ${matchRows}
-        ${r.matches.length>8?`<div onclick="campFcShowAllMatches=!campFcShowAllMatches;renderCampaigns()" style="cursor:pointer;font-size:11px;font-weight:700;color:#60A5FA;padding:8px 0 2px;text-align:center">${campFcShowAllMatches?'↑ Show fewer':'Show all '+r.matches.length+' matches (used in the average below) →'}</div>`:''}
-        ${(()=>{
-          const forAvg=r.matches.filter(m=>m.upliftPct!=null&&Math.abs(m.upliftPct)<150);
-          const excludedCount=r.matches.length-forAvg.length;
-          const avgTxt=forAvg.length?fP(forAvg.reduce((s,m)=>s+m.upliftPct,0)/forAvg.length):'—';
-          return`<div style="font-size:12px;color:${T.label};margin-top:8px">Avg uplift: <strong style="color:${T.text}">${avgTxt}</strong>${excludedCount?` <span style="font-size:10px;color:${T.label}">(${excludedCount} statistical outlier${excludedCount>1?'s':''} excluded)</span>`:''}</div>`;
-        })()}
-      </div>
-    </details>`:`<div style="font-size:11px;color:#F59E0B;padding:8px;background:rgba(245,158,11,.08);border-radius:6px;margin-bottom:10px">No exact matches — using fallback estimates. Consider selecting a comparable past campaign.</div>`)
-    // 4. Comparison table (supplementary detail, kept below the reordered core sections)
-    +`<div style="margin-bottom:12px">`
-    +`<div style="font-size:13px;font-weight:700;color:${T.secondary};margin-bottom:10px">Orders comparison · ${campFcStart} – ${campFcEnd} baseline vs comparable periods</div>`
-    +`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:5px 0;border-bottom:0.5px solid ${T.border};font-size:11px;font-weight:600;color:${T.label};text-transform:uppercase;letter-spacing:.5px"><div>Period</div><div>Avg orders/day</div><div>Avg net/day</div><div>vs prior week</div><div>vs last year</div></div>`
-    +cmpRow('Current baseline (last 30d)',baseOrd,baseNet,pwPct,'vs prior wk',lyPct,'vs Jul 2025')
-    +(r.expected?(()=>{const xOrd=r.expected.totalOrders/r.nDays,xNet=r.expected.campNet/r.nDays,xPct=pctOf2(xOrd,baseOrd);return`<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.2fr;gap:4px;padding:8px 0 8px 10px;border-bottom:0.5px solid #BFD8F7;font-size:11px;align-items:center;background:rgba(96,165,250,.07);border-left:3px solid #60A5FA;margin-left:-2px"><div style="color:#0C447C;font-weight:700">Expected forecast · campaign on<div style="font-size:11px;color:#185FA5;font-weight:400">Projected · ${campFcStart} – ${campFcEnd}</div></div><div style="font-size:13px;font-weight:700;color:#0C447C">${Math.round(xOrd).toLocaleString()}</div><div style="font-size:13px;font-weight:700;color:#0C447C">${fA(xNet)}</div><div>${xPct!=null?`<span style="font-size:10px;background:${xPct>=0?'rgba(34,197,94,.1)':'rgba(239,68,68,.1)'};color:${xPct>=0?'#16a34a':'#dc2626'};padding:1px 6px;border-radius:999px;font-weight:600">${fP(xPct)}</span> <span style="font-size:9px;color:${T.label}">vs baseline</span>`:'—'}</div><div><span style="color:${T.label};font-size:10px">—</span></div></div>`;})():'')
-    +(r.pwOrders!=null?cmpRow('Prior week ('+subDays(campFcStart,7)+' – '+subDays(campFcStart,1)+')',r.pwOrders,r.pwNet,null,'',null,''):'')
-    +(recA!=null?cmpRow('Last campaign: '+(r.recCamp.name||r.recCamp.comments||'—').slice(0,30),recOrd,recNet,recPct,'vs baseline',null,'',r.recCamp.startDate+' – '+r.recCamp.endDate):'')
-    +(r.lyOrders!=null?cmpRow('Same dates, last year',r.lyOrders,r.lyNet,null,'',null,'',r.lyHasDisc?'':'Sales only · no discount data'):'')
-    +'</div>'
-    // Flags
-    +(flagsHTML?`<div style="margin-bottom:10px">${flagsHTML}</div>`:'')
-    // Export
-    +`<div style="display:flex;gap:8px;justify-content:flex-end">`
-    +`<button onclick="campFcSaveForecast()" ${campFcSaving?'disabled':''} style="background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.35);border-radius:6px;color:#60A5FA;padding:5px 14px;font-size:11px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px">${campFcSaving?'Saving…':'📌 Save this forecast'}</button>`
-    +(campFcSaveMsg?`<span style="font-size:11px;color:${campFcSaveMsg.startsWith('✅')?'#22C55E':'#EF4444'};align-self:center">${campFcSaveMsg}</span>`:'')
-    +`<button onclick="campFcExport()" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#16a34a;padding:5px 14px;font-size:11px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px">⬇ Export forecast + post-campaign tracker</button>`
-    +'</div>'
-    +'</div>';
-  }
-
-  // Form
-  const today=dk(new Date());
-  // v404: found while auditing against the mockup — sel() (Brand/Aggregator) had no
-  // renderCampaigns() call, unlike the 'type' select right next to it in Deal terms. Brand/
-  // Aggregator changes DO have visible downstream dependencies within this same form — the
-  // Branches chip list and the brand×aggregator summary pill are both computed from
-  // campFcBrand/campFcAgg at the top of this function, so without an explicit re-render they'd
-  // silently go stale until some other interaction happened to redraw the page. sel() is only
-  // ever used for these two fields in this form, so fixed at the shared helper rather than at
-  // each call site.
-  const sel=(k,opts,cur)=>`<select onchange="campFcSet('${k}',this.value);renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600"><option value="">—</option>${opts}</select>`;
-  // v366: same color-scheme gap as the Break-Even Calculator (build 365) — without it, the native
-  // date picker icon and popup default to light mode and are nearly invisible on this dark panel.
-  const inp=(k,type,cur,min,max)=>`<input type="${type}" value="${cur}" min="${min}" max="${max}" onchange="campFcSet('${k}',this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600;box-sizing:border-box;color-scheme:${T.inputScheme}">`;
-  const fld=(lbl,html)=>`<div><div style="font-size:10px;font-weight:600;color:${T.muted};margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px">${lbl}</div>${html}</div>`;
-
-  const historyPanel=`<div style="background:${T.panelBg};border:0.5px solid ${T.border};border-radius:12px;padding:14px 16px;margin-top:14px">
-    <div style="font-size:13px;font-weight:700;color:${T.text};margin-bottom:4px">📜 Forecast History</div>
-    <div style="font-size:10px;color:${T.label};margin-bottom:8px">Every saved forecast, compared against the real campaign once one matching those parameters actually runs.</div>
-    ${campFcHistoryHTML()}
-  </div>`;
-  const sectionCard=(icon,title,inner)=>`<div style="background:${T.rowBg};border:0.5px solid ${T.border};border-radius:8px;padding:12px 14px;margin-bottom:10px">
-    <div style="font-size:11px;font-weight:800;color:${accent};margin-bottom:8px">${icon} ${title}</div>
-    ${inner}
-  </div>`;
-  return`<div style="background:${T.panelBg};border:0.5px solid ${T.border};border-radius:12px;padding:14px 16px;margin-bottom:14px;border-left:3px solid ${accent};border-top-left-radius:0;border-bottom-left-radius:0">`
-  +`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${campFcCollapsed?'0':'12px'}">`
-  +`<div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">📊</span><div style="font-size:15px;font-weight:800;color:${T.text}">Campaign Forecaster</div><div style="font-size:10px;color:${T.muted};margin-left:4px">Estimate what a planned campaign will yield before you launch</div></div>`
-  +`<button onclick="campFcSet('collapsed','${(!campFcCollapsed).toString()}')" style="background:none;border:0.5px solid ${T.border};border-radius:6px;color:${T.label};padding:3px 10px;font-size:11px;cursor:pointer">${campFcCollapsed?'▼ Expand':'▲ Collapse'}</button></div>`
-  +(campFcCollapsed?'':
-    (()=>{
-      // v400: Option B form redesign, approved from campfc_fullpage.html — upcoming-campaign
-      // picker as a dropdown (was a row of pill buttons) feeding straight into a two-column split:
-      // "What & when" (identity — brand/aggregator/dates) next to "Deal terms" (the discount
-      // mechanics), instead of three stacked full-width sections. Same underlying fields/handlers
-      // (campFcSet, campFcApplyUpcoming, sel/inp/fld) — this is a layout change, not new state.
-      const upcoming=campFcUpcomingCampaigns();
-      const upcomingDD=upcoming.length?`<select onchange="if(this.value!=='')campFcApplyUpcoming(this.value)" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:7px;color:${T.text};padding:9px 11px;font-size:12px;font-weight:600;margin-bottom:12px">
-        <option value="">📅 Pull from an upcoming campaign…</option>
-        ${upcoming.map((c,i)=>`<option value="${i}">${esc(c.brand)} × ${esc(c.aggregator)} · ${esc(c.name||c.comments||'Campaign')} · ${fmtShort(c.startDate)}-${fmtShort(c.endDate)}</option>`).join('')}
-      </select>`:'';
-      const whatWhenCol=`<div style="background:${T.rowBg};border-radius:10px;padding:14px 16px">
-        <div style="font-size:11px;font-weight:800;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">🏷️ What &amp; when</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">${fld('Brand',sel('brand',bOpts,campFcBrand))}${fld('Aggregator',sel('agg',aOpts,campFcAgg))}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">${fld('Start',inp('start','date',campFcStart,'2025-01-01','2030-12-31'))}${fld('End',inp('end','date',campFcEnd,'2025-01-01','2030-12-31'))}</div>
-        ${fld('Comments (optional)',`<textarea onchange="campFcSet('comments',this.value)" placeholder="e.g. live in select locations only, or BOGO exclusive to Noon with no commission charged on these orders" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:7px 8px;font-size:12px;min-height:40px;font-family:inherit;box-sizing:border-box;resize:vertical">${campFcComments}</textarea>`)}
-      </div>`;
-      const dealTermsCol=`<div style="background:${T.rowBg};border-radius:10px;padding:14px 16px">
-        <div style="font-size:11px;font-weight:800;color:#F59E0B;text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">🎯 Deal terms</div>
-        <div style="margin-bottom:10px">${fld('Structure',`<select onchange="campFcSet('type',this.value);renderCampaigns()" style="width:100%;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:6px;color:${T.text};padding:6px 8px;font-size:12px;font-weight:600">
-          <option value="menu"${campFcType==='menu'?' selected':''}>Menu-wide % off, capped</option>
-          <option value="selectItems"${campFcType==='selectItems'?' selected':''}>% off select items</option>
-          <option value="bogo"${campFcType==='bogo'?' selected':''}>BOGO / free item with purchase</option>
-          <option value="ofu"${campFcType==='ofu'?' selected':''}>Single item offer (OFU-style)</option>
-          <option value="platformEvent"${campFcType==='platformEvent'?' selected':''}>Platform-wide event (e.g. Keeta Week)</option>
-        </select>`)}
-        ${CAMP_FC_TYPE_NAMES[campFcType]?`<div style="font-size:9.5px;color:${T.muted};margin-top:5px">Discount cost is derived from real historical ${CAMP_FC_TYPE_NAMES[campFcType]} campaigns, not a formula.</div>`:''}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-          ${campFcType!=='bogo'?fld('Discount %',inp('discPct','number',campFcDiscPct,1,90)):''}
-          ${campFcType==='menu'?fld('Cap AED',inp('cap','number',campFcCap,1,999)):''}
-        </div>
-        <div style="display:flex;align-items:center;gap:10px;background:${T.inputBg};border:0.5px solid ${T.border};border-radius:7px;padding:8px 11px">
-          <label style="position:relative;display:inline-block;width:34px;height:18px;flex-shrink:0;cursor:pointer">
-            <input type="checkbox" ${campFcCoFund?"checked":""} onchange="campFcSet('coFund',this.checked?'true':'false');renderCampaigns()" style="position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer">
-            <span style="position:absolute;inset:0;background:${campFcCoFund?"#22C55E":T.border};border-radius:999px;transition:.15s;pointer-events:none"></span>
-            <span style="position:absolute;top:2px;${campFcCoFund?"right":"left"}:2px;width:14px;height:14px;background:#fff;border-radius:50%;transition:.15s;pointer-events:none"></span>
-          </label>
-          <span style="font-size:12px;font-weight:600;color:${T.text};flex:1">Co-funded by ${campFcAgg||"platform"}</span>
-          ${campFcCoFund?`<input type="number" value="${campFcCoFundPct}" onchange="campFcSet('coFundPct',this.value)" style="width:52px;background:${T.panelBg};border:0.5px solid ${T.border};border-radius:5px;color:${T.text};padding:4px 6px;font-size:11.5px;font-weight:600;text-align:center"><span style="font-size:11.5px;color:${T.muted}">%</span>`:""}
-        </div>
-      </div>`;
-      // v403: Nikhil caught a real, concrete gap between the approved mockup and what actually
-      // shipped in build 400 — the mockup (campfc_fullpage.html) puts Comments inside the "What &
-      // when" column (moved above) and the Run Forecast button as a full-width element INSIDE
-      // this same card, right after the two columns — build 400 left both in their pre-redesign
-      // positions (Comments as a separate collapsed accordion below, Run Forecast as a standalone
-      // button further down), which is why it still looked like the old layout even though the
-      // two-column split itself was in place. Branches/brand-summary-pill aren't in the
-      // (simplified) mockup at all — kept here since they're real, necessary confirmation UI —
-      // but moved inside this same card too, ending with Run Forecast last, so the whole thing
-      // reads as the one cohesive card the mockup shows rather than a card followed by loose
-      // elements below it.
-      const summaryPill=(campFcBrand&&campFcAgg)?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:${T.panelBg};border-radius:6px;border:0.5px solid ${T.border}">`+bPill(campFcBrand,22)+`<span style="font-size:12.5px;font-weight:700;color:${T.text}">${campFcBrand}</span>`+`<span style="color:${T.label};font-size:12.5px">×</span>`+aPill(campFcAgg,22)+`<span style="font-size:12.5px;font-weight:700;color:${T.text}">${campFcAgg}</span>`+`<span style="font-size:10.5px;color:${T.muted};margin-left:4px">${campFcTypeLabel(campFcType,campFcDiscPct,campFcCap)}${campFcCoFund?' · '+campFcCoFundPct+'% co-funded':''}</span></div>`:'';
-      const branchesBlock=branches.length?`<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:600;color:${T.muted};text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">Branches <span style="font-weight:400;text-transform:none">(all selected by default · tap to deselect)</span></div>${branchChips}</div>`:'';
-      return sectionCard('📋','Campaign details',
-        upcomingDD+`<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">`+whatWhenCol+dealTermsCol+'</div>'
-        +summaryPill+branchesBlock
-        +`<button onclick="campFcRun()" style="width:100%;background:linear-gradient(135deg,${accent},#4E8FEA);border:none;border-radius:8px;color:#0B1220;padding:11px;font-size:13px;cursor:pointer;font-weight:800">▶ Run Forecast</button>`);
-    })()
-  )
-  +(campFcCollapsed?'':resultsHTML)
-  +'</div>'
-  +historyPanel;
-}
 
 async function renderCampaigns(){
   const pg=document.getElementById('page-campaigns');if(!pg)return;
@@ -16441,19 +15356,12 @@ async function renderCampaigns(){
     </div></div>`;
     // Forecaster — its own prominent card, not one pill among equals, since it's a genuinely
     // different kind of tool (planning) rather than a status filter.
-    // v364: two side-by-side half-width tool cards replacing the single full-width forecaster banner.
-    // Left = existing Campaign Forecaster (unchanged internally), right = new Campaign Break-Even
-    // Calculator. Each gets a distinct border-left accent so they read as different tools at a
-    // glance: amber for the forecaster, blue for the break-even.
-    const forecasterCTA=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-      <div onclick="campTab='forecaster';renderCampaigns()" style="cursor:pointer;background:linear-gradient(135deg,rgba(245,158,11,.13),rgba(245,158,11,.04));border:1.5px solid ${campTab==='forecaster'?'#f59e0b':'rgba(245,158,11,.35)'};border-left:3px solid #f59e0b;border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${campTab==='forecaster'?'#f59e0b':'rgba(245,158,11,.35)'}'">
-        <div style="display:flex;align-items:center;gap:11px"><span style="font-size:24px">🔮</span><div><div style="font-size:14px;font-weight:800;color:#fbbf24">Campaign Forecaster</div><div style="font-size:11px;color:${T.label};margin-top:2px;line-height:1.4">Model a planned discount — expected lift, ROI, and break-even</div></div></div>
-        <span style="font-size:11px;font-weight:700;color:#f59e0b;white-space:nowrap;flex-shrink:0">${campTab==='forecaster'?'✓ Open':'Open →'}</span>
-      </div>
-      <div onclick="campTab='breakeven';renderCampaigns()" style="cursor:pointer;background:linear-gradient(135deg,rgba(96,165,250,.13),rgba(96,165,250,.04));border:1.5px solid ${campTab==='breakeven'?'#60A5FA':'rgba(96,165,250,.35)'};border-left:3px solid #60A5FA;border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px" onmouseover="this.style.borderColor='#60A5FA'" onmouseout="this.style.borderColor='${campTab==='breakeven'?'#60A5FA':'rgba(96,165,250,.35)'}'">
-        <div style="display:flex;align-items:center;gap:11px"><span style="font-size:24px">🎯</span><div><div style="font-size:14px;font-weight:800;color:#93C5FD">Campaign Break-Even Calculator</div><div style="font-size:11px;color:${T.label};margin-top:2px;line-height:1.4">Enter campaign terms — baseline auto-pulled, targets calculated</div></div></div>
-        <span style="font-size:11px;font-weight:700;color:#60A5FA;white-space:nowrap;flex-shrink:0">${campTab==='breakeven'?'✓ Open':'Open →'}</span>
-      </div>
+    // v432: Forecaster and Break-Even Calculator retired now that Campaign Planner has full
+    // parity with both (Save/History, form parity, results parity, comparison+flags — see builds
+    // 420-423) — Nikhil's own explicit call once parity was reached, per his answer earlier in
+    // this thread ("decide after seeing Planner with full parity"). Single full-width card now
+    // that there's only one tool here, not the two-card grid built for three options.
+    const forecasterCTA=`<div style="margin-bottom:14px">
       <div onclick="campTab='planner';renderCampaigns()" style="cursor:pointer;background:linear-gradient(135deg,rgba(74,222,128,.13),rgba(74,222,128,.04));border:1.5px solid ${campTab==='planner'?'#4ADE80':'rgba(74,222,128,.35)'};border-left:3px solid #4ADE80;border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px" onmouseover="this.style.borderColor='#4ADE80'" onmouseout="this.style.borderColor='${campTab==='planner'?'#4ADE80':'rgba(74,222,128,.35)'}'">
         <div style="display:flex;align-items:center;gap:11px"><span style="font-size:24px">🎢</span><div><div style="font-size:14px;font-weight:800;color:#86EFAC">Campaign Planner</div><div style="font-size:11px;color:${T.label};margin-top:2px;line-height:1.4">Forecast and break-even together — is what's likely enough to clear what's needed?</div></div></div>
         <span style="font-size:11px;font-weight:700;color:#4ADE80;white-space:nowrap;flex-shrink:0">${campTab==='planner'?'✓ Open':'Open →'}</span>
@@ -16477,9 +15385,7 @@ async function renderCampaigns(){
       return html;
     };
     let main='';
-    if(campTab==='forecaster'){main=campFcHTML();}
-    else if(campTab==='breakeven'){main=campBeHTML();}
-    else if(campTab==='planner'){main=campPlanHTML();}
+    if(campTab==='planner'){main=campPlanHTML();}
     else if(campTab==='browse'){
       // Filter bar renders ONCE, above the combined sections — not duplicated per status,
       // which is what would've happened if each section still called it independently.
@@ -16499,8 +15405,8 @@ async function renderCampaigns(){
     // campaign's own card, and don't make sense summed/blended across every active campaign at
     // once. campKPIStrip() itself is left in place (unused for now) rather than deleted outright,
     // in case a differently-scoped version of it is useful in the redesign.
-    const topChrome=(campTab==='detail'||campTab==='forecaster'||campTab==='breakeven')?'':forecasterCTA+statusTable;
-    const toolBack=(campTab==='forecaster'||campTab==='breakeven'||campTab==='planner')?`<div style="margin-bottom:10px;padding:8px 12px;background:rgba(255,255,255,.04);border-radius:8px;border:1px solid ${T.border};display:flex;align-items:center;gap:10px"><button onclick="campTab='browse';renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.3);border-radius:7px;color:${T.label};padding:6px 13px;font-size:12px;cursor:pointer;font-weight:700">← Back to campaigns</button><span style="color:${T.border}">|</span><span style="font-size:13px;font-weight:700;color:${campTab==='forecaster'?'#fbbf24':campTab==='breakeven'?'#93C5FD':'#4ADE80'}">${campTab==='forecaster'?'🔮 Campaign Forecaster':campTab==='breakeven'?'🎯 Campaign Break-Even Calculator':'🎢 Campaign Planner'}</span></div>`:'';
+    const topChrome=(campTab==='detail')?'':forecasterCTA+statusTable;
+    const toolBack=(campTab==='planner')?`<div style="margin-bottom:10px;padding:8px 12px;background:rgba(255,255,255,.04);border-radius:8px;border:1px solid ${T.border};display:flex;align-items:center;gap:10px"><button onclick="campTab='browse';renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.3);border-radius:7px;color:${T.label};padding:6px 13px;font-size:12px;cursor:pointer;font-weight:700">← Back to campaigns</button><span style="color:${T.border}">|</span><span style="font-size:13px;font-weight:700;color:#4ADE80">🎢 Campaign Planner</span></div>`:'';
     // v368: the auto-play timer targets specific DOM nodes by id — those nodes are about to be
     // destroyed by the innerHTML replacement below, so the timer MUST stop first or it keeps
     // firing against elements that no longer exist. Restarted after the new DOM is in place, only
@@ -16509,7 +15415,6 @@ async function renderCampaigns(){
     if(typeof campPlanStopChartAuto==='function')campPlanStopChartAuto();
     pg.innerHTML=`${styleOverride}${header}${campDataFreshnessStrip()}${attention}${topChrome}${toolBack}${main}`;
     if(_focusedId){const _el=document.getElementById(_focusedId);if(_el){_el.focus();if(_focusedSel&&_el.setSelectionRange){try{_el.setSelectionRange(_focusedSel.start,_focusedSel.end);}catch(e){}}}}
-    if(campTab==='breakeven'&&campBeScenCache)campBeStartAuto();
     if(campTab==='planner'&&campPlanResult)campPlanRenderChart();
     if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
     if(campTab==='detail'&&selCamp){const c=selCamp;const imp=campImpact(c);if(campStatus(c)!=='Upcoming'&&imp.hasData){const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&(c.brand==='All Brands'||r.brand===c.brand)&&(c.aggregator==='All'||r.aggregator===c.aggregator)));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-camp',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}}
