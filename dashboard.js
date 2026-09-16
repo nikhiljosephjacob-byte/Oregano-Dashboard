@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-436";
+const BUILD_VERSION="2026-08-13-438";
 const BUILD_NOTES=[
+  "🐛 Real, confirmed bug caught by Nikhil from an actual P&L screenshot — Lollorosso × Careem's Baseline showed Gross Sales identical to Net Sales (AED 5,979 = AED 5,979), and Break-even came out at 170 orders/day, which Nikhil correctly flagged as too high for a 30% CAP 20 campaign on Careem's low commission. Traced it precisely: that baseline window was the build-433 degraded fallback (visible right there in the same screenshot's amber warning — no clean 90-day window found, so the baseline includes real campaign-affected, discounted days), but campPlanCompute()'s P&L builder had a hardcoded 'baseline has zero discount' assumption, applied completely unconditionally, in two separate places — the per-scenario P&L card builder (pnlAt) and the break-even calculation itself (contribPoBaseline). That assumption is only valid for a genuinely CLEAN baseline; for a degraded one it silently zeroed out real discount the window actually contains, overstating baseline Net Sales and Net Contribution, which directly overstates the break-even order count needed to clear it. Fixed both: when the baseline is degraded, its real per-order discount rate is now derived from the gap baseline.dailyGross/baseline.dailyNet already capture (both already reflect the true, contaminated-window numbers) instead of being assumed away. Since a daily-sales record only carries a total discount, not who funded it, the derived discount is conservatively treated as fully brand-funded — the assumption that understates baseline contribution rather than overstates it, erring toward a safer, lower, more achievable break-even target rather than a falsely generous one. Verified precisely: reconstructed Nikhil's real scenario (a genuinely exhausted 90-day lookback, confirmed isDegraded:true) and confirmed Gross now correctly differs from Net and break-even drops as expected; separately confirmed a genuinely clean baseline (isDegraded:false) is completely unaffected — Gross still exactly equals Net, matching existing, correct behavior for the common case. Re-ran the full top-to-bottom script execution test given the standing lesson from build 434 — zero uncaught errors.",
+  "✨ 'Pull from an upcoming campaign' dropdown now excludes campaigns that already have a saved forecast — Nikhil's own request, since the list was getting cluttered with ones that don't need another pass. Reuses campFcMatchSaved(c) directly, the same already-proven function powering the card badge (435) and the detail view's own forecast-comparison banner, so 'already forecasted' means exactly the same thing here as everywhere else. Verified: a mock upcoming campaign with a matching saved forecast is correctly excluded while one without a match is correctly kept; re-ran the full top-to-bottom script execution test (zero uncaught errors) given the standing lesson from build 434 that a syntax check alone isn't sufficient.",
   "🎨🐛 Two fixes from Nikhil's real screenshots. (1) Overview page: moved the Export Daily Digest button off its own dedicated row and into the same line as the date label, on the right — added a new dateExtra option to the shared makeFilterBar(opts), defaulting to empty so every other page calling it is completely unaffected; Overview now passes the button through it instead of rendering a separate div below the bar. (2) Real UI collision, not a bug in the matching logic itself: the card's existing 'Hybrid' data-source tag already uses 🔮 as part of its own icon ('🟢🔮 Hybrid', meaning partial-exact-data-plus-estimation — completely unrelated to forecasting), and build 435's new Forecasted badge used the same emoji, so on cards showing both they visually blended into what read as 'the symbol beside Hybrid' rather than two distinct things — exactly what Nikhil described. Switched the Forecasted badge to 📋, matching the detail view's own forecast-comparison banner icon, so the two surfaces read consistently and no longer collide with Hybrid's own icon. Verified both: rendered makeFilterBar() with and without dateExtra, confirming the button appears inline with the date on Overview and leaks into nothing else; re-ran the full top-to-bottom script execution test (zero uncaught errors) and Campaign Planner's own functional test, both still passing.",
   "✨ Forecasted-campaign badge on cards — Nikhil's own request: could only tell a campaign had been forecasted beforehand by opening it, since that check only ever ran inside the detail view. Added a small 🔮 Forecasted badge to the card's tag row (next to the offer/co-funding/exact tags) using campFcMatchSaved(c) directly — the exact same, already-proven function the detail view itself already calls — not a separate or reimplemented check, so 'forecasted' means precisely the same thing on the card as it does one click away. Its lazy-load trigger (a setTimeout when campFcHistory hasn't loaded yet) is already built into that function, so this works correctly even on a first-ever visit to the browse tab in a session, not only after Planner has already been opened once. Caught and fixed a duplicate-declaration mistake of my own mid-edit via the usual syntax-check-before-shipping discipline. Verified properly this time, not just with node --check, given the exact lesson from build 434: ran the full script through real execution (zero uncaught top-level errors), then tested campFcMatchSaved directly against the real BOGO campaign from Nikhil's own screenshot with a matching saved forecast (badge correctly shows), a different campaign with no saved forecast (badge correctly stays hidden), and the not-yet-loaded-history case (returns null gracefully and correctly triggers the background load) — then rendered campCardGrid() itself end-to-end with both campaigns, confirming the page stays structurally balanced and exactly one badge appears, on the one campaign that genuinely has a match.",
   "🚨🐛 CRITICAL — build 432's removal of Forecaster/Break-Even broke the entire dashboard, not just those two pages. Full blank screen, confirmed from Nikhil's actual console log. Two real bugs, both from the same root cause — my removal script searched for 'function NAME(' to find each function's boundaries, which doesn't include a preceding 'async ' keyword. (1) campFcSaveForecast was declared async function campFcSaveForecast(){...} — removing its body left a bare, orphaned 'async' keyword sitting on its own line, immediately before async function campFcLoadHistory(). This is syntactically VALID (node --check correctly passed) but throws 'ReferenceError: async is not defined' the instant the script runs — a bare 'async' with no following function is parsed as a variable reference, not a syntax error, so my syntax check couldn't catch it; only real execution could, and I didn't run one. Because this fires at the very top of the script, it halted ALL subsequent top-level execution — every page, not just Campaign Planner, explaining the fully blank dashboard and the cascading 'ovTrendMetric before initialization' error Nikhil also saw (that variable's own declaration, much later in the file, never got to run). (2) A second, independent miss: campFcSaveForecast was also referenced by BARE NAME (no parentheses) in the global window-export list that makes onclick=\"\" handlers reachable — my original dependency audit only searched for 'name(' (calls), completely missing this reference-without-parentheses pattern, so it passed as clean when it wasn't. Fixed both: removed the dangling async keyword, removed the stale campFcSaveForecast entry from the export list (campFcLoadHistory, which still exists, stays). This time verified properly, not just with node --check: ran the ENTIRE script through a real JS execution (Function constructor with minimal browser-API mocks) confirming it now completes top-to-bottom with zero uncaught errors — the actual failure mode from build 432, not just a syntax pass — and redid the dependency audit correctly this time, searching for ANY mention of all 21 removed function names (not just calls) with zero remaining hits. Re-confirmed Campaign Planner's own compute+render pipeline still works correctly. Lesson taken: a syntax check alone is not sufficient verification for a removal like this — the actual script needs to run.",
@@ -14220,7 +14222,13 @@ let campFcBranches=new Set(),campFcResult=null,campFcCollapsed=false;
 // this from real dates, not the sheet's status text, so it's reliable even if that's stale).
 function campFcUpcomingCampaigns(){
   if(!campLoaded)return[];
-  return campaignData.filter(c=>campStatus(c)==='Upcoming').sort((a,b)=>a.startDate.localeCompare(b.startDate));
+  // v437: real request from Nikhil — the dropdown was listing upcoming campaigns that already
+  // have a saved forecast, cluttering the list with ones that don't need another. Filters those
+  // out using campFcMatchSaved(c) directly — the same, already-proven matching function powering
+  // both the card badge (build 435) and the detail view's own forecast-comparison banner — so
+  // "already forecasted" means precisely the same thing here as it does everywhere else in the
+  // app, not a separate or reimplemented check.
+  return campaignData.filter(c=>campStatus(c)==='Upcoming'&&!campFcMatchSaved(c)).sort((a,b)=>a.startDate.localeCompare(b.startDate));
 }
 // Applies one upcoming campaign's real data to the form — brand, aggregator, dates, discount%,
 // cap, co-fund split (via the same parseCampComment used elsewhere), and an INFERRED structure
@@ -14917,9 +14925,17 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
   const commPo=commBaseAOV*commRate;
   const contribPoCampaign=commBaseAOV-campaignFoodPo-commPo;
 
+  // v438: same fix as pnlAt() below — "baseline has zero discount" only holds for a genuinely
+  // clean baseline window. When degraded (build 433's fallback), the real per-order discount the
+  // window actually contains is derived from baseline.dailyGross/dailyNet (both already reflect
+  // the contaminated-window reality) instead of assumed away, so break-even isn't computed
+  // against an artificially-inflated baseline contribution.
+  const baselineDiscPo=(baseline.isDegraded&&baseline.dailyOrders>0)
+    ?Math.max(0,(baseline.dailyGross-baseline.dailyNet)/baseline.dailyOrders):0;
   const baseFoodPo=grossAOV*foodRate;
-  const baseCommPo=grossAOV*commRate; // baseline has zero discount, so commission base = full gross
-  const contribPoBaseline=grossAOV-baseFoodPo-baseCommPo;
+  const baseNetPo=grossAOV-baselineDiscPo; // commission base = gross minus baseline's own real discount
+  const baseCommPo=baseNetPo*commRate;
+  const contribPoBaseline=baseNetPo-baseFoodPo-baseCommPo;
 
   const baselineOrders=baseline.dailyOrders;
   const baselineContribDay=baselineOrders*contribPoBaseline;
@@ -14937,9 +14953,26 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
     // from grossDay before and needs no separate change.
     const useAOV=isBaseline?grossAOV:campaignAOV;
     const grossDay=orders*useAOV;
-    const discTotalDay=isBaseline?0:orders*fullDiscPerOrder;
+    // v438: real bug caught by Nikhil from an actual P&L screenshot — Gross Sales and Net Sales
+    // were identical for Baseline (AED 5,979 = AED 5,979) even though the baseline window was
+    // flagged as degraded (build 433's fallback: no clean 90-day window found, so the baseline
+    // includes real campaign-affected, discounted days). "Baseline has zero discount" is only a
+    // valid assumption for a genuinely CLEAN window — it was being applied unconditionally,
+    // silently zeroing out real discount the baseline window actually contains whenever it's the
+    // degraded fallback, overstating baseline Net Sales and Net Contribution, and therefore
+    // overstating the break-even order count needed to clear it (exactly what Nikhil flagged as
+    // "170 orders/day seems too high"). Fixed: when degraded, derive the baseline's own real
+    // per-order discount rate from the gap baseline.dailyGross/baseline.dailyNet already capture
+    // (both already reflect the real, contaminated-window averages) rather than assuming zero.
+    // The aggregator/brand funding split isn't knowable from daily-sales-only records (only a
+    // total discount is recorded, not who funded it), so it's conservatively treated as fully
+    // brand-funded — the assumption that understates baseline contribution rather than
+    // overstates it, erring toward a safer (lower, more achievable) break-even target.
+    const baselineDiscPerOrder=(isBaseline&&baseline.isDegraded&&baseline.dailyOrders>0)
+      ?Math.max(0,(baseline.dailyGross-baseline.dailyNet)/baseline.dailyOrders):0;
+    const discTotalDay=isBaseline?orders*baselineDiscPerOrder:orders*fullDiscPerOrder;
     const aggFundDay=isBaseline?0:orders*(fullDiscPerOrder-ourDiscPerOrder);
-    const brandFundDay=isBaseline?0:orders*ourDiscPerOrder;
+    const brandFundDay=isBaseline?orders*baselineDiscPerOrder:orders*ourDiscPerOrder;
     const netSalesDay=grossDay-brandFundDay; // commission base, matches commBaseAOV*orders
     const commDay=netSalesDay*commRate;
     const foodDay=grossDay*foodRate;
