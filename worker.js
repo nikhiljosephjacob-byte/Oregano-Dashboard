@@ -334,33 +334,33 @@ async function handleAdminSessions(request, env) {
   const admin = await requireAdmin(request, env);
   if (!admin) return json({ error: "forbidden" }, 403);
 
+  // FIX: these three sections used to fetch each key's value with a sequential `await` inside a
+  // plain for-loop — one KV read at a time. With limits of up to 1000 sessions + 200 events + 100
+  // bans, that's potentially 1300+ individual reads happening one after another. Even at a fast
+  // ~20-30ms each, that adds up well past a reasonable timeout, and Workers have their own
+  // wall-clock execution limit — if this ran long enough, Cloudflare could kill the Worker before
+  // it ever sends a response, which looks like a silent, total hang from the browser's side (no
+  // error, nothing — exactly what was reported). Parallelized with Promise.all so all the reads
+  // for each section fire concurrently instead of queueing behind each other.
+
   // Active sessions
   const sList = await env.SESSIONS.list({ prefix: "session:", limit: 1000 });
-  const active = [];
-  for (const k of sList.keys) {
-    const raw = await env.SESSIONS.get(k.name);
-    if (raw) active.push(JSON.parse(raw));
-  }
+  const activeRaw = await Promise.all(sList.keys.map(k => env.SESSIONS.get(k.name)));
+  const active = activeRaw.filter(Boolean).map(raw => JSON.parse(raw));
 
   // Recent events (last 200)
   const eList = await env.SESSIONS.list({ prefix: "event:", limit: 200 });
   const sorted = eList.keys.sort((a, b) => b.name.localeCompare(a.name)).slice(0, 200);
-  const events = [];
-  for (const k of sorted) {
-    const raw = await env.SESSIONS.get(k.name);
-    if (raw) events.push(JSON.parse(raw));
-  }
+  const eventsRaw = await Promise.all(sorted.map(k => env.SESSIONS.get(k.name)));
+  const events = eventsRaw.filter(Boolean).map(raw => JSON.parse(raw));
 
   // Bans
   const bList = await env.SESSIONS.list({ prefix: "banned:", limit: 100 });
-  const bans = [];
-  for (const k of bList.keys) {
-    const raw = await env.SESSIONS.get(k.name);
-    bans.push({
-      user: k.name.slice("banned:".length),
-      meta: raw ? JSON.parse(raw) : null
-    });
-  }
+  const bansRaw = await Promise.all(bList.keys.map(k => env.SESSIONS.get(k.name)));
+  const bans = bList.keys.map((k, i) => ({
+    user: k.name.slice("banned:".length),
+    meta: bansRaw[i] ? JSON.parse(bansRaw[i]) : null
+  }));
 
   return json({ active, events, bans, serverTime: new Date().toISOString() });
 }
