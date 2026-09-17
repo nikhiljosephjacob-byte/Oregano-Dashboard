@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-440";
+const BUILD_VERSION="2026-08-13-442";
 const BUILD_NOTES=[
+  "🎨 Admin page theming unified with the rest of the dashboard — caught by Nikhil right after confirming the loading fix worked. Root cause: this page never checked _darkPage at all, relying on shared .card/.ct/.tbl CSS classes with light-theme-only colors and no dark variant, while every other page in the app builds its own inline theme-aware styling instead. That's exactly why it rendered white against an otherwise fully dark dashboard. Built a local theme object matching the existing DARK_THEME/light-mode pattern already used elsewhere (e.g. cmpPanel's own light-mode branch), and replaced every hardcoded class and color for cards, table headers, rows, and dividers with it — status colors (green for success, red for bans, amber for kicks) intentionally kept as-is throughout, since those are semantic, not theme-dependent. Verified directly: rendered the page in both modes with realistic session/event/ban data — dark mode correctly picks up DARK_THEME's card background with no stray white anywhere, light mode correctly uses its own light background with no dark bleed-through, and the full markup stays structurally balanced (div and table tag counts match) in both. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
+  "🐛 Admin page stuck permanently on 'Loading sessions…', reported by Nikhil with a screenshot. Traced the code path precisely: that text is set synchronously before the sessions fetch, and neither the 'No active session' branch, the 'Access denied' branch, nor the old 'Network error' catch branch was showing — meaning the fetch to /api/admin/sessions was neither resolving nor rejecting, just hanging indefinitely. A clean 404 or 500 would have resolved the promise and shown a clear message already, so this points to the endpoint being genuinely unresponsive rather than simply missing. Added an explicit 10-second timeout via AbortController so a hang now surfaces a clear, actionable message ('Request timed out after 10s — appears to be hanging or unreachable') instead of leaving the page stuck forever, plus console logging right before and after the fetch so the exact failure point is visible if this recurs. Verified all three paths directly: a normal successful response still renders the page correctly; a genuine network error still shows its own distinct message, not conflated with a timeout; and a simulated hang (a fetch that only resolves via the abort signal, matching real browser fetch/AbortController behavior) correctly times out and shows the new message rather than hanging. Re-ran the full top-to-bottom script execution test — zero uncaught errors. This fixes the symptom (permanently stuck loading state) even though the backend's own reason for not responding at all isn't something visible or fixable from this file — if the timeout message shows up in practice, that's the next thing to investigate on the backend side.",
   "🐛 Real UX bug on the Compare page, caught directly by Nikhil — every filter option click closed the dropdown, forcing a re-open to pick a second option, making multi-select painful. Traced it precisely: cmpToggle() calls renderCompare() on every click (a full innerHTML rebuild), and the dropdown's open/closed state lived only as a DOM attribute — which gets completely wiped and recreated from scratch on every rebuild, since nothing in JS remembered it was open. This exact problem was already solved, just never applied here: the Campaigns page's own filter dropdowns have a working rememberOpenDD()/restoreOpenDD()/campOpenDDId mechanism (built earlier, ~line 10631) that captures which dropdown is open before a re-render and reopens the same one after. Reused it directly for Compare rather than building a second, parallel mechanism — it's a generic DOM-id matcher, not actually Campaigns-specific despite the name. Wired cmpToggle() to call remember/restore around renderCompare(), and updated Compare's own dropdown builder to check campOpenDDId for its initial open/closed state, matching the Campaigns version's pattern exactly. Verified with a DOM simulation reproducing the real bug mechanism (a mock renderCompare() that wipes the dropdown state, matching what a real innerHTML rebuild does): confirmed the dropdown now correctly stays open across the re-render and the same dropdown id is the one restored, not a different one; re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "✨ Three real requests from Nikhil, all from the same screenshot and thread. (1) Forecast History is now visible the moment Campaign Planner opens, not gated behind running a new forecast first — moved the shared campFcHistoryHTML() render into the pre-Run early-return branch too, same shared function, not a duplicate. (2) The genuine HTTP 404 on /api/forecast/delete confirms that endpoint doesn't exist on the backend — not something fixable from this file, since dashboard.js only calls whatever the backend actually exposes; flagged honestly rather than guessing at another endpoint shape. Given delete doesn't work, addressed the actual pain it was blocking — a campaign forecasted 5 times with completely unchanged inputs (brand/agg/dates/type/discPct/cap/coFundPct all identical) cluttering the list. History now groups by those exact inputs and shows only the most-recently-saved one per group, with a visible '+N earlier forecasts hidden here (still in history, not deleted)' note — a display-only dedupe, since nothing is actually removed from the backend, just collapsed in the view. (3) Nikhil directly asked whether old saved forecasts needed checking against the build-438 baseline fix and pushed back on being asked to do that manually — fair. History now automatically flags any record saved before build 438 whose brand×aggregator is STILL hitting the degraded-baseline fallback right now (the same frequent-campaign pattern that caused the bug tends to persist), with an honest '⚠ pre-438 · may understate this forecast's saved contribution/ROI' note — checking 'still degraded now' as a proxy for 'was degraded at save time,' flagged as a maybe, not asserted as certain, since the two aren't guaranteed identical. Verified all three: reconstructed the exact 5-duplicate screenshot scenario and confirmed only 1 row renders with the correct latest values and a '+4 earlier' note; confirmed a pre-438 record for a currently-degraded brand×aggregator gets flagged while a post-438 record for the same pair correctly doesn't; re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "🐛 Real, confirmed bug caught by Nikhil from an actual P&L screenshot — Lollorosso × Careem's Baseline showed Gross Sales identical to Net Sales (AED 5,979 = AED 5,979), and Break-even came out at 170 orders/day, which Nikhil correctly flagged as too high for a 30% CAP 20 campaign on Careem's low commission. Traced it precisely: that baseline window was the build-433 degraded fallback (visible right there in the same screenshot's amber warning — no clean 90-day window found, so the baseline includes real campaign-affected, discounted days), but campPlanCompute()'s P&L builder had a hardcoded 'baseline has zero discount' assumption, applied completely unconditionally, in two separate places — the per-scenario P&L card builder (pnlAt) and the break-even calculation itself (contribPoBaseline). That assumption is only valid for a genuinely CLEAN baseline; for a degraded one it silently zeroed out real discount the window actually contains, overstating baseline Net Sales and Net Contribution, which directly overstates the break-even order count needed to clear it. Fixed both: when the baseline is degraded, its real per-order discount rate is now derived from the gap baseline.dailyGross/baseline.dailyNet already capture (both already reflect the true, contaminated-window numbers) instead of being assumed away. Since a daily-sales record only carries a total discount, not who funded it, the derived discount is conservatively treated as fully brand-funded — the assumption that understates baseline contribution rather than overstates it, erring toward a safer, lower, more achievable break-even target rather than a falsely generous one. Verified precisely: reconstructed Nikhil's real scenario (a genuinely exhausted 90-day lookback, confirmed isDegraded:true) and confirmed Gross now correctly differs from Net and break-even drops as expected; separately confirmed a genuinely clean baseline (isDegraded:false) is completely unaffected — Gross still exactly equals Net, matching existing, correct behavior for the common case. Re-ran the full top-to-bottom script execution test given the standing lesson from build 434 — zero uncaught errors.",
@@ -21192,14 +21194,33 @@ async function renderAdmin(){
 
   let data;
   try{
-    const res=await fetch("/api/admin/sessions",{headers:{"X-Session-Id":sess.sessionId}});
+    // v441: real bug reported by Nikhil — Admin page stuck permanently on "Loading sessions…".
+    // Traced the code path: this text is set synchronously before the fetch, and neither the
+    // "No active session" nor "Access denied" nor the old "Network error" branch was showing —
+    // meaning the fetch itself was never resolving OR rejecting, just hanging indefinitely (a
+    // genuinely unresponsive endpoint, not a clean 404/500, which WOULD have resolved the promise
+    // and shown a clear message already). Added an explicit timeout via AbortController so a
+    // hang now surfaces a clear, actionable message instead of hanging forever, plus console
+    // logging around the fetch so the exact failure point is visible if this happens again.
+    console.log("[admin] fetching /api/admin/sessions...");
+    const ctrl=new AbortController();
+    const timeoutId=setTimeout(()=>ctrl.abort(),10000);
+    let res;
+    try{
+      res=await fetch("/api/admin/sessions",{headers:{"X-Session-Id":sess.sessionId},signal:ctrl.signal});
+    }finally{
+      clearTimeout(timeoutId);
+    }
+    console.log("[admin] fetch resolved, status:",res.status);
     if(!res.ok){
       pg.innerHTML=`<div style="padding:24px;color:#EF4444">Access denied (${res.status}).</div>`;
       return;
     }
     data=await res.json();
   }catch(e){
-    pg.innerHTML=`<div style="padding:24px;color:#EF4444">Network error: ${e.message}</div>`;
+    console.log("[admin] fetch failed:",e.name,e.message);
+    const isTimeout=e.name==="AbortError";
+    pg.innerHTML=`<div style="padding:24px;color:#EF4444">${isTimeout?"Request timed out after 10s — /api/admin/sessions appears to be hanging or unreachable, not returning any response at all.":`Network error: ${e.message}`}</div>`;
     return;
   }
 
@@ -21222,71 +21243,90 @@ async function renderAdmin(){
     return m?m.slice(0,3).join(" · "):ua.slice(0,40);
   };
   const evColor=(ev)=>({login_success:"#22C55E",login_failed:"#EF4444",login_blocked_banned:"#EF4444",logout:"#94a3b8",admin_kick:"#FBBF24",admin_ban:"#EF4444",admin_unban:"#22C55E"})[ev]||"#94a3b8";
+  // v442: real bug caught by Nikhil right after the loading fix — this page never checked
+  // _darkPage at all, relying on the shared .card/.ct/.tbl CSS classes (light-theme only, no
+  // dark variant), while every other page in the app builds its own inline, theme-aware styling.
+  // That's why it rendered white against an otherwise fully dark dashboard. Built a local theme
+  // object matching the DARK_THEME/light-mode pattern already used everywhere else (e.g.
+  // cmpPanel's own light-mode branch), and replaced every hardcoded class and color below with it.
+  const T=_darkPage?{
+    cardBg:DARK_THEME.card,border:DARK_THEME.cardBorder,text:DARK_THEME.textPrimary,
+    muted:DARK_THEME.textSecondary,label:DARK_THEME.textMuted,rowBorder:DARK_THEME.cardBorder+"66",
+    headBorder:DARK_THEME.cardBorder,codeBg:"rgba(255,255,255,.06)"
+  }:{
+    cardBg:"#FFFFFF",border:"#E2E8F0",text:"#0F172A",
+    muted:"#64748B",label:"#94A3B8",rowBorder:"#F1F5F9",
+    headBorder:"#E2E8F0",codeBg:"#F1F5F9"
+  };
+  const cardOpen=`<div style="background:${T.cardBg};border:1px solid ${T.border};border-radius:12px;padding:16px 18px;margin-bottom:14px">`;
+  const ctStyle=`font-size:13px;font-weight:800;color:${T.text};margin-bottom:10px;text-transform:uppercase;letter-spacing:.4px`;
+  const thStyle=`text-align:left;padding:6px 10px;font-size:10px;font-weight:700;color:${T.label};text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid ${T.headBorder}`;
+  const tdBase=`padding:8px 10px;font-size:12px;border-bottom:1px solid ${T.rowBorder}`;
 
   const activeRows=(data.active||[]).map(s=>`
     <tr>
-      <td><strong style="color:#22C55E">${s.displayName||s.user}</strong></td>
-      <td><code style="font-size:10px;color:#94a3b8">${s.ip}</code></td>
-      <td style="color:#94a3b8;font-size:11px">${shortUA(s.ua)}</td>
-      <td style="color:#475569">${fmtTime(s.loginTs)}</td>
-      <td style="color:#22C55E">${fmtAgo(s.lastSeen)}</td>
-      <td style="text-align:right">
+      <td style="${tdBase}"><strong style="color:#22C55E">${s.displayName||s.user}</strong></td>
+      <td style="${tdBase}"><code style="font-size:10px;color:${T.muted};background:${T.codeBg};padding:1px 5px;border-radius:4px">${s.ip}</code></td>
+      <td style="${tdBase};color:${T.muted};font-size:11px">${shortUA(s.ua)}</td>
+      <td style="${tdBase};color:${T.text}">${fmtTime(s.loginTs)}</td>
+      <td style="${tdBase};color:#22C55E">${fmtAgo(s.lastSeen)}</td>
+      <td style="${tdBase};text-align:right">
         <button onclick="adminKick('${s.sessionId}','${s.user}')" style="background:rgba(251,191,36,.15);border:1px solid rgba(251,191,36,.4);color:#FBBF24;padding:3px 9px;font-size:10px;border-radius:5px;cursor:pointer;font-weight:700">Kick</button>
         <button onclick="adminBan('${s.user}')" style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);color:#EF4444;padding:3px 9px;font-size:10px;border-radius:5px;cursor:pointer;font-weight:700;margin-left:4px">Ban</button>
       </td>
     </tr>
-  `).join("")||`<tr><td colspan="6" style="color:#64748b;text-align:center;padding:14px">No active sessions.</td></tr>`;
+  `).join("")||`<tr><td colspan="6" style="${tdBase};color:${T.label};text-align:center;padding:14px">No active sessions.</td></tr>`;
 
   const eventRows=(data.events||[]).slice(0,100).map(e=>`
     <tr>
-      <td style="color:#94a3b8;font-size:11px">${fmtTime(e.ts)}</td>
-      <td><strong style="color:${evColor(e.event)}">${e.user||"—"}</strong></td>
-      <td style="color:${evColor(e.event)};font-size:11px;font-weight:700">${(e.event||"").replace(/_/g," ")}</td>
-      <td><code style="font-size:10px;color:#94a3b8">${e.ip||"—"}</code></td>
-      <td style="color:#64748b;font-size:11px">${e.target?"→ "+e.target:""}${e.reason?" · "+e.reason:""}${e.kickedCount?" ("+e.kickedCount+" kicked)":""}</td>
+      <td style="${tdBase};color:${T.muted};font-size:11px">${fmtTime(e.ts)}</td>
+      <td style="${tdBase}"><strong style="color:${evColor(e.event)}">${e.user||"—"}</strong></td>
+      <td style="${tdBase};color:${evColor(e.event)};font-size:11px;font-weight:700">${(e.event||"").replace(/_/g," ")}</td>
+      <td style="${tdBase}"><code style="font-size:10px;color:${T.muted};background:${T.codeBg};padding:1px 5px;border-radius:4px">${e.ip||"—"}</code></td>
+      <td style="${tdBase};color:${T.label};font-size:11px">${e.target?"→ "+e.target:""}${e.reason?" · "+e.reason:""}${e.kickedCount?" ("+e.kickedCount+" kicked)":""}</td>
     </tr>
-  `).join("")||`<tr><td colspan="5" style="color:#64748b;text-align:center;padding:14px">No events yet.</td></tr>`;
+  `).join("")||`<tr><td colspan="5" style="${tdBase};color:${T.label};text-align:center;padding:14px">No events yet.</td></tr>`;
 
   const banRows=(data.bans||[]).map(b=>`
     <tr>
-      <td><strong style="color:#EF4444">${b.user}</strong></td>
-      <td style="color:#94a3b8;font-size:11px">${b.meta?fmtTime(b.meta.ts):"—"}</td>
-      <td style="color:#94a3b8;font-size:11px">${b.meta?b.meta.bannedBy:"—"}</td>
-      <td style="color:#475569;font-size:11px">${b.meta&&b.meta.reason?b.meta.reason:"<em style=\"color:#64748b\">no reason</em>"}</td>
-      <td style="text-align:right">
+      <td style="${tdBase}"><strong style="color:#EF4444">${b.user}</strong></td>
+      <td style="${tdBase};color:${T.muted};font-size:11px">${b.meta?fmtTime(b.meta.ts):"—"}</td>
+      <td style="${tdBase};color:${T.muted};font-size:11px">${b.meta?b.meta.bannedBy:"—"}</td>
+      <td style="${tdBase};color:${T.text};font-size:11px">${b.meta&&b.meta.reason?b.meta.reason:`<em style="color:${T.label}">no reason</em>`}</td>
+      <td style="${tdBase};text-align:right">
         <button onclick="adminUnban('${b.user}')" style="background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.4);color:#22C55E;padding:3px 9px;font-size:10px;border-radius:5px;cursor:pointer;font-weight:700">Unban</button>
       </td>
     </tr>
-  `).join("")||`<tr><td colspan="5" style="color:#64748b;text-align:center;padding:14px">No banned users.</td></tr>`;
+  `).join("")||`<tr><td colspan="5" style="${tdBase};color:${T.label};text-align:center;padding:14px">No banned users.</td></tr>`;
 
   pg.innerHTML=`
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
       <div style="font-size:18px;font-weight:800;color:#22C55E">🛡 Admin · Sessions & Audit</div>
       <button onclick="renderAdmin()" style="background:rgba(245,158,11,.15);border:1px solid rgba(245,158,11,.4);color:#f59e0b;padding:4px 12px;font-size:11px;border-radius:5px;cursor:pointer;font-weight:700">↻ Refresh</button>
       <div style="flex:1"></div>
-      <div style="font-size:10px;color:#64748b">Server time: ${fmtTime(data.serverTime)}</div>
+      <div style="font-size:10px;color:${T.label}">Server time: ${fmtTime(data.serverTime)}</div>
     </div>
 
-    <div class="card">
-      <div class="ct">Active sessions <span style="color:#22C55E;font-weight:700">(${(data.active||[]).length})</span></div>
-      <div style="overflow-x:auto"><table class="tbl">
-        <thead><tr><th>User</th><th>IP</th><th>Device</th><th>Login time</th><th>Last seen</th><th></th></tr></thead>
+    ${cardOpen}
+      <div style="${ctStyle}">Active sessions <span style="color:#22C55E;font-weight:700">(${(data.active||[]).length})</span></div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+        <thead><tr><th style="${thStyle}">User</th><th style="${thStyle}">IP</th><th style="${thStyle}">Device</th><th style="${thStyle}">Login time</th><th style="${thStyle}">Last seen</th><th style="${thStyle}"></th></tr></thead>
         <tbody>${activeRows}</tbody>
       </table></div>
     </div>
 
-    <div class="card">
-      <div class="ct">Banned users <span style="color:#EF4444;font-weight:700">(${(data.bans||[]).length})</span></div>
-      <div style="overflow-x:auto"><table class="tbl">
-        <thead><tr><th>User</th><th>Banned at</th><th>By</th><th>Reason</th><th></th></tr></thead>
+    ${cardOpen}
+      <div style="${ctStyle}">Banned users <span style="color:#EF4444;font-weight:700">(${(data.bans||[]).length})</span></div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+        <thead><tr><th style="${thStyle}">User</th><th style="${thStyle}">Banned at</th><th style="${thStyle}">By</th><th style="${thStyle}">Reason</th><th style="${thStyle}"></th></tr></thead>
         <tbody>${banRows}</tbody>
       </table></div>
     </div>
 
-    <div class="card">
-      <div class="ct">Recent login history <span style="color:#94a3b8;font-weight:700">(last 100)</span></div>
-      <div style="overflow-x:auto"><table class="tbl">
-        <thead><tr><th>Time</th><th>User</th><th>Event</th><th>IP</th><th>Detail</th></tr></thead>
+    ${cardOpen}
+      <div style="${ctStyle}">Recent login history <span style="color:${T.label};font-weight:700">(last 100)</span></div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+        <thead><tr><th style="${thStyle}">Time</th><th style="${thStyle}">User</th><th style="${thStyle}">Event</th><th style="${thStyle}">IP</th><th style="${thStyle}">Detail</th></tr></thead>
         <tbody>${eventRows}</tbody>
       </table></div>
     </div>
