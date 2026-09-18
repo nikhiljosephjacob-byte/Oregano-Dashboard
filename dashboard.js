@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-445";
+const BUILD_VERSION="2026-08-13-446";
 const BUILD_NOTES=[
+  "✨ Campaign History Report expanded per Nikhil's follow-up request — per-outlet sales and contribution vs. prior periods, plus a fuller cost breakdown in the summary table. Two additions: (1) the existing 'At a glance' summary table now includes Discount Cost and Contribution columns alongside the existing uplift/incr. contribution/ROI, so the full cost-vs-contribution picture is visible across all instances in one table, not just in the individual P&L cards later in the report. (2) A new per-outlet section — new campReportOutletPL() computes sales, orders, discount, gross, and contribution for a single outlet over any date range directly from allData, using the same commission/food-rate helpers the rest of the app already relies on, so the numbers tie to the same logic rather than a separate calculation; campReportOutletSection() then builds one row per (outlet, instance) pair, comparing the campaign period against an equivalent-length prior period immediately before it. Scoped exactly as Nikhil specified — only outlets each instance actually ran on via campOutlets(), not every outlet the brand has, and not padded with zero-rows for outlets an instance never touched. Verified carefully given the real risk of over- or under-scoping: built a scenario where one outlet was scoped to both instances and another was scoped to only one, confirmed the first appears twice, the second appears exactly once (not zero, not twice), and a third, never-scoped outlet doesn't appear at all; confirmed the expanded summary table's new columns render correctly; confirmed the full report stays structurally balanced (div and table tag counts match) with the new section wired in. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "✨ Shoppable Banner — new 4th Ad Type added, confirmed directly by Nikhil from a real screenshot of the Ad Investments sheet (Talabat now has CPC, Keywords, Banner, and Shoppable Banner; column A's header was also renamed to 'Ad Type'). Checked the column-header rename first — the detector already accepted 'ad type' as a recognized header variant, so that part needed no change. The real gap was in classification: the existing /banner?/i pattern would have silently swallowed 'Shoppable Banner' into the same 'Banners' bucket as plain Banner ads, merging two things Nikhil explicitly wants tracked as separate categories. Fixed both places this could happen — the raw column-A value, and the Remarks/Brand-Location fallback for when column A is unlabeled — checking for 'shoppable banner' before the generic banner pattern in each, so it's never miscategorized. Added it to the ad-type sort order too (CPC, Keywords, Banners, Shoppable Banner — matching Nikhil's own stated order) so it appears in a sensible position in toggles and breakdowns rather than falling to an arbitrary spot. Checked the rest of the pipeline before assuming more changes were needed: every filter and P&L calculation downstream already compares against whatever adType value is passed in generically (r.adType===effAdType and similar), rather than hardcoding the 3 old type names, so those already work correctly with the new type with zero changes required — only the parsing stage needed the explicit fix. One thing deliberately left alone: Talabat's per-outlet CPC+Keywords budget-recommendation feature is scoped specifically to those two types in its own header and logic — expanding it to include Shoppable Banner would be a separate business decision, not something to fold in silently under 'treat it the same,' so flagging it rather than changing it. Verified the classification logic directly against 9 real cases — all 3 existing types unchanged, the real 'Shoppable Banner' value from the screenshot correctly classified as its own distinct type, and both the direct-column and remarks-fallback paths correctly distinguishing 'shoppable banner' from plain 'banner' mentions. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "✏️ Removed the Repeat/Reconsider/Avoid verdict entirely from the Campaign History Report, per Nikhil's direct correction — a fair one. He questioned the ROI-based rule directly and pushed for contribution-and-trend instead; rather than rebuild the same kind of single automated rule under new criteria, he asked to remove automated judgment altogether and show the real data instead. Renamed 'Campaign Repeat Report' to 'Campaign History Report' throughout (cover, page headers, tooltips) since it no longer makes a recommendation. Page 2 is now a neutral summary — plain averages (incr. contribution, ROI, order uplift) with no verdict banner and no pros/cons — explicitly labeled 'not a recommendation.' The real addition: every past instance now gets its own full P&L card, matching the exact same row set and Campaign/Baseline layout as the detail view's own popup table (Net Sales, Gross Sales, discount — with the co-funding breakdown row when it applies — Contribution), not a summary substitute for it, two cards per printed page. Verified thoroughly given this replaced the feature's central logic: confirmed zero verdict/recommendation language anywhere in the generated HTML (no 'Repeat', 'Reconsider', 'Avoid', no Pros/Cons sections); confirmed a full P&L card renders correctly for every instance including the co-funding row on the one instance that has it; confirmed structural balance (div and table tag counts match); re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "✨ Campaign Repeat Report — a genuinely new feature, built across a full design discussion (two rendered mockups shown, three clarifying questions asked and answered) before any code was written. Answers that shaped it: compare ALL past instances of a repeated campaign, not just the latest; available automatically for every completed campaign, not gated behind a special trigger; PDF export only, matching Compare's own 'Export to PDF' pattern (client-side print-CSS + window.print(), reusing the shared reportBaseCSS() rather than a separate stylesheet); and matching defined as same campaign name + same brand + same aggregator, confirmed directly rather than assumed. Built in three layers: (1) campReportFindInstances() finds every COMPLETED campaign sharing that identity, using campAnalysisCached() for each — the exact same, already-proven analysis every card and detail view already shows, not a separate computation that could quietly drift; (2) campReportVerdict() applies three explicit, auditable rules (Repeat: avg ROI >= 1x and avg contribution positive; Reconsider: avg contribution positive but ROI < 1x — precisely the real Flash Sale example that prompted this feature; Avoid: avg contribution negative) rather than a black-box score; (3) campReportBuildHTML()/campReportExportPDF() generate a 3-page PDF — cover, verdict + pros/cons + averages, and a full instance-by-instance table. Wired into two places, both from Nikhil's original ask: a small 📄 icon on completed campaign cards (gated on Completed status, since Running/Upcoming have no finished result to report on) and a 'Repeat report' button in the campaign detail view's own header — both reuse the existing campaignData-index pattern already used for exportCampaignOrdersByIdx, not a fragile embedded-object approach. Verified thoroughly given the real stakes of a brand-new feature: all three verdict rules tested independently including the exact real Flash Sale numbers (0.37x ROI, +AED 13,800) correctly producing 'Reconsider'; the matching function tested against case/whitespace name variants, wrong brand, wrong aggregator, wrong status, and wrong name, each correctly included or excluded; the full PDF HTML tested for structural balance (div/table tag counts) and correct content; the 'no completed instances yet' path tested to fail gracefully with a clear message instead of a broken export; the card icon tested to show only for completed campaigns with the correct index; and a full end-to-end trace from icon click through window.open/document.write/print() confirming the mechanism actually fires. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
@@ -12111,10 +12112,12 @@ function campReportBuildHTML(c){
       <div style="background:#f9fafb;border-radius:8px;padding:12px 14px"><div style="font-size:10px;color:#6b7280;text-transform:uppercase;font-weight:700">Avg order uplift</div><div style="font-size:20px;font-weight:800;margin-top:4px">+${Math.round(avgUplift)}%</div></div>
     </div>
     <div class="sec-title">At a glance</div>
-    <table><thead><tr><th>Dates</th><th>Terms</th><th>Order uplift</th><th>Incr. contribution</th><th>ROI</th></tr></thead><tbody>${instances.map(m=>`<tr>
+    <table><thead><tr><th>Dates</th><th>Terms</th><th>Order uplift</th><th>Discount cost</th><th>Contribution</th><th>Incr. contribution</th><th>ROI</th></tr></thead><tbody>${instances.map(m=>`<tr>
       <td>${esc(m.c.startDate)} – ${esc(m.c.endDate)}</td>
       <td>${esc(m.c.comments||m.c.name||"—")}</td>
       <td>${(m.a.ordersLift||0)>=0?"+":""}${Math.round(m.a.ordersLift||0)}%</td>
+      <td>AED ${Math.round(m.a.ourDiscCost||0).toLocaleString()}</td>
+      <td>AED ${Math.round(m.a.campContribTotal||0).toLocaleString()}</td>
       <td style="color:${(m.a.incrContribTotal||0)>=0?"#16a34a":"#dc2626"}">${(m.a.incrContribTotal||0)>=0?"+":""}AED ${Math.round(m.a.incrContribTotal||0).toLocaleString()}</td>
       <td>${(m.a.discountROI||0).toFixed(2)}×</td>
     </tr>`).join("")}</tbody></table>
@@ -12154,8 +12157,69 @@ function campReportBuildHTML(c){
       <div class="footer"><span>Oregano Group — Campaign History Report</span><span>${pageNum}</span></div></div>`);
   }
 
-  const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(filename)}</title><style>${css}</style></head><body>${cover}${p2}${plPagesHTML.join("")}</body></html>`;
+  const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(filename)}</title><style>${css}</style></head><body>${cover}${p2}${campReportOutletSection(instances)}${plPagesHTML.join("")}</body></html>`;
   return{html,filename};
+}
+// v446: real follow-up request from Nikhil — per-outlet sales and contribution, compared against
+// a prior period, scoped only to the outlets each instance actually ran on (not every outlet the
+// brand has). Computed directly from allData rather than reusing campAnalysisV2 (which is scoped
+// to the whole campaign, not a single outlet) — same commission/food-rate helpers the rest of the
+// app already uses, so the numbers tie out to the same logic, just sliced narrower.
+function campReportOutletPL(brand,aggregator,outlet,startDate,endDate){
+  const recs=allData.filter(r=>r.brand===brand&&r.aggregator===aggregator&&r.branch===outlet&&r.date>=startDate&&r.date<=endDate);
+  const sales=recs.reduce((s,r)=>s+r.sales,0);
+  const orders=recs.reduce((s,r)=>s+r.orders,0);
+  const disc=recs.reduce((s,r)=>s+(r.disc||0),0);
+  const gross=sales+disc;
+  const commRate=commissionRateFor(aggregator,brand,startDate);
+  const foodRate=foodPkgPct(brand);
+  const comm=sales*commRate;
+  const food=gross*foodRate;
+  const contribution=sales-comm-food;
+  return{sales,orders,gross,disc,contribution,days:daysBetweenInclusive(startDate,endDate)};
+}
+function campReportOutletSection(instances){
+  // Union of every outlet actually scoped on any instance, not the brand's full outlet list.
+  const outletSet=new Set();
+  instances.forEach(m=>{campOutlets(m.c).forEach(o=>outletSet.add(o));});
+  const outlets=[...outletSet].sort();
+  if(!outlets.length)return"";
+  const rows=[];
+  outlets.forEach(outlet=>{
+    instances.forEach(m=>{
+      const scoped=campOutlets(m.c);
+      if(!scoped.has(outlet))return; // this instance didn't run on this outlet — skip, not zero
+      const camp=campReportOutletPL(m.c.brand,m.c.aggregator,outlet,m.c.startDate,m.c.endDate);
+      const priorEnd=subDays(m.c.startDate,1);
+      const priorStart=subDays(m.c.startDate,camp.days);
+      const prior=campReportOutletPL(m.c.brand,m.c.aggregator,outlet,priorStart,priorEnd);
+      rows.push({outlet,m,camp,prior});
+    });
+  });
+  const pages=[];
+  const perPage=14;
+  for(let i=0;i<rows.length;i+=perPage){
+    const pageNum="O"+(Math.floor(i/perPage)+1);
+    const chunk=rows.slice(i,i+perPage);
+    const chunkHTML=chunk.map(({outlet,m,camp,prior})=>{
+      const salesDelta=prior.sales>0?((camp.sales-prior.sales)/prior.sales*100):null;
+      const contribDelta=prior.contribution!==0?((camp.contribution-prior.contribution)/Math.abs(prior.contribution)*100):null;
+      return`<tr>
+        <td>${esc(outlet)}</td>
+        <td>${esc(m.c.startDate)} – ${esc(m.c.endDate)}</td>
+        <td>AED ${Math.round(camp.sales).toLocaleString()}</td>
+        <td>AED ${Math.round(prior.sales).toLocaleString()}</td>
+        <td style="color:${salesDelta==null?'#6b7280':salesDelta>=0?'#16a34a':'#dc2626'}">${salesDelta==null?"—":(salesDelta>=0?"+":"")+Math.round(salesDelta)+"%"}</td>
+        <td>AED ${Math.round(camp.contribution).toLocaleString()}</td>
+        <td>AED ${Math.round(prior.contribution).toLocaleString()}</td>
+        <td style="color:${contribDelta==null?'#6b7280':contribDelta>=0?'#16a34a':'#dc2626'}">${contribDelta==null?"—":(contribDelta>=0?"+":"")+Math.round(contribDelta)+"%"}</td>
+      </tr>`;
+    }).join("");
+    pages.push(`<div class="page"><div class="runhdr"><div><div class="l">Per-outlet detail</div><div class="scope">Sales &amp; contribution vs. the equivalent prior period, same length</div></div><div class="p">Oregano Group</div></div>
+      <table><thead><tr><th>Outlet</th><th>Instance</th><th>Sales</th><th>Prior period sales</th><th>Δ Sales</th><th>Contribution</th><th>Prior period contrib.</th><th>Δ Contribution</th></tr></thead><tbody>${chunkHTML}</tbody></table>
+      <div class="footer"><span>Oregano Group — Campaign History Report</span><span>${pageNum}</span></div></div>`);
+  }
+  return pages.join("");
 }
 function campReportExportPDF(idx){
   const c=campaignData[idx];
