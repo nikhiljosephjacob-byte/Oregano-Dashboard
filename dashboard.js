@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-442";
+const BUILD_VERSION="2026-08-13-444";
 const BUILD_NOTES=[
+  "✏️ Removed the Repeat/Reconsider/Avoid verdict entirely from the Campaign History Report, per Nikhil's direct correction — a fair one. He questioned the ROI-based rule directly and pushed for contribution-and-trend instead; rather than rebuild the same kind of single automated rule under new criteria, he asked to remove automated judgment altogether and show the real data instead. Renamed 'Campaign Repeat Report' to 'Campaign History Report' throughout (cover, page headers, tooltips) since it no longer makes a recommendation. Page 2 is now a neutral summary — plain averages (incr. contribution, ROI, order uplift) with no verdict banner and no pros/cons — explicitly labeled 'not a recommendation.' The real addition: every past instance now gets its own full P&L card, matching the exact same row set and Campaign/Baseline layout as the detail view's own popup table (Net Sales, Gross Sales, discount — with the co-funding breakdown row when it applies — Contribution), not a summary substitute for it, two cards per printed page. Verified thoroughly given this replaced the feature's central logic: confirmed zero verdict/recommendation language anywhere in the generated HTML (no 'Repeat', 'Reconsider', 'Avoid', no Pros/Cons sections); confirmed a full P&L card renders correctly for every instance including the co-funding row on the one instance that has it; confirmed structural balance (div and table tag counts match); re-ran the full top-to-bottom script execution test — zero uncaught errors.",
+  "✨ Campaign Repeat Report — a genuinely new feature, built across a full design discussion (two rendered mockups shown, three clarifying questions asked and answered) before any code was written. Answers that shaped it: compare ALL past instances of a repeated campaign, not just the latest; available automatically for every completed campaign, not gated behind a special trigger; PDF export only, matching Compare's own 'Export to PDF' pattern (client-side print-CSS + window.print(), reusing the shared reportBaseCSS() rather than a separate stylesheet); and matching defined as same campaign name + same brand + same aggregator, confirmed directly rather than assumed. Built in three layers: (1) campReportFindInstances() finds every COMPLETED campaign sharing that identity, using campAnalysisCached() for each — the exact same, already-proven analysis every card and detail view already shows, not a separate computation that could quietly drift; (2) campReportVerdict() applies three explicit, auditable rules (Repeat: avg ROI >= 1x and avg contribution positive; Reconsider: avg contribution positive but ROI < 1x — precisely the real Flash Sale example that prompted this feature; Avoid: avg contribution negative) rather than a black-box score; (3) campReportBuildHTML()/campReportExportPDF() generate a 3-page PDF — cover, verdict + pros/cons + averages, and a full instance-by-instance table. Wired into two places, both from Nikhil's original ask: a small 📄 icon on completed campaign cards (gated on Completed status, since Running/Upcoming have no finished result to report on) and a 'Repeat report' button in the campaign detail view's own header — both reuse the existing campaignData-index pattern already used for exportCampaignOrdersByIdx, not a fragile embedded-object approach. Verified thoroughly given the real stakes of a brand-new feature: all three verdict rules tested independently including the exact real Flash Sale numbers (0.37x ROI, +AED 13,800) correctly producing 'Reconsider'; the matching function tested against case/whitespace name variants, wrong brand, wrong aggregator, wrong status, and wrong name, each correctly included or excluded; the full PDF HTML tested for structural balance (div/table tag counts) and correct content; the 'no completed instances yet' path tested to fail gracefully with a clear message instead of a broken export; the card icon tested to show only for completed campaigns with the correct index; and a full end-to-end trace from icon click through window.open/document.write/print() confirming the mechanism actually fires. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "🎨 Admin page theming unified with the rest of the dashboard — caught by Nikhil right after confirming the loading fix worked. Root cause: this page never checked _darkPage at all, relying on shared .card/.ct/.tbl CSS classes with light-theme-only colors and no dark variant, while every other page in the app builds its own inline theme-aware styling instead. That's exactly why it rendered white against an otherwise fully dark dashboard. Built a local theme object matching the existing DARK_THEME/light-mode pattern already used elsewhere (e.g. cmpPanel's own light-mode branch), and replaced every hardcoded class and color for cards, table headers, rows, and dividers with it — status colors (green for success, red for bans, amber for kicks) intentionally kept as-is throughout, since those are semantic, not theme-dependent. Verified directly: rendered the page in both modes with realistic session/event/ban data — dark mode correctly picks up DARK_THEME's card background with no stray white anywhere, light mode correctly uses its own light background with no dark bleed-through, and the full markup stays structurally balanced (div and table tag counts match) in both. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "🐛 Admin page stuck permanently on 'Loading sessions…', reported by Nikhil with a screenshot. Traced the code path precisely: that text is set synchronously before the sessions fetch, and neither the 'No active session' branch, the 'Access denied' branch, nor the old 'Network error' catch branch was showing — meaning the fetch to /api/admin/sessions was neither resolving nor rejecting, just hanging indefinitely. A clean 404 or 500 would have resolved the promise and shown a clear message already, so this points to the endpoint being genuinely unresponsive rather than simply missing. Added an explicit 10-second timeout via AbortController so a hang now surfaces a clear, actionable message ('Request timed out after 10s — appears to be hanging or unreachable') instead of leaving the page stuck forever, plus console logging right before and after the fetch so the exact failure point is visible if this recurs. Verified all three paths directly: a normal successful response still renders the page correctly; a genuine network error still shows its own distinct message, not conflated with a timeout; and a simulated hang (a fetch that only resolves via the abort signal, matching real browser fetch/AbortController behavior) correctly times out and shows the new message rather than hanging. Re-ran the full top-to-bottom script execution test — zero uncaught errors. This fixes the symptom (permanently stuck loading state) even though the backend's own reason for not responding at all isn't something visible or fixable from this file — if the timeout message shows up in practice, that's the next thing to investigate on the backend side.",
   "🐛 Real UX bug on the Compare page, caught directly by Nikhil — every filter option click closed the dropdown, forcing a re-open to pick a second option, making multi-select painful. Traced it precisely: cmpToggle() calls renderCompare() on every click (a full innerHTML rebuild), and the dropdown's open/closed state lived only as a DOM attribute — which gets completely wiped and recreated from scratch on every rebuild, since nothing in JS remembered it was open. This exact problem was already solved, just never applied here: the Campaigns page's own filter dropdowns have a working rememberOpenDD()/restoreOpenDD()/campOpenDDId mechanism (built earlier, ~line 10631) that captures which dropdown is open before a re-render and reopens the same one after. Reused it directly for Compare rather than building a second, parallel mechanism — it's a generic DOM-id matcher, not actually Campaigns-specific despite the name. Wired cmpToggle() to call remember/restore around renderCompare(), and updated Compare's own dropdown builder to check campOpenDDId for its initial open/closed state, matching the Campaigns version's pattern exactly. Verified with a DOM simulation reproducing the real bug mechanism (a mock renderCompare() that wipes the dropdown state, matching what a real innerHTML rebuild does): confirmed the dropdown now correctly stays open across the re-render and the same dropdown id is the one restored, not a different one; re-ran the full top-to-bottom script execution test — zero uncaught errors.",
@@ -11033,6 +11035,12 @@ function campCardGrid(camps,showProfit){
     // badge. Switched to 📋, matching the detail view's own forecast-comparison banner icon (line
     // ~12835) for visual consistency between the two surfaces instead of colliding with Hybrid's.
     const forecastedChip=campFcMatchSaved(c)?`<span style="font-size:10px;background:rgba(251,191,36,.12);color:#FBBF24;font-weight:700;padding:2px 7px;border-radius:6px" title="This campaign was forecasted beforehand — open it to see the forecast vs. what actually happened">📋 Forecasted</span>`:'';
+    // v443: campaign repeat report icon — only meaningful once a campaign is genuinely completed
+    // (a Running/Upcoming one has no finished result to report on). Every completed campaign
+    // with real data matches at least itself in campReportFindInstances(), so this is available
+    // for all of them, per Nikhil's own "automatic for every completed campaign" answer — no
+    // separate "has enough history" gate needed.
+    const reportIcon=(campStatus(c)==="Completed")?`<span onclick="event.stopPropagation();campReportExportPDF(${idx})" title="Export history report PDF — full P&L for every past run of this exact campaign" style="cursor:pointer;font-size:13px;color:${T.muted};padding:2px 5px;border-radius:5px" onmouseenter="this.style.color='${T.text}';this.style.background='${T.rowBg2}'" onmouseleave="this.style.color='${T.muted}';this.style.background='transparent'">📄</span>`:'';
     const offer=campOfferLabel(c);
     const dateStrCompact=(()=>{
       const s=fmtShort(c.startDate),e=fmtShort(c.endDate);
@@ -11076,6 +11084,7 @@ function campCardGrid(camps,showProfit){
         ${exactChip}
         ${subsidyChip}
         ${campHasOrderExport(c)?`<span onclick="event.stopPropagation();exportCampaignOrdersByIdx(${idx})" style="cursor:pointer;font-size:11px;background:rgba(34,197,94,.1);color:#16a34a;padding:2px 8px;border-radius:6px;font-weight:700" title="Download the exact order-level rows attributed to this campaign (CSV)">📥</span>`:''}
+        ${reportIcon}
         <span style="font-size:10.5px;color:${T.label};font-weight:600">${dateStrCompact}</span>
       </div>
       ${extraDetail?`<div style="font-size:11px;color:${T.muted};margin-top:7px;line-height:1.5;font-weight:500" title="${(c.comments||'').replace(/"/g,'&quot;')}">${extraDetail}</div>`:''}
@@ -12037,6 +12046,119 @@ function campAnalysisCached(c){
   campAnalysisCache.set(key,a);
   return a;
 }
+// v443: real feature request from Nikhil — a director-level "should we repeat this?" report per
+// campaign, built up across a multi-question design discussion. Matching definition confirmed
+// directly by Nikhil: same campaign name + same brand + same aggregator, not discount-structure
+// similarity (that's a different, looser concept the forecaster's own historical matching already
+// covers for a DIFFERENT purpose — estimating an upcoming campaign, not auditing a repeated one).
+// Finds every COMPLETED campaign sharing this identity, chronologically sorted, each with its
+// real analysis attached via the same campAnalysisCached() every card and detail view already
+// uses — not a separate computation that could quietly drift from what's shown elsewhere.
+function campReportNormName(name){
+  return(name||"").trim().toLowerCase().replace(/\s+/g," ");
+}
+function campReportFindInstances(c){
+  if(!campLoaded)return[];
+  const targetName=campReportNormName(c.name);
+  if(!targetName)return[];
+  const matches=campaignData.filter(x=>
+    campStatus(x)==="Completed"&&
+    x.brand===c.brand&&
+    x.aggregator===c.aggregator&&
+    campReportNormName(x.name)===targetName
+  );
+  return matches
+    .map(x=>({c:x,a:campAnalysisCached(x)}))
+    .filter(m=>m.a&&m.a.hasData)
+    .sort((p,q)=>p.c.startDate.localeCompare(q.c.startDate));
+}
+// v444: real correction from Nikhil — removed the automated Repeat/Reconsider/Avoid verdict
+// entirely, including the pros/cons framing. His reasoning, and I agree with it: a single rule
+// (ROI-based or otherwise) oversimplifies a real business decision, and the report should show
+// the actual numbers — the same full P&L format already used in the campaign detail view's own
+// popup (Campaign / Baseline / Incremental, per line item) — for every past instance, and let him
+// decide. No scoring, no recommendation, just the real data laid out clearly.
+function campReportBuildHTML(c){
+  const instances=campReportFindInstances(c);
+  if(!instances.length)return null;
+  const n=instances.length;
+  const avgROI=instances.reduce((s,m)=>s+(m.a.discountROI||0),0)/n;
+  const avgContrib=instances.reduce((s,m)=>s+(m.a.incrContribTotal||0),0)/n;
+  const avgUplift=instances.reduce((s,m)=>s+(m.a.ordersLift||0),0)/n;
+  const css=reportBaseCSS();
+  const filename=`${c.brand}_${c.aggregator}_${(c.name||"Campaign").replace(/[^a-z0-9]+/gi,"")}_Report`;
+
+  const cover=`<div class="page cover">
+    <div class="cover-top">${logoImg(c.brand,44)}${logoImg(c.aggregator,44)}<div class="cover-brand"><div class="name">OREGANO GROUP</div><div class="sub">Multi-Brand F&amp;B Performance Reporting</div></div></div>
+    <div class="cover-mid"><div class="cover-label">Campaign History Report</div><div class="cover-title">${esc(c.name)}<br>${esc(c.brand)} × ${esc(c.aggregator)}</div>
+      <div class="cover-scope-box">${n} completed instance${n!==1?"s":""} found, ${esc(instances[0].c.startDate)} → ${esc(instances[n-1].c.endDate)}</div></div>
+    <div class="cover-bottom"><span>Generated ${fmtDisp(dk(new Date()))}</span><span>Confidential — Internal Use Only</span></div></div>`;
+
+  const p2=`<div class="page"><div class="runhdr"><div><div class="l">Summary</div><div class="scope">${esc(c.name)} — ${esc(c.brand)} × ${esc(c.aggregator)}</div></div><div class="p">Oregano Group · Page 2</div></div>
+    <div class="sec-title">Averages across ${n} instance${n!==1?"s":""}</div>
+    <div class="sec-sub">Plain averages, not a recommendation — the full P&L for each instance follows on the pages after this one.</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
+      <div style="background:#f9fafb;border-radius:8px;padding:12px 14px"><div style="font-size:10px;color:#6b7280;text-transform:uppercase;font-weight:700">Avg incr. contribution</div><div style="font-size:20px;font-weight:800;margin-top:4px;color:${avgContrib>=0?"#16a34a":"#dc2626"}">${avgContrib>=0?"+":""}AED ${Math.round(avgContrib).toLocaleString()}</div></div>
+      <div style="background:#f9fafb;border-radius:8px;padding:12px 14px"><div style="font-size:10px;color:#6b7280;text-transform:uppercase;font-weight:700">Avg ROI</div><div style="font-size:20px;font-weight:800;margin-top:4px">${avgROI.toFixed(2)}×</div></div>
+      <div style="background:#f9fafb;border-radius:8px;padding:12px 14px"><div style="font-size:10px;color:#6b7280;text-transform:uppercase;font-weight:700">Avg order uplift</div><div style="font-size:20px;font-weight:800;margin-top:4px">+${Math.round(avgUplift)}%</div></div>
+    </div>
+    <div class="sec-title">At a glance</div>
+    <table><thead><tr><th>Dates</th><th>Terms</th><th>Order uplift</th><th>Incr. contribution</th><th>ROI</th></tr></thead><tbody>${instances.map(m=>`<tr>
+      <td>${esc(m.c.startDate)} – ${esc(m.c.endDate)}</td>
+      <td>${esc(m.c.comments||m.c.name||"—")}</td>
+      <td>${(m.a.ordersLift||0)>=0?"+":""}${Math.round(m.a.ordersLift||0)}%</td>
+      <td style="color:${(m.a.incrContribTotal||0)>=0?"#16a34a":"#dc2626"}">${(m.a.incrContribTotal||0)>=0?"+":""}AED ${Math.round(m.a.incrContribTotal||0).toLocaleString()}</td>
+      <td>${(m.a.discountROI||0).toFixed(2)}×</td>
+    </tr>`).join("")}</tbody></table>
+    <div class="footer"><span>Oregano Group — Campaign History Report</span><span>2</span></div></div>`;
+
+  // v444: one full P&L card per instance, same row set and Campaign/Baseline/Incremental
+  // layout as the detail view's own popup table (Net Sales, Gross Sales, discount breakdown
+  // with co-funding split when it applies, Contribution) — not a summary substitute for it.
+  const plCard=(m,pageNum)=>{
+    const a=m.a,ic=m.c;
+    const fA=(v)=>`AED ${Math.round(v).toLocaleString()}`;
+    const discLabel=a.coFundedPct>0?(ic.aggregator==='Deliveroo'?`${esc(ic.brand)}'s discount cost`:"Merchant discount cost"):"Discount given";
+    const coFundRow=a.coFundedPct>0?`<tr style="color:#2563eb"><td>+ ${esc(ic.aggregator)}-funded co-pay</td><td style="text-align:right">${fA(a.aggInferredCoFund)}</td><td style="text-align:right">—</td></tr>
+      <tr style="color:#6b7280;font-style:italic;font-size:11px"><td>= Total discount to customer</td><td style="text-align:right">${fA(a.totalCustomerDisc)}</td><td style="text-align:right">—</td></tr>`:"";
+    return`<div style="border:0.5px solid #E2E8F0;border-radius:10px;padding:14px 16px;margin-bottom:14px">
+      <div style="font-size:13px;font-weight:800;color:#0F172A;margin-bottom:2px">${esc(ic.startDate)} – ${esc(ic.endDate)}</div>
+      <div style="font-size:11px;color:#6b7280;margin-bottom:10px">${esc(ic.comments||ic.name||"—")}</div>
+      <table><thead><tr><th></th><th>Campaign</th><th>Baseline</th></tr></thead><tbody>
+        <tr><td>Net Sales</td><td style="text-align:right">${fA(a.cs.sales)}</td><td style="text-align:right">${fA(a.bs.sales)}</td></tr>
+        <tr><td>Gross Sales</td><td style="text-align:right">${fA(a.campGross)}</td><td style="text-align:right">${fA(a.baseGross)}</td></tr>
+        <tr><td>${discLabel}</td><td style="text-align:right">${fA(a.ourDiscCost)}</td><td style="text-align:right">${fA(a.bs.disc||0)}</td></tr>
+        ${coFundRow}
+        <tr style="border-top:2px solid #FBBF2455;font-weight:800"><td style="color:#B45309">Contribution</td><td style="text-align:right">${fA(a.campContribTotal)}</td><td style="text-align:right">${fA(a.baseContribTotal)}</td></tr>
+      </tbody></table>
+    </div>`;
+  };
+  const plPages=instances.map((m,i)=>{
+    const pageNum=3+Math.floor(i/2);
+    return plCard(m,pageNum);
+  });
+  // Two P&L cards per printed page — matches how much fits legibly without cramming.
+  const plPagesHTML=[];
+  for(let i=0;i<plPages.length;i+=2){
+    const pageNum=3+i/2;
+    plPagesHTML.push(`<div class="page"><div class="runhdr"><div><div class="l">Full P&amp;L — instance${plPages.slice(i,i+2).length>1?"s":""} ${i+1}${plPages.slice(i,i+2).length>1?"–"+(i+2>n?n:i+2):""}</div><div class="scope">${esc(c.name)} — ${esc(c.brand)} × ${esc(c.aggregator)}</div></div><div class="p">Oregano Group · Page ${pageNum}</div></div>
+      ${plPages.slice(i,i+2).join("")}
+      <div class="footer"><span>Oregano Group — Campaign History Report</span><span>${pageNum}</span></div></div>`);
+  }
+
+  const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(filename)}</title><style>${css}</style></head><body>${cover}${p2}${plPagesHTML.join("")}</body></html>`;
+  return{html,filename};
+}
+function campReportExportPDF(idx){
+  const c=campaignData[idx];
+  if(!c){alert("Couldn't find that campaign — try reopening the page.");return;}
+  const built=campReportBuildHTML(c);
+  if(!built){alert("No completed instances of this campaign found yet — nothing to report on.");return;}
+  const w=window.open("","_blank");
+  if(!w){alert("Please allow pop-ups to export the report.");return;}
+  w.document.open();w.document.write(built.html);w.document.close();
+  w.onload=()=>{setTimeout(()=>w.print(),300);};
+}
 // Legacy comprehensive campaign analysis (kept for any callers not yet migrated to V2).
 function campAnalysis(c){
   const base=campImpactExtended(c);
@@ -12886,7 +13008,7 @@ function campDetailHTML(c,idx){
   }else if(exclusiveSiblings.length){
     exclBadge=`<div style="margin-top:8px;padding:8px 12px;background:rgba(100,116,139,.08);border-left:3px solid #94a3b8;border-radius:4px;display:flex;align-items:flex-start;gap:10px"><div style="font-size:18px;line-height:1">⏸</div><div style="flex:1;min-width:200px"><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Paused When Exclusive Offer Runs</div><div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.5">Another ${c.brand}/${c.aggregator} campaign — ${exclusiveSiblings.map(x=>'"'+(x.name||'unnamed')+'"').join(', ')} — is marked exclusive and overlaps these dates. During those overlapping days, this campaign was effectively paused, so its standalone lift figures should be read with that in mind.</div></div></div>`;
   }
-  const header=`<div class="card" style="border-color:${accent}44;margin-bottom:12px"><div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px"><div style="flex:1;min-width:280px"><div style="font-size:16px;font-weight:800;color:${accent}">${c.name||'(no name)'}</div><div style="font-size:12px;color:#475569;font-weight:600;margin-top:6px;line-height:2"><span style="color:${accent};font-weight:700">${c.brand}</span> · <span style="color:${AC[c.aggregator]||'#888'};font-weight:700">${c.aggregator}</span> · ${!c.outlet||c.outlet==='All'?'All Outlets':c.outlet}<br>${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)} (${a.days} day${a.days!==1?'s':''})<br><span style="color:#0F172A;line-height:1.6">${c.comments||''}</span>${(c.addons&&c.addons.length)?`<div style="margin-top:10px;padding:8px 12px;background:rgba(232,214,20,0.08);border-left:3px solid #E8D614;border-radius:4px"><div style="font-size:10px;color:#E8D614;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">⊕ Co-funded Add-ons</div>${c.addons.map(ad=>`<div style="font-size:11px;color:#FCD34D;line-height:1.5"><strong>${ad.name}</strong> · ${ad.comments} · ${fmtCampDateRange(ad.startDate,ad.endDate)}</div>`).join('')}</div>`:''}</div>${scopeBadge}${exclBadge}</div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0"><div style="padding:4px 14px;border-radius:12px;font-size:11px;font-weight:700;background:${stClr}22;color:${stClr};border:1px solid ${stClr}44">${st}</div><button onclick="campTab='browse';renderCampaigns()" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer">← Back</button></div></div></div>`;
+  const header=`<div class="card" style="border-color:${accent}44;margin-bottom:12px"><div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px"><div style="flex:1;min-width:280px"><div style="font-size:16px;font-weight:800;color:${accent}">${c.name||'(no name)'}</div><div style="font-size:12px;color:#475569;font-weight:600;margin-top:6px;line-height:2"><span style="color:${accent};font-weight:700">${c.brand}</span> · <span style="color:${AC[c.aggregator]||'#888'};font-weight:700">${c.aggregator}</span> · ${!c.outlet||c.outlet==='All'?'All Outlets':c.outlet}<br>${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)} (${a.days} day${a.days!==1?'s':''})<br><span style="color:#0F172A;line-height:1.6">${c.comments||''}</span>${(c.addons&&c.addons.length)?`<div style="margin-top:10px;padding:8px 12px;background:rgba(232,214,20,0.08);border-left:3px solid #E8D614;border-radius:4px"><div style="font-size:10px;color:#E8D614;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">⊕ Co-funded Add-ons</div>${c.addons.map(ad=>`<div style="font-size:11px;color:#FCD34D;line-height:1.5"><strong>${ad.name}</strong> · ${ad.comments} · ${fmtCampDateRange(ad.startDate,ad.endDate)}</div>`).join('')}</div>`:''}</div>${scopeBadge}${exclBadge}</div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0"><div style="padding:4px 14px;border-radius:12px;font-size:11px;font-weight:700;background:${stClr}22;color:${stClr};border:1px solid ${stClr}44">${st}</div>${st==='Completed'?`<button onclick="campReportExportPDF(${idx})" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer" title="Full P&L for every past run of this exact campaign">📄 History report</button>`:''}<button onclick="campTab='browse';renderCampaigns()" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer">← Back</button></div></div></div>`;
 
   if(st==='Upcoming')return header+`<div class="card"><div style="color:#F59E0B;font-size:13px;padding:4px 0">⏰ Campaign starts ${fmtDisp(c.startDate)} — performance data will appear once live.</div></div>`;
   if(!a.hasData)return header+`<div class="card"><div style="color:#64748b;font-size:12px;padding:4px 0">No sales data found for this campaign period.</div></div>`;
@@ -21401,7 +21523,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     sortTableBy,selectCamp,campSetSearch,campSetQuickFilter,campSetCardSort,campToggleFilter,campClearFilters,campSortBy,campSetDate,campClearDates,campSetElasticity,
     campTrajectory,campBreakevenUplift,campFindCleanBaseline,campCollapseSection,campParticipationV1,campParticipationTrend,cpcPacingRec,
     campFcLoadHistory,
-    toggleRatingBell,checkRatingAlerts,renderRatingBell,retryBrand,exportCampaignOrders,exportCampaignOrdersByIdx,campHasOrderExport,
+    toggleRatingBell,checkRatingAlerts,renderRatingBell,retryBrand,exportCampaignOrders,exportCampaignOrdersByIdx,campHasOrderExport,campReportExportPDF,
     confirmClearAggData,clearKeetaData,clearCareemData,clearTalabatData,clearDeliverooData,clearNoonData,handleOrdersUpload,
     cmpToggle,cmpClear,cmpPreset,cmpSetDate,cmpSetMetric,cmpSwap,cmpCopyAtoB,cmpToggleExpand,
     injectCompareTab,loadKPIData,doLoad,
