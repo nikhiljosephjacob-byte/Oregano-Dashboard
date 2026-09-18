@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-447";
+const BUILD_VERSION="2026-08-13-448";
 const BUILD_NOTES=[
+  "🐛 Real bug caught by Nikhil — the report icon on campaign cards stopped producing anything at all, no error, no popup, nothing. Traced it precisely by reading campOutlets()'s own source: it legitimately returns null to mean 'all outlets, no restriction' — a case build 446's new per-outlet code never checked for. It called .forEach() directly on that result, and for any campaign with no explicit outlet restriction — including the exact real Flash Sale campaign that triggered this report — that's a null, so null.forEach() throws immediately. An inline onclick=\"\" handler that throws fails completely silently from the user's side: no visible error, no alert, nothing happening — precisely what was reported. Fixed by normalizing null into the brand's actual full outlet list (every outlet with real data), applied everywhere campOutlets() gets called in the per-outlet section. Also wrapped the whole export function in try/catch with diagnostic logging at each step, so if a different, unanticipated edge case ever causes a real failure again, it surfaces as a clear, readable error instead of vanishing silently — the same lesson learned from the Admin page hang investigation, applied proactively here rather than waited for. Verified precisely against the real bug: reconstructed the exact failing case (a campaign with no outlet restriction, campOutlets() returning null) and confirmed it threw before the fix and now correctly succeeds, resolving to the real outlets with live data. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "🎨 Real UX fix from Nikhil, from an actual screenshot — Smokeys on Talabat showed two empty sections (CPC, Keywords) ABOVE the one section that actually had data (Shoppable Banner), forcing a scroll past empty content to reach anything useful. Reordered per his own stated rule: sections with real investment data for this view now come first; empty ones sink to the bottom instead of leading. Chose 'show empty below' over his alternative 'don't show them at all,' since knowing a type exists but has zero spend this period is itself sometimes worth noticing — flagged this choice explicitly in case the fully-hidden version is actually preferred. When multiple types have real data, sorted by total budget allocated, descending, exactly as asked. Emptiness is detected by checking each section's own already-rendered HTML for the 📭 marker the existing empty-state already uses, rather than re-deriving the month/data-availability logic a second time in the dispatcher — one source of truth, not two that could quietly drift apart. Verified against the exact real scenario from the screenshot (CPC empty, Keywords empty, Shoppable Banner with data) — Shoppable Banner now correctly sorts first; separately verified two non-empty types correctly sort by budget descending, and confirmed the all-empty case cleanly falls back to the standard CPC/Keywords/Banners/Shoppable-Banner reading order rather than behaving unpredictably. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "✨ Campaign History Report expanded per Nikhil's follow-up request — per-outlet sales and contribution vs. prior periods, plus a fuller cost breakdown in the summary table. Two additions: (1) the existing 'At a glance' summary table now includes Discount Cost and Contribution columns alongside the existing uplift/incr. contribution/ROI, so the full cost-vs-contribution picture is visible across all instances in one table, not just in the individual P&L cards later in the report. (2) A new per-outlet section — new campReportOutletPL() computes sales, orders, discount, gross, and contribution for a single outlet over any date range directly from allData, using the same commission/food-rate helpers the rest of the app already relies on, so the numbers tie to the same logic rather than a separate calculation; campReportOutletSection() then builds one row per (outlet, instance) pair, comparing the campaign period against an equivalent-length prior period immediately before it. Scoped exactly as Nikhil specified — only outlets each instance actually ran on via campOutlets(), not every outlet the brand has, and not padded with zero-rows for outlets an instance never touched. Verified carefully given the real risk of over- or under-scoping: built a scenario where one outlet was scoped to both instances and another was scoped to only one, confirmed the first appears twice, the second appears exactly once (not zero, not twice), and a third, never-scoped outlet doesn't appear at all; confirmed the expanded summary table's new columns render correctly; confirmed the full report stays structurally balanced (div and table tag counts match) with the new section wired in. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "✨ Shoppable Banner — new 4th Ad Type added, confirmed directly by Nikhil from a real screenshot of the Ad Investments sheet (Talabat now has CPC, Keywords, Banner, and Shoppable Banner; column A's header was also renamed to 'Ad Type'). Checked the column-header rename first — the detector already accepted 'ad type' as a recognized header variant, so that part needed no change. The real gap was in classification: the existing /banner?/i pattern would have silently swallowed 'Shoppable Banner' into the same 'Banners' bucket as plain Banner ads, merging two things Nikhil explicitly wants tracked as separate categories. Fixed both places this could happen — the raw column-A value, and the Remarks/Brand-Location fallback for when column A is unlabeled — checking for 'shoppable banner' before the generic banner pattern in each, so it's never miscategorized. Added it to the ad-type sort order too (CPC, Keywords, Banners, Shoppable Banner — matching Nikhil's own stated order) so it appears in a sensible position in toggles and breakdowns rather than falling to an arbitrary spot. Checked the rest of the pipeline before assuming more changes were needed: every filter and P&L calculation downstream already compares against whatever adType value is passed in generically (r.adType===effAdType and similar), rather than hardcoding the 3 old type names, so those already work correctly with the new type with zero changes required — only the parsing stage needed the explicit fix. One thing deliberately left alone: Talabat's per-outlet CPC+Keywords budget-recommendation feature is scoped specifically to those two types in its own header and logic — expanding it to include Shoppable Banner would be a separate business decision, not something to fold in silently under 'treat it the same,' so flagging it rather than changing it. Verified the classification logic directly against 9 real cases — all 3 existing types unchanged, the real 'Shoppable Banner' value from the screenshot correctly classified as its own distinct type, and both the direct-column and remarks-fallback paths correctly distinguishing 'shoppable banner' from plain 'banner' mentions. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
@@ -12203,15 +12204,27 @@ function campReportOutletPL(brand,aggregator,outlet,startDate,endDate){
   return{sales,orders,gross,disc,contribution,days:daysBetweenInclusive(startDate,endDate)};
 }
 function campReportOutletSection(instances){
+  // v448: real bug fix — campOutlets(c) legitimately returns null to mean "all outlets, no
+  // restriction" (confirmed by reading its own source), but this function called .forEach()
+  // directly on that result with no null check. For any campaign with no explicit outlet
+  // restriction — including the exact real Flash Sale campaign that triggered this report —
+  // campOutlets() returns null, and null.forEach() throws immediately, silently, from inside an
+  // inline onclick handler: no error shown, no popup, nothing — precisely what was reported.
+  // Normalized here: null now resolves to every outlet that brand actually has live data for.
+  const resolveScope=(c)=>{
+    const s=campOutlets(c);
+    if(s)return s;
+    return new Set(allData.filter(r=>r.brand===c.brand).map(r=>r.branch).filter(b=>b!=="(brand-level)"));
+  };
   // Union of every outlet actually scoped on any instance, not the brand's full outlet list.
   const outletSet=new Set();
-  instances.forEach(m=>{campOutlets(m.c).forEach(o=>outletSet.add(o));});
+  instances.forEach(m=>{resolveScope(m.c).forEach(o=>outletSet.add(o));});
   const outlets=[...outletSet].sort();
   if(!outlets.length)return"";
   const rows=[];
   outlets.forEach(outlet=>{
     instances.forEach(m=>{
-      const scoped=campOutlets(m.c);
+      const scoped=resolveScope(m.c);
       if(!scoped.has(outlet))return; // this instance didn't run on this outlet — skip, not zero
       const camp=campReportOutletPL(m.c.brand,m.c.aggregator,outlet,m.c.startDate,m.c.endDate);
       const priorEnd=subDays(m.c.startDate,1);
@@ -12246,14 +12259,32 @@ function campReportOutletSection(instances){
   return pages.join("");
 }
 function campReportExportPDF(idx){
-  const c=campaignData[idx];
-  if(!c){alert("Couldn't find that campaign — try reopening the page.");return;}
-  const built=campReportBuildHTML(c);
-  if(!built){alert("No completed instances of this campaign found yet — nothing to report on.");return;}
-  const w=window.open("","_blank");
-  if(!w){alert("Please allow pop-ups to export the report.");return;}
-  w.document.open();w.document.write(built.html);w.document.close();
-  w.onload=()=>{setTimeout(()=>w.print(),300);};
+  // v448: real bug reported by Nikhil — the report icon stopped producing anything at all,
+  // with no error message, no alert, nothing. Traced the likely mechanism: build 446 added real
+  // per-outlet computation (campReportOutletSection/campReportOutletPL) inside the same call
+  // chain, and an inline onclick="" handler that throws fails completely silently — no visible
+  // error, no alert, just nothing happening, which matches exactly what was reported. Wrapped the
+  // whole function in try/catch with real diagnostic logging at each step, so if this recurs, the
+  // browser console will show precisely where it's failing instead of leaving both of us guessing.
+  console.log("[campReport] export requested for idx="+idx);
+  try{
+    const c=campaignData[idx];
+    console.log("[campReport] campaign:",c?`${c.brand} × ${c.aggregator} — ${c.name}`:"NOT FOUND");
+    if(!c){alert("Couldn't find that campaign — try reopening the page.");return;}
+    const built=campReportBuildHTML(c);
+    console.log("[campReport] built:",built?`HTML length ${built.html.length}`:"NULL (no completed instances found)");
+    if(!built){alert("No completed instances of this campaign found yet — nothing to report on.");return;}
+    const w=window.open("","_blank");
+    console.log("[campReport] window.open result:",w?"opened":"BLOCKED (null)");
+    if(!w){alert("Please allow pop-ups to export the report.");return;}
+    w.document.open();w.document.write(built.html);w.document.close();
+    w.onload=()=>{setTimeout(()=>w.print(),300);};
+    console.log("[campReport] export completed successfully");
+  }catch(e){
+    console.log("[campReport] EXCEPTION:",e.name,"-",e.message);
+    console.log(e.stack);
+    alert("Report export failed: "+e.message+" — this has been logged to the console, please share it so it can be fixed.");
+  }
 }
 // Legacy comprehensive campaign analysis (kept for any callers not yet migrated to V2).
 function campAnalysis(c){
