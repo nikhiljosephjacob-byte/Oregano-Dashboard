@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-448";
+const BUILD_VERSION="2026-08-13-449";
 const BUILD_NOTES=[
+  "📊 Two chart additions to the Campaign History Report, shown as renderings and confirmed before building, per Nikhil's own request. (1) An incremental-contribution trend chart above the 'previous comparable campaigns' table — 3 prior instances plus the current one, current highlighted in a distinct color, answering 'has this been working, and is it improving' at a glance instead of requiring a read of every row. (2) A diverging bar chart in the per-outlet section — green bars for outlets that gained contribution vs. the prior period, red for outlets that lost, sorted best-to-worst — making the exact 'uneven outlet performance' finding the flag callout describes visible immediately, without replacing that callout (the chart shows WHICH outlets diverged; the callout explains WHY it matters and names the branch worth excluding — different jobs, kept both). Built as inline SVG matching the existing Before/During/After chart's own style, not Chart.js — this is a static print report with no JS execution at print time, so consistency with what's already there mattered more than a fancier library. Verified thoroughly: the trend chart renders exactly 4 bars (3 real prior instances plus the current one), the current bar correctly uses the distinct highlight color and shows the real incremental-contribution figure; the outlet chart correctly colors a gaining outlet green and a losing one red; every existing piece (Before/During/After chart, the outlet flag callout, the exclusion of the current campaign from its own comparison table) still works correctly alongside the new charts; full report stays structurally balanced (div and svg tag counts match). Also includes, in the same build: a major redesign of this same report, modeled directly on a real reference PDF Nikhil shared (the Noon Monday BOGO Campaign Review) — the per-outlet section is now scoped to only the specific campaign instance being reported on, not stacked across every past instance; the 'previous comparable campaigns' comparison is now a lightweight table capped at the 3 most recent OTHER instances, explicitly excluding the current one, replacing the old averages summary and full-P&L-card-per-instance pages entirely; a new outlet performance flag names exactly which outlets lost contribution against their own prior period when others gained, so they can be considered for exclusion next time; and a new Before/During/After daily order-count chart for the specific campaign, with the 'after' window honestly capped at whatever data actually exists rather than padded with fabricated days for a campaign that just finished. Verified extensively against a realistic scenario with 4 total instances and 2 outlets with opposite performance, confirming every piece works correctly together, including the exact null-handling fix from build 448 (campOutlets returning null for an unrestricted campaign). Re-ran the full top-to-bottom script execution test — zero uncaught errors. Caught and fixed two of my own mid-edit mistakes before shipping: an orphaned function body left behind by an incomplete replacement, and a nonsensical self-referential expression that always evaluated to zero — both caught by re-running the test suite rather than trusting the edit was clean.",
   "🐛 Real bug caught by Nikhil — the report icon on campaign cards stopped producing anything at all, no error, no popup, nothing. Traced it precisely by reading campOutlets()'s own source: it legitimately returns null to mean 'all outlets, no restriction' — a case build 446's new per-outlet code never checked for. It called .forEach() directly on that result, and for any campaign with no explicit outlet restriction — including the exact real Flash Sale campaign that triggered this report — that's a null, so null.forEach() throws immediately. An inline onclick=\"\" handler that throws fails completely silently from the user's side: no visible error, no alert, nothing happening — precisely what was reported. Fixed by normalizing null into the brand's actual full outlet list (every outlet with real data), applied everywhere campOutlets() gets called in the per-outlet section. Also wrapped the whole export function in try/catch with diagnostic logging at each step, so if a different, unanticipated edge case ever causes a real failure again, it surfaces as a clear, readable error instead of vanishing silently — the same lesson learned from the Admin page hang investigation, applied proactively here rather than waited for. Verified precisely against the real bug: reconstructed the exact failing case (a campaign with no outlet restriction, campOutlets() returning null) and confirmed it threw before the fix and now correctly succeeds, resolving to the real outlets with live data. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "🎨 Real UX fix from Nikhil, from an actual screenshot — Smokeys on Talabat showed two empty sections (CPC, Keywords) ABOVE the one section that actually had data (Shoppable Banner), forcing a scroll past empty content to reach anything useful. Reordered per his own stated rule: sections with real investment data for this view now come first; empty ones sink to the bottom instead of leading. Chose 'show empty below' over his alternative 'don't show them at all,' since knowing a type exists but has zero spend this period is itself sometimes worth noticing — flagged this choice explicitly in case the fully-hidden version is actually preferred. When multiple types have real data, sorted by total budget allocated, descending, exactly as asked. Emptiness is detected by checking each section's own already-rendered HTML for the 📭 marker the existing empty-state already uses, rather than re-deriving the month/data-availability logic a second time in the dispatcher — one source of truth, not two that could quietly drift apart. Verified against the exact real scenario from the screenshot (CPC empty, Keywords empty, Shoppable Banner with data) — Shoppable Banner now correctly sorts first; separately verified two non-empty types correctly sort by budget descending, and confirmed the all-empty case cleanly falls back to the standard CPC/Keywords/Banners/Shoppable-Banner reading order rather than behaving unpredictably. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "✨ Campaign History Report expanded per Nikhil's follow-up request — per-outlet sales and contribution vs. prior periods, plus a fuller cost breakdown in the summary table. Two additions: (1) the existing 'At a glance' summary table now includes Discount Cost and Contribution columns alongside the existing uplift/incr. contribution/ROI, so the full cost-vs-contribution picture is visible across all instances in one table, not just in the individual P&L cards later in the report. (2) A new per-outlet section — new campReportOutletPL() computes sales, orders, discount, gross, and contribution for a single outlet over any date range directly from allData, using the same commission/food-rate helpers the rest of the app already relies on, so the numbers tie to the same logic rather than a separate calculation; campReportOutletSection() then builds one row per (outlet, instance) pair, comparing the campaign period against an equivalent-length prior period immediately before it. Scoped exactly as Nikhil specified — only outlets each instance actually ran on via campOutlets(), not every outlet the brand has, and not padded with zero-rows for outlets an instance never touched. Verified carefully given the real risk of over- or under-scoping: built a scenario where one outlet was scoped to both instances and another was scoped to only one, confirmed the first appears twice, the second appears exactly once (not zero, not twice), and a third, never-scoped outlet doesn't appear at all; confirmed the expanded summary table's new columns render correctly; confirmed the full report stays structurally balanced (div and table tag counts match) with the new section wired in. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
@@ -12115,75 +12116,136 @@ function campReportFindInstances(c){
 function campReportBuildHTML(c){
   const instances=campReportFindInstances(c);
   if(!instances.length)return null;
-  const n=instances.length;
-  const avgROI=instances.reduce((s,m)=>s+(m.a.discountROI||0),0)/n;
-  const avgContrib=instances.reduce((s,m)=>s+(m.a.incrContribTotal||0),0)/n;
-  const avgUplift=instances.reduce((s,m)=>s+(m.a.ordersLift||0),0)/n;
+  // v449: "previous comparable campaigns" means genuinely OTHER instances, not this one counted
+  // among its own comparison set — excluded by identity (brand+dates+start), then capped at the
+  // 3 most recent per Nikhil's explicit request, so the director sees a quick "has this worked
+  // before" read rather than a growing table that gets less useful the more times it's run.
+  const others=instances.filter(m=>!(m.c.brand===c.brand&&m.c.aggregator===c.aggregator&&m.c.startDate===c.startDate&&m.c.endDate===c.endDate));
+  const recentOthers=others.slice(-3).reverse(); // most recent first
   const css=reportBaseCSS();
   const filename=`${c.brand}_${c.aggregator}_${(c.name||"Campaign").replace(/[^a-z0-9]+/gi,"")}_Report`;
 
   const cover=`<div class="page cover">
     <div class="cover-top">${logoImg(c.brand,44)}${logoImg(c.aggregator,44)}<div class="cover-brand"><div class="name">OREGANO GROUP</div><div class="sub">Multi-Brand F&amp;B Performance Reporting</div></div></div>
     <div class="cover-mid"><div class="cover-label">Campaign History Report</div><div class="cover-title">${esc(c.name)}<br>${esc(c.brand)} × ${esc(c.aggregator)}</div>
-      <div class="cover-scope-box">${n} completed instance${n!==1?"s":""} found, ${esc(instances[0].c.startDate)} → ${esc(instances[n-1].c.endDate)}</div></div>
+      <div class="cover-scope-box">${esc(c.startDate)} → ${esc(c.endDate)}${others.length?` · ${others.length} prior instance${others.length!==1?"s":""} on record`:" · first time this campaign has run"}</div></div>
     <div class="cover-bottom"><span>Generated ${fmtDisp(dk(new Date()))}</span><span>Confidential — Internal Use Only</span></div></div>`;
 
-  const p2=`<div class="page"><div class="runhdr"><div><div class="l">Summary</div><div class="scope">${esc(c.name)} — ${esc(c.brand)} × ${esc(c.aggregator)}</div></div><div class="p">Oregano Group · Page 2</div></div>
-    <div class="sec-title">Averages across ${n} instance${n!==1?"s":""}</div>
-    <div class="sec-sub">Plain averages, not a recommendation — the full P&L for each instance follows on the pages after this one.</div>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
-      <div style="background:#f9fafb;border-radius:8px;padding:12px 14px"><div style="font-size:10px;color:#6b7280;text-transform:uppercase;font-weight:700">Avg incr. contribution</div><div style="font-size:20px;font-weight:800;margin-top:4px;color:${avgContrib>=0?"#16a34a":"#dc2626"}">${avgContrib>=0?"+":""}AED ${Math.round(avgContrib).toLocaleString()}</div></div>
-      <div style="background:#f9fafb;border-radius:8px;padding:12px 14px"><div style="font-size:10px;color:#6b7280;text-transform:uppercase;font-weight:700">Avg ROI</div><div style="font-size:20px;font-weight:800;margin-top:4px">${avgROI.toFixed(2)}×</div></div>
-      <div style="background:#f9fafb;border-radius:8px;padding:12px 14px"><div style="font-size:10px;color:#6b7280;text-transform:uppercase;font-weight:700">Avg order uplift</div><div style="font-size:20px;font-weight:800;margin-top:4px">+${Math.round(avgUplift)}%</div></div>
-    </div>
-    <div class="sec-title">At a glance</div>
-    <table><thead><tr><th>Dates</th><th>Terms</th><th>Order uplift</th><th>Discount cost</th><th>Contribution</th><th>Incr. contribution</th><th>ROI</th></tr></thead><tbody>${instances.map(m=>`<tr>
+  // v449: table trimmed to exactly what Nikhil asked for — Days, Orders, Sales, Discount,
+  // Contribution per prior instance — a quick "has this worked before" read, not a full P&L
+  // substitute (the previous, heavier per-instance P&L cards are removed; the outlet-level detail
+  // that follows is now scoped to just the current instance instead).
+  const priorTableRows=recentOthers.map(m=>`<tr>
       <td>${esc(m.c.startDate)} – ${esc(m.c.endDate)}</td>
-      <td>${esc(m.c.comments||m.c.name||"—")}</td>
-      <td>${(m.a.ordersLift||0)>=0?"+":""}${Math.round(m.a.ordersLift||0)}%</td>
+      <td>${m.a.cs?daysBetweenInclusive(m.c.startDate,m.c.endDate):"—"}</td>
+      <td>${m.a.cs?Math.round(m.a.cs.orders).toLocaleString():"—"}</td>
+      <td>AED ${m.a.cs?Math.round(m.a.cs.sales).toLocaleString():"—"}</td>
       <td>AED ${Math.round(m.a.ourDiscCost||0).toLocaleString()}</td>
-      <td>AED ${Math.round(m.a.campContribTotal||0).toLocaleString()}</td>
       <td style="color:${(m.a.incrContribTotal||0)>=0?"#16a34a":"#dc2626"}">${(m.a.incrContribTotal||0)>=0?"+":""}AED ${Math.round(m.a.incrContribTotal||0).toLocaleString()}</td>
-      <td>${(m.a.discountROI||0).toFixed(2)}×</td>
-    </tr>`).join("")}</tbody></table>
+    </tr>`).join("");
+  const currentInstance=instances.find(m=>m.c.brand===c.brand&&m.c.aggregator===c.aggregator&&m.c.startDate===c.startDate&&m.c.endDate===c.endDate);
+  const currentIncrContrib=currentInstance?(currentInstance.a.incrContribTotal||0):0;
+  const priorSection=recentOthers.length?`<div class="sec-title">Previous comparable campaigns</div>
+    <div class="sec-sub">${recentOthers.length} most recent — has this campaign worked before?</div>
+    ${campReportContribTrendChart([...recentOthers].reverse(),currentIncrContrib)}
+    <table><thead><tr><th>Dates</th><th>Days</th><th>Orders</th><th>Sales</th><th>Discount</th><th>Incr. contribution</th></tr></thead><tbody>${priorTableRows}</tbody></table>`
+    :`<div class="sec-title">Previous comparable campaigns</div><div class="sec-sub">None found — this is the first recorded run of this exact campaign.</div>`;
+
+  const p2=`<div class="page"><div class="runhdr"><div><div class="l">Summary</div><div class="scope">${esc(c.name)} — ${esc(c.brand)} × ${esc(c.aggregator)}</div></div><div class="p">Oregano Group · Page 2</div></div>
+    ${priorSection}
+    ${campReportBeforeDuringAfterChart(c)}
     <div class="footer"><span>Oregano Group — Campaign History Report</span><span>2</span></div></div>`;
 
-  // v444: one full P&L card per instance, same row set and Campaign/Baseline/Incremental
-  // layout as the detail view's own popup table (Net Sales, Gross Sales, discount breakdown
-  // with co-funding split when it applies, Contribution) — not a summary substitute for it.
-  const plCard=(m,pageNum)=>{
-    const a=m.a,ic=m.c;
-    const fA=(v)=>`AED ${Math.round(v).toLocaleString()}`;
-    const discLabel=a.coFundedPct>0?(ic.aggregator==='Deliveroo'?`${esc(ic.brand)}'s discount cost`:"Merchant discount cost"):"Discount given";
-    const coFundRow=a.coFundedPct>0?`<tr style="color:#2563eb"><td>+ ${esc(ic.aggregator)}-funded co-pay</td><td style="text-align:right">${fA(a.aggInferredCoFund)}</td><td style="text-align:right">—</td></tr>
-      <tr style="color:#6b7280;font-style:italic;font-size:11px"><td>= Total discount to customer</td><td style="text-align:right">${fA(a.totalCustomerDisc)}</td><td style="text-align:right">—</td></tr>`:"";
-    return`<div style="border:0.5px solid #E2E8F0;border-radius:10px;padding:14px 16px;margin-bottom:14px">
-      <div style="font-size:13px;font-weight:800;color:#0F172A;margin-bottom:2px">${esc(ic.startDate)} – ${esc(ic.endDate)}</div>
-      <div style="font-size:11px;color:#6b7280;margin-bottom:10px">${esc(ic.comments||ic.name||"—")}</div>
-      <table><thead><tr><th></th><th>Campaign</th><th>Baseline</th></tr></thead><tbody>
-        <tr><td>Net Sales</td><td style="text-align:right">${fA(a.cs.sales)}</td><td style="text-align:right">${fA(a.bs.sales)}</td></tr>
-        <tr><td>Gross Sales</td><td style="text-align:right">${fA(a.campGross)}</td><td style="text-align:right">${fA(a.baseGross)}</td></tr>
-        <tr><td>${discLabel}</td><td style="text-align:right">${fA(a.ourDiscCost)}</td><td style="text-align:right">${fA(a.bs.disc||0)}</td></tr>
-        ${coFundRow}
-        <tr style="border-top:2px solid #FBBF2455;font-weight:800"><td style="color:#B45309">Contribution</td><td style="text-align:right">${fA(a.campContribTotal)}</td><td style="text-align:right">${fA(a.baseContribTotal)}</td></tr>
-      </tbody></table>
-    </div>`;
-  };
-  const plPages=instances.map((m,i)=>{
-    const pageNum=3+Math.floor(i/2);
-    return plCard(m,pageNum);
-  });
-  // Two P&L cards per printed page — matches how much fits legibly without cramming.
-  const plPagesHTML=[];
-  for(let i=0;i<plPages.length;i+=2){
-    const pageNum=3+i/2;
-    plPagesHTML.push(`<div class="page"><div class="runhdr"><div><div class="l">Full P&amp;L — instance${plPages.slice(i,i+2).length>1?"s":""} ${i+1}${plPages.slice(i,i+2).length>1?"–"+(i+2>n?n:i+2):""}</div><div class="scope">${esc(c.name)} — ${esc(c.brand)} × ${esc(c.aggregator)}</div></div><div class="p">Oregano Group · Page ${pageNum}</div></div>
-      ${plPages.slice(i,i+2).join("")}
-      <div class="footer"><span>Oregano Group — Campaign History Report</span><span>${pageNum}</span></div></div>`);
-  }
-
-  const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(filename)}</title><style>${css}</style></head><body>${cover}${p2}${campReportOutletSection(instances)}${plPagesHTML.join("")}</body></html>`;
+  const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(filename)}</title><style>${css}</style></head><body>${cover}${p2}${campReportOutletSection(c)}</body></html>`;
   return{html,filename};
+}
+// v450: real request from Nikhil after reviewing a rendering — a trend chart above the "previous
+// comparable campaigns" table, so "has this been working, and is it improving" is visible at a
+// glance rather than requiring a read of every row. Chronological order (oldest first), current
+// instance highlighted in a distinct color since it's the one actually being evaluated, not just
+// another data point. Inline SVG matching the Before/During/After chart's own style — this is a
+// static print report, not an interactive page, so no Chart.js here either.
+function campReportContribTrendChart(recentOthersChrono,currentContrib){
+  const bars=[...recentOthersChrono.map(m=>({label:fmtShort(m.c.startDate),value:m.a.incrContribTotal||0,isCurrent:false})),{label:"Current",value:currentContrib,isCurrent:true}];
+  const sizeW=420,sizeH=150,leftMargin=10,bottomMargin=32,topMargin=20;
+  const maxV=Math.max(...bars.map(b=>Math.abs(b.value)),1);
+  const n=bars.length,groupW=(sizeW-leftMargin-10)/n,barW=Math.min(48,groupW*0.55);
+  const baseY=sizeH-bottomMargin,plotH=baseY-topMargin;
+  const rendered=bars.map((b,i)=>{
+    const gx=leftMargin+i*groupW+(groupW-barW)/2;
+    const h=(Math.abs(b.value)/maxV)*plotH;
+    const y=baseY-h;
+    const clr=b.isCurrent?"#eb6834":"#2a78d6";
+    return`<rect x="${gx.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${clr}" rx="3"/>
+      <text x="${(gx+barW/2).toFixed(1)}" y="${(y-5).toFixed(1)}" font-size="9.5" fill="#374151" text-anchor="middle" font-family="-apple-system,sans-serif">${b.value>=0?"+":""}AED ${Math.round(b.value).toLocaleString()}</text>
+      <text x="${(gx+barW/2).toFixed(1)}" y="${baseY+14}" font-size="9" fill="${b.isCurrent?"#0F172A":"#6b7280"}" font-weight="${b.isCurrent?"700":"400"}" text-anchor="middle" font-family="-apple-system,sans-serif">${esc(b.label)}</text>`;
+  }).join("");
+  return`<div style="margin:14px 0"><div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:6px">Incremental contribution — recent instances vs. current</div>
+    <svg viewBox="0 0 ${sizeW} ${sizeH}" style="width:100%;height:140px">${rendered}</svg></div>`;
+}
+
+// v449: real redesign requested by Nikhil, modeled directly on a reference PDF he shared (the
+// Noon Monday BOGO report) — a Before/During/After order-count chart for the specific campaign
+// this report is being generated for. Daily granularity (not weekly like the reference, which
+// was specific to a recurring "every Monday" cadence) — Before and After windows match the
+// campaign's own length, immediately preceding/following it. After is capped at whatever data
+// actually exists up to `latest`, since a just-finished campaign may not have a full "after"
+// window yet — shown honestly as fewer bars rather than padded with fabricated zero-days.
+function campReportBeforeDuringAfterChart(c){
+  const days=daysBetweenInclusive(c.startDate,c.endDate);
+  const beforeEnd=subDays(c.startDate,1);
+  const beforeStart=subDays(c.startDate,days);
+  const afterStartRaw=subDays(c.endDate,-1);
+  const afterEndRaw=subDays(c.endDate,-days);
+  const afterEnd=afterEndRaw>latest?latest:afterEndRaw;
+  const hasAfter=afterStartRaw<=latest;
+
+  const dayRecs=(start,end)=>{
+    if(start>end)return[];
+    const out=[];
+    let cur=start;
+    let guard=0;
+    while(cur<=end&&guard<400){
+      const recs=allData.filter(r=>r.brand===c.brand&&r.aggregator===c.aggregator&&r.date===cur);
+      out.push({date:cur,orders:recs.reduce((s,r)=>s+r.orders,0)});
+      cur=subDays(cur,-1);guard++;
+    }
+    return out;
+  };
+  const before=dayRecs(beforeStart,beforeEnd).map(d=>({...d,period:"before"}));
+  const during=dayRecs(c.startDate,c.endDate).map(d=>({...d,period:"during"}));
+  const after=hasAfter?dayRecs(afterStartRaw,afterEnd).map(d=>({...d,period:"after"})):[];
+  const allDays=[...before,...during,...after];
+  if(!allDays.length)return"";
+
+  const sizeW=680,sizeH=230,leftMargin=40,bottomMargin=45,topMargin=15;
+  const maxV=Math.max(...allDays.map(d=>d.orders),1);
+  const n=allDays.length,plotW=sizeW-leftMargin-15,barGap=2;
+  const barW=Math.max(6,(plotW/n)-barGap);
+  const clrFor={before:"#94a3b8",during:"#dc2626",after:"#94a3b8"};
+  const baseY=sizeH-bottomMargin;
+  const plotH=baseY-topMargin;
+  const bars=allDays.map((d,i)=>{
+    const x=leftMargin+i*(barW+barGap);
+    const h=(d.orders/maxV)*plotH;
+    const y=baseY-h;
+    const shortDate=fmtShort(d.date);
+    return`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${clrFor[d.period]}" rx="1.5"/>
+      <text x="${(x+barW/2).toFixed(1)}" y="${baseY+11}" font-size="7.5" fill="#6b7280" text-anchor="middle" font-family="-apple-system,sans-serif">${esc(shortDate)}</text>`;
+  }).join("");
+  const gridlines=[0,0.25,0.5,0.75,1].map(f=>{
+    const y=baseY-f*plotH;
+    const val=Math.round(maxV*f);
+    return`<line x1="${leftMargin}" y1="${y.toFixed(1)}" x2="${sizeW-15}" y2="${y.toFixed(1)}" stroke="#e5e7eb" stroke-width="0.5"/>
+      <text x="${leftMargin-5}" y="${(y+3).toFixed(1)}" font-size="8" fill="#9ca3af" text-anchor="end" font-family="-apple-system,sans-serif">${val}</text>`;
+  }).join("");
+  const legend=`<g font-family="-apple-system,sans-serif" font-size="9">
+    <rect x="${sizeW-190}" y="0" width="10" height="10" fill="#94a3b8" rx="2"/><text x="${sizeW-176}" y="9" fill="#374151">Before / After</text>
+    <rect x="${sizeW-80}" y="0" width="10" height="10" fill="#dc2626" rx="2"/><text x="${sizeW-66}" y="9" fill="#374151">Campaign</text>
+  </g>`;
+  return`<div style="margin:16px 0"><div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:6px">Orders per day — before, during &amp; after this campaign</div>
+    <svg viewBox="0 0 ${sizeW} ${sizeH}" style="width:100%;height:210px">${legend}${gridlines}${bars}</svg>
+    ${!hasAfter?`<div style="font-size:10px;color:#9ca3af;font-style:italic;margin-top:4px">No "after" window shown yet — this campaign ended too recently for a full comparable period of data.</div>`:""}</div>`;
 }
 // v446: real follow-up request from Nikhil — per-outlet sales and contribution, compared against
 // a prior period, scoped only to the outlets each instance actually ran on (not every outlet the
@@ -12203,61 +12265,78 @@ function campReportOutletPL(brand,aggregator,outlet,startDate,endDate){
   const contribution=sales-comm-food;
   return{sales,orders,gross,disc,contribution,days:daysBetweenInclusive(startDate,endDate)};
 }
-function campReportOutletSection(instances){
-  // v448: real bug fix — campOutlets(c) legitimately returns null to mean "all outlets, no
-  // restriction" (confirmed by reading its own source), but this function called .forEach()
-  // directly on that result with no null check. For any campaign with no explicit outlet
-  // restriction — including the exact real Flash Sale campaign that triggered this report —
-  // campOutlets() returns null, and null.forEach() throws immediately, silently, from inside an
-  // inline onclick handler: no error shown, no popup, nothing — precisely what was reported.
-  // Normalized here: null now resolves to every outlet that brand actually has live data for.
-  const resolveScope=(c)=>{
-    const s=campOutlets(c);
-    if(s)return s;
-    return new Set(allData.filter(r=>r.brand===c.brand).map(r=>r.branch).filter(b=>b!=="(brand-level)"));
-  };
-  // Union of every outlet actually scoped on any instance, not the brand's full outlet list.
-  const outletSet=new Set();
-  instances.forEach(m=>{resolveScope(m.c).forEach(o=>outletSet.add(o));});
-  const outlets=[...outletSet].sort();
+// v449: real correction from Nikhil — the per-outlet section should only ever show THIS specific
+// campaign instance's own outlet split, not every past instance stacked together (that
+// comparison now lives in the separate, much lighter "previous comparable campaigns" table
+// instead). Also adds an explicit flag for outlets whose contribution went the OPPOSITE direction
+// from the majority — e.g. one branch lost money while the rest gained — so a genuinely uneven
+// result is visible at a glance rather than buried in a table of otherwise-similar rows, per
+// Nikhil's own stated reason: knowing this lets a branch be excluded next time around.
+function campReportOutletSection(c){
+  const scope=campOutlets(c)||new Set(allData.filter(r=>r.brand===c.brand).map(r=>r.branch).filter(b=>b!=="(brand-level)"));
+  const outlets=[...scope].sort();
   if(!outlets.length)return"";
-  const rows=[];
-  outlets.forEach(outlet=>{
-    instances.forEach(m=>{
-      const scoped=resolveScope(m.c);
-      if(!scoped.has(outlet))return; // this instance didn't run on this outlet — skip, not zero
-      const camp=campReportOutletPL(m.c.brand,m.c.aggregator,outlet,m.c.startDate,m.c.endDate);
-      const priorEnd=subDays(m.c.startDate,1);
-      const priorStart=subDays(m.c.startDate,camp.days);
-      const prior=campReportOutletPL(m.c.brand,m.c.aggregator,outlet,priorStart,priorEnd);
-      rows.push({outlet,m,camp,prior});
-    });
+  const priorEnd=subDays(c.startDate,1);
+  const priorStart=subDays(c.startDate,daysBetweenInclusive(c.startDate,c.endDate));
+  const rows=outlets.map(outlet=>{
+    const camp=campReportOutletPL(c.brand,c.aggregator,outlet,c.startDate,c.endDate);
+    const prior=campReportOutletPL(c.brand,c.aggregator,outlet,priorStart,priorEnd);
+    const contribDelta=camp.contribution-prior.contribution;
+    return{outlet,camp,prior,contribDelta};
   });
-  const pages=[];
-  const perPage=14;
-  for(let i=0;i<rows.length;i+=perPage){
-    const pageNum="O"+(Math.floor(i/perPage)+1);
-    const chunk=rows.slice(i,i+perPage);
-    const chunkHTML=chunk.map(({outlet,m,camp,prior})=>{
-      const salesDelta=prior.sales>0?((camp.sales-prior.sales)/prior.sales*100):null;
-      const contribDelta=prior.contribution!==0?((camp.contribution-prior.contribution)/Math.abs(prior.contribution)*100):null;
-      return`<tr>
-        <td>${esc(outlet)}</td>
-        <td>${esc(m.c.startDate)} – ${esc(m.c.endDate)}</td>
-        <td>AED ${Math.round(camp.sales).toLocaleString()}</td>
-        <td>AED ${Math.round(prior.sales).toLocaleString()}</td>
-        <td style="color:${salesDelta==null?'#6b7280':salesDelta>=0?'#16a34a':'#dc2626'}">${salesDelta==null?"—":(salesDelta>=0?"+":"")+Math.round(salesDelta)+"%"}</td>
-        <td>AED ${Math.round(camp.contribution).toLocaleString()}</td>
-        <td>AED ${Math.round(prior.contribution).toLocaleString()}</td>
-        <td style="color:${contribDelta==null?'#6b7280':contribDelta>=0?'#16a34a':'#dc2626'}">${contribDelta==null?"—":(contribDelta>=0?"+":"")+Math.round(contribDelta)+"%"}</td>
-      </tr>`;
-    }).join("");
-    pages.push(`<div class="page"><div class="runhdr"><div><div class="l">Per-outlet detail</div><div class="scope">Sales &amp; contribution vs. the equivalent prior period, same length</div></div><div class="p">Oregano Group</div></div>
-      <table><thead><tr><th>Outlet</th><th>Instance</th><th>Sales</th><th>Prior period sales</th><th>Δ Sales</th><th>Contribution</th><th>Prior period contrib.</th><th>Δ Contribution</th></tr></thead><tbody>${chunkHTML}</tbody></table>
-      <div class="footer"><span>Oregano Group — Campaign History Report</span><span>${pageNum}</span></div></div>`);
-  }
-  return pages.join("");
+  const positive=rows.filter(r=>r.contribDelta>0);
+  const negative=rows.filter(r=>r.contribDelta<0);
+  const isMixed=positive.length>0&&negative.length>0;
+
+  const tableRows=rows.map(({outlet,camp,prior,contribDelta})=>{
+    const salesDelta=prior.sales>0?((camp.sales-prior.sales)/prior.sales*100):null;
+    return`<tr>
+      <td>${esc(outlet)}</td>
+      <td>AED ${Math.round(camp.sales).toLocaleString()}</td>
+      <td>AED ${Math.round(prior.sales).toLocaleString()}</td>
+      <td style="color:${salesDelta==null?'#6b7280':salesDelta>=0?'#16a34a':'#dc2626'}">${salesDelta==null?"—":(salesDelta>=0?"+":"")+Math.round(salesDelta)+"%"}</td>
+      <td>AED ${Math.round(camp.contribution).toLocaleString()}</td>
+      <td>AED ${Math.round(prior.contribution).toLocaleString()}</td>
+      <td style="color:${contribDelta>=0?'#16a34a':'#dc2626'}">${contribDelta>=0?"+":""}AED ${Math.round(contribDelta).toLocaleString()}</td>
+    </tr>`;
+  }).join("");
+
+  const flagSection=isMixed?`<div style="margin-top:16px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 16px">
+    <div style="font-size:12px;font-weight:700;color:#991b1b;margin-bottom:6px">⚠ Uneven outlet performance</div>
+    <div style="font-size:11px;color:#7f1d1d;line-height:1.6">${negative.length} outlet${negative.length!==1?"s":""} lost contribution against the prior period while ${positive.length} gained — worth considering for exclusion next time: <strong>${negative.map(r=>esc(r.outlet)).join(", ")}</strong>.</div>
+  </div>`:"";
+
+  // v450: real request from Nikhil after reviewing a rendering — a diverging bar chart makes
+  // "which outlets gained vs. lost" visible at a glance instead of requiring a read of the delta
+  // column row by row, which is exactly the mixed-performance case the flag callout below exists
+  // to catch. Kept the callout too — the chart shows WHICH outlets diverged, not WHY they're
+  // being flagged for exclusion, so the two serve different jobs rather than duplicating each
+  // other. Sorted by delta so the worst performer anchors one end and the best the other.
+  const sortedForChart=[...rows].sort((a,b)=>b.contribDelta-a.contribDelta);
+  const chartMaxAbs=Math.max(...sortedForChart.map(r=>Math.abs(r.contribDelta)),1);
+  const rowH=26,chartH=sortedForChart.length*rowH+20,midX=200;
+  const chartBars=sortedForChart.map((r,i)=>{
+    const y=10+i*rowH;
+    const w=(Math.abs(r.contribDelta)/chartMaxAbs)*170;
+    const isPos=r.contribDelta>=0;
+    const x=isPos?midX:midX-w;
+    const clr=isPos?"#0ca30c":"#d03b3b";
+    const labelX=isPos?midX-6:midX+6;
+    const valX=isPos?midX+w+6:midX-w-6;
+    return`<text x="${labelX}" y="${y+15}" font-size="10" fill="#0F172A" text-anchor="end" font-family="-apple-system,sans-serif">${esc(r.outlet)}</text>
+      <rect x="${x.toFixed(1)}" y="${y}" width="${w.toFixed(1)}" height="18" rx="3" fill="${clr}"/>
+      <text x="${valX}" y="${y+15}" font-size="9.5" fill="#374151" text-anchor="${isPos?"start":"end"}" font-family="-apple-system,sans-serif">${isPos?"+":""}AED ${Math.round(r.contribDelta).toLocaleString()}</text>`;
+  }).join("");
+  const outletChart=rows.length>1?`<div style="margin-bottom:16px"><div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:6px">Contribution change vs. prior period, by outlet</div>
+    <svg viewBox="0 0 400 ${chartH}" style="width:100%;height:${chartH}px"><line x1="${midX}" y1="0" x2="${midX}" y2="${chartH}" stroke="#c3c2b7" stroke-width="1"/>${chartBars}</svg></div>`:"";
+
+  return`<div class="page"><div class="runhdr"><div><div class="l">Per-outlet detail</div><div class="scope">${esc(c.name)} — ${esc(c.brand)} × ${esc(c.aggregator)}, ${esc(c.startDate)}–${esc(c.endDate)}</div></div><div class="p">Oregano Group</div></div>
+    ${outletChart}
+    <table><thead><tr><th>Outlet</th><th>Sales</th><th>Prior period sales</th><th>Δ Sales</th><th>Contribution</th><th>Prior period contrib.</th><th>Δ Contribution</th></tr></thead><tbody>${tableRows}</tbody></table>
+    ${flagSection}
+    <div class="footer"><span>Oregano Group — Campaign History Report</span><span>3</span></div></div>`;
 }
+
 function campReportExportPDF(idx){
   // v448: real bug reported by Nikhil — the report icon stopped producing anything at all,
   // with no error message, no alert, nothing. Traced the likely mechanism: build 446 added real
