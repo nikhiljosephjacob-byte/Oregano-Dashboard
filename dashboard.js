@@ -13,14 +13,95 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-458";
+const BUILD_VERSION="2026-08-13-459";
 const BUILD_NOTES=[
+  "🎬 Page-open animation pass, per Nikhil's explicit sign-off on three separate interactive demos (not built blind): (1) KPI numbers now count up smoothly from 0 on every page (his pick over three other options shown — specifically NOT the flight-board/digit-roll style from the first demo, which he disliked). New animateKpiCountUp(), hooked into gp() so it applies uniformly wherever the shared .kpi/.v markup is used, not just Overview — parses the already-rendered final text (handles 'AED 612,480', '18,420', '33.2%', negatives) and counts up in place, landing on the exact original string so no formatting is lost; anything that doesn't parse as a clean number is left untouched rather than risking a fabricated value. (2) Line charts now draw left-to-right over 3.2s with no leading dot (his approved tweak — slower than the original 1.4s demo, dot removed) — Chart.js's own default only animates points rising vertically, not a true start-to-end draw, so this needed a real plugin: clips the plotting area to a widening horizontal sliver, driven by the SAME animation's onProgress/onComplete so it can't drift out of sync with the real duration. (3) Bars grow up one after another (dataIndex*90ms stagger) — the very first demo's behavior, approved unchanged throughout, using Chart.js's own documented per-element delay pattern. Also folded in the hourglass loading icon (flips on the Campaigns/Ads nav tabs while loading, removed the same moment the existing green segments clear) — approved as its own standalone mockup earlier in this same round. Verified (1) with a real functional test: drove requestAnimationFrame manually frame-by-frame, confirmed a genuine partial value mid-flight (not a jump), confirmed every element lands on its exact original string, confirmed a non-numeric '—' value is left completely untouched. (2) and (3) are Chart.js internals (animation config merging, canvas clip timing) this sandbox can't render — verified the setup code itself runs clean against a Chart.js-shaped mock (Chart.defaults.datasets.line/bar.animation come out with exactly the expected keys) but the actual on-screen look needs Nikhil's eyes on the real dashboard. Full script execution re-run clean throughout.",
   "🔧 Three fixes from one round of Nikhil screenshots. (1) Keeta free-delivery cost made uniform — only campaigns with a concurrent same-brand+platform sibling (Oregano's case) ever had FD subtracted, via campParticipationV1/keetaCampWindowStats; a standalone Keeta campaign (Fyoozhen's case) fell through to campAnalysisV2/campRecentWindowAnalysis instead, which never touched FD at all. Fixed at the source in both functions (not just the popup renderer) so the tile and popup stay identical — reuses keetaCampWindowStats() exactly as the concurrent path already does: real per-order FD from an uploaded Keeta orders file when it covers the window (Keeta's own 'Campaign type' column already tells us per order, so nothing re-implements Nikhil's stated >AED25 net-value floor — Keeta's own export already reflects it), flat AED2/order estimate otherwise. Confirmed FD is Keeta-only per Nikhil directly — other aggregators don't carry this cost, and FD itself isn't tied to any discount campaign (it's a standalone conversion lever entered as a sheet comment so it doesn't spawn its own campaign tile, solved several builds back) — so FD running on days with NO campaign at all still isn't captured anywhere; flagged back to Nikhil as a separate, larger question, not built here. (2) Contribution % added to both comparison panels in the standard campaign popup (Campaign to date/Same days last month, and Last N days) — reused the existing fmtContribPct() helper, which turned out to already be wired into the OTHER (Keeta-exact) popup but not this one, hence Nikhil seeing it in one popup and not the other. (3) The What's New popup's OK button being unclickable right after load, reported again after the v188 band-aid (flat 2800ms delay) — replaced with requestIdleCallback (6000ms ceiling, falls back to the same 2800ms on Safari) so the popup waits for the main thread to actually be free instead of guessing a fixed delay that a bigger dataset can outlast. Verified (1) and (2) with functional tests against real mock order/sales data — exact-FD path, fallback-estimate path, and a non-Keeta regression check confirming zero effect outside Keeta. (3) is a diagnosis-driven fix Node can't fully exercise (real main-thread contention) — needs Nikhil's confirmation on the real dashboard. Full script execution re-run clean throughout.",
   "🧹 Trimmed BUILD_NOTES from 17 entries down to the most recent 5, per Nikhil asking again (\"do we need them all? it's too long\") even after the build-454 trim to 15 — 15 apparently wasn't short enough. Cut harder this time since the reasoning for why ANY of this is safe to remove hasn't changed: the What's New popup only ever reads BUILD_NOTES.slice(0,1) (build 401), so nothing past the very first entry is read by the live app, ever — this array exists purely as a build changelog for future-Claude's own benefit, not user-facing content. If older history is ever needed, it is NOT gone: every past build note still exists in this project's conversation history and can be pulled back up by asking, without needing to keep it loaded in the shipped file on every page load. Extracted and rebuilt with the same bracket-matching parse as the two prior trims (build 454/455), not a naive split, to avoid corrupting any entry containing a comma, quote, or emoji.",
   "📊 Forecast Accuracy export, made complete — two real gaps Nikhil caught by directly asking 'does this cover ALL previously forecasted campaigns, and does it have ALL the data needed to compare against actual performance?' On completeness: confirmed and documented, not silently assumed — campFcHistory is exactly whatever GET /api/forecast/list returns with zero client-side slicing anywhere in the load path (campFcLoadHistory() → campFcHistory=data.records, no limit/offset applied), so the export already covers every forecast the account has saved; flagged honestly that the endpoint's own server-side behavior isn't visible from this file, same discipline as every other backend-dependent assumption already flagged elsewhere in this project. On data completeness: this was a real, confirmed gap — build 455 only exported the two numbers campFcMatchActual() itself returns (actualUpliftPct, actualROI), matching what the on-screen table shows, but the table was only ever built for a quick glance, not a full comparison, and the forecast side had the same problem — everything from the saved scenarios.expected payload got dropped except uplift% and ROI, even though Campaign Planner computed real absolute orders/sales/discount/contribution numbers at save time. Fixed by calling campAnalysisV2(match.c) directly for every matched row — the same real analysis campFcMatchActual() already runs internally, just not previously exposed — now pulling actual orders/day, net sales/day, AOV, allocated discount, contribution/day, AND the real 28-day-earlier baseline those were measured against, so every actual number in the export can be independently verified from the raw figures beside it rather than taken on faith. Forecast side now exports full absolute detail (total orders, incremental orders/day, net sales, merchant discount, incremental contribution/day) for all three scenarios, not just Expected's uplift%. Added a second Error column (Actual minus Forecast Expected, in AED contribution/day) alongside the existing percentage-point error, since a % miss and an AED miss can tell different stories depending on the baseline size. Deliberately called campAnalysisV2 a second time here rather than editing campFcMatchActual() itself to return more fields — costs one extra analysis call per matched row, but leaves the live on-screen table's own function completely untouched, so this export can't be the thing that regresses a page Nikhil already relies on daily. Verified with the same two-case functional test as build 454/455 (no-match row, full match against real mock order/sales data) — confirmed all new columns populate correctly (41 total) and, critically, that the pre-existing Actual Uplift %/ROI/Error numbers come out byte-identical to before this change, since this only adds columns, never alters a previously-exported one. Full top-to-bottom script execution test re-run clean.",
-  "📊 Forecast Accuracy export — Nikhil's direct ask: check every campaign that's been forecasted, see what uplift was predicted at forecast time, and cross-check it against the real sales data once the campaign ran. Investigated first rather than building blind: the real cross-check already runs automatically, every time Forecast History renders — campFcMatchActual() already finds each saved forecast's matching real campaign and the table already shows Expected uplift next to Actual uplift % and ROI. The actual gap was that this already-computed comparison lived only on-screen, one row at a time, with no way to pull it out for a proper look across everything at once. New campFcHistoryExport() (⬇ Export forecast accuracy button, both places Forecast History renders — the pre-Run and post-Run Campaign Planner states) downloads an XLSX with one row per saved forecast: brand, aggregator, discount structure, the three forecasted scenarios (Conservative/Expected/Optimistic uplift %, Expected ROI, Expected incremental contribution/day), the matched real campaign (name, dates, status), its actual uplift %/ROI, and a computed Error column (Actual minus Forecast Expected, in points) for a quick read on which direction and how far off the model tends to run. Deliberately exports EVERY raw saved record, not the history table's own display-only dedupe from build 439 (a UX-declutter choice for on-screen clutter, not something an accuracy audit should silently drop rows for) — and every row is matched via the EXACT SAME campFcMatchActual() the live table already calls, so nothing exported can drift from what's on screen. Verified with two real-shaped cases run through the actual functions, not a mock of them: a forecast with no matching real campaign yet (confirms blank Actual/Error columns, 'No match found' status, forecast columns still populate correctly) and a forecast with a real completed campaign plus real order/sales data behind it (100 orders/day during vs 80/day in the matching 28-day-earlier baseline — confirms the export's Actual Uplift % and Error columns come out numerically identical to what campAnalysisV2/campFcMatchActual compute natively, not a parallel calculation). Full top-to-bottom script execution test also re-run — zero uncaught errors.",
-  "🧹 Trimmed BUILD_NOTES from 59 entries down to the most recent 15, per Nikhil's request — same maintenance the file already had done once before at a different threshold (167→15, see that entry further down). The underlying reason is unchanged: the What's New popup only ever reads BUILD_NOTES.slice(0,1) (see the build-401-era popup-fix entry), so every entry beyond the very first is pure dead weight shipped to every user on every page load, never read by any live feature. Verified this trim changes nothing functionally: BUILD_NOTES[0] (this entry, once shipped) and the popup's slice(0,1) call are both untouched — only entries beyond index 14 were removed. File dropped from 1,823,205 to 1,737,543 characters (~4.7% smaller). Extracted and rebuilt the array with a proper bracket-matching parse (not a naive string/line split) to avoid corrupting any entry containing a comma, quote, or emoji."
+  "📊 Forecast Accuracy export — Nikhil's direct ask: check every campaign that's been forecasted, see what uplift was predicted at forecast time, and cross-check it against the real sales data once the campaign ran. Investigated first rather than building blind: the real cross-check already runs automatically, every time Forecast History renders — campFcMatchActual() already finds each saved forecast's matching real campaign and the table already shows Expected uplift next to Actual uplift % and ROI. The actual gap was that this already-computed comparison lived only on-screen, one row at a time, with no way to pull it out for a proper look across everything at once. New campFcHistoryExport() (⬇ Export forecast accuracy button, both places Forecast History renders — the pre-Run and post-Run Campaign Planner states) downloads an XLSX with one row per saved forecast: brand, aggregator, discount structure, the three forecasted scenarios (Conservative/Expected/Optimistic uplift %, Expected ROI, Expected incremental contribution/day), the matched real campaign (name, dates, status), its actual uplift %/ROI, and a computed Error column (Actual minus Forecast Expected, in points) for a quick read on which direction and how far off the model tends to run. Deliberately exports EVERY raw saved record, not the history table's own display-only dedupe from build 439 (a UX-declutter choice for on-screen clutter, not something an accuracy audit should silently drop rows for) — and every row is matched via the EXACT SAME campFcMatchActual() the live table already calls, so nothing exported can drift from what's on screen. Verified with two real-shaped cases run through the actual functions, not a mock of them: a forecast with no matching real campaign yet (confirms blank Actual/Error columns, 'No match found' status, forecast columns still populate correctly) and a forecast with a real completed campaign plus real order/sales data behind it (100 orders/day during vs 80/day in the matching 28-day-earlier baseline — confirms the export's Actual Uplift % and Error columns come out numerically identical to what campAnalysisV2/campFcMatchActual compute natively, not a parallel calculation). Full top-to-bottom script execution test also re-run — zero uncaught errors."
 ];
+
+
+
+// v459: page-open animation pass — three pieces, each specifically approved by Nikhil from
+// interactive demos, not built blind. (1) KPI numbers count up smoothly from 0 (his pick out of
+// four options shown — explicitly NOT the flight-board/digit-roll style he disliked in the first
+// round). (2) Line charts draw themselves left-to-right in 3.2s with no leading dot (his approved
+// tweak: slower than the original 1.4s demo, dot removed). (3) Bars grow up one after another
+// (the very first demo's staggered-bar behavior, which he approved unchanged throughout).
+if(typeof Chart!=="undefined"){
+  try{
+    // Staggered bar growth — Chart.js's own default animates every bar in a dataset
+    // simultaneously; ctx.type/ctx.mode==="default" gating on dataIndex*90ms delay is Chart.js's
+    // own documented pattern for a "grows up one by one" bar animation, not a custom invention.
+    Chart.defaults.datasets.bar=Chart.defaults.datasets.bar||{};
+    Chart.defaults.datasets.bar.animation={duration:700,delay:(c)=>c.type==="data"&&c.mode==="default"?c.dataIndex*90:0};
+    // Line charts: Chart.js's default animation makes points rise vertically from the axis, not
+    // draw left-to-right — so getting the actual "start point to end point, like a snake" effect
+    // Nikhil asked for needs a real reveal: a plugin clips the plotting area to a horizontal
+    // sliver that widens from 0 to full width, driven by the SAME animation's own progress
+    // (onProgress/onComplete) so the clip can never drift out of sync with the real duration/
+    // easing below. onProgress/onComplete are set directly on this per-type object (not the
+    // shared global default) so this doesn't depend on exactly how Chart.js merges nested
+    // animation config between the global and per-type defaults.
+    Chart.defaults.datasets.line=Chart.defaults.datasets.line||{};
+    Chart.defaults.datasets.line.animation={
+      duration:3200,easing:"easeInOutQuad",
+      onProgress:(actx)=>{const c=actx.chart;if(actx.numSteps)c._revealProgress=actx.currentStep/actx.numSteps;},
+      onComplete:(actx)=>{actx.chart._revealProgress=1;}
+    };
+    Chart.register({
+      id:"lineRevealClip",
+      beforeDatasetsDraw(c){
+        if(c.config.type!=="line")return;
+        const prog=c._revealProgress==null?1:c._revealProgress;
+        if(prog>=1)return;
+        const a=c.chartArea;
+        c.ctx.save();
+        c.ctx.beginPath();
+        c.ctx.rect(a.left,a.top,Math.max(0,a.width*prog),a.height);
+        c.ctx.clip();
+        c._revealClipped=true;
+      },
+      afterDatasetsDraw(c){if(c._revealClipped){c.ctx.restore();c._revealClipped=false;}}
+    });
+  }catch(e){console.log("[chart animation setup] error:",e.message);}
+}
+// Smooth count-up for every ".kpi .v" on the page that just became active. Parses the ALREADY-
+// FORMATTED final text (handles "AED 612,480", "18,420", "33.2%", negative "−AED 1,234") rather
+// than needing every KPI card's own render code taught a new "animated" mode — this is a single
+// hook (called from gp() below) that works across every page using the shared .kpi markup, not
+// just Overview. An element whose text doesn't cleanly parse as a number (an em dash "—", or
+// anything unexpected) is left exactly as rendered — animating "unknown" text into a fabricated
+// number would be worse than not animating it. Lands on the ORIGINAL string at the end (not a
+// re-derived one), so any formatting quirk the real renderer produced is preserved exactly.
+function animateKpiCountUp(root){
+  if(!root)return;
+  const els=root.querySelectorAll(".kpi .v");
+  els.forEach(el=>{
+    const raw=el.textContent.trim();
+    const m=raw.match(/^(−|-)?([^\d]*)([\d,]+(?:\.\d+)?)(.*)$/);
+    if(!m)return;
+    const neg=m[1]==="−"||m[1]==="-";
+    const prefix=m[2]||"",suffix=m[4]||"";
+    const numStr=m[3].replace(/,/g,"");
+    const target=parseFloat(numStr);
+    if(isNaN(target))return;
+    const decimals=numStr.includes(".")?numStr.split(".")[1].length:0;
+    const signedTarget=neg?-target:target;
+    const dur=1100,start=performance.now();
+    function step(ts){
+      const t=Math.min(1,(ts-start)/dur);
+      const eased=1-Math.pow(1-t,3);
+      const val=signedTarget*eased;
+      el.textContent=(val<0?"−":"")+prefix+Math.abs(val).toLocaleString(undefined,{minimumFractionDigits:decimals,maximumFractionDigits:decimals})+suffix;
+      if(t<1)requestAnimationFrame(step);else el.textContent=raw;
+    }
+    requestAnimationFrame(step);
+  });
+}
+
 
 
 
@@ -4919,17 +5000,24 @@ function ensureNavBatteryCSS(){
   if(document.getElementById("nav-battery-css"))return;
   const s=document.createElement("style");
   s.id="nav-battery-css";
-  s.textContent="@keyframes navSegPulse{0%,100%{opacity:.5}50%{opacity:1}}";
+  // v459: hourglass flip, added alongside the existing segment-glow pulse — per Nikhil directly,
+  // the green segmented underline alone doesn't read as "loading" to someone opening the
+  // dashboard for the first time without being told what it means. The hourglass is a much more
+  // universally-understood loading symbol; segments stay as the secondary, more precise progress
+  // indicator for anyone who does know to look for them.
+  s.textContent="@keyframes navSegPulse{0%,100%{opacity:.5}50%{opacity:1}}@keyframes navHourglassFlip{0%,40%{transform:rotate(0deg)}50%,90%{transform:rotate(180deg)}100%{transform:rotate(180deg)}}";
   document.head.appendChild(s);
 }
 function paintNavBattery(tab,pct,readyTitle,loadingLabel){
   if(!tab)return;
   ensureNavBatteryCSS();
   let bar=tab.querySelector(".nav-battery-segs");
+  let hg=tab.querySelector(".nav-battery-hourglass");
   if(pct>=100){
     tab.style.pointerEvents="";tab.style.opacity="";tab.removeAttribute("data-charging");
     tab.title=readyTitle;
     if(bar)bar.remove();
+    if(hg)hg.remove();
     return;
   }
   tab.setAttribute("data-charging","1");
@@ -4937,6 +5025,13 @@ function paintNavBattery(tab,pct,readyTitle,loadingLabel){
   tab.style.pointerEvents="none";
   tab.style.opacity="0.9";
   tab.title=`${loadingLabel}… ${pct}%`;
+  if(!hg){
+    hg=document.createElement("span");
+    hg.className="nav-battery-hourglass";
+    hg.textContent="⏳";
+    hg.style.cssText="position:absolute;top:2px;right:3px;font-size:10px;line-height:1;display:inline-block;animation:navHourglassFlip 1.6s ease-in-out infinite;pointer-events:none";
+    tab.appendChild(hg);
+  }
   if(!bar){
     bar=document.createElement("div");
     bar.className="nav-battery-segs";
@@ -5427,7 +5522,14 @@ function restructureTabIcons(){
     t.innerHTML=`<span class="tab-icon" style="flex-shrink:0;display:inline-flex;justify-content:center;width:18px">${icon}</span><span class="tab-label">${label}</span>`;
   });
 }
-function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>{t.classList.toggle("act",t.dataset.pg===page);});document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};ovTrendMetric='sales';brTrendMetric='sales';if(typeof campBeStopAuto==='function')campBeStopAuto();if(typeof campPlanStopChartAuto==='function')campPlanStopChartAuto();renderPage(page);}
+function gp(page){curPage=page;document.querySelectorAll(".pg").forEach(p=>p.classList.remove("act"));const tgt=document.getElementById(`page-${page}`);if(tgt)tgt.classList.add("act");document.querySelectorAll(".tab").forEach(t=>{t.classList.toggle("act",t.dataset.pg===page);});document.querySelectorAll(".mnav").forEach(m=>{m.classList.toggle("act",m.dataset.pg===page);});Object.values(charts).forEach(c=>c.destroy());charts={};ovTrendMetric='sales';brTrendMetric='sales';if(typeof campBeStopAuto==='function')campBeStopAuto();if(typeof campPlanStopChartAuto==='function')campPlanStopChartAuto();renderPage(page);
+  // v459: KPI count-up, on every page switch — a couple of pages build their KPI cards a beat
+  // after renderPage() returns (e.g. Feedback's own chart draw is explicitly deferred via
+  // setTimeout so pg.innerHTML is committed first), so a short setTimeout here matches that same
+  // existing pattern rather than risking an empty querySelectorAll on a page that isn't fully
+  // painted yet.
+  setTimeout(()=>{if(typeof animateKpiCountUp==="function")animateKpiCountUp(document.getElementById(`page-${page}`));},60);
+}
 
 // ── MOBILE NAV DRAWER ──
 // Slides in from the left on tap of hamburger. Overlay dims the page. Any tap on a nav item or
