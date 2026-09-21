@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-450";
+const BUILD_VERSION="2026-08-13-451";
 const BUILD_NOTES=[
+  "🐛 Critical fix, caught by Nikhil BEFORE it caused wrong numbers — he asked me to verify the dashboard would correctly handle Oregano's restarting BOGO Mondays campaign on Noon plus new BOGO Wednesdays campaigns for Lollorosso, Fyoozhen, Wicked Wings, and Smokeys, all with the same 'no commission except 2% PG' mechanic. Checking found a real problem: the original fix for this exact commission treatment (build ~291) hardcoded it to 4 specific past dates AND to Oregano only, based on the narrow assumption — correct at the time — that no overlapping campaigns ran on Noon-Oregano-Mondays during that exact window. That assumption breaks the moment the campaign restarts on new dates or extends to other brands, which is exactly what's happening now. None of the new Monday dates (21 Sep onward) were in the hardcoded set, and three of the five brands were never covered by it at all — without this fix, commission would have been calculated at the full, non-rebated rate for every one of these real campaigns, silently understating contribution across the board, for both a sheet-only calculation and an uploaded Noon statement. Replaced the hardcoded date set with a dynamic check against real campaign data: for a given brand and date, is there an active (non-cancelled) Noon campaign covering it whose own comments describe this exact mechanic (matching the literal 'No Commission Charged... Except PG fees of X%' phrasing from Nikhil's own sheet, not just 'BOGO' generically, so a plain BOGO campaign with normal commission correctly does NOT get this treatment). Applied consistently across all 5 places in the codebase that referenced the old hardcoded set, removing it entirely once nothing referenced it anymore. Verified thoroughly against the real screenshot: all 5 brands (Oregano's new Monday dates through October, plus Lollorosso/Fyoozhen/Wicked Wings/Smokeys's new Wednesday campaigns) correctly detected; a campaign on the wrong aggregator, a date with no campaign at all, a brand never covered, and a cancelled matching campaign all correctly excluded; confirmed the original historical dates still work correctly since they're real campaign records too, not a separate special case. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "🐛🎨 Real fixes to the Campaign History Report, from Nikhil's direct review of two renderings. (1) Genuine bug fix: the diverging outlet chart had a hardcoded text-anchor that only positions correctly for positive bars (label ending just left of the bar, flowing further left). For negative bars, which extend leftward from center, that same anchor made the outlet name flow backward INTO the bar and the value label's own space — exactly the 'names are covering the numbers' overlap Nikhil flagged with a real screenshot. Now conditional: negative bars get text-anchor=start, positioned just right of center, flowing away from the bar instead of into it. Verified directly against the exact bug shape (2 positive, 2 negative outlets, real dollar amounts) — confirmed zero coordinate collisions and the negative-bar labels now correctly using the fixed anchor. (2) Removed the second 'incremental contribution' line from the combined chart per Nikhil's explicit correction that it was adding confusion rather than clarity — replaced with a genuine combined chart: Actual Sales and Incremental Sales as two distinct-colored bars, a single Contribution line overlaid on its own padded scale (1.5x real max) so the two series' value labels stay in separate vertical bands and don't collide with each other — checked directly with real-shaped numbers, not just eyeballed. (3) Every font size across all three charts bumped from the original 7.5-9.5px range to 10.5-12px, per Nikhil's explicit 'sizes... to be readable and not small' — nothing in the shipped report is smaller than 10px. (4) Explicit period date labels ('Current: [dates] vs. Prior period: [dates]') replacing the vague 'prior period' language throughout the outlet section. (5) The single combined outlet table split into two, exactly as asked — Sales/Discount/Contribution, and Orders/AOV — each ending in a genuine Total row (AOV totals computed as a real weighted average, sales/orders, not a naive sum of per-outlet AOVs, which would have been a real and easy-to-miss math error). Verified extensively: zero exact-coordinate text collisions in either chart with realistic data; both new tables render with correct totals; period labels show the real computed date ranges; the old 'incremental contribution' single-line language is completely gone; full report stays structurally balanced (div, table, and svg tag counts all match). Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "📊 Two chart additions to the Campaign History Report, shown as renderings and confirmed before building, per Nikhil's own request. (1) An incremental-contribution trend chart above the 'previous comparable campaigns' table — 3 prior instances plus the current one, current highlighted in a distinct color, answering 'has this been working, and is it improving' at a glance instead of requiring a read of every row. (2) A diverging bar chart in the per-outlet section — green bars for outlets that gained contribution vs. the prior period, red for outlets that lost, sorted best-to-worst — making the exact 'uneven outlet performance' finding the flag callout describes visible immediately, without replacing that callout (the chart shows WHICH outlets diverged; the callout explains WHY it matters and names the branch worth excluding — different jobs, kept both). Built as inline SVG matching the existing Before/During/After chart's own style, not Chart.js — this is a static print report with no JS execution at print time, so consistency with what's already there mattered more than a fancier library. Verified thoroughly: the trend chart renders exactly 4 bars (3 real prior instances plus the current one), the current bar correctly uses the distinct highlight color and shows the real incremental-contribution figure; the outlet chart correctly colors a gaining outlet green and a losing one red; every existing piece (Before/During/After chart, the outlet flag callout, the exclusion of the current campaign from its own comparison table) still works correctly alongside the new charts; full report stays structurally balanced (div and svg tag counts match). Also includes, in the same build: a major redesign of this same report, modeled directly on a real reference PDF Nikhil shared (the Noon Monday BOGO Campaign Review) — the per-outlet section is now scoped to only the specific campaign instance being reported on, not stacked across every past instance; the 'previous comparable campaigns' comparison is now a lightweight table capped at the 3 most recent OTHER instances, explicitly excluding the current one, replacing the old averages summary and full-P&L-card-per-instance pages entirely; a new outlet performance flag names exactly which outlets lost contribution against their own prior period when others gained, so they can be considered for exclusion next time; and a new Before/During/After daily order-count chart for the specific campaign, with the 'after' window honestly capped at whatever data actually exists rather than padded with fabricated days for a campaign that just finished. Verified extensively against a realistic scenario with 4 total instances and 2 outlets with opposite performance, confirming every piece works correctly together, including the exact null-handling fix from build 448 (campOutlets returning null for an unrestricted campaign). Re-ran the full top-to-bottom script execution test — zero uncaught errors. Caught and fixed two of my own mid-edit mistakes before shipping: an orphaned function body left behind by an incomplete replacement, and a nonsensical self-referential expression that always evaluated to zero — both caught by re-running the test suite rather than trusting the edit was clean.",
   "🐛 Real bug caught by Nikhil — the report icon on campaign cards stopped producing anything at all, no error, no popup, nothing. Traced it precisely by reading campOutlets()'s own source: it legitimately returns null to mean 'all outlets, no restriction' — a case build 446's new per-outlet code never checked for. It called .forEach() directly on that result, and for any campaign with no explicit outlet restriction — including the exact real Flash Sale campaign that triggered this report — that's a null, so null.forEach() throws immediately. An inline onclick=\"\" handler that throws fails completely silently from the user's side: no visible error, no alert, nothing happening — precisely what was reported. Fixed by normalizing null into the brand's actual full outlet list (every outlet with real data), applied everywhere campOutlets() gets called in the per-outlet section. Also wrapped the whole export function in try/catch with diagnostic logging at each step, so if a different, unanticipated edge case ever causes a real failure again, it surfaces as a clear, readable error instead of vanishing silently — the same lesson learned from the Admin page hang investigation, applied proactively here rather than waited for. Verified precisely against the real bug: reconstructed the exact failing case (a campaign with no outlet restriction, campOutlets() returning null) and confirmed it threw before the fix and now correctly succeeds, resolving to the real outlets with live data. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
@@ -444,7 +445,37 @@ function commissionRateFor(agg,brand,dateStr){
 // formula assumes (17% base + 2% PG), and that today's statement charges the full 17% with no
 // visible credit yet, exactly as Nikhil described (reimbursement is a separate future step, not
 // reflected in the statement Noon and Oregano haven't yet agreed the amount for).
-const NOON_OREGANO_BOGO_MONDAYS=new Set(["2026-07-20","2026-07-27","2026-08-03","2026-08-10"]);
+// v452: real, serious problem caught by Nikhil BEFORE it caused wrong numbers — the original
+// v291 fix hardcoded this to 4 specific past dates AND to Oregano specifically, based on the
+// narrow (and correct, at the time) assumption that Nikhil ran no overlapping campaigns on
+// Noon-Oregano-Mondays during that exact window. That assumption breaks the moment the campaign
+// restarts on new dates, or extends to other brands — exactly what's happening now: Oregano's
+// BOGO Mondays resumes on entirely new dates (21 Sep onward), and Lollorosso/Fyoozhen/Wicked
+// Wings/Smokeys are starting their OWN version on Wednesdays. None of these dates were in the
+// hardcoded set, and three of these brands were never covered by it at all — without this fix,
+// commission would have been calculated at the full, non-rebated rate for every one of these
+// real campaigns, understating contribution across the board. Replaced the hardcoded date set
+// with a dynamic check against real campaign data: for a given brand+date, is there an ACTIVE
+// (non-cancelled) Noon campaign covering that date whose own comments describe this exact "no
+// commission except PG" mechanic? Matches the literal phrasing from Nikhil's own sheet ("No
+// Commission Charged on these Orders Except PG fees of X%"), not just "BOGO" — a plain BOGO
+// campaign with normal commission should NOT get this rebate, only ones explicitly using this
+// mechanic. Memoized by brand+date since this gets checked per daily record across many rows
+// sharing the same date, and campaignData itself won't change within a single page render.
+const _noonBogoWaiverCache=new Map();
+function isNoonCommissionWaived(brand,dateStr){
+  if(!brand||!dateStr)return false;
+  const key=brand+"|"+dateStr;
+  if(_noonBogoWaiverCache.has(key))return _noonBogoWaiverCache.get(key);
+  const result=(typeof campaignData!=="undefined"&&campaignData)?campaignData.some(c=>
+    c.aggregator==="Noon"&&c.brand===brand&&
+    c.startDate<=dateStr&&c.endDate>=dateStr&&
+    campStatus(c)!=="Cancelled"&&
+    /no\s+commission.{0,40}except.{0,20}pg/i.test((c.comments||"")+" "+(c.name||""))
+  ):false;
+  _noonBogoWaiverCache.set(key,result);
+  return result;
+}
 // v335: pro-rata ad-cost allocation, per Nikhil's explicit request — CPC and Keywords spend was
 // never subtracted anywhere in the profitability chain, meaning contribution was overstated by
 // real ad cost for any brand+aggregator+date range with active campaigns. The correct pro-rata
@@ -732,8 +763,9 @@ function computeProfitability(records,dateStr){
     byKey[k].disc+=(r.disc||0);
     if(r.branch&&r.branch!=='(brand-level)')byKey[k].branches.add(r.branch); // v357: track in-view outlets for CPC scoping
     if(r.date){if(!byKey[k].lo||r.date<byKey[k].lo)byKey[k].lo=r.date;if(!byKey[k].hi||r.date>byKey[k].hi)byKey[k].hi=r.date;}
-    // v291: Noon-Oregano BOGO reimbursement, specific campaign dates only — see brandContribution.
-    if(r.aggregator==='Noon'&&r.brand==='Oregano'&&r.date&&NOON_OREGANO_BOGO_MONDAYS.has(r.date)){
+    // v452: Noon commission-waiver reimbursement, generalized beyond the original 4 hardcoded
+    // Oregano-only dates — see isNoonCommissionWaived and brandContribution.
+    if(r.aggregator==='Noon'&&r.date&&isNoonCommissionWaived(r.brand,r.date)){
       byKey[k].mondayDisc+=(r.disc||0);
     }
   }
@@ -887,8 +919,8 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
       // v388: per-key real data span — the last date THIS brand+aggregator actually has a synced
       // sales row for, so ad cost never gets calculated past what the sales side is counting.
       if(r.date){if(!m[k].lo||r.date<m[k].lo)m[k].lo=r.date;if(!m[k].hi||r.date>m[k].hi)m[k].hi=r.date;}
-      // v291: Noon-Oregano BOGO reimbursement, specific campaign dates only — see brandContribution.
-      if(r.aggregator==='Noon'&&r.brand==='Oregano'&&r.date&&NOON_OREGANO_BOGO_MONDAYS.has(r.date)){
+      // v452: Noon commission-waiver reimbursement, generalized — see isNoonCommissionWaived.
+      if(r.aggregator==='Noon'&&r.date&&isNoonCommissionWaived(r.brand,r.date)){
         m[k].mondayDisc+=(r.disc||0);
       }
     }
@@ -11721,7 +11753,7 @@ function campAnalysisV2(c){
     recs.forEach(r=>{
       const b=r.brand;if(!byBrand[b])byBrand[b]={net:0,disc:0,mondayDisc:0};
       byBrand[b].net+=r.sales;byBrand[b].disc+=(r.disc||0);
-      if(c.aggregator==='Noon'&&b==='Oregano'&&r.date&&NOON_OREGANO_BOGO_MONDAYS.has(r.date))byBrand[b].mondayDisc+=(r.disc||0);
+      if(c.aggregator==='Noon'&&r.date&&isNoonCommissionWaived(b,r.date))byBrand[b].mondayDisc+=(r.disc||0);
     });
     let contribution=0,gross=0,net=0,disc=0,mondayDiscTotal=0;
     for(const b in byBrand){
@@ -12048,9 +12080,10 @@ function campRecentWindowAnalysis(c){
     recs.forEach(r=>{
       const b=r.brand;if(!byBrand[b])byBrand[b]={net:0,disc:0,mondayDisc:0};
       byBrand[b].net+=r.sales;byBrand[b].disc+=(r.disc||0);
-      // v293: Noon-Oregano BOGO Monday discount — this function (powering the "Last N days"
-      // section) predates the v290-292 fix and was missed then; see brandContribution for context.
-      if(c.aggregator==='Noon'&&b==='Oregano'&&r.date&&NOON_OREGANO_BOGO_MONDAYS.has(r.date))byBrand[b].mondayDisc+=(r.disc||0);
+      // v293/v452: Noon commission-waiver Monday discount — this function (powering the "Last N
+      // days" section) predates the v290-292 fix and was missed then, now uses the same
+      // generalized, dynamic check as everywhere else; see isNoonCommissionWaived for context.
+      if(c.aggregator==='Noon'&&r.date&&isNoonCommissionWaived(b,r.date))byBrand[b].mondayDisc+=(r.disc||0);
     });
     let contribution=0,gross=0,net=0,disc=0,mondayDiscTotal=0;
     for(const b in byBrand){const o=byBrand[b];const g=o.net+o.disc;contribution+=brandContribution(c.aggregator,b,o.net,g,dref,o.mondayDisc);gross+=g;net+=o.net;disc+=o.disc;mondayDiscTotal+=o.mondayDisc;}
@@ -19989,9 +20022,9 @@ function cmpComputeContribution(cfg){
       if(r.brand!==brand||r.aggregator!==agg)continue;
       if(!inWindow(r.date))continue;
       brandDisc+=r.disc||0;
-      // v292: Noon-Oregano BOGO Monday discount, tracked the same way as brandDisc above so it
-      // gets the same outlet-share scaling applied below — see brandContribution for context.
-      if(agg==='Noon'&&brand==='Oregano'&&r.date&&NOON_OREGANO_BOGO_MONDAYS.has(r.date))brandMondayDisc+=r.disc||0;
+      // v292/v452: Noon commission-waiver Monday discount, tracked the same way as brandDisc
+      // above so it gets the same outlet-share scaling applied below — see isNoonCommissionWaived.
+      if(agg==='Noon'&&r.date&&isNoonCommissionWaived(brand,r.date))brandMondayDisc+=r.disc||0;
       if(r.branch!=="(brand-level)"){
         brandSales+=r.sales||0;
         if(!cfg.branches.size||cfg.branches.has(r.branch))outletSales+=r.sales||0;
