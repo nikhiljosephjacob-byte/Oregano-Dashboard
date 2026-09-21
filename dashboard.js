@@ -13,13 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-457";
+const BUILD_VERSION="2026-08-13-458";
 const BUILD_NOTES=[
+  "🔧 Three fixes from one round of Nikhil screenshots. (1) Keeta free-delivery cost made uniform — only campaigns with a concurrent same-brand+platform sibling (Oregano's case) ever had FD subtracted, via campParticipationV1/keetaCampWindowStats; a standalone Keeta campaign (Fyoozhen's case) fell through to campAnalysisV2/campRecentWindowAnalysis instead, which never touched FD at all. Fixed at the source in both functions (not just the popup renderer) so the tile and popup stay identical — reuses keetaCampWindowStats() exactly as the concurrent path already does: real per-order FD from an uploaded Keeta orders file when it covers the window (Keeta's own 'Campaign type' column already tells us per order, so nothing re-implements Nikhil's stated >AED25 net-value floor — Keeta's own export already reflects it), flat AED2/order estimate otherwise. Confirmed FD is Keeta-only per Nikhil directly — other aggregators don't carry this cost, and FD itself isn't tied to any discount campaign (it's a standalone conversion lever entered as a sheet comment so it doesn't spawn its own campaign tile, solved several builds back) — so FD running on days with NO campaign at all still isn't captured anywhere; flagged back to Nikhil as a separate, larger question, not built here. (2) Contribution % added to both comparison panels in the standard campaign popup (Campaign to date/Same days last month, and Last N days) — reused the existing fmtContribPct() helper, which turned out to already be wired into the OTHER (Keeta-exact) popup but not this one, hence Nikhil seeing it in one popup and not the other. (3) The What's New popup's OK button being unclickable right after load, reported again after the v188 band-aid (flat 2800ms delay) — replaced with requestIdleCallback (6000ms ceiling, falls back to the same 2800ms on Safari) so the popup waits for the main thread to actually be free instead of guessing a fixed delay that a bigger dataset can outlast. Verified (1) and (2) with functional tests against real mock order/sales data — exact-FD path, fallback-estimate path, and a non-Keeta regression check confirming zero effect outside Keeta. (3) is a diagnosis-driven fix Node can't fully exercise (real main-thread contention) — needs Nikhil's confirmation on the real dashboard. Full script execution re-run clean throughout.",
   "🧹 Trimmed BUILD_NOTES from 17 entries down to the most recent 5, per Nikhil asking again (\"do we need them all? it's too long\") even after the build-454 trim to 15 — 15 apparently wasn't short enough. Cut harder this time since the reasoning for why ANY of this is safe to remove hasn't changed: the What's New popup only ever reads BUILD_NOTES.slice(0,1) (build 401), so nothing past the very first entry is read by the live app, ever — this array exists purely as a build changelog for future-Claude's own benefit, not user-facing content. If older history is ever needed, it is NOT gone: every past build note still exists in this project's conversation history and can be pulled back up by asking, without needing to keep it loaded in the shipped file on every page load. Extracted and rebuilt with the same bracket-matching parse as the two prior trims (build 454/455), not a naive split, to avoid corrupting any entry containing a comma, quote, or emoji.",
   "📊 Forecast Accuracy export, made complete — two real gaps Nikhil caught by directly asking 'does this cover ALL previously forecasted campaigns, and does it have ALL the data needed to compare against actual performance?' On completeness: confirmed and documented, not silently assumed — campFcHistory is exactly whatever GET /api/forecast/list returns with zero client-side slicing anywhere in the load path (campFcLoadHistory() → campFcHistory=data.records, no limit/offset applied), so the export already covers every forecast the account has saved; flagged honestly that the endpoint's own server-side behavior isn't visible from this file, same discipline as every other backend-dependent assumption already flagged elsewhere in this project. On data completeness: this was a real, confirmed gap — build 455 only exported the two numbers campFcMatchActual() itself returns (actualUpliftPct, actualROI), matching what the on-screen table shows, but the table was only ever built for a quick glance, not a full comparison, and the forecast side had the same problem — everything from the saved scenarios.expected payload got dropped except uplift% and ROI, even though Campaign Planner computed real absolute orders/sales/discount/contribution numbers at save time. Fixed by calling campAnalysisV2(match.c) directly for every matched row — the same real analysis campFcMatchActual() already runs internally, just not previously exposed — now pulling actual orders/day, net sales/day, AOV, allocated discount, contribution/day, AND the real 28-day-earlier baseline those were measured against, so every actual number in the export can be independently verified from the raw figures beside it rather than taken on faith. Forecast side now exports full absolute detail (total orders, incremental orders/day, net sales, merchant discount, incremental contribution/day) for all three scenarios, not just Expected's uplift%. Added a second Error column (Actual minus Forecast Expected, in AED contribution/day) alongside the existing percentage-point error, since a % miss and an AED miss can tell different stories depending on the baseline size. Deliberately called campAnalysisV2 a second time here rather than editing campFcMatchActual() itself to return more fields — costs one extra analysis call per matched row, but leaves the live on-screen table's own function completely untouched, so this export can't be the thing that regresses a page Nikhil already relies on daily. Verified with the same two-case functional test as build 454/455 (no-match row, full match against real mock order/sales data) — confirmed all new columns populate correctly (41 total) and, critically, that the pre-existing Actual Uplift %/ROI/Error numbers come out byte-identical to before this change, since this only adds columns, never alters a previously-exported one. Full top-to-bottom script execution test re-run clean.",
   "📊 Forecast Accuracy export — Nikhil's direct ask: check every campaign that's been forecasted, see what uplift was predicted at forecast time, and cross-check it against the real sales data once the campaign ran. Investigated first rather than building blind: the real cross-check already runs automatically, every time Forecast History renders — campFcMatchActual() already finds each saved forecast's matching real campaign and the table already shows Expected uplift next to Actual uplift % and ROI. The actual gap was that this already-computed comparison lived only on-screen, one row at a time, with no way to pull it out for a proper look across everything at once. New campFcHistoryExport() (⬇ Export forecast accuracy button, both places Forecast History renders — the pre-Run and post-Run Campaign Planner states) downloads an XLSX with one row per saved forecast: brand, aggregator, discount structure, the three forecasted scenarios (Conservative/Expected/Optimistic uplift %, Expected ROI, Expected incremental contribution/day), the matched real campaign (name, dates, status), its actual uplift %/ROI, and a computed Error column (Actual minus Forecast Expected, in points) for a quick read on which direction and how far off the model tends to run. Deliberately exports EVERY raw saved record, not the history table's own display-only dedupe from build 439 (a UX-declutter choice for on-screen clutter, not something an accuracy audit should silently drop rows for) — and every row is matched via the EXACT SAME campFcMatchActual() the live table already calls, so nothing exported can drift from what's on screen. Verified with two real-shaped cases run through the actual functions, not a mock of them: a forecast with no matching real campaign yet (confirms blank Actual/Error columns, 'No match found' status, forecast columns still populate correctly) and a forecast with a real completed campaign plus real order/sales data behind it (100 orders/day during vs 80/day in the matching 28-day-earlier baseline — confirms the export's Actual Uplift % and Error columns come out numerically identical to what campAnalysisV2/campFcMatchActual compute natively, not a parallel calculation). Full top-to-bottom script execution test also re-run — zero uncaught errors.",
-  "🧹 Trimmed BUILD_NOTES from 59 entries down to the most recent 15, per Nikhil's request — same maintenance the file already had done once before at a different threshold (167→15, see that entry further down). The underlying reason is unchanged: the What's New popup only ever reads BUILD_NOTES.slice(0,1) (see the build-401-era popup-fix entry), so every entry beyond the very first is pure dead weight shipped to every user on every page load, never read by any live feature. Verified this trim changes nothing functionally: BUILD_NOTES[0] (this entry, once shipped) and the popup's slice(0,1) call are both untouched — only entries beyond index 14 were removed. File dropped from 1,823,205 to 1,737,543 characters (~4.7% smaller). Extracted and rebuilt the array with a proper bracket-matching parse (not a naive string/line split) to avoid corrupting any entry containing a comma, quote, or emoji.",
-  "🐛 Three real, connected bugs fixed, caught by Nikhil from an actual generated report. (1) Day-of-week mismatch: 'immediately preceding N days' walked back N raw calendar days regardless of weekday — his real example was a Fri-Sun campaign whose 'prior period' came out as Tue-Thu, which is not a fair baseline for an F&B business with genuine weekly seasonality (weekends are naturally busier independent of any campaign). Fixed in both the outlet section and the Before/During/After chart's before/after windows: now the same date range, exactly one week earlier/later, so weekday composition always matches — verified directly against the real dates (Fri 18 Sep correctly compares to Fri 11 Sep, not Tue 15 Sep). (2) The current campaign's own numbers were missing from the 'previous comparable campaigns' table entirely — visible only in the chart above it, even though it's the actual subject of the report. Now included as its own clearly-marked row. (3) Raw totals aren't a fair comparison across campaigns of different lengths, per Nikhil's own correct instinct — a longer prior campaign will obviously show bigger totals even if it performed worse per day. Every relevant column (Orders, Sales, Incr. contribution) now shows the per-day figure alongside the total. Verified with a realistic case designed to prove the fix actually works: a 7-day prior campaign and a 3-day current campaign with deliberately identical per-day performance both now correctly show 'AED 5,000/day' — the apples-to-apples comparison Nikhil asked for, not just a cosmetic label change. Also fixed: the 'Why did profitability change' popup's 'CPC/Keywords cost' label, which predated Shoppable Banner and no longer described the real ad-type mix — changed to the generic 'Ad Investment cost,' Nikhil's own explicit alternative, since determining the exact type mix contributing to a given cost figure would need deeper logic than a label rename. Re-ran the full top-to-bottom script execution test — zero uncaught errors."
+  "🧹 Trimmed BUILD_NOTES from 59 entries down to the most recent 15, per Nikhil's request — same maintenance the file already had done once before at a different threshold (167→15, see that entry further down). The underlying reason is unchanged: the What's New popup only ever reads BUILD_NOTES.slice(0,1) (see the build-401-era popup-fix entry), so every entry beyond the very first is pure dead weight shipped to every user on every page load, never read by any live feature. Verified this trim changes nothing functionally: BUILD_NOTES[0] (this entry, once shipped) and the popup's slice(0,1) call are both untouched — only entries beyond index 14 were removed. File dropped from 1,823,205 to 1,737,543 characters (~4.7% smaller). Extracted and rebuilt the array with a proper bracket-matching parse (not a naive string/line split) to avoid corrupting any entry containing a comma, quote, or emoji."
 ];
 
 
@@ -693,6 +693,15 @@ function brandContribution(agg,brand,netSales,grossSales,dateStr,mondayBogoDisc)
   }
   const foodCost=grossSales*foodPkgPct(brand);
   return netSales-commCost-foodCost;
+}
+// v458: Contribution % — Nikhil's direct ask, across every P&L popup that shows a Contribution
+// AED figure. Absolute contribution can rise while margin falls if commission or discount burn
+// ate a bigger share of gross — this makes that visible everywhere Contribution already appears,
+// not just the total. Denominator is Net sales (post-discount), matching the "Net sales" row
+// that's already shown right beside Contribution in every one of these popups. Shown a mockup
+// (real Fyoozhen×Keeta numbers, 8,081÷21,223 = 38.1%) and confirmed before building.
+function fmtContribPct(contrib,netSales){
+  return(netSales>0)?(contrib/netSales*100).toFixed(1)+'%':'—';
 }
 // v279: shared "Profitability" helper for the KPI rows and breakdown tables across Overview,
 // Brands, Outlets, Platforms and Compare — same formula every campaign contribution figure in
@@ -4602,7 +4611,21 @@ async function doLoad(){
   // "Got it" button looked clickable but didn't respond immediately — the click was real, it
   // was just queued behind other JS work. Giving the heavier background tasks a head start
   // first means the modal shows once the thread is actually free to handle the click.
-  setTimeout(()=>{if(typeof showWhatsNewIfNeeded==="function")showWhatsNewIfNeeded();},2800);
+  // v458: real bug Nikhil hit again — the v188 fix above (flat 2800ms delay) was a guess at how
+  // long prewarmCPC/prewarmCampaigns/loadKPIData take, not a measurement of when they're
+  // actually done. On a slower connection or a bigger dataset than whatever v188 was tested
+  // against, those background loads can still be running well past 2800ms — so the modal opens
+  // on schedule, but the click still lands in the same queue behind that ongoing work and sits
+  // unresponsive until it finishes, exactly the "OK button not clickable for a while" symptom
+  // reported again. Switched to requestIdleCallback, which fires only once the browser reports
+  // the main thread is genuinely free — so it naturally waits LONGER on a slow/heavy load and
+  // doesn't wait needlessly on a fast one, instead of guessing one fixed number for every case.
+  // {timeout:6000} is a hard ceiling so the popup still appears even if the browser never
+  // reports an idle slot. Safari has no requestIdleCallback at all, so it falls back to the
+  // exact same 2800ms setTimeout as before — unchanged, no regression there.
+  const showWhatsNewWhenIdle=()=>{if(typeof showWhatsNewIfNeeded==="function")showWhatsNewIfNeeded();};
+  if(typeof requestIdleCallback==="function"){requestIdleCallback(showWhatsNewWhenIdle,{timeout:6000});}
+  else{setTimeout(showWhatsNewWhenIdle,2800);}
   if(errs.length){const e=document.getElementById("etoa");if(e){e.textContent="⚠️ Partial: "+errs.join(", ");e.style.display="block";setTimeout(()=>e.style.display="none",6000);}}
   gp("overview");
   // Pre-warm KPI data in the background so the tab opens fast
@@ -11713,6 +11736,36 @@ function campAnalysisV2(c){
     return{contribution,gross,net,disc,mondayDiscTotal};
   };
   const campC=contribFor(cR), baseC=contribFor(bR);
+  // v458: Keeta free-delivery cost, made uniform across every Keeta campaign — Nikhil caught that
+  // only campaigns with a concurrent same-brand+platform sibling (routed through
+  // campParticipationV1/keetaCampWindowStats, the "own-order economics" popup) ever had FD cost
+  // subtracted; a standalone Keeta campaign with no sibling running (e.g. Fyoozhen's, per the
+  // screenshot) fell through to THIS function instead, which never touched FD at all — so its
+  // tile and popup both quietly overstated contribution relative to campaigns that happened to
+  // have a sibling. Fixed HERE, at the source, rather than only in the popup renderer,
+  // specifically so the tile (campCardGrid reads these same totals) and the popup stay identical
+  // — patching only the popup's display would have traded one tile-vs-popup mismatch for another.
+  // Reuses keetaCampWindowStats() exactly as the concurrent-campaign path already does: real
+  // per-order FD from the uploaded Keeta orders file when it covers the window (Keeta's own
+  // "Campaign type" column already tells us, per order, whether free delivery applied — including
+  // whatever net-value floor Keeta itself enforces server-side, so nothing here re-implements that
+  // rule), falling back to the flat AED-2/order estimate only when no exact upload covers the
+  // window. Per Nikhil directly: FD on Keeta is NOT tied to a discount campaign at all — it can
+  // run standalone, entered purely as a sheet comment so it doesn't spawn its own campaign tile
+  // (mergeKeetaFDAddons, solved several builds back) — so this only ever adjusts the FD-cost SIZE
+  // of an EXISTING campaign's own numbers; it does nothing for FD running on days with no campaign
+  // at all, which is a separate, larger question flagged back to Nikhil, not built here. Zero
+  // effect on non-Keeta aggregators — the whole block is gated behind c.aggregator==='Keeta'.
+  let campFD=0,baseFD=0,campFDExact=false;
+  if(c.aggregator==='Keeta'){
+    const campStats=keetaCampWindowStats(c,effStart,effEnd,outletSet);
+    const baseStats=keetaCampWindowStats(c,bStart,bEnd,outletSet);
+    campFD=campStats?campStats.fd:cs.orders*KEETA_FD_COST;
+    baseFD=baseStats?baseStats.fd:bs.orders*KEETA_FD_COST;
+    campFDExact=!!campStats;
+    campC.contribution-=campFD;
+    baseC.contribution-=baseFD;
+  }
   // Allocate this campaign's share of the brand-level daily discount (by branch proportion), with
   // overlap detection. Replaces the raw cs.disc which would double-count when campaigns overlap.
   const alloc=allocateCampaignDiscount(c,effStart,effEnd);
@@ -11957,6 +12010,7 @@ function campAnalysisV2(c){
     coFundedPct,needsCoFundClarity,ourDiscCost,ourDiscPerDay,
     aggInferredCoFund,totalCustomerDisc,
     campContribTotal:campC.contribution,baseContribTotal:baseC.contribution,
+    campFD,baseFD,campFDExact,
     campContribPerDay,baseContribPerDay,incrContribPerDay,incrContribTotal,profitabilityPct,
     ordersLift,salesLift,aovChange,incrOrdersPerDay,incrSalesPerDay,
     discountROI,discPctOfGross,campDisc:allocatedDisc,coFundedDisc:alloc.coFundedDisc||0,rawBrandDisc:cs.disc||0,allocatedDisc,hasOverlap,overlapDays:alloc.overlapDays,branchN:alloc.myN,branchM:alloc.M,
@@ -12045,6 +12099,19 @@ function campRecentWindowAnalysis(c){
     rC.gross=correctedGross;
     rC.contribution=brandContribution(c.aggregator,brandForCost,rC.net,correctedGross,dref,rC.mondayDiscTotal);
   }
+  // v458: same Keeta FD fix as campAnalysisV2 (see that function's comment for the full context)
+  // — this "Last N days" section runs its own separate contribution calc (contribFor2, not
+  // campAnalysisV2's contribFor), so it had the identical gap independently and needed the same
+  // fix applied here too, not just in the main panel above it.
+  let rFD=0,pFD=0;
+  if(c.aggregator==='Keeta'){
+    const rStats=keetaCampWindowStats(c,recentStart,campEnd,outletSet);
+    const pStats=keetaCampWindowStats(c,preStart,preEnd,outletSet);
+    rFD=rStats?rStats.fd:rs.orders*KEETA_FD_COST;
+    pFD=pStats?pStats.fd:ps.orders*KEETA_FD_COST;
+    rC.contribution-=rFD;
+    pC.contribution-=pFD;
+  }
   const isDeliveroo=c.aggregator==='Deliveroo';
   const ourDiscCostR=isDeliveroo?allocatedDiscR*(1-coFundedPct):allocatedDiscR;
   const incrContribTotal=rC.contribution-pC.contribution;
@@ -12054,6 +12121,7 @@ function campRecentWindowAnalysis(c){
   const preConcurrent=campaignData.find(x=>x!==c&&x.brand===c.brand&&x.aggregator===c.aggregator&&!isRewardsCampaign(x)&&x.startDate<=preEnd&&x.endDate>=preStart);
   return{sameAsFullCampaign,N,noData:false,recentStart,recentEnd:campEnd,preStart,preEnd,
     rs,ps,campGross:rC.gross,baseGross:pC.gross,campContribTotal:rC.contribution,baseContribTotal:pC.contribution,
+    campFD:rFD,baseFD:pFD,
     incrContribTotal,ourDiscCost:ourDiscCostR,discountROI,preConcurrent};
 }
 function campAnalysisCached(c){
@@ -13782,6 +13850,7 @@ function buildCampParticipationTipHTML(part,c){
       ${row(`📦 Food/pkg ${(food*100).toFixed(0)}%`,'−'+fA(smFood))}
       <div style="border-top:1px solid #92400E;margin:5px 0 3px"></div>
       ${row('<strong>Contribution</strong>','<strong>'+fA(smAgo.contrib)+'</strong>')}
+      ${row('Contribution %',fmtContribPct(smAgo.contrib,smAgo.net))}
     </div>`;
   }else{
     smAgoPanel=`<div style="background:#1C1917;border:1px solid #92400E;border-radius:8px;padding:10px 12px;margin-bottom:10px"><div style="font-weight:700;color:#FBBF24;font-size:11px;margin-bottom:6px">📅 Same days, last month</div><div style="color:#94a3b8;font-size:10px;font-style:italic;line-height:1.5">Not shown — no matching campaign found for ${c.brand} a month ago${keetaIsResidualCampaign(c)?'':` (this campaign's own item/terms started ${fmtShort(c.startDate)})`}.</div></div>`;
@@ -13811,6 +13880,7 @@ function buildCampParticipationTipHTML(part,c){
         <tr><td style="padding:3px 0;opacity:.75">📦 Food/pkg ${(food*100).toFixed(0)}%</td><td style="text-align:right">−${fA(rFood)}</td><td style="text-align:right">−${fA(pFood)}</td></tr>
         <tr><td colspan="3" style="border-top:1px solid #1E40AF"></td></tr>
         <tr style="font-weight:700"><td style="padding:4px 0">Contribution</td><td style="text-align:right">${fA(rw.recent.contrib)}</td><td style="text-align:right">${fA(rw.pre.contrib)}</td></tr>
+        <tr style="font-size:10.5px;opacity:.85"><td style="padding:2px 0">Contribution %</td><td style="text-align:right">${fmtContribPct(rw.recent.contrib,rw.recent.net)}</td><td style="text-align:right">${fmtContribPct(rw.pre.contrib,rw.pre.net)}</td></tr>
         </table>
         ${preNameNote}
         <div style="border-top:1px solid #1E40AF;margin-top:8px;padding-top:7px"><div style="display:flex;justify-content:space-between;font-size:11.5px"><span style="opacity:.75">Incremental</span><span style="color:${incrClr};font-weight:700">${incr>=0?'+':'−'}${fA(incr)}</span></div></div>
@@ -13833,6 +13903,7 @@ function buildCampParticipationTipHTML(part,c){
     ${row(`📦 Food/pkg ${(food*100).toFixed(0)}% × gross`,'−'+fA(part.gross*food))}
     <div style="border-top:1px solid #92400E;margin:5px 0 3px"></div>
     ${row('<strong>Contribution</strong>','<strong>'+fA(part.contrib)+'</strong>')}
+    ${row('Contribution %',fmtContribPct(part.contrib,part.net))}
   </div>`
   +smAgoPanel
   +(recentBlockHTML?`${recentBlockHTML}<div style="height:2px"></div>`:'')
@@ -13882,11 +13953,13 @@ function buildCampCalcTipHTML(a,c){
     <tr><td></td>${tHead('📅 Campaign to date','#FBBF24',fmtShort(a.effStart)+'→'+fmtShort(a.effEnd))}${tHead('Same dates, last month','#FBBF24',fmtShort(a.bStart)+'→'+fmtShort(a.bEnd))}</tr>
     <tr><td colspan="3" style="border-top:1px solid #92400E;padding-top:4px"></td></tr>
     ${tRow('💰 Net sales',fA(a.cs.sales),fA(a.bs.sales))}
-    ${tRow('🏦 Commission','−'+fA(a.cs.sales-a.campContribTotal-a.campGross*food),'−'+fA(a.bs.sales-a.baseContribTotal-a.baseGross*food))}
+    ${tRow('🏦 Commission','−'+fA(a.cs.sales-a.campContribTotal-a.campGross*food-(a.campFD||0)),'−'+fA(a.bs.sales-a.baseContribTotal-a.baseGross*food-(a.baseFD||0)))}
     ${tRow(`📦 Food/pkg ${+(food*100).toFixed(0)}%`,'−'+fA(a.campGross*food),'−'+fA(a.baseGross*food))}
     ${(a.ourDiscCost>0||baseDisc>0)?tRow('🎟️ Merchant disc.',a.ourDiscCost>0?'−'+fA(a.ourDiscCost):'−AED 0',baseDisc>0?'−'+fA(baseDisc):'−AED 0'):''}
+    ${(a.aggregator==='Keeta'&&(a.campFD>0||a.baseFD>0))?tRow('🚚 Free delivery',a.campFD>0?'−'+fA(a.campFD):'−AED 0',a.baseFD>0?'−'+fA(a.baseFD):'−AED 0'):''}
     <tr><td colspan="3" style="border-top:1px solid #92400E"></td></tr>
     <tr style="font-weight:700"><td style="padding:4px 0">Contribution</td><td style="text-align:right">${fA(a.campContribTotal)}</td><td style="text-align:right">${fA(a.baseContribTotal)}</td></tr>
+    <tr style="font-size:10.5px;opacity:.85"><td style="padding:2px 0">Contribution %</td><td style="text-align:right">${fmtContribPct(a.campContribTotal,a.cs.sales)}</td><td style="text-align:right">${fmtContribPct(a.baseContribTotal,a.bs.sales)}</td></tr>
     </table>`
     +(monthAgoNote?`<div style="margin-top:7px;font-size:10px;line-height:1.5;color:#FCD34D">⚠ Last month also had a promo: ${monthAgoNote} — not a clean comparison.</div>`:'')
     +`<div style="border-top:1px solid #92400E;margin-top:8px;padding-top:7px">`
@@ -13914,11 +13987,13 @@ function buildCampCalcTipHTML(a,c){
         <table style="width:100%;border-collapse:collapse;font-size:11.5px">
         <tr><td></td><td style="text-align:right;padding:0 4px;opacity:.6;font-size:9px">${fmtShort(rw.recentStart)}→${fmtShort(rw.recentEnd)}</td><td style="text-align:right;padding:0 4px;opacity:.6;font-size:9px">${fmtShort(rw.preStart)}→${fmtShort(rw.preEnd)}</td></tr>
         ${tRow('💰 Net sales',fA(rw.rs.sales),fA(rw.ps.sales))}
-        ${tRow('🏦 Commission','−'+fA(rw.rs.sales-rw.campContribTotal-rw.campGross*food),'−'+fA(rw.ps.sales-rw.baseContribTotal-rw.baseGross*food))}
+        ${tRow('🏦 Commission','−'+fA(rw.rs.sales-rw.campContribTotal-rw.campGross*food-(rw.campFD||0)),'−'+fA(rw.ps.sales-rw.baseContribTotal-rw.baseGross*food-(rw.baseFD||0)))}
         ${tRow(`📦 Food/pkg ${+(food*100).toFixed(0)}%`,'−'+fA(rw.campGross*food),'−'+fA(rw.baseGross*food))}
         ${(rw.ourDiscCost>0||(rw.ps.disc||0)>0)?tRow('🎟️ Merchant disc.',rw.ourDiscCost>0?'−'+fA(rw.ourDiscCost):'−AED 0',(rw.ps.disc||0)>0?'−'+fA(rw.ps.disc):'−AED 0'):''}
+        ${(a.aggregator==='Keeta'&&(rw.campFD>0||rw.baseFD>0))?tRow('🚚 Free delivery',rw.campFD>0?'−'+fA(rw.campFD):'−AED 0',rw.baseFD>0?'−'+fA(rw.baseFD):'−AED 0'):''}
         <tr><td colspan="3" style="border-top:1px solid #1E40AF"></td></tr>
         <tr style="font-weight:700"><td style="padding:4px 0">Contribution</td><td style="text-align:right">${fA(rw.campContribTotal)}</td><td style="text-align:right">${fA(rw.baseContribTotal)}</td></tr>
+        <tr style="font-size:10.5px;opacity:.85"><td style="padding:2px 0">Contribution %</td><td style="text-align:right">${fmtContribPct(rw.campContribTotal,rw.rs.sales)}</td><td style="text-align:right">${fmtContribPct(rw.baseContribTotal,rw.ps.sales)}</td></tr>
         </table>
         ${preNote?`<div style="margin-top:7px;font-size:10px;line-height:1.5;color:#93C5FD">⚠ Week before also had a promo: ${preNote} — not a clean comparison.</div>`:''}
         <div style="border-top:1px solid #1E40AF;margin-top:8px;padding-top:7px">
