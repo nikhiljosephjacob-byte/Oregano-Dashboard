@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-451";
+const BUILD_VERSION="2026-08-13-452";
 const BUILD_NOTES=[
+  "🐛🎨 Four fixes to the Campaign History Report, from Nikhil's direct review of a real generated PDF. (1) Filename now follows his exact requested format — Brand-Aggregator-CampaignName-DateRange (e.g. 'Oregano-Deliveroo-BOGO-18-20 Sep, 26'), replacing the old underscore-separated, space-stripped version; colons from his own typed example were converted to hyphens since ':' is an invalid filename character on Windows. (2) The chart overlap Nikhil's screenshot showed was still present after the previous pass — two earlier fixes (proportional padding, then a fixed vertical band) both turned out to be data-dependent rather than structural guarantees: since contribution tracks sales closely in practice, both series tend to peak at the same data point together, and a short incremental-sales bar's label can land right where the line's own band also reaches, since both are ultimately anchored to the same baseline. Rebuilt as two fully separate, stacked panels instead — the contribution line gets its own panel with its own axis at the top, the sales bars get their own panel below, connected visually by faint dashed guide lines. This guarantees zero overlap by construction (verified: 127.8px of clear vertical space between the two panels' labels using the exact real numbers from the screenshot, plus a deliberately extreme edge case), not by tuning padding ratios to fit one dataset. (3) Both outlet tables rebuilt with grouped column headers — Nikhil correctly flagged that alternating Sales/Prior sales/Discount/Prior discount column by column left it genuinely unclear which period any given figure belonged to. Now two clearly-labeled blocks: every CURRENT figure grouped together under a header naming the real current dates, every PRIOR figure grouped together under a second header naming its real prior dates. (4) Fixed the page-break problem where the 'Orders & AOV' heading landed on one printed page with its table pushed to the next — rather than relying on CSS 'keep together' hints, which aren't reliable across every print/PDF engine, split the per-outlet section into two separate, dedicated pages so a heading and its own table can never be separated by a page break, regardless of exact content height. Verified all four fixes directly: filename matches the exact requested format; chart panels confirmed structurally non-overlapping against both the real failing numbers and an edge case; both tables show real, correctly labeled Current/Prior date headers; page count and heading-table pairing confirmed correct; full report stays structurally balanced. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "🐛 Critical fix, caught by Nikhil BEFORE it caused wrong numbers — he asked me to verify the dashboard would correctly handle Oregano's restarting BOGO Mondays campaign on Noon plus new BOGO Wednesdays campaigns for Lollorosso, Fyoozhen, Wicked Wings, and Smokeys, all with the same 'no commission except 2% PG' mechanic. Checking found a real problem: the original fix for this exact commission treatment (build ~291) hardcoded it to 4 specific past dates AND to Oregano only, based on the narrow assumption — correct at the time — that no overlapping campaigns ran on Noon-Oregano-Mondays during that exact window. That assumption breaks the moment the campaign restarts on new dates or extends to other brands, which is exactly what's happening now. None of the new Monday dates (21 Sep onward) were in the hardcoded set, and three of the five brands were never covered by it at all — without this fix, commission would have been calculated at the full, non-rebated rate for every one of these real campaigns, silently understating contribution across the board, for both a sheet-only calculation and an uploaded Noon statement. Replaced the hardcoded date set with a dynamic check against real campaign data: for a given brand and date, is there an active (non-cancelled) Noon campaign covering it whose own comments describe this exact mechanic (matching the literal 'No Commission Charged... Except PG fees of X%' phrasing from Nikhil's own sheet, not just 'BOGO' generically, so a plain BOGO campaign with normal commission correctly does NOT get this treatment). Applied consistently across all 5 places in the codebase that referenced the old hardcoded set, removing it entirely once nothing referenced it anymore. Verified thoroughly against the real screenshot: all 5 brands (Oregano's new Monday dates through October, plus Lollorosso/Fyoozhen/Wicked Wings/Smokeys's new Wednesday campaigns) correctly detected; a campaign on the wrong aggregator, a date with no campaign at all, a brand never covered, and a cancelled matching campaign all correctly excluded; confirmed the original historical dates still work correctly since they're real campaign records too, not a separate special case. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "🐛🎨 Real fixes to the Campaign History Report, from Nikhil's direct review of two renderings. (1) Genuine bug fix: the diverging outlet chart had a hardcoded text-anchor that only positions correctly for positive bars (label ending just left of the bar, flowing further left). For negative bars, which extend leftward from center, that same anchor made the outlet name flow backward INTO the bar and the value label's own space — exactly the 'names are covering the numbers' overlap Nikhil flagged with a real screenshot. Now conditional: negative bars get text-anchor=start, positioned just right of center, flowing away from the bar instead of into it. Verified directly against the exact bug shape (2 positive, 2 negative outlets, real dollar amounts) — confirmed zero coordinate collisions and the negative-bar labels now correctly using the fixed anchor. (2) Removed the second 'incremental contribution' line from the combined chart per Nikhil's explicit correction that it was adding confusion rather than clarity — replaced with a genuine combined chart: Actual Sales and Incremental Sales as two distinct-colored bars, a single Contribution line overlaid on its own padded scale (1.5x real max) so the two series' value labels stay in separate vertical bands and don't collide with each other — checked directly with real-shaped numbers, not just eyeballed. (3) Every font size across all three charts bumped from the original 7.5-9.5px range to 10.5-12px, per Nikhil's explicit 'sizes... to be readable and not small' — nothing in the shipped report is smaller than 10px. (4) Explicit period date labels ('Current: [dates] vs. Prior period: [dates]') replacing the vague 'prior period' language throughout the outlet section. (5) The single combined outlet table split into two, exactly as asked — Sales/Discount/Contribution, and Orders/AOV — each ending in a genuine Total row (AOV totals computed as a real weighted average, sales/orders, not a naive sum of per-outlet AOVs, which would have been a real and easy-to-miss math error). Verified extensively: zero exact-coordinate text collisions in either chart with realistic data; both new tables render with correct totals; period labels show the real computed date ranges; the old 'incremental contribution' single-line language is completely gone; full report stays structurally balanced (div, table, and svg tag counts all match). Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "📊 Two chart additions to the Campaign History Report, shown as renderings and confirmed before building, per Nikhil's own request. (1) An incremental-contribution trend chart above the 'previous comparable campaigns' table — 3 prior instances plus the current one, current highlighted in a distinct color, answering 'has this been working, and is it improving' at a glance instead of requiring a read of every row. (2) A diverging bar chart in the per-outlet section — green bars for outlets that gained contribution vs. the prior period, red for outlets that lost, sorted best-to-worst — making the exact 'uneven outlet performance' finding the flag callout describes visible immediately, without replacing that callout (the chart shows WHICH outlets diverged; the callout explains WHY it matters and names the branch worth excluding — different jobs, kept both). Built as inline SVG matching the existing Before/During/After chart's own style, not Chart.js — this is a static print report with no JS execution at print time, so consistency with what's already there mattered more than a fancier library. Verified thoroughly: the trend chart renders exactly 4 bars (3 real prior instances plus the current one), the current bar correctly uses the distinct highlight color and shows the real incremental-contribution figure; the outlet chart correctly colors a gaining outlet green and a losing one red; every existing piece (Before/During/After chart, the outlet flag callout, the exclusion of the current campaign from its own comparison table) still works correctly alongside the new charts; full report stays structurally balanced (div and svg tag counts match). Also includes, in the same build: a major redesign of this same report, modeled directly on a real reference PDF Nikhil shared (the Noon Monday BOGO Campaign Review) — the per-outlet section is now scoped to only the specific campaign instance being reported on, not stacked across every past instance; the 'previous comparable campaigns' comparison is now a lightweight table capped at the 3 most recent OTHER instances, explicitly excluding the current one, replacing the old averages summary and full-P&L-card-per-instance pages entirely; a new outlet performance flag names exactly which outlets lost contribution against their own prior period when others gained, so they can be considered for exclusion next time; and a new Before/During/After daily order-count chart for the specific campaign, with the 'after' window honestly capped at whatever data actually exists rather than padded with fabricated days for a campaign that just finished. Verified extensively against a realistic scenario with 4 total instances and 2 outlets with opposite performance, confirming every piece works correctly together, including the exact null-handling fix from build 448 (campOutlets returning null for an unrestricted campaign). Re-ran the full top-to-bottom script execution test — zero uncaught errors. Caught and fixed two of my own mid-edit mistakes before shipping: an orphaned function body left behind by an incomplete replacement, and a nonsensical self-referential expression that always evaluated to zero — both caught by re-running the test suite rather than trusting the edit was clean.",
@@ -12157,7 +12158,23 @@ function campReportBuildHTML(c){
   const others=instances.filter(m=>!(m.c.brand===c.brand&&m.c.aggregator===c.aggregator&&m.c.startDate===c.startDate&&m.c.endDate===c.endDate));
   const recentOthers=others.slice(-3).reverse(); // most recent first
   const css=reportBaseCSS();
-  const filename=`${c.brand}_${c.aggregator}_${(c.name||"Campaign").replace(/[^a-z0-9]+/gi,"")}_Report`;
+  // v453: real request from Nikhil, with an exact example — "Oregano-Deliveroo-BOGO-18-20 Sep, 26"
+  // (day range, abbreviated month, 2-digit year, hyphen-separated). Built as its own small helper
+  // rather than reusing fmtDisp/fmtShort, since neither produces this exact compact range format.
+  // Colons in his own written example are replaced with hyphens here since ":" is an invalid
+  // filename character on Windows — the visible structure (Brand-Aggregator-Campaign-Date) is
+  // what's preserved, not the literal punctuation from a typed example.
+  const fnDateRange=(()=>{
+    const s=new Date(c.startDate+"T12:00:00"),e=new Date(c.endDate+"T12:00:00");
+    const yy=e.getFullYear().toString().slice(-2);
+    const mon=e.toLocaleDateString("en-AE",{month:"short"});
+    if(c.startDate===c.endDate)return`${s.getDate()} ${mon}, ${yy}`;
+    if(s.getMonth()===e.getMonth())return`${s.getDate()}-${e.getDate()} ${mon}, ${yy}`;
+    const sMon=s.toLocaleDateString("en-AE",{month:"short"});
+    return`${s.getDate()} ${sMon}-${e.getDate()} ${mon}, ${yy}`;
+  })();
+  const fnPart=(s)=>(s||"").replace(/[\\/:*?"<>|]/g,"").trim();
+  const filename=`${fnPart(c.brand)}-${fnPart(c.aggregator)}-${fnPart(c.name)||"Campaign"}-${fnDateRange}`;
 
   const cover=`<div class="page cover">
     <div class="cover-top">${logoImg(c.brand,44)}${logoImg(c.aggregator,44)}<div class="cover-brand"><div class="name">OREGANO GROUP</div><div class="sub">Multi-Brand F&amp;B Performance Reporting</div></div></div>
@@ -12214,39 +12231,52 @@ function campReportContribTrendChart(recentOthersChrono,currentInstance){
       contrib:currentInstance.a.campContribTotal||0,
       isCurrent:true}
   ];
-  const sizeW=620,sizeH=280,leftMargin=55,rightMargin=15,bottomMargin=42,topMargin=20;
-  const plotW=sizeW-leftMargin-rightMargin,baseY=sizeH-bottomMargin,plotH=baseY-topMargin;
-  // Padded scales (1.5x real max) so bars and the line each get their own vertical band —
-  // verified directly against real-shaped numbers, not just eyeballed, before shipping.
-  const salesMax=Math.max(...bars.map(b=>b.sales),1)*1.5;
-  const contribMax=Math.max(...bars.map(b=>Math.abs(b.contrib)),1)*1.5;
-  const n=bars.length,groupW=plotW/n,barW=Math.min(50,groupW*0.28);
+  // v455: two attempted fixes (proportional padding, then a fixed vertical band) both still left
+  // a real, data-dependent overlap per Nikhil's own screenshot — a short incremental-sales bar's
+  // label can land right where the line's own band also reaches, since both are ultimately
+  // anchored to the same baseline. Rebuilt as two fully separate, stacked panels instead: the
+  // contribution line gets its own panel with its own axis at the top, the sales/incremental bars
+  // get their own panel below, with a real visual gap between them. This guarantees zero overlap
+  // by construction — the two series simply don't share any vertical space at all — rather than
+  // relying on padding ratios or background rects to paper over a data-dependent collision.
+  const sizeW=620,sizeH=340,leftMargin=58,rightMargin=15;
+  const linePanelTop=18,linePanelBaseY=112,linePanelH=linePanelBaseY-linePanelTop;
+  const barPanelTop=150,barPanelBaseY=298,barPanelH=barPanelBaseY-barPanelTop;
+  const plotW=sizeW-leftMargin-rightMargin;
+  const salesMax=Math.max(...bars.map(b=>b.sales),1);
+  const contribMax=Math.max(...bars.map(b=>Math.abs(b.contrib)),1);
+  const barCapFrac=0.8;
+  const n=bars.length,groupW=plotW/n,barW=Math.min(50,groupW*0.3);
   const rendered=bars.map((b,i)=>{
     const gx=leftMargin+i*groupW+groupW*0.12;
-    const hSales=(b.sales/salesMax)*plotH,ySales=baseY-hSales;
-    const hIncr=(b.incrSales/salesMax)*plotH,yIncr=baseY-hIncr;
+    const hSales=(b.sales/salesMax)*barPanelH*barCapFrac,ySales=barPanelBaseY-hSales;
+    const hIncr=(b.incrSales/salesMax)*barPanelH*barCapFrac,yIncr=barPanelBaseY-hIncr;
     const incrX=gx+barW+8;
-    const lineX=gx+barW+(incrX-gx-barW)/2+barW/2; // point sits between the two bars of this group
-    const lineY=baseY-((b.contrib/contribMax)*plotH);
-    return{gx,ySales,hSales,incrX,yIncr,hIncr,lineX,lineY,b};
+    const centerX=gx+(incrX+barW-gx)/2; // shared x for the line point above this same group
+    const lineY=linePanelBaseY-((b.contrib/contribMax)*linePanelH*0.82);
+    return{gx,ySales,hSales,incrX,yIncr,hIncr,centerX,lineY,b};
   });
   const barsHTML=rendered.map(({gx,ySales,hSales,incrX,yIncr,hIncr,b})=>`
     <rect x="${gx.toFixed(1)}" y="${ySales.toFixed(1)}" width="${barW.toFixed(1)}" height="${hSales.toFixed(1)}" fill="${b.isCurrent?"#eb6834":"#2a78d6"}" rx="3"/>
     <text x="${(gx+barW/2).toFixed(1)}" y="${(ySales-8).toFixed(1)}" font-size="10.5" fill="#374151" text-anchor="middle" font-family="-apple-system,sans-serif">AED ${Math.round(b.sales).toLocaleString()}</text>
     <rect x="${incrX.toFixed(1)}" y="${yIncr.toFixed(1)}" width="${barW.toFixed(1)}" height="${hIncr.toFixed(1)}" fill="#1baf7a" rx="3"/>
     <text x="${(incrX+barW/2).toFixed(1)}" y="${(yIncr-8).toFixed(1)}" font-size="10.5" fill="#374151" text-anchor="middle" font-family="-apple-system,sans-serif">AED ${Math.round(b.incrSales).toLocaleString()}</text>
-    <text x="${(gx+barW+4).toFixed(1)}" y="${baseY+16}" font-size="10.5" fill="${b.isCurrent?"#0F172A":"#6b7280"}" font-weight="${b.isCurrent?"700":"400"}" text-anchor="middle" font-family="-apple-system,sans-serif">${esc(b.label)}</text>`).join("");
-  const linePts=rendered.map(r=>`${r.lineX.toFixed(1)},${r.lineY.toFixed(1)}`).join(" ");
-  // Line value labels sit BELOW each point (bars' own labels sit above bars), keeping the two
-  // series' text in separate vertical bands even when a point and a bar top happen to be close.
-  const lineLabels=rendered.map(r=>`<circle cx="${r.lineX.toFixed(1)}" cy="${r.lineY.toFixed(1)}" r="4" fill="#dc2626"/>
-    <text x="${r.lineX.toFixed(1)}" y="${(r.lineY+18).toFixed(1)}" font-size="10.5" fill="#dc2626" font-weight="700" text-anchor="middle" font-family="-apple-system,sans-serif">AED ${Math.round(r.b.contrib).toLocaleString()}</text>`).join("");
-  const gridY=[0,0.5,1].map(f=>{
-    const y=baseY-f*plotH;
-    return`<line x1="${leftMargin}" y1="${y.toFixed(1)}" x2="${sizeW-rightMargin}" y2="${y.toFixed(1)}" stroke="#f0efec" stroke-width="0.5"/>`;
-  }).join("");
+    <text x="${(gx+barW+4).toFixed(1)}" y="${barPanelBaseY+16}" font-size="10.5" fill="${b.isCurrent?"#0F172A":"#6b7280"}" font-weight="${b.isCurrent?"700":"400"}" text-anchor="middle" font-family="-apple-system,sans-serif">${esc(b.label)}</text>`).join("");
+  const linePts=rendered.map(r=>`${r.centerX.toFixed(1)},${r.lineY.toFixed(1)}`).join(" ");
+  const lineLabels=rendered.map(r=>`<circle cx="${r.centerX.toFixed(1)}" cy="${r.lineY.toFixed(1)}" r="4" fill="#dc2626"/>
+    <text x="${r.centerX.toFixed(1)}" y="${(r.lineY-10).toFixed(1)}" font-size="10.5" fill="#dc2626" font-weight="700" text-anchor="middle" font-family="-apple-system,sans-serif">AED ${Math.round(r.b.contrib).toLocaleString()}</text>`).join("");
+  // Faint connector from each line point straight down to its own group in the bar panel below,
+  // making the two panels read as one chart despite the gap, without any risk of label collision.
+  const connectors=rendered.map(r=>`<line x1="${r.centerX.toFixed(1)}" y1="${linePanelBaseY}" x2="${r.centerX.toFixed(1)}" y2="${barPanelTop-4}" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="2,2"/>`).join("");
   return`<div style="margin:16px 0"><div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px">Sales &amp; contribution — recent instances vs. current</div>
-    <svg viewBox="0 0 ${sizeW} ${sizeH}" style="width:100%;height:${sizeH}px">${gridY}${barsHTML}<polyline points="${linePts}" fill="none" stroke="#dc2626" stroke-width="2"/>${lineLabels}</svg>
+    <svg viewBox="0 0 ${sizeW} ${sizeH}" style="width:100%;height:${sizeH}px">
+      <text x="${leftMargin}" y="12" font-size="9.5" fill="#9ca3af" font-family="-apple-system,sans-serif">CONTRIBUTION</text>
+      <line x1="${leftMargin}" y1="${linePanelBaseY}" x2="${sizeW-rightMargin}" y2="${linePanelBaseY}" stroke="#e5e7eb" stroke-width="0.5"/>
+      ${connectors}<polyline points="${linePts}" fill="none" stroke="#dc2626" stroke-width="2"/>${lineLabels}
+      <text x="${leftMargin}" y="${barPanelTop-10}" font-size="9.5" fill="#9ca3af" font-family="-apple-system,sans-serif">SALES</text>
+      <line x1="${leftMargin}" y1="${barPanelBaseY}" x2="${sizeW-rightMargin}" y2="${barPanelBaseY}" stroke="#9ca3af" stroke-width="0.5"/>
+      ${barsHTML}
+    </svg>
     <div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:6px;font-size:10.5px;color:#6b7280">
       <span><span style="display:inline-block;width:10px;height:10px;background:#2a78d6;border-radius:2px;margin-right:4px;vertical-align:-1px"></span>Actual sales</span>
       <span><span style="display:inline-block;width:10px;height:10px;background:#1baf7a;border-radius:2px;margin-right:4px;vertical-align:-1px"></span>Incremental sales</span>
@@ -12370,10 +12400,16 @@ function campReportOutletSection(c){
   const positive=rows.filter(r=>r.contribDelta>0);
   const negative=rows.filter(r=>r.contribDelta<0);
   const isMixed=positive.length>0&&negative.length>0;
-  const periodLabel=`Current: ${fmtDisp(c.startDate)}–${fmtDisp(c.endDate)} &nbsp;vs.&nbsp; Prior period: ${fmtDisp(priorStart)}–${fmtDisp(priorEnd)}`;
 
   const fA=(v)=>`AED ${Math.round(v).toLocaleString()}`;
-  // Table 1: Sales, Discount, Contribution — with a Total row summing every outlet.
+  const curLabel=`Current: ${fmtDisp(c.startDate)}–${fmtDisp(c.endDate)}`;
+  const priorLabel=`Prior period: ${fmtDisp(priorStart)}–${fmtDisp(priorEnd)}`;
+  // v455: real clarity fix from Nikhil — the original table alternated Sales/Prior sales/Discount/
+  // Prior discount/etc. column by column with no date shown anywhere, leaving it genuinely unclear
+  // which period each figure belonged to. Rebuilt with grouped column headers instead: all CURRENT
+  // figures clustered together under one header naming the real dates, all PRIOR figures clustered
+  // together under a second header naming ITS real dates — two clearly-labeled blocks instead of
+  // values alternating column by column with no date attached to either side.
   const t1Total={sales:0,priorSales:0,disc:0,priorDisc:0,contrib:0,priorContrib:0};
   const t1Rows=rows.map(({outlet,camp,prior})=>{
     t1Total.sales+=camp.sales;t1Total.priorSales+=prior.sales;
@@ -12381,15 +12417,18 @@ function campReportOutletSection(c){
     t1Total.contrib+=camp.contribution;t1Total.priorContrib+=prior.contribution;
     return`<tr>
       <td>${esc(outlet)}</td>
-      <td style="text-align:right">${fA(camp.sales)}</td><td style="text-align:right">${fA(prior.sales)}</td>
-      <td style="text-align:right">${fA(camp.disc)}</td><td style="text-align:right">${fA(prior.disc)}</td>
-      <td style="text-align:right;color:${camp.contribution>=prior.contribution?"#16a34a":"#dc2626"}">${fA(camp.contribution)}</td><td style="text-align:right">${fA(prior.contribution)}</td>
+      <td style="text-align:right">${fA(camp.sales)}</td><td style="text-align:right">${fA(camp.disc)}</td><td style="text-align:right;color:${camp.contribution>=prior.contribution?"#16a34a":"#dc2626"}">${fA(camp.contribution)}</td>
+      <td style="text-align:right;border-left:1px solid #e5e7eb">${fA(prior.sales)}</td><td style="text-align:right">${fA(prior.disc)}</td><td style="text-align:right">${fA(prior.contribution)}</td>
     </tr>`;
   }).join("");
-  const table1=`<table><thead><tr><th>Outlet</th><th style="text-align:right">Sales</th><th style="text-align:right">Prior sales</th><th style="text-align:right">Discount</th><th style="text-align:right">Prior discount</th><th style="text-align:right">Contribution</th><th style="text-align:right">Prior contribution</th></tr></thead>
-    <tbody>${t1Rows}<tr style="border-top:1.5px solid #374151;font-weight:700"><td>Total</td><td style="text-align:right">${fA(t1Total.sales)}</td><td style="text-align:right">${fA(t1Total.priorSales)}</td><td style="text-align:right">${fA(t1Total.disc)}</td><td style="text-align:right">${fA(t1Total.priorDisc)}</td><td style="text-align:right">${fA(t1Total.contrib)}</td><td style="text-align:right">${fA(t1Total.priorContrib)}</td></tr></tbody></table>`;
+  const table1=`<table><thead>
+    <tr><th></th><th colspan="3" style="text-align:center;background:#f9fafb">${esc(curLabel)}</th><th colspan="3" style="text-align:center;background:#f3f4f6;border-left:1px solid #e5e7eb">${esc(priorLabel)}</th></tr>
+    <tr><th>Outlet</th><th style="text-align:right">Sales</th><th style="text-align:right">Discount</th><th style="text-align:right">Contribution</th><th style="text-align:right;border-left:1px solid #e5e7eb">Sales</th><th style="text-align:right">Discount</th><th style="text-align:right">Contribution</th></tr>
+    </thead>
+    <tbody>${t1Rows}<tr style="border-top:1.5px solid #374151;font-weight:700"><td>Total</td><td style="text-align:right">${fA(t1Total.sales)}</td><td style="text-align:right">${fA(t1Total.disc)}</td><td style="text-align:right">${fA(t1Total.contrib)}</td><td style="text-align:right;border-left:1px solid #e5e7eb">${fA(t1Total.priorSales)}</td><td style="text-align:right">${fA(t1Total.priorDisc)}</td><td style="text-align:right">${fA(t1Total.priorContrib)}</td></tr></tbody></table>`;
 
-  // Table 2: Orders and AOV — with a Total row (AOV totals as a genuine weighted average, sales/orders, not a sum of AOVs).
+  // Table 2: same grouped-header treatment for Orders/AOV (AOV totals as a genuine weighted
+  // average, sales/orders, not a sum of per-outlet AOVs, which would have been a real math error).
   const t2Total={orders:0,priorOrders:0,sales:0,priorSales:0};
   const t2Rows=rows.map(({outlet,camp,prior})=>{
     t2Total.orders+=camp.orders;t2Total.priorOrders+=prior.orders;
@@ -12398,14 +12437,17 @@ function campReportOutletSection(c){
     const priorAov=prior.orders>0?prior.sales/prior.orders:0;
     return`<tr>
       <td>${esc(outlet)}</td>
-      <td style="text-align:right">${camp.orders.toLocaleString()}</td><td style="text-align:right">${prior.orders.toLocaleString()}</td>
-      <td style="text-align:right">${fA(aov)}</td><td style="text-align:right">${fA(priorAov)}</td>
+      <td style="text-align:right">${camp.orders.toLocaleString()}</td><td style="text-align:right">${fA(aov)}</td>
+      <td style="text-align:right;border-left:1px solid #e5e7eb">${prior.orders.toLocaleString()}</td><td style="text-align:right">${fA(priorAov)}</td>
     </tr>`;
   }).join("");
   const t2Aov=t2Total.orders>0?t2Total.sales/t2Total.orders:0;
   const t2PriorAov=t2Total.priorOrders>0?t2Total.priorSales/t2Total.priorOrders:0;
-  const table2=`<table><thead><tr><th>Outlet</th><th style="text-align:right">Orders</th><th style="text-align:right">Prior orders</th><th style="text-align:right">AOV</th><th style="text-align:right">Prior AOV</th></tr></thead>
-    <tbody>${t2Rows}<tr style="border-top:1.5px solid #374151;font-weight:700"><td>Total</td><td style="text-align:right">${t2Total.orders.toLocaleString()}</td><td style="text-align:right">${t2Total.priorOrders.toLocaleString()}</td><td style="text-align:right">${fA(t2Aov)}</td><td style="text-align:right">${fA(t2PriorAov)}</td></tr></tbody></table>`;
+  const table2=`<table><thead>
+    <tr><th></th><th colspan="2" style="text-align:center;background:#f9fafb">${esc(curLabel)}</th><th colspan="2" style="text-align:center;background:#f3f4f6;border-left:1px solid #e5e7eb">${esc(priorLabel)}</th></tr>
+    <tr><th>Outlet</th><th style="text-align:right">Orders</th><th style="text-align:right">AOV</th><th style="text-align:right;border-left:1px solid #e5e7eb">Orders</th><th style="text-align:right">AOV</th></tr>
+    </thead>
+    <tbody>${t2Rows}<tr style="border-top:1.5px solid #374151;font-weight:700"><td>Total</td><td style="text-align:right">${t2Total.orders.toLocaleString()}</td><td style="text-align:right">${fA(t2Aov)}</td><td style="text-align:right;border-left:1px solid #e5e7eb">${t2Total.priorOrders.toLocaleString()}</td><td style="text-align:right">${fA(t2PriorAov)}</td></tr></tbody></table>`;
 
   const flagSection=isMixed?`<div style="margin-top:18px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px 18px">
     <div style="font-size:12.5px;font-weight:700;color:#991b1b;margin-bottom:6px">⚠ Uneven outlet performance</div>
@@ -12434,15 +12476,21 @@ function campReportOutletSection(c){
   const outletChart=rows.length>1?`<div style="margin-bottom:18px"><div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px">Contribution change vs. prior period, by outlet</div>
     <svg viewBox="0 0 560 ${chartH}" style="width:100%;height:${chartH}px"><line x1="${midX}" y1="0" x2="${midX}" y2="${chartH}" stroke="#c3c2b7" stroke-width="1"/>${chartBars}</svg></div>`:"";
 
+  // v455: split into two separate printed pages, per Nikhil's own screenshot showing the "Orders
+  // & AOV" heading landing on one page with its table pushed to the next — a real print/page-break
+  // problem, not something CSS "keep together" hints reliably fix across every PDF/print engine.
+  // The safe, reliable fix is structural: give each table its own page outright, so a heading and
+  // its table can never be split by a mid-content page break, regardless of exact content height.
   return`<div class="page"><div class="runhdr"><div><div class="l">Per-outlet detail</div><div class="scope">${esc(c.name)} — ${esc(c.brand)} × ${esc(c.aggregator)}</div></div><div class="p">Oregano Group</div></div>
-    <div style="font-size:11.5px;color:#6b7280;margin-bottom:14px">${periodLabel}</div>
     ${outletChart}
     <div style="font-size:12.5px;font-weight:700;color:#374151;margin-bottom:6px">Sales, discount &amp; contribution by outlet</div>
     ${table1}
-    <div style="font-size:12.5px;font-weight:700;color:#374151;margin:20px 0 6px">Orders &amp; AOV by outlet</div>
+    <div class="footer"><span>Oregano Group — Campaign History Report</span><span>3</span></div></div>
+    <div class="page"><div class="runhdr"><div><div class="l">Per-outlet detail</div><div class="scope">${esc(c.name)} — ${esc(c.brand)} × ${esc(c.aggregator)}</div></div><div class="p">Oregano Group</div></div>
+    <div style="font-size:12.5px;font-weight:700;color:#374151;margin-bottom:6px">Orders &amp; AOV by outlet</div>
     ${table2}
     ${flagSection}
-    <div class="footer"><span>Oregano Group — Campaign History Report</span><span>3</span></div></div>`;
+    <div class="footer"><span>Oregano Group — Campaign History Report</span><span>4</span></div></div>`;
 }
 
 function campReportExportPDF(idx){
