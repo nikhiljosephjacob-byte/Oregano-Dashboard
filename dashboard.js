@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-452";
+const BUILD_VERSION="2026-08-13-453";
 const BUILD_NOTES=[
+  "🐛 Three real, connected bugs fixed, caught by Nikhil from an actual generated report. (1) Day-of-week mismatch: 'immediately preceding N days' walked back N raw calendar days regardless of weekday — his real example was a Fri-Sun campaign whose 'prior period' came out as Tue-Thu, which is not a fair baseline for an F&B business with genuine weekly seasonality (weekends are naturally busier independent of any campaign). Fixed in both the outlet section and the Before/During/After chart's before/after windows: now the same date range, exactly one week earlier/later, so weekday composition always matches — verified directly against the real dates (Fri 18 Sep correctly compares to Fri 11 Sep, not Tue 15 Sep). (2) The current campaign's own numbers were missing from the 'previous comparable campaigns' table entirely — visible only in the chart above it, even though it's the actual subject of the report. Now included as its own clearly-marked row. (3) Raw totals aren't a fair comparison across campaigns of different lengths, per Nikhil's own correct instinct — a longer prior campaign will obviously show bigger totals even if it performed worse per day. Every relevant column (Orders, Sales, Incr. contribution) now shows the per-day figure alongside the total. Verified with a realistic case designed to prove the fix actually works: a 7-day prior campaign and a 3-day current campaign with deliberately identical per-day performance both now correctly show 'AED 5,000/day' — the apples-to-apples comparison Nikhil asked for, not just a cosmetic label change. Also fixed: the 'Why did profitability change' popup's 'CPC/Keywords cost' label, which predated Shoppable Banner and no longer described the real ad-type mix — changed to the generic 'Ad Investment cost,' Nikhil's own explicit alternative, since determining the exact type mix contributing to a given cost figure would need deeper logic than a label rename. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "🐛🎨 Four fixes to the Campaign History Report, from Nikhil's direct review of a real generated PDF. (1) Filename now follows his exact requested format — Brand-Aggregator-CampaignName-DateRange (e.g. 'Oregano-Deliveroo-BOGO-18-20 Sep, 26'), replacing the old underscore-separated, space-stripped version; colons from his own typed example were converted to hyphens since ':' is an invalid filename character on Windows. (2) The chart overlap Nikhil's screenshot showed was still present after the previous pass — two earlier fixes (proportional padding, then a fixed vertical band) both turned out to be data-dependent rather than structural guarantees: since contribution tracks sales closely in practice, both series tend to peak at the same data point together, and a short incremental-sales bar's label can land right where the line's own band also reaches, since both are ultimately anchored to the same baseline. Rebuilt as two fully separate, stacked panels instead — the contribution line gets its own panel with its own axis at the top, the sales bars get their own panel below, connected visually by faint dashed guide lines. This guarantees zero overlap by construction (verified: 127.8px of clear vertical space between the two panels' labels using the exact real numbers from the screenshot, plus a deliberately extreme edge case), not by tuning padding ratios to fit one dataset. (3) Both outlet tables rebuilt with grouped column headers — Nikhil correctly flagged that alternating Sales/Prior sales/Discount/Prior discount column by column left it genuinely unclear which period any given figure belonged to. Now two clearly-labeled blocks: every CURRENT figure grouped together under a header naming the real current dates, every PRIOR figure grouped together under a second header naming its real prior dates. (4) Fixed the page-break problem where the 'Orders & AOV' heading landed on one printed page with its table pushed to the next — rather than relying on CSS 'keep together' hints, which aren't reliable across every print/PDF engine, split the per-outlet section into two separate, dedicated pages so a heading and its own table can never be separated by a page break, regardless of exact content height. Verified all four fixes directly: filename matches the exact requested format; chart panels confirmed structurally non-overlapping against both the real failing numbers and an edge case; both tables show real, correctly labeled Current/Prior date headers; page count and heading-table pairing confirmed correct; full report stays structurally balanced. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "🐛 Critical fix, caught by Nikhil BEFORE it caused wrong numbers — he asked me to verify the dashboard would correctly handle Oregano's restarting BOGO Mondays campaign on Noon plus new BOGO Wednesdays campaigns for Lollorosso, Fyoozhen, Wicked Wings, and Smokeys, all with the same 'no commission except 2% PG' mechanic. Checking found a real problem: the original fix for this exact commission treatment (build ~291) hardcoded it to 4 specific past dates AND to Oregano only, based on the narrow assumption — correct at the time — that no overlapping campaigns ran on Noon-Oregano-Mondays during that exact window. That assumption breaks the moment the campaign restarts on new dates or extends to other brands, which is exactly what's happening now. None of the new Monday dates (21 Sep onward) were in the hardcoded set, and three of the five brands were never covered by it at all — without this fix, commission would have been calculated at the full, non-rebated rate for every one of these real campaigns, silently understating contribution across the board, for both a sheet-only calculation and an uploaded Noon statement. Replaced the hardcoded date set with a dynamic check against real campaign data: for a given brand and date, is there an active (non-cancelled) Noon campaign covering it whose own comments describe this exact mechanic (matching the literal 'No Commission Charged... Except PG fees of X%' phrasing from Nikhil's own sheet, not just 'BOGO' generically, so a plain BOGO campaign with normal commission correctly does NOT get this treatment). Applied consistently across all 5 places in the codebase that referenced the old hardcoded set, removing it entirely once nothing referenced it anymore. Verified thoroughly against the real screenshot: all 5 brands (Oregano's new Monday dates through October, plus Lollorosso/Fyoozhen/Wicked Wings/Smokeys's new Wednesday campaigns) correctly detected; a campaign on the wrong aggregator, a date with no campaign at all, a brand never covered, and a cancelled matching campaign all correctly excluded; confirmed the original historical dates still work correctly since they're real campaign records too, not a separate special case. Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
   "🐛🎨 Real fixes to the Campaign History Report, from Nikhil's direct review of two renderings. (1) Genuine bug fix: the diverging outlet chart had a hardcoded text-anchor that only positions correctly for positive bars (label ending just left of the bar, flowing further left). For negative bars, which extend leftward from center, that same anchor made the outlet name flow backward INTO the bar and the value label's own space — exactly the 'names are covering the numbers' overlap Nikhil flagged with a real screenshot. Now conditional: negative bars get text-anchor=start, positioned just right of center, flowing away from the bar instead of into it. Verified directly against the exact bug shape (2 positive, 2 negative outlets, real dollar amounts) — confirmed zero coordinate collisions and the negative-bar labels now correctly using the fixed anchor. (2) Removed the second 'incremental contribution' line from the combined chart per Nikhil's explicit correction that it was adding confusion rather than clarity — replaced with a genuine combined chart: Actual Sales and Incremental Sales as two distinct-colored bars, a single Contribution line overlaid on its own padded scale (1.5x real max) so the two series' value labels stay in separate vertical bands and don't collide with each other — checked directly with real-shaped numbers, not just eyeballed. (3) Every font size across all three charts bumped from the original 7.5-9.5px range to 10.5-12px, per Nikhil's explicit 'sizes... to be readable and not small' — nothing in the shipped report is smaller than 10px. (4) Explicit period date labels ('Current: [dates] vs. Prior period: [dates]') replacing the vague 'prior period' language throughout the outlet section. (5) The single combined outlet table split into two, exactly as asked — Sales/Discount/Contribution, and Orders/AOV — each ending in a genuine Total row (AOV totals computed as a real weighted average, sales/orders, not a naive sum of per-outlet AOVs, which would have been a real and easy-to-miss math error). Verified extensively: zero exact-coordinate text collisions in either chart with realistic data; both new tables render with correct totals; period labels show the real computed date ranges; the old 'incremental contribution' single-line language is completely gone; full report stays structurally balanced (div, table, and svg tag counts all match). Re-ran the full top-to-bottom script execution test — zero uncaught errors.",
@@ -1064,7 +1065,7 @@ function buildProfitabilityTipHTML(bd,labelA,labelB){
     ${cellRow('','Net sales',fAed(bd.grossA-bd.discA),fAed(bd.grossB-bd.discB),true)}
     ${cellRow('🏦','Commission','−'+fAed(bd.commA),'−'+fAed(bd.commB))}
     ${cellRow('📦','Food/pkg cost','−'+fAed(bd.foodA),'−'+fAed(bd.foodB))}
-    ${cellRow('📣','CPC/Keywords cost','−'+fAed(bd.adCostA||0),'−'+fAed(bd.adCostB||0))}
+    ${cellRow('📣','Ad Investment cost','−'+fAed(bd.adCostA||0),'−'+fAed(bd.adCostB||0))}
     ${cellRow('','Net Contribution','AED '+fAed(bd.contribA),'AED '+fAed(bd.contribB),false,true)}
     </table>`;
   const netChangeBox=`<div style="display:flex;justify-content:space-between;align-items:center;background:${totalDelta>=0?'rgba(46,204,113,.1)':'rgba(239,68,68,.1)'};border-radius:8px;padding:9px 11px;margin-bottom:13px">
@@ -12182,24 +12183,35 @@ function campReportBuildHTML(c){
       <div class="cover-scope-box">${esc(c.startDate)} → ${esc(c.endDate)}${others.length?` · ${others.length} prior instance${others.length!==1?"s":""} on record`:" · first time this campaign has run"}</div></div>
     <div class="cover-bottom"><span>Generated ${fmtDisp(dk(new Date()))}</span><span>Confidential — Internal Use Only</span></div></div>`;
 
-  // v449: table trimmed to exactly what Nikhil asked for — Days, Orders, Sales, Discount,
-  // Contribution per prior instance — a quick "has this worked before" read, not a full P&L
-  // substitute (the previous, heavier per-instance P&L cards are removed; the outlet-level detail
-  // that follows is now scoped to just the current instance instead).
-  const priorTableRows=recentOthers.map(m=>`<tr>
-      <td>${esc(m.c.startDate)} – ${esc(m.c.endDate)}</td>
-      <td>${m.a.cs?daysBetweenInclusive(m.c.startDate,m.c.endDate):"—"}</td>
-      <td>${m.a.cs?Math.round(m.a.cs.orders).toLocaleString():"—"}</td>
-      <td>AED ${m.a.cs?Math.round(m.a.cs.sales).toLocaleString():"—"}</td>
+  // v456: two real fixes from Nikhil. (1) The current campaign's own numbers didn't appear in
+  // this table at all — only in the chart above it — even though it's the actual subject of the
+  // report; now included as its own clearly-marked row. (2) Raw totals aren't a fair comparison
+  // across campaigns of different lengths (his own example: a longer prior campaign will obviously
+  // show bigger totals even if it performed worse per day) — every relevant column now shows the
+  // per-day figure alongside the total, so a 2-day campaign and a 7-day campaign are genuinely
+  // comparable rather than one structurally dwarfing the other just by running longer.
+  const fmtTotalPerDay=(total,days,isMoney)=>{
+    const perDay=days>0?total/days:0;
+    const f=(v)=>isMoney?`AED ${Math.round(v).toLocaleString()}`:Math.round(v).toLocaleString();
+    return`${f(total)} <span style="color:#9ca3af;font-size:10px">(${f(perDay)}/day)</span>`;
+  };
+  const rowHTML=(m,isCurrent)=>{
+    const d=m.a.cs?daysBetweenInclusive(m.c.startDate,m.c.endDate):0;
+    return`<tr${isCurrent?' style="background:#fff7ed;font-weight:700"':""}>
+      <td>${isCurrent?"Current — ":""}${esc(m.c.startDate)} – ${esc(m.c.endDate)}</td>
+      <td>${d||"—"}</td>
+      <td>${m.a.cs?fmtTotalPerDay(m.a.cs.orders,d,false):"—"}</td>
+      <td>${m.a.cs?fmtTotalPerDay(m.a.cs.sales,d,true):"—"}</td>
       <td>AED ${Math.round(m.a.ourDiscCost||0).toLocaleString()}</td>
-      <td style="color:${(m.a.incrContribTotal||0)>=0?"#16a34a":"#dc2626"}">${(m.a.incrContribTotal||0)>=0?"+":""}AED ${Math.round(m.a.incrContribTotal||0).toLocaleString()}</td>
-    </tr>`).join("");
+      <td style="color:${(m.a.incrContribTotal||0)>=0?"#16a34a":"#dc2626"}">${fmtTotalPerDay(m.a.incrContribTotal||0,d,true)}</td>
+    </tr>`;
+  };
   const currentInstance=instances.find(m=>m.c.brand===c.brand&&m.c.aggregator===c.aggregator&&m.c.startDate===c.startDate&&m.c.endDate===c.endDate);
-  const priorSection=recentOthers.length?`<div class="sec-title">Previous comparable campaigns</div>
-    <div class="sec-sub">${recentOthers.length} most recent — has this campaign worked before?</div>
-    ${currentInstance?campReportContribTrendChart([...recentOthers].reverse(),currentInstance):""}
-    <table><thead><tr><th>Dates</th><th>Days</th><th>Orders</th><th>Sales</th><th>Discount</th><th>Incr. contribution</th></tr></thead><tbody>${priorTableRows}</tbody></table>`
-    :`<div class="sec-title">Previous comparable campaigns</div><div class="sec-sub">None found — this is the first recorded run of this exact campaign.</div>`;
+  const priorTableRows=recentOthers.map(m=>rowHTML(m,false)).join("")+(currentInstance?rowHTML(currentInstance,true):"");
+  const priorSection=`<div class="sec-title">Previous comparable campaigns</div>
+    <div class="sec-sub">${recentOthers.length?`${recentOthers.length} most recent, plus the current campaign — has this worked before, on a fair per-day basis?`:"No prior instances found — this is the first recorded run of this exact campaign. Current campaign shown below."}</div>
+    ${(recentOthers.length&&currentInstance)?campReportContribTrendChart([...recentOthers].reverse(),currentInstance):""}
+    <table><thead><tr><th>Dates</th><th>Days</th><th>Orders (total, per day)</th><th>Sales (total, per day)</th><th>Discount</th><th>Incr. contribution (total, per day)</th></tr></thead><tbody>${priorTableRows}</tbody></table>`;
 
   const p2=`<div class="page"><div class="runhdr"><div><div class="l">Summary</div><div class="scope">${esc(c.name)} — ${esc(c.brand)} × ${esc(c.aggregator)}</div></div><div class="p">Oregano Group · Page 2</div></div>
     ${priorSection}
@@ -12292,11 +12304,16 @@ function campReportContribTrendChart(recentOthersChrono,currentInstance){
 // actually exists up to `latest`, since a just-finished campaign may not have a full "after"
 // window yet — shown honestly as fewer bars rather than padded with fabricated zero-days.
 function campReportBeforeDuringAfterChart(c){
-  const days=daysBetweenInclusive(c.startDate,c.endDate);
-  const beforeEnd=subDays(c.startDate,1);
-  const beforeStart=subDays(c.startDate,days);
-  const afterStartRaw=subDays(c.endDate,-1);
-  const afterEndRaw=subDays(c.endDate,-days);
+  // v456: same real fix as the outlet section — "immediately preceding/following N days" lands
+  // on different weekdays than the campaign, which isn't a fair comparison for an F&B business
+  // with real weekly seasonality. Before/After windows are now the same date range, exactly one
+  // week earlier/later, so weekday composition always matches — consistent with the fix Nikhil
+  // asked for on the outlet tables, and matching how his own reference PDF compared week-over-week
+  // on the same weekday rather than any N raw preceding days.
+  const beforeStart=subDays(c.startDate,7);
+  const beforeEnd=subDays(c.endDate,7);
+  const afterStartRaw=subDays(c.startDate,-7);
+  const afterEndRaw=subDays(c.endDate,-7);
   const afterEnd=afterEndRaw>latest?latest:afterEndRaw;
   const hasAfter=afterStartRaw<=latest;
 
@@ -12388,9 +12405,14 @@ function campReportOutletSection(c){
   const scope=campOutlets(c)||new Set(allData.filter(r=>r.brand===c.brand).map(r=>r.branch).filter(b=>b!=="(brand-level)"));
   const outlets=[...scope].sort();
   if(!outlets.length)return"";
-  const days=daysBetweenInclusive(c.startDate,c.endDate);
-  const priorEnd=subDays(c.startDate,1);
-  const priorStart=subDays(c.startDate,days);
+  // v456: real bug caught by Nikhil — "immediately preceding N days" lands on different weekdays
+  // than the campaign itself (his real example: campaign Fri-Sun, prior period came out Tue-Thu),
+  // which is not a fair baseline for an F&B business with real weekly seasonality — weekends are
+  // naturally busier regardless of any campaign, so comparing a weekend campaign against a weekday
+  // baseline overstates the apparent lift. Fixed to the same date range, exactly one week earlier,
+  // so the weekday composition always matches.
+  const priorStart=subDays(c.startDate,7);
+  const priorEnd=subDays(c.endDate,7);
   const rows=outlets.map(outlet=>{
     const camp=campReportOutletPL(c.brand,c.aggregator,outlet,c.startDate,c.endDate);
     const prior=campReportOutletPL(c.brand,c.aggregator,outlet,priorStart,priorEnd);
@@ -12403,7 +12425,7 @@ function campReportOutletSection(c){
 
   const fA=(v)=>`AED ${Math.round(v).toLocaleString()}`;
   const curLabel=`Current: ${fmtDisp(c.startDate)}–${fmtDisp(c.endDate)}`;
-  const priorLabel=`Prior period: ${fmtDisp(priorStart)}–${fmtDisp(priorEnd)}`;
+  const priorLabel=`Prior period (same days, 1 week earlier): ${fmtDisp(priorStart)}–${fmtDisp(priorEnd)}`;
   // v455: real clarity fix from Nikhil — the original table alternated Sales/Prior sales/Discount/
   // Prior discount/etc. column by column with no date shown anywhere, leaving it genuinely unclear
   // which period each figure belonged to. Rebuilt with grouped column headers instead: all CURRENT
