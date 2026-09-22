@@ -13,13 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-460";
+const BUILD_VERSION="2026-08-13-461";
 const BUILD_NOTES=[
+  "🔧 Two REAL root causes, not more guessing. (1) KPI count-up 'didn't work at all' — because renderOverview() doesn't actually use the .kpi/.v markup the animation was built for; it uses a completely different helper, kpiCard(), whose value div had NO class at all. querySelectorAll('.kpi .v') found zero elements on the actual page Nikhil was looking at, so nothing ever animated — not a speed problem, a wrong-selector problem. Added a kpi-value-num class to kpiCard()'s own value div and widened animateKpiCountUp's selector to catch both patterns. Also fixed a real regression this surfaced: some KPI values (fmtAEDTip's abbreviated AED figures) come wrapped in a hover-tooltip <span title='exact figure'>, which the animation's old textContent-only landing was silently stripping every single time it ran — now captures innerHTML up front and restores THAT at the end, not textContent, so the tooltip survives. Verified both: a mock kpiCard-shaped element now animates correctly, and a tooltip-wrapped value comes out byte-identical after the animation completes. (2) Hourglass position/size, per Nikhil directly ('after the S in Campaigns', 'after the E in Ads Performance', 'too small to notice') — two prior guesses (a fixed top/right offset, then inside the segment bar) both missed because neither actually looked at the label's real text position, which this file has no visibility into (the sidebar HTML lives outside dashboard.js). New insertHourglassAfterLabel() does what buildSidebarNav() already does for this exact same blind spot: walks the tab's actual text nodes via TreeWalker, finds the one that IS the label ('Campaigns' / 'Ads Performance'), and inserts immediately after it — so it lands in the right place regardless of unknown surrounding markup, instead of a third coordinate guess. Bumped 9px→16px. Verified against two different plausible tab structures (label as its own wrapped span, and as a raw text node with no wrapper) — lands correctly in both. Full script execution re-run clean throughout.",
   "🔧 Two real bugs from Nikhil's very next screenshot, both same-day. (1) KPI count-up 'didn't work at all' — because it was hooked into gp(), the tab-CLICK handler, but gp() is only one of several callers of the shared renderPage() dispatcher: fApply/fToggle/fClear (filters), sortTableBy, dismissRec/undismissRec, and critically the very FIRST render on initial dashboard load all call renderPage(curPage) directly, bypassing gp() entirely. So the animation only had a chance to fire if someone clicked a DIFFERENT nav tab and back — never on first load, never after a filter, never after sorting. Exact same class of bug as the existing v286 tooltip fix in this same function (initCalcTip similarly tucked into one incidental caller instead of the shared dispatcher) — same fix: moved the hook to renderPage() itself, the one function every repaint actually funnels through. Verified for real this time: called renderPage() directly (not gp()) with a fake page name matching none of the dispatch branches, confirmed the setTimeout still fires and animateKpiCountUp still queues a real animation frame — proving the hook no longer depends on which caller triggered the render. (2) Hourglass misaligned, per screenshot — it was a separate absolutely-positioned element guessing its own top:2px;right:3px on the tab, landing disconnected from the row, floating above it near the previous row's boundary. Rebuilt as one more flex child INSIDE the segments bar itself (align-items:flex-end) — the one piece of this whole indicator already proven to render in the right place, since it's the visible green bar in Nikhil's own screenshot — instead of a second guessed offset. Full script execution re-run clean; (2) still needs Nikhil's eyes on the real page, same caveat as last build for anything Chart.js/CSS-rendering that this sandbox can't visually confirm.",
   "🎬 Page-open animation pass, per Nikhil's explicit sign-off on three separate interactive demos (not built blind): (1) KPI numbers now count up smoothly from 0 on every page (his pick over three other options shown — specifically NOT the flight-board/digit-roll style from the first demo, which he disliked). New animateKpiCountUp(), hooked into gp() so it applies uniformly wherever the shared .kpi/.v markup is used, not just Overview — parses the already-rendered final text (handles 'AED 612,480', '18,420', '33.2%', negatives) and counts up in place, landing on the exact original string so no formatting is lost; anything that doesn't parse as a clean number is left untouched rather than risking a fabricated value. (2) Line charts now draw left-to-right over 3.2s with no leading dot (his approved tweak — slower than the original 1.4s demo, dot removed) — Chart.js's own default only animates points rising vertically, not a true start-to-end draw, so this needed a real plugin: clips the plotting area to a widening horizontal sliver, driven by the SAME animation's onProgress/onComplete so it can't drift out of sync with the real duration. (3) Bars grow up one after another (dataIndex*90ms stagger) — the very first demo's behavior, approved unchanged throughout, using Chart.js's own documented per-element delay pattern. Also folded in the hourglass loading icon (flips on the Campaigns/Ads nav tabs while loading, removed the same moment the existing green segments clear) — approved as its own standalone mockup earlier in this same round. Verified (1) with a real functional test: drove requestAnimationFrame manually frame-by-frame, confirmed a genuine partial value mid-flight (not a jump), confirmed every element lands on its exact original string, confirmed a non-numeric '—' value is left completely untouched. (2) and (3) are Chart.js internals (animation config merging, canvas clip timing) this sandbox can't render — verified the setup code itself runs clean against a Chart.js-shaped mock (Chart.defaults.datasets.line/bar.animation come out with exactly the expected keys) but the actual on-screen look needs Nikhil's eyes on the real dashboard. Full script execution re-run clean throughout.",
   "🔧 Three fixes from one round of Nikhil screenshots. (1) Keeta free-delivery cost made uniform — only campaigns with a concurrent same-brand+platform sibling (Oregano's case) ever had FD subtracted, via campParticipationV1/keetaCampWindowStats; a standalone Keeta campaign (Fyoozhen's case) fell through to campAnalysisV2/campRecentWindowAnalysis instead, which never touched FD at all. Fixed at the source in both functions (not just the popup renderer) so the tile and popup stay identical — reuses keetaCampWindowStats() exactly as the concurrent path already does: real per-order FD from an uploaded Keeta orders file when it covers the window (Keeta's own 'Campaign type' column already tells us per order, so nothing re-implements Nikhil's stated >AED25 net-value floor — Keeta's own export already reflects it), flat AED2/order estimate otherwise. Confirmed FD is Keeta-only per Nikhil directly — other aggregators don't carry this cost, and FD itself isn't tied to any discount campaign (it's a standalone conversion lever entered as a sheet comment so it doesn't spawn its own campaign tile, solved several builds back) — so FD running on days with NO campaign at all still isn't captured anywhere; flagged back to Nikhil as a separate, larger question, not built here. (2) Contribution % added to both comparison panels in the standard campaign popup (Campaign to date/Same days last month, and Last N days) — reused the existing fmtContribPct() helper, which turned out to already be wired into the OTHER (Keeta-exact) popup but not this one, hence Nikhil seeing it in one popup and not the other. (3) The What's New popup's OK button being unclickable right after load, reported again after the v188 band-aid (flat 2800ms delay) — replaced with requestIdleCallback (6000ms ceiling, falls back to the same 2800ms on Safari) so the popup waits for the main thread to actually be free instead of guessing a fixed delay that a bigger dataset can outlast. Verified (1) and (2) with functional tests against real mock order/sales data — exact-FD path, fallback-estimate path, and a non-Keeta regression check confirming zero effect outside Keeta. (3) is a diagnosis-driven fix Node can't fully exercise (real main-thread contention) — needs Nikhil's confirmation on the real dashboard. Full script execution re-run clean throughout.",
-  "🧹 Trimmed BUILD_NOTES from 17 entries down to the most recent 5, per Nikhil asking again (\"do we need them all? it's too long\") even after the build-454 trim to 15 — 15 apparently wasn't short enough. Cut harder this time since the reasoning for why ANY of this is safe to remove hasn't changed: the What's New popup only ever reads BUILD_NOTES.slice(0,1) (build 401), so nothing past the very first entry is read by the live app, ever — this array exists purely as a build changelog for future-Claude's own benefit, not user-facing content. If older history is ever needed, it is NOT gone: every past build note still exists in this project's conversation history and can be pulled back up by asking, without needing to keep it loaded in the shipped file on every page load. Extracted and rebuilt with the same bracket-matching parse as the two prior trims (build 454/455), not a naive split, to avoid corrupting any entry containing a comma, quote, or emoji.",
-  "📊 Forecast Accuracy export, made complete — two real gaps Nikhil caught by directly asking 'does this cover ALL previously forecasted campaigns, and does it have ALL the data needed to compare against actual performance?' On completeness: confirmed and documented, not silently assumed — campFcHistory is exactly whatever GET /api/forecast/list returns with zero client-side slicing anywhere in the load path (campFcLoadHistory() → campFcHistory=data.records, no limit/offset applied), so the export already covers every forecast the account has saved; flagged honestly that the endpoint's own server-side behavior isn't visible from this file, same discipline as every other backend-dependent assumption already flagged elsewhere in this project. On data completeness: this was a real, confirmed gap — build 455 only exported the two numbers campFcMatchActual() itself returns (actualUpliftPct, actualROI), matching what the on-screen table shows, but the table was only ever built for a quick glance, not a full comparison, and the forecast side had the same problem — everything from the saved scenarios.expected payload got dropped except uplift% and ROI, even though Campaign Planner computed real absolute orders/sales/discount/contribution numbers at save time. Fixed by calling campAnalysisV2(match.c) directly for every matched row — the same real analysis campFcMatchActual() already runs internally, just not previously exposed — now pulling actual orders/day, net sales/day, AOV, allocated discount, contribution/day, AND the real 28-day-earlier baseline those were measured against, so every actual number in the export can be independently verified from the raw figures beside it rather than taken on faith. Forecast side now exports full absolute detail (total orders, incremental orders/day, net sales, merchant discount, incremental contribution/day) for all three scenarios, not just Expected's uplift%. Added a second Error column (Actual minus Forecast Expected, in AED contribution/day) alongside the existing percentage-point error, since a % miss and an AED miss can tell different stories depending on the baseline size. Deliberately called campAnalysisV2 a second time here rather than editing campFcMatchActual() itself to return more fields — costs one extra analysis call per matched row, but leaves the live on-screen table's own function completely untouched, so this export can't be the thing that regresses a page Nikhil already relies on daily. Verified with the same two-case functional test as build 454/455 (no-match row, full match against real mock order/sales data) — confirmed all new columns populate correctly (41 total) and, critically, that the pre-existing Actual Uplift %/ROI/Error numbers come out byte-identical to before this change, since this only adds columns, never alters a previously-exported one. Full top-to-bottom script execution test re-run clean."
+  "🧹 Trimmed BUILD_NOTES from 17 entries down to the most recent 5, per Nikhil asking again (\"do we need them all? it's too long\") even after the build-454 trim to 15 — 15 apparently wasn't short enough. Cut harder this time since the reasoning for why ANY of this is safe to remove hasn't changed: the What's New popup only ever reads BUILD_NOTES.slice(0,1) (build 401), so nothing past the very first entry is read by the live app, ever — this array exists purely as a build changelog for future-Claude's own benefit, not user-facing content. If older history is ever needed, it is NOT gone: every past build note still exists in this project's conversation history and can be pulled back up by asking, without needing to keep it loaded in the shipped file on every page load. Extracted and rebuilt with the same bracket-matching parse as the two prior trims (build 454/455), not a naive split, to avoid corrupting any entry containing a comma, quote, or emoji."
 ];
 
 
@@ -68,18 +68,27 @@ if(typeof Chart!=="undefined"){
     });
   }catch(e){console.log("[chart animation setup] error:",e.message);}
 }
-// Smooth count-up for every ".kpi .v" on the page that just became active. Parses the ALREADY-
-// FORMATTED final text (handles "AED 612,480", "18,420", "33.2%", negative "−AED 1,234") rather
-// than needing every KPI card's own render code taught a new "animated" mode — this is a single
-// hook (called from gp() below) that works across every page using the shared .kpi markup, not
-// just Overview. An element whose text doesn't cleanly parse as a number (an em dash "—", or
-// anything unexpected) is left exactly as rendered — animating "unknown" text into a fabricated
-// number would be worse than not animating it. Lands on the ORIGINAL string at the end (not a
-// re-derived one), so any formatting quirk the real renderer produced is preserved exactly.
+// Smooth count-up for every ".kpi .v" AND ".kpi-value-num" element on the page that just became
+// active — two selectors because it turns out there are two different KPI-card renderers in this
+// file: the compact ".kpi"/".v" pattern used in a couple of places, and kpiCard() (the function
+// that actually builds Overview's main Total Orders/Net Sales/AOV/etc. row), whose value div had
+// no class at all until now. That's the real reason the count-up "didn't work at all" — the
+// selector was only ever matching the FIRST pattern, and the page Nikhil was actually looking at
+// uses the second one, so querySelectorAll found zero elements and animated nothing; it wasn't a
+// speed problem. Added a `kpi-value-num` class to kpiCard()'s own value div so it can be found.
+// Parses the ALREADY-FORMATTED final text (handles "AED 612,480", "18,420", "33.2%", negative
+// "−AED 1,234") rather than needing every KPI renderer taught a new "animated" mode. An element
+// whose text doesn't cleanly parse as a number (an em dash "—", or anything unexpected) is left
+// exactly as rendered. Reads/writes via textContent during the animation (fine — the number is
+// changing every frame anyway) but restores the ORIGINAL innerHTML at the end, not textContent —
+// some values (fmtAEDTip's abbreviated AED figures) come wrapped in a hover-tooltip <span> with
+// the exact figure in its title attribute, which a plain textContent landing would have silently
+// stripped every time the animation ran.
 function animateKpiCountUp(root){
   if(!root)return;
-  const els=root.querySelectorAll(".kpi .v");
+  const els=root.querySelectorAll(".kpi .v, .kpi-value-num");
   els.forEach(el=>{
+    const rawHTML=el.innerHTML;
     const raw=el.textContent.trim();
     const m=raw.match(/^(−|-)?([^\d]*)([\d,]+(?:\.\d+)?)(.*)$/);
     if(!m)return;
@@ -96,7 +105,7 @@ function animateKpiCountUp(root){
       const eased=1-Math.pow(1-t,3);
       const val=signedTarget*eased;
       el.textContent=(val<0?"−":"")+prefix+Math.abs(val).toLocaleString(undefined,{minimumFractionDigits:decimals,maximumFractionDigits:decimals})+suffix;
-      if(t<1)requestAnimationFrame(step);else el.textContent=raw;
+      if(t<1)requestAnimationFrame(step);else el.innerHTML=rawHTML;
     }
     requestAnimationFrame(step);
   });
@@ -5000,15 +5009,38 @@ function ensureNavBatteryCSS(){
   if(document.getElementById("nav-battery-css"))return;
   const s=document.createElement("style");
   s.id="nav-battery-css";
-  // v459: hourglass flip, added alongside the existing segment-glow pulse — per Nikhil directly,
-  // the green segmented underline alone doesn't read as "loading" to someone opening the
-  // dashboard for the first time without being told what it means. The hourglass is a much more
-  // universally-understood loading symbol; segments stay as the secondary, more precise progress
-  // indicator for anyone who does know to look for them.
   s.textContent="@keyframes navSegPulse{0%,100%{opacity:.5}50%{opacity:1}}@keyframes navHourglassFlip{0%,40%{transform:rotate(0deg)}50%,90%{transform:rotate(180deg)}100%{transform:rotate(180deg)}}";
   document.head.appendChild(s);
 }
-function paintNavBattery(tab,pct,readyTitle,loadingLabel){
+// v461: real fix, not a third coordinate guess. Two absolute-position guesses (top:2px/right:3px,
+// then inside the segment bar) both put the hourglass somewhere Nikhil didn't ask for — he wants
+// it literally after the "s" in "Campaigns" and after the "e" in "Ads Performance", i.e. right
+// after the label text itself. The sidebar tab's actual HTML isn't in this file (buildSidebarNav
+// above this function already works around that same gap by matching tabs on their VISIBLE TEXT,
+// not assumed markup) — so this does the same: walk the tab's text nodes, find the one that IS
+// the label, and insert immediately after it. That's the only way to land "right after the
+// label" without knowing the surrounding markup, and it can't drift to the wrong spot the way a
+// fixed pixel offset already has twice.
+function insertHourglassAfterLabel(tab,label){
+  let hg=tab.querySelector(".nav-battery-hourglass");
+  if(hg)return hg;
+  const walker=document.createTreeWalker(tab,NodeFilter.SHOW_TEXT);
+  let node;
+  while(node=walker.nextNode()){
+    if(node.textContent.trim()===label){
+      hg=document.createElement("span");
+      hg.className="nav-battery-hourglass";
+      hg.textContent="⏳";
+      // Bumped from 9-10px (Nikhil: "too small to even notice") to 16px — clearly readable next
+      // to normal tab-label text instead of disappearing into it.
+      hg.style.cssText="display:inline-block;font-size:16px;line-height:1;margin-left:5px;vertical-align:middle;animation:navHourglassFlip 1.6s ease-in-out infinite";
+      node.parentNode.insertBefore(hg,node.nextSibling);
+      return hg;
+    }
+  }
+  return null; // label text not found — caller just won't get an hourglass, not a crash
+}
+function paintNavBattery(tab,pct,readyTitle,loadingLabel,label){
   if(!tab)return;
   ensureNavBatteryCSS();
   let bar=tab.querySelector(".nav-battery-segs");
@@ -5016,6 +5048,8 @@ function paintNavBattery(tab,pct,readyTitle,loadingLabel){
     tab.style.pointerEvents="";tab.style.opacity="";tab.removeAttribute("data-charging");
     tab.title=readyTitle;
     if(bar)bar.remove();
+    const hg=tab.querySelector(".nav-battery-hourglass");
+    if(hg)hg.remove();
     return;
   }
   tab.setAttribute("data-charging","1");
@@ -5023,18 +5057,11 @@ function paintNavBattery(tab,pct,readyTitle,loadingLabel){
   tab.style.pointerEvents="none";
   tab.style.opacity="0.9";
   tab.title=`${loadingLabel}… ${pct}%`;
+  if(label)insertHourglassAfterLabel(tab,label);
   if(!bar){
     bar=document.createElement("div");
     bar.className="nav-battery-segs";
-    // v460: real bug Nikhil caught from a screenshot — the hourglass, positioned separately at a
-    // guessed top:2px;right:3px on the tab itself, landed disconnected from the row, floating
-    // above it near the boundary with the row above. Rather than guess a second fixed offset,
-    // the hourglass is now just one more flex child INSIDE this same segments bar — the one
-    // piece of this whole indicator already proven to render in the right place (it's the green
-    // bar visible under "Ads Performance"/"Campaigns" in that screenshot). align-items:flex-end
-    // sits its bottom edge flush with the segments' own bottom edge, so it extends upward from
-    // the same baseline instead of floating at some unrelated point in the tab.
-    bar.style.cssText="position:absolute;left:6px;right:6px;bottom:1px;display:flex;align-items:flex-end;gap:3px;pointer-events:none";
+    bar.style.cssText="position:absolute;left:6px;right:6px;bottom:1px;display:flex;gap:3px;pointer-events:none";
     tab.appendChild(bar);
   }
   const N=5,segs=[];
@@ -5046,12 +5073,11 @@ function paintNavBattery(tab,pct,readyTitle,loadingLabel){
     const anim=active?"animation:navSegPulse 1s ease-in-out infinite;":"";
     segs.push(`<span style="flex:1;height:4px;border-radius:2px;background:${bg};${glow}${anim}"></span>`);
   }
-  segs.push('<span style="font-size:9px;line-height:1;margin-left:1px;display:inline-block;animation:navHourglassFlip 1.6s ease-in-out infinite;flex-shrink:0">⏳</span>');
   bar.innerHTML=segs.join("");
 }
 // Battery-style fill: paint the nav tab background from left (green) as computation progresses.
 function paintCPCNavBattery(pct){
-  paintNavBattery(cpcNavTab(),pct,"Ads Performance — ready","Computing Ads Performance");
+  paintNavBattery(cpcNavTab(),pct,"Ads Performance — ready","Computing Ads Performance","Ads Performance");
 }
 // Proactively load + build the CPC model so it's ready before the user clicks.
 async function prewarmCPC(){
@@ -5084,7 +5110,7 @@ function campNavTab(){
   return null;
 }
 function paintCampNavBattery(pct){
-  paintNavBattery(campNavTab(),pct,"Campaigns — ready","Loading campaigns");
+  paintNavBattery(campNavTab(),pct,"Campaigns — ready","Loading campaigns","Campaigns");
 }
 // Proactively load campaign data and precompute every campaign's analysis in chunks (yields to the
 // UI between batches so it never blocks). The cache means the page then renders instantly.
@@ -5384,7 +5410,7 @@ function kpiCard(label,value,sub,chg,onclick,perDay,invertChg,tooltipHTML,ctipId
     :`style="${wrapStyle}"`;
   return`<div class="sm" ${outerAttrs}>
     <div style="font-size:10px;color:${T.label};font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${label}${onclick?` <span style="color:${T.accent}">&#9656;</span>`:''}${tooltipHTML?' <span style="opacity:.6;cursor:help">&#9432;</span>':''}</div>
-    <div style="font-size:28px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:${T.value}">${value}</div>
+    <div class="kpi-value-num" style="font-size:28px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:${T.value}">${value}</div>
     ${compSection}
     ${pdLine}
     ${tooltipBlock}
