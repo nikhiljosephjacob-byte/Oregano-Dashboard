@@ -13,13 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-461";
+const BUILD_VERSION="2026-08-13-462";
 const BUILD_NOTES=[
+  "📂 Forecast History rows are now clickable — real gap Nikhil caught: only Export and Delete existed on each row, there was never a way to reopen a past forecast. Per his explicit choice (option B — faithful snapshot, not a live recompute, after being offered both): clicking a row expands it in place to show the EXACT saved numbers (all three scenarios' uplift/net sales/merchant disc/ROI, the baseline they were measured against, build version, actual-result comparison), never recomputed — a true record of what was decided at the time, not a moving target. New campFcReopenForecast()/campFcSnapshotHTML(), modeled directly on the existing campPlanApplyUpcoming() pattern for populating the Planner form (simpler here — a saved forecast already carries structured discPct/cap/type, no regex-guessing from freeform text needed). The Planner's own inputs get loaded too and the page scrolls up to them, so a live re-run against today's data is one click away via the snapshot's own 'Run against today's data' button — but campPlanResult is deliberately left untouched until that button is clicked, keeping 'view the snapshot' and 'recompute live' as two distinct actions, not one that surprises the other. Second click on the same row collapses it. Delete (✕) now stops event propagation so deleting a row doesn't also toggle it open. Verified with real functional tests: first click expands + populates every Planner field correctly + leaves campPlanResult null; second click on the same id collapses; the snapshot panel itself renders all three scenario cards, the baseline line, the actual-result block and the Run button with correct values. Full script execution re-run clean.",
   "🔧 Two REAL root causes, not more guessing. (1) KPI count-up 'didn't work at all' — because renderOverview() doesn't actually use the .kpi/.v markup the animation was built for; it uses a completely different helper, kpiCard(), whose value div had NO class at all. querySelectorAll('.kpi .v') found zero elements on the actual page Nikhil was looking at, so nothing ever animated — not a speed problem, a wrong-selector problem. Added a kpi-value-num class to kpiCard()'s own value div and widened animateKpiCountUp's selector to catch both patterns. Also fixed a real regression this surfaced: some KPI values (fmtAEDTip's abbreviated AED figures) come wrapped in a hover-tooltip <span title='exact figure'>, which the animation's old textContent-only landing was silently stripping every single time it ran — now captures innerHTML up front and restores THAT at the end, not textContent, so the tooltip survives. Verified both: a mock kpiCard-shaped element now animates correctly, and a tooltip-wrapped value comes out byte-identical after the animation completes. (2) Hourglass position/size, per Nikhil directly ('after the S in Campaigns', 'after the E in Ads Performance', 'too small to notice') — two prior guesses (a fixed top/right offset, then inside the segment bar) both missed because neither actually looked at the label's real text position, which this file has no visibility into (the sidebar HTML lives outside dashboard.js). New insertHourglassAfterLabel() does what buildSidebarNav() already does for this exact same blind spot: walks the tab's actual text nodes via TreeWalker, finds the one that IS the label ('Campaigns' / 'Ads Performance'), and inserts immediately after it — so it lands in the right place regardless of unknown surrounding markup, instead of a third coordinate guess. Bumped 9px→16px. Verified against two different plausible tab structures (label as its own wrapped span, and as a raw text node with no wrapper) — lands correctly in both. Full script execution re-run clean throughout.",
   "🔧 Two real bugs from Nikhil's very next screenshot, both same-day. (1) KPI count-up 'didn't work at all' — because it was hooked into gp(), the tab-CLICK handler, but gp() is only one of several callers of the shared renderPage() dispatcher: fApply/fToggle/fClear (filters), sortTableBy, dismissRec/undismissRec, and critically the very FIRST render on initial dashboard load all call renderPage(curPage) directly, bypassing gp() entirely. So the animation only had a chance to fire if someone clicked a DIFFERENT nav tab and back — never on first load, never after a filter, never after sorting. Exact same class of bug as the existing v286 tooltip fix in this same function (initCalcTip similarly tucked into one incidental caller instead of the shared dispatcher) — same fix: moved the hook to renderPage() itself, the one function every repaint actually funnels through. Verified for real this time: called renderPage() directly (not gp()) with a fake page name matching none of the dispatch branches, confirmed the setTimeout still fires and animateKpiCountUp still queues a real animation frame — proving the hook no longer depends on which caller triggered the render. (2) Hourglass misaligned, per screenshot — it was a separate absolutely-positioned element guessing its own top:2px;right:3px on the tab, landing disconnected from the row, floating above it near the previous row's boundary. Rebuilt as one more flex child INSIDE the segments bar itself (align-items:flex-end) — the one piece of this whole indicator already proven to render in the right place, since it's the visible green bar in Nikhil's own screenshot — instead of a second guessed offset. Full script execution re-run clean; (2) still needs Nikhil's eyes on the real page, same caveat as last build for anything Chart.js/CSS-rendering that this sandbox can't visually confirm.",
   "🎬 Page-open animation pass, per Nikhil's explicit sign-off on three separate interactive demos (not built blind): (1) KPI numbers now count up smoothly from 0 on every page (his pick over three other options shown — specifically NOT the flight-board/digit-roll style from the first demo, which he disliked). New animateKpiCountUp(), hooked into gp() so it applies uniformly wherever the shared .kpi/.v markup is used, not just Overview — parses the already-rendered final text (handles 'AED 612,480', '18,420', '33.2%', negatives) and counts up in place, landing on the exact original string so no formatting is lost; anything that doesn't parse as a clean number is left untouched rather than risking a fabricated value. (2) Line charts now draw left-to-right over 3.2s with no leading dot (his approved tweak — slower than the original 1.4s demo, dot removed) — Chart.js's own default only animates points rising vertically, not a true start-to-end draw, so this needed a real plugin: clips the plotting area to a widening horizontal sliver, driven by the SAME animation's onProgress/onComplete so it can't drift out of sync with the real duration. (3) Bars grow up one after another (dataIndex*90ms stagger) — the very first demo's behavior, approved unchanged throughout, using Chart.js's own documented per-element delay pattern. Also folded in the hourglass loading icon (flips on the Campaigns/Ads nav tabs while loading, removed the same moment the existing green segments clear) — approved as its own standalone mockup earlier in this same round. Verified (1) with a real functional test: drove requestAnimationFrame manually frame-by-frame, confirmed a genuine partial value mid-flight (not a jump), confirmed every element lands on its exact original string, confirmed a non-numeric '—' value is left completely untouched. (2) and (3) are Chart.js internals (animation config merging, canvas clip timing) this sandbox can't render — verified the setup code itself runs clean against a Chart.js-shaped mock (Chart.defaults.datasets.line/bar.animation come out with exactly the expected keys) but the actual on-screen look needs Nikhil's eyes on the real dashboard. Full script execution re-run clean throughout.",
-  "🔧 Three fixes from one round of Nikhil screenshots. (1) Keeta free-delivery cost made uniform — only campaigns with a concurrent same-brand+platform sibling (Oregano's case) ever had FD subtracted, via campParticipationV1/keetaCampWindowStats; a standalone Keeta campaign (Fyoozhen's case) fell through to campAnalysisV2/campRecentWindowAnalysis instead, which never touched FD at all. Fixed at the source in both functions (not just the popup renderer) so the tile and popup stay identical — reuses keetaCampWindowStats() exactly as the concurrent path already does: real per-order FD from an uploaded Keeta orders file when it covers the window (Keeta's own 'Campaign type' column already tells us per order, so nothing re-implements Nikhil's stated >AED25 net-value floor — Keeta's own export already reflects it), flat AED2/order estimate otherwise. Confirmed FD is Keeta-only per Nikhil directly — other aggregators don't carry this cost, and FD itself isn't tied to any discount campaign (it's a standalone conversion lever entered as a sheet comment so it doesn't spawn its own campaign tile, solved several builds back) — so FD running on days with NO campaign at all still isn't captured anywhere; flagged back to Nikhil as a separate, larger question, not built here. (2) Contribution % added to both comparison panels in the standard campaign popup (Campaign to date/Same days last month, and Last N days) — reused the existing fmtContribPct() helper, which turned out to already be wired into the OTHER (Keeta-exact) popup but not this one, hence Nikhil seeing it in one popup and not the other. (3) The What's New popup's OK button being unclickable right after load, reported again after the v188 band-aid (flat 2800ms delay) — replaced with requestIdleCallback (6000ms ceiling, falls back to the same 2800ms on Safari) so the popup waits for the main thread to actually be free instead of guessing a fixed delay that a bigger dataset can outlast. Verified (1) and (2) with functional tests against real mock order/sales data — exact-FD path, fallback-estimate path, and a non-Keeta regression check confirming zero effect outside Keeta. (3) is a diagnosis-driven fix Node can't fully exercise (real main-thread contention) — needs Nikhil's confirmation on the real dashboard. Full script execution re-run clean throughout.",
-  "🧹 Trimmed BUILD_NOTES from 17 entries down to the most recent 5, per Nikhil asking again (\"do we need them all? it's too long\") even after the build-454 trim to 15 — 15 apparently wasn't short enough. Cut harder this time since the reasoning for why ANY of this is safe to remove hasn't changed: the What's New popup only ever reads BUILD_NOTES.slice(0,1) (build 401), so nothing past the very first entry is read by the live app, ever — this array exists purely as a build changelog for future-Claude's own benefit, not user-facing content. If older history is ever needed, it is NOT gone: every past build note still exists in this project's conversation history and can be pulled back up by asking, without needing to keep it loaded in the shipped file on every page load. Extracted and rebuilt with the same bracket-matching parse as the two prior trims (build 454/455), not a naive split, to avoid corrupting any entry containing a comma, quote, or emoji."
+  "🔧 Three fixes from one round of Nikhil screenshots. (1) Keeta free-delivery cost made uniform — only campaigns with a concurrent same-brand+platform sibling (Oregano's case) ever had FD subtracted, via campParticipationV1/keetaCampWindowStats; a standalone Keeta campaign (Fyoozhen's case) fell through to campAnalysisV2/campRecentWindowAnalysis instead, which never touched FD at all. Fixed at the source in both functions (not just the popup renderer) so the tile and popup stay identical — reuses keetaCampWindowStats() exactly as the concurrent path already does: real per-order FD from an uploaded Keeta orders file when it covers the window (Keeta's own 'Campaign type' column already tells us per order, so nothing re-implements Nikhil's stated >AED25 net-value floor — Keeta's own export already reflects it), flat AED2/order estimate otherwise. Confirmed FD is Keeta-only per Nikhil directly — other aggregators don't carry this cost, and FD itself isn't tied to any discount campaign (it's a standalone conversion lever entered as a sheet comment so it doesn't spawn its own campaign tile, solved several builds back) — so FD running on days with NO campaign at all still isn't captured anywhere; flagged back to Nikhil as a separate, larger question, not built here. (2) Contribution % added to both comparison panels in the standard campaign popup (Campaign to date/Same days last month, and Last N days) — reused the existing fmtContribPct() helper, which turned out to already be wired into the OTHER (Keeta-exact) popup but not this one, hence Nikhil seeing it in one popup and not the other. (3) The What's New popup's OK button being unclickable right after load, reported again after the v188 band-aid (flat 2800ms delay) — replaced with requestIdleCallback (6000ms ceiling, falls back to the same 2800ms on Safari) so the popup waits for the main thread to actually be free instead of guessing a fixed delay that a bigger dataset can outlast. Verified (1) and (2) with functional tests against real mock order/sales data — exact-FD path, fallback-estimate path, and a non-Keeta regression check confirming zero effect outside Keeta. (3) is a diagnosis-driven fix Node can't fully exercise (real main-thread contention) — needs Nikhil's confirmation on the real dashboard. Full script execution re-run clean throughout."
 ];
 
 
@@ -14211,6 +14211,44 @@ function campPlanApplyUpcoming(idx){
   campPlanResult=null;
   renderCampaigns();
 }
+// v462: reopen a saved forecast from Forecast History — Nikhil's direct question ("how do I open
+// a previous forecast? they're not clickable"). They never were; only Export and Delete existed
+// on each row. Per his explicit choice (option B, not the default I'd have picked): show the
+// EXACT saved snapshot, not a live recompute — the frozen scenario numbers as they were saved,
+// so this is a faithful record of a past decision rather than a moving target that reads
+// differently every time the underlying data changes. The Planner's own inputs are loaded too
+// (mirrors campPlanApplyUpcoming right above, but simpler — a saved forecast already carries
+// structured discPct/cap/type fields, no regex-guessing from freeform comments needed), purely
+// so a live re-run is one click away if wanted, not because reopening implies recomputing.
+// Deliberately does NOT touch campPlanResult — leaving it null means the form shows the loaded
+// inputs but nothing runs until the snapshot's own "Run against today's data" button is clicked,
+// keeping "view the snapshot" and "recompute live" as two distinct, deliberate actions.
+function campFcReopenForecast(id){
+  const f=campFcHistory&&campFcHistory.find(x=>x.id===id);
+  if(!f)return;
+  campFcExpandedId=(campFcExpandedId===id)?null:id; // toggle: click again to collapse
+  if(campFcExpandedId===id){
+    campPlanBrand=f.brand;
+    campPlanAgg=f.agg;
+    campPlanStart=f.start;
+    campPlanEnd=f.end;
+    campPlanType=f.type||'menu';
+    campPlanDiscPct=f.discPct;
+    campPlanCap=f.cap;
+    campPlanCoFund=!!f.coFund;
+    campPlanCoFundPct=f.coFundPct||campPlanCoFundPct;
+    campPlanBranches=new Set(f.branches||[]);
+    campPlanComments=f.comments||'';
+    campPlanResult=null;
+  }
+  renderCampaigns();
+  if(campFcExpandedId===id){
+    setTimeout(()=>{
+      const el=document.getElementById("camp-planner-form-anchor");
+      if(el)el.scrollIntoView({behavior:"smooth",block:"start"});
+    },60);
+  }
+}
 
 // v412: forecast calibration — learns from your own real forecast-vs-actual track record
 // instead of guessing at which structural variable (momentum, co-funding, trend) explains the
@@ -14433,7 +14471,7 @@ function campPlanHTML(){
     ?campBeFindHistoricalDiscPerOrder(campPlanBrand,campPlanAgg,campPlanType==='bogo'?'bogo':'select')
     :null;
 
-  const form=`<div style="background:${T.panelBg};border:0.5px solid ${T.border};border-radius:12px;padding:16px 18px;margin-bottom:14px">
+  const form=`<div id="camp-planner-form-anchor" style="background:${T.panelBg};border:0.5px solid ${T.border};border-radius:12px;padding:16px 18px;margin-bottom:14px">
     <div style="display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;color:${accent};margin-bottom:12px">📋 Campaign details</div>
     ${upcomingDD}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
@@ -15707,7 +15745,7 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
 
 
 // ── v111: Forecast log — save, list, and match-to-actual ──
-let campFcHistory=null,campFcHistoryLoading=false,campFcHistoryError=null;
+let campFcHistory=null,campFcHistoryLoading=false,campFcHistoryError=null,campFcExpandedId=null;
 let campFcSaving=false,campFcSaveMsg='';
 async function campFcLoadHistory(){
   if(campFcHistoryLoading)return;
@@ -15771,6 +15809,46 @@ function campFcMatchActual(fRec){
   return{c,actualUpliftPct:a.ordersLift,actualROI:a.discountROI,status:campStatus(c)};
 }
 
+// v462: the expanded snapshot panel for a reopened forecast (companion to campFcReopenForecast
+// above) — renders the EXACT saved scenario numbers from f.scenarios, never recomputed, per
+// Nikhil's explicit choice of a faithful historical record over a live-recompute view. `match`
+// is passed in from the caller's own already-computed campFcMatchActual(f) rather than calling
+// it a second time here — same real record, no reason to redo the lookup.
+function campFcSnapshotHTML(f,match,T){
+  const fA=v=>v==null?'—':'AED '+Math.round(Math.abs(v)).toLocaleString();
+  const savedDate=fmtShort(f.savedAt.slice(0,10));
+  const bl=f.baseline||{};
+  const scenCard=(label,sc,accentClr)=>{
+    if(!sc)return`<div style="background:${T.rowBg};border-radius:8px;padding:10px 12px"><div style="font-size:10px;color:${T.muted};margin-bottom:4px">${label}</div><div style="font-size:11px;color:${T.label}">Not run</div></div>`;
+    return`<div style="background:${T.rowBg};border-radius:8px;padding:10px 12px${accentClr?`;border:1px solid ${accentClr}55`:''}">
+      <div style="font-size:10px;color:${accentClr||T.muted};font-weight:700;margin-bottom:4px">${label}</div>
+      <div style="font-size:17px;font-weight:800;color:${accentClr||T.text};margin-bottom:6px">${sc.upliftPct>=0?'+':''}${Math.round(sc.upliftPct)}%</div>
+      <div style="font-size:10.5px;color:${T.label};line-height:1.7">Net sales: ${fA(sc.campNet)}<br>Merchant disc: ${fA(sc.merchantDisc)}<br>ROI: ${sc.roi!=null?sc.roi.toFixed(2)+'×':'—'}</div>
+    </div>`;
+  };
+  let actualBlock='';
+  if(match&&match.actualUpliftPct!=null){
+    const clr=match.actualUpliftPct>=0?'#22C55E':'#EF4444';
+    actualBlock=`<div style="background:${clr}18;border-radius:8px;padding:9px 12px;margin-bottom:12px">
+      <div style="font-size:10px;color:${clr};margin-bottom:2px">Actual result</div>
+      <div style="font-size:12px;color:${T.text}"><strong>${match.actualUpliftPct>=0?'+':''}${match.actualUpliftPct.toFixed(0)}% orders</strong>${match.actualROI!=null?` · ROI ${match.actualROI.toFixed(2)}×`:''} · matched to <strong>${esc(match.c.name||match.c.comments||'—')}</strong>, ${match.c.startDate}–${match.c.endDate}</div>
+    </div>`;
+  }
+  return`<div style="padding:14px 16px;margin:2px 0 8px;background:${T.panelBg};border:0.5px solid ${T.border};border-radius:8px">
+    <div style="font-size:10.5px;color:${T.muted};margin-bottom:10px">Snapshot from build ${esc(f.algoVersion||'—')}, saved ${savedDate} — showing exactly what was saved, not recomputed against today's data.</div>
+    <div style="font-size:10.5px;color:${T.label};margin-bottom:10px">Baseline used at save time · ${bl.dailyOrders!=null?Math.round(bl.dailyOrders*10)/10+' orders/day':'—'} · ${bl.dailyNet!=null?fA(bl.dailyNet)+'/day net sales':'—'}</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px">
+      ${scenCard('Conservative',f.scenarios?.conservative)}
+      ${scenCard('Expected',f.scenarios?.expected,'#60A5FA')}
+      ${scenCard('Optimistic',f.scenarios?.optimistic)}
+    </div>
+    ${actualBlock}
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:10px;border-top:0.5px solid ${T.border}">
+      <div style="font-size:11px;color:${T.label}">These inputs are loaded into the Planner form above.</div>
+      <button onclick="event.stopPropagation();campPlanRun();document.getElementById('camp-planner-form-anchor')?.scrollIntoView({behavior:'smooth',block:'start'})" style="white-space:nowrap;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.35);border-radius:6px;color:#4ADE80;padding:6px 12px;font-size:11px;cursor:pointer;font-weight:700">▶ Run against today's data</button>
+    </div>
+  </div>`;
+}
 function campFcHistoryHTML(){
   const T=campTheme();
   if(campFcHistory===null){
@@ -15832,14 +15910,18 @@ function campFcHistoryHTML(){
       }catch(e){}
     }
     const dupNote=dupCount>0?`<div style="font-size:9.5px;color:${T.label};margin-top:2px">+${dupCount} earlier forecast${dupCount!==1?'s':''} for these same inputs, hidden here (still in history, not deleted)</div>`:'';
-    return `<div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1.4fr 1fr 0.3fr;gap:8px;padding:9px 0;border-bottom:0.5px solid ${T.rowBg2};font-size:12px;align-items:center">
-      <div><div style="font-weight:700;color:${T.text}">${bPill(f.brand,18)} ${f.brand} <span style="color:${T.label}">×</span> ${f.agg}</div><div style="font-size:10px;color:${T.label};margin-top:2px">${campFcTypeLabel(f.type||'menu',f.discPct,f.cap)} · saved ${savedDate} by ${f.savedByName||f.savedBy||'—'}</div>${degradedFlag}${dupNote}</div>
+    const isOpen=campFcExpandedId===f.id;
+    const chevron=`<i class="ti" style="display:inline-block;margin-right:5px;transition:transform .15s;transform:rotate(${isOpen?90:0}deg);color:${T.label};font-size:10px">▸</i>`;
+    const snapshotHTML=isOpen?campFcSnapshotHTML(f,match,T):'';
+    return `<div onclick="campFcReopenForecast('${esc(f.id)}')" style="cursor:pointer;display:grid;grid-template-columns:1.6fr 1fr 1fr 1.4fr 1fr 0.3fr;gap:8px;padding:9px 0;border-bottom:0.5px solid ${T.rowBg2};font-size:12px;align-items:center">
+      <div><div style="font-weight:700;color:${T.text}">${chevron}${bPill(f.brand,18)} ${f.brand} <span style="color:${T.label}">×</span> ${f.agg}</div><div style="font-size:10px;color:${T.label};margin-top:2px;margin-left:15px">${campFcTypeLabel(f.type||'menu',f.discPct,f.cap)} · saved ${savedDate} by ${f.savedByName||f.savedBy||'—'}</div>${degradedFlag}${dupNote}</div>
       <div style="color:${T.muted}">${f.start} – ${f.end}</div>
       <div>${exp?`<strong style="color:#60A5FA">${exp.upliftPct>=0?'+':''}${Math.round(exp.upliftPct)}%</strong>`:'—'}</div>
       <div>${actualHTML}</div>
       <div style="font-size:9px;color:${T.label}">${f.algoVersion||'—'}</div>
-      <div onclick="campFcDeleteForecast('${esc(f.id)}')" title="Delete this forecast" style="color:${T.label};cursor:pointer;text-align:center;font-size:14px;border-radius:5px;padding:2px;transition:.15s" onmouseenter="this.style.color='#EF4444';this.style.background='#EF444422'" onmouseleave="this.style.color='${T.label}';this.style.background='transparent'">✕</div>
-    </div>`;
+      <div onclick="event.stopPropagation();campFcDeleteForecast('${esc(f.id)}')" title="Delete this forecast" style="color:${T.label};cursor:pointer;text-align:center;font-size:14px;border-radius:5px;padding:2px;transition:.15s" onmouseenter="this.style.color='#EF4444';this.style.background='#EF444422'" onmouseleave="this.style.color='${T.label}';this.style.background='transparent'">✕</div>
+    </div>
+    ${snapshotHTML}`;
   }).join('');
   return `<div style="margin-top:6px">
     <div style="display:grid;grid-template-columns:1.6fr 1fr 1fr 1.4fr 1fr 0.3fr;gap:8px;padding:5px 0;border-bottom:0.5px solid ${T.border};font-size:10px;font-weight:700;color:${T.label};text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Dates</div><div>Forecast</div><div>Actual</div><div>Build</div><div></div></div>
