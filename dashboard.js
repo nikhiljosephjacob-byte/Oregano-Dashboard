@@ -13,13 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-470";
+const BUILD_VERSION="2026-08-13-472";
 const BUILD_NOTES=[
+  "📊 Campaign Planner: 'Compare vs Similar Campaigns' ported in — the one genuinely confirmed-missing piece from the Planner-parity check, after two real corrections to what I'd been telling Nikhil: the baseline explainer ('How we got the baseline') turned out to ALREADY be in the Planner (v422), and Daily Digest turned out to ALREADY be fully built and wired to a real Export button on Overview (digestExportPDF/digestBuildReportHTML, using real campAnalysisV2/cpcData/outlet-move data) — both contradicting what I'd said was still outstanding, caught only once I actually read the code instead of trusting my own prior summary. This was the one real gap left. Adapted, not copy-pasted, from the standalone campDetailV2HTML version: that one compares an existing campaign's real results against similar past ones; the Planner has no 'current campaign' with real results yet since it's a hypothetical being planned. Deliberately did NOT try to insert the forecast's own numbers as a comparable row — a forecast's figures are incremental (uplift vs baseline), while this table's contribution/order is a TOTAL figure from real completed campaigns; mixing the two under one column header would be comparing genuinely different metrics, worse than leaving the row out. Shows real past campaigns for the Planner's selected brand+aggregator, ranked by contribution/order, same six caveats as the original. Placed in the post-run results view, right before Forecast History. Verified with a real functional test: empty with no brand/aggregator selected, both real campaigns showing correctly with real computed figures when history exists, and empty again for a brand/aggregator combination with no campaign history — not just checking it renders, checking it renders the RIGHT thing in each case. Full script execution re-run clean.",
+  "💰 Keeta FD, extended to campTrajectory/campBreakevenUplift/computeProfitabilityBreakdown — the two remaining gaps flagged last session, per Nikhil's direct instruction ('subtract it, it's a cost, same as commission'). (1) campTrajectory computes each weekly SEGMENT's contribution independently via brandContribution() directly — this is the actual function behind the 'Was working, now losing money' verdict, and it was never touched by any earlier Keeta FD fix even though the campaign-level totals were. Same permissive-matcher pattern as computeProfitability (keetaCampWindowStats with ()=>true), applied per segment. (2) campBreakevenUplift is subtler: its baseline contribution figure was ALREADY correct (reads from the same campAnalysisV2 object build 463 fixed), but its forward-looking unitMargin RATE (contribution assumed per future AED of gross) had no FD term at all — approximated as KEETA_FD_COST/baseGrossAOV, the best available forward-looking basis since this function projects rather than observes. (3) computeProfitabilityBreakdown (Compare page) builds its own commission/food/ad-cost cascade by hand rather than through computeProfitability() — same gap, same fix, at both the per-mover level AND the top-level aggregate return (which recomputed contribA/contribB from scratch and would have been inconsistent with the per-mover figures if only one had been fixed). Verified all three with real functional tests, and caught a real test-design mistake along the way: my first campTrajectory comparison showed identical results with and without exact Keeta data and looked like a failure — turned out my test's real FD-per-order (2.0 AED) coincidentally matched the KEETA_FD_COST fallback constant exactly, so both paths produced the same number by chance, not because the fix wasn't working. Rebuilt the test with a deliberately different real rate (5.0 AED/order campaign vs 1.0 baseline) and got a clear, large, correct swing (+126/day → −64/day) once real asymmetric data was used instead of the flat estimate — plus a Talabat control confirming zero cross-contamination into non-Keeta aggregators. campBreakevenUplift verified separately: identical inputs produce a materially higher required uplift for Keeta (44.6%) than Talabat (31.5%), exactly as expected once FD eats into the assumed margin. computeProfitabilityBreakdown verified with exact FD figures (40, 44) subtracted correctly at both the per-mover and top-level totals, and a no-data control confirming zero adjustment when no exact Keeta file covers the range. Full script execution re-run clean throughout.",
   "🎯 Trending Terms — relevance-based sort + honest counts, real gap Nikhil caught the very next look. Build 468's heading fix stated the table's scope correctly, but a theme dominated by OTHER categories' mentions could still show its full cross-category total as THE number and still win the big red crosscutting alarm on raw volume — e.g. 'Taste / seasoning: 32 times' as the headline under a Raw/UC filter, when only 2 of those 32 were actually Raw/UC-tagged; the other 30 had nothing to do with what was filtered. v467 correctly kept irrelevant themes OUT of the table entirely; this is the other half — a theme that legitimately belongs in the table (≥1 relevant match) can still be almost entirely noise from other categories. New catRelevantCount tracks, per theme, how many matches are ACTUALLY tagged with the active category, separate from the cross-category total. Three changes: (1) table sort now orders by relevance to the filter first (catRelevantCount desc), not raw cross-category volume — a theme genuinely about what's filtered now outranks one that's mostly unrelated noise. (2) Count column shows both numbers when filtered ('2 · 32 total') instead of just the bigger, more misleading one. (3) the crosscutting callout's own headline states the split too ('2 times within Raw/UC (32 total across all categories)') rather than the bare total alone. Caught and fixed a real scoping bug mid-build before it shipped: catShortForTitle was used in the callout before it was declared further down the same function (temporal dead zone) — moved the one shared definition up so both the panel title and the callout read from the same value, removed the now-redundant second declaration. Verified with a real functional test reproducing the exact numbers from the report (30 unrelated Taste-only complaints, 2 genuinely cross-category, 20 pure Raw/UC) — confirmed 'Undercooked / raw' (22 relevant) now ranks above 'Taste / seasoning' (2 relevant) in the table, the callout states the honest split, and a no-filter control case confirmed sort/display are completely unchanged when no Category filter is active. My first version of this test had its own bug too — it compared the callout's theme mention (which always names whichever theme is crosscutting, regardless of table order) against the table instead of isolating the table rows — caught and fixed before trusting the result. Full script execution re-run clean.",
   "🔧 Nav-tab loading indicator restarting after a couple seconds, blocking Campaigns/Ads Performance again mid-session — real bug Nikhil caught, root-caused, not guessed at. pullOrderDataFromServer() runs shortly after every page load and, whenever the SHARED server copy is newer than this browser's (a normal, frequent occurrence with multiple people using this dashboard), calls rewarmCampaignAnalyses() — which resets campModelBuilt=false and reruns the whole prewarm from scratch against the fresh data. That part is correct and necessary. What was wrong: prewarmCampaigns()/prewarmCPC() treated every rewarm identically to a true first load — repainting the nav indicator from a low percentage and re-disabling the tab's pointer events for the whole rewarm — even though the ALREADY-cached analyses from the first load are still completely valid to view in the meantime. A background cache refresh has no real reason to lock anyone out of clicking in. New campEverBuilt/cpcEverBuilt flags — unlike campModelBuilt/cpcModel, which legitimately DO get reset to trigger a recompute — are never cleared by a rewarm or the page's own manual refresh button, so the indicator now only ever paints (and only then disables the tab) the very first time this completes for a browser session; every later rewarm updates the cache silently, with no visible restart and no blocked tab. Verified with a real functional test reproducing the exact reported sequence: ran a full first load and confirmed the tab genuinely gets disabled then cleared (pointerEvents history: none → none → '' ), then triggered rewarmCampaignAnalyses() exactly as the background sync would and confirmed the tab's pointerEvents is never set to 'none' again during that second pass — only the harmless final clear. Full script execution re-run clean.",
-  "📥 Trending Terms export to Excel + a heading clarity fix, both from Nikhil directly. (1) New ⬇ Export button, top-right of the Trending Terms panel — exports every match for the currently-drilled theme (not capped at 25 like the on-screen panel), with Brand/Branch/Date/Aggregator/Order ID/Category/Matched term(s)/Complaint text, complaint text bold black when it contains a match, per the sample file Nikhil approved. Disabled with a tooltip until a term row is actually drilled into, since that's what determines what gets exported. REAL CORRECTION mid-build: I'd previously told Nikhil whole-cell bold was achievable with the plain xlsx library already loaded elsewhere in this file — checked properly this time and that's wrong; SheetJS Community Edition cannot write ANY cell styling at all, bold included. Switched to xlsx-js-style, a maintained fork pinned to the exact same SheetJS 0.18.5 core already used everywhere else in this file, just with font/color styling added on write — same API, fully backward compatible. Handled a real risk deliberately: if another export already ran first in the session and loaded the plain library, a naive `if(window.XLSX)` guard would skip loading the styled one and the bold would silently never appear with no error. Checked for `window.XLSX.style_version` specifically (a real prop this fork adds) so it only skips loading when the styled version is confirmed already present — verified with a test that pre-loads a plain XLSX mock and confirms the styled one still gets loaded anyway. (2) Per Nikhil directly: a row labeled 'Taste / seasoning' showing under a Raw/UC filter (because one complaint legitimately hit both themes) was confusing on its own, even though the count itself was correct. Fixed at the panel level, not the row: the section title now reads 'Trending terms within Raw/UC-related complaints' whenever a Category filter is active, so the table's actual scope is stated plainly regardless of what any individual row's own theme label says. Verified all three pieces with real functional tests: matched-term detection, sheet-name sanitization (theme names contain '/', illegal in Excel sheet names), the library-safety scenario, and the heading text changing correctly with and without a Category filter. Full script execution re-run clean.",
-  "🔍 Trending Terms — real follow-up gap Nikhil caught immediately after v465 shipped: with Category=Spilled filtered, 'Missing item' (an entirely unrelated theme) was showing up in the table. v465 correctly let a theme's MATCHES span every category (a Taste-tagged complaint mentioning 'spilled' now counts toward Spilled/mishandled) — but never restricted which THEME ROWS are worth showing in the first place, so the table still listed every theme found anywhere in the whole dataset regardless of the active Category filter, including ones with zero real connection to it. Filtering records was right; filtering the RESULT to themes actually relevant to the selected category was the missing half. Added one more filter: a theme row only shows if at least one of its matches is actually tagged with the active category — keeps the cross-category counting benefit for RELEVANT themes (Spilled/mishandled's count can still include a Taste-tagged 'spilled' mention) while dropping themes with no real relationship to what's filtered. No Category filter active → completely unchanged, every theme still shows exactly as before. Verified with a functional test built around the exact reported scenario: three real 'Missing item' complaints in an unrelated category, one genuine Spilled complaint, and one cross-category Taste complaint mentioning 'spilled' — confirmed Missing item is now excluded, Spilled/mishandled is shown, and its count correctly stays at 2 (both the direct match and the cross-category one), not silently dropped to 1. Full script execution re-run clean.",
-  "🔧 Feedback trend chart, three real fixes from Nikhil's own screenshots. (1) Switching FROM Index mode back to Count left bars never appearing — real bug, confirmed and root-caused: Index mode's chart is type:'line' with two line datasets; the Count/rate branch's replayTrend() assumes type:'bar', and Chart.js can't change a chart's type after creation. The old staleness check only looked at whether the canvas ELEMENT had changed, not whether the leftover chart instance was even the right SHAPE for the new mode, so it fed new numbers into a chart still rendering as two lines — no bars, ever. Every chart instance is now tagged with the mode it was built for (_trendMode); a mismatch is treated exactly like a stale canvas — destroy and rebuild, not reuse. Verified by literally reproducing the reported sequence (draw Index, then draw Count) and confirming a real type:'bar' chart gets created on the switch, not silently skipped. (2) Index tooltip showed bare numbers like '87' and '101' with no way to know what they meant — fixed to lead with the real count/order number and put the index value in parentheses as the secondary detail, using data that was already computed, not new. (3) Per Nikhil directly, 'we don't need both' — merged Count and % into one view (bars stay count, since a raw number reads more intuitively than a % that looks nearly flat month to month) with rate now always shown alongside count in the same tooltip instead of needing a separate click to see it; the % toggle button is gone, Index stays as the second (and now only other) view. Verified all three with real functional tests: the mode-switch bug reproduction, and tooltip callbacks called directly with real numbers confirming both the Index tooltip ('Complaints: 22 (index 122)') and the merged Count tooltip (returns ['Complaints: 22', 'Rate: 0.07%'] as separate lines) render correctly. Full script execution re-run clean."
+  "📥 Trending Terms export to Excel + a heading clarity fix, both from Nikhil directly. (1) New ⬇ Export button, top-right of the Trending Terms panel — exports every match for the currently-drilled theme (not capped at 25 like the on-screen panel), with Brand/Branch/Date/Aggregator/Order ID/Category/Matched term(s)/Complaint text, complaint text bold black when it contains a match, per the sample file Nikhil approved. Disabled with a tooltip until a term row is actually drilled into, since that's what determines what gets exported. REAL CORRECTION mid-build: I'd previously told Nikhil whole-cell bold was achievable with the plain xlsx library already loaded elsewhere in this file — checked properly this time and that's wrong; SheetJS Community Edition cannot write ANY cell styling at all, bold included. Switched to xlsx-js-style, a maintained fork pinned to the exact same SheetJS 0.18.5 core already used everywhere else in this file, just with font/color styling added on write — same API, fully backward compatible. Handled a real risk deliberately: if another export already ran first in the session and loaded the plain library, a naive `if(window.XLSX)` guard would skip loading the styled one and the bold would silently never appear with no error. Checked for `window.XLSX.style_version` specifically (a real prop this fork adds) so it only skips loading when the styled version is confirmed already present — verified with a test that pre-loads a plain XLSX mock and confirms the styled one still gets loaded anyway. (2) Per Nikhil directly: a row labeled 'Taste / seasoning' showing under a Raw/UC filter (because one complaint legitimately hit both themes) was confusing on its own, even though the count itself was correct. Fixed at the panel level, not the row: the section title now reads 'Trending terms within Raw/UC-related complaints' whenever a Category filter is active, so the table's actual scope is stated plainly regardless of what any individual row's own theme label says. Verified all three pieces with real functional tests: matched-term detection, sheet-name sanitization (theme names contain '/', illegal in Excel sheet names), the library-safety scenario, and the heading text changing correctly with and without a Category filter. Full script execution re-run clean."
 ];
 
 
@@ -1012,7 +1012,7 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
   const groupsA=byKey(recordsA),groupsB=byKey(recordsB);
   const allKeys=new Set([...Object.keys(groupsA),...Object.keys(groupsB)]);
   const movers=[];
-  let grossA=0,grossB=0,discA=0,discB=0,commA=0,commB=0,foodA=0,foodB=0,adCostA=0,adCostB=0;
+  let grossA=0,grossB=0,discA=0,discB=0,commA=0,commB=0,foodA=0,foodB=0,adCostA=0,adCostB=0,fdA=0,fdB=0;
   for(const key of allKeys){
     const gA=groupsA[key]||{net:0,disc:0,mondayDisc:0,branches:new Set(),lo:null,hi:null},gB=groupsB[key]||{net:0,disc:0,mondayDisc:0,branches:new Set(),lo:null,hi:null};
     const[brand,aggregator]=key.split('|');
@@ -1054,9 +1054,24 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
     const _vbB=(rangeB.start&&adEndB)?cpcOutletScope(brand,aggregator,rangeB.start,adEndB,gB.branches,gB.net):null;
     const gAdCostA=(rangeA.start&&adEndA)?cpcAdCostForRange(brand,aggregator,rangeA.start,adEndA,_vbA):0;
     const gAdCostB=(rangeB.start&&adEndB)?cpcAdCostForRange(brand,aggregator,rangeB.start,adEndB,_vbB):0;
-    const contribA=gA.net-gCommA-gFoodA-gAdCostA,contribB=gB.net-gCommB-gFoodB-gAdCostB;
+    // v471: Keeta FD, per Nikhil directly ("subtract it like any other cost"). This popup builds
+    // its own commission/food/ad-cost cascade by hand rather than through computeProfitability()
+    // (the function build 463 already fixed), so it had this identical gap independently — Compare
+    // was one of the two places flagged but not yet touched when that fix shipped. Same permissive-
+    // matcher pattern as computeProfitability: keetaCampWindowStats with ()=>true sums real FD
+    // across every order for this brand+outlets+date-range, not scoped to one specific campaign.
+    // Uses the SAME date-capping (adEndA/adEndB, gA.hi/gB.hi) already established just above for ad
+    // cost, so FD is never priced against a day this popup counts zero sales for either. Zero
+    // effect on non-Keeta aggregators; only adjusts anything when exact Keeta order data covers
+    // the range.
+    let gFdA=0,gFdB=0;
+    if(aggregator==='Keeta'){
+      if(rangeA.start&&adEndA){const kwA=keetaCampWindowStats({brand},rangeA.start,adEndA,gA.branches.size?gA.branches:null,()=>true);gFdA=kwA?kwA.fd:0;}
+      if(rangeB.start&&adEndB){const kwB=keetaCampWindowStats({brand},rangeB.start,adEndB,gB.branches.size?gB.branches:null,()=>true);gFdB=kwB?kwB.fd:0;}
+    }
+    const contribA=gA.net-gCommA-gFoodA-gAdCostA-gFdA,contribB=gB.net-gCommB-gFoodB-gAdCostB-gFdB;
     grossA+=gGrossA;grossB+=gGrossB;discA+=gA.disc;discB+=gB.disc;
-    commA+=gCommA;commB+=gCommB;foodA+=gFoodA;foodB+=gFoodB;adCostA+=gAdCostA;adCostB+=gAdCostB;
+    commA+=gCommA;commB+=gCommB;foodA+=gFoodA;foodB+=gFoodB;adCostA+=gAdCostA;adCostB+=gAdCostB;fdA+=gFdA;fdB+=gFdB;
     if(gGrossA<=0&&gGrossB<=0)continue;
     // v288: campaignName is now ADDITIONAL context, never a replacement for brand·aggregator —
     // Nikhil caught this too: a resolved campaign name ("Best Sellers 30% OFF") was replacing
@@ -1085,7 +1100,7 @@ function computeProfitabilityBreakdown(recordsA,recordsB,dateRef,explicitRangeA,
   movers.sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta));
   return{
     grossA,grossB,discA,discB,commA,commB,foodA,foodB,
-    contribA:grossA-discA-commA-foodA-adCostA,contribB:grossB-discB-commB-foodB-adCostB,adCostA,adCostB,
+    contribA:grossA-discA-commA-foodA-adCostA-fdA,contribB:grossB-discB-commB-foodB-adCostB-fdB,adCostA,adCostB,fdA,fdB,
     rangeA,rangeB,
     movers // v289: full list, not pre-sliced — buildProfitabilityTipHTML needs every mover to
            // compute an accurate "other brands/platforms" remainder for whatever it doesn't show
@@ -13116,7 +13131,20 @@ function campBreakevenUplift(a,c){
   const brandForCost=c.brand==='All Brands'?'Oregano':c.brand;
   const comm=commissionRateFor(c.aggregator,brandForCost,c.startDate);
   const food=foodPkgPct(brandForCost);
-  const unitMargin=(1-a.actualDiscDepth)*(1-comm)-food; // contribution per AED of gross at this depth
+  // v471: Keeta FD, per Nikhil directly ("subtract the FD cost, same as commission"). a's own
+  // baseContribPerDay (used below) already has FD subtracted — campAnalysisV2 fixed that. What
+  // was still missing is HERE: unitMargin is a forward-looking assumed rate ("how much
+  // contribution does each future AED of gross yield at this discount depth"), used to work out
+  // how much MORE gross is needed to clear the baseline contribution target — and that rate had
+  // no FD term at all, so it assumed every future AED of Keeta gross keeps more of itself than
+  // it really will once FD is subtracted, understating the uplift actually required to break
+  // even. FD is a flat per-order AED amount, not naturally a %-of-gross rate like commission or
+  // food cost — approximated here as a fraction of gross using the campaign's own observed
+  // baseline AOV (KEETA_FD_COST/baseGrossAOV), the best available forward-looking basis since
+  // this function is inherently a projection, not a backward-facing observed calculation the
+  // way campAnalysisV2's own real per-order FD figures are. Zero effect on non-Keeta campaigns.
+  const fdFrac=(c.aggregator==='Keeta'&&baseGrossAOV>0)?KEETA_FD_COST/baseGrossAOV:0;
+  const unitMargin=(1-a.actualDiscDepth)*(1-comm)-food-fdFrac; // contribution per AED of gross at this depth
   if(unitMargin<=0)return{impossible:true};
   const reqGrossPerDay=a.baseContribPerDay/unitMargin;
   const reqOrdersPerDay=reqGrossPerDay/baseGrossAOV;
@@ -13155,12 +13183,30 @@ function campTrajectory(c){
     const cs=sumR(cR);
     let segDisc=0;for(const dd in dailyAlloc){if(dd>=segStart&&dd<=segEnd)segDisc+=dailyAlloc[dd];}
     const cGross=cs.sales+segDisc;
-    const cContrib=brandContribution(c.aggregator,brandForCost,cs.sales,cGross,c.startDate);
+    let cContrib=brandContribution(c.aggregator,brandForCost,cs.sales,cGross,c.startDate);
     const bS=subDays(segStart,off),bE=subDays(segEnd,off);
     const bR=brandRecs.filter(r=>r.date>=bS&&r.date<=bE&&flt(r));
     const bsg=sumR(bR);
     const bGross=bsg.sales+(bsg.disc||0);
-    const bContrib=brandContribution(c.aggregator,brandForCost,bsg.sales,bGross,c.startDate);
+    let bContrib=brandContribution(c.aggregator,brandForCost,bsg.sales,bGross,c.startDate);
+    // v471: same Keeta FD fix as computeProfitability/campAnalysisV2/campRecentWindowAnalysis,
+    // applied at the per-SEGMENT level here — per Nikhil directly ("subtract the FD cost, it's
+    // a cost as well, same as commission"). Each segment's contribution was computed via
+    // brandContribution() directly, completely independent of the analysis object `a` this
+    // function ALSO reads from `campAnalysisCached(c)` — so even though the campaign-level
+    // totals had already been fixed, the per-segment trajectory (the actual thing that decides
+    // the "Was working, now losing money" verdict) never was. Same permissive-matcher pattern
+    // as computeProfitability: keetaCampWindowStats with ()=>true sums real FD across every
+    // order in this brand+outlet window regardless of which specific campaign it's linked to,
+    // matching this segment's own "all activity in this window" semantics — not scoped to one
+    // campaign's own orders the way the original campaign-popup fix was. Zero effect on non-
+    // Keeta aggregators; only adjusts anything when exact Keeta order data covers the window.
+    if(c.aggregator==='Keeta'){
+      const cKw=keetaCampWindowStats(c,segStart,segEnd,outletSet,()=>true);
+      cContrib-=cKw?cKw.fd:cs.orders*KEETA_FD_COST;
+      const bKw=keetaCampWindowStats(c,bS,bE,outletSet,()=>true);
+      bContrib-=bKw?bKw.fd:bsg.orders*KEETA_FD_COST;
+    }
     segs.push({segStart,segEnd,days,orders:cs.orders,sales:cs.sales,disc:segDisc,
       incrContribPerDay:(cContrib/days)-(bContrib/days),
       incrOrdersPerDay:(cs.orders/days)-(bsg.orders/days),
@@ -13243,6 +13289,74 @@ function campFcMatchSaved(c){
   if(!candidates.length)return null;
   candidates.sort((a,b)=>b.savedAt.localeCompare(a.savedAt));
   return candidates[0];
+}
+// v472: "Compare vs Similar Campaigns" ported into the Campaign Planner — the one confirmed
+// gap left once baseline explainer/Similar Campaigns tracking turned out to be more done than
+// last reported (baseline explainer was ALREADY in the Planner; only this was genuinely
+// missing). Adapted, not copy-pasted, from the standalone campDetailV2HTML version right below
+// this function: that version compares one REAL campaign's own results against similar past
+// ones; the Planner has no "current campaign" with real results yet — it's a hypothetical being
+// planned, not something that's already run. So this shows the same real-campaign comparison
+// table (same brand+aggregator, ranked by contribution/order, same six caveats) WITHOUT a
+// "current" row — deliberately did not try to insert the forecast's own numbers as a comparable
+// row either: a forecast's expected figures are INCREMENTAL (uplift vs baseline), while this
+// table's contribution/order is a TOTAL figure from real completed campaigns — mixing the two
+// would be comparing genuinely different metrics under the same column header, which is worse
+// than just leaving the row out. The real historical campaigns alone still give the calibration
+// value Nikhil asked for: what discount depths has this brand+aggregator actually run, and how
+// did each one's total economics turn out.
+function campPlanSimilarCampaignsHTML(){
+  if(!campPlanBrand||!campPlanAgg||typeof campaignData==='undefined')return'';
+  const T=campTheme();
+  const candidates=campaignData.filter(x=>
+    x.brand===campPlanBrand&&x.aggregator===campPlanAgg&&!isRewardsCampaign(x)&&
+    (campStatus(x)==='Completed'||campStatus(x)==='Running')
+  ).sort((x,y)=>y.startDate.localeCompare(x.startDate)).slice(0,6);
+  const rows=[];
+  candidates.forEach(x=>{
+    try{
+      const xa=campAnalysisCached(x);
+      if(!xa.hasData)return;
+      rows.push({campaign:x,orders:xa.cs.orders,discPct:xa.discPctOfGross,discCost:xa.ourDiscCost,contribution:xa.campContribTotal});
+    }catch(e){/* skip campaigns whose analysis errors */}
+  });
+  if(rows.length<1)return'';
+  const withPerOrder=rows.map(r=>({...r,contribPerOrder:r.orders>0?r.contribution/r.orders:0}));
+  withPerOrder.sort((x,y)=>y.contribPerOrder-x.contribPerOrder);
+  const tableRows=withPerOrder.map(r=>`<tr style="border-bottom:1px solid ${T.border}">
+    <td style="padding:10px 12px;font-size:12.5px;font-weight:700;color:${T.text}">${esc(r.campaign.name||'Campaign')}<div style="font-size:10.5px;color:${T.muted};font-weight:600;margin-top:2px">${fmtShort(r.campaign.startDate)} – ${fmtShort(r.campaign.endDate)}</div></td>
+    <td style="padding:10px 12px;text-align:right;font-size:13px;font-weight:700;color:${T.text}">${r.orders.toLocaleString()}</td>
+    <td style="padding:10px 12px;text-align:right;font-size:13px;font-weight:700;color:${T.text}">${r.discPct!=null?r.discPct.toFixed(0)+'%':'—'}</td>
+    <td style="padding:10px 12px;text-align:right;font-size:13px;font-weight:700;color:#EF4444">${fmtAEDx(r.discCost)}</td>
+    <td style="padding:10px 12px;text-align:right;font-size:13px;font-weight:800;color:${r.contribution>=0?'#22C55E':'#EF4444'}">${r.contribution>=0?'+':''}${fmtAEDx(r.contribution)}</td>
+    <td style="padding:10px 12px;text-align:right;font-size:14px;font-weight:800;color:${r.contribPerOrder>=0?'#22C55E':'#EF4444'}">${r.contribPerOrder>=0?'+':''}${fmtAEDx(r.contribPerOrder)}</td>
+  </tr>`).join('');
+  return `<div style="background:${T.panelBg};border:0.5px solid ${T.border};border-radius:12px;padding:14px 16px;margin-top:14px">
+    <div style="font-size:13px;font-weight:700;color:${T.text};margin-bottom:4px">📊 Compare vs Similar Campaigns</div>
+    <div style="font-size:10px;color:${T.muted};margin-bottom:10px">Real past ${esc(campPlanBrand)} × ${esc(campPlanAgg)} campaigns, ranked by contribution per order — what discount depths have actually been tried and how each one's total economics turned out. Not the same as your forecast's numbers above, which are incremental vs baseline; this is each campaign's own total.</div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+      <thead><tr style="background:${T.rowBg};border-bottom:1px solid ${T.border}">
+        <th style="text-align:left;padding:8px 12px;font-size:10.5px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.4px">Campaign</th>
+        <th style="text-align:right;padding:8px 12px;font-size:10.5px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.4px">Orders</th>
+        <th style="text-align:right;padding:8px 12px;font-size:10.5px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.4px">Discount %</th>
+        <th style="text-align:right;padding:8px 12px;font-size:10.5px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.4px">Discount Given</th>
+        <th style="text-align:right;padding:8px 12px;font-size:10.5px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.4px">Total Contribution</th>
+        <th style="text-align:right;padding:8px 12px;font-size:10.5px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.4px">Contribution / Order</th>
+      </tr></thead>
+      <tbody>${tableRows}</tbody>
+    </table></div>
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer;font-size:10.5px;font-weight:700;color:${T.muted}">Read this with caution — six things it doesn't account for</summary>
+      <div style="font-size:10.5px;color:${T.secondary};line-height:1.8;margin-top:6px;padding-left:2px">
+        1. Doesn't show whether discounting helped at all versus running no promotion.<br>
+        2. These campaigns ran in different weeks — demand, weather, and season differ.<br>
+        3. Higher-volume campaigns can build ranking, repeat customers, and reach this table can't see.<br>
+        4. Different co-funding levels make "our contribution" look better for whichever campaign got the bigger aggregator subsidy.<br>
+        5. Average order size can differ between campaigns, so contribution-per-order isn't perfectly apples-to-apples.<br>
+        6. Short campaigns are small samples — one big order or a slow day can swing the numbers.
+      </div>
+    </details>
+  </div>`;
 }
 function campDetailV2HTML(c,idx){
   const T=campTheme();
@@ -14802,6 +14916,7 @@ function campPlanHTML(){
     ${campPlanSaveMsg?`<span style="font-size:11px;color:${campPlanSaveMsg.startsWith('✅')?'#22C55E':'#EF4444'};align-self:center">${campPlanSaveMsg}</span>`:''}
     <button onclick="campPlanExport()" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#16a34a;padding:5px 14px;font-size:11px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px">⬇ Export forecast + post-campaign tracker</button>
   </div>
+  ${campPlanSimilarCampaignsHTML()}
   <div style="background:${T.panelBg};border:0.5px solid ${T.border};border-radius:12px;padding:14px 16px;margin-top:14px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px"><div style="font-size:13px;font-weight:700;color:${T.text}">📜 Forecast History</div>${(campFcHistory&&campFcHistory.length)?`<button onclick="campFcHistoryExport()" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#16a34a;padding:4px 10px;font-size:10.5px;cursor:pointer;font-weight:600">⬇ Export forecast accuracy</button>`:''}</div>
     <div style="font-size:10px;color:${T.muted};margin-bottom:8px">Every saved forecast, compared against the real campaign once one matching those parameters actually runs — shared with the Campaign Forecaster, regardless of which tool a given forecast was saved from.</div>
