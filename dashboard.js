@@ -13,13 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-464";
+const BUILD_VERSION="2026-08-13-466";
 const BUILD_NOTES=[
+  "🔧 Feedback trend chart, three real fixes from Nikhil's own screenshots. (1) Switching FROM Index mode back to Count left bars never appearing — real bug, confirmed and root-caused: Index mode's chart is type:'line' with two line datasets; the Count/rate branch's replayTrend() assumes type:'bar', and Chart.js can't change a chart's type after creation. The old staleness check only looked at whether the canvas ELEMENT had changed, not whether the leftover chart instance was even the right SHAPE for the new mode, so it fed new numbers into a chart still rendering as two lines — no bars, ever. Every chart instance is now tagged with the mode it was built for (_trendMode); a mismatch is treated exactly like a stale canvas — destroy and rebuild, not reuse. Verified by literally reproducing the reported sequence (draw Index, then draw Count) and confirming a real type:'bar' chart gets created on the switch, not silently skipped. (2) Index tooltip showed bare numbers like '87' and '101' with no way to know what they meant — fixed to lead with the real count/order number and put the index value in parentheses as the secondary detail, using data that was already computed, not new. (3) Per Nikhil directly, 'we don't need both' — merged Count and % into one view (bars stay count, since a raw number reads more intuitively than a % that looks nearly flat month to month) with rate now always shown alongside count in the same tooltip instead of needing a separate click to see it; the % toggle button is gone, Index stays as the second (and now only other) view. Verified all three with real functional tests: the mode-switch bug reproduction, and tooltip callbacks called directly with real numbers confirming both the Index tooltip ('Complaints: 22 (index 122)') and the merged Count tooltip (returns ['Complaints: 22', 'Rate: 0.07%'] as separate lines) render correctly. Full script execution re-run clean.",
+  "🔍 Trending Terms now scans ALL categories, not just whatever Category filter is active — real gap Nikhil caught by directly asking why a Category=Spilled filter showed 22 on the graph but only 11 in Trending Terms. Two separate findings, not one: (1) most of that gap is inherent — the term match only counts a complaint if its TEXT literally contains 'spilled'/'leaking'/'messy'/'spill'; a complaint tagged Spilled but worded differently (e.g. 'box was crushed') is counted in the 22 but can't match the term. Not a bug, just two different definitions (human category tag vs literal keyword scan). (2) a real one: Trending Terms was built to catch 'the same underlying issue... regardless of which category it got logged under' (its own code comment), but was actually running on feedbackFilteredRecords(), which DOES apply the active Category filter — so with any category selected, it could only ever see that one category's own text, silently defeating the entire cross-category point of the feature. New feedbackFilteredRecordsIgnoringCategory() (same filters minus Category) now feeds Trending Terms specifically — every other card (graph, alert banner, KPIs) is untouched and still respects Category exactly as before. Deliberately NOT restricted to the Category-filtered date range either, so a different category's later-month feedback can't get silently cut off. Added a header note when a Category filter is active, clarifying the counts span all categories on purpose. Verified with a real functional test built around the exact reported scenario: a Taste-tagged complaint whose text also says 'spilled' was invisible to the old category-scoped version and correctly appears under 'Spilled / mishandled' with the new one — confirmed by inspecting the actual matched record's category, not just a count. Full script execution re-run clean.",
   "📈 Feedback page: new 'Index' mode on the complaints trend chart — per Nikhil's design request, answering 'is this rise just proportional to order growth, or genuinely outpacing it' at a glance, which neither the existing Count nor % view did directly. Third toggle button next to Count/%. Both complaints and orders indexed to their own first non-zero month (standard growth-index convention) as two lines on ONE shared scale — the gap between them IS the signal: tracking together = normal, complaints pulling ahead = a real ops flag, not just more orders. Alert tag (red/green) computed from real numbers, not fabricated — flags the month with the largest complaints-vs-orders index gap when it exceeds 15pts (a starting threshold, easy to move). Both lines animate with a slowed (3200ms), dot-free snake-draw — same clip-rect technique as this chart's own existing bar+line snake animation, adapted to run on two lines together with no bar phase, matching the timing Nikhil approved for the Overview page's own line-draw (build 459) rather than reusing this chart's faster 1400ms. REAL BUG CAUGHT AND FIXED DURING BUILD: the first version used an early `return` inside the Index-mode branch, which — since JS return exits the nearest FUNCTION, not just the enclosing if-block — silently skipped the outlet chart entirely (a completely separate chart drawn later in the same function) every time Index mode was active. Caught by a functional test specifically checking for this (tracked every `new Chart()` call and asserted the outlet chart still fires), not by visual inspection — fixed by restructuring into a proper if/else so control flow reaches the outlet-chart code unconditionally. Also caught and fixed a second real bug the same way: an initial test using `global.feedbackTrendChartMode='index'` from outside the script never actually changed anything, because that `let` is scoped to the script's own execution, not the Node global object — same class of scoping mistake flagged elsewhere in this file's own history; fixed by setting the variable through a hook appended to the same script scope, not from outside it. Verified end-to-end: Index mode draws a 'line' chart, Count mode still draws its original 'bar' chart, outlet chart fires in both, and the alert tag correctly computes real numbers for a real spike case (a 5x complaint jump against 15% order growth correctly triggered the red alert with the right month name and a 385pt gap, not a fabricated one). Full script execution re-run clean.",
   "🚚 Keeta FD cost, extended to Overview/Brands/Outlets/Platforms/Compare — the bigger gap flagged last session: the build-458/462 fix only reached campAnalysisV2/campRecentWindowAnalysis (the Campaigns-page analysis functions), so FD was still completely missing from every other page's Contribution figure, on ANY day with no linked campaign to anchor it to. Fixed at the true shared source this time — computeProfitability(), the one function that actually powers the Contribution number shown across all of those pages. Reuses keetaCampWindowStats() with an always-match campaignMatcher (()=>true) instead of the usual single-campaign filter, so it sums real per-order FD across EVERY campaign bucket for a brand's in-view date range and outlets — including Keeta's own '(Unattributed)' bucket, which is exactly where an FD-only order with no linked discount campaign already lands per the upload parser's own attribution logic. Only ever adjusts anything when an exact Keeta orders file covers that date range — silently does nothing otherwise, same 'real data or no adjustment' rule as everywhere else FD is handled here. Zero effect on non-Keeta aggregators. Verified with a real three-part test: a no-exact-data control (unchanged from before this fix), a case with both a campaign-linked order (FD 40) and an Unattributed no-campaign order (FD 30) — confirmed exactly 70 AED subtracted, not more, not less — and a Talabat regression check confirming complete non-interference. NOT yet done: computeProfitabilityBreakdown() (the Compare page's own A/B popup) computes commission/food by hand rather than through this same function, so it still has this identical gap, unfixed, flagged not silently left inconsistent. Also NOT done: campTrajectory/campBreakevenUplift (the 'Continue?' verdict and Break-Even Calculator) — same gap, same fix pattern would apply, not yet built. Also fixed the same day: Forecast History's reopened snapshot was missing order counts and incremental contribution entirely (only showed uplift%/net sales/merchant disc/roi) even though those fields ARE saved on every record — added them, with the live Planner card's absolute orders/day headline reconstructed from baseline.dailyOrders + the scenario's own incrOrdersPerDay, both real saved fields. Full script execution re-run clean.",
-  "📂 Forecast History rows are now clickable — real gap Nikhil caught: only Export and Delete existed on each row, there was never a way to reopen a past forecast. Per his explicit choice (option B — faithful snapshot, not a live recompute, after being offered both): clicking a row expands it in place to show the EXACT saved numbers (all three scenarios' uplift/net sales/merchant disc/ROI, the baseline they were measured against, build version, actual-result comparison), never recomputed — a true record of what was decided at the time, not a moving target. New campFcReopenForecast()/campFcSnapshotHTML(), modeled directly on the existing campPlanApplyUpcoming() pattern for populating the Planner form (simpler here — a saved forecast already carries structured discPct/cap/type, no regex-guessing from freeform text needed). The Planner's own inputs get loaded too and the page scrolls up to them, so a live re-run against today's data is one click away via the snapshot's own 'Run against today's data' button — but campPlanResult is deliberately left untouched until that button is clicked, keeping 'view the snapshot' and 'recompute live' as two distinct actions, not one that surprises the other. Second click on the same row collapses it. Delete (✕) now stops event propagation so deleting a row doesn't also toggle it open. Verified with real functional tests: first click expands + populates every Planner field correctly + leaves campPlanResult null; second click on the same id collapses; the snapshot panel itself renders all three scenario cards, the baseline line, the actual-result block and the Run button with correct values. Full script execution re-run clean.",
-  "🔧 Two REAL root causes, not more guessing. (1) KPI count-up 'didn't work at all' — because renderOverview() doesn't actually use the .kpi/.v markup the animation was built for; it uses a completely different helper, kpiCard(), whose value div had NO class at all. querySelectorAll('.kpi .v') found zero elements on the actual page Nikhil was looking at, so nothing ever animated — not a speed problem, a wrong-selector problem. Added a kpi-value-num class to kpiCard()'s own value div and widened animateKpiCountUp's selector to catch both patterns. Also fixed a real regression this surfaced: some KPI values (fmtAEDTip's abbreviated AED figures) come wrapped in a hover-tooltip <span title='exact figure'>, which the animation's old textContent-only landing was silently stripping every single time it ran — now captures innerHTML up front and restores THAT at the end, not textContent, so the tooltip survives. Verified both: a mock kpiCard-shaped element now animates correctly, and a tooltip-wrapped value comes out byte-identical after the animation completes. (2) Hourglass position/size, per Nikhil directly ('after the S in Campaigns', 'after the E in Ads Performance', 'too small to notice') — two prior guesses (a fixed top/right offset, then inside the segment bar) both missed because neither actually looked at the label's real text position, which this file has no visibility into (the sidebar HTML lives outside dashboard.js). New insertHourglassAfterLabel() does what buildSidebarNav() already does for this exact same blind spot: walks the tab's actual text nodes via TreeWalker, finds the one that IS the label ('Campaigns' / 'Ads Performance'), and inserts immediately after it — so it lands in the right place regardless of unknown surrounding markup, instead of a third coordinate guess. Bumped 9px→16px. Verified against two different plausible tab structures (label as its own wrapped span, and as a raw text node with no wrapper) — lands correctly in both. Full script execution re-run clean throughout.",
-  "🔧 Two real bugs from Nikhil's very next screenshot, both same-day. (1) KPI count-up 'didn't work at all' — because it was hooked into gp(), the tab-CLICK handler, but gp() is only one of several callers of the shared renderPage() dispatcher: fApply/fToggle/fClear (filters), sortTableBy, dismissRec/undismissRec, and critically the very FIRST render on initial dashboard load all call renderPage(curPage) directly, bypassing gp() entirely. So the animation only had a chance to fire if someone clicked a DIFFERENT nav tab and back — never on first load, never after a filter, never after sorting. Exact same class of bug as the existing v286 tooltip fix in this same function (initCalcTip similarly tucked into one incidental caller instead of the shared dispatcher) — same fix: moved the hook to renderPage() itself, the one function every repaint actually funnels through. Verified for real this time: called renderPage() directly (not gp()) with a fake page name matching none of the dispatch branches, confirmed the setTimeout still fires and animateKpiCountUp still queues a real animation frame — proving the hook no longer depends on which caller triggered the render. (2) Hourglass misaligned, per screenshot — it was a separate absolutely-positioned element guessing its own top:2px;right:3px on the tab, landing disconnected from the row, floating above it near the previous row's boundary. Rebuilt as one more flex child INSIDE the segments bar itself (align-items:flex-end) — the one piece of this whole indicator already proven to render in the right place, since it's the visible green bar in Nikhil's own screenshot — instead of a second guessed offset. Full script execution re-run clean; (2) still needs Nikhil's eyes on the real page, same caveat as last build for anything Chart.js/CSS-rendering that this sandbox can't visually confirm."
+  "📂 Forecast History rows are now clickable — real gap Nikhil caught: only Export and Delete existed on each row, there was never a way to reopen a past forecast. Per his explicit choice (option B — faithful snapshot, not a live recompute, after being offered both): clicking a row expands it in place to show the EXACT saved numbers (all three scenarios' uplift/net sales/merchant disc/ROI, the baseline they were measured against, build version, actual-result comparison), never recomputed — a true record of what was decided at the time, not a moving target. New campFcReopenForecast()/campFcSnapshotHTML(), modeled directly on the existing campPlanApplyUpcoming() pattern for populating the Planner form (simpler here — a saved forecast already carries structured discPct/cap/type, no regex-guessing from freeform text needed). The Planner's own inputs get loaded too and the page scrolls up to them, so a live re-run against today's data is one click away via the snapshot's own 'Run against today's data' button — but campPlanResult is deliberately left untouched until that button is clicked, keeping 'view the snapshot' and 'recompute live' as two distinct actions, not one that surprises the other. Second click on the same row collapses it. Delete (✕) now stops event propagation so deleting a row doesn't also toggle it open. Verified with real functional tests: first click expands + populates every Planner field correctly + leaves campPlanResult null; second click on the same id collapses; the snapshot panel itself renders all three scenario cards, the baseline line, the actual-result block and the Run button with correct values. Full script execution re-run clean."
 ];
 
 
@@ -18651,20 +18651,17 @@ let _feedbackTrendObserver=null; // tracked so any previous observer can be disc
 let feedbackShowCustom=false;       // top-section Option C: presets shown by default, granular month chips + dimension filters hidden behind this
 let feedbackHeatmapMode='count';    // 'count' or 'rate' — which face of the flip heatmap is showing
 let feedbackCompareMode='row';      // 'column' (vs other categories this month) or 'row' (vs this category's own history) — defaults to row per confirmed preference
-let feedbackTrendChartMode='count'; // 'count', 'rate', or 'index' — which the trend chart currently shows
+let feedbackTrendChartMode='count'; // 'count' (merged count+rate, both shown on hover) or 'index' — which the trend chart currently shows
 let feedbackLastOverviewContext=null; // cached {months,dimRecs,outletRanked,chartCatShort} from the last full render, so mode toggles can redraw the chart directly
 function feedbackSetTrendChartMode(mode){
   if(mode===feedbackTrendChartMode)return;
   feedbackTrendChartMode=mode;
   const btnCount=document.getElementById('feedback-trend-mode-count');
-  const btnRate=document.getElementById('feedback-trend-mode-rate');
   const btnIndex=document.getElementById('feedback-trend-mode-index');
-  if(btnCount&&btnRate&&btnIndex){
+  if(btnCount&&btnIndex){
     const mutedColor=btnCount.dataset.mutedColor;
     btnCount.style.background=mode==='count'?'#EA8C3A':'transparent';
     btnCount.style.color=mode==='count'?'#fff':mutedColor;
-    btnRate.style.background=mode==='rate'?'#EA8C3A':'transparent';
-    btnRate.style.color=mode==='rate'?'#fff':mutedColor;
     btnIndex.style.background=mode==='index'?'#EA8C3A':'transparent';
     btnIndex.style.color=mode==='index'?'#fff':mutedColor;
   }
@@ -18854,6 +18851,31 @@ function feedbackFilteredRecords(){
     if(feedbackFilterYear&&!r.date.startsWith(feedbackFilterYear))return false;
     if(feedbackFilterMonths.size&&!feedbackFilterMonths.has(r.month))return false;
     if(feedbackFilterCategory&&r.category!==feedbackFilterCategory)return false;
+    if(feedbackFilterAggregator&&r.aggregator!==feedbackFilterAggregator)return false;
+    if(feedbackFilterOutlet&&r.branch!==feedbackFilterOutlet)return false;
+    return true;
+  });
+}
+// v465: same as feedbackFilteredRecords() but WITHOUT the Category check — built specifically
+// for Trending Terms, per Nikhil directly catching that the feature wasn't doing what its own
+// code comment says it does ("catches the same underlying issue... regardless of which category
+// it got logged under"). It was actually running on feedbackFilteredRecords(), which DOES apply
+// the Category filter — so with any category selected, keyword-matching could only ever see
+// that one category's own text, silently defeating the entire cross-category point of the
+// feature. This is real, not a hypothetical: confirmed against Nikhil's own numbers — 22
+// complaints tagged "Spilled / mishandled" for September, but only 11 whose TEXT literally
+// contains one of the four trigger words (spilled/leaking/messy/spill) — the other 11 are
+// either worded differently within that same category, OR exactly the cross-category case this
+// fix restores: a complaint filed under a DIFFERENT category (e.g. Taste) that happens to
+// mention one of those words too, previously invisible to this table no matter what. Every
+// other card on the page (the graph, the alert banner, KPI totals) keeps using the regular
+// feedbackFilteredRecords() and still respects the Category filter exactly as before — this
+// change is scoped to Trending Terms alone.
+function feedbackFilteredRecordsIgnoringCategory(){
+  if(!feedbackData||!feedbackData.records)return[];
+  return feedbackData.records.filter(r=>{
+    if(feedbackFilterYear&&!r.date.startsWith(feedbackFilterYear))return false;
+    if(feedbackFilterMonths.size&&!feedbackFilterMonths.has(r.month))return false;
     if(feedbackFilterAggregator&&r.aggregator!==feedbackFilterAggregator)return false;
     if(feedbackFilterOutlet&&r.branch!==feedbackFilterOutlet)return false;
     return true;
@@ -19224,8 +19246,7 @@ function feedbackBuildOverview(T){
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;flex-wrap:wrap;gap:8px">
       <div class="ct">Total complaints and rate, by month <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a bar to select that month for Detail</span></div>
       <div style="display:inline-flex;background:${T.rowBg2||T.rowBg};border:1px solid ${T.border};border-radius:7px;padding:3px">
-        <button id="feedback-trend-mode-count" data-muted-color="${trendMutedColor}" onclick="feedbackSetTrendChartMode('count')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackTrendChartMode==='count'?'#EA8C3A':'transparent'};color:${feedbackTrendChartMode==='count'?'#fff':trendMutedColor}">Count</button>
-        <button id="feedback-trend-mode-rate" data-muted-color="${trendMutedColor}" onclick="feedbackSetTrendChartMode('rate')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackTrendChartMode==='rate'?'#EA8C3A':'transparent'};color:${feedbackTrendChartMode==='rate'?'#fff':trendMutedColor}">%</button>
+        <button id="feedback-trend-mode-count" data-muted-color="${trendMutedColor}" onclick="feedbackSetTrendChartMode('count')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackTrendChartMode==='count'?'#EA8C3A':'transparent'};color:${feedbackTrendChartMode==='count'?'#fff':trendMutedColor}">Trend</button>
         <button id="feedback-trend-mode-index" data-muted-color="${trendMutedColor}" onclick="feedbackSetTrendChartMode('index')" title="Complaints growth vs order growth, both indexed to the first month" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackTrendChartMode==='index'?'#EA8C3A':'transparent'};color:${feedbackTrendChartMode==='index'?'#fff':trendMutedColor}">Index</button>
       </div>
     </div>
@@ -19341,7 +19362,16 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
           plugins:{legend:{display:false},
             tooltip:{callbacks:{
               title:items=>{const i=items[0].dataIndex;return new Date(months[i]+"-01T12:00:00").toLocaleDateString("en-AE",{month:"long",year:"numeric"});},
-              label:c=>c.dataset.label+': '+c.parsed.y.toFixed(0)
+              // v466: real gap Nikhil caught — "87" and "101" mean nothing on their own to
+              // someone who only thinks in complaint counts and order counts. Every tooltip
+              // line now leads with the real number (already computed above as counts/orderVol
+              // — no new data, just surfacing what was already there) and puts the index value
+              // in parentheses as the secondary, technical detail for anyone who does want it.
+              label:c=>{
+                const i=c.dataIndex;
+                if(c.datasetIndex===0)return'Complaints: '+counts[i]+' (index '+c.parsed.y.toFixed(0)+')';
+                return'Total orders: '+orderVol[i].toLocaleString()+' (index '+c.parsed.y.toFixed(0)+')';
+              }
             }}
           },
           scales:{
@@ -19351,6 +19381,7 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
         plugins:[idxSnakeClip]
       });
       idxChart._idxSnakeProgress=0;
+      idxChart._trendMode='index';
       charts['feedback-trend-chart']=idxChart;
       startIdxSnake(idxChart);
       const idxObs=new IntersectionObserver((entries)=>{
@@ -19362,7 +19393,10 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
       _feedbackTrendObserver=idxObs;
     }else{
     const selected=feedbackFilterMonths.size?months.map(m=>feedbackFilterMonths.has(m)):months.map(()=>true);
-    const newData=feedbackTrendChartMode==='count'?counts:rates;
+    // v466: was a count/rate ternary — dead now that % is merged into this same view (rate is
+    // still shown, just in the tooltip alongside count, not as a separate bar-height mode).
+    // Bars are always count; feedbackTrendChartMode can only be 'count' inside this branch.
+    const newData=counts;
     const barColors=selected.map(s=>s?'#FF8A3Dcc':'#FF8A3D33');
     // v248: month labels — two-line, year shown as a second line only at January (year
     // boundary), so a chart spanning multiple years is disambiguated without cluttering every
@@ -19436,7 +19470,17 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
       chart.update(); // animated 0→real, triggers onComplete below → startLineSnake
     }
     const existing=charts['feedback-trend-chart'];
-    const isStale=existing&&existing.canvas!==trendCtx; // canvas element changed = page was rebuilt elsewhere, this instance is detached
+    // v466: real bug Nikhil caught — switching FROM Index mode back to Count left the bars
+    // never appearing at all. isStale only checked whether the canvas ELEMENT had changed
+    // (a page rebuild elsewhere), not whether the EXISTING chart instance was even the right
+    // SHAPE for this mode. Index mode's chart is type:'line' with two line datasets; this
+    // branch's replayTrend() assumes type:'bar' with dataset[0] as bars — Chart.js can't change
+    // a chart's type after creation, so calling replayTrend on a leftover Index-mode instance
+    // just fed new numbers into a chart still rendering everything as lines, no bars ever drawn.
+    // Now every chart instance is tagged with the mode it was actually built for at creation
+    // (_trendMode, set on both this chart and the Index-mode one below); a mismatch is treated
+    // exactly like a stale canvas — destroy and rebuild fresh instead of reusing the wrong shape.
+    const isStale=existing&&(existing.canvas!==trendCtx||existing._trendMode!=='count');
     if(isStale){destroyChart('feedback-trend-chart');}
     if(charts['feedback-trend-chart']&&!isStale){
       // Count/% toggle — same chart instance, new bar values. Replays the full sequence.
@@ -19466,19 +19510,28 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
           plugins:{legend:{display:false},
             tooltip:{callbacks:{
               title:items=>{const i=items[0].dataIndex;const mo=months[i];return new Date(mo+"-01T12:00:00").toLocaleDateString("en-AE",{month:"long",year:"numeric"});},
-              label:c=>c.dataset.label==='Total orders'?'Total orders: '+c.parsed.y.toLocaleString():'Complaints: '+c.parsed.y+(feedbackTrendChartMode==='rate'?'%':'')
+              // v466: per Nikhil directly — merge Count and % into one view, hover shows all
+              // three real numbers together instead of needing two separate toggled views to
+              // see count vs rate. Bars stay count-based (a raw number reads more intuitively
+              // than a % that can look nearly flat month to month); rate is now always alongside
+              // it, not a separate mode.
+              label:c=>{
+                const i=c.dataIndex;
+                if(c.dataset.label==='Total orders')return'Total orders: '+c.parsed.y.toLocaleString();
+                return['Complaints: '+counts[i],'Rate: '+rates[i]+'%'];
+              }
             }}
           },
           scales:{
-            y:{position:'left',grid:{color:_darkPage?'rgba(255,255,255,.06)':'#F1F5F9'},ticks:{color:axisColor,font:{size:12,weight:'600'},callback:v=>feedbackTrendChartMode==='rate'?v+'%':v}},
+            y:{position:'left',grid:{color:_darkPage?'rgba(255,255,255,.06)':'#F1F5F9'},ticks:{color:axisColor,font:{size:12,weight:'600'}}},
             y1:{position:'right',grid:{display:false},ticks:{color:lineColor,font:{size:12,weight:'600'},callback:v=>v>=1000?(v/1000)+'k':v}},
             x:{grid:{display:false},ticks:{color:axisColor,font:{size:12,weight:'600'}}}
           }},
         plugins:[snakeClipPlugin]
       });
       chart._snakeProgress=0;
+      chart._trendMode='count';
       charts['feedback-trend-chart']=chart;
-      // Fires the first reveal (bars 0→real, then the line via onComplete above) as soon as the
       // chart is at least 20% visible, and every time it crosses back into view after that —
       // never disconnected until a fresh chart replaces this one.
       const obs=new IntersectionObserver((entries)=>{
@@ -19664,8 +19717,15 @@ async function renderFeedback(){
   const internalPct=recs.length?internalCount/recs.length*100:0;
 
   // ── Trending terms — same underlying issue caught across different wording and different
-  // categories, from the actual complaint text rather than the pre-assigned category field ──
-  const currThemes=feedbackExtractThemes(recs);
+  // categories, from the actual complaint text rather than the pre-assigned category field.
+  // v465: uses feedbackFilteredRecordsIgnoringCategory(), not `recs` — see that function's own
+  // comment for why. Deliberately NOT further restricted to `range` (recs' own date span) either
+  // — range is derived from the Category-filtered set, so if a different category has feedback
+  // later in the month than "Spilled" does, truncating to range would cut off exactly the
+  // cross-category matches this fix exists to surface. Still respects Year/Month/Aggregator/
+  // Outlet — only Category is dropped.
+  const themeRecs=feedbackFilteredRecordsIgnoringCategory();
+  const currThemes=feedbackExtractThemes(themeRecs);
   const priorThemes=feedbackExtractThemes(priorRecs);
   const themeRows=Object.entries(currThemes).map(([theme,matches])=>{
     const priorCount=(priorThemes[theme]||[]).length;
@@ -19728,7 +19788,7 @@ async function renderFeedback(){
       }
     }
     trendingTermsPanel=`<div class="card" style="padding:12px 14px;margin-bottom:12px">
-      <div class="ct" style="margin-bottom:6px">Trending terms <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· from complaint text, not category tags · click a row for examples</span></div>
+      <div class="ct" style="margin-bottom:6px">Trending terms <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· from complaint text, not category tags · click a row for examples${feedbackFilterCategory?' · counts span ALL categories, not just '+esc((FEEDBACK_TOP_CATEGORIES.find(([full])=>full===feedbackFilterCategory)||[null,feedbackFilterCategory])[1])+' — that\'s the point':''}</span></div>
       ${crossCuttingCallout}
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
         <tr><td></td><td style="text-align:right;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Count</td><td style="text-align:center;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Trend</td><td style="text-align:right;color:${T.muted};padding:3px 8px;font-weight:700;font-size:10.5px">Spread</td><td></td></tr>
