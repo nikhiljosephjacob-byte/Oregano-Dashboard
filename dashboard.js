@@ -13,13 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-463";
+const BUILD_VERSION="2026-08-13-464";
 const BUILD_NOTES=[
+  "📈 Feedback page: new 'Index' mode on the complaints trend chart — per Nikhil's design request, answering 'is this rise just proportional to order growth, or genuinely outpacing it' at a glance, which neither the existing Count nor % view did directly. Third toggle button next to Count/%. Both complaints and orders indexed to their own first non-zero month (standard growth-index convention) as two lines on ONE shared scale — the gap between them IS the signal: tracking together = normal, complaints pulling ahead = a real ops flag, not just more orders. Alert tag (red/green) computed from real numbers, not fabricated — flags the month with the largest complaints-vs-orders index gap when it exceeds 15pts (a starting threshold, easy to move). Both lines animate with a slowed (3200ms), dot-free snake-draw — same clip-rect technique as this chart's own existing bar+line snake animation, adapted to run on two lines together with no bar phase, matching the timing Nikhil approved for the Overview page's own line-draw (build 459) rather than reusing this chart's faster 1400ms. REAL BUG CAUGHT AND FIXED DURING BUILD: the first version used an early `return` inside the Index-mode branch, which — since JS return exits the nearest FUNCTION, not just the enclosing if-block — silently skipped the outlet chart entirely (a completely separate chart drawn later in the same function) every time Index mode was active. Caught by a functional test specifically checking for this (tracked every `new Chart()` call and asserted the outlet chart still fires), not by visual inspection — fixed by restructuring into a proper if/else so control flow reaches the outlet-chart code unconditionally. Also caught and fixed a second real bug the same way: an initial test using `global.feedbackTrendChartMode='index'` from outside the script never actually changed anything, because that `let` is scoped to the script's own execution, not the Node global object — same class of scoping mistake flagged elsewhere in this file's own history; fixed by setting the variable through a hook appended to the same script scope, not from outside it. Verified end-to-end: Index mode draws a 'line' chart, Count mode still draws its original 'bar' chart, outlet chart fires in both, and the alert tag correctly computes real numbers for a real spike case (a 5x complaint jump against 15% order growth correctly triggered the red alert with the right month name and a 385pt gap, not a fabricated one). Full script execution re-run clean.",
   "🚚 Keeta FD cost, extended to Overview/Brands/Outlets/Platforms/Compare — the bigger gap flagged last session: the build-458/462 fix only reached campAnalysisV2/campRecentWindowAnalysis (the Campaigns-page analysis functions), so FD was still completely missing from every other page's Contribution figure, on ANY day with no linked campaign to anchor it to. Fixed at the true shared source this time — computeProfitability(), the one function that actually powers the Contribution number shown across all of those pages. Reuses keetaCampWindowStats() with an always-match campaignMatcher (()=>true) instead of the usual single-campaign filter, so it sums real per-order FD across EVERY campaign bucket for a brand's in-view date range and outlets — including Keeta's own '(Unattributed)' bucket, which is exactly where an FD-only order with no linked discount campaign already lands per the upload parser's own attribution logic. Only ever adjusts anything when an exact Keeta orders file covers that date range — silently does nothing otherwise, same 'real data or no adjustment' rule as everywhere else FD is handled here. Zero effect on non-Keeta aggregators. Verified with a real three-part test: a no-exact-data control (unchanged from before this fix), a case with both a campaign-linked order (FD 40) and an Unattributed no-campaign order (FD 30) — confirmed exactly 70 AED subtracted, not more, not less — and a Talabat regression check confirming complete non-interference. NOT yet done: computeProfitabilityBreakdown() (the Compare page's own A/B popup) computes commission/food by hand rather than through this same function, so it still has this identical gap, unfixed, flagged not silently left inconsistent. Also NOT done: campTrajectory/campBreakevenUplift (the 'Continue?' verdict and Break-Even Calculator) — same gap, same fix pattern would apply, not yet built. Also fixed the same day: Forecast History's reopened snapshot was missing order counts and incremental contribution entirely (only showed uplift%/net sales/merchant disc/roi) even though those fields ARE saved on every record — added them, with the live Planner card's absolute orders/day headline reconstructed from baseline.dailyOrders + the scenario's own incrOrdersPerDay, both real saved fields. Full script execution re-run clean.",
   "📂 Forecast History rows are now clickable — real gap Nikhil caught: only Export and Delete existed on each row, there was never a way to reopen a past forecast. Per his explicit choice (option B — faithful snapshot, not a live recompute, after being offered both): clicking a row expands it in place to show the EXACT saved numbers (all three scenarios' uplift/net sales/merchant disc/ROI, the baseline they were measured against, build version, actual-result comparison), never recomputed — a true record of what was decided at the time, not a moving target. New campFcReopenForecast()/campFcSnapshotHTML(), modeled directly on the existing campPlanApplyUpcoming() pattern for populating the Planner form (simpler here — a saved forecast already carries structured discPct/cap/type, no regex-guessing from freeform text needed). The Planner's own inputs get loaded too and the page scrolls up to them, so a live re-run against today's data is one click away via the snapshot's own 'Run against today's data' button — but campPlanResult is deliberately left untouched until that button is clicked, keeping 'view the snapshot' and 'recompute live' as two distinct actions, not one that surprises the other. Second click on the same row collapses it. Delete (✕) now stops event propagation so deleting a row doesn't also toggle it open. Verified with real functional tests: first click expands + populates every Planner field correctly + leaves campPlanResult null; second click on the same id collapses; the snapshot panel itself renders all three scenario cards, the baseline line, the actual-result block and the Run button with correct values. Full script execution re-run clean.",
   "🔧 Two REAL root causes, not more guessing. (1) KPI count-up 'didn't work at all' — because renderOverview() doesn't actually use the .kpi/.v markup the animation was built for; it uses a completely different helper, kpiCard(), whose value div had NO class at all. querySelectorAll('.kpi .v') found zero elements on the actual page Nikhil was looking at, so nothing ever animated — not a speed problem, a wrong-selector problem. Added a kpi-value-num class to kpiCard()'s own value div and widened animateKpiCountUp's selector to catch both patterns. Also fixed a real regression this surfaced: some KPI values (fmtAEDTip's abbreviated AED figures) come wrapped in a hover-tooltip <span title='exact figure'>, which the animation's old textContent-only landing was silently stripping every single time it ran — now captures innerHTML up front and restores THAT at the end, not textContent, so the tooltip survives. Verified both: a mock kpiCard-shaped element now animates correctly, and a tooltip-wrapped value comes out byte-identical after the animation completes. (2) Hourglass position/size, per Nikhil directly ('after the S in Campaigns', 'after the E in Ads Performance', 'too small to notice') — two prior guesses (a fixed top/right offset, then inside the segment bar) both missed because neither actually looked at the label's real text position, which this file has no visibility into (the sidebar HTML lives outside dashboard.js). New insertHourglassAfterLabel() does what buildSidebarNav() already does for this exact same blind spot: walks the tab's actual text nodes via TreeWalker, finds the one that IS the label ('Campaigns' / 'Ads Performance'), and inserts immediately after it — so it lands in the right place regardless of unknown surrounding markup, instead of a third coordinate guess. Bumped 9px→16px. Verified against two different plausible tab structures (label as its own wrapped span, and as a raw text node with no wrapper) — lands correctly in both. Full script execution re-run clean throughout.",
-  "🔧 Two real bugs from Nikhil's very next screenshot, both same-day. (1) KPI count-up 'didn't work at all' — because it was hooked into gp(), the tab-CLICK handler, but gp() is only one of several callers of the shared renderPage() dispatcher: fApply/fToggle/fClear (filters), sortTableBy, dismissRec/undismissRec, and critically the very FIRST render on initial dashboard load all call renderPage(curPage) directly, bypassing gp() entirely. So the animation only had a chance to fire if someone clicked a DIFFERENT nav tab and back — never on first load, never after a filter, never after sorting. Exact same class of bug as the existing v286 tooltip fix in this same function (initCalcTip similarly tucked into one incidental caller instead of the shared dispatcher) — same fix: moved the hook to renderPage() itself, the one function every repaint actually funnels through. Verified for real this time: called renderPage() directly (not gp()) with a fake page name matching none of the dispatch branches, confirmed the setTimeout still fires and animateKpiCountUp still queues a real animation frame — proving the hook no longer depends on which caller triggered the render. (2) Hourglass misaligned, per screenshot — it was a separate absolutely-positioned element guessing its own top:2px;right:3px on the tab, landing disconnected from the row, floating above it near the previous row's boundary. Rebuilt as one more flex child INSIDE the segments bar itself (align-items:flex-end) — the one piece of this whole indicator already proven to render in the right place, since it's the visible green bar in Nikhil's own screenshot — instead of a second guessed offset. Full script execution re-run clean; (2) still needs Nikhil's eyes on the real page, same caveat as last build for anything Chart.js/CSS-rendering that this sandbox can't visually confirm.",
-  "🎬 Page-open animation pass, per Nikhil's explicit sign-off on three separate interactive demos (not built blind): (1) KPI numbers now count up smoothly from 0 on every page (his pick over three other options shown — specifically NOT the flight-board/digit-roll style from the first demo, which he disliked). New animateKpiCountUp(), hooked into gp() so it applies uniformly wherever the shared .kpi/.v markup is used, not just Overview — parses the already-rendered final text (handles 'AED 612,480', '18,420', '33.2%', negatives) and counts up in place, landing on the exact original string so no formatting is lost; anything that doesn't parse as a clean number is left untouched rather than risking a fabricated value. (2) Line charts now draw left-to-right over 3.2s with no leading dot (his approved tweak — slower than the original 1.4s demo, dot removed) — Chart.js's own default only animates points rising vertically, not a true start-to-end draw, so this needed a real plugin: clips the plotting area to a widening horizontal sliver, driven by the SAME animation's onProgress/onComplete so it can't drift out of sync with the real duration. (3) Bars grow up one after another (dataIndex*90ms stagger) — the very first demo's behavior, approved unchanged throughout, using Chart.js's own documented per-element delay pattern. Also folded in the hourglass loading icon (flips on the Campaigns/Ads nav tabs while loading, removed the same moment the existing green segments clear) — approved as its own standalone mockup earlier in this same round. Verified (1) with a real functional test: drove requestAnimationFrame manually frame-by-frame, confirmed a genuine partial value mid-flight (not a jump), confirmed every element lands on its exact original string, confirmed a non-numeric '—' value is left completely untouched. (2) and (3) are Chart.js internals (animation config merging, canvas clip timing) this sandbox can't render — verified the setup code itself runs clean against a Chart.js-shaped mock (Chart.defaults.datasets.line/bar.animation come out with exactly the expected keys) but the actual on-screen look needs Nikhil's eyes on the real dashboard. Full script execution re-run clean throughout."
+  "🔧 Two real bugs from Nikhil's very next screenshot, both same-day. (1) KPI count-up 'didn't work at all' — because it was hooked into gp(), the tab-CLICK handler, but gp() is only one of several callers of the shared renderPage() dispatcher: fApply/fToggle/fClear (filters), sortTableBy, dismissRec/undismissRec, and critically the very FIRST render on initial dashboard load all call renderPage(curPage) directly, bypassing gp() entirely. So the animation only had a chance to fire if someone clicked a DIFFERENT nav tab and back — never on first load, never after a filter, never after sorting. Exact same class of bug as the existing v286 tooltip fix in this same function (initCalcTip similarly tucked into one incidental caller instead of the shared dispatcher) — same fix: moved the hook to renderPage() itself, the one function every repaint actually funnels through. Verified for real this time: called renderPage() directly (not gp()) with a fake page name matching none of the dispatch branches, confirmed the setTimeout still fires and animateKpiCountUp still queues a real animation frame — proving the hook no longer depends on which caller triggered the render. (2) Hourglass misaligned, per screenshot — it was a separate absolutely-positioned element guessing its own top:2px;right:3px on the tab, landing disconnected from the row, floating above it near the previous row's boundary. Rebuilt as one more flex child INSIDE the segments bar itself (align-items:flex-end) — the one piece of this whole indicator already proven to render in the right place, since it's the visible green bar in Nikhil's own screenshot — instead of a second guessed offset. Full script execution re-run clean; (2) still needs Nikhil's eyes on the real page, same caveat as last build for anything Chart.js/CSS-rendering that this sandbox can't visually confirm."
 ];
 
 
@@ -18651,19 +18651,33 @@ let _feedbackTrendObserver=null; // tracked so any previous observer can be disc
 let feedbackShowCustom=false;       // top-section Option C: presets shown by default, granular month chips + dimension filters hidden behind this
 let feedbackHeatmapMode='count';    // 'count' or 'rate' — which face of the flip heatmap is showing
 let feedbackCompareMode='row';      // 'column' (vs other categories this month) or 'row' (vs this category's own history) — defaults to row per confirmed preference
-let feedbackTrendChartMode='count'; // 'count' or 'rate' — which the trend chart currently shows
+let feedbackTrendChartMode='count'; // 'count', 'rate', or 'index' — which the trend chart currently shows
 let feedbackLastOverviewContext=null; // cached {months,dimRecs,outletRanked,chartCatShort} from the last full render, so mode toggles can redraw the chart directly
 function feedbackSetTrendChartMode(mode){
   if(mode===feedbackTrendChartMode)return;
   feedbackTrendChartMode=mode;
   const btnCount=document.getElementById('feedback-trend-mode-count');
   const btnRate=document.getElementById('feedback-trend-mode-rate');
-  if(btnCount&&btnRate){
+  const btnIndex=document.getElementById('feedback-trend-mode-index');
+  if(btnCount&&btnRate&&btnIndex){
     const mutedColor=btnCount.dataset.mutedColor;
     btnCount.style.background=mode==='count'?'#EA8C3A':'transparent';
     btnCount.style.color=mode==='count'?'#fff':mutedColor;
     btnRate.style.background=mode==='rate'?'#EA8C3A':'transparent';
     btnRate.style.color=mode==='rate'?'#fff':mutedColor;
+    btnIndex.style.background=mode==='index'?'#EA8C3A':'transparent';
+    btnIndex.style.color=mode==='index'?'#fff':mutedColor;
+  }
+  // v464: legend swaps to two lines in Index mode (both series ARE lines there, unlike the
+  // Complaints bar in Count/%) — otherwise the swatch would show a square for a series that's
+  // actually drawn as a line, same inconsistency-bug-class as everything else this session.
+  const legendEl=document.getElementById('feedback-trend-legend');
+  if(legendEl){
+    legendEl.innerHTML=mode==='index'
+      ?`<span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${legendEl.dataset.labelColor||''}"><span style="width:16px;height:2px;background:#DE4A42;border-radius:1px"></span>Complaints (index)</span>
+        <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${legendEl.dataset.labelColor||''}"><span style="width:16px;height:2px;background:#5AB4E8;border-radius:1px"></span>Total orders (index)</span>`
+      :`<span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${legendEl.dataset.labelColor||''}"><span style="width:10px;height:10px;border-radius:2px;background:#FF8A3D"></span>Complaints</span>
+        <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${legendEl.dataset.labelColor||''}"><span style="width:16px;height:2px;background:#5AB4E8;border-radius:1px"></span>Total orders <span style="color:${legendEl.dataset.mutedColor||''}">(hover a point)</span></span>`;
   }
   // v228: redraw the chart directly using the cached context instead of calling renderFeedback()
   // — a full re-render rebuilds the whole page's HTML, which destroys and recreates the canvas
@@ -19212,13 +19226,15 @@ function feedbackBuildOverview(T){
       <div style="display:inline-flex;background:${T.rowBg2||T.rowBg};border:1px solid ${T.border};border-radius:7px;padding:3px">
         <button id="feedback-trend-mode-count" data-muted-color="${trendMutedColor}" onclick="feedbackSetTrendChartMode('count')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackTrendChartMode==='count'?'#EA8C3A':'transparent'};color:${feedbackTrendChartMode==='count'?'#fff':trendMutedColor}">Count</button>
         <button id="feedback-trend-mode-rate" data-muted-color="${trendMutedColor}" onclick="feedbackSetTrendChartMode('rate')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackTrendChartMode==='rate'?'#EA8C3A':'transparent'};color:${feedbackTrendChartMode==='rate'?'#fff':trendMutedColor}">%</button>
+        <button id="feedback-trend-mode-index" data-muted-color="${trendMutedColor}" onclick="feedbackSetTrendChartMode('index')" title="Complaints growth vs order growth, both indexed to the first month" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackTrendChartMode==='index'?'#EA8C3A':'transparent'};color:${feedbackTrendChartMode==='index'?'#fff':trendMutedColor}">Index</button>
       </div>
     </div>
-    <div style="display:flex;gap:14px;margin:6px 0 4px">
+    <div style="display:flex;gap:14px;margin:6px 0 4px" id="feedback-trend-legend" data-label-color="${T.label}" data-muted-color="${T.muted}">
       <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${T.label}"><span style="width:10px;height:10px;border-radius:2px;background:#FF8A3D"></span>Complaints</span>
       <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${T.label}"><span style="width:16px;height:2px;background:#5AB4E8;border-radius:1px"></span>Total orders <span style="color:${T.muted}">(hover a point)</span></span>
     </div>
     <div style="position:relative;height:220px"><canvas id="feedback-trend-chart"></canvas></div>
+    <div id="feedback-trend-alert"></div>
   </div>`;
 
 
@@ -19243,6 +19259,108 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
       return s;
     });
     const rates=counts.map((c,i)=>orderVol[i]>0?+(c/orderVol[i]*100).toFixed(2):0);
+    // v464: "Index" mode — real gap Nikhil identified from the existing Count/% views: neither
+    // answers "is this rise just proportional to order growth, or genuinely outpacing it" at a
+    // glance. Both series indexed to their own first non-zero month (standard growth-index
+    // convention, matches the approved mockup) — the GAP between the two lines is the whole
+    // point: complaints tracking orders = normal seasonal movement; complaints pulling ahead =
+    // a real ops signal, not just "more orders, more complaints." Reuses the real counts/
+    // orderVol already computed above — no separate data path, so Index mode can never drift
+    // from what Count/% are already showing for the same months.
+    if(feedbackTrendChartMode==='index'){
+      const ordersBase=orderVol.find(v=>v>0)||0;
+      const complaintsBase=counts.find(v=>v>0)||0;
+      const ordersIdx=orderVol.map(v=>ordersBase>0?+(v/ordersBase*100).toFixed(1):0);
+      const complaintsIdx=counts.map(v=>complaintsBase>0?+(v/complaintsBase*100).toFixed(1):0);
+      // v464: alert threshold — complaints index running >15pts ahead of orders index. 15 is a
+      // starting point, not a tuned figure; easy to move if it flags too often or too rarely
+      // once Nikhil's seen it against a few real months.
+      const GAP_ALERT=15;
+      const gaps=complaintsIdx.map((c,i)=>c-ordersIdx[i]);
+      const alertHtml=document.getElementById('feedback-trend-alert');
+      if(alertHtml){
+        let maxGapIdx=-1,maxGap=-Infinity;
+        gaps.forEach((g,i)=>{if(orderVol[i]>0&&counts[i]>0&&g>maxGap){maxGap=g;maxGapIdx=i;}});
+        if(maxGapIdx>=0&&maxGap>GAP_ALERT){
+          const mo=new Date(months[maxGapIdx]+"-01T12:00:00").toLocaleDateString("en-AE",{month:"long",year:"numeric"});
+          alertHtml.innerHTML=`<div style="margin-top:8px;padding:9px 12px;background:#EF444418;border-radius:7px;display:flex;align-items:center;gap:8px"><span style="font-size:14px">⚠️</span><span style="font-size:11.5px;color:#F87171">${esc(mo)}: complaints index is ${maxGap.toFixed(0)}pts above the orders index — growing faster than order volume explains.</span></div>`;
+        }else{
+          alertHtml.innerHTML=`<div style="margin-top:8px;padding:9px 12px;background:#22C55E18;border-radius:7px;display:flex;align-items:center;gap:8px"><span style="font-size:14px">✓</span><span style="font-size:11.5px;color:#4ADE80">Complaints are tracking order volume — no month running materially ahead.</span></div>`;
+        }
+      }
+      const monthLabelsIdx=months.map(m=>{
+        const short=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"});
+        const isJan=m.endsWith("-01");
+        return isJan?[short,m.slice(0,4)]:[short];
+      });
+      const axisColorIdx=_darkPage?'#D5DCEA':'#334155';
+      // Same snake-draw TECHNIQUE as the bar+line view below (clip rect widening left to
+      // right), adapted for two simultaneous lines instead of one line chained after a bar
+      // animation — there's no bar phase here, so both lines draw together. Slowed to 3200ms
+      // and dropped the leading dot, matching what Nikhil approved for the Overview page's own
+      // line-draw animation (build 459) rather than reusing this chart's existing 1400ms.
+      const idxSnakeClip={
+        id:'feedbackIdxSnakeClip',
+        beforeDatasetDraw(chart){
+          const progress=chart._idxSnakeProgress!==undefined?chart._idxSnakeProgress:1;
+          if(progress>=1)return;
+          const area=chart.chartArea;const ctx=chart.ctx;
+          ctx.save();ctx.beginPath();
+          ctx.rect(area.left,area.top-10,(area.right-area.left)*progress,area.height+20);
+          ctx.clip();
+          chart._idxClipped=true;
+        },
+        afterDatasetDraw(chart){if(chart._idxClipped){chart.ctx.restore();chart._idxClipped=false;}}
+      };
+      function startIdxSnake(chart){
+        const DUR=3200;
+        if(chart._idxSnakeAnimId)cancelAnimationFrame(chart._idxSnakeAnimId);
+        chart._idxSnakeAnimating=true;
+        chart._idxSnakeProgress=0;
+        const start=performance.now();
+        function step(now){
+          const t=Math.min(1,(now-start)/DUR);
+          chart._idxSnakeProgress=1-Math.pow(1-t,3);
+          chart.draw();
+          if(t<1){chart._idxSnakeAnimId=requestAnimationFrame(step);}
+          else{chart._idxSnakeAnimating=false;}
+        }
+        chart._idxSnakeAnimId=requestAnimationFrame(step);
+      }
+      destroyChart('feedback-trend-chart');
+      if(_feedbackTrendObserver){_feedbackTrendObserver.disconnect();_feedbackTrendObserver=null;}
+      const idxChart=new Chart(trendCtx,{
+        type:'line',
+        data:{labels:monthLabelsIdx,datasets:[
+          {label:'Complaints (index)',data:complaintsIdx,borderColor:'#DE4A42',backgroundColor:'#DE4A42',borderWidth:2,pointRadius:0,tension:.3},
+          {label:'Total orders (index)',data:ordersIdx,borderColor:'#5AB4E8',backgroundColor:'#5AB4E8',borderWidth:2,pointRadius:0,tension:.3}
+        ]},
+        options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:12}},
+          interaction:{mode:'index',intersect:false},
+          animation:{duration:0},
+          plugins:{legend:{display:false},
+            tooltip:{callbacks:{
+              title:items=>{const i=items[0].dataIndex;return new Date(months[i]+"-01T12:00:00").toLocaleDateString("en-AE",{month:"long",year:"numeric"});},
+              label:c=>c.dataset.label+': '+c.parsed.y.toFixed(0)
+            }}
+          },
+          scales:{
+            y:{position:'left',title:{display:true,text:'Index (first month = 100)',color:axisColorIdx},grid:{color:_darkPage?'rgba(255,255,255,.06)':'#F1F5F9'},ticks:{color:axisColorIdx,font:{size:12,weight:'600'}}},
+            x:{grid:{display:false},ticks:{color:axisColorIdx,font:{size:12,weight:'600'}}}
+          }},
+        plugins:[idxSnakeClip]
+      });
+      idxChart._idxSnakeProgress=0;
+      charts['feedback-trend-chart']=idxChart;
+      startIdxSnake(idxChart);
+      const idxObs=new IntersectionObserver((entries)=>{
+        if(!entries[0].isIntersecting)return;
+        if(idxChart._idxSnakeAnimating)return;
+        startIdxSnake(idxChart);
+      },{threshold:0.2});
+      idxObs.observe(trendCtx);
+      _feedbackTrendObserver=idxObs;
+    }else{
     const selected=feedbackFilterMonths.size?months.map(m=>feedbackFilterMonths.has(m)):months.map(()=>true);
     const newData=feedbackTrendChartMode==='count'?counts:rates;
     const barColors=selected.map(s=>s?'#FF8A3Dcc':'#FF8A3D33');
@@ -19370,6 +19488,7 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
       },{threshold:0.2});
       obs.observe(trendCtx);
       _feedbackTrendObserver=obs;
+    }
     }
   }
   const outletCtx=document.getElementById('feedback-outlet-chart');
