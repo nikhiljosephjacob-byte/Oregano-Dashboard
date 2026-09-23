@@ -13,13 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-468";
+const BUILD_VERSION="2026-08-13-469";
 const BUILD_NOTES=[
+  "🔧 Nav-tab loading indicator restarting after a couple seconds, blocking Campaigns/Ads Performance again mid-session — real bug Nikhil caught, root-caused, not guessed at. pullOrderDataFromServer() runs shortly after every page load and, whenever the SHARED server copy is newer than this browser's (a normal, frequent occurrence with multiple people using this dashboard), calls rewarmCampaignAnalyses() — which resets campModelBuilt=false and reruns the whole prewarm from scratch against the fresh data. That part is correct and necessary. What was wrong: prewarmCampaigns()/prewarmCPC() treated every rewarm identically to a true first load — repainting the nav indicator from a low percentage and re-disabling the tab's pointer events for the whole rewarm — even though the ALREADY-cached analyses from the first load are still completely valid to view in the meantime. A background cache refresh has no real reason to lock anyone out of clicking in. New campEverBuilt/cpcEverBuilt flags — unlike campModelBuilt/cpcModel, which legitimately DO get reset to trigger a recompute — are never cleared by a rewarm or the page's own manual refresh button, so the indicator now only ever paints (and only then disables the tab) the very first time this completes for a browser session; every later rewarm updates the cache silently, with no visible restart and no blocked tab. Verified with a real functional test reproducing the exact reported sequence: ran a full first load and confirmed the tab genuinely gets disabled then cleared (pointerEvents history: none → none → '' ), then triggered rewarmCampaignAnalyses() exactly as the background sync would and confirmed the tab's pointerEvents is never set to 'none' again during that second pass — only the harmless final clear. Full script execution re-run clean.",
   "📥 Trending Terms export to Excel + a heading clarity fix, both from Nikhil directly. (1) New ⬇ Export button, top-right of the Trending Terms panel — exports every match for the currently-drilled theme (not capped at 25 like the on-screen panel), with Brand/Branch/Date/Aggregator/Order ID/Category/Matched term(s)/Complaint text, complaint text bold black when it contains a match, per the sample file Nikhil approved. Disabled with a tooltip until a term row is actually drilled into, since that's what determines what gets exported. REAL CORRECTION mid-build: I'd previously told Nikhil whole-cell bold was achievable with the plain xlsx library already loaded elsewhere in this file — checked properly this time and that's wrong; SheetJS Community Edition cannot write ANY cell styling at all, bold included. Switched to xlsx-js-style, a maintained fork pinned to the exact same SheetJS 0.18.5 core already used everywhere else in this file, just with font/color styling added on write — same API, fully backward compatible. Handled a real risk deliberately: if another export already ran first in the session and loaded the plain library, a naive `if(window.XLSX)` guard would skip loading the styled one and the bold would silently never appear with no error. Checked for `window.XLSX.style_version` specifically (a real prop this fork adds) so it only skips loading when the styled version is confirmed already present — verified with a test that pre-loads a plain XLSX mock and confirms the styled one still gets loaded anyway. (2) Per Nikhil directly: a row labeled 'Taste / seasoning' showing under a Raw/UC filter (because one complaint legitimately hit both themes) was confusing on its own, even though the count itself was correct. Fixed at the panel level, not the row: the section title now reads 'Trending terms within Raw/UC-related complaints' whenever a Category filter is active, so the table's actual scope is stated plainly regardless of what any individual row's own theme label says. Verified all three pieces with real functional tests: matched-term detection, sheet-name sanitization (theme names contain '/', illegal in Excel sheet names), the library-safety scenario, and the heading text changing correctly with and without a Category filter. Full script execution re-run clean.",
   "🔍 Trending Terms — real follow-up gap Nikhil caught immediately after v465 shipped: with Category=Spilled filtered, 'Missing item' (an entirely unrelated theme) was showing up in the table. v465 correctly let a theme's MATCHES span every category (a Taste-tagged complaint mentioning 'spilled' now counts toward Spilled/mishandled) — but never restricted which THEME ROWS are worth showing in the first place, so the table still listed every theme found anywhere in the whole dataset regardless of the active Category filter, including ones with zero real connection to it. Filtering records was right; filtering the RESULT to themes actually relevant to the selected category was the missing half. Added one more filter: a theme row only shows if at least one of its matches is actually tagged with the active category — keeps the cross-category counting benefit for RELEVANT themes (Spilled/mishandled's count can still include a Taste-tagged 'spilled' mention) while dropping themes with no real relationship to what's filtered. No Category filter active → completely unchanged, every theme still shows exactly as before. Verified with a functional test built around the exact reported scenario: three real 'Missing item' complaints in an unrelated category, one genuine Spilled complaint, and one cross-category Taste complaint mentioning 'spilled' — confirmed Missing item is now excluded, Spilled/mishandled is shown, and its count correctly stays at 2 (both the direct match and the cross-category one), not silently dropped to 1. Full script execution re-run clean.",
   "🔧 Feedback trend chart, three real fixes from Nikhil's own screenshots. (1) Switching FROM Index mode back to Count left bars never appearing — real bug, confirmed and root-caused: Index mode's chart is type:'line' with two line datasets; the Count/rate branch's replayTrend() assumes type:'bar', and Chart.js can't change a chart's type after creation. The old staleness check only looked at whether the canvas ELEMENT had changed, not whether the leftover chart instance was even the right SHAPE for the new mode, so it fed new numbers into a chart still rendering as two lines — no bars, ever. Every chart instance is now tagged with the mode it was built for (_trendMode); a mismatch is treated exactly like a stale canvas — destroy and rebuild, not reuse. Verified by literally reproducing the reported sequence (draw Index, then draw Count) and confirming a real type:'bar' chart gets created on the switch, not silently skipped. (2) Index tooltip showed bare numbers like '87' and '101' with no way to know what they meant — fixed to lead with the real count/order number and put the index value in parentheses as the secondary detail, using data that was already computed, not new. (3) Per Nikhil directly, 'we don't need both' — merged Count and % into one view (bars stay count, since a raw number reads more intuitively than a % that looks nearly flat month to month) with rate now always shown alongside count in the same tooltip instead of needing a separate click to see it; the % toggle button is gone, Index stays as the second (and now only other) view. Verified all three with real functional tests: the mode-switch bug reproduction, and tooltip callbacks called directly with real numbers confirming both the Index tooltip ('Complaints: 22 (index 122)') and the merged Count tooltip (returns ['Complaints: 22', 'Rate: 0.07%'] as separate lines) render correctly. Full script execution re-run clean.",
-  "🔍 Trending Terms now scans ALL categories, not just whatever Category filter is active — real gap Nikhil caught by directly asking why a Category=Spilled filter showed 22 on the graph but only 11 in Trending Terms. Two separate findings, not one: (1) most of that gap is inherent — the term match only counts a complaint if its TEXT literally contains 'spilled'/'leaking'/'messy'/'spill'; a complaint tagged Spilled but worded differently (e.g. 'box was crushed') is counted in the 22 but can't match the term. Not a bug, just two different definitions (human category tag vs literal keyword scan). (2) a real one: Trending Terms was built to catch 'the same underlying issue... regardless of which category it got logged under' (its own code comment), but was actually running on feedbackFilteredRecords(), which DOES apply the active Category filter — so with any category selected, it could only ever see that one category's own text, silently defeating the entire cross-category point of the feature. New feedbackFilteredRecordsIgnoringCategory() (same filters minus Category) now feeds Trending Terms specifically — every other card (graph, alert banner, KPIs) is untouched and still respects Category exactly as before. Deliberately NOT restricted to the Category-filtered date range either, so a different category's later-month feedback can't get silently cut off. Added a header note when a Category filter is active, clarifying the counts span all categories on purpose. Verified with a real functional test built around the exact reported scenario: a Taste-tagged complaint whose text also says 'spilled' was invisible to the old category-scoped version and correctly appears under 'Spilled / mishandled' with the new one — confirmed by inspecting the actual matched record's category, not just a count. Full script execution re-run clean.",
-  "📈 Feedback page: new 'Index' mode on the complaints trend chart — per Nikhil's design request, answering 'is this rise just proportional to order growth, or genuinely outpacing it' at a glance, which neither the existing Count nor % view did directly. Third toggle button next to Count/%. Both complaints and orders indexed to their own first non-zero month (standard growth-index convention) as two lines on ONE shared scale — the gap between them IS the signal: tracking together = normal, complaints pulling ahead = a real ops flag, not just more orders. Alert tag (red/green) computed from real numbers, not fabricated — flags the month with the largest complaints-vs-orders index gap when it exceeds 15pts (a starting threshold, easy to move). Both lines animate with a slowed (3200ms), dot-free snake-draw — same clip-rect technique as this chart's own existing bar+line snake animation, adapted to run on two lines together with no bar phase, matching the timing Nikhil approved for the Overview page's own line-draw (build 459) rather than reusing this chart's faster 1400ms. REAL BUG CAUGHT AND FIXED DURING BUILD: the first version used an early `return` inside the Index-mode branch, which — since JS return exits the nearest FUNCTION, not just the enclosing if-block — silently skipped the outlet chart entirely (a completely separate chart drawn later in the same function) every time Index mode was active. Caught by a functional test specifically checking for this (tracked every `new Chart()` call and asserted the outlet chart still fires), not by visual inspection — fixed by restructuring into a proper if/else so control flow reaches the outlet-chart code unconditionally. Also caught and fixed a second real bug the same way: an initial test using `global.feedbackTrendChartMode='index'` from outside the script never actually changed anything, because that `let` is scoped to the script's own execution, not the Node global object — same class of scoping mistake flagged elsewhere in this file's own history; fixed by setting the variable through a hook appended to the same script scope, not from outside it. Verified end-to-end: Index mode draws a 'line' chart, Count mode still draws its original 'bar' chart, outlet chart fires in both, and the alert tag correctly computes real numbers for a real spike case (a 5x complaint jump against 15% order growth correctly triggered the red alert with the right month name and a 385pt gap, not a fabricated one). Full script execution re-run clean."
+  "🔍 Trending Terms now scans ALL categories, not just whatever Category filter is active — real gap Nikhil caught by directly asking why a Category=Spilled filter showed 22 on the graph but only 11 in Trending Terms. Two separate findings, not one: (1) most of that gap is inherent — the term match only counts a complaint if its TEXT literally contains 'spilled'/'leaking'/'messy'/'spill'; a complaint tagged Spilled but worded differently (e.g. 'box was crushed') is counted in the 22 but can't match the term. Not a bug, just two different definitions (human category tag vs literal keyword scan). (2) a real one: Trending Terms was built to catch 'the same underlying issue... regardless of which category it got logged under' (its own code comment), but was actually running on feedbackFilteredRecords(), which DOES apply the active Category filter — so with any category selected, it could only ever see that one category's own text, silently defeating the entire cross-category point of the feature. New feedbackFilteredRecordsIgnoringCategory() (same filters minus Category) now feeds Trending Terms specifically — every other card (graph, alert banner, KPIs) is untouched and still respects Category exactly as before. Deliberately NOT restricted to the Category-filtered date range either, so a different category's later-month feedback can't get silently cut off. Added a header note when a Category filter is active, clarifying the counts span all categories on purpose. Verified with a real functional test built around the exact reported scenario: a Taste-tagged complaint whose text also says 'spilled' was invisible to the old category-scoped version and correctly appears under 'Spilled / mishandled' with the new one — confirmed by inspecting the actual matched record's category, not just a count. Full script execution re-run clean."
 ];
 
 
@@ -5102,24 +5102,29 @@ function paintCPCNavBattery(pct){
   paintNavBattery(cpcNavTab(),pct,"Ads Performance — ready","Computing Ads Performance","Ads Performance");
 }
 // Proactively load + build the CPC model so it's ready before the user clicks.
+// v469: same fix as prewarmCampaigns just above — cpcEverBuilt (unlike cpcModel, which DOES get
+// reset to null by the page's own manual "↻ Refresh" button) is never cleared, so a refresh
+// silently updates the cache without re-disabling the tab or restarting the visible indicator;
+// only a true first build for this browser session ever shows/blocks anything.
 async function prewarmCPC(){
   if(cpcModel||cpcModelBuilding)return;
+  const paint=(pct)=>{if(!cpcEverBuilt)paintCPCNavBattery(pct);};
   try{
-    paintCPCNavBattery(2);
+    paint(2);
     if(!cpcLoaded){const csv=await fetchCSV(CPC_GID);cpcData=parseCPCSheet(csv);cpcLoaded=true;}
-    paintCPCNavBattery(8);
-    if(!cpcData.length){paintCPCNavBattery(100);return;}
+    paint(8);
+    if(!cpcData.length){paintCPCNavBattery(100);cpcEverBuilt=true;return;}
     cpcModelBuilding=true;
     cpcModel=await buildCPCModel((pct)=>{
       // map model progress (0-100) into the 8-100 nav range
       const navPct=8+Math.round(pct*0.92);
-      paintCPCNavBattery(navPct);
+      paint(navPct);
       // also update the in-page bar if the page is open
       const bar=document.getElementById("cpc-progress-fill");const lbl=document.getElementById("cpc-progress-lbl");
       if(bar)bar.style.width=pct+"%";if(lbl)lbl.textContent=pct+"%";
     });
-    cpcModelBuilding=false;
-    paintCPCNavBattery(100);
+    cpcModelBuilding=false;cpcEverBuilt=true;
+    paintCPCNavBattery(100); // unconditional — always clears any indicator state left from a real first load
     // If the user is already sitting on the page waiting, render it now
     if(curPage==="cpc")renderCPC();
   }catch(e){console.log("[CPC prewarm] error:",e.message);cpcModelBuilding=false;paintCPCNavBattery(100);}
@@ -5136,13 +5141,29 @@ function paintCampNavBattery(pct){
 }
 // Proactively load campaign data and precompute every campaign's analysis in chunks (yields to the
 // UI between batches so it never blocks). The cache means the page then renders instantly.
+// v469: real bug Nikhil caught — the loading bar/hourglass completing once on initial load,
+// then restarting a couple seconds later, and the Campaigns/Ads tabs going unclickable again
+// during that restart. Root-caused: pullOrderDataFromServer() runs shortly after every page
+// load and, whenever the shared server copy is newer than what this browser already has (a
+// normal, frequent occurrence with multiple people using this dashboard), calls
+// rewarmCampaignAnalyses() — which resets campModelBuilt=false and reruns this whole function
+// from scratch to recompute analyses against the fresh data. That part is correct and
+// necessary. What was wrong is that THIS function treated a rewarm identically to a true first
+// load — repainting the nav indicator from a low percentage and re-disabling the tab's pointer
+// events for the whole rewarm — even though the ALREADY-cached analyses from the first load are
+// still completely valid to view in the meantime; a background cache refresh has no real reason
+// to block anyone from clicking in. campEverBuilt (unlike campModelBuilt) is never reset by a
+// rewarm, so `paint` below only actually touches the nav indicator — and only then disables the
+// tab — the very first time this ever completes for this browser session; every later rewarm
+// updates the cache silently with no visible restart and no blocked tab.
 async function prewarmCampaigns(){
   if(campModelBuilt||campModelBuilding)return;
   campModelBuilding=true;
+  const paint=(pct)=>{if(!campEverBuilt)paintCampNavBattery(pct);};
   try{
-    paintCampNavBattery(3);
+    paint(3);
     if(!campLoaded){const csv=await fetchCSV(CAMPAIGN_GID);campaignData=parseCampaigns(csv);campLoaded=true;campAnalysisCache.clear();}
-    paintCampNavBattery(10);
+    paint(10);
     // v182: bound the prewarm set to recent activity instead of the campaign's entire history.
     // toWarm used to include EVERY Completed campaign ever recorded — with 2.5+ years of history
     // and growing, that set only ever gets bigger, which is almost certainly why this has been
@@ -5161,11 +5182,11 @@ async function prewarmCampaigns(){
     for(let i=0;i<toWarm.length;i+=batch){
       for(let j=i;j<Math.min(i+batch,toWarm.length);j++){try{campAnalysisCached(toWarm[j]);}catch(e){}}
       const pct=10+Math.round(((i+batch)/Math.max(1,toWarm.length))*90);
-      paintCampNavBattery(Math.min(99,pct));
+      paint(Math.min(99,pct));
       await new Promise(r=>setTimeout(r,0)); // yield to UI
     }
-    campModelBuilt=true;campModelBuilding=false;
-    paintCampNavBattery(100);
+    campModelBuilt=true;campModelBuilding=false;campEverBuilt=true;
+    paintCampNavBattery(100); // unconditional — always clears any indicator state left from a real first load
     if(curPage==='campaigns'&&typeof renderCampaigns==='function')renderCampaigns();
   }catch(e){console.log("[Campaign prewarm] error:",e.message);campModelBuilding=false;paintCampNavBattery(100);}
 }
@@ -7012,7 +7033,7 @@ function parseCPCSheet(csv){
 //     postImpact: Map(rowRef -> impact),
 //     actions: [ ...urgent action items... ]
 //   }
-let cpcModel=null,cpcModelProgress=0,cpcModelBuilding=false;
+let cpcModel=null,cpcModelProgress=0,cpcModelBuilding=false,cpcEverBuilt=false;
 // v314: fixes a real, confirmed race condition — gp() (navigation) never awaits renderPage(), and
 // renderCPC() has a genuine unguarded async gap around buildCPCModel() (can take real time, per
 // its own progress bar UI). If the user navigates away from Ads Performance and back — or
@@ -10274,7 +10295,7 @@ let campAnalysisCache=new Map();
 // Invalidated whenever an exact upload changes (each clearXxxData / merge already resets
 // campAnalysisCache; we hook the same points to clear this cache too).
 let _observedRatioCache=new Map();
-let campModelBuilt=false,campModelBuilding=false;
+let campModelBuilt=false,campModelBuilding=false,campEverBuilt=false;
 let campReturnTab='browse'; // which tab to return to when leaving the deep-dive
 // ── CPC INVESTMENTS STATE ──
 const CPC_GID="2056065310";
