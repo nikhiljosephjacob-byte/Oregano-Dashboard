@@ -13,13 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-475";
+const BUILD_VERSION="2026-08-13-476";
 const BUILD_NOTES=[
+  "📈 Cancellations page — two new panels, per Nikhil's explicit approval of a published full-page rendering (now a standing instruction: renderings go out as a real link showing the actual page in context, not isolated widget snippets). (1) Cancellation Rate Over Time — the page had zero time dimension before this; order volume renders as faded background bars for scale, not a second y-axis, since the FIRST draft of this exact chart used dual axes and got caught as the same anti-pattern already fixed on the Feedback page's Count/% merge this same session — corrected before ever proposing it to Nikhil. Flags whichever month's rate sits furthest above the period average as a real, computed ratio, not a guessed threshold. (2) Outlet × Responsibility Heatmap — every outlet against every responsibility bucket at once; the existing Aggregator→Brand→Outlet drill-down only ever shows one branch at a time, so a pattern spanning outlets was invisible without clicking through each one by hand. Top 10 outlets by cancellation count, lit cells clickable — reuses the EXISTING cancSelectResp() selection mechanic rather than inventing new navigation state, since a heatmap cell isn't scoped to one aggregator the way a drill-down branch is (an outlet can appear on several). Order volume for the trend chart comes from allData filtered through the exact same `f` (curFilters()) the cancellations themselves already use, so the two series are genuinely comparable, not two different scopes drawn as if related. Verified with a real functional test using dates spanning three months with a deliberate rate spike in the middle month: both panels render, the heatmap correctly lists the two real outlets involved, the spike alert correctly identifies the right month with a real computed ratio (1.6×) rather than a placeholder, and the actual Chart.js config that gets built has only one y-axis (confirmed programmatically, not just eyeballed) with the right bar/line types. Caught and fixed a real bug in my OWN test along the way, not the dashboard — `global.talabatOrdersData = ...` from outside the script doesn't reach the script's own internal `talabatOrdersData` (same class of scoping mistake already flagged elsewhere in this file's history), silently dropping a month of test data; fixed by using the same window-hook pattern as every other state variable in these tests. Full script execution re-run clean.",
   "🔍 Full Keeta FD audit, per Nikhil directly asking 'is there any other place this hasn't been factored in.' Went through every call site of brandContribution()/commissionRateFor() in the file rather than guessing — found three more genuinely live gaps, confirmed one dead-code false alarm, and confirmed everything else already correct. (1) campAnalysisV2 had a SECOND contribution calc buried inside itself — a 'corrected gross' branch that only fires for outlet-scoped campaigns (the code's own example: an AUH-only Flash Sale) — that called brandContribution() fresh and OVERWROTE campC.contribution, silently erasing the FD subtraction build 458 had already applied earlier in the same function. Fixed by re-subtracting the same campFD there rather than letting the overwrite win. (2) The 'what-if a shallower discount depth' scenario simulator AND the breakEvenDepth scan (both inside campAnalysisV2, used for the depth-sensitivity chart) had never had FD touch them at all — both compute hypothetical order counts at depths that never actually ran, so — same logic as the Campaign Planner forecast fix — only the flat AED-2/order estimate is honest here, never exact data. (3) cmpComputeContribution — a THIRD, completely separate Compare-page contribution calculator from computeProfitabilityBreakdown (the A/B popup already fixed) — feeds the page's own top-level Contribution card directly, including the three-way A/B/C comparison, and had never been touched. Same permissive-matcher pattern as everywhere else. Also found buildFcCalcTipHTML — same gap, but confirmed via a call-site search that it's dead code, never called anywhere since the standalone Forecaster it belonged to was retired; left alone rather than fixing something nothing can ever render, flagged for cleanup instead. Verified (1) by direct code reasoning (the fix is a one-line append to an existing formula, and the exact 'scoped outlet, non-overlapping allocation' trigger condition is hard to construct in an isolated test within reasonable time — flagged as the one fix in this batch not covered by a dedicated functional test). (2) and (3) verified with real functional tests: cmpComputeContribution confirmed to drop by exactly a real FD figure (40 AED) when exact data covers the range and zero otherwise; the scenario simulator's first comparison (exact vs no-exact Keeta data) correctly showed NO difference — which is the CORRECT behavior by design, not a bug, since hypothetical order counts can never have real per-order data — confirmed the fix actually does something by comparing against a temporarily-reverted copy with the FD term removed, which showed the real, expected ~120 AED/day swing (60 orders × AED 2) and breakEvenDepth correctly dropping from 0.41 to 0.35 once the fixed cost eats into available margin. Full script execution re-run clean.",
   "💰 Campaign Planner forecast P&L — Keeta FD was never in it, at all, for any aggregator. Real gap Nikhil caught directly ('the FD costs doesn't come up in the Full P&L per category tables') after forecasting a Keeta campaign. Root cause: every Keeta FD fix this session (computeProfitability, campAnalysisV2, campRecentWindowAnalysis, campTrajectory, campBreakevenUplift, computeProfitabilityBreakdown) fixed something that OBSERVES real past order data — none of them could ever reach a forecast, because a forecast has no real orders to look up; campPlanCompute()/pnlAt() project from a baseline + assumed uplift, they don't observe anything. So this was always going to need its own fix, not inherit one of the others. Also means there's no 'exact vs estimate' choice here the way there was everywhere else — a future campaign can never have real per-order Keeta data, only the flat AED-2/order estimate is ever possible for a forecast. Applied to BOTH the campaign scenarios (fdDay=orders×KEETA_FD_COST inside pnlAt) and the baseline (baseline is real historical Keeta activity too, and the same cost almost certainly applied to it) — and to the separate contribPoCampaign calculation used for break-even orders, which duplicates pnlAt's per-order math outside the function and needed the identical fdPerOrder term to stay consistent with it. Added a 'Keeta Free Delivery' line to the on-screen P&L cards, shown only when relevant (agg==='Keeta'); the CSV/XLSX export needed no change since it only ever showed a summarized Net Contribution figure, not a Commission/Food breakdown, so it inherits the corrected number automatically. Verified with a real functional test: Keeta scenario and baseline both show non-zero fdDay, an identical Talabat forecast shows exactly zero, and the underlying arithmetic (netSalesDay−commDay−foodDay−fdDay) matches contribDay exactly. My first test also tried comparing Keeta's absolute contribution dollars against Talabat's and read as a failure — caught that this was an invalid comparison (the two aggregators have different commission rates baked in, so a raw dollar comparison isn't apples-to-apples) rather than trusting a confusing result; the real proof is that Keeta's own contribution is exactly fdDay lower than it would be without this fix, which held exactly. Full script execution re-run clean.",
   "🔔 Campaigns 'Recommendations' panel — two real bugs Nikhil caught in one screenshot. (1) 'Ends in Xh' alerts kept firing even after he'd already entered a follow-up campaign (same brand+aggregator) starting the next day in the sheet — the alert had no way to know he'd already acted on exactly what it was nagging about. campNeedsAttentionItems() already received `upcoming` as a parameter, it just never used it for this check. New hasContinuation() looks for a same-brand+aggregator campaign (in either active or upcoming) starting within 2 days of this one ending, and suppresses the ending-soon/extend-worthy alerts when one exists — checked against a DIFFERENT aggregator's follow-up too, confirmed that does NOT suppress it, since that's not actually a continuation of anything. (2) 'Dismissed once today, then it came back' — real bug, not a session-boundary misunderstanding: recKey was `${title}|${reason}`, and title for the most common alert ('Ends in Xh') is computed live from hours-remaining on every render — dismiss it at 'Ends in 5h' and the same campaign's next render says 'Ends in 4h', a different string, so the dismissal silently stopped matching. Every alert now carries its own stableKey (the campaign's real identity + which kind of alert it is, e.g. brand|aggregator|name|dates|'ending'), set once and never dependent on the displayed hour count — dismissing now stays dismissed regardless of how much time passes or how many times the page re-renders. Verified both with real functional tests: a campaign ending soon with no follow-up still alerts (control), the identical campaign with a same-brand+aggregator follow-up starting next day is correctly suppressed, a follow-up on a DIFFERENT aggregator correctly does NOT suppress it, and a recKey computed at '5h remaining' vs the same campaign's key at '3h remaining' come out identical. Full script execution re-run clean.",
-  "📊 Campaign Planner: 'Compare vs Similar Campaigns' ported in — the one genuinely confirmed-missing piece from the Planner-parity check, after two real corrections to what I'd been telling Nikhil: the baseline explainer ('How we got the baseline') turned out to ALREADY be in the Planner (v422), and Daily Digest turned out to ALREADY be fully built and wired to a real Export button on Overview (digestExportPDF/digestBuildReportHTML, using real campAnalysisV2/cpcData/outlet-move data) — both contradicting what I'd said was still outstanding, caught only once I actually read the code instead of trusting my own prior summary. This was the one real gap left. Adapted, not copy-pasted, from the standalone campDetailV2HTML version: that one compares an existing campaign's real results against similar past ones; the Planner has no 'current campaign' with real results yet since it's a hypothetical being planned. Deliberately did NOT try to insert the forecast's own numbers as a comparable row — a forecast's figures are incremental (uplift vs baseline), while this table's contribution/order is a TOTAL figure from real completed campaigns; mixing the two under one column header would be comparing genuinely different metrics, worse than leaving the row out. Shows real past campaigns for the Planner's selected brand+aggregator, ranked by contribution/order, same six caveats as the original. Placed in the post-run results view, right before Forecast History. Verified with a real functional test: empty with no brand/aggregator selected, both real campaigns showing correctly with real computed figures when history exists, and empty again for a brand/aggregator combination with no campaign history — not just checking it renders, checking it renders the RIGHT thing in each case. Full script execution re-run clean.",
-  "💰 Keeta FD, extended to campTrajectory/campBreakevenUplift/computeProfitabilityBreakdown — the two remaining gaps flagged last session, per Nikhil's direct instruction ('subtract it, it's a cost, same as commission'). (1) campTrajectory computes each weekly SEGMENT's contribution independently via brandContribution() directly — this is the actual function behind the 'Was working, now losing money' verdict, and it was never touched by any earlier Keeta FD fix even though the campaign-level totals were. Same permissive-matcher pattern as computeProfitability (keetaCampWindowStats with ()=>true), applied per segment. (2) campBreakevenUplift is subtler: its baseline contribution figure was ALREADY correct (reads from the same campAnalysisV2 object build 463 fixed), but its forward-looking unitMargin RATE (contribution assumed per future AED of gross) had no FD term at all — approximated as KEETA_FD_COST/baseGrossAOV, the best available forward-looking basis since this function projects rather than observes. (3) computeProfitabilityBreakdown (Compare page) builds its own commission/food/ad-cost cascade by hand rather than through computeProfitability() — same gap, same fix, at both the per-mover level AND the top-level aggregate return (which recomputed contribA/contribB from scratch and would have been inconsistent with the per-mover figures if only one had been fixed). Verified all three with real functional tests, and caught a real test-design mistake along the way: my first campTrajectory comparison showed identical results with and without exact Keeta data and looked like a failure — turned out my test's real FD-per-order (2.0 AED) coincidentally matched the KEETA_FD_COST fallback constant exactly, so both paths produced the same number by chance, not because the fix wasn't working. Rebuilt the test with a deliberately different real rate (5.0 AED/order campaign vs 1.0 baseline) and got a clear, large, correct swing (+126/day → −64/day) once real asymmetric data was used instead of the flat estimate — plus a Talabat control confirming zero cross-contamination into non-Keeta aggregators. campBreakevenUplift verified separately: identical inputs produce a materially higher required uplift for Keeta (44.6%) than Talabat (31.5%), exactly as expected once FD eats into the assumed margin. computeProfitabilityBreakdown verified with exact FD figures (40, 44) subtracted correctly at both the per-mover and top-level totals, and a no-data control confirming zero adjustment when no exact Keeta file covers the range. Full script execution re-run clean throughout."
+  "📊 Campaign Planner: 'Compare vs Similar Campaigns' ported in — the one genuinely confirmed-missing piece from the Planner-parity check, after two real corrections to what I'd been telling Nikhil: the baseline explainer ('How we got the baseline') turned out to ALREADY be in the Planner (v422), and Daily Digest turned out to ALREADY be fully built and wired to a real Export button on Overview (digestExportPDF/digestBuildReportHTML, using real campAnalysisV2/cpcData/outlet-move data) — both contradicting what I'd said was still outstanding, caught only once I actually read the code instead of trusting my own prior summary. This was the one real gap left. Adapted, not copy-pasted, from the standalone campDetailV2HTML version: that one compares an existing campaign's real results against similar past ones; the Planner has no 'current campaign' with real results yet since it's a hypothetical being planned. Deliberately did NOT try to insert the forecast's own numbers as a comparable row — a forecast's figures are incremental (uplift vs baseline), while this table's contribution/order is a TOTAL figure from real completed campaigns; mixing the two under one column header would be comparing genuinely different metrics, worse than leaving the row out. Shows real past campaigns for the Planner's selected brand+aggregator, ranked by contribution/order, same six caveats as the original. Placed in the post-run results view, right before Forecast History. Verified with a real functional test: empty with no brand/aggregator selected, both real campaigns showing correctly with real computed figures when history exists, and empty again for a brand/aggregator combination with no campaign history — not just checking it renders, checking it renders the RIGHT thing in each case. Full script execution re-run clean."
 ];
 
 
@@ -21843,6 +21843,85 @@ function renderCancellations(){
   const revenueLost=filtered.reduce((s,c)=>s+Math.abs(c.amount||0),0);
   const commissionCharged=filtered.reduce((s,c)=>s+cancMoneyLostBeyondRevenue(c),0);
 
+  // v476: two new panels, per Nikhil's explicit approval of the published rendering — a Rate
+  // Over Time chart and an Outlet × Responsibility heatmap, neither of which existed on this
+  // page before (it had zero time dimension and no cross-outlet comparison view, only the
+  // Aggregator→Brand→Outlet drill-down which only ever shows one branch at a time).
+  //
+  // Trend: single axis, deliberately — the approved rendering's own first draft used a
+  // dual-axis chart (count + rate) and got caught and corrected before shipping, since that's
+  // the exact anti-pattern already fixed on the Feedback page's Count/% merge this same session.
+  // Rate is the one real axis; order volume renders as faded background bars for scale (so a
+  // rate spike can't be mistaken for a pure volume effect) without needing a second scale.
+  // Order volume comes from allData, filtered the SAME way (f) as the cancellations themselves,
+  // so the two series are genuinely comparable — not two different scopes drawn as if related.
+  const cancMonths=[...new Set(filtered.map(c=>c.date&&c.date.slice(0,7)).filter(Boolean))].sort();
+  const cancCountByMonth=cancMonths.map(m=>filtered.filter(c=>c.date&&c.date.slice(0,7)===m).length);
+  const ordersByMonth=cancMonths.map(m=>{
+    return allData.filter(r=>{
+      if(r.branch==="(brand-level)")return false;
+      if(!r.date||r.date.slice(0,7)!==m)return false;
+      if(f.start&&r.date<f.start)return false;
+      if(f.end&&r.date>f.end)return false;
+      if(f.brands.size&&!f.brands.has(r.brand))return false;
+      if(f.platforms.size&&!f.platforms.has(r.aggregator))return false;
+      if(f.branches.size&&!f.branches.has(r.branch))return false;
+      return true;
+    }).reduce((s,r)=>s+(r.orders||0),0);
+  });
+  const cancRateByMonth=cancMonths.map((m,i)=>ordersByMonth[i]>0?+(cancCountByMonth[i]/ordersByMonth[i]*100).toFixed(2):0);
+  const trendAvgRate=cancRateByMonth.length?cancRateByMonth.reduce((a,b)=>a+b,0)/cancRateByMonth.length:0;
+  let trendSpikeIdx=-1,trendSpikeRatio=1;
+  cancRateByMonth.forEach((r,i)=>{if(trendAvgRate>0&&r/trendAvgRate>trendSpikeRatio){trendSpikeRatio=r/trendAvgRate;trendSpikeIdx=i;}});
+  const trendPanel=cancMonths.length<2?"":`<div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px;margin-bottom:20px">
+    <div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:4px">📈 Cancellation Rate Over Time</div>
+    <div style="font-size:11.5px;color:${T.textMuted};margin-bottom:14px">Rate by month — order volume shown as faded background bars for scale, not a second axis</div>
+    <div style="position:relative;width:100%;height:230px"><canvas id="canc-trend-chart"></canvas></div>
+    ${trendSpikeIdx>=1?`<div style="margin-top:12px;padding:10px 14px;background:${T.accentRed}18;border:1px solid ${T.accentRed}44;border-radius:8px;display:flex;align-items:center;gap:8px;font-size:12.5px;color:${T.accentRed}">⚠ ${fmtShort(cancMonths[trendSpikeIdx]+"-01")}: rate is ${trendSpikeRatio.toFixed(1)}× the period average — worth checking what changed then.</div>`:""}
+  </div>`;
+
+  // Heatmap: every outlet against every responsibility bucket at once — the drill-down only
+  // ever shows one Aggregator→Brand→Outlet branch at a time, so a pattern spanning outlets
+  // (e.g. one outlet consistently restaurant-fault while everyone else is driver-fault) was
+  // invisible without clicking through every single outlet by hand. Cell click reuses the
+  // EXISTING cancSelectResp() selection mechanic (highlights that responsibility, filters Top
+  // Reasons to it) rather than inventing new navigation state — a heatmap cell isn't scoped to
+  // one aggregator the way the Brand/Outlet drill-down levels are (an outlet can appear on
+  // several aggregators), so jumping into that specific drill-down branch from a cell isn't a
+  // clean 1:1 mapping the way selecting a responsibility is.
+  const RESP_ORDER=["Restaurant","Driver","Platform","Unknown"];
+  const heatOutletTotals={};
+  filtered.forEach(c=>{const k=(c.brand||"Unknown")+" - "+(c.outlet||"Unknown");heatOutletTotals[k]=(heatOutletTotals[k]||0)+1;});
+  const heatOutlets=Object.entries(heatOutletTotals).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([k])=>k);
+  const heatMatrix={};
+  heatOutlets.forEach(k=>{heatMatrix[k]=RESP_ORDER.map(r=>filtered.filter(c=>((c.brand||"Unknown")+" - "+(c.outlet||"Unknown"))===k&&(c.responsibility||"Unknown")===r).length);});
+  const heatMax=Math.max(1,...Object.values(heatMatrix).flat());
+  const heatCellColor=v=>{
+    if(v===0)return"transparent";
+    const t=v/heatMax;
+    const stops=[[58,32,32],[110,42,42],[163,45,45],[214,58,58],[255,107,107]];
+    const idx=Math.min(stops.length-2,Math.floor(t*(stops.length-1)));
+    const fr=t*(stops.length-1)-idx;
+    const c=stops[idx].map((s,i)=>Math.round(s+(stops[idx+1][i]-s)*fr));
+    return`rgb(${c.join(",")})`;
+  };
+  const heatRows=heatOutlets.map(k=>`<tr>
+    <td style="padding:8px 10px;text-align:left;color:${T.textSecondary};font-weight:600;font-size:12px;white-space:nowrap">${esc(k)}</td>
+    ${heatMatrix[k].map((v,i)=>`<td onclick="${v>0?`cancSelectResp('${RESP_ORDER[i]}')`:""}" style="padding:10px;text-align:center;font-weight:700;border-radius:6px;background:${heatCellColor(v)};color:${v/heatMax>0.4?"#fff":T.textPrimary};cursor:${v>0?"pointer":"default"}">${v}</td>`).join("")}
+  </tr>`).join("");
+  const heatmapPanel=heatOutlets.length<2?"":`<div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px;margin-bottom:20px">
+    <div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:4px">🔥 Outlet × Responsibility Heatmap</div>
+    <div style="font-size:11.5px;color:${T.textMuted};margin-bottom:14px">Top 10 outlets by cancellation count — click a lit cell to filter Top Reasons to that responsibility</div>
+    <div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:12.5px;min-width:520px;width:100%">
+      <thead><tr>
+        <th style="text-align:left;padding:6px 10px;color:${T.textMuted};font-weight:700;font-size:11px;text-transform:uppercase"></th>
+        ${RESP_ORDER.map(r=>`<th style="text-align:center;padding:6px 10px;color:${T.textMuted};font-weight:700;font-size:11px;text-transform:uppercase">${r}</th>`).join("")}
+      </tr></thead>
+      <tbody>${heatRows}</tbody>
+    </table></div>
+    <div style="margin-top:12px;display:flex;align-items:center;gap:8px;font-size:11px;color:${T.textMuted}"><span>Fewer</span><span style="width:70px;height:8px;border-radius:4px;background:linear-gradient(90deg,#3A2020,${T.accentRed})"></span><span>More</span></div>
+  </div>`;
+
   const tile=(label,value,sub,clr)=>`<div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};flex:1;min-width:220px">
     <div style="padding:20px">
       <div style="font-size:11px;color:${T.textMuted};font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px">${label}</div>
@@ -22031,6 +22110,8 @@ function renderCancellations(){
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px"><span style="font-size:22px">🚫</span><div style="font-size:22px;font-weight:800;color:${T.textPrimary}">Order Cancellation Monitor</div></div>
     <div style="font-size:13px;color:${T.textSecondary};margin-bottom:20px">Click any aggregator card to drill down — brands, then outlets responsible for the most cancellations</div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:20px">${tiles.join("")}</div>
+    ${trendPanel}
+    ${heatmapPanel}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
       <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px"><div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:16px">By Responsibility</div>${respRows}</div>
       <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px"><div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:16px">${reasonCardTitle}</div>${reasonRows}</div>
@@ -22040,6 +22121,35 @@ function renderCancellations(){
       <div style="font-size:12.5px;color:${T.textSecondary};line-height:1.7">💡 <strong style="color:${T.textPrimary}">Deliveroo note:</strong> its entries are post-delivery quality refunds (wrong/missing items), not pre-delivery cancellations like the other aggregators — a different problem needing a different fix (kitchen QC, not delivery logistics), even though the financial impact is real.</div>
     </div>
   </div>`;
+  // v476: chart draws after innerHTML is committed — same pattern as every other canvas-based
+  // chart in this file (e.g. feedbackDrawOverviewCharts), since the canvas element has to exist
+  // in the DOM before Chart.js can attach to it.
+  if(cancMonths.length>=2){
+    setTimeout(()=>cancDrawTrendChart(cancMonths,cancRateByMonth,ordersByMonth),0);
+  }
+}
+function cancDrawTrendChart(months,rates,orders){
+  const ctx=document.getElementById("canc-trend-chart");
+  if(!ctx||typeof Chart==="undefined")return;
+  destroyChart("canc-trend-chart");
+  const labels=months.map(m=>fmtShort(m+"-01"));
+  const maxOrders=Math.max(1,...orders);
+  const scaledOrders=orders.map(o=>o/maxOrders*Math.max(1,...rates)*1.1);
+  const chart=new Chart(ctx,{
+    data:{labels,datasets:[
+      {type:"bar",label:"Order volume (relative)",data:scaledOrders,backgroundColor:DARK_THEME.cardBorder,borderRadius:4,order:2},
+      {type:"line",label:"Cancellation rate",data:rates,borderColor:DARK_THEME.accentRed,backgroundColor:DARK_THEME.accentRed,borderWidth:2,pointRadius:4,pointBackgroundColor:DARK_THEME.accentRed,tension:.3,order:1}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{
+        label:c=>c.datasetIndex===1?"Rate: "+c.parsed.y+"%":"Orders: "+orders[c.dataIndex].toLocaleString()
+      }}},
+      scales:{
+        y:{title:{display:true,text:"Rate %",color:DARK_THEME.textMuted},grid:{color:"rgba(255,255,255,.06)"},ticks:{color:DARK_THEME.textMuted}},
+        x:{grid:{display:false},ticks:{color:DARK_THEME.textMuted}}
+      }}
+  });
+  charts["canc-trend-chart"]=chart;
 }
 function cancExportAgg(agg){
   // v171: now respects active filters (brand/platform/outlet/date), matching what's actually
