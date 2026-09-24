@@ -13,13 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-477";
+const BUILD_VERSION="2026-08-13-479";
 const BUILD_NOTES=[
+  "🎯 Careem FTU CPC — real, current data change per Nikhil directly. Careem added a new ad product visible only to first-time users (FTU = First Time User), a fixed AED 3 bid, distinct from the existing standard AED 2 CPC, and confirmed he'll enter it as its own value in Column A ('FTU CPC'). parseCPCSheet now recognizes it as its own distinct adType, checked before the generic CPC fallback — same pattern already used for Shoppable Banner vs plain Banner. Confirmed by reading cpcAdCostForRange line by line that this needed no other change: that function (which every ad-spend figure across the whole dashboard reads from, including the Compare report narrative fixed two builds ago) never filtered by adType at all — it sums every ad type unconditionally, so FTU CPC spend was already flowing into every total correctly even before this fix. What this fix actually changes is narrower and still real: FTU CPC rows would have been silently blended into the generic 'CPC' bucket's own bid/ROAS averages on the Ads Performance page, mixing a AED 2 bid with a AED 3 bid into one misleading number. The Ad Type toggle used throughout that page already builds its option list dynamically from whatever adType values are actually present in the data (the same mechanism that already surfaced Shoppable Banner once it started appearing) — so FTU CPC becomes a real, selectable filter with zero UI changes needed beyond the parser fix. Also updated (comments only, not logic) the two places documenting 'Deliveroo is the only aggregator where bid is in our control' — Nikhil confirmed he does have real manual bid control on Careem now too, but explicitly said whether that bid can be changed again mid-month is still unconfirmed ('we'll find out next month'). Deliberately did NOT extend cpcDeliverooBidOpt's actual gate to Careem — recommending a bid change Nikhil might not be able to execute mid-flight would be worse than saying nothing; left it Deliveroo-only with a comment explaining why, ready to revisit once mid-month adjustability is confirmed one way or the other. Verified with a real functional test: a CSV with one standard CPC row (AED 2 bid) and one FTU CPC row (AED 3 bid) for the same brand+outlet parses into two correctly distinguished types, and cpcAdCostForRange correctly sums both (AED 900 + AED 750 = AED 1,650) rather than only picking up one. Full script execution re-run clean.",
+  "📊 Compare page PDF report — a large combined update from one message with two parts: table/outlet enhancements, then a sign-aware rewrite of the ad-spend and discount-burn narrative lines. PART 1 — three asks against actual uploaded report pages. (1) Ad Spend column added to Outlet-Level Detail — cmpScopedMetrics already computed real per-outlet ad spend for every other column on that row, it just wasn't being shown; no new calculation needed. (2) Totals row on every real row/column table in the report — Outlet-Level Detail and the shared cmpFullMetricsTable (used by both Brand Comparison and Platform Comparison). AOV in the totals row is weighted (total sales ÷ total orders), not a naive average-of-averages, which would overweight low-volume outlets/brands relative to their real share of orders — same convention every other AOV figure in this dashboard already uses. Campaign cards and KPI tiles deliberately left untouched — not row/column tables, so a 'totals row' doesn't apply the same way. (3) Outlet-level movers in Conclusions — the existing brand/platform movers logic never named a specific OUTLET or explained why, even though that's the most actionable granularity. New logic names the single worst decliner and best grower by outlet, and — matching the two scenarios Nikhil described directly — distinguishes whether a top grower's gain came with ad spend appearing from zero (likely ad-driven), ad spend growing faster than sales (investment paying off), or contribution growing slower than sales (margin cost from discount/ad spend outgrowing the gain). Verified against the exact real numbers from Nikhil's own uploaded PDF (Outlet-Level Detail totals reproduce AED 1,257 → AED 3,594 exactly) and a constructed scenario naming both a real decliner and a real ad-driven-margin-cost grower correctly. Caught a real gap in the new code before it shipped: the outlet-movers logic assumed data[].outlets always exists — true for real report data, not for older test fixtures — added a defensive guard rather than leaving it to fail on any future caller that omits the field. PART 2 — Nikhil then asked the mirror-image question directly: does a slowdown alongside a real ad spend cut get attributed to reduced visibility? Checked — it didn't, and the existing 'grew faster/slower' comparison template produced actively nonsensical text for that case ('Ad spend grew slower than sales (-40.0% vs -20.0%)' when NEITHER grew, both fell). Rewrote both the discount-burn line and the ad-spend line to be sign-aware rather than magnitude-only: growth-vs-growth, decline-vs-decline (cut faster → 'reduced visibility may be contributing'; cut less → 'doesn't look purely ad-driven'), and the two mixed-sign cases each get correct wording. Added the matching Worth Watching bullet for the decline-alongside-ad-cut case too. Verified with the original 0→1,345 case (still correct), a new slowdown scenario (sales -20%, ad spend -40%, now correctly reads 'reduced ad visibility may be contributing to the decline'), and full regression against the normal and zero-to-zero cases. Caught a real structural bug in my own edit mid-build too — a str_replace left old orphaned code nested inside a new branch; found and corrected before the syntax check that would have caught it anyway. Full script execution re-run clean.",
   "📢 Compare page PDF report — ad spend was invisible in both the narrative prose and the rule-based conclusions, real gap Nikhil caught from an actual exported report where ad spend went AED 0 → AED 1,345 between two windows and neither the Key Observations paragraph nor Worth Watching mentioned it once. Two separate causes, not one. (1) cmpReportNarrative() (the executive-summary paragraph) had a discLine and a contribLine but no adLine at all — ad spend was never referenced regardless of the numbers, a gap that existed for every report, not just this one. Added fresh, explicitly handling the from-zero case in plain English rather than a percentage. (2) cmpReportConclusions() actually ALREADY had a real rule — 'ad spend grew well ahead of sales' — but it silently never fires when prior ad spend is 0, because pctOf() returns null whenever the prior value is 0 (can't express a from-zero change as a percentage) and the rule's own condition requires a non-null adPct. That's not a smaller version of the signal being missed — going from NO ad spend to real ad spend is the same signal in its most extreme, most narratively important form, and it was being dropped entirely rather than just degraded. Added an explicit zero-base branch expressing the jump in AED and % of net sales instead of a percentage. Verified by reproducing the EXACT numbers from Nikhil's own uploaded report (sales 1,257→3,594, ad spend 0→1,345) — both the narrative and the Worth Watching bullet now state the real jump correctly ('Ad spend went from AED 0 to AED 1,345 this window (37.4% of net sales)...'). Also tested the normal non-zero-base case (ad spend growing proportionally with sales, correctly says so with no false alarm) and the zero-to-zero case (no ad spend in either period — correctly stays silent about it, doesn't fabricate a mention). Full script execution re-run clean.",
   "📈 Cancellations page — two new panels, per Nikhil's explicit approval of a published full-page rendering (now a standing instruction: renderings go out as a real link showing the actual page in context, not isolated widget snippets). (1) Cancellation Rate Over Time — the page had zero time dimension before this; order volume renders as faded background bars for scale, not a second y-axis, since the FIRST draft of this exact chart used dual axes and got caught as the same anti-pattern already fixed on the Feedback page's Count/% merge this same session — corrected before ever proposing it to Nikhil. Flags whichever month's rate sits furthest above the period average as a real, computed ratio, not a guessed threshold. (2) Outlet × Responsibility Heatmap — every outlet against every responsibility bucket at once; the existing Aggregator→Brand→Outlet drill-down only ever shows one branch at a time, so a pattern spanning outlets was invisible without clicking through each one by hand. Top 10 outlets by cancellation count, lit cells clickable — reuses the EXISTING cancSelectResp() selection mechanic rather than inventing new navigation state, since a heatmap cell isn't scoped to one aggregator the way a drill-down branch is (an outlet can appear on several). Order volume for the trend chart comes from allData filtered through the exact same `f` (curFilters()) the cancellations themselves already use, so the two series are genuinely comparable, not two different scopes drawn as if related. Verified with a real functional test using dates spanning three months with a deliberate rate spike in the middle month: both panels render, the heatmap correctly lists the two real outlets involved, the spike alert correctly identifies the right month with a real computed ratio (1.6×) rather than a placeholder, and the actual Chart.js config that gets built has only one y-axis (confirmed programmatically, not just eyeballed) with the right bar/line types. Caught and fixed a real bug in my OWN test along the way, not the dashboard — `global.talabatOrdersData = ...` from outside the script doesn't reach the script's own internal `talabatOrdersData` (same class of scoping mistake already flagged elsewhere in this file's history), silently dropping a month of test data; fixed by using the same window-hook pattern as every other state variable in these tests. Full script execution re-run clean.",
-  "🔍 Full Keeta FD audit, per Nikhil directly asking 'is there any other place this hasn't been factored in.' Went through every call site of brandContribution()/commissionRateFor() in the file rather than guessing — found three more genuinely live gaps, confirmed one dead-code false alarm, and confirmed everything else already correct. (1) campAnalysisV2 had a SECOND contribution calc buried inside itself — a 'corrected gross' branch that only fires for outlet-scoped campaigns (the code's own example: an AUH-only Flash Sale) — that called brandContribution() fresh and OVERWROTE campC.contribution, silently erasing the FD subtraction build 458 had already applied earlier in the same function. Fixed by re-subtracting the same campFD there rather than letting the overwrite win. (2) The 'what-if a shallower discount depth' scenario simulator AND the breakEvenDepth scan (both inside campAnalysisV2, used for the depth-sensitivity chart) had never had FD touch them at all — both compute hypothetical order counts at depths that never actually ran, so — same logic as the Campaign Planner forecast fix — only the flat AED-2/order estimate is honest here, never exact data. (3) cmpComputeContribution — a THIRD, completely separate Compare-page contribution calculator from computeProfitabilityBreakdown (the A/B popup already fixed) — feeds the page's own top-level Contribution card directly, including the three-way A/B/C comparison, and had never been touched. Same permissive-matcher pattern as everywhere else. Also found buildFcCalcTipHTML — same gap, but confirmed via a call-site search that it's dead code, never called anywhere since the standalone Forecaster it belonged to was retired; left alone rather than fixing something nothing can ever render, flagged for cleanup instead. Verified (1) by direct code reasoning (the fix is a one-line append to an existing formula, and the exact 'scoped outlet, non-overlapping allocation' trigger condition is hard to construct in an isolated test within reasonable time — flagged as the one fix in this batch not covered by a dedicated functional test). (2) and (3) verified with real functional tests: cmpComputeContribution confirmed to drop by exactly a real FD figure (40 AED) when exact data covers the range and zero otherwise; the scenario simulator's first comparison (exact vs no-exact Keeta data) correctly showed NO difference — which is the CORRECT behavior by design, not a bug, since hypothetical order counts can never have real per-order data — confirmed the fix actually does something by comparing against a temporarily-reverted copy with the FD term removed, which showed the real, expected ~120 AED/day swing (60 orders × AED 2) and breakEvenDepth correctly dropping from 0.41 to 0.35 once the fixed cost eats into available margin. Full script execution re-run clean.",
-  "💰 Campaign Planner forecast P&L — Keeta FD was never in it, at all, for any aggregator. Real gap Nikhil caught directly ('the FD costs doesn't come up in the Full P&L per category tables') after forecasting a Keeta campaign. Root cause: every Keeta FD fix this session (computeProfitability, campAnalysisV2, campRecentWindowAnalysis, campTrajectory, campBreakevenUplift, computeProfitabilityBreakdown) fixed something that OBSERVES real past order data — none of them could ever reach a forecast, because a forecast has no real orders to look up; campPlanCompute()/pnlAt() project from a baseline + assumed uplift, they don't observe anything. So this was always going to need its own fix, not inherit one of the others. Also means there's no 'exact vs estimate' choice here the way there was everywhere else — a future campaign can never have real per-order Keeta data, only the flat AED-2/order estimate is ever possible for a forecast. Applied to BOTH the campaign scenarios (fdDay=orders×KEETA_FD_COST inside pnlAt) and the baseline (baseline is real historical Keeta activity too, and the same cost almost certainly applied to it) — and to the separate contribPoCampaign calculation used for break-even orders, which duplicates pnlAt's per-order math outside the function and needed the identical fdPerOrder term to stay consistent with it. Added a 'Keeta Free Delivery' line to the on-screen P&L cards, shown only when relevant (agg==='Keeta'); the CSV/XLSX export needed no change since it only ever showed a summarized Net Contribution figure, not a Commission/Food breakdown, so it inherits the corrected number automatically. Verified with a real functional test: Keeta scenario and baseline both show non-zero fdDay, an identical Talabat forecast shows exactly zero, and the underlying arithmetic (netSalesDay−commDay−foodDay−fdDay) matches contribDay exactly. My first test also tried comparing Keeta's absolute contribution dollars against Talabat's and read as a failure — caught that this was an invalid comparison (the two aggregators have different commission rates baked in, so a raw dollar comparison isn't apples-to-apples) rather than trusting a confusing result; the real proof is that Keeta's own contribution is exactly fdDay lower than it would be without this fix, which held exactly. Full script execution re-run clean.",
-  "🔔 Campaigns 'Recommendations' panel — two real bugs Nikhil caught in one screenshot. (1) 'Ends in Xh' alerts kept firing even after he'd already entered a follow-up campaign (same brand+aggregator) starting the next day in the sheet — the alert had no way to know he'd already acted on exactly what it was nagging about. campNeedsAttentionItems() already received `upcoming` as a parameter, it just never used it for this check. New hasContinuation() looks for a same-brand+aggregator campaign (in either active or upcoming) starting within 2 days of this one ending, and suppresses the ending-soon/extend-worthy alerts when one exists — checked against a DIFFERENT aggregator's follow-up too, confirmed that does NOT suppress it, since that's not actually a continuation of anything. (2) 'Dismissed once today, then it came back' — real bug, not a session-boundary misunderstanding: recKey was `${title}|${reason}`, and title for the most common alert ('Ends in Xh') is computed live from hours-remaining on every render — dismiss it at 'Ends in 5h' and the same campaign's next render says 'Ends in 4h', a different string, so the dismissal silently stopped matching. Every alert now carries its own stableKey (the campaign's real identity + which kind of alert it is, e.g. brand|aggregator|name|dates|'ending'), set once and never dependent on the displayed hour count — dismissing now stays dismissed regardless of how much time passes or how many times the page re-renders. Verified both with real functional tests: a campaign ending soon with no follow-up still alerts (control), the identical campaign with a same-brand+aggregator follow-up starting next day is correctly suppressed, a follow-up on a DIFFERENT aggregator correctly does NOT suppress it, and a recKey computed at '5h remaining' vs the same campaign's key at '3h remaining' come out identical. Full script execution re-run clean."
+  "🔍 Full Keeta FD audit, per Nikhil directly asking 'is there any other place this hasn't been factored in.' Went through every call site of brandContribution()/commissionRateFor() in the file rather than guessing — found three more genuinely live gaps, confirmed one dead-code false alarm, and confirmed everything else already correct. (1) campAnalysisV2 had a SECOND contribution calc buried inside itself — a 'corrected gross' branch that only fires for outlet-scoped campaigns (the code's own example: an AUH-only Flash Sale) — that called brandContribution() fresh and OVERWROTE campC.contribution, silently erasing the FD subtraction build 458 had already applied earlier in the same function. Fixed by re-subtracting the same campFD there rather than letting the overwrite win. (2) The 'what-if a shallower discount depth' scenario simulator AND the breakEvenDepth scan (both inside campAnalysisV2, used for the depth-sensitivity chart) had never had FD touch them at all — both compute hypothetical order counts at depths that never actually ran, so — same logic as the Campaign Planner forecast fix — only the flat AED-2/order estimate is honest here, never exact data. (3) cmpComputeContribution — a THIRD, completely separate Compare-page contribution calculator from computeProfitabilityBreakdown (the A/B popup already fixed) — feeds the page's own top-level Contribution card directly, including the three-way A/B/C comparison, and had never been touched. Same permissive-matcher pattern as everywhere else. Also found buildFcCalcTipHTML — same gap, but confirmed via a call-site search that it's dead code, never called anywhere since the standalone Forecaster it belonged to was retired; left alone rather than fixing something nothing can ever render, flagged for cleanup instead. Verified (1) by direct code reasoning (the fix is a one-line append to an existing formula, and the exact 'scoped outlet, non-overlapping allocation' trigger condition is hard to construct in an isolated test within reasonable time — flagged as the one fix in this batch not covered by a dedicated functional test). (2) and (3) verified with real functional tests: cmpComputeContribution confirmed to drop by exactly a real FD figure (40 AED) when exact data covers the range and zero otherwise; the scenario simulator's first comparison (exact vs no-exact Keeta data) correctly showed NO difference — which is the CORRECT behavior by design, not a bug, since hypothetical order counts can never have real per-order data — confirmed the fix actually does something by comparing against a temporarily-reverted copy with the FD term removed, which showed the real, expected ~120 AED/day swing (60 orders × AED 2) and breakEvenDepth correctly dropping from 0.41 to 0.35 once the fixed cost eats into available margin. Full script execution re-run clean."
 ];
 
 
@@ -6974,6 +6974,19 @@ function parseCPCSheet(csv){
     // generic banner pattern in both the raw normalization and the Remarks-mentions fallback, so
     // a genuine "Shoppable Banner" cell or remark is never miscategorized as plain Banners.
     const isShoppableBanner=(v)=>/shoppable\s*banner/i.test(v);
+    // v479: FTU CPC — real, current data change per Nikhil directly. Careem added a second CPC
+    // product visible only to first-time users (FTU = First Time User), a fixed AED 3 bid,
+    // distinct from the existing standard AED 2 CPC — he'll enter it as its own value in Column A
+    // ("FTU CPC"), the same way Talabat's Shoppable Banner got its own Column A value rather than
+    // being folded into plain Banner. Checked BEFORE the generic CPC fallback, same pattern as the
+    // Shoppable-Banner-before-Banner check just above, so a genuine "FTU CPC" cell is never
+    // miscategorized as plain CPC and silently blended into the same bid/ROAS averages. No other
+    // change needed to show it anywhere in the app — the Ad Type toggle throughout this page
+    // (cpcSetAdType, the History tab filter, every per-aggregator/brand breakdown) already builds
+    // its option list dynamically from whatever adType values are actually present in cpcData,
+    // the same mechanism that already surfaced Shoppable Banner as a real filter option once it
+    // started appearing in the data — nothing here is hardcoded to a fixed set of 4 types.
+    const isFtuCpc=(v)=>/\bftu\b/i.test(v);
     const adTypeRaw=((row[cm.adType]||"").trim()||"CPC").replace(/key\s*words?/i,"Keywords");
     const remarksMentionsShoppableBanner=isShoppableBanner(remarksRaw)||isShoppableBanner(bl);
     const remarksMentionsBanner=(/banner/i.test(remarksRaw)||/banner/i.test(bl))&&!remarksMentionsShoppableBanner;
@@ -6990,7 +7003,7 @@ function parseCPCSheet(csv){
     const budgetType=btRaw.includes("combin")?"combined":(btRaw.includes("seperat")||btRaw.includes("separat"))?"separate":"separate";
     const schedule=parseCpcSchedule(budgetCellRaw); // v361: day-of-week / daypart split, if present
     const rec={
-      adType:/keyword/i.test(adType)?"Keywords":isShoppableBanner(adType)?"Shoppable Banner":/banner/i.test(adType)?"Banners":"CPC",
+      adType:/keyword/i.test(adType)?"Keywords":isShoppableBanner(adType)?"Shoppable Banner":isFtuCpc(adType)?"FTU CPC":/banner/i.test(adType)?"Banners":"CPC",
       aggregator,brand,branch,splitScope,brandLocation:bl,startDate,endDate,
       views:num(cm.views),orders:num(cm.orders),sales:num(cm.sales),aov:num(cm.aov),cto:num(cm.cto),
       budgetAlloc:num(cm.budgetAlloc),budgetSpent:num(cm.budgetSpent),leftover:num(cm.leftover),
@@ -7595,6 +7608,14 @@ function cpcRenderBrandLevel(ag){
 // Looks at the past 6 months of this brand-outlet's Deliveroo bids and finds the bid that
 // delivered the best balance of return (ROAS) and volume (orders). Returns the suggested bid
 // plus the burn impact (simple proportional model: new burn = burn × newBid/oldBid).
+// v479: still gated to Deliveroo only — this is a deliberate, current choice, not a stale
+// assumption. Careem now has real manual bid control too (Nikhil sets it himself when creating
+// the CPC/FTU CPC campaign, confirmed directly), so the premise this function needs ("a bid
+// someone can actually act on") does now hold for Careem in principle. What's still unconfirmed
+// is whether that bid can be CHANGED again mid-month once a campaign is live, the way Deliveroo's
+// can — Nikhil said explicitly that's something to find out next month. Recommending a bid
+// change he might not be able to execute mid-flight would be worse than saying nothing, so this
+// stays Deliveroo-only until that's confirmed one way or the other — revisit this gate once it is.
 function cpcDeliverooBidOpt(ag,brand,outlet,curRow,curBidOverride){
   if(ag!=="Deliveroo")return null;
   const today=cpcRealToday();
@@ -8339,7 +8360,9 @@ function cpcObligationsCard(priorMonth,priorLabel,nextLabel){
 }
 
 // Deliveroo per-outlet allocation table. Key feature: bid recommendations leveraged from
-// cpcDeliverooBidOpt (Deliveroo is the only aggregator where bid is in our control).
+// cpcDeliverooBidOpt (Deliveroo-only for now — see that function's own comment for why Careem,
+// despite now having real manual bid control too, isn't included yet: mid-month bid-change
+// ability there is still unconfirmed as of Sep 2026).
 // Reconciles bottom-up recommendations to the top-down 2% mandate by redistributing any gap
 // to the best-performing outlets (weighted by ROAS upside).
 // v319: trend-aware verdicts + trim-priority, per Nikhil's direct feedback — Fyoozhen DIP got
@@ -9733,7 +9756,7 @@ function cpcRenderOutletLevel(ag,brand){
   const B=A.brands[brand];
   // Fixed reading order: CPC always first, then Keywords, then Banners, then anything else —
   // independent of Set insertion order (which follows raw sheet row order and isn't reliable).
-  const TYPE_ORDER={CPC:0,Keywords:1,Banners:2,"Shoppable Banner":3};
+  const TYPE_ORDER={CPC:0,"FTU CPC":1,Keywords:2,Banners:3,"Shoppable Banner":4};
   const aggAdTypes=[...B.adTypes].sort((a,b)=>(TYPE_ORDER[a]??99)-(TYPE_ORDER[b]??99));
   if(cpcAdTypeFilter!=='all'||aggAdTypes.length<=1){
     return cpcRenderOutletLevelSingle(ag,brand,false);
@@ -21194,28 +21217,57 @@ function cmpReportNarrative(data){
   if(sorted.length){const top=sorted[0];driver=` — ${top.brand} on ${top.aggregator} was the largest single contributor.`;}
   let discLine="";
   if(discPct!=null&&salesPct!=null){
-    if(Math.abs(discPct-salesPct)<5)discLine=` Discount burn moved roughly in line with sales (${fmtPct(discPct)}), so margin held steady.`;
-    else if(discPct>salesPct)discLine=` Discount burn grew faster than sales (${fmtPct(discPct)} vs ${fmtPct(salesPct)}) — some of this growth came at a real cost.`;
-    else discLine=` Discount burn grew slower than sales (${fmtPct(discPct)} vs ${fmtPct(salesPct)}), so this wasn't bought with heavier discounting.`;
+    if(Math.abs(discPct-salesPct)<5){
+      discLine=` Discount burn moved roughly in line with sales (${fmtPct(discPct)}).`;
+    }else if(salesPct<0&&discPct<0){
+      // v478: same sign-blindness bug as adLine had — "grew slower/faster" reads as nonsense
+      // when BOTH values are declines, not growth at different rates. Caught while fixing the
+      // identical shape of bug in adLine below, for the exact scenario Nikhil asked about.
+      if(discPct<salesPct)discLine=` Discount burn was cut even faster than sales fell (${fmtPct(discPct)} vs ${fmtPct(salesPct)}), so this wasn't a margin-protection cut — sales fell despite less discounting too.`;
+      else discLine=` Discount burn fell less than sales did (${fmtPct(discPct)} vs ${fmtPct(salesPct)}) — margin held up better than the top line.`;
+    }else if(salesPct<0&&discPct>=0){
+      discLine=` Sales fell even as discount burn ${discPct>5?"rose":"held steady"} (${fmtPct(discPct)}) — heavier discounting didn't prevent the decline.`;
+    }else if(salesPct>=0&&discPct<0){
+      discLine=` Sales grew even as discount burn fell (${fmtPct(discPct)}) — this growth wasn't bought with heavier discounting.`;
+    }else if(discPct>salesPct){
+      discLine=` Discount burn grew faster than sales (${fmtPct(discPct)} vs ${fmtPct(salesPct)}) — some of this growth came at a real cost.`;
+    }else{
+      discLine=` Discount burn grew slower than sales (${fmtPct(discPct)} vs ${fmtPct(salesPct)}), so this wasn't bought with heavier discounting.`;
+    }
   }
-  // v477: ad spend line, per Nikhil directly — he compared two windows where ad spend went
-  // from AED 0 to AED 1,345 and the report's own narrative never mentioned it once, even though
-  // that's arguably the single biggest factor in the whole comparison. Root cause: pctOf()
-  // returns null whenever the prior value is 0 (can't divide by zero) — so a real, working
-  // discLine-style comparison for ad spend was never actually reachable here for a "no ad spend
-  // before, real ad spend now" window, the exact case that most needs calling out. This line
-  // never existed before this fix at all (discLine/contribLine did, adLine didn't) — added
-  // fresh, with the zero-base case handled explicitly rather than silently producing nothing.
+  // v477/v478: ad spend line, per Nikhil directly — first (v477) because he compared two windows
+  // where ad spend went from AED 0 to AED 1,345 and the report never mentioned it once. Then
+  // (v478) he asked the mirror-image question directly: does a SLOWDOWN with ad spend also
+  // falling get attributed to reduced visibility? Checked the real behavior before answering —
+  // it didn't, and worse, the existing "grew faster/slower" framing produced actively confusing
+  // text for this exact case ("Ad spend grew slower than sales (-40.0% vs -20.0%)" when NEITHER
+  // grew — both fell, ad spend just fell further). Rewritten sign-aware rather than magnitude-
+  // only: growth-vs-growth, decline-vs-decline, and the two mixed-sign cases (sales fell despite
+  // steady/rising ad spend; sales grew despite falling ad spend) each get their own correct
+  // wording, not one comparison template stretched to cover cases it was never written for.
   let adLine="";
   if(latest.adSpend>0||prior.adSpend>0){
     if(prior.adSpend===0&&latest.adSpend>0){
       adLine=` Ad spend went from AED 0 to ${fmtAEDx(latest.adSpend)} this window — some of the growth above may be ad-driven, not purely organic or discount-driven.`;
+    }else if(prior.adSpend>0&&latest.adSpend===0){
+      adLine=` Ad spend went from ${fmtAEDx(prior.adSpend)} to AED 0 this window${salesPct!=null&&salesPct<0?" — reduced ad visibility may be contributing to the decline above":""}.`;
     }else{
       const adPct=pctOf(latest.adSpend,prior.adSpend);
       if(adPct!=null&&salesPct!=null){
-        if(Math.abs(adPct-salesPct)<5)adLine=` Ad spend moved roughly in line with sales (${fmtPct(adPct)}).`;
-        else if(adPct>salesPct)adLine=` Ad spend grew faster than sales (${fmtPct(adPct)} vs ${fmtPct(salesPct)}) — some of this growth may be ad-driven.`;
-        else adLine=` Ad spend grew slower than sales (${fmtPct(adPct)} vs ${fmtPct(salesPct)}).`;
+        if(Math.abs(adPct-salesPct)<5){
+          adLine=` Ad spend moved roughly in line with sales (${fmtPct(adPct)}).`;
+        }else if(salesPct<0&&adPct<0){
+          if(adPct<salesPct)adLine=` Ad spend was cut even faster than sales fell (${fmtPct(adPct)} vs ${fmtPct(salesPct)}) — reduced ad visibility may be contributing to the decline.`;
+          else adLine=` Ad spend fell less than sales did (${fmtPct(adPct)} vs ${fmtPct(salesPct)}) — the decline doesn't look purely ad-driven.`;
+        }else if(salesPct<0&&adPct>=0){
+          adLine=` Sales fell even as ad spend ${adPct>5?"rose":"held steady"} (${fmtPct(adPct)}) — the decline doesn't look ad-driven; look elsewhere.`;
+        }else if(salesPct>=0&&adPct<0){
+          adLine=` Sales grew even as ad spend fell (${fmtPct(adPct)}) — this growth wasn't ad-driven.`;
+        }else if(adPct>salesPct){
+          adLine=` Ad spend grew faster than sales (${fmtPct(adPct)} vs ${fmtPct(salesPct)}) — some of this growth may be ad-driven.`;
+        }else{
+          adLine=` Ad spend grew slower than sales (${fmtPct(adPct)} vs ${fmtPct(salesPct)}).`;
+        }
       }
     }
   }
@@ -21255,6 +21307,14 @@ function cmpReportConclusions(data){
     const adOfSales=latest.sales>0?(latest.adSpend/latest.sales*100):0;
     bad.push(`Ad spend went from AED 0 to ${fmtAEDx(latest.adSpend)} this window (${adOfSales.toFixed(1)}% of net sales) — worth factoring into how much of the sales growth reads as organic versus ad-driven.`);
   }
+  // v478: mirror-image case, per Nikhil directly asking whether a slowdown alongside a real ad
+  // spend cut gets attributed to reduced visibility — checked, it didn't. Sales falling while ad
+  // spend was cut even faster is a real, distinct signal from "ad spend grew ahead of sales"
+  // above; gated explicitly on both being real declines rather than reusing a plain magnitude
+  // check, since that reads the wrong way when both values are negative.
+  else if(salesPct!=null&&adPct!=null&&salesPct<-5&&adPct<salesPct-5){
+    bad.push(`Sales fell ${fmtPct(salesPct)} while ad spend was cut even faster (${fmtPct(adPct)}) — reduced ad visibility may be contributing to the decline, not just weaker organic demand.`);
+  }
   // v386: AOV vs. order-volume divergence — a real, generalizable pattern worth calling out
   // on its own rather than leaving buried in the KPI cards, since "sales grew but orders fell"
   // and "sales grew because orders grew" tell very different stories about what actually drove it.
@@ -21277,6 +21337,38 @@ function cmpReportConclusions(data){
   // proportionate to how the "bad" side names specific combos rather than every mover.
   const cleanGrowers=growing.filter(m=>m.discPct==null||m.discPct<=m.pct+5).sort((a,b)=>b.pct-a.pct);
   if(cleanGrowers.length)good.push(`${cleanGrowers[0].brand} · ${cleanGrowers[0].aggregator} delivered clean growth (${fmtPct(cleanGrowers[0].pct)} sales) without discount spend growing materially faster — a sustainable pattern, not one propped up by heavier discounting.`);
+  // v478: outlet-level movers, per Nikhil directly — the section above already names specific
+  // declining/growing BRAND·PLATFORM combos, but never named a specific OUTLET or attempted to
+  // explain why, even though that's the most actionable granularity for deciding where to act
+  // next. Same discipline as the brand/platform movers: one worst decliner, one best grower, not
+  // every outlet — proportionate to how specific the rest of this section already gets.
+  const allOutletNames=[...new Set(data.flatMap(d=>(d.outlets||[]).map(o=>o.outlet)))];
+  if(allOutletNames.length>=2){
+    const outletMovers=allOutletNames.map(name=>{
+      const mP=cmpScopedMetrics(prior.cfg,null,null,name);
+      const mL=cmpScopedMetrics(latest.cfg,null,null,name);
+      if(!mP.sales&&!mL.sales)return null;
+      return{name,salesPct:pctOf(mL.sales,mP.sales),contribPct:pctOf(mL.contribution,mP.contribution),
+        adPct:pctOf(mL.adSpend,mP.adSpend),priorAdSpend:mP.adSpend,latestAdSpend:mL.adSpend};
+    }).filter(m=>m&&m.salesPct!=null);
+    const bySalesPct=[...outletMovers].sort((a,b)=>a.salesPct-b.salesPct);
+    const worstOutlet=bySalesPct[0],bestOutlet=bySalesPct[bySalesPct.length-1];
+    if(worstOutlet&&worstOutlet.salesPct<=-15){
+      const alsoContrib=worstOutlet.contribPct!=null&&worstOutlet.contribPct<worstOutlet.salesPct-5;
+      bad.push(`${worstOutlet.name} declined ${fmtPct(worstOutlet.salesPct)}${alsoContrib?", and contribution fell even further — this wasn't just a volume dip":""} — worth checking what changed there specifically.`);
+    }
+    if(bestOutlet&&bestOutlet.salesPct>=15&&bestOutlet!==worstOutlet){
+      if(bestOutlet.priorAdSpend===0&&bestOutlet.latestAdSpend>0){
+        good.push(`${bestOutlet.name} grew ${fmtPct(bestOutlet.salesPct)}, outpacing every other outlet — new ad spend there (AED 0 → ${fmtAEDx(bestOutlet.latestAdSpend)}) may be a real factor, not purely organic demand.`);
+      }else if(bestOutlet.adPct!=null&&bestOutlet.adPct>bestOutlet.salesPct+15){
+        good.push(`${bestOutlet.name} grew ${fmtPct(bestOutlet.salesPct)}, outpacing every other outlet — ad spend there grew even faster (${fmtPct(bestOutlet.adPct)}), suggesting the investment there is paying off.`);
+      }else if(bestOutlet.contribPct!=null&&bestOutlet.contribPct<bestOutlet.salesPct-10){
+        bad.push(`${bestOutlet.name} grew sales ${fmtPct(bestOutlet.salesPct)} the most of any outlet, but contribution only grew ${fmtPct(bestOutlet.contribPct)} — discount and/or ad spend there grew faster than the sales gain, so this growth came at a real margin cost.`);
+      }else{
+        good.push(`${bestOutlet.name} grew ${fmtPct(bestOutlet.salesPct)}, the strongest outlet this period — a clean gain without visible margin erosion.`);
+      }
+    }
+  }
   if(latest.campaigns.length&&!prior.campaigns.length)bad.push(`A campaign ran in ${latest.dateLabel} with no counterpart in ${prior.dateLabel} — part of the movement above may be campaign-driven rather than organic. See Campaigns That Ran.`);
   // v381 fix: hasConcern is captured BEFORE the "nothing crossed a threshold" placeholder is
   // pushed into bad — Nikhil's earlier catch on the Discount Burn narrative (KPI card added but
@@ -21435,9 +21527,24 @@ function cmpFullMetricsTable(title,sub,colLabel,names,scopeFn,prior,latest,clrA,
       ${cmpPairedMetricCell(mP.contribution,mL.contribution,fmtAEDExact,true,clrA,clrB)}
       ${cmpPairedMetricCell(mP.adSpend,mL.adSpend,fmtAEDExact,false,clrA,clrB)}</tr>`;
   }).join("");
+  // v478: Totals row, per Nikhil directly. Same weighted-AOV convention as the Outlet-Level
+  // Detail fix — total sales ÷ total orders, not a naive average of each row's own AOV, which
+  // would overweight low-volume brands/platforms relative to their real share of orders.
+  const rowsData=names.map(name=>({p:scopeFn(name,prior),l:scopeFn(name,latest)}));
+  const sum=(side,field)=>rowsData.reduce((s,r)=>s+(r[side][field]||0),0);
+  const pSales=sum("p","sales"),lSales=sum("l","sales");
+  const pOrders=sum("p","orders"),lOrders=sum("l","orders");
+  const pAov=pOrders?pSales/pOrders:0,lAov=lOrders?lSales/lOrders:0;
+  const totalsRow=`<tr style="font-weight:800;border-top:2px solid #ccc"><td>Total</td>
+    ${cmpPairedMetricCell(pSales,lSales,fmtAEDExact,true,clrA,clrB)}
+    ${cmpPairedMetricCell(pOrders,lOrders,v=>v.toLocaleString(),true,clrA,clrB)}
+    ${cmpPairedMetricCell(pAov,lAov,fmtAEDExact,true,clrA,clrB)}
+    ${cmpPairedMetricCell(sum("p","discBurn"),sum("l","discBurn"),fmtAEDExact,false,clrA,clrB)}
+    ${cmpPairedMetricCell(sum("p","contribution"),sum("l","contribution"),fmtAEDExact,true,clrA,clrB)}
+    ${cmpPairedMetricCell(sum("p","adSpend"),sum("l","adSpend"),fmtAEDExact,false,clrA,clrB)}</tr>`;
   return`<div class="sec-title" style="font-size:14.5px">${title}</div><div class="sec-sub">${sub}</div>
     <table><thead><tr><th>${colLabel}</th><th>Sales</th><th>Orders</th><th>AOV</th><th>Discount</th><th>Contribution</th><th>Ad Spend</th></tr></thead>
-    <tbody>${rows}</tbody></table>`;
+    <tbody>${rows}${totalsRow}</tbody></table>`;
 }
 // v428: every consecutive pair in data, same convention cmpReportKPICards already uses for the
 // Executive Summary — [data[0],data[1]], [data[1],data[2]], ... — so a 2-period scope still
@@ -21508,7 +21615,10 @@ function cmpReportOutletDetail(data){
   const allOutlets=new Set(data.flatMap(d=>d.outlets.map(o=>o.outlet)));
   if(allOutlets.size<2)return"";
   const brandCount=Math.max(...data.map(d=>d.brandCount));
-  const head=`<thead><tr><th>Outlet</th><th>Sales</th><th>Orders</th><th>AOV</th><th>Discount</th><th>Contribution</th></tr></thead>`;
+  // v478: Ad Spend column, per Nikhil directly — cmpScopedMetrics already computes real
+  // per-outlet ad spend (same function everything else on this row already reads from), it just
+  // wasn't being shown. No new computation needed, just surfacing what was already there.
+  const head=`<thead><tr><th>Outlet</th><th>Sales</th><th>Orders</th><th>AOV</th><th>Discount</th><th>Ad Spend</th><th>Contribution</th></tr></thead>`;
   return cmpConsecutivePairs(data).map(([prior,latest])=>{
     const clrA=cmpClrFor(prior.key),clrB=cmpClrFor(latest.key);
     const outletRow=(name,brand)=>{
@@ -21518,12 +21628,33 @@ function cmpReportOutletDetail(data){
         ${cmpPairedMetricCell(mP.orders,mL.orders,v=>v.toLocaleString(),true,clrA,clrB)}
         ${cmpPairedMetricCell(mP.aov,mL.aov,fmtAEDExact,true,clrA,clrB)}
         ${cmpPairedMetricCell(mP.discBurn,mL.discBurn,fmtAEDExact,false,clrA,clrB)}
+        ${cmpPairedMetricCell(mP.adSpend,mL.adSpend,fmtAEDExact,false,clrA,clrB)}
         ${cmpPairedMetricCell(mP.contribution,mL.contribution,fmtAEDExact,true,clrA,clrB)}</tr>`;
+    };
+    // v478: Totals row, per Nikhil directly ("add totals at the bottom of tables where
+    // applicable, and averages wherever applicable"). Sales/Orders/Discount/Ad Spend/Contribution
+    // sum directly across the outlet list; AOV is the one column where a plain average would be
+    // wrong — it's weighted by each outlet's own order count (total sales ÷ total orders), the
+    // same convention every AOV figure elsewhere in this dashboard already uses, not a naive
+    // average-of-averages that would overweight low-volume outlets.
+    const totalsRow=(names,brand)=>{
+      const rows=names.map(n=>({p:cmpScopedMetrics(prior.cfg,brand,null,n),l:cmpScopedMetrics(latest.cfg,brand,null,n)}));
+      const sum=(side,field)=>rows.reduce((s,r)=>s+(r[side][field]||0),0);
+      const pSales=sum("p","sales"),lSales=sum("l","sales");
+      const pOrders=sum("p","orders"),lOrders=sum("l","orders");
+      const pAov=pOrders?pSales/pOrders:0,lAov=lOrders?lSales/lOrders:0;
+      return`<tr style="font-weight:800;border-top:2px solid #ccc"><td>Total</td>
+        ${cmpPairedMetricCell(pSales,lSales,fmtAEDExact,true,clrA,clrB)}
+        ${cmpPairedMetricCell(pOrders,lOrders,v=>v.toLocaleString(),true,clrA,clrB)}
+        ${cmpPairedMetricCell(pAov,lAov,fmtAEDExact,true,clrA,clrB)}
+        ${cmpPairedMetricCell(sum("p","discBurn"),sum("l","discBurn"),fmtAEDExact,false,clrA,clrB)}
+        ${cmpPairedMetricCell(sum("p","adSpend"),sum("l","adSpend"),fmtAEDExact,false,clrA,clrB)}
+        ${cmpPairedMetricCell(sum("p","contribution"),sum("l","contribution"),fmtAEDExact,true,clrA,clrB)}</tr>`;
     };
     if(brandCount<2){
       const names=[...allOutlets];
       return`<div class="sec-title">Outlet-Level Detail</div><div class="sec-sub">Every outlet active for ${esc(data[0].label)} — both periods shown directly</div>
-        <table>${head}<tbody>${names.map(n=>outletRow(n,null)).join("")}</tbody></table>`;
+        <table>${head}<tbody>${names.map(n=>outletRow(n,null)).join("")}${totalsRow(names,null)}</tbody></table>`;
     }
     const brands=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.brand)))];
     const sections=brands.map(brand=>{
@@ -21531,7 +21662,7 @@ function cmpReportOutletDetail(data){
       const brandOutlets=[...new Set(cmpData({...latest.cfg,brands:new Set([brand])}).concat(cmpData({...prior.cfg,brands:new Set([brand])})).map(r=>r.branch).filter(b=>b!=="(brand-level)"))];
       if(!brandOutlets.length)return"";
       return`<div class="outlet-brand-group"><div class="outlet-brand-hd" style="color:${BMAP[brand]?.c||'#888'};border-color:${BMAP[brand]?.c||'#888'}">${logoImg(brand,16)}${esc(brand)}</div>
-        <table>${head}<tbody>${brandOutlets.map(n=>outletRow(n,brand)).join("")}</tbody></table></div>`;
+        <table>${head}<tbody>${brandOutlets.map(n=>outletRow(n,brand)).join("")}${totalsRow(brandOutlets,brand)}</tbody></table></div>`;
     }).join("");
     return`<div class="sec-title">Outlet-Level Detail</div><div class="sec-sub">Organized one section per brand, both periods shown directly — the deepest level of this report</div>${sections}`;
   }).join('<div style="page-break-before:always"></div>');
