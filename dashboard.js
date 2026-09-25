@@ -13,13 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-482";
+const BUILD_VERSION="2026-08-13-483";
 const BUILD_NOTES=[
+  "🗂️ Discount Burn Analysis folded into Campaigns as its own tab, per Nikhil directly (\"let Discount Burn be a functionality inside the Campaigns Page, I don't use it much\") — then pushed further when the first pass only redirected the old page rather than removing it from the sidebar (\"if we created it, we should be able to remove it as well\"), which is what actually shipped. Mockup shown and approved before building (side-by-side current vs proposed CTA row), matching the existing house rule to render before building. Implementation: a new discountBurnCampTabHTML() returns the same content every existing discount* helper already built (computeDiscountBurn, discountFilterBarHTML, discountKpiRowHTML, discountUnmappedKeetaItemsWarning, discountTrendChartHTML, discountUncategorizedBreakdownHTML, discRecTableHTML, discountCoFundAuditTableHTML, discountCampaignTableHTML) — none of that logic changed, only where it's mounted, wired into renderCampaigns() as campTab==='discounts' alongside the existing 'browse'/'planner'/'detail' states, with a second CTA card (amber, matching Discount Burn's own established header color) next to the Campaign Planner card, and the same '← Back to campaigns' bar pattern Planner already uses, extended to also carry the Download CSV button. The real obstacle: the sidebar tab's own source HTML isn't in this file at all — confirmed not by assumption but by a comment already sitting in this exact codebase from build v461 ('The sidebar tab's actual HTML isn't in this file... matching tabs on their VISIBLE TEXT, not assumed markup'), the same constraint buildSidebarNav itself already works around. Removal uses the identical technique: a new removeDiscountBurnTab(), called once at init right before buildSidebarNav, finds the live tab by its onclick target or visible text and deletes it from the DOM outright — not hidden, not skipped, genuinely gone — before the sidebar-building step ever collects it. The old renderDiscounts() is kept only as a one-line safety-net redirect (sets campTab, calls gp('campaigns'), renders Campaigns) for any stray reference that still tries to reach the old page directly, not as a real destination. Verified three ways: removeDiscountBurnTab() against a mock four-tab set removes only the Discount Burn tab and leaves Overview/Campaigns/KPI Tracker untouched; a full renderCampaigns() render with campTab='discounts' and real order/campaign data produces the CTA grid, the back bar, the CSV button, and the discount content correctly with no thrown errors; and the redirect path plus the untouched 'browse' view both confirmed working with no regression (two real test-data gaps caught and fixed while building the tests themselves — an empty campaigns array and a missing classList stub — both test-harness issues, not application bugs). Full regression re-run against every test from this entire session — all still pass. Full script execution re-run clean.",
   "🔎 Full audit, per Nikhil's direct question: does ad spend respect real campaign date windows everywhere it's deducted, all the way across the dashboard — his example, a Lollorosso DMC Deliveroo CPC campaign that ran 7-9 Sep only (budget consumed early / cancelled), should show zero ad spend if you Compare 15-20 Sep, since the campaign was long over. Traced cpcAdCostForRange's own overlap logic by hand against his exact scenario first: confirmed correct — the overlapStart<=overlapEnd check and the confirmedEnded flag (set once a later update date proves the row really ended on its stated End Date) together mean a campaign contributes exactly zero cost to any window that doesn't overlap it, with no extrapolation past a confirmed end. Then found all 3 real call sites of that function (computeProfitability, computeProfitabilityBreakdown, cmpAdSpendOverlap) and confirmed each passes its own real, narrow query range — not some broader month smear — so the core engine is correct everywhere it's actually used. But that search surfaced a much bigger, separate gap while checking for OTHER independent ad-spend calculators (the same class of bug that hit Keeta FD repeatedly across builds 458/462/471/474/475): cmpComputeContribution — a fourth contribution calculator, entirely separate from the three above — never called cpcAdCostForRange at all, regardless of date window. This one feeds nearly everything on the Compare page that says 'Contribution': the Outlet-Level Detail table, Brand/Platform Comparison, every Totals row, the outlet-movers logic, the narrative's 'Net contribution declined X%' line, and the top-level Contribution KPI plus the three-way A/B/C comparison — all while Ad Spend was computed and shown as a fully separate column right next to it, implying a relationship between the two figures that didn't actually exist in the math. Every other contribution path in the dashboard nets ad spend out the same way it nets out commission and discount; this one silently didn't, so Contribution here has been overstated by the real ad spend amount wherever ad spend was nonzero, for as long as this function has existed — a materially bigger issue than the date-windowing question that led to finding it. Fixed with the identical established pattern (cpcOutletScope to split pooled rows across branches actually in view, cpcAdCostForRange over the pair's own real data span so it doesn't extrapolate past days with no sales row yet — same fix class as v388's fix to computeProfitabilityBreakdown for the same reason). Verified two ways: (1) a constructed scenario matching Nikhil's exact example — real orders and a real 7-9 Sep campaign row — confirms ad spend reads the real AED 300 for the 7-9 Sep window and exactly zero for 15-20 Sep, both directions; (2) a Keeta-only regression with no CPC data confirms the existing Keeta FD deduction alongside it still works unbroken. Also confirmed, not fixed: the Campaigns page (campAnalysisV2) deliberately excludes CPC from its own profitability figures — a real, previously documented instruction from Nikhil ('ad spend should factor into profitability everywhere except Campaigns') — flagged to him directly as a scope boundary worth re-confirming still stands, not silently left as an oversight. Full regression re-run against every test from this entire session — all still pass. Full script execution re-run clean.",
   "🎯 Root cause found — real data typo, not a code bug. Nikhil pushed back on build 480's fix ('but there WAS CPC on Lollorosso Talabat in August — check the Google sheet, you'll find it'), and he was right: build 480 correctly distinguished 'no data' from 'confirmed zero', but the ROW ITSELF WAS THERE with real spend, so it should never have shown either — that was still a bug, just a different one. Tracked down the actual master sheet (searched Drive, found partner-side files first, asked Nikhil directly, got the real 'Virtual Brands Performance' file, hit a tool limitation pulling one specific tab from a multi-tab spreadsheet, asked Nikhil to export just the Ad Investments tab as CSV, and he uploaded it) rather than reasoning about it from code alone. Found it on direct inspection: the End Date cell for three real August 2026 rows (Lollorosso-Motorcity CPC, Lollorosso-Motorcity Key Words, Oregano-Reem CPC) reads '30-Aug--26' — a doubled hyphen, one extra keystroke. Verified line by line that every layer of date parsing rejected it: parseCPCDate's regex requires exactly one separator character, its parseDate fallback's own regex has the identical exactly-one-separator requirement, and even the final native Date() fallback returns Invalid Date for this string — so endDate came back null and cpcAdCostForRange's own guard (`if(!r.startDate||!r.endDate||!r.dailyBurn)continue`) silently dropped the row entirely, before build 480's hasData tracking ever got a chance to see it: the row wasn't 'not found for this outlet', it was found and then discarded at the date-parsing stage, two steps earlier than where the previous fix was looking. Fixed both parseCPCDate and its parseDate fallback to tolerate one-or-more separator characters ([-\\/]+ instead of [-\\/]) rather than requiring exactly one — a real, realistic typo class (an accidental extra keypress), not a loosening of what counts as a valid date; malformed non-date strings still correctly fail to match, verified directly. Verified against the real uploaded CSV, not synthetic data: all three previously-broken rows (including Oregano-Reem, which was silently affected the same way but which Nikhil hadn't mentioned) now parse with the correct endDate (2026-08-30) and their real budgetSpent (649.82 / 759.24 / 641.53) and positive dailyBurn. Also surfaced, as a secondary finding, a real but separate and lower-priority data issue already caught by existing diagnostics: one Noon/September row has 'Lollorosso Jumeirah' (a space instead of a hyphen) in Brand-Location, so it can't be mapped to a specific outlet — out of scope for this fix, flagged to Nikhil directly rather than touched. Full regression re-run against every test from all four prior ad-spend-related builds this session — all still pass. Full script execution re-run clean.",
   "🔍 Compare page PDF report — 'AED 0 ad spend' was two conflated meanings wearing one number, real gap Nikhil caught directly (Motorcity, Lollorosso, Talabat — he knew real August CPC investment happened, report showed a flat AED 0). Traced it fully rather than guessing: cmpAdSpendOverlap already computed a real `hasData` flag (whether any CPC data covers the period at all), but cmpAdSpendForCfg only ever read `.spent` and threw `.hasData` away — so 'no CPC data was found for this period' and 'CPC ran and genuinely spent nothing' rendered as the exact same bare AED 0, with no way to tell which one a reader was looking at. Found and fixed a SECOND, deeper bug while building the first fix: hasData itself ignored the `branch` parameter entirely, checking only whether ANY row existed for the brand+aggregator+period from ANY outlet — meaning a real August row for a DIFFERENT outlet (Al Reef) was silently making Motorcity's own missing data look present, the reverse of the reported symptom caught only because a two-outlet test surfaced it. Now correctly scoped: a per-outlet CPC row only counts for the specific outlet it belongs to; a pooled row (splitScope set — brand-level/DXB/AUH/N Branches, no single outlet) still counts for every outlet it could split across, so outlets under a pooled Careem/Noon budget don't wrongly read as having no data. Propagated adSpendHasData through cmpScopedMetrics into three places: the Outlet-Level Detail table and cmpFullMetricsTable (Brand/Platform Comparison) now show an honest 'No data' with an explanatory tooltip instead of a bare, indistinguishable AED 0 — cmpPairedMetricCell gained optional hasData parameters, defaulting to normal rendering for every other metric column that doesn't pass them, since only Ad Spend can genuinely have no data at all (Sales/Orders/AOV/Discount/Contribution all come from real order records, never CPC uploads). The ad-spend narrative and Worth Watching bullets built in the last two sessions had the exact same conflation baked in — 'ad spend went from AED 0' would have fired just as wrongly there — guarded both with one early check ahead of the existing cascades rather than threading the condition through every branch. Verified end-to-end with a test reproducing the real scenario shape: real orders in both months for two outlets, a real CPC row for Motorcity in September only and for Al Reef in both months — confirmed Motorcity's August correctly reads hasData=false while September and Al Reef's own data both correctly read true, the Outlet-Level Detail table shows 'No data' instead of a bare zero, the narrative says 'No CPC data was found' instead of falsely claiming a confirmed zero, and the pooled-row case (Careem/Noon) still splits correctly across every outlet it covers with hasData=true for each. Full regression re-run against every test from the three prior ad-spend-related builds — all still pass. Full script execution re-run clean.",
-  "🎯 Careem FTU CPC — real, current data change per Nikhil directly. Careem added a new ad product visible only to first-time users (FTU = First Time User), a fixed AED 3 bid, distinct from the existing standard AED 2 CPC, and confirmed he'll enter it as its own value in Column A ('FTU CPC'). parseCPCSheet now recognizes it as its own distinct adType, checked before the generic CPC fallback — same pattern already used for Shoppable Banner vs plain Banner. Confirmed by reading cpcAdCostForRange line by line that this needed no other change: that function (which every ad-spend figure across the whole dashboard reads from, including the Compare report narrative fixed two builds ago) never filtered by adType at all — it sums every ad type unconditionally, so FTU CPC spend was already flowing into every total correctly even before this fix. What this fix actually changes is narrower and still real: FTU CPC rows would have been silently blended into the generic 'CPC' bucket's own bid/ROAS averages on the Ads Performance page, mixing a AED 2 bid with a AED 3 bid into one misleading number. The Ad Type toggle used throughout that page already builds its option list dynamically from whatever adType values are actually present in the data (the same mechanism that already surfaced Shoppable Banner once it started appearing) — so FTU CPC becomes a real, selectable filter with zero UI changes needed beyond the parser fix. Also updated (comments only, not logic) the two places documenting 'Deliveroo is the only aggregator where bid is in our control' — Nikhil confirmed he does have real manual bid control on Careem now too, but explicitly said whether that bid can be changed again mid-month is still unconfirmed ('we'll find out next month'). Deliberately did NOT extend cpcDeliverooBidOpt's actual gate to Careem — recommending a bid change Nikhil might not be able to execute mid-flight would be worse than saying nothing; left it Deliveroo-only with a comment explaining why, ready to revisit once mid-month adjustability is confirmed one way or the other. Verified with a real functional test: a CSV with one standard CPC row (AED 2 bid) and one FTU CPC row (AED 3 bid) for the same brand+outlet parses into two correctly distinguished types, and cpcAdCostForRange correctly sums both (AED 900 + AED 750 = AED 1,650) rather than only picking up one. Full script execution re-run clean.",
-  "📊 Compare page PDF report — a large combined update from one message with two parts: table/outlet enhancements, then a sign-aware rewrite of the ad-spend and discount-burn narrative lines. PART 1 — three asks against actual uploaded report pages. (1) Ad Spend column added to Outlet-Level Detail — cmpScopedMetrics already computed real per-outlet ad spend for every other column on that row, it just wasn't being shown; no new calculation needed. (2) Totals row on every real row/column table in the report — Outlet-Level Detail and the shared cmpFullMetricsTable (used by both Brand Comparison and Platform Comparison). AOV in the totals row is weighted (total sales ÷ total orders), not a naive average-of-averages, which would overweight low-volume outlets/brands relative to their real share of orders — same convention every other AOV figure in this dashboard already uses. Campaign cards and KPI tiles deliberately left untouched — not row/column tables, so a 'totals row' doesn't apply the same way. (3) Outlet-level movers in Conclusions — the existing brand/platform movers logic never named a specific OUTLET or explained why, even though that's the most actionable granularity. New logic names the single worst decliner and best grower by outlet, and — matching the two scenarios Nikhil described directly — distinguishes whether a top grower's gain came with ad spend appearing from zero (likely ad-driven), ad spend growing faster than sales (investment paying off), or contribution growing slower than sales (margin cost from discount/ad spend outgrowing the gain). Verified against the exact real numbers from Nikhil's own uploaded PDF (Outlet-Level Detail totals reproduce AED 1,257 → AED 3,594 exactly) and a constructed scenario naming both a real decliner and a real ad-driven-margin-cost grower correctly. Caught a real gap in the new code before it shipped: the outlet-movers logic assumed data[].outlets always exists — true for real report data, not for older test fixtures — added a defensive guard rather than leaving it to fail on any future caller that omits the field. PART 2 — Nikhil then asked the mirror-image question directly: does a slowdown alongside a real ad spend cut get attributed to reduced visibility? Checked — it didn't, and the existing 'grew faster/slower' comparison template produced actively nonsensical text for that case ('Ad spend grew slower than sales (-40.0% vs -20.0%)' when NEITHER grew, both fell). Rewrote both the discount-burn line and the ad-spend line to be sign-aware rather than magnitude-only: growth-vs-growth, decline-vs-decline (cut faster → 'reduced visibility may be contributing'; cut less → 'doesn't look purely ad-driven'), and the two mixed-sign cases each get correct wording. Added the matching Worth Watching bullet for the decline-alongside-ad-cut case too. Verified with the original 0→1,345 case (still correct), a new slowdown scenario (sales -20%, ad spend -40%, now correctly reads 'reduced ad visibility may be contributing to the decline'), and full regression against the normal and zero-to-zero cases. Caught a real structural bug in my own edit mid-build too — a str_replace left old orphaned code nested inside a new branch; found and corrected before the syntax check that would have caught it anyway. Full script execution re-run clean."
+  "🎯 Careem FTU CPC — real, current data change per Nikhil directly. Careem added a new ad product visible only to first-time users (FTU = First Time User), a fixed AED 3 bid, distinct from the existing standard AED 2 CPC, and confirmed he'll enter it as its own value in Column A ('FTU CPC'). parseCPCSheet now recognizes it as its own distinct adType, checked before the generic CPC fallback — same pattern already used for Shoppable Banner vs plain Banner. Confirmed by reading cpcAdCostForRange line by line that this needed no other change: that function (which every ad-spend figure across the whole dashboard reads from, including the Compare report narrative fixed two builds ago) never filtered by adType at all — it sums every ad type unconditionally, so FTU CPC spend was already flowing into every total correctly even before this fix. What this fix actually changes is narrower and still real: FTU CPC rows would have been silently blended into the generic 'CPC' bucket's own bid/ROAS averages on the Ads Performance page, mixing a AED 2 bid with a AED 3 bid into one misleading number. The Ad Type toggle used throughout that page already builds its option list dynamically from whatever adType values are actually present in the data (the same mechanism that already surfaced Shoppable Banner once it started appearing) — so FTU CPC becomes a real, selectable filter with zero UI changes needed beyond the parser fix. Also updated (comments only, not logic) the two places documenting 'Deliveroo is the only aggregator where bid is in our control' — Nikhil confirmed he does have real manual bid control on Careem now too, but explicitly said whether that bid can be changed again mid-month is still unconfirmed ('we'll find out next month'). Deliberately did NOT extend cpcDeliverooBidOpt's actual gate to Careem — recommending a bid change Nikhil might not be able to execute mid-flight would be worse than saying nothing; left it Deliveroo-only with a comment explaining why, ready to revisit once mid-month adjustability is confirmed one way or the other. Verified with a real functional test: a CSV with one standard CPC row (AED 2 bid) and one FTU CPC row (AED 3 bid) for the same brand+outlet parses into two correctly distinguished types, and cpcAdCostForRange correctly sums both (AED 900 + AED 750 = AED 1,650) rather than only picking up one. Full script execution re-run clean."
 ];
 
 
@@ -4727,6 +4727,10 @@ async function doLoad(){
   // captured and placed in the sidebar footer, rather than being orphaned outside it.
   tagTabsWithPageIds(); // idempotent — catches the admin tab, which didn't exist for the first pass
   restructureTabIcons(); // same idempotent catch, for the admin tab's icon/label split
+  removeDiscountBurnTab(); // v483: must run before buildSidebarNav, so the deleted tab never
+  // reaches its tab-collection step at all — see the function's own comment for why this is safe
+  // even without access to the tab's source markup (same text/onclick-matching approach v461
+  // already used elsewhere in this file for the identical constraint).
   buildSidebarNav();
   // v112: pull the shared aggregator order data from the server (all users). If anything
   // updated, caches were already invalidated inside — re-render whichever page is open.
@@ -4826,6 +4830,25 @@ function updateSidebarSyncStatus(){
   else txt=`Synced ${Math.floor(secs/3600)}h ago`;
   el.textContent=txt;
 }
+// v483: removes the standalone "Discount Burn" tab from the sidebar entirely, per Nikhil
+// directly ("if we created it, we should be able to remove it as well") — its content now lives
+// inside Campaigns (campTab==='discounts', see discountBurnCampTabHTML). The tab's own source
+// markup isn't in this file — buildSidebarNav below already documented that same constraint back
+// in build v461 ("The sidebar tab's actual HTML isn't in this file... matching tabs on their
+// VISIBLE TEXT, not assumed markup"), so removal uses the identical technique: find the live DOM
+// element by its onclick target or visible text, then delete it outright, rather than editing
+// markup that isn't accessible from here. Matches on either gp('discounts')/gp("discounts") (the
+// onclick a real tab would carry) or the literal "Discount Burn" text, the same two signals
+// tagTabsWithPageIds() already uses to identify this tab — so if either one would have tagged it
+// data-pg="discounts", this removes it before that tagging, and before buildSidebarNav (called
+// right after this) ever collects it into the sidebar.
+function removeDiscountBurnTab(){
+  document.querySelectorAll(".tab").forEach(t=>{
+    const oc=t.getAttribute("onclick")||"";
+    const txt=(t.textContent||"").trim();
+    if(oc.includes("'discounts'")||oc.includes('"discounts"')||/discount burn/i.test(txt))t.remove();
+  });
+}
 function buildSidebarNav(){
   try{
     if(document.getElementById("app-sidebar"))return;
@@ -4837,7 +4860,11 @@ function buildSidebarNav(){
     // v183: reorder by data-pg (set by tagTabsWithPageIds, called before this) rather than
     // trusting whatever DOM order the tabs happened to arrive in — Cancellations goes right
     // after KPI Tracker, Admin is pulled out entirely into its own footer section at the bottom.
-    const ORDER=["overview","brands","outlets","platforms","cpc","campaigns","discounts","kpi","cancellations","feedback","compare"];
+    // v483: "discounts" removed — Discount Burn Analysis now lives inside Campaigns as a tab
+    // (campTab==='discounts'), not a standalone page. The tab itself is deleted from the DOM
+    // outright by removeDiscountBurnTab() before this function ever runs, so it wouldn't reach
+    // ORDER's mapping anyway — removed here too so ORDER stays an accurate list of real pages.
+    const ORDER=["overview","brands","outlets","platforms","cpc","campaigns","kpi","cancellations","feedback","compare"];
     const byPg={};
     tabs.forEach(t=>{if(t.dataset.pg)byPg[t.dataset.pg]=t;});
     const orderedTabs=ORDER.map(id=>byPg[id]).filter(Boolean);
@@ -16561,6 +16588,10 @@ async function renderCampaigns(){
     #page-campaigns .fpill{background:${DARK_THEME.bg}!important;border-color:${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
     #page-campaigns .fpill.on{border-color:#f59e0b!important;color:#f59e0b!important}
     #page-campaigns .fchip{background:${DARK_THEME.card}!important}
+    #page-campaigns table th{color:${DARK_THEME.textMuted}!important}
+    #page-campaigns table td{color:${DARK_THEME.textPrimary}!important}
+    #page-campaigns .preset{background:${DARK_THEME.bg}!important;border-color:${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
+    #page-campaigns .preset.act{background:rgba(245,158,11,.15)!important;border-color:#f59e0b!important;color:#f59e0b!important}
   </style>`:"";
   if(!campLoaded){
     pg.innerHTML=`${styleOverride}<div style="padding:30px;text-align:center;color:${T.muted};font-size:13px">⏳ Loading campaigns from Google Sheets...</div>`;
@@ -16599,10 +16630,19 @@ async function renderCampaigns(){
     // 420-423) — Nikhil's own explicit call once parity was reached, per his answer earlier in
     // this thread ("decide after seeing Planner with full parity"). Single full-width card now
     // that there's only one tool here, not the two-card grid built for three options.
-    const forecasterCTA=`<div style="margin-bottom:14px">
+    // v483: Discount Burn Analysis added as a second CTA alongside Campaign Planner, per Nikhil
+    // directly ("let Discount Burn be a functionality inside Campaigns"). Same card pattern as
+    // the planner CTA, amber-accented to match Discount Burn's own established color (the
+    // #f59e0b/#fbbf24 gradient its standalone header always used) rather than reusing green,
+    // so the two tools stay visually distinct at a glance.
+    const forecasterCTA=`<div style="margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div onclick="campTab='planner';renderCampaigns()" style="cursor:pointer;background:linear-gradient(135deg,rgba(74,222,128,.13),rgba(74,222,128,.04));border:1.5px solid ${campTab==='planner'?'#4ADE80':'rgba(74,222,128,.35)'};border-left:3px solid #4ADE80;border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px" onmouseover="this.style.borderColor='#4ADE80'" onmouseout="this.style.borderColor='${campTab==='planner'?'#4ADE80':'rgba(74,222,128,.35)'}'">
         <div style="display:flex;align-items:center;gap:11px"><span style="font-size:24px">🎢</span><div><div style="font-size:14px;font-weight:800;color:#86EFAC">Campaign Planner</div><div style="font-size:11px;color:${T.label};margin-top:2px;line-height:1.4">Forecast and break-even together — is what's likely enough to clear what's needed?</div></div></div>
         <span style="font-size:11px;font-weight:700;color:#4ADE80;white-space:nowrap;flex-shrink:0">${campTab==='planner'?'✓ Open':'Open →'}</span>
+      </div>
+      <div onclick="campTab='discounts';renderCampaigns()" style="cursor:pointer;background:linear-gradient(135deg,rgba(245,158,11,.13),rgba(245,158,11,.04));border:1.5px solid ${campTab==='discounts'?'#f59e0b':'rgba(245,158,11,.35)'};border-left:3px solid #f59e0b;border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px" onmouseover="this.style.borderColor='#f59e0b'" onmouseout="this.style.borderColor='${campTab==='discounts'?'#f59e0b':'rgba(245,158,11,.35)'}'">
+        <div style="display:flex;align-items:center;gap:11px"><span style="font-size:24px">💸</span><div><div style="font-size:14px;font-weight:800;color:#FBBF24">Discount Burn Analysis</div><div style="font-size:11px;color:${T.label};margin-top:2px;line-height:1.4">Total burn, campaign attribution, ambient discount tracking</div></div></div>
+        <span style="font-size:11px;font-weight:700;color:#f59e0b;white-space:nowrap;flex-shrink:0">${campTab==='discounts'?'✓ Open':'Open →'}</span>
       </div>
     </div>`;
     // Rewards segregation renderer: on Active/History, split the filtered list into "regular" and
@@ -16624,6 +16664,7 @@ async function renderCampaigns(){
     };
     let main='';
     if(campTab==='planner'){main=campPlanHTML();}
+    else if(campTab==='discounts'){main=discountBurnCampTabHTML();}
     else if(campTab==='browse'){
       // Filter bar renders ONCE, above the combined sections — not duplicated per status,
       // which is what would've happened if each section still called it independently.
@@ -16644,7 +16685,9 @@ async function renderCampaigns(){
     // once. campKPIStrip() itself is left in place (unused for now) rather than deleted outright,
     // in case a differently-scoped version of it is useful in the redesign.
     const topChrome=(campTab==='detail')?'':forecasterCTA+statusTable;
-    const toolBack=(campTab==='planner')?`<div style="margin-bottom:10px;padding:8px 12px;background:rgba(255,255,255,.04);border-radius:8px;border:1px solid ${T.border};display:flex;align-items:center;gap:10px"><button onclick="campTab='browse';renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.3);border-radius:7px;color:${T.label};padding:6px 13px;font-size:12px;cursor:pointer;font-weight:700">← Back to campaigns</button><span style="color:${T.border}">|</span><span style="font-size:13px;font-weight:700;color:#4ADE80">🎢 Campaign Planner</span></div>`:'';
+    const toolBack=(campTab==='planner')?`<div style="margin-bottom:10px;padding:8px 12px;background:rgba(255,255,255,.04);border-radius:8px;border:1px solid ${T.border};display:flex;align-items:center;gap:10px"><button onclick="campTab='browse';renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.3);border-radius:7px;color:${T.label};padding:6px 13px;font-size:12px;cursor:pointer;font-weight:700">← Back to campaigns</button><span style="color:${T.border}">|</span><span style="font-size:13px;font-weight:700;color:#4ADE80">🎢 Campaign Planner</span></div>`
+      :(campTab==='discounts')?`<div style="margin-bottom:10px;padding:8px 12px;background:rgba(255,255,255,.04);border-radius:8px;border:1px solid ${T.border};display:flex;align-items:center;gap:10px"><button onclick="campTab='browse';renderCampaigns()" style="background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.3);border-radius:7px;color:${T.label};padding:6px 13px;font-size:12px;cursor:pointer;font-weight:700">← Back to campaigns</button><span style="color:${T.border}">|</span><span style="font-size:13px;font-weight:700;color:#f59e0b">💸 Discount Burn Analysis</span><button onclick="discountExportCSV()" style="margin-left:auto;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:5px">⬇ Download CSV</button></div>`
+      :'';
     // v368: the auto-play timer targets specific DOM nodes by id — those nodes are about to be
     // destroyed by the innerHTML replacement below, so the timer MUST stop first or it keeps
     // firing against elements that no longer exist. Restarted after the new DOM is in place, only
@@ -16654,6 +16697,7 @@ async function renderCampaigns(){
     pg.innerHTML=`${styleOverride}${header}${campDataFreshnessStrip()}${attention}${topChrome}${toolBack}${main}`;
     if(_focusedId){const _el=document.getElementById(_focusedId);if(_el){_el.focus();if(_focusedSel&&_el.setSelectionRange){try{_el.setSelectionRange(_focusedSel.start,_focusedSel.end);}catch(e){}}}}
     if(campTab==='planner'&&campPlanResult)campPlanRenderChart();
+    if(campTab==='discounts')discountBurnCampTabDrawChart();
     if(campTab==='detail'&&selBundle){const c=selBundle;const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&r.brand===c.brand&&r.aggregator===c.aggregator));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-bundle',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}
     if(campTab==='detail'&&selCamp){const c=selCamp;const imp=campImpact(c);if(campStatus(c)!=='Upcoming'&&imp.hasData){const trend=[];let d=new Date(c.startDate+'T12:00:00');const end=new Date(c.endDate+'T12:00:00');while(d<=end){const k=dk(d);const s=sumR(allData.filter(r=>r.date===k&&(c.brand==='All Brands'||r.brand===c.brand)&&(c.aggregator==='All'||r.aggregator===c.aggregator)));trend.push({d:k.slice(5),s:s.sales,o:s.orders});d.setDate(d.getDate()+1);}setTimeout(()=>{trendChart('ch-camp',trend,BMAP[c.brand]?.c||'#f59e0b');},50);}}
   }catch(err){pg.innerHTML=`${styleOverride}<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Render error</div><div style="color:${T.muted};font-size:12px">${err.message}</div></div>`;}
@@ -17926,58 +17970,59 @@ function discRecTableHTML(){
     :`<div style="text-align:center;color:${T.muted};font-size:12px;padding:20px">No discrepancy above AED 1 for this selection — the sheet and statement files agree.</div>`}
   </div>`;
 }
-async function renderDiscounts(){
-  const pg=document.getElementById("page-discounts");
-  if(!pg)return;
+// v483: Discount Burn Analysis, folded into Campaigns as its own tab (campTab==='discounts') —
+// per Nikhil directly ("let Discount Burn be a functionality inside Campaigns, I don't use it
+// much standalone"). Returns just the discount-specific body content (filter bar through the
+// campaign table) — no outer page header or "back" bar, since renderCampaigns() already supplies
+// both via its own header and the toolBack pattern already used for Campaign Planner, so this
+// stays a plain content fragment exactly like campPlanHTML() is for the planner tab. Reuses every
+// existing discount* helper unchanged — computeDiscountBurn, discountFilterBarHTML,
+// discountKpiRowHTML, discountUnmappedKeetaItemsWarning, discountUncategorizedBreakdownHTML,
+// discRecTableHTML, discountCoFundAuditTableHTML, discountCampaignTableHTML — none of that logic
+// changed, only where it's mounted. Still sets _lastDiscBurnData (discAuditDateHTML's per-date
+// drill-down tool reads this global regardless of which page rendered it) and still calls
+// discountEnsureDates() first, same as the original renderDiscounts() did.
+function discountBurnCampTabHTML(){
   const T=discTheme();
-  const styleOverride=_darkPage?`<style>
-    #page-discounts{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
-    #page-discounts .card,#page-discounts .sm{background:${DARK_THEME.card}!important;border:1px solid ${DARK_THEME.cardBorder}!important;box-shadow:${DARK_THEME.shadow}!important;color:${DARK_THEME.textPrimary}}
-    #page-discounts .ct{color:${DARK_THEME.textPrimary}!important}
-    #page-discounts table th{color:${DARK_THEME.textMuted}!important}
-    #page-discounts table td{color:${DARK_THEME.textPrimary}!important}
-    #page-discounts .fpill{background:${DARK_THEME.bg}!important;border-color:${DARK_THEME.cardBorder}!important}
-    #page-discounts .fpill.on{border-color:#f59e0b!important}
-    #page-discounts .preset{background:${DARK_THEME.bg}!important;border-color:${DARK_THEME.cardBorder}!important;color:${DARK_THEME.textSecondary}!important}
-    #page-discounts .preset.act{background:rgba(245,158,11,.15)!important;border-color:#f59e0b!important;color:#f59e0b!important}
-  </style>`:"";
-  if(!campLoaded){
-    pg.innerHTML=`${styleOverride}<div style="padding:30px;text-align:center;color:${T.muted};font-size:13px">⏳ Loading campaign data…</div>`;
-    await loadCampaigns();
-    return renderDiscounts();
-  }
-  // CRITICAL: normalize dates BEFORE rendering the filter bar. Otherwise the date inputs
-  // read stale dateStart/dateEnd (from a previous preset or custom range) while the KPI
-  // cards below show the newly-computed range — user sees a mismatch and it looks like
-  // filters aren't working.
   discountEnsureDates();
-  const header=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid ${T.border}"><div><div style="display:flex;align-items:center;gap:9px"><span style="font-size:20px">💸</span><div style="font-size:18px;font-weight:800;background:linear-gradient(90deg,#f59e0b,#fbbf24);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:.3px">Discount Burn Analysis</div></div><div style="font-size:10px;color:${T.muted};margin-top:2px;letter-spacing:.4px">Total burn · Campaign attribution · Ambient discount tracking</div></div><button onclick="discountExportCSV()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:5px">⬇ Download CSV</button></div>`;
   const filterBar=discountFilterBarHTML();
   const data=computeDiscountBurn();
-  _lastDiscBurnData=data; // cached for discAuditDateHTML — the per-date drill-down tool
-  if(!data){
-    pg.innerHTML=`${styleOverride}${header}${filterBar}<div class="card" style="text-align:center;padding:30px;color:${T.muted}">Please select a valid date range to view results.</div>`;
-    return;
-  }
-  if(data.matchesCount===0){
-    pg.innerHTML=`${styleOverride}${header}${filterBar}<div class="card" style="text-align:center;padding:30px;color:${T.muted}">No sales data matches these filters. Try widening the aggregator/brand/region selection or picking a different date range.</div>`;
-    return;
-  }
-  pg.innerHTML=`${styleOverride}${header}${filterBar}${discountKpiRowHTML(data)}${discountUnmappedKeetaItemsWarning()}${discountTrendChartHTML(data)}${discountUncategorizedBreakdownHTML(data)}${discRecTableHTML()}${discountCoFundAuditTableHTML(data)}${discountCampaignTableHTML(data)}`;
-  // Render trend chart after DOM is in place
-  if(data.trend&&data.trend.length>0){
-    const axisClr=_darkPage?DARK_THEME.textMuted:"#64748b";
-    setTimeout(()=>{
-      const ctx=document.getElementById("ch-discount-trend");
-      if(!ctx)return;
-      if(charts["ch-discount-trend"])charts["ch-discount-trend"].destroy();
-      charts["ch-discount-trend"]=new Chart(ctx,{
-        type:"line",
-        data:{labels:data.trend.map(x=>x.d),datasets:[{label:"Daily Burn",data:data.trend.map(x=>x.burn),borderColor:"#EF4444",backgroundColor:"rgba(239,68,68,.12)",borderWidth:2,pointRadius:2,pointHoverRadius:5,fill:true,tension:.25}]},
-        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`AED ${Math.round(c.parsed.y).toLocaleString()}`}}},scales:{y:{beginAtZero:true,ticks:{callback:v=>`AED ${(v/1000).toFixed(1)}k`,font:{size:10},color:axisClr},grid:{color:"rgba(148,163,184,.15)"}},x:{ticks:{font:{size:9},color:axisClr,maxRotation:0,autoSkip:true,maxTicksLimit:12},grid:{display:false}}}}
-      });
-    },50);
-  }
+  _lastDiscBurnData=data;
+  if(!data)return`${filterBar}<div class="card" style="text-align:center;padding:30px;color:${T.muted}">Please select a valid date range to view results.</div>`;
+  if(data.matchesCount===0)return`${filterBar}<div class="card" style="text-align:center;padding:30px;color:${T.muted}">No sales data matches these filters. Try widening the aggregator/brand/region selection or picking a different date range.</div>`;
+  return`${filterBar}${discountKpiRowHTML(data)}${discountUnmappedKeetaItemsWarning()}${discountTrendChartHTML(data)}${discountUncategorizedBreakdownHTML(data)}${discRecTableHTML()}${discountCoFundAuditTableHTML(data)}${discountCampaignTableHTML(data)}`;
+}
+// v483: draws the discount trend chart after renderCampaigns() has put the DOM in place — same
+// chart config as the original renderDiscounts(), just called from the new home. Only fires when
+// _lastDiscBurnData (set by discountBurnCampTabHTML above, in the same render pass) has a real
+// trend to draw, mirroring the original's own `if(data.trend&&data.trend.length>0)` guard.
+function discountBurnCampTabDrawChart(){
+  const data=_lastDiscBurnData;
+  if(!data||!data.trend||!data.trend.length)return;
+  const axisClr=_darkPage?DARK_THEME.textMuted:"#64748b";
+  setTimeout(()=>{
+    const ctx=document.getElementById("ch-discount-trend");
+    if(!ctx)return;
+    if(charts["ch-discount-trend"])charts["ch-discount-trend"].destroy();
+    charts["ch-discount-trend"]=new Chart(ctx,{
+      type:"line",
+      data:{labels:data.trend.map(x=>x.d),datasets:[{label:"Daily Burn",data:data.trend.map(x=>x.burn),borderColor:"#EF4444",backgroundColor:"rgba(239,68,68,.12)",borderWidth:2,pointRadius:2,pointHoverRadius:5,fill:true,tension:.25}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`AED ${Math.round(c.parsed.y).toLocaleString()}`}}},scales:{y:{beginAtZero:true,ticks:{callback:v=>`AED ${(v/1000).toFixed(1)}k`,font:{size:10},color:axisClr},grid:{color:"rgba(148,163,184,.15)"}},x:{ticks:{font:{size:9},color:axisClr,maxRotation:0,autoSkip:true,maxTicksLimit:12},grid:{display:false}}}}
+    });
+  },50);
+}
+// v483: Discount Burn Analysis moved into Campaigns (campTab==='discounts', see
+// discountBurnCampTabHTML above) — this standalone page is kept only as a safety-net redirect,
+// for any stale reference that still sets curPage/renders it directly (e.g. the
+// pullOrderDataFromServer callback above, or a bookmarked '?page=discounts' URL), not as a real
+// destination anymore. The sidebar tab itself is removed outright at init (see
+// removeDiscountBurnTab) rather than just left to redirect silently, per Nikhil directly ("if we
+// created it, we should be able to remove it") — redirecting alone would have left a nav button
+// that still looked like its own page.
+async function renderDiscounts(){
+  campTab='discounts';
+  if(typeof gp==='function')gp('campaigns');
+  return renderCampaigns();
 }
 
 function kpiOutletName(tab){return KPI_OUTLET_NAME[tab]||tab;}
