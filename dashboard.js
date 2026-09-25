@@ -13,13 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-479";
+const BUILD_VERSION="2026-08-13-480";
 const BUILD_NOTES=[
+  "🔍 Compare page PDF report — 'AED 0 ad spend' was two conflated meanings wearing one number, real gap Nikhil caught directly (Motorcity, Lollorosso, Talabat — he knew real August CPC investment happened, report showed a flat AED 0). Traced it fully rather than guessing: cmpAdSpendOverlap already computed a real `hasData` flag (whether any CPC data covers the period at all), but cmpAdSpendForCfg only ever read `.spent` and threw `.hasData` away — so 'no CPC data was found for this period' and 'CPC ran and genuinely spent nothing' rendered as the exact same bare AED 0, with no way to tell which one a reader was looking at. Found and fixed a SECOND, deeper bug while building the first fix: hasData itself ignored the `branch` parameter entirely, checking only whether ANY row existed for the brand+aggregator+period from ANY outlet — meaning a real August row for a DIFFERENT outlet (Al Reef) was silently making Motorcity's own missing data look present, the reverse of the reported symptom caught only because a two-outlet test surfaced it. Now correctly scoped: a per-outlet CPC row only counts for the specific outlet it belongs to; a pooled row (splitScope set — brand-level/DXB/AUH/N Branches, no single outlet) still counts for every outlet it could split across, so outlets under a pooled Careem/Noon budget don't wrongly read as having no data. Propagated adSpendHasData through cmpScopedMetrics into three places: the Outlet-Level Detail table and cmpFullMetricsTable (Brand/Platform Comparison) now show an honest 'No data' with an explanatory tooltip instead of a bare, indistinguishable AED 0 — cmpPairedMetricCell gained optional hasData parameters, defaulting to normal rendering for every other metric column that doesn't pass them, since only Ad Spend can genuinely have no data at all (Sales/Orders/AOV/Discount/Contribution all come from real order records, never CPC uploads). The ad-spend narrative and Worth Watching bullets built in the last two sessions had the exact same conflation baked in — 'ad spend went from AED 0' would have fired just as wrongly there — guarded both with one early check ahead of the existing cascades rather than threading the condition through every branch. Verified end-to-end with a test reproducing the real scenario shape: real orders in both months for two outlets, a real CPC row for Motorcity in September only and for Al Reef in both months — confirmed Motorcity's August correctly reads hasData=false while September and Al Reef's own data both correctly read true, the Outlet-Level Detail table shows 'No data' instead of a bare zero, the narrative says 'No CPC data was found' instead of falsely claiming a confirmed zero, and the pooled-row case (Careem/Noon) still splits correctly across every outlet it covers with hasData=true for each. Full regression re-run against every test from the three prior ad-spend-related builds — all still pass. Full script execution re-run clean.",
   "🎯 Careem FTU CPC — real, current data change per Nikhil directly. Careem added a new ad product visible only to first-time users (FTU = First Time User), a fixed AED 3 bid, distinct from the existing standard AED 2 CPC, and confirmed he'll enter it as its own value in Column A ('FTU CPC'). parseCPCSheet now recognizes it as its own distinct adType, checked before the generic CPC fallback — same pattern already used for Shoppable Banner vs plain Banner. Confirmed by reading cpcAdCostForRange line by line that this needed no other change: that function (which every ad-spend figure across the whole dashboard reads from, including the Compare report narrative fixed two builds ago) never filtered by adType at all — it sums every ad type unconditionally, so FTU CPC spend was already flowing into every total correctly even before this fix. What this fix actually changes is narrower and still real: FTU CPC rows would have been silently blended into the generic 'CPC' bucket's own bid/ROAS averages on the Ads Performance page, mixing a AED 2 bid with a AED 3 bid into one misleading number. The Ad Type toggle used throughout that page already builds its option list dynamically from whatever adType values are actually present in the data (the same mechanism that already surfaced Shoppable Banner once it started appearing) — so FTU CPC becomes a real, selectable filter with zero UI changes needed beyond the parser fix. Also updated (comments only, not logic) the two places documenting 'Deliveroo is the only aggregator where bid is in our control' — Nikhil confirmed he does have real manual bid control on Careem now too, but explicitly said whether that bid can be changed again mid-month is still unconfirmed ('we'll find out next month'). Deliberately did NOT extend cpcDeliverooBidOpt's actual gate to Careem — recommending a bid change Nikhil might not be able to execute mid-flight would be worse than saying nothing; left it Deliveroo-only with a comment explaining why, ready to revisit once mid-month adjustability is confirmed one way or the other. Verified with a real functional test: a CSV with one standard CPC row (AED 2 bid) and one FTU CPC row (AED 3 bid) for the same brand+outlet parses into two correctly distinguished types, and cpcAdCostForRange correctly sums both (AED 900 + AED 750 = AED 1,650) rather than only picking up one. Full script execution re-run clean.",
   "📊 Compare page PDF report — a large combined update from one message with two parts: table/outlet enhancements, then a sign-aware rewrite of the ad-spend and discount-burn narrative lines. PART 1 — three asks against actual uploaded report pages. (1) Ad Spend column added to Outlet-Level Detail — cmpScopedMetrics already computed real per-outlet ad spend for every other column on that row, it just wasn't being shown; no new calculation needed. (2) Totals row on every real row/column table in the report — Outlet-Level Detail and the shared cmpFullMetricsTable (used by both Brand Comparison and Platform Comparison). AOV in the totals row is weighted (total sales ÷ total orders), not a naive average-of-averages, which would overweight low-volume outlets/brands relative to their real share of orders — same convention every other AOV figure in this dashboard already uses. Campaign cards and KPI tiles deliberately left untouched — not row/column tables, so a 'totals row' doesn't apply the same way. (3) Outlet-level movers in Conclusions — the existing brand/platform movers logic never named a specific OUTLET or explained why, even though that's the most actionable granularity. New logic names the single worst decliner and best grower by outlet, and — matching the two scenarios Nikhil described directly — distinguishes whether a top grower's gain came with ad spend appearing from zero (likely ad-driven), ad spend growing faster than sales (investment paying off), or contribution growing slower than sales (margin cost from discount/ad spend outgrowing the gain). Verified against the exact real numbers from Nikhil's own uploaded PDF (Outlet-Level Detail totals reproduce AED 1,257 → AED 3,594 exactly) and a constructed scenario naming both a real decliner and a real ad-driven-margin-cost grower correctly. Caught a real gap in the new code before it shipped: the outlet-movers logic assumed data[].outlets always exists — true for real report data, not for older test fixtures — added a defensive guard rather than leaving it to fail on any future caller that omits the field. PART 2 — Nikhil then asked the mirror-image question directly: does a slowdown alongside a real ad spend cut get attributed to reduced visibility? Checked — it didn't, and the existing 'grew faster/slower' comparison template produced actively nonsensical text for that case ('Ad spend grew slower than sales (-40.0% vs -20.0%)' when NEITHER grew, both fell). Rewrote both the discount-burn line and the ad-spend line to be sign-aware rather than magnitude-only: growth-vs-growth, decline-vs-decline (cut faster → 'reduced visibility may be contributing'; cut less → 'doesn't look purely ad-driven'), and the two mixed-sign cases each get correct wording. Added the matching Worth Watching bullet for the decline-alongside-ad-cut case too. Verified with the original 0→1,345 case (still correct), a new slowdown scenario (sales -20%, ad spend -40%, now correctly reads 'reduced ad visibility may be contributing to the decline'), and full regression against the normal and zero-to-zero cases. Caught a real structural bug in my own edit mid-build too — a str_replace left old orphaned code nested inside a new branch; found and corrected before the syntax check that would have caught it anyway. Full script execution re-run clean.",
   "📢 Compare page PDF report — ad spend was invisible in both the narrative prose and the rule-based conclusions, real gap Nikhil caught from an actual exported report where ad spend went AED 0 → AED 1,345 between two windows and neither the Key Observations paragraph nor Worth Watching mentioned it once. Two separate causes, not one. (1) cmpReportNarrative() (the executive-summary paragraph) had a discLine and a contribLine but no adLine at all — ad spend was never referenced regardless of the numbers, a gap that existed for every report, not just this one. Added fresh, explicitly handling the from-zero case in plain English rather than a percentage. (2) cmpReportConclusions() actually ALREADY had a real rule — 'ad spend grew well ahead of sales' — but it silently never fires when prior ad spend is 0, because pctOf() returns null whenever the prior value is 0 (can't express a from-zero change as a percentage) and the rule's own condition requires a non-null adPct. That's not a smaller version of the signal being missed — going from NO ad spend to real ad spend is the same signal in its most extreme, most narratively important form, and it was being dropped entirely rather than just degraded. Added an explicit zero-base branch expressing the jump in AED and % of net sales instead of a percentage. Verified by reproducing the EXACT numbers from Nikhil's own uploaded report (sales 1,257→3,594, ad spend 0→1,345) — both the narrative and the Worth Watching bullet now state the real jump correctly ('Ad spend went from AED 0 to AED 1,345 this window (37.4% of net sales)...'). Also tested the normal non-zero-base case (ad spend growing proportionally with sales, correctly says so with no false alarm) and the zero-to-zero case (no ad spend in either period — correctly stays silent about it, doesn't fabricate a mention). Full script execution re-run clean.",
-  "📈 Cancellations page — two new panels, per Nikhil's explicit approval of a published full-page rendering (now a standing instruction: renderings go out as a real link showing the actual page in context, not isolated widget snippets). (1) Cancellation Rate Over Time — the page had zero time dimension before this; order volume renders as faded background bars for scale, not a second y-axis, since the FIRST draft of this exact chart used dual axes and got caught as the same anti-pattern already fixed on the Feedback page's Count/% merge this same session — corrected before ever proposing it to Nikhil. Flags whichever month's rate sits furthest above the period average as a real, computed ratio, not a guessed threshold. (2) Outlet × Responsibility Heatmap — every outlet against every responsibility bucket at once; the existing Aggregator→Brand→Outlet drill-down only ever shows one branch at a time, so a pattern spanning outlets was invisible without clicking through each one by hand. Top 10 outlets by cancellation count, lit cells clickable — reuses the EXISTING cancSelectResp() selection mechanic rather than inventing new navigation state, since a heatmap cell isn't scoped to one aggregator the way a drill-down branch is (an outlet can appear on several). Order volume for the trend chart comes from allData filtered through the exact same `f` (curFilters()) the cancellations themselves already use, so the two series are genuinely comparable, not two different scopes drawn as if related. Verified with a real functional test using dates spanning three months with a deliberate rate spike in the middle month: both panels render, the heatmap correctly lists the two real outlets involved, the spike alert correctly identifies the right month with a real computed ratio (1.6×) rather than a placeholder, and the actual Chart.js config that gets built has only one y-axis (confirmed programmatically, not just eyeballed) with the right bar/line types. Caught and fixed a real bug in my OWN test along the way, not the dashboard — `global.talabatOrdersData = ...` from outside the script doesn't reach the script's own internal `talabatOrdersData` (same class of scoping mistake already flagged elsewhere in this file's history), silently dropping a month of test data; fixed by using the same window-hook pattern as every other state variable in these tests. Full script execution re-run clean.",
-  "🔍 Full Keeta FD audit, per Nikhil directly asking 'is there any other place this hasn't been factored in.' Went through every call site of brandContribution()/commissionRateFor() in the file rather than guessing — found three more genuinely live gaps, confirmed one dead-code false alarm, and confirmed everything else already correct. (1) campAnalysisV2 had a SECOND contribution calc buried inside itself — a 'corrected gross' branch that only fires for outlet-scoped campaigns (the code's own example: an AUH-only Flash Sale) — that called brandContribution() fresh and OVERWROTE campC.contribution, silently erasing the FD subtraction build 458 had already applied earlier in the same function. Fixed by re-subtracting the same campFD there rather than letting the overwrite win. (2) The 'what-if a shallower discount depth' scenario simulator AND the breakEvenDepth scan (both inside campAnalysisV2, used for the depth-sensitivity chart) had never had FD touch them at all — both compute hypothetical order counts at depths that never actually ran, so — same logic as the Campaign Planner forecast fix — only the flat AED-2/order estimate is honest here, never exact data. (3) cmpComputeContribution — a THIRD, completely separate Compare-page contribution calculator from computeProfitabilityBreakdown (the A/B popup already fixed) — feeds the page's own top-level Contribution card directly, including the three-way A/B/C comparison, and had never been touched. Same permissive-matcher pattern as everywhere else. Also found buildFcCalcTipHTML — same gap, but confirmed via a call-site search that it's dead code, never called anywhere since the standalone Forecaster it belonged to was retired; left alone rather than fixing something nothing can ever render, flagged for cleanup instead. Verified (1) by direct code reasoning (the fix is a one-line append to an existing formula, and the exact 'scoped outlet, non-overlapping allocation' trigger condition is hard to construct in an isolated test within reasonable time — flagged as the one fix in this batch not covered by a dedicated functional test). (2) and (3) verified with real functional tests: cmpComputeContribution confirmed to drop by exactly a real FD figure (40 AED) when exact data covers the range and zero otherwise; the scenario simulator's first comparison (exact vs no-exact Keeta data) correctly showed NO difference — which is the CORRECT behavior by design, not a bug, since hypothetical order counts can never have real per-order data — confirmed the fix actually does something by comparing against a temporarily-reverted copy with the FD term removed, which showed the real, expected ~120 AED/day swing (60 orders × AED 2) and breakEvenDepth correctly dropping from 0.41 to 0.35 once the fixed cost eats into available margin. Full script execution re-run clean."
+  "📈 Cancellations page — two new panels, per Nikhil's explicit approval of a published full-page rendering (now a standing instruction: renderings go out as a real link showing the actual page in context, not isolated widget snippets). (1) Cancellation Rate Over Time — the page had zero time dimension before this; order volume renders as faded background bars for scale, not a second y-axis, since the FIRST draft of this exact chart used dual axes and got caught as the same anti-pattern already fixed on the Feedback page's Count/% merge this same session — corrected before ever proposing it to Nikhil. Flags whichever month's rate sits furthest above the period average as a real, computed ratio, not a guessed threshold. (2) Outlet × Responsibility Heatmap — every outlet against every responsibility bucket at once; the existing Aggregator→Brand→Outlet drill-down only ever shows one branch at a time, so a pattern spanning outlets was invisible without clicking through each one by hand. Top 10 outlets by cancellation count, lit cells clickable — reuses the EXISTING cancSelectResp() selection mechanic rather than inventing new navigation state, since a heatmap cell isn't scoped to one aggregator the way a drill-down branch is (an outlet can appear on several). Order volume for the trend chart comes from allData filtered through the exact same `f` (curFilters()) the cancellations themselves already use, so the two series are genuinely comparable, not two different scopes drawn as if related. Verified with a real functional test using dates spanning three months with a deliberate rate spike in the middle month: both panels render, the heatmap correctly lists the two real outlets involved, the spike alert correctly identifies the right month with a real computed ratio (1.6×) rather than a placeholder, and the actual Chart.js config that gets built has only one y-axis (confirmed programmatically, not just eyeballed) with the right bar/line types. Caught and fixed a real bug in my OWN test along the way, not the dashboard — `global.talabatOrdersData = ...` from outside the script doesn't reach the script's own internal `talabatOrdersData` (same class of scoping mistake already flagged elsewhere in this file's history), silently dropping a month of test data; fixed by using the same window-hook pattern as every other state variable in these tests. Full script execution re-run clean."
 ];
 
 
@@ -20609,7 +20609,17 @@ function cmpAdSpendOverlap(cfg,brand,agg,branch){
   const winEnd=cfg.end||cfg.start;
   const viewBranches=branch!=null?new Set([branch]):undefined;
   const spent=cpcAdCostForRange(brand,agg,cfg.start,winEnd,viewBranches);
-  const hasData=cpcData.some(r=>r.brand===brand&&r.aggregator===agg&&r.startDate&&r.endDate&&r.startDate<=winEnd&&r.endDate>=cfg.start);
+  // v480: real second bug in the same fix — hasData ignored `branch` entirely, checking only
+  // whether ANY CPC row exists for this brand+aggregator+period, from ANY outlet. That's exactly
+  // why the first version of this fix still failed on a two-outlet test: Al Reef's real August
+  // row (same brand+aggregator as Motorcity) was satisfying hasData for a Motorcity query that
+  // has no row of its own — the reverse of the real Nikhil scenario just masked by name. Now
+  // scoped the same way `spent` already is: a per-outlet row only counts if it matches the
+  // specific branch being asked about; a pooled row (splitScope set — brand-level/DXB/AUH/N
+  // Branches, no single outlet) counts regardless of branch, since the split logic decides
+  // afterward whether this outlet actually gets an allocation from it — excluding pooled rows
+  // here would make EVERY outlet under a pooled campaign wrongly read as having no data at all.
+  const hasData=cpcData.some(r=>r.brand===brand&&r.aggregator===agg&&r.startDate&&r.endDate&&r.startDate<=winEnd&&r.endDate>=cfg.start&&(!branch||r.splitScope||r.branch===branch));
   const pooled=cpcData.some(r=>r.brand===brand&&r.aggregator===agg&&r.splitScope&&r.startDate&&r.endDate&&r.startDate<=winEnd&&r.endDate>=cfg.start);
   return{spent,pooled,hasData};
 }
@@ -21116,17 +21126,30 @@ function cmpAggByOutlet(records){
 // Sums Ad Spend across every distinct brand+aggregator pair actually present in this window's
 // records — mirrors how cmpComputeContribution finds its "pairs" set, so the scope is exactly
 // what's really in the filtered data, not a guess from the raw filter config.
+// v480: real gap Nikhil caught directly — Motorcity showed AED 0 ad spend for a period where he
+// knows real Talabat CPC investment happened. Traced it: cmpAdSpendOverlap already computes a
+// real `hasData` flag (whether any CPC row for this brand+aggregator even covers the period at
+// all), but cmpAdSpendForCfg only ever read `.spent` and threw `.hasData` away — so "AED 0
+// because no CPC data was found for this period" and "AED 0 because CPC ran and genuinely spent
+// nothing" were rendering identically, with no way to tell which one a reader was looking at.
+// Now returns both, so callers can show "No CPC data" instead of a bare, indistinguishable
+// "AED 0" when the underlying data genuinely isn't there — the report becomes honest about a
+// data gap instead of silently implying a confirmed zero. This does NOT explain why Motorcity's
+// August data is missing in the first place (that's a real question about what's in the actual
+// uploaded sheet, not something fixable from this code alone) — it makes the report surface
+// the gap clearly so it's obvious to check, rather than reading as a confirmed number.
 function cmpAdSpendForCfg(cfg,records){
   const pairs=new Set();
   for(const r of records)pairs.add(r.brand+"|"+r.aggregator);
   const branch=cfg.branches.size===1?[...cfg.branches][0]:null;
-  let total=0;
+  let total=0,anyHasData=false;
   for(const key of pairs){
     const[brand,agg]=key.split("|");
     const spend=cmpAdSpendOverlap(cfg,brand,agg,branch);
     total+=spend?.spent||0;
+    if(spend?.hasData)anyHasData=true;
   }
-  return total;
+  return{spent:total,hasData:anyHasData};
 }
 // v382: the core reusable building block for the report's drill-down sections (Brand
 // Comparison, Platform Comparison) — Nikhil's own framing: "combine all 3 [scopes] together...
@@ -21149,8 +21172,8 @@ function cmpScopedMetrics(parentCfg,brand,agg,branch){
   const aov=orders?sales/orders:0;
   const disc=cmpComputeDisc(cfg);
   const contribution=cmpComputeContribution(cfg);
-  const adSpend=cmpAdSpendForCfg(cfg,records);
-  return{orders,sales,aov,discBurn:disc.total,contribution,adSpend};
+  const adSpendResult=cmpAdSpendForCfg(cfg,records);
+  return{orders,sales,aov,discBurn:disc.total,contribution,adSpend:adSpendResult.spent,adSpendHasData:adSpendResult.hasData};
 }
 // Real campaigns overlapping this specific window, scoped to the same brand/aggregator filter
 // as the rest of the report — reuses the exact overlap-day logic already proven in
@@ -21190,13 +21213,14 @@ function cmpBuildReportData(){
     const aov=orders?sales/orders:0;
     const disc=cmpComputeDisc(cfg);
     const contribution=cmpComputeContribution(cfg);
-    const adSpend=cmpAdSpendForCfg(cfg,records);
+    const adSpendResult=cmpAdSpendForCfg(cfg,records);
+    const adSpend=adSpendResult.spent,adSpendHasData=adSpendResult.hasData;
     const brandPlatform=cmpAggForBrandPlatform(records);
     const outlets=cmpAggByOutlet(records);
     const campaigns=cmpCampaignsForWindow(cfg);
     const aggSet=new Set(records.map(r=>r.aggregator));
     return{key,cfg,label:cmpLabel(cfg),dateLabel:cmpDateLabel(cfg),orders,sales,aov,
-      discBurn:disc.total,discSource:disc.source,contribution,adSpend,brandPlatform,outlets,
+      discBurn:disc.total,discSource:disc.source,contribution,adSpend,adSpendHasData,brandPlatform,outlets,
       campaigns,aggCount:aggSet.size,brandCount:new Set(records.map(r=>r.brand)).size};
   });
 }
@@ -21246,7 +21270,19 @@ function cmpReportNarrative(data){
   // steady/rising ad spend; sales grew despite falling ad spend) each get their own correct
   // wording, not one comparison template stretched to cover cases it was never written for.
   let adLine="";
-  if(latest.adSpend>0||prior.adSpend>0){
+  // v480: real gap Nikhil caught (via the Outlet-Level Detail table, but the exact same
+  // underlying issue applies here) — this narrative's own "went from AED 0" framing has been
+  // implicitly assuming a bare adSpend of 0 always means "confirmed no ad spend," when it can
+  // also mean "no CPC data was found for this period at all." Those are very different stories,
+  // and conflating them is exactly the bug that made Motorcity's real August spend disappear.
+  // Guards this as one early, simple check rather than threading a hasData condition through
+  // every branch below — cleaner and safer than trying to special-case each one individually.
+  if(prior.adSpendHasData===false||latest.adSpendHasData===false){
+    const missing=[];
+    if(prior.adSpendHasData===false)missing.push(prior.dateLabel);
+    if(latest.adSpendHasData===false)missing.push(latest.dateLabel);
+    adLine=` No CPC data was found for ${missing.join(" and ")} — ad spend can't be reliably compared for this window; worth checking the Ad Investments upload actually covers this period.`;
+  }else if(latest.adSpend>0||prior.adSpend>0){
     if(prior.adSpend===0&&latest.adSpend>0){
       adLine=` Ad spend went from AED 0 to ${fmtAEDx(latest.adSpend)} this window — some of the growth above may be ad-driven, not purely organic or discount-driven.`;
     }else if(prior.adSpend>0&&latest.adSpend===0){
@@ -21294,7 +21330,16 @@ function cmpReportConclusions(data){
     else if(contribPct<salesPct-8)bad.push(`Contribution grew slower than sales (${fmtPct(contribPct)} vs ${fmtPct(salesPct)}) — margin is thinning even as the top line grows.`);
   }
   if(discPct!=null&&salesPct!=null&&discPct>salesPct+8)bad.push(`Discount burn (${fmtPct(discPct)}) outpaced sales growth (${fmtPct(salesPct)}) — a meaningful share of the gain may be discount-funded rather than organic.`);
-  if(adPct!=null&&salesPct!=null&&adPct>salesPct+10)bad.push(`Ad spend (${fmtPct(adPct)}) grew well ahead of sales (${fmtPct(salesPct)}) — ROAS is likely softening.`);
+  // v480: same hasData guard as the narrative paragraph above — see that comment for the full
+  // reasoning (the Motorcity case: adSpend reading 0 because no CPC data was found for that
+  // period, versus a confirmed real zero, look identical without this check). One early branch
+  // covering the whole ad-spend cascade below, rather than threading the check through each one.
+  if(prior.adSpendHasData===false||latest.adSpendHasData===false){
+    const missing=[];
+    if(prior.adSpendHasData===false)missing.push(prior.dateLabel);
+    if(latest.adSpendHasData===false)missing.push(latest.dateLabel);
+    bad.push(`No CPC data was found for ${missing.join(" and ")} — ad spend can't be reliably compared for this window; worth checking the Ad Investments upload actually covers this period.`);
+  }else if(adPct!=null&&salesPct!=null&&adPct>salesPct+10)bad.push(`Ad spend (${fmtPct(adPct)}) grew well ahead of sales (${fmtPct(salesPct)}) — ROAS is likely softening.`);
   // v477: real gap Nikhil caught directly — adPct is null whenever prior.adSpend is 0 (pctOf
   // can't express a from-zero change as a percentage), so the check right above this comment
   // silently never fires for the exact case that matters most: no ad spend last window, real ad
@@ -21437,19 +21482,30 @@ function cmpReportKPICards(d,prior){
 // was, so Discount Burn and Ad Spend going UP (bad) showed green, and going DOWN (good)
 // showed red. Confirmed this was live in dashboard.js too, not just the mockup — every
 // caller below is now updated to pass the correct polarity per column.
-function cmpPairedMetricCell(valA,valB,fmt,higherIsGood,clrA,clrB){
+function cmpPairedMetricCell(valA,valB,fmt,higherIsGood,clrA,clrB,hasDataA,hasDataB){
   valA=valA||0;valB=valB||0;
   let arrow="—",dcolor="#9ca3af";
-  if(valA){
+  if(valA&&hasDataA!==false&&hasDataB!==false){
     const pct=((valB-valA)/valA)*100;
     const isIncrease=pct>=0;
     const good=higherIsGood?isIncrease:!isIncrease;
     dcolor=good?"#15803d":"#b91c1c";
     arrow=`${isIncrease?"▲":"▼"}${Math.abs(pct).toFixed(1)}%`;
   }
+  // v480: hasDataA/hasDataB — optional, default to normal rendering for every existing caller
+  // that doesn't pass them (Sales/Orders/AOV/Discount/Contribution all have real underlying
+  // order data, so this never applies to them). Only Ad Spend can genuinely have NO data at all
+  // for a period (a brand+aggregator with no CPC rows covering the window), as opposed to a
+  // confirmed real zero — and those two things looked identical before this fix. "No data"
+  // renders in place of the value, and the % change arrow is suppressed on that side too, since
+  // a change computed against "no data" isn't a real percentage.
+  const noDataTip=`title="No CPC data found for this outlet in this period — not the same as a confirmed AED 0"`;
+  const showA=hasDataA===false?`<span style="font-style:italic;color:#9ca3af" ${noDataTip}>No data</span>`:fmt(valA);
+  const showB=hasDataB===false?`<span style="font-style:italic;color:#9ca3af" ${noDataTip}>No data</span>`:fmt(valB);
+  const arrowHtml=(hasDataA===false||hasDataB===false)?"":`<span style="font-size:8.5px;font-weight:700;color:${dcolor}">${arrow}</span>`;
   return`<td style="text-align:right;padding:6px 9px">
-    <div style="font-size:9.5px;color:${clrA}">${fmt(valA)}</div>
-    <div style="font-size:10.5px;font-weight:700;color:${clrB}">${fmt(valB)} <span style="font-size:8.5px;font-weight:700;color:${dcolor}">${arrow}</span></div>
+    <div style="font-size:9.5px;color:${clrA}">${showA}</div>
+    <div style="font-size:10.5px;font-weight:700;color:${clrB}">${showB} ${arrowHtml}</div>
   </td>`;
 }
 // Same rendering, but for callers that already have a % change directly (e.g. outlet rows,
@@ -21525,7 +21581,7 @@ function cmpFullMetricsTable(title,sub,colLabel,names,scopeFn,prior,latest,clrA,
       ${cmpPairedMetricCell(mP.aov,mL.aov,fmtAEDExact,true,clrA,clrB)}
       ${cmpPairedMetricCell(mP.discBurn,mL.discBurn,fmtAEDExact,false,clrA,clrB)}
       ${cmpPairedMetricCell(mP.contribution,mL.contribution,fmtAEDExact,true,clrA,clrB)}
-      ${cmpPairedMetricCell(mP.adSpend,mL.adSpend,fmtAEDExact,false,clrA,clrB)}</tr>`;
+      ${cmpPairedMetricCell(mP.adSpend,mL.adSpend,fmtAEDExact,false,clrA,clrB,mP.adSpendHasData,mL.adSpendHasData)}</tr>`;
   }).join("");
   // v478: Totals row, per Nikhil directly. Same weighted-AOV convention as the Outlet-Level
   // Detail fix — total sales ÷ total orders, not a naive average of each row's own AOV, which
@@ -21628,7 +21684,7 @@ function cmpReportOutletDetail(data){
         ${cmpPairedMetricCell(mP.orders,mL.orders,v=>v.toLocaleString(),true,clrA,clrB)}
         ${cmpPairedMetricCell(mP.aov,mL.aov,fmtAEDExact,true,clrA,clrB)}
         ${cmpPairedMetricCell(mP.discBurn,mL.discBurn,fmtAEDExact,false,clrA,clrB)}
-        ${cmpPairedMetricCell(mP.adSpend,mL.adSpend,fmtAEDExact,false,clrA,clrB)}
+        ${cmpPairedMetricCell(mP.adSpend,mL.adSpend,fmtAEDExact,false,clrA,clrB,mP.adSpendHasData,mL.adSpendHasData)}
         ${cmpPairedMetricCell(mP.contribution,mL.contribution,fmtAEDExact,true,clrA,clrB)}</tr>`;
     };
     // v478: Totals row, per Nikhil directly ("add totals at the bottom of tables where
