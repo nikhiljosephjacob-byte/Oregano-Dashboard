@@ -13,13 +13,13 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-483";
+const BUILD_VERSION="2026-08-13-484";
 const BUILD_NOTES=[
+  "📈 Two real gaps, both per Nikhil directly in one message. (1) Overview page — All Brands and All Platforms tables gained a Δ Contribution column, mirroring the existing Δ Orders/Δ Net Sales columns exactly (both tables already computed current-period contribution for the Profitability column; the only new work was calling computeProfitability again against the prior-period records, same pattern the page's own top KPI card already uses for profCur/profPrev). Also fixed the header wrapping he flagged — 'Δ Orders vs 1 Aug–24 Aug (prior mo.)' was rendering as one long unbroken line with no wrap point; a <br> now drops the comparison sub-label onto its own smaller-font line beneath the metric name, applied identically to all three Δ columns for consistency, not just the new one. (2) Cancellations page — real example given directly: Mirdif does the most Talabat volume for Oregano, so it naturally logs more cancellations in absolute terms, but the page had nowhere that showed this as a RATE, only raw counts, making a high-volume outlet look disproportionately bad next to small ones. Investigated the actual page before building: 'primary reason per outlet' technically already existed (mostCommon(), the same helper the outlet drill-down level already used for its own Top Reason column) but was reachable only three clicks deep (Aggregator → Brand → Outlet), scoped to one brand+aggregator at a time, with the Worst Outlet tile and the outlet heatmap both ranking by raw count. Built a new top-level 'Cancellations by Outlet' panel: every outlet in one sortable table (same sortableTable infra Overview/Brands/Platforms already use), a real Cancellation Rate % column (cancellations ÷ that outlet's own order volume, same filter scope) as a first-class column, sorted by rate by default rather than count, plus Primary Reason and Responsible columns reusing the exact same mostCommon() computation — promoted from a local const inside renderCancellations to a shared top-level function so the new CSV export (cancExportOutletRates, matching the page's existing cancExportAgg pattern) can reuse the identical logic rather than reimplementing it. Verified with a scenario shaped exactly like the real example given: an outlet with 20x the order volume and more raw cancellations than a small outlet, but a far better rate (2.00% vs 8.00%) — confirmed the new table correctly flips the ranking, surfacing the small outlet as the one that actually needs attention, and confirmed the CSV export produces the identical numbers shown on screen. The broader 'develop it like the Feedback page wherever applicable' ask was intentionally scoped down to these two concrete, unambiguous pieces (rate context, primary reason surfaced at the top level) rather than guessing at a fuller redesign — flagged to Nikhil as a follow-up if specific Feedback-page features (trending-terms-style analysis, category filtering) should be ported over too. Full regression re-run against every test from this entire session — all still pass. Full script execution re-run clean.",
   "🗂️ Discount Burn Analysis folded into Campaigns as its own tab, per Nikhil directly (\"let Discount Burn be a functionality inside the Campaigns Page, I don't use it much\") — then pushed further when the first pass only redirected the old page rather than removing it from the sidebar (\"if we created it, we should be able to remove it as well\"), which is what actually shipped. Mockup shown and approved before building (side-by-side current vs proposed CTA row), matching the existing house rule to render before building. Implementation: a new discountBurnCampTabHTML() returns the same content every existing discount* helper already built (computeDiscountBurn, discountFilterBarHTML, discountKpiRowHTML, discountUnmappedKeetaItemsWarning, discountTrendChartHTML, discountUncategorizedBreakdownHTML, discRecTableHTML, discountCoFundAuditTableHTML, discountCampaignTableHTML) — none of that logic changed, only where it's mounted, wired into renderCampaigns() as campTab==='discounts' alongside the existing 'browse'/'planner'/'detail' states, with a second CTA card (amber, matching Discount Burn's own established header color) next to the Campaign Planner card, and the same '← Back to campaigns' bar pattern Planner already uses, extended to also carry the Download CSV button. The real obstacle: the sidebar tab's own source HTML isn't in this file at all — confirmed not by assumption but by a comment already sitting in this exact codebase from build v461 ('The sidebar tab's actual HTML isn't in this file... matching tabs on their VISIBLE TEXT, not assumed markup'), the same constraint buildSidebarNav itself already works around. Removal uses the identical technique: a new removeDiscountBurnTab(), called once at init right before buildSidebarNav, finds the live tab by its onclick target or visible text and deletes it from the DOM outright — not hidden, not skipped, genuinely gone — before the sidebar-building step ever collects it. The old renderDiscounts() is kept only as a one-line safety-net redirect (sets campTab, calls gp('campaigns'), renders Campaigns) for any stray reference that still tries to reach the old page directly, not as a real destination. Verified three ways: removeDiscountBurnTab() against a mock four-tab set removes only the Discount Burn tab and leaves Overview/Campaigns/KPI Tracker untouched; a full renderCampaigns() render with campTab='discounts' and real order/campaign data produces the CTA grid, the back bar, the CSV button, and the discount content correctly with no thrown errors; and the redirect path plus the untouched 'browse' view both confirmed working with no regression (two real test-data gaps caught and fixed while building the tests themselves — an empty campaigns array and a missing classList stub — both test-harness issues, not application bugs). Full regression re-run against every test from this entire session — all still pass. Full script execution re-run clean.",
   "🔎 Full audit, per Nikhil's direct question: does ad spend respect real campaign date windows everywhere it's deducted, all the way across the dashboard — his example, a Lollorosso DMC Deliveroo CPC campaign that ran 7-9 Sep only (budget consumed early / cancelled), should show zero ad spend if you Compare 15-20 Sep, since the campaign was long over. Traced cpcAdCostForRange's own overlap logic by hand against his exact scenario first: confirmed correct — the overlapStart<=overlapEnd check and the confirmedEnded flag (set once a later update date proves the row really ended on its stated End Date) together mean a campaign contributes exactly zero cost to any window that doesn't overlap it, with no extrapolation past a confirmed end. Then found all 3 real call sites of that function (computeProfitability, computeProfitabilityBreakdown, cmpAdSpendOverlap) and confirmed each passes its own real, narrow query range — not some broader month smear — so the core engine is correct everywhere it's actually used. But that search surfaced a much bigger, separate gap while checking for OTHER independent ad-spend calculators (the same class of bug that hit Keeta FD repeatedly across builds 458/462/471/474/475): cmpComputeContribution — a fourth contribution calculator, entirely separate from the three above — never called cpcAdCostForRange at all, regardless of date window. This one feeds nearly everything on the Compare page that says 'Contribution': the Outlet-Level Detail table, Brand/Platform Comparison, every Totals row, the outlet-movers logic, the narrative's 'Net contribution declined X%' line, and the top-level Contribution KPI plus the three-way A/B/C comparison — all while Ad Spend was computed and shown as a fully separate column right next to it, implying a relationship between the two figures that didn't actually exist in the math. Every other contribution path in the dashboard nets ad spend out the same way it nets out commission and discount; this one silently didn't, so Contribution here has been overstated by the real ad spend amount wherever ad spend was nonzero, for as long as this function has existed — a materially bigger issue than the date-windowing question that led to finding it. Fixed with the identical established pattern (cpcOutletScope to split pooled rows across branches actually in view, cpcAdCostForRange over the pair's own real data span so it doesn't extrapolate past days with no sales row yet — same fix class as v388's fix to computeProfitabilityBreakdown for the same reason). Verified two ways: (1) a constructed scenario matching Nikhil's exact example — real orders and a real 7-9 Sep campaign row — confirms ad spend reads the real AED 300 for the 7-9 Sep window and exactly zero for 15-20 Sep, both directions; (2) a Keeta-only regression with no CPC data confirms the existing Keeta FD deduction alongside it still works unbroken. Also confirmed, not fixed: the Campaigns page (campAnalysisV2) deliberately excludes CPC from its own profitability figures — a real, previously documented instruction from Nikhil ('ad spend should factor into profitability everywhere except Campaigns') — flagged to him directly as a scope boundary worth re-confirming still stands, not silently left as an oversight. Full regression re-run against every test from this entire session — all still pass. Full script execution re-run clean.",
   "🎯 Root cause found — real data typo, not a code bug. Nikhil pushed back on build 480's fix ('but there WAS CPC on Lollorosso Talabat in August — check the Google sheet, you'll find it'), and he was right: build 480 correctly distinguished 'no data' from 'confirmed zero', but the ROW ITSELF WAS THERE with real spend, so it should never have shown either — that was still a bug, just a different one. Tracked down the actual master sheet (searched Drive, found partner-side files first, asked Nikhil directly, got the real 'Virtual Brands Performance' file, hit a tool limitation pulling one specific tab from a multi-tab spreadsheet, asked Nikhil to export just the Ad Investments tab as CSV, and he uploaded it) rather than reasoning about it from code alone. Found it on direct inspection: the End Date cell for three real August 2026 rows (Lollorosso-Motorcity CPC, Lollorosso-Motorcity Key Words, Oregano-Reem CPC) reads '30-Aug--26' — a doubled hyphen, one extra keystroke. Verified line by line that every layer of date parsing rejected it: parseCPCDate's regex requires exactly one separator character, its parseDate fallback's own regex has the identical exactly-one-separator requirement, and even the final native Date() fallback returns Invalid Date for this string — so endDate came back null and cpcAdCostForRange's own guard (`if(!r.startDate||!r.endDate||!r.dailyBurn)continue`) silently dropped the row entirely, before build 480's hasData tracking ever got a chance to see it: the row wasn't 'not found for this outlet', it was found and then discarded at the date-parsing stage, two steps earlier than where the previous fix was looking. Fixed both parseCPCDate and its parseDate fallback to tolerate one-or-more separator characters ([-\\/]+ instead of [-\\/]) rather than requiring exactly one — a real, realistic typo class (an accidental extra keypress), not a loosening of what counts as a valid date; malformed non-date strings still correctly fail to match, verified directly. Verified against the real uploaded CSV, not synthetic data: all three previously-broken rows (including Oregano-Reem, which was silently affected the same way but which Nikhil hadn't mentioned) now parse with the correct endDate (2026-08-30) and their real budgetSpent (649.82 / 759.24 / 641.53) and positive dailyBurn. Also surfaced, as a secondary finding, a real but separate and lower-priority data issue already caught by existing diagnostics: one Noon/September row has 'Lollorosso Jumeirah' (a space instead of a hyphen) in Brand-Location, so it can't be mapped to a specific outlet — out of scope for this fix, flagged to Nikhil directly rather than touched. Full regression re-run against every test from all four prior ad-spend-related builds this session — all still pass. Full script execution re-run clean.",
-  "🔍 Compare page PDF report — 'AED 0 ad spend' was two conflated meanings wearing one number, real gap Nikhil caught directly (Motorcity, Lollorosso, Talabat — he knew real August CPC investment happened, report showed a flat AED 0). Traced it fully rather than guessing: cmpAdSpendOverlap already computed a real `hasData` flag (whether any CPC data covers the period at all), but cmpAdSpendForCfg only ever read `.spent` and threw `.hasData` away — so 'no CPC data was found for this period' and 'CPC ran and genuinely spent nothing' rendered as the exact same bare AED 0, with no way to tell which one a reader was looking at. Found and fixed a SECOND, deeper bug while building the first fix: hasData itself ignored the `branch` parameter entirely, checking only whether ANY row existed for the brand+aggregator+period from ANY outlet — meaning a real August row for a DIFFERENT outlet (Al Reef) was silently making Motorcity's own missing data look present, the reverse of the reported symptom caught only because a two-outlet test surfaced it. Now correctly scoped: a per-outlet CPC row only counts for the specific outlet it belongs to; a pooled row (splitScope set — brand-level/DXB/AUH/N Branches, no single outlet) still counts for every outlet it could split across, so outlets under a pooled Careem/Noon budget don't wrongly read as having no data. Propagated adSpendHasData through cmpScopedMetrics into three places: the Outlet-Level Detail table and cmpFullMetricsTable (Brand/Platform Comparison) now show an honest 'No data' with an explanatory tooltip instead of a bare, indistinguishable AED 0 — cmpPairedMetricCell gained optional hasData parameters, defaulting to normal rendering for every other metric column that doesn't pass them, since only Ad Spend can genuinely have no data at all (Sales/Orders/AOV/Discount/Contribution all come from real order records, never CPC uploads). The ad-spend narrative and Worth Watching bullets built in the last two sessions had the exact same conflation baked in — 'ad spend went from AED 0' would have fired just as wrongly there — guarded both with one early check ahead of the existing cascades rather than threading the condition through every branch. Verified end-to-end with a test reproducing the real scenario shape: real orders in both months for two outlets, a real CPC row for Motorcity in September only and for Al Reef in both months — confirmed Motorcity's August correctly reads hasData=false while September and Al Reef's own data both correctly read true, the Outlet-Level Detail table shows 'No data' instead of a bare zero, the narrative says 'No CPC data was found' instead of falsely claiming a confirmed zero, and the pooled-row case (Careem/Noon) still splits correctly across every outlet it covers with hasData=true for each. Full regression re-run against every test from the three prior ad-spend-related builds — all still pass. Full script execution re-run clean.",
-  "🎯 Careem FTU CPC — real, current data change per Nikhil directly. Careem added a new ad product visible only to first-time users (FTU = First Time User), a fixed AED 3 bid, distinct from the existing standard AED 2 CPC, and confirmed he'll enter it as its own value in Column A ('FTU CPC'). parseCPCSheet now recognizes it as its own distinct adType, checked before the generic CPC fallback — same pattern already used for Shoppable Banner vs plain Banner. Confirmed by reading cpcAdCostForRange line by line that this needed no other change: that function (which every ad-spend figure across the whole dashboard reads from, including the Compare report narrative fixed two builds ago) never filtered by adType at all — it sums every ad type unconditionally, so FTU CPC spend was already flowing into every total correctly even before this fix. What this fix actually changes is narrower and still real: FTU CPC rows would have been silently blended into the generic 'CPC' bucket's own bid/ROAS averages on the Ads Performance page, mixing a AED 2 bid with a AED 3 bid into one misleading number. The Ad Type toggle used throughout that page already builds its option list dynamically from whatever adType values are actually present in the data (the same mechanism that already surfaced Shoppable Banner once it started appearing) — so FTU CPC becomes a real, selectable filter with zero UI changes needed beyond the parser fix. Also updated (comments only, not logic) the two places documenting 'Deliveroo is the only aggregator where bid is in our control' — Nikhil confirmed he does have real manual bid control on Careem now too, but explicitly said whether that bid can be changed again mid-month is still unconfirmed ('we'll find out next month'). Deliberately did NOT extend cpcDeliverooBidOpt's actual gate to Careem — recommending a bid change Nikhil might not be able to execute mid-flight would be worse than saying nothing; left it Deliveroo-only with a comment explaining why, ready to revisit once mid-month adjustability is confirmed one way or the other. Verified with a real functional test: a CSV with one standard CPC row (AED 2 bid) and one FTU CPC row (AED 3 bid) for the same brand+outlet parses into two correctly distinguished types, and cpcAdCostForRange correctly sums both (AED 900 + AED 750 = AED 1,650) rather than only picking up one. Full script execution re-run clean."
+  "🔍 Compare page PDF report — 'AED 0 ad spend' was two conflated meanings wearing one number, real gap Nikhil caught directly (Motorcity, Lollorosso, Talabat — he knew real August CPC investment happened, report showed a flat AED 0). Traced it fully rather than guessing: cmpAdSpendOverlap already computed a real `hasData` flag (whether any CPC data covers the period at all), but cmpAdSpendForCfg only ever read `.spent` and threw `.hasData` away — so 'no CPC data was found for this period' and 'CPC ran and genuinely spent nothing' rendered as the exact same bare AED 0, with no way to tell which one a reader was looking at. Found and fixed a SECOND, deeper bug while building the first fix: hasData itself ignored the `branch` parameter entirely, checking only whether ANY row existed for the brand+aggregator+period from ANY outlet — meaning a real August row for a DIFFERENT outlet (Al Reef) was silently making Motorcity's own missing data look present, the reverse of the reported symptom caught only because a two-outlet test surfaced it. Now correctly scoped: a per-outlet CPC row only counts for the specific outlet it belongs to; a pooled row (splitScope set — brand-level/DXB/AUH/N Branches, no single outlet) still counts for every outlet it could split across, so outlets under a pooled Careem/Noon budget don't wrongly read as having no data. Propagated adSpendHasData through cmpScopedMetrics into three places: the Outlet-Level Detail table and cmpFullMetricsTable (Brand/Platform Comparison) now show an honest 'No data' with an explanatory tooltip instead of a bare, indistinguishable AED 0 — cmpPairedMetricCell gained optional hasData parameters, defaulting to normal rendering for every other metric column that doesn't pass them, since only Ad Spend can genuinely have no data at all (Sales/Orders/AOV/Discount/Contribution all come from real order records, never CPC uploads). The ad-spend narrative and Worth Watching bullets built in the last two sessions had the exact same conflation baked in — 'ad spend went from AED 0' would have fired just as wrongly there — guarded both with one early check ahead of the existing cascades rather than threading the condition through every branch. Verified end-to-end with a test reproducing the real scenario shape: real orders in both months for two outlets, a real CPC row for Motorcity in September only and for Al Reef in both months — confirmed Motorcity's August correctly reads hasData=false while September and Al Reef's own data both correctly read true, the Outlet-Level Detail table shows 'No data' instead of a bare zero, the narrative says 'No CPC data was found' instead of falsely claiming a confirmed zero, and the pooled-row case (Careem/Noon) still splits correctly across every outlet it covers with hasData=true for each. Full regression re-run against every test from the three prior ad-spend-related builds — all still pass. Full script execution re-run clean."
 ];
 
 
@@ -5846,6 +5846,10 @@ function renderOverview(){
     const depth=gross>0?(disc/gross*100):0;
     const pv=BR.find(x=>x.n===b.n)?sumR(pd.filter(r=>r.brand===b.n)):{sales:0,orders:0,disc:0};
     const prof=computeProfitability(ld.filter(r=>r.brand===b.n),profDateRef).contribution;
+    // v484: prior-period contribution, per Nikhil directly — same computeProfitability call
+    // already used for `prof` above, just against `pd` (prior-period records) instead of `ld`,
+    // matching the exact pattern the page's own top KPI card already uses for profCur/profPrev.
+    const profPrior=computeProfitability(pd.filter(r=>r.brand===b.n),profDateRef).contribution;
     const profMargin=b.cv.sales>0?prof/b.cv.sales*100:0;
     return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.n,22)}<strong style="color:${b.c}">${b.n}</strong></span>`,
@@ -5854,8 +5858,9 @@ function renderOverview(){
       disc>0?`<span style="color:${depth>=20?'#FF6B6B':depth>=10?'#F59E0B':'#2ECC71'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
       `<span data-ctip="${profitabilityTipId(ld.filter(r=>r.brand===b.n),pd.filter(r=>r.brand===b.n),profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior)}" style="cursor:help;color:${prof>=0?'#2ECC71':'#FF6B6B'};font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
       fmtChgCell(b.cv.orders,pv.orders,false),
-      fmtChgCell(b.cv.sales,pv.sales,true)
-    ],sortVals:[b.n,b.cv.orders,b.cv.sales,aov,disc,depth,prof,b.oc,b.sc]};
+      fmtChgCell(b.cv.sales,pv.sales,true),
+      fmtChgCell(prof,profPrior,true)
+    ],sortVals:[b.n,b.cv.orders,b.cv.sales,aov,disc,depth,prof,b.oc,b.sc,pctOf(prof,profPrior)]};
   });
   const aggTableRows=aggRows.map(a=>{
     const disc=a.disc||0;
@@ -5863,6 +5868,9 @@ function renderOverview(){
     const depth=gross>0?(disc/gross*100):0;
     const pv=sumR(pd.filter(r=>r.aggregator===a.ag));
     const prof=computeProfitability(ld.filter(r=>r.aggregator===a.ag),profDateRef).contribution;
+    // v484: same prior-period contribution computation as brandTableRows above, mirrored here
+    // for the All Platforms table.
+    const profPrior=computeProfitability(pd.filter(r=>r.aggregator===a.ag),profDateRef).contribution;
     const profMargin=a.sales>0?prof/a.sales*100:0;
     return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(a.ag,22)}<strong style="color:${a.clr}">${a.ag}</strong></span>`,
@@ -5871,10 +5879,23 @@ function renderOverview(){
       disc>0?`<span style="color:${depth>=20?'#FF6B6B':depth>=10?'#F59E0B':'#2ECC71'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
       `<span data-ctip="${profitabilityTipId(ld.filter(r=>r.aggregator===a.ag),pd.filter(r=>r.aggregator===a.ag),profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior)}" style="cursor:help;color:${prof>=0?'#2ECC71':'#FF6B6B'};font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
       fmtChgCell(a.orders,pv.orders,false),
-      fmtChgCell(a.sales,pv.sales,true)
-    ],sortVals:[a.ag,a.orders,a.sales,a.aov,disc,depth,prof,a.oc,a.sc]};
+      fmtChgCell(a.sales,pv.sales,true),
+      fmtChgCell(prof,profPrior,true)
+    ],sortVals:[a.ag,a.orders,a.sales,a.aov,disc,depth,prof,a.oc,a.sc,pctOf(prof,profPrior)]};
   });
-  const heads=["","Orders","Net Sales","AOV","Discount Burn","Depth %","💵 Profitability",`Δ Orders <span style="font-weight:400;color:#8393AB">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:#8393AB">${compShort}</span>`];
+  // v484: two real fixes to this header row, per Nikhil directly. (1) New "Δ Contribution"
+  // column, mirroring Δ Orders/Δ Net Sales exactly (both tables already computed `prof` for the
+  // Profitability column — profPrior above is the only new calculation needed). (2) Header
+  // wrapping — "Δ Orders vs 1 Aug–24 Aug (prior mo.)" was rendering as one long inline run of
+  // text with no wrap point, which read oddly in a narrow column. A <br> forces the comparison
+  // sub-label onto its own line, and a smaller font-size distinguishes it as a sub-label rather
+  // than a continuation of the metric name — same fix shape applied identically to all three Δ
+  // columns for consistency, not just the new one.
+  const heads=["","Orders","Net Sales","AOV","Discount Burn","Depth %","💵 Profitability",
+    `Δ Orders<br><span style="font-weight:400;font-size:9px;color:#8393AB">${compShort}</span>`,
+    `Δ Net Sales<br><span style="font-weight:400;font-size:9px;color:#8393AB">${compShort}</span>`,
+    `Δ Contribution<br><span style="font-weight:400;font-size:9px;color:#8393AB">${compShort}</span>`];
+
 
   const digestExportBtn=`<button onclick="digestExportPDF()" style="background:rgba(201,162,75,.12);border:1px solid rgba(201,162,75,.4);border-radius:6px;color:#C9A24B;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:700;font-style:normal" title="Generate a PDF: yesterday's numbers + this week vs last week / 4 weeks back / last year">📄 Export Daily Digest</button>`;
   document.getElementById("page-overview").innerHTML=makeFilterBar({dateExtra:digestExportBtn})+
@@ -22091,6 +22112,16 @@ function cancMoneyLostBeyondRevenue(c){
   if(c.aggregator==="Deliveroo")return c.netImpact<0?Math.abs(c.netImpact):0;
   return 0;
 }
+// v484: promoted out of renderCancellations (where it was a local const) so
+// cancExportOutletRates can share the exact same computation as the on-screen "Cancellations by
+// Outlet" table, rather than reimplementing it — same helper the outlet drill-down level already
+// used for its own "Top Reason" column, unchanged behavior, just no longer locked to one scope.
+function mostCommon(arr,key){
+  const counts={};
+  arr.forEach(x=>{const v=x[key]||"Unknown";counts[v]=(counts[v]||0)+1;});
+  const sorted=Object.entries(counts).sort((a,b)=>b[1]-a[1]);
+  return sorted.length?sorted[0][0]:"—";
+}
 function renderCancellations(){
   const pg=document.getElementById("page-cancellations");
   if(!pg)return;
@@ -22225,6 +22256,58 @@ function renderCancellations(){
     <div style="margin-top:12px;display:flex;align-items:center;gap:8px;font-size:11px;color:${T.textMuted}"><span>Fewer</span><span style="width:70px;height:8px;border-radius:4px;background:linear-gradient(90deg,#3A2020,${T.accentRed})"></span><span>More</span></div>
   </div>`;
 
+  // v484: Cancellations by Outlet — real gap Nikhil caught directly, with a concrete example
+  // (Mirdif does the most Talabat volume for Oregano, so it naturally logs more cancellations in
+  // absolute terms — the page had nowhere that showed this as a RATE, only raw counts, making a
+  // high-volume outlet look disproportionately bad against low-volume ones). The "primary reason
+  // per outlet" data technically already existed — mostCommon() is the exact helper the Outlet
+  // drill-down level already uses — but only reachable 3 clicks deep (Aggregator → Brand →
+  // Outlet), scoped to one brand+aggregator at a time, sorted by raw count with no rate column at
+  // all. This panel surfaces the same mostCommon() computation at the top level, across every
+  // outlet at once, with a real rate (cancellations ÷ that outlet's own order volume over the
+  // same filtered window) as a first-class sortable column — defaulting the sort to rate
+  // (descending), not count, so the ranking actually reflects outlet performance rather than
+  // outlet size. Built on sortableTable, the same shared infra Overview/Brands/Platforms already
+  // use, so every column sorts for free and the page picks up the same interaction pattern
+  // already established elsewhere in the dashboard rather than a bespoke one-off table.
+  const outletCancGroups={};
+  filtered.forEach(c=>{
+    const k=(c.brand||"Unknown")+" - "+(c.outlet||"Unknown");
+    if(!outletCancGroups[k])outletCancGroups[k]={items:[],brand:c.brand||"Unknown",outlet:c.outlet||"Unknown"};
+    outletCancGroups[k].items.push(c);
+  });
+  const outletRateHeads=["Outlet","Cancellations","Orders","Cancellation Rate","Primary Reason","Responsible"];
+  const outletRateRows=Object.entries(outletCancGroups).map(([k,v])=>{
+    const orders=allData.filter(r=>{
+      if(r.branch==="(brand-level)")return false;
+      if(r.brand!==v.brand||r.branch!==v.outlet)return false;
+      if(f.start&&r.date<f.start)return false;
+      if(f.end&&r.date>f.end)return false;
+      if(f.platforms.size&&!f.platforms.has(r.aggregator))return false;
+      return true;
+    }).reduce((s,r)=>s+(r.orders||0),0);
+    const rate=orders>0?(v.items.length/orders*100):null;
+    const topReason=mostCommon(v.items,"reason");
+    const topResp=mostCommon(v.items,"responsibility");
+    const respClr=topResp==="Restaurant"?T.accentRed:topResp==="Driver"?T.accentOrange:topResp==="Unknown"?T.textMuted:T.accentBlue;
+    return{cells:[
+      `<span style="font-weight:700;color:${T.textPrimary}">${esc(k)}</span>`,
+      v.items.length.toLocaleString(),
+      orders?orders.toLocaleString():`<span style="color:${T.textMuted}">—</span>`,
+      rate!=null?`<span style="font-weight:800;color:${rate>=3?T.accentRed:rate>=1.5?T.accentOrange:T.accentGreen}">${rate.toFixed(2)}%</span>`:`<span style="color:${T.textMuted}">no order data</span>`,
+      `<span style="color:${T.textSecondary}">${esc(topReason)}</span>`,
+      `<span style="font-size:10px;font-weight:800;padding:2px 9px;border-radius:10px;background:${respClr}22;color:${respClr}">${topResp}</span>`
+    ],sortVals:[k,v.items.length,orders,rate==null?-1:rate,topReason,topResp]};
+  });
+  const outletRatePanel=outletRateRows.length<2?"":`<div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px;margin-bottom:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <div style="font-size:15px;font-weight:800;color:${T.textPrimary}">📊 Cancellations by Outlet</div>
+      <span onclick="cancExportOutletRates()" style="cursor:pointer;font-size:12px;color:${T.accentBlue};font-weight:700">⬇ Export CSV</span>
+    </div>
+    <div style="font-size:11.5px;color:${T.textMuted};margin-bottom:14px">Sorted by rate, not raw count — a high-volume outlet naturally logs more cancellations without necessarily performing worse. Click any header to sort.</div>
+    ${sortableTable("canc-outlet-rate",outletRateHeads,outletRateRows,3)}
+  </div>`;
+
   const tile=(label,value,sub,clr)=>`<div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};flex:1;min-width:220px">
     <div style="padding:20px">
       <div style="font-size:11px;color:${T.textMuted};font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px">${label}</div>
@@ -22296,12 +22379,9 @@ function renderCancellations(){
   // (count, top reason, responsible party) -> Outlet breakdown (which outlets are responsible
   // for the most cancellations on that brand+aggregator), with the order-level detail table
   // at the final level. Same nav-state dispatch pattern as the Investment Plan drill-down.
-  const mostCommon=(arr,key)=>{
-    const counts={};
-    arr.forEach(x=>{const v=x[key]||"Unknown";counts[v]=(counts[v]||0)+1;});
-    const sorted=Object.entries(counts).sort((a,b)=>b[1]-a[1]);
-    return sorted.length?sorted[0][0]:"—";
-  };
+  // v484: mostCommon() promoted to a top-level function (see above renderCancellations) so
+  // cancExportOutletRates can reuse it too — this local const removed, calls below now resolve
+  // to that top-level version via normal scope lookup, unchanged behavior.
   const breadcrumb=(parts)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">${parts.map((p,i)=>`${i>0?`<span style="color:${T.textMuted}">›</span>`:""}${p}`).join("")}</div>`;
   const crumbBtn=(label,onclick)=>`<span onclick="${onclick}" style="cursor:pointer;font-size:13px;font-weight:700;color:${T.accentBlue}">${label}</span>`;
   const crumbCurrent=(label,clr)=>`<span style="font-size:13px;font-weight:800;color:${clr||T.textPrimary}">${label}</span>`;
@@ -22415,6 +22495,7 @@ function renderCancellations(){
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:20px">${tiles.join("")}</div>
     ${trendPanel}
     ${heatmapPanel}
+    ${outletRatePanel}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
       <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px"><div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:16px">By Responsibility</div>${respRows}</div>
       <div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px"><div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:16px">${reasonCardTitle}</div>${reasonRows}</div>
@@ -22472,6 +22553,42 @@ function cancExportAgg(agg){
   const header=["Order No","Brand","Outlet","Date","Reason","Responsibility","Amount (AED)"];
   const rows=items.map(c=>[c.order_no||"",c.brand||"",c.outlet||"",c.date||"",c.reason||"",c.responsibility||"",(c.amount||0).toFixed(2)]);
   cpcExportCSV(`${agg.toLowerCase()}_cancellations_${dk(new Date())}.csv`,header,rows);
+}
+// v484: export for the new "Cancellations by Outlet" panel — same filter-respecting pattern as
+// cancExportAgg above, recomputing the exact same outlet grouping, order-volume lookup, rate,
+// and mostCommon() reason/responsibility the on-screen table already shows, so the export matches
+// what's actually visible rather than a broader, unfiltered dump.
+function cancExportOutletRates(){
+  const f=curFilters();
+  const filtered=getAllCancellations().filter(c=>{
+    if(f.start&&c.date&&c.date<f.start)return false;
+    if(f.end&&c.date&&c.date>f.end)return false;
+    if(f.brands.size&&!f.brands.has(c.brand))return false;
+    if(f.platforms.size&&!f.platforms.has(c.aggregator))return false;
+    if(f.branches.size&&!f.branches.has(c.outlet))return false;
+    return true;
+  });
+  const groups={};
+  filtered.forEach(c=>{
+    const k=(c.brand||"Unknown")+" - "+(c.outlet||"Unknown");
+    if(!groups[k])groups[k]={items:[],brand:c.brand||"Unknown",outlet:c.outlet||"Unknown"};
+    groups[k].items.push(c);
+  });
+  if(!Object.keys(groups).length)return;
+  const header=["Outlet","Cancellations","Orders","Cancellation Rate %","Primary Reason","Responsible"];
+  const rows=Object.entries(groups).map(([k,v])=>{
+    const orders=allData.filter(r=>{
+      if(r.branch==="(brand-level)")return false;
+      if(r.brand!==v.brand||r.branch!==v.outlet)return false;
+      if(f.start&&r.date<f.start)return false;
+      if(f.end&&r.date>f.end)return false;
+      if(f.platforms.size&&!f.platforms.has(r.aggregator))return false;
+      return true;
+    }).reduce((s,r)=>s+(r.orders||0),0);
+    const rate=orders>0?(v.items.length/orders*100):null;
+    return[k,v.items.length,orders,rate!=null?rate.toFixed(2):"",mostCommon(v.items,"reason"),mostCommon(v.items,"responsibility")];
+  });
+  cpcExportCSV(`cancellations_by_outlet_${dk(new Date())}.csv`,header,rows);
 }
 
 function renderCompare(){
