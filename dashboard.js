@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-490";
+const BUILD_VERSION="2026-08-13-491";
 const BUILD_NOTES=[
+  "💸 CAREEM DISCOUNT SHOWING AED 0 AT EVERY OUTLET — Nikhil caught Careem discounts missing for September on the Compare page's PDF export (and therefore missing from the Excel report built off it), specifically Smokeys. Traced through the full pipeline against the Google Sheet, the uploaded Careem order-export, and the PDF. ROOT CAUSE, two compounding bugs: (1) parseCareemCSV silently drops any order whose BRAND_NAME or MERCHANT_AREA isn't in the hardcoded CAREEM_BRAND_NORM/CAREEM_OUTLET_CODE lookup tables — no warning, no error, the file just parses 'successfully' with those rows gone. (2) The Compare page's outlet-filtered discount calc (cmpComputeDisc, Path 2) summed the uploaded export's menu_disc directly and trusted it completely once any exact data existed for that platform — it never checked the export's total against the Google Sheet's own (authoritative, straight-off-the-statement) brand total. So when the export was missing rows for a brand/outlet — through bug (1), or simply because the uploaded file's date coverage didn't reach that period — the outlet showed AED 0 instead of falling back to an estimate, even though the sheet clearly had a nonzero brand-level figure. Built a Python reconciliation toolkit against the 4 Comparison-Report PDFs + the Ad Investments sheet to scope it precisely: confirmed Deliveroo/Talabat/Noon are completely unaffected (0 of 30 brand×platform groups off by more than 2%), the bug is Careem-only, and it hits every Careem brand to varying degrees — Smokeys September is the total-zero case Nikhil saw, but Fyoozhen/Lollorosso/Wicked Wings were also silently under- or over-counted at the outlet level even where the brand-level PDF table was correct throughout. FIX: the Google Sheet's brand-level daily discount is now always the authoritative TOTAL for a brand+platform+window — the uploaded export is only trusted to SPLIT that total across outlets, and only when its own total for that brand/window is within ±5% of the sheet's total (cmpExactDiscForScope + cmpNormOutlet, which also tolerates cosmetic outlet-name differences like sheet 'DIP (Fyoozhen)' vs export 'DIP'). When the export doesn't reconcile, it falls back to the existing sales-weighted allocation of the sheet total — the same Path 3 already used when no exact data exists at all. Outlet rows now always sum to the trustworthy brand total; no outlet can show AED 0 while the brand-level figure is nonzero. Also fixed the silent-drop itself: any upload with unmapped brand/outlet names now shows a warning naming exactly which raw names weren't recognised and how many orders they cost, plus a 'coverage by brand' date-range summary — so a partial/mismatched export is visible at upload time instead of only surfacing as a downstream discrepancy weeks later. Unit-tested against the reconciliation toolkit's findings (all 9 of the previously-wrong Careem brand/month combinations now compute the sheet-reconciled figure); full regression re-run, full script execution clean. Separately re-delivering the Ad Investment Review Excel with corrected September Careem discount figures.",
   "🖱️ + 🏷️ Two changes, both per Nikhil directly. (1) MISSING PROFIT POPUP — hovering the Profitability figure in the Outlet × Platform table at the bottom of the Brands page showed no 'Why did profitability change?' popup. Audited every place a profit figure is displayed rather than fixing that one table. The popup system itself is initialised on every page render, so this was not a broken mechanism — those cells simply never had the hook: they were built after the Overview tables and carried only the number and colour. Found seven: Brands Outlet×Platform table, the two brand tables on the Outlets page, the brand table on the Platforms page, and three Compare tables (Per-Platform Breakdown, Brand×Platform, and the expanded per-Outlet table). Everything else already had it (Overview tables, all Profitability KPI cards, Outlets tiles, Platforms tiles, Compare KPI card); the Daily Digest and an eligibility check that compute profit are exports/logic, not hover-able displays. Added one shared helper, profTipHook(cur, prior, dateRef), and each cell passes the records ITS ROW covers — so the popup for one outlet×platform row explains that row, not the whole brand. storeTip() stores a function that only runs on hover, so this adds nothing to render time. Compare uses a local cmpProfTipHook that orders the two periods the same way the Compare KPI card does (later period = 'this period'); Group C columns deliberately get no popup, matching the KPI card. (2) 'PROFIT' → 'CONTRIBUTION' — the Platforms tiles said 'Profit' for what is actually net contribution. Renamed there and everywhere else the bare word appeared as a label: the Compare page's A/B/C '💵 Profit' column headings, 'Δ Profit' and 'Δ Profit (C vs B)', the two 'Profit + Ad Spend — higher Profit highlighted green…' descriptions, the '💵 Profit:' summary line, and two Campaign phrases — 'Daily profit contribution up/down X%' (now 'Daily contribution…') and the Break-even scenario subtitle 'Matches baseline profit' (now '…contribution'). Re-scanned afterwards: zero standalone 'Profit' left in user-facing text (20 occurrences across 9 places before). Deliberately NOT changed and listed for Nikhil to decide: 'Profitability' is used as a feature/section name in ~20 places (KPI card titles, table headers, the popup title 'Why did profitability change?', Campaign 'Profitability Analysis', 'Cost & Profitability' group) plus natural-language words like 'profitable' in campaign verdicts — renaming a concept name on a guess seemed worse than asking. Layout: 'CONTRIBUTION' is longer than 'PROFIT' and the tile's fourth column is only ~87px wide, so measured it with wide fonts first (with the emoji it lands at roughly 83–91px — too tight to trust without a browser). Kept the full word, set it to 9px nowrap, and widened the tinted block by 10px on its RIGHT edge only (into the tile's own padding) so the label sits inside the coloured box and the numbers stay exactly where they were. Verified with real renders: Brands Outlet×Platform (3 rows, popups show net sales 6,000/4,800, 3,600/2,400, 2,000/3,000 — each row's own figures, not the brand total), Outlets page (brand-level popup covers both platforms 9,600/7,200; brand×platform popups split per platform), Platforms brand table (8,000/7,800), and the real Compare page on its platforms and outlets sub-tabs (Deliveroo Aug 3,500 → Sep 4,300, Talabat 900 → 1,400, DMC 2,000 → 3,300, Marina 1,500 → 1,000), plus headings on all three sub-tabs. Two test-side corrections along the way, code was right both times: my first expectation used the wrong prior window (the dashboard's prior window for a custom range is the same length immediately BEFORE it, so my August data didn't fully cover it — the figures 2,160/1,080/1,350 were exactly 9 days' worth), and the build-487 colour test needed its pattern updated for the new hover attribute (re-checked: the same cells are found, AED 2.9K still green, AED -316 still red). Full regression re-run, full script execution clean.",
   "🔎 New campaign not appearing on the dashboard — Nikhil added a Deliveroo · Smokeys BOGO row (28 Sep → 6 Oct, 'BOGO on 2 Sandwiches : BBQ Beef Melt and Avokebab', structure BOGO, status Running) to the Campaign Activations sheet and it never showed up, 'no matter how many times I hard refresh'. Investigated in order rather than guessing. (1) PARSER — ran the real parseCampaigns on rows shaped exactly like his screenshot: the Smokeys row parses to a Running BOGO campaign (28 Sep → 6 Oct); parseDate reads both '28-Sep-2026' and '6-Oct-2026'; columns line up with the parser (Aggregator, Brand, Start, End, Branches, Comments, Name, Discount Structure, Status). Not the cause. (2) DISPLAY FILTERS — with no filters set, any Running campaign in the loaded data appears under Active; a real render of the Campaigns page with that row puts the Smokeys BOGO card on the Active list. Not the cause. (3) DASHBOARD CACHE — no campaign cache exists in the app (no localStorage, no service worker); campaignData is filled only by fetchCSV, once per page load. Not the cause. So the row was not ARRIVING. Found the likely mechanism: every sheet is fetched from the published-to-web CSV, racing the direct link against two third-party proxies (allorigins, corsproxy) and taking whichever answers first — all with the IDENTICAL URL every time, no cache-busting. hardRefreshNow() only cache-busts the dashboard's own JavaScript (the ?_v= in the address bar), not sheet data, and the Campaigns page's own 'Refresh Data' button re-requests the same URL — so any hop that caches that URL (a proxy, or an edge in front of Google) returns the same old copy no matter how often you refresh. That matches the symptom exactly. Fixed in fetchCSV: each request now carries a unique throwaway parameter so every hop sees a cache MISS (Google ignores unknown parameters); if that variant is refused on every route it falls back to the original plain URL, so it can only add a retry, never break loading; the total-failure error is unchanged ('blocked'). Applies to every sheet — daily order data, Ad Investments and Campaign Activations — since all go through fetchCSV and all 9 callers just receive CSV text. Also made this diagnosable so it can never be a mystery again: csvFetchInfo records which route answered and when; the Campaigns page header now shows one line — 'Sheet: loaded 12:31 · 47 campaigns · newest starts 28 Sep 2026 · via direct' — where the newest-start date answers 'did my new row reach the dashboard?' at a glance (reads 23 Sep while the sheet has a 28 Sep row = the copy is stale; reads 28 Sep = it arrived); and parseCampaigns used to silently `continue` past any row with an unreadable start/end date — now remembered and shown as a red warning naming the row and the exact bad cell, while intentional skips (Cancelled status, excluded brands) deliberately do not trigger it. Verified: reproduced the failure against a fake network where the direct link is blocked and proxies cache by URL — the OLD fetch still returns the stale copy after the row is added (the reported symptom) while the NEW fetch returns the copy containing the Smokeys row, and it parses; each load requests a distinct URL with gid/single/output preserved; busted-URL-refused falls back to the plain URL; total failure still throws 'blocked'; header renders correctly for fresh, stale and bad-date sheets. Honest limit stated to Nikhil: this cures caching between the browser and Google, but if Google's OWN published copy is stale (e.g. 'Automatically republish when changes are made' is off in Publish to web) it cannot — the freshness line will show that, and the fix there is in the sheet's publish settings. Full regression re-run — every earlier test passes, full script execution clean.",
   "🗓️ + 📊 Two fixes. (1) DATE FILTER ROLLING BACK — Nikhil sent a screen recording: set a custom range 17 Sep → 27 Sep, changed the start to 18 Sep, pressed Apply, and it briefly showed 18 then jumped back to 17 on its own, on several pages. Analysed the video frame by frame (extracted 157 frames, cropped the date boxes, period label and Orders tile): the boxes read 18/09, then after Apply the page re-rendered with the OLD range — Orders counted up 17→55→87→106→113→118→119, the KPI count-up animation replaying on the wrong dates. Root cause: Overview, Brands, Outlets, Platforms and Cancellations all render the SAME filter bar with hard-coded id=\"f-s\" / id=\"f-e\", and every page's container stays in the document at once. document.getElementById returns the FIRST match in document order, so Apply read the date boxes of whichever earlier page had last been left on a custom range and saved THOSE stale dates back — which is also why it looked random, depending on which other pages had been used before. Reproduced first against the real fApply using a DOM that resolves duplicate ids the way browsers do (Apply saved 17/09 while 18/09 was typed), then fixed: fApply now receives the clicked Apply button and looks the inputs up inside the bar that owns it, falling back to the active page's container, then to the old global lookup for any caller that passes nothing. Checked that no other date input has this hazard — Campaigns, Discount and Compare date inputs use per-input handlers, not id lookups. Tested the real click path, Outlets and Platforms each keeping their own range while Overview held a stale one, the no-argument fallback, and that Overview itself (the 'first' page) is unchanged. (2) CONTRIBUTION % MISSING FROM THE P&L POPUP — Nikhil asked why the 'Why did profitability change?' popup shows no contribution % and to check everywhere. Audit result: the popup's Net Contribution row was just two AED figures, and it is ONE shared builder (buildProfitabilityTipHTML) opened from 9 places (Overview brand table, Overview platform table, Overview/Brands/Outlets KPI cards, Outlets tiles, Platforms tiles, Compare KPI) — so it was missing in all nine, not some. Where the % DID show — Overview/Brands/Outlets/Platforms tables, the three Profitability KPI cards, Outlets tiles, the Daily Digest and Compare-report KPIs — each computed prof/sales*100 inline (seven separate copies); there was never a shared definition, so any surface written without it simply never had it. Same gap on the Platforms tile (visible in his screenshot — Outlets tiles had a margin line, Platforms tiles didn't) and the Campaign Planner Full P&L cards. Fixed with one shared helper, contribMarginPct(contribution, netSales) with null (rendered as a dash) when there are no net sales, and fmtMarginPct. Popup now shows a 'Contribution margin (% of net sales)' row under Net Contribution for both periods plus a margin line in the Net change box ('26.5% → 29.0% · +2.6 pts') — because +AED 22,969 alone can't tell you whether profit grew from volume or from better margin. Platforms tiles show margin under current AND prior profit (red for negative); Planner cards show '% of net sales' under Net Contribution/day. Verified with the EXACT numbers from his screenshot (Lollorosso, 1 Aug–27 Aug vs 1 Sep–27 Sep: 33,232 / 125,557 = 26.5% and 56,201 / 193,573 = 29.0%, +2.6 pts, existing figures untouched); a loss-making case (negative margin red with a real minus and the move reading as a fall); an empty prior period (dash, and no bogus pts line); and a real pipeline check that the popup's margin equals what the Profitability tables show for the same period (39.667% both). A real render of the Platforms page with a healthy and a loss-making platform shows 41.2% / 43.8% (Deliveroo, this/prior) and a red −1.7% (Careem). One test expectation was my own arithmetic slip (−9,000/193,573 is −4.6%, not −4.7%) — corrected in the test, code was right. Not changed, reported to Nikhil: the campaign-detail contribution tables and the Compare-page brand/platform/outlet tables still show contribution without a margin. Full regression re-run — all earlier tests pass, full script execution clean.",
@@ -3054,6 +3055,22 @@ async function handleOrdersUpload(filesOrFile){
       // the way every other aggregator's data does.
       const dr=fresh.metadata.date_range||[];
       results.push(`✓ ${file.name} (${detected.charAt(0).toUpperCase()+detected.slice(1)}): ${fresh.records.length.toLocaleString()} records, ${dr[0]||"?"} → ${dr[1]||"?"}`);
+      // v491: surface unmapped brand/outlet names instead of silently dropping their orders.
+      // Root cause of the "Careem discount = AED 0 at every outlet" bug: unrecognized
+      // MERCHANT_AREA/BRAND_NAME values were skipped with zero visible signal, so an entire
+      // brand's Careem export could parse "successfully" (0 errors) while covering none of its
+      // real discount. Now every skip is counted and named so an admin can see it immediately
+      // and extend CAREEM_OUTLET_CODE / CAREEM_BRAND_NORM (or the equivalent Keeta tables).
+      {
+        const md=fresh.metadata||{},sk=md.rows_skipped||{},warn=[];
+        if(sk.no_brand)warn.push(`${sk.no_brand} orders skipped — brand not recognised: ${(md.unmapped_brands||[]).map(x=>`"${x}"`).join(", ")||"(blank)"}`);
+        if(sk.no_outlet)warn.push(`${sk.no_outlet} orders skipped — outlet not recognised: ${(md.unmapped_outlets||[]).map(x=>`"${x}"`).join(", ")||"(blank)"}`);
+        if(warn.length)results.push(`   ⚠ ${warn.join("\n   ⚠ ")}\n   Their discount is NOT counted — add the names to the mapping table in the dashboard.`);
+        const span={};
+        for(const r of fresh.records){if(!r.brand||!r.date)continue;const q=span[r.brand]||(span[r.brand]=[r.date,r.date]);if(r.date<q[0])q[0]=r.date;if(r.date>q[1])q[1]=r.date;}
+        const spanTxt=Object.entries(span).sort().map(([b,q])=>`${b} ${q[0]} → ${q[1]}`).join("\n   ");
+        if(spanTxt)results.push(`   Coverage by brand:\n   ${spanTxt}`);
+      }
     }catch(e){
       console.error(`[Upload] ${file.name} failed:`,e);
       errors.push(`${file.name}: ${e.message}`);
@@ -20712,16 +20729,64 @@ function cmpData(cfg){
   });
 }
 
+// v491: normalize an outlet name for matching the sheet's branch names against the Careem/
+// Keeta export's outlet names, which sometimes differ cosmetically (sheet: "DIP (Fyoozhen)",
+// export: "DIP" once mapped through CAREEM_OUTLET_CODE) — strip any "(...)" qualifier and
+// case/whitespace before comparing.
+function cmpNormOutlet(s){return String(s==null?"":s).replace(/\s*\(.*?\)\s*/g," ").trim().toLowerCase();}
+
+// v491: root-cause fix for "Careem discount shows AED 0 at every outlet" (Smokeys, Sep 2026).
+// The Google Sheet's brand-level daily discount (r.disc) is the AUTHORITATIVE total — it comes
+// straight off Careem/Keeta's own statement and is never wrong. The uploaded order-export CSV/
+// XLSX is only useful for SPLITTING that total across outlets; it should never be allowed to
+// override the total, because rows can silently go missing from it (unmapped outlet/brand name
+// in CAREEM_OUTLET_CODE/CAREEM_BRAND_NORM → parseCareemCSV drops the order with no error visible
+// on this page — see the upload-time warning added in handleOrdersUpload). Previously, Path 2
+// summed the export's menu_disc directly and trusted it completely: if the export was missing
+// an outlet's rows (or missing entirely for that brand, e.g. because the file just didn't cover
+// it), that outlet reported AED 0 discount even though the sheet total was nonzero.
+// Fix: only trust the export's SPLIT when its own total is within ±5% of the sheet's total for
+// the same brand+window (proving it's covering essentially all the same orders); otherwise fall
+// back to sales-weighted allocation of the sheet total, exactly like Path 3. Either way the
+// outlet-level total now reconciles to the trustworthy sheet figure.
+function cmpExactDiscForScope(exactData,brand,agg,cfg,inWindow){
+  let sheetTotal=0,brandSales=0,outletSales=0;
+  for(const r of allData){
+    if(r.brand!==brand||r.aggregator!==agg||!inWindow(r.date))continue;
+    sheetTotal+=r.disc||0;
+    if(r.branch!=="(brand-level)"){
+      brandSales+=r.sales||0;
+      if(cfg.branches.has(r.branch))outletSales+=r.sales||0;
+    }
+  }
+  const wanted=new Set([...cfg.branches].map(cmpNormOutlet));
+  let exactAll=0,exactSel=0,n=0;
+  if(exactData&&exactData.records){
+    for(const rec of exactData.records){
+      if(rec.brand!==brand||!inWindow(rec.date))continue;
+      exactAll+=rec.menu_disc||0;n++;
+      if(wanted.has(cmpNormOutlet(rec.outlet)))exactSel+=rec.menu_disc||0;
+    }
+  }
+  const coverage=sheetTotal>0?exactAll/sheetTotal:null;
+  const exactOk=n>0&&exactAll>0&&(sheetTotal<=0||(coverage>=0.95&&coverage<=1.05));
+  if(exactOk)return{total:sheetTotal>0?exactSel*(sheetTotal/exactAll):exactSel,exact:true};
+  return{total:brandSales>0?sheetTotal*(outletSales/brandSales):0,exact:false};
+}
+
 // Compute total merchant-funded discount for the comparison filter scope. Three paths,
 // chosen in order of preference for accuracy:
 //   1. No outlet filter → sum r.disc across ALL records for the brand × aggregator in the
 //      date window. The dashboard's sheet parser attaches each day's brand-level discount to
 //      a single record (usually a real outlet's row, not the "(brand-level)" pseudo-branch),
 //      so summing all records correctly recovers the brand total without double-counting.
-//   2. Outlet filter set + Keeta/Careem exact data uploaded → sum per-outlet menu_disc
-//      from the uploaded JSON (this is what the Campaigns page uses).
-//   3. Outlet filter set + no exact data → fall back to sales-weighted estimate
-//      (brand_disc × outlet_sales / brand_total_sales) so at least we report something.
+//   2. Outlet filter set + Keeta/Careem exact data uploaded → split the sheet's authoritative
+//      brand total across outlets using the uploaded export's per-outlet shares — but ONLY
+//      when the export's own total for this brand/window is within ±5% of the sheet's total
+//      (see cmpExactDiscForScope above). This guarantees outlet rows always sum to the brand
+//      total and never silently show AED 0 just because some export rows went unmapped.
+//   3. Outlet filter set + no exact data (or export total doesn't reconcile) → fall back to
+//      sales-weighted estimate (brand_disc × outlet_sales / brand_total_sales).
 // Returns {total, source} so the card can label "📊 Exact" when it has truth available.
 function cmpComputeDisc(cfg){
   const inWindow=d=>(!cfg.start||d>=cfg.start)&&(!cfg.end||d<=cfg.end);
@@ -20752,24 +20817,13 @@ function cmpComputeDisc(cfg){
       }
       continue;
     }
-    // Path 2: outlet filter + exact data
-    if(agg==="Keeta"&&keetaOrdersData){
-      for(const rec of keetaOrdersData.records){
-        if(rec.brand!==brand)continue;
-        if(!cfg.branches.has(rec.outlet))continue;
-        if(!inWindow(rec.date))continue;
-        total+=rec.menu_disc;
-      }
-      anyExact=true;continue;
-    }
-    if(agg==="Careem"&&careemOrdersData){
-      for(const rec of careemOrdersData.records){
-        if(rec.brand!==brand)continue;
-        if(!cfg.branches.has(rec.outlet))continue;
-        if(!inWindow(rec.date))continue;
-        total+=rec.menu_disc;
-      }
-      anyExact=true;continue;
+    // Path 2: outlet filter + exact data — sheet total is authoritative, export only splits it
+    // (and only when it demonstrably covers the sheet total; see cmpExactDiscForScope).
+    if((agg==="Keeta"&&keetaOrdersData)||(agg==="Careem"&&careemOrdersData)){
+      const res=cmpExactDiscForScope(agg==="Keeta"?keetaOrdersData:careemOrdersData,brand,agg,cfg,inWindow);
+      total+=res.total;
+      if(res.exact)anyExact=true;else anyEstimated=true;
+      continue;
     }
     // Path 3: fallback — sales-weighted brand allocation. brandDisc sums r.disc across ALL
     // records (per-outlet + pseudo-brand-level) since the parser attaches disc to any single
