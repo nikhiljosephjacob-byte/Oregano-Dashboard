@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-08-13-492";
+const BUILD_VERSION="2026-09-29-493";
 const BUILD_NOTES=[
+  "📊 COMPARE PAGE / PDF EXPORT — DISCOUNT (AND CONTRIBUTION) NO LONGER PROPORTIONALLY SPLIT — Nikhil's direct catch: filtering the Compare page (or its PDF export) to one outlet was estimating that outlet's discount by splitting the brand's whole-window total by sales share, instead of using the real number already sitting in the Google Sheet — 'beats the purpose of having such in-depth data in the sheet then.' Root cause confirmed in the sheet parser itself first: r.disc (the per-record discount the dashboard already holds) is, day by day, the best-available real figure — genuine when 2+ outlets show different amounts that day, corrected against an uploaded order export where one covers that day, and only spread by that SINGLE day's sales when neither applies. So the raw material for an exact per-outlet number was already there; two places were discarding it and re-guessing from scratch across the whole window instead: (1) cmpComputeDisc's Path 3 (the Discount card/PDF figure, for Deliveroo/Talabat/Noon — Careem/Keeta already had a real-data path from the v491/v492 fixes) did brand_disc × outlet_sales ÷ brand_sales; (2) cmpComputeContribution (feeds the Contribution card/KPI, the Outlet-Level Detail table, Brand/Platform Comparison, every Totals row, outlet-movers, and the 'Net contribution declined X%' narrative) did the exact same sales-share guess independently, for EVERY aggregator including Careem/Keeta — it never had the exact-export path at all, so Contribution and Discount could show two different discount figures for the identical filtered outlet. Fixed both: added cmpDirectOutletDisc (sums each selected outlet's own real r.disc directly, excluding the rare '(brand-level)' orphan record that can't be fairly credited to one outlet) and cmpScopedDisc (the shared lookup — no filter → sum everything; Careem/Keeta with an uploaded export → the existing exact-export overlay; otherwise → the new direct sum) — cmpComputeDisc and cmpComputeContribution now both call the same function, so they can't quietly diverge again, and cmpExactDiscForScope's own fallback (when an uploaded export doesn't reconcile within ±5%) was upgraded the same way instead of falling back to a sales-share guess. Verified with a synthetic two-outlet, two-day dataset (one day where both outlets have distinct real discount, one day where the sheet recorded it all on one outlet, plus an orphan brand-level row): the new logic returns each outlet's real number exactly (confirmed against hand-computed expected values); the old formula, run on the same data, was off by 33% for the outlet it under/over-counted — concrete proof the bug was real, not just a theoretical concern. No effect on the brand-level (no outlet filter) view, which already summed real records directly. Full regression re-run, script execution clean.",
   "🏷️ CAREEM SMOKEYS EXPORT — THE ACTUAL SOURCE OF THE AED 0 DISCOUNT — Nikhil sent his real Sep 1-27 2026 Careem order export so the v491 upload warning could name exactly what was going unmapped. It did: found that Careem renamed Smokeys' listing at some point — the export uses BRAND_NAME \"Smokey's - UAE\", but CAREEM_BRAND_NORM only recognised the old \"Smokey's Pizzeria - UAE\". Every single Smokeys order that month (452 of 452, AED 11,760.50 of discount) used the new name, so parseCareemCSV silently dropped the brand entirely — this is the real, direct cause of the Sep-discount-AED-0 bug v491 fixed defensively; v491 made the Compare page never SHOW AED 0 when the sheet has a real total, this fixes the export itself so Smokeys data is actually captured going forward. Added \"Smokey's - UAE\" → Smokeys to the mapping table (kept the old name too, in case any historical export still uses it). Verified directly against his file: re-parsed it with the fix, all 452 orders now map (previously 0), all 14 outlets resolve cleanly (Al Forsan, Al Quoz, Al Reef, Al Reem, DIP, DMC, DSO, Furjan, Jumeirah, Marina, Mirdiff, Motorcity, Town Square, Villa — no unmapped outlets). One honest note: the export's own total (AED 11,760.50) is ~7% below the Google Sheet's Sep total for Smokeys (AED 12,634) — likely timing/edge-case orders — so it still falls outside the ±5% band v491 added, meaning the Compare page and the Excel correctly keep using the sales-weighted estimate for Smokeys Sep rather than the export's split; the fix here is still real and necessary (it's the difference between the export contributing SOMETHING vs NOTHING to that coverage check), just not quite enough on its own to flip Smokeys Sep to '📊 Exact'. No regression risk — purely additive mapping entry, old key retained. Full regression re-run, full script execution clean.",
   "💸 CAREEM DISCOUNT SHOWING AED 0 AT EVERY OUTLET — Nikhil caught Careem discounts missing for September on the Compare page's PDF export (and therefore missing from the Excel report built off it), specifically Smokeys. Traced through the full pipeline against the Google Sheet, the uploaded Careem order-export, and the PDF. ROOT CAUSE, two compounding bugs: (1) parseCareemCSV silently drops any order whose BRAND_NAME or MERCHANT_AREA isn't in the hardcoded CAREEM_BRAND_NORM/CAREEM_OUTLET_CODE lookup tables — no warning, no error, the file just parses 'successfully' with those rows gone. (2) The Compare page's outlet-filtered discount calc (cmpComputeDisc, Path 2) summed the uploaded export's menu_disc directly and trusted it completely once any exact data existed for that platform — it never checked the export's total against the Google Sheet's own (authoritative, straight-off-the-statement) brand total. So when the export was missing rows for a brand/outlet — through bug (1), or simply because the uploaded file's date coverage didn't reach that period — the outlet showed AED 0 instead of falling back to an estimate, even though the sheet clearly had a nonzero brand-level figure. Built a Python reconciliation toolkit against the 4 Comparison-Report PDFs + the Ad Investments sheet to scope it precisely: confirmed Deliveroo/Talabat/Noon are completely unaffected (0 of 30 brand×platform groups off by more than 2%), the bug is Careem-only, and it hits every Careem brand to varying degrees — Smokeys September is the total-zero case Nikhil saw, but Fyoozhen/Lollorosso/Wicked Wings were also silently under- or over-counted at the outlet level even where the brand-level PDF table was correct throughout. FIX: the Google Sheet's brand-level daily discount is now always the authoritative TOTAL for a brand+platform+window — the uploaded export is only trusted to SPLIT that total across outlets, and only when its own total for that brand/window is within ±5% of the sheet's total (cmpExactDiscForScope + cmpNormOutlet, which also tolerates cosmetic outlet-name differences like sheet 'DIP (Fyoozhen)' vs export 'DIP'). When the export doesn't reconcile, it falls back to the existing sales-weighted allocation of the sheet total — the same Path 3 already used when no exact data exists at all. Outlet rows now always sum to the trustworthy brand total; no outlet can show AED 0 while the brand-level figure is nonzero. Also fixed the silent-drop itself: any upload with unmapped brand/outlet names now shows a warning naming exactly which raw names weren't recognised and how many orders they cost, plus a 'coverage by brand' date-range summary — so a partial/mismatched export is visible at upload time instead of only surfacing as a downstream discrepancy weeks later. Unit-tested against the reconciliation toolkit's findings (all 9 of the previously-wrong Careem brand/month combinations now compute the sheet-reconciled figure); full regression re-run, full script execution clean. Separately re-delivering the Ad Investment Review Excel with corrected September Careem discount figures.",
   "🖱️ + 🏷️ Two changes, both per Nikhil directly. (1) MISSING PROFIT POPUP — hovering the Profitability figure in the Outlet × Platform table at the bottom of the Brands page showed no 'Why did profitability change?' popup. Audited every place a profit figure is displayed rather than fixing that one table. The popup system itself is initialised on every page render, so this was not a broken mechanism — those cells simply never had the hook: they were built after the Overview tables and carried only the number and colour. Found seven: Brands Outlet×Platform table, the two brand tables on the Outlets page, the brand table on the Platforms page, and three Compare tables (Per-Platform Breakdown, Brand×Platform, and the expanded per-Outlet table). Everything else already had it (Overview tables, all Profitability KPI cards, Outlets tiles, Platforms tiles, Compare KPI card); the Daily Digest and an eligibility check that compute profit are exports/logic, not hover-able displays. Added one shared helper, profTipHook(cur, prior, dateRef), and each cell passes the records ITS ROW covers — so the popup for one outlet×platform row explains that row, not the whole brand. storeTip() stores a function that only runs on hover, so this adds nothing to render time. Compare uses a local cmpProfTipHook that orders the two periods the same way the Compare KPI card does (later period = 'this period'); Group C columns deliberately get no popup, matching the KPI card. (2) 'PROFIT' → 'CONTRIBUTION' — the Platforms tiles said 'Profit' for what is actually net contribution. Renamed there and everywhere else the bare word appeared as a label: the Compare page's A/B/C '💵 Profit' column headings, 'Δ Profit' and 'Δ Profit (C vs B)', the two 'Profit + Ad Spend — higher Profit highlighted green…' descriptions, the '💵 Profit:' summary line, and two Campaign phrases — 'Daily profit contribution up/down X%' (now 'Daily contribution…') and the Break-even scenario subtitle 'Matches baseline profit' (now '…contribution'). Re-scanned afterwards: zero standalone 'Profit' left in user-facing text (20 occurrences across 9 places before). Deliberately NOT changed and listed for Nikhil to decide: 'Profitability' is used as a feature/section name in ~20 places (KPI card titles, table headers, the popup title 'Why did profitability change?', Campaign 'Profitability Analysis', 'Cost & Profitability' group) plus natural-language words like 'profitable' in campaign verdicts — renaming a concept name on a guess seemed worse than asking. Layout: 'CONTRIBUTION' is longer than 'PROFIT' and the tile's fourth column is only ~87px wide, so measured it with wide fonts first (with the emoji it lands at roughly 83–91px — too tight to trust without a browser). Kept the full word, set it to 9px nowrap, and widened the tinted block by 10px on its RIGHT edge only (into the tile's own padding) so the label sits inside the coloured box and the numbers stay exactly where they were. Verified with real renders: Brands Outlet×Platform (3 rows, popups show net sales 6,000/4,800, 3,600/2,400, 2,000/3,000 — each row's own figures, not the brand total), Outlets page (brand-level popup covers both platforms 9,600/7,200; brand×platform popups split per platform), Platforms brand table (8,000/7,800), and the real Compare page on its platforms and outlets sub-tabs (Deliveroo Aug 3,500 → Sep 4,300, Talabat 900 → 1,400, DMC 2,000 → 3,300, Marina 1,500 → 1,000), plus headings on all three sub-tabs. Two test-side corrections along the way, code was right both times: my first expectation used the wrong prior window (the dashboard's prior window for a custom range is the same length immediately BEFORE it, so my August data didn't fully cover it — the figures 2,160/1,080/1,350 were exactly 9 days' worth), and the build-487 colour test needed its pattern updated for the new hover attribute (re-checked: the same cells are found, AED 2.9K still green, AED -316 still red). Full regression re-run, full script execution clean.",
@@ -20744,6 +20745,25 @@ function cmpData(cfg){
 // case/whitespace before comparing.
 function cmpNormOutlet(s){return String(s==null?"":s).replace(/\s*\(.*?\)\s*/g," ").trim().toLowerCase();}
 
+// v493: real per-outlet discount for one (brand,aggregator) pair, restricted to cfg.branches.
+// r.disc is already the best-available per-outlet-per-day figure the sheet parser can produce
+// (genuine when 2+ outlets differ that day, exact-corrected via an uploaded order export where
+// one covers that day, sales-spread only at the SINGLE-DAY level as a last resort) — so summing
+// each selected outlet's own r.disc directly is strictly more accurate than re-deriving a cruder
+// WHOLE-WINDOW sales-share guess from scratch, which is what both cmpComputeDisc's old Path 3
+// and cmpComputeContribution used to do. The "(brand-level)" pseudo-branch (a day with discount
+// but no matching sales/orders row at all) is excluded — it cannot be fairly credited to any one
+// filtered outlet.
+function cmpDirectOutletDisc(brand,agg,cfg,inWindow){
+  let total=0;
+  for(const r of allData){
+    if(r.brand!==brand||r.aggregator!==agg||!inWindow(r.date))continue;
+    if(r.branch==="(brand-level)")continue;
+    if(cfg.branches.has(r.branch))total+=r.disc||0;
+  }
+  return total;
+}
+
 // v491: root-cause fix for "Careem discount shows AED 0 at every outlet" (Smokeys, Sep 2026).
 // The Google Sheet's brand-level daily discount (r.disc) is the AUTHORITATIVE total — it comes
 // straight off Careem/Keeta's own statement and is never wrong. The uploaded order-export CSV/
@@ -20759,14 +20779,10 @@ function cmpNormOutlet(s){return String(s==null?"":s).replace(/\s*\(.*?\)\s*/g,"
 // back to sales-weighted allocation of the sheet total, exactly like Path 3. Either way the
 // outlet-level total now reconciles to the trustworthy sheet figure.
 function cmpExactDiscForScope(exactData,brand,agg,cfg,inWindow){
-  let sheetTotal=0,brandSales=0,outletSales=0;
+  let sheetTotal=0;
   for(const r of allData){
     if(r.brand!==brand||r.aggregator!==agg||!inWindow(r.date))continue;
     sheetTotal+=r.disc||0;
-    if(r.branch!=="(brand-level)"){
-      brandSales+=r.sales||0;
-      if(cfg.branches.has(r.branch))outletSales+=r.sales||0;
-    }
   }
   const wanted=new Set([...cfg.branches].map(cmpNormOutlet));
   let exactAll=0,exactSel=0,n=0;
@@ -20780,7 +20796,31 @@ function cmpExactDiscForScope(exactData,brand,agg,cfg,inWindow){
   const coverage=sheetTotal>0?exactAll/sheetTotal:null;
   const exactOk=n>0&&exactAll>0&&(sheetTotal<=0||(coverage>=0.95&&coverage<=1.05));
   if(exactOk)return{total:sheetTotal>0?exactSel*(sheetTotal/exactAll):exactSel,exact:true};
-  return{total:brandSales>0?sheetTotal*(outletSales/brandSales):0,exact:false};
+  // v493: fallback used to be a whole-window sales-share guess (sheetTotal*(outletSales/
+  // brandSales)); now it's the real per-outlet number (see cmpDirectOutletDisc above) — the
+  // export just didn't reconcile well enough to trust its split, that doesn't mean the sheet's
+  // own per-outlet r.disc figures are unusable too.
+  return{total:cmpDirectOutletDisc(brand,agg,cfg,inWindow),exact:false};
+}
+
+// v493: shared scoped-discount lookup used by BOTH cmpComputeDisc (the Compare page's Discount
+// card) and cmpComputeContribution (its Contribution card/KPI) so the two numbers can never
+// diverge again — same preference order as cmpComputeDisc's original three paths: no outlet
+// filter → sum every record; Careem/Keeta with an uploaded export → cmpExactDiscForScope; else →
+// direct per-outlet sum (cmpDirectOutletDisc).
+function cmpScopedDisc(brand,agg,cfg,inWindow){
+  if(!cfg.branches.size){
+    let total=0;
+    for(const r of allData){
+      if(r.brand!==brand||r.aggregator!==agg||!inWindow(r.date))continue;
+      total+=r.disc||0;
+    }
+    return{total,exact:false};
+  }
+  if((agg==="Keeta"&&keetaOrdersData)||(agg==="Careem"&&careemOrdersData)){
+    return cmpExactDiscForScope(agg==="Keeta"?keetaOrdersData:careemOrdersData,brand,agg,cfg,inWindow);
+  }
+  return{total:cmpDirectOutletDisc(brand,agg,cfg,inWindow),exact:false};
 }
 
 // Compute total merchant-funded discount for the comparison filter scope. Three paths,
@@ -20794,8 +20834,9 @@ function cmpExactDiscForScope(exactData,brand,agg,cfg,inWindow){
 //      when the export's own total for this brand/window is within ±5% of the sheet's total
 //      (see cmpExactDiscForScope above). This guarantees outlet rows always sum to the brand
 //      total and never silently show AED 0 just because some export rows went unmapped.
-//   3. Outlet filter set + no exact data (or export total doesn't reconcile) → fall back to
-//      sales-weighted estimate (brand_disc × outlet_sales / brand_total_sales).
+//   3. Outlet filter set + no exact data (or export total doesn't reconcile) → v493: each
+//      selected outlet's own real r.disc, summed directly (cmpDirectOutletDisc) — no longer a
+//      whole-window sales-weighted guess; see that function's comment for why this is accurate.
 // Returns {total, source} so the card can label "📊 Exact" when it has truth available.
 function cmpComputeDisc(cfg){
   const inWindow=d=>(!cfg.start||d>=cfg.start)&&(!cfg.end||d<=cfg.end);
@@ -20826,29 +20867,12 @@ function cmpComputeDisc(cfg){
       }
       continue;
     }
-    // Path 2: outlet filter + exact data — sheet total is authoritative, export only splits it
-    // (and only when it demonstrably covers the sheet total; see cmpExactDiscForScope).
-    if((agg==="Keeta"&&keetaOrdersData)||(agg==="Careem"&&careemOrdersData)){
-      const res=cmpExactDiscForScope(agg==="Keeta"?keetaOrdersData:careemOrdersData,brand,agg,cfg,inWindow);
-      total+=res.total;
-      if(res.exact)anyExact=true;else anyEstimated=true;
-      continue;
-    }
-    // Path 3: fallback — sales-weighted brand allocation. brandDisc sums r.disc across ALL
-    // records (per-outlet + pseudo-brand-level) since the parser attaches disc to any single
-    // record per day. brandSales sums only real outlets to use as the allocation base.
-    let brandDisc=0,brandSales=0,outletSales=0;
-    for(const r of allData){
-      if(r.brand!==brand||r.aggregator!==agg)continue;
-      if(!inWindow(r.date))continue;
-      brandDisc+=r.disc||0;
-      if(r.branch!=="(brand-level)"){
-        brandSales+=r.sales||0;
-        if(cfg.branches.has(r.branch))outletSales+=r.sales||0;
-      }
-    }
-    if(brandSales>0)total+=brandDisc*(outletSales/brandSales);
-    anyEstimated=true;
+    // Path 2 (exact data) / Path 3 (real per-outlet fallback) — both now live in cmpScopedDisc,
+    // shared with cmpComputeContribution. v493: Path 3 used to be a whole-window sales-weighted
+    // allocation; it's now each selected outlet's own real r.disc (see cmpDirectOutletDisc).
+    const res=cmpScopedDisc(brand,agg,cfg,inWindow);
+    total+=res.total;
+    if(res.exact)anyExact=true;else anyEstimated=true;
   }
   const source=cfg.branches.size===0?"brand_level":(anyExact&&!anyEstimated?"exact":(anyEstimated&&anyExact?"mixed":"estimated"));
   return{total,source};
@@ -21265,10 +21289,11 @@ function cmpCampaignImbalance(){
   if(!daysInA&&!daysInB)return null;
   return{daysInA,daysInB,namesA:[...namesA],namesB:[...namesB]};
 }
-// v108: Contribution for the comparison scope — sales-weighted outlet allocation of discount
-// (same approach as cmpComputeDisc Path 3), run through brandContribution() for the margin lens.
-// Net Sales going up doesn't mean profit went up by the same amount if growth was
-// discount-funded — this card makes that visible instead of leaving it implicit.
+// v108: Contribution for the comparison scope, run through brandContribution() for the margin
+// lens. Net Sales going up doesn't mean profit went up by the same amount if growth was
+// discount-funded — this card makes that visible instead of leaving it implicit. v493: discount
+// now comes from cmpScopedDisc — the same real per-outlet figure the Discount card uses — not
+// a separately-derived sales-weighted allocation (see the v493 note further down).
 function cmpComputeContribution(cfg){
   const inWindow=d=>(!cfg.start||d>=cfg.start)&&(!cfg.end||d<=cfg.end);
   const allowedBrands=cfg.brands.size?cfg.brands:null;
@@ -21286,7 +21311,7 @@ function cmpComputeContribution(cfg){
   const dref=cfg.end||cfg.start;
   for(const key of pairs){
     const [brand,agg]=key.split("|");
-    let brandDisc=0,brandSales=0,outletSales=0,brandMondayDisc=0;
+    let brandSales=0,outletSales=0,outletMondayDisc=0;
     // v482: track in-view branches and the pair's own real data span, same as computeProfitability
     // already does (g.branches/g.lo/g.hi) — needed below to scope and cap the ad-cost call
     // correctly, the same established pattern used everywhere else ad spend is subtracted.
@@ -21294,14 +21319,13 @@ function cmpComputeContribution(cfg){
     for(const r of allData){
       if(r.brand!==brand||r.aggregator!==agg)continue;
       if(!inWindow(r.date))continue;
-      brandDisc+=r.disc||0;
-      // v292/v452: Noon commission-waiver Monday discount, tracked the same way as brandDisc
-      // above so it gets the same outlet-share scaling applied below — see isNoonCommissionWaived.
-      if(agg==='Noon'&&r.date&&isNoonCommissionWaived(brand,r.date))brandMondayDisc+=r.disc||0;
       if(r.branch!=="(brand-level)"){
         brandSales+=r.sales||0;
         if(!cfg.branches.size||cfg.branches.has(r.branch)){
           outletSales+=r.sales||0;
+          // v292/v452: Noon commission-waiver Monday discount — now the real per-outlet figure
+          // for the selected scope (see v493 note below), not a brand-wide total scaled down.
+          if(agg==='Noon'&&r.date&&isNoonCommissionWaived(brand,r.date))outletMondayDisc+=r.disc||0;
           branches.add(r.branch);
           if(r.date){if(!lo||r.date<lo)lo=r.date;if(!hi||r.date>hi)hi=r.date;}
         }
@@ -21309,8 +21333,15 @@ function cmpComputeContribution(cfg){
     }
     if(brandSales<=0)continue;
     const scopedSales=outletSales;
-    const scopedDisc=brandDisc*(outletSales/brandSales);
-    const scopedMondayDisc=brandMondayDisc*(outletSales/brandSales);
+    // v493: this used to be brandDisc*(outletSales/brandSales) — a whole-window sales-share
+    // GUESS at what this outlet's own discount was. cmpComputeDisc's Discount card never used
+    // that number (it had its own, more careful three-path logic, including the Careem/Keeta
+    // exact-export overlay) — so Contribution and Discount could show numbers built from two
+    // different discount figures for the exact same filtered outlet. Now both call the same
+    // cmpScopedDisc, so the "Contribution" card is always net of the REAL discount, and the two
+    // cards can never quietly disagree again.
+    const scopedDisc=cmpScopedDisc(brand,agg,cfg,inWindow).total;
+    const scopedMondayDisc=outletMondayDisc;
     const gross=scopedSales+scopedDisc;
     // v475: third Keeta FD gap found in this same audit — cmpComputeContribution is a completely
     // separate Compare-page contribution calculator from computeProfitabilityBreakdown (the A/B
