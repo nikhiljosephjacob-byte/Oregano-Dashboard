@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-09-29-493";
+const BUILD_VERSION="2026-09-30-495";
 const BUILD_NOTES=[
+  "↔️ DAILY DIGEST — CONTRIBUTION MOVED TO LAST COLUMN — Nikhil's direct follow-up. Both Page 3 brand tables (the new Daily brand split and the existing weekly Brand-level study) had Contribution sitting before Ad Spend; swapped so every row now reads Sales → Orders → AOV → Discount → Ad Spend → Contribution — Contribution last, as the bottom-line figure that nets everything to its left. Checked every other table in the report for the same pattern: Page 2's KPI cards and its This-week table already had Net Contribution last, so those were untouched. Full regression re-run, script execution clean.",
+  "📅 DAILY DIGEST — DAILY BRAND TABLE + DATE RANGES SHOWN EVERYWHERE — Nikhil's direct ask, two parts. (1) He wanted yesterday's Sales split by brand, not just the existing weekly 'Brand-level study' table (This week vs last week) — added a new 'Daily brand split — yesterday' table right above it on Page 3, same columns (Sales, Orders, AOV, Discount, Contribution, Ad spend) but for yesterday vs the same weekday last week — the exact comparison basis Page 2's 'Yesterday at a glance' KPI cards already use, just broken out per brand instead of as one dashboard-wide total. (2) 'no confusion on which dates are being compared with which dates' — every date-based table on Page 3 (new Daily table, the weekly Brand-level study, and the Aggregator × brand matrix) now states its actual date ranges, not vague labels: the section subtitle spells them out in full (e.g. '23 Sep–29 Sep vs last week (16 Sep–22 Sep), 4 weeks back (26 Aug–1 Sep), and last year (Tue 23 Sep 2025–Mon 29 Sep 2025)'), AND every column header now carries a small second line with its own exact range, since a subtitle at the top of a wide table is easy to lose track of once you're reading column 5. Also fixed the alignment/overflow Nikhil flagged: the Contribution column carries three figures (WoW arrow + a '4wk' pill + an 'LY' pill) and on real brand-level totals that row ran wider than the AED amount above it, crowding toward the Ad Spend column instead of sitting cleanly under its own header. Every metric cell now uses a small two-part layout — the amount fixed on its own line, the arrow/pills below it in a right-aligned row that WRAPS onto a second line instead of overflowing past the column — so nothing can drift past its own column border regardless of how wide the real figures are. Verified with a synthetic dataset scaled to real AED magnitudes (400+ days, so 4-week-back and last-year comparisons both had real data to show, not just blanks): re-rendered Page 3 and visually confirmed the new Daily table, the date ranges in every header, and the now-contained Contribution cells — no wrapping past a column, no run-on text into a neighboring one. Full regression re-run, script execution clean.",
   "📊 COMPARE PAGE / PDF EXPORT — DISCOUNT (AND CONTRIBUTION) NO LONGER PROPORTIONALLY SPLIT — Nikhil's direct catch: filtering the Compare page (or its PDF export) to one outlet was estimating that outlet's discount by splitting the brand's whole-window total by sales share, instead of using the real number already sitting in the Google Sheet — 'beats the purpose of having such in-depth data in the sheet then.' Root cause confirmed in the sheet parser itself first: r.disc (the per-record discount the dashboard already holds) is, day by day, the best-available real figure — genuine when 2+ outlets show different amounts that day, corrected against an uploaded order export where one covers that day, and only spread by that SINGLE day's sales when neither applies. So the raw material for an exact per-outlet number was already there; two places were discarding it and re-guessing from scratch across the whole window instead: (1) cmpComputeDisc's Path 3 (the Discount card/PDF figure, for Deliveroo/Talabat/Noon — Careem/Keeta already had a real-data path from the v491/v492 fixes) did brand_disc × outlet_sales ÷ brand_sales; (2) cmpComputeContribution (feeds the Contribution card/KPI, the Outlet-Level Detail table, Brand/Platform Comparison, every Totals row, outlet-movers, and the 'Net contribution declined X%' narrative) did the exact same sales-share guess independently, for EVERY aggregator including Careem/Keeta — it never had the exact-export path at all, so Contribution and Discount could show two different discount figures for the identical filtered outlet. Fixed both: added cmpDirectOutletDisc (sums each selected outlet's own real r.disc directly, excluding the rare '(brand-level)' orphan record that can't be fairly credited to one outlet) and cmpScopedDisc (the shared lookup — no filter → sum everything; Careem/Keeta with an uploaded export → the existing exact-export overlay; otherwise → the new direct sum) — cmpComputeDisc and cmpComputeContribution now both call the same function, so they can't quietly diverge again, and cmpExactDiscForScope's own fallback (when an uploaded export doesn't reconcile within ±5%) was upgraded the same way instead of falling back to a sales-share guess. Verified with a synthetic two-outlet, two-day dataset (one day where both outlets have distinct real discount, one day where the sheet recorded it all on one outlet, plus an orphan brand-level row): the new logic returns each outlet's real number exactly (confirmed against hand-computed expected values); the old formula, run on the same data, was off by 33% for the outlet it under/over-counted — concrete proof the bug was real, not just a theoretical concern. No effect on the brand-level (no outlet filter) view, which already summed real records directly. Full regression re-run, script execution clean.",
   "🏷️ CAREEM SMOKEYS EXPORT — THE ACTUAL SOURCE OF THE AED 0 DISCOUNT — Nikhil sent his real Sep 1-27 2026 Careem order export so the v491 upload warning could name exactly what was going unmapped. It did: found that Careem renamed Smokeys' listing at some point — the export uses BRAND_NAME \"Smokey's - UAE\", but CAREEM_BRAND_NORM only recognised the old \"Smokey's Pizzeria - UAE\". Every single Smokeys order that month (452 of 452, AED 11,760.50 of discount) used the new name, so parseCareemCSV silently dropped the brand entirely — this is the real, direct cause of the Sep-discount-AED-0 bug v491 fixed defensively; v491 made the Compare page never SHOW AED 0 when the sheet has a real total, this fixes the export itself so Smokeys data is actually captured going forward. Added \"Smokey's - UAE\" → Smokeys to the mapping table (kept the old name too, in case any historical export still uses it). Verified directly against his file: re-parsed it with the fix, all 452 orders now map (previously 0), all 14 outlets resolve cleanly (Al Forsan, Al Quoz, Al Reef, Al Reem, DIP, DMC, DSO, Furjan, Jumeirah, Marina, Mirdiff, Motorcity, Town Square, Villa — no unmapped outlets). One honest note: the export's own total (AED 11,760.50) is ~7% below the Google Sheet's Sep total for Smokeys (AED 12,634) — likely timing/edge-case orders — so it still falls outside the ±5% band v491 added, meaning the Compare page and the Excel correctly keep using the sales-weighted estimate for Smokeys Sep rather than the export's split; the fix here is still real and necessary (it's the difference between the export contributing SOMETHING vs NOTHING to that coverage check), just not quite enough on its own to flip Smokeys Sep to '📊 Exact'. No regression risk — purely additive mapping entry, old key retained. Full regression re-run, full script execution clean.",
   "💸 CAREEM DISCOUNT SHOWING AED 0 AT EVERY OUTLET — Nikhil caught Careem discounts missing for September on the Compare page's PDF export (and therefore missing from the Excel report built off it), specifically Smokeys. Traced through the full pipeline against the Google Sheet, the uploaded Careem order-export, and the PDF. ROOT CAUSE, two compounding bugs: (1) parseCareemCSV silently drops any order whose BRAND_NAME or MERCHANT_AREA isn't in the hardcoded CAREEM_BRAND_NORM/CAREEM_OUTLET_CODE lookup tables — no warning, no error, the file just parses 'successfully' with those rows gone. (2) The Compare page's outlet-filtered discount calc (cmpComputeDisc, Path 2) summed the uploaded export's menu_disc directly and trusted it completely once any exact data existed for that platform — it never checked the export's total against the Google Sheet's own (authoritative, straight-off-the-statement) brand total. So when the export was missing rows for a brand/outlet — through bug (1), or simply because the uploaded file's date coverage didn't reach that period — the outlet showed AED 0 instead of falling back to an estimate, even though the sheet clearly had a nonzero brand-level figure. Built a Python reconciliation toolkit against the 4 Comparison-Report PDFs + the Ad Investments sheet to scope it precisely: confirmed Deliveroo/Talabat/Noon are completely unaffected (0 of 30 brand×platform groups off by more than 2%), the bug is Careem-only, and it hits every Careem brand to varying degrees — Smokeys September is the total-zero case Nikhil saw, but Fyoozhen/Lollorosso/Wicked Wings were also silently under- or over-counted at the outlet level even where the brand-level PDF table was correct throughout. FIX: the Google Sheet's brand-level daily discount is now always the authoritative TOTAL for a brand+platform+window — the uploaded export is only trusted to SPLIT that total across outlets, and only when its own total for that brand/window is within ±5% of the sheet's total (cmpExactDiscForScope + cmpNormOutlet, which also tolerates cosmetic outlet-name differences like sheet 'DIP (Fyoozhen)' vs export 'DIP'). When the export doesn't reconcile, it falls back to the existing sales-weighted allocation of the sheet total — the same Path 3 already used when no exact data exists at all. Outlet rows now always sum to the trustworthy brand total; no outlet can show AED 0 while the brand-level figure is nonzero. Also fixed the silent-drop itself: any upload with unmapped brand/outlet names now shows a warning naming exactly which raw names weren't recognised and how many orders they cost, plus a 'coverage by brand' date-range summary — so a partial/mismatched export is visible at upload time instead of only surfacing as a downstream discrepancy weeks later. Unit-tested against the reconciliation toolkit's findings (all 9 of the previously-wrong Careem brand/month combinations now compute the sheet-reconciled figure); full regression re-run, full script execution clean. Separately re-delivering the Ad Investment Review Excel with corrected September Careem discount figures.",
@@ -6188,21 +6190,59 @@ function digestBuildReportHTML(){
     fwb:digestPeriodTotals(dr.fourWeeksBack.start,dr.fourWeeksBack.end,brand,agg),
     ly:digestPeriodTotals(dr.lastYear.start,dr.lastYear.end,brand,agg)
   });
+  // v494: Nikhil's direct ask — "no confusion on which dates are being compared with which
+  // dates" — so every date-based table header now carries the actual range, not just a vague
+  // "this week vs last week". thRange() renders it as a small second line under the metric name;
+  // a shared string per comparison basis (rather than one per column) keeps the header row from
+  // repeating six near-identical date strings.
+  const thRange=txt=>`<div class="th-range">${esc(txt)}</div>`;
+  const wkRangeShort=`${fmtShort(dr.thisWeek.start)}–${fmtShort(dr.thisWeek.end)} vs ${fmtShort(dr.lastWeek.start)}–${fmtShort(dr.lastWeek.end)}`;
+  const wkRangeContrib=`${wkRangeShort} · +4wk/LY`;
+  // v494: the amount and its arrow(s) used to sit in one right-aligned run of inline text/spans
+  // with no wrap protection — fine for Sales/Orders/AOV/Discount/Ad spend (one small badge), but
+  // Contribution carries THREE (WoW arrow + 4wk pill + LY pill) and on real brand-level totals
+  // (5-6 digit AED figures) that row ran wider than the number above it, reading as crowded and
+  // drifting out of line with the column it's meant to sit under — the alignment problem Nikhil
+  // flagged. Fixed with a dedicated wrapper: the amount stays right-aligned and unwrapped on its
+  // own line, and the arrow/pills sit on their own flex row directly under it, right-aligned but
+  // allowed to wrap onto a second line instead of running past the cell/column boundary.
+  const metricCell=(val,badgesHTML)=>`<td style="text-align:right"><div class="cell-val">${val}</div><div class="cell-badges">${badgesHTML}</div></td>`;
 
-  // --- Brand-level study ---
+  // --- Daily brand split (v494, per Nikhil: "split of Sales on that day per brand") ---
+  const dayPeriodSet=brand=>({
+    y:digestPeriodTotals(dr.yesterday.start,dr.yesterday.end,brand,null),
+    ySame:digestPeriodTotals(dr.sameDayLastWeek.start,dr.sameDayLastWeek.end,brand,null)
+  });
+  const dayRangeShort=`${fmtShort(dr.yesterday.start)} vs ${fmtShort(dr.sameDayLastWeek.start)}`;
+  const dailyBrandRows=BR.map(b=>{
+    const ps=dayPeriodSet(b.n);
+    return`<tr><td><div class="brand-cell">${logoImg(b.n,20)}${esc(b.n)}</div></td>
+      ${metricCell(fmtAEDExact(ps.y.sales),arrowSmall(ps.y.sales,ps.ySame.sales))}
+      ${metricCell(ps.y.orders.toLocaleString(),arrowSmall(ps.y.orders,ps.ySame.orders))}
+      ${metricCell(fmtAEDExact(ps.y.aov),arrowSmall(ps.y.aov,ps.ySame.aov))}
+      ${metricCell(fmtAEDExact(ps.y.disc),arrowSmall(ps.y.disc,ps.ySame.disc,false))}
+      ${metricCell(fmtAEDExact(ps.y.adCost),arrowSmall(ps.y.adCost,ps.ySame.adCost,false))}
+      ${metricCell(fmtAEDExact(ps.y.contribution),arrowSmall(ps.y.contribution,ps.ySame.contribution))}
+    </tr>`;
+  }).join("");
+  const dailyBrandStudy=`<div class="sec-title">Daily brand split — yesterday</div><div class="sec-sub">${esc(fmtDisp(dr.yesterday.start))} vs ${esc(fmtDisp(dr.sameDayLastWeek.start))} (same weekday last week)</div>
+    <table><thead><tr><th style="text-align:left">Brand</th><th>Sales${thRange(dayRangeShort)}</th><th>Orders${thRange(dayRangeShort)}</th><th>AOV${thRange(dayRangeShort)}</th><th>Discount${thRange(dayRangeShort)}</th><th>Ad spend${thRange(dayRangeShort)}</th><th>Contribution${thRange(dayRangeShort)}</th></tr></thead><tbody>${dailyBrandRows}</tbody></table>`;
+
+  // --- Brand-level study (weekly) ---
   const brandRows=BR.map(b=>{
     const ps=periodSet(b.n,null);
     return`<tr><td><div class="brand-cell">${logoImg(b.n,20)}${esc(b.n)}</div></td>
-      <td style="text-align:right">${fmtAEDExact(ps.tw.sales)}<br>${arrowSmall(ps.tw.sales,ps.lw.sales)}</td>
-      <td style="text-align:right">${ps.tw.orders.toLocaleString()}<br>${arrowSmall(ps.tw.orders,ps.lw.orders)}</td>
-      <td style="text-align:right">${fmtAEDExact(ps.tw.aov)}<br>${arrowSmall(ps.tw.aov,ps.lw.aov)}</td>
-      <td style="text-align:right">${fmtAEDExact(ps.tw.disc)}<br>${arrowSmall(ps.tw.disc,ps.lw.disc,false)}</td>
-      <td style="text-align:right">${fmtAEDExact(ps.tw.contribution)}<br>${arrowSmall(ps.tw.contribution,ps.lw.contribution)}${miniBadge(pctOf(ps.tw.contribution,ps.fwb.contribution),"4wk")}${miniBadge(pctOf(ps.tw.contribution,ps.ly.contribution),"LY")}</td>
-      <td style="text-align:right">${fmtAEDExact(ps.tw.adCost)}<br>${arrowSmall(ps.tw.adCost,ps.lw.adCost,false)}</td>
+      ${metricCell(fmtAEDExact(ps.tw.sales),arrowSmall(ps.tw.sales,ps.lw.sales))}
+      ${metricCell(ps.tw.orders.toLocaleString(),arrowSmall(ps.tw.orders,ps.lw.orders))}
+      ${metricCell(fmtAEDExact(ps.tw.aov),arrowSmall(ps.tw.aov,ps.lw.aov))}
+      ${metricCell(fmtAEDExact(ps.tw.disc),arrowSmall(ps.tw.disc,ps.lw.disc,false))}
+      ${metricCell(fmtAEDExact(ps.tw.adCost),arrowSmall(ps.tw.adCost,ps.lw.adCost,false))}
+      ${metricCell(fmtAEDExact(ps.tw.contribution),arrowSmall(ps.tw.contribution,ps.lw.contribution)+miniBadge(pctOf(ps.tw.contribution,ps.fwb.contribution),"4wk")+miniBadge(pctOf(ps.tw.contribution,ps.ly.contribution),"LY"))}
     </tr>`;
   }).join("");
-  const brandStudy=`<div class="sec-title">Brand-level study</div><div class="sec-sub">This week vs last week · contribution also shown against 4 weeks ago and last year</div>
-    <table><thead><tr><th style="text-align:left">Brand</th><th>Sales</th><th>Orders</th><th>AOV</th><th>Discount</th><th>Contribution</th><th>Ad spend</th></tr></thead><tbody>${brandRows}</tbody></table>`;
+  const weekRangeSub=`${esc(fmtShort(dr.thisWeek.start))}–${esc(fmtShort(dr.thisWeek.end))} vs last week (${esc(fmtShort(dr.lastWeek.start))}–${esc(fmtShort(dr.lastWeek.end))}), 4 weeks back (${esc(fmtShort(dr.fourWeeksBack.start))}–${esc(fmtShort(dr.fourWeeksBack.end))}), and last year (${esc(fmtDisp(dr.lastYear.start))}–${esc(fmtDisp(dr.lastYear.end))})`;
+  const brandStudy=`<div class="sec-title" style="margin-top:16px">Brand-level study — this week</div><div class="sec-sub">${weekRangeSub}</div>
+    <table><thead><tr><th style="text-align:left">Brand</th><th>Sales${thRange(wkRangeShort)}</th><th>Orders${thRange(wkRangeShort)}</th><th>AOV${thRange(wkRangeShort)}</th><th>Discount${thRange(wkRangeShort)}</th><th>Ad spend${thRange(wkRangeShort)}</th><th>Contribution${thRange(wkRangeContrib)}</th></tr></thead><tbody>${brandRows}</tbody></table>`;
 
   // --- Aggregator x brand matrix ---
   // v405: Nikhil caught a real gap — this was hardcoded to just 3 aggregators (Talabat/Deliveroo/
@@ -6226,7 +6266,7 @@ function digestBuildReportHTML(){
     return`<tr><td><div class="brand-cell">${logoImg(b.n,18)}${esc(b.n)}</div></td>${cells}</tr>`;
   }).join("");
   const matrixHead=`<tr><th style="text-align:left">Brand</th>${matrixAggs.map(a=>`<th style="text-align:center">${logoImg(a,14)}</th>`).join("")}</tr>`;
-  const aggMatrix=`<div class="sec-title" style="margin-top:16px">Aggregator × brand performance</div><div class="sec-sub">Contribution WoW change, every combo</div>
+  const aggMatrix=`<div class="sec-title" style="margin-top:16px">Aggregator × brand performance</div><div class="sec-sub">Contribution change, ${weekRangeSub.split(", 4 weeks")[0]}, every combo</div>
     <table style="font-size:9.5px"><thead>${matrixHead}</thead><tbody>${matrixRows}</tbody></table>`;
 
   // --- Outlet moves (shared by highlights + watch list) ---
@@ -6322,6 +6362,7 @@ function digestBuildReportHTML(){
     <div class="footer"><span>Oregano Group — Daily Digest</span><span>2</span></div>
   </div>`;
   const p3=`<div class="page"><div class="runhdr"><div><div class="l">Daily Digest</div><div class="scope">Brand &amp; platform detail</div></div><div class="p">Oregano Group · Page 3</div></div>
+    ${dailyBrandStudy}
     ${brandStudy}
     ${aggMatrix}
     <div class="footer"><span>Oregano Group — Daily Digest</span><span>3</span></div>
@@ -22163,6 +22204,15 @@ function reportBaseCSS(){
     th{text-align:right;font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#4b5563;padding:6px 7px;border-bottom:2px solid #1a1f2e}
     th:first-child{text-align:left}td{padding:6px 7px;border-bottom:1px solid #eee;text-align:right}td:first-child{text-align:left;font-weight:700}
     tr.tot td{font-weight:800;border-top:2px solid #1a1f2e;border-bottom:none;padding-top:10px}
+    /* v494: compact "which dates am I looking at" line under a column's metric name — normal
+       case (not uppercase, so it doesn't compete with the metric label above it), wraps rather
+       than forcing width, so a long date range never pushes a column past its neighbor. */
+    .th-range{display:block;font-size:6.8px;font-weight:500;letter-spacing:0;text-transform:none;color:#9ca3af;margin-top:2px;line-height:1.25;white-space:normal}
+    /* v494: the AED/count amount stays on its own unwrapped line; its arrow + any 4wk/LY pills
+       sit on a second, right-aligned flex row that's allowed to WRAP instead of overflowing past
+       the column's own border — fixes the crowded, out-of-line Contribution cell Nikhil flagged. */
+    .cell-val{white-space:nowrap}
+    .cell-badges{display:flex;justify-content:flex-end;align-items:center;gap:4px;flex-wrap:wrap;margin-top:2px}
     .brand-cell{display:inline-flex;align-items:center;gap:7px}
     .pos{color:#15803d;font-weight:700}.neg{color:#b91c1c;font-weight:700}.up{color:#15803d}.down{color:#b91c1c}
     img.tag{display:inline-block;width:16px;height:16px;border-radius:4px;margin-right:6px;vertical-align:middle;object-fit:cover;box-shadow:0 0 0 1px rgba(0,0,0,.08)}
