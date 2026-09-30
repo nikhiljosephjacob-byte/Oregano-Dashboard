@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-09-30-497";
+const BUILD_VERSION="2026-09-30-498";
 const BUILD_NOTES=[
+  "🎨 OVERVIEW RATINGS SECTION — RESTYLED — direct follow-up: Nikhil flagged the v497 styling (dashed amber border, ⭐/🆕 emoji tags, colored pill badges) as awkward and out of place next to the plain, understated look of the rest of the KPI row. Rather than guess again, showed 3 restyled alternatives as an interactive mockup — a KPI-card twin (no chrome beyond the card itself, values in the same bold tabular-numeral style the other cards use), a compact data-table version (matching the All Brands/All Platforms table styling), and a minimal ring-badge version — and built the one Nikhil picked: the card twin. No more dashed border or emoji tags; the label now uses the exact same 10px uppercase/700-weight/1px-letter-spacing style every other KPI card label uses, and the Talabat/Deliveroo figures are plain bold colored numbers (still colored red/amber/green by the same KPI Tracker threshold, still independently clickable to open the outlet breakdown) instead of filled badge chips. Removed the now-unused ratingBadgeBg() helper that only existed for the old pill styling. Re-verified against the same 17-check isolated test harness used for the original build (aggregation math, exclusions, worst-first sort, below-target flagging, expand/collapse toggling, KPI Tracker deep-link) — all still passing — plus a full-file syntax check.",
   "⭐ OVERVIEW — NEW \"AVERAGE RATINGS — BRAND × AGGREGATOR\" SECTION — Nikhil's direct ask, worked through as an interactive mockup before this build (placement, coloring rule, and click-to-expand behavior were all shown and confirmed first, not guessed at). Sits in the gap next to the Active Outlets KPI card — the Overview KPI row is now 5 columns instead of 6 specifically so that gap exists for it to fill, rather than the row running edge-to-edge with nothing spare. For each brand, shows the simple (unweighted) average of the latest Talabat and Deliveroo rating across every outlet carrying that brand — confirmed with Nikhil rather than weighting by order volume. This isn't a new data source: it's a new aggregation over buildKPIEvalRows(), the exact same rows the KPI Tracker page already reads (each outlet's most recent dated rating value from the KPI Google Sheet — not pulled live from an API). Click any brand's Talabat/Deliveroo figure and a panel opens below the KPI row with that brand's outlets, worst-rated first, colored red/amber/green — confirmed to reuse the KPI Tracker's own existing threshold (<4.6 / <4.7 / ≥4.7) instead of the target-relative bands the first mockup used, so there's one rating-color rule across the whole dashboard instead of two. Shows the 6 worst outlets inline (confirmed — no need to show the full list here) with a '+N more' count and an 'Open full breakdown in KPI Tracker →' link that jumps straight into the Tracker's own outlet drill-down for that brand/platform/metric, reusing its existing worst-to-best card view rather than building a second one. Verified with an isolated test harness against the real extracted functions (17 checks: aggregation math, non-rating/non-tracked rows correctly excluded, missing brand/platform combinations don't throw, worst-first sort order, below-target flagging, expand/collapse toggling, and the KPI Tracker deep-link) — all passing.",
   "⚡ CAMPAIGNS PAGE STALLING ON FILTER CHANGES — Nikhil caught it directly: filtering Completed Campaigns by aggregator froze the page for a couple of seconds. Root cause: the initial page-load prewarm only precomputes each campaign's real P&L analysis for Running campaigns plus Completed ones from the last 120 days (a deliberate v182 tradeoff to keep first load fast). Switching the aggregator/brand filter recomputes 'the 120 most recent completed campaigns matching this filter' — for a lower-volume aggregator, that set can reach back well past 120 days, pulling in a batch of campaigns that were never precomputed. Rendering their cards was calling the real analysis (which scans sales history, resolves discount allocation against every concurrent same-brand+platform campaign, and — for Keeta — exact order data) synchronously, for as many as showed up, all inside one render. Fixed two ways: (1) that render now checks which of the shown cards are already cached; any that aren't render instantly with a lightweight 'Calculating…' placeholder instead of blocking, while the real analysis for just those runs in the background in small yielding batches (the same pattern already used for the initial-load prewarm) — a follow-up render fills in the real numbers once ready, usually well under a second later, and the page is never blocked. (2) A second, smaller but very real cost found on the same hot path: every rendered card was calling campaignData.indexOf(c) — an O(N) scan of the entire campaign history, repeated per card, on every single render (every filter click, not just cold ones) — replaced with an O(1) lookup Map rebuilt whenever campaign data reloads. (3) Also removed a leftover diagnostic console.log from an earlier bug hunt (v429, resolved at v431) that was unconditionally firing — and building its log string — on every branch-scoped campaign's analysis, cold or warm. Scoped narrowly to the Completed Campaigns card grid specifically, since that's the reported hot path; the dozens of similar lookups deeper inside the analysis engine itself are cache-protected (they only cost anything once per campaign, not per render) and were left untouched to avoid risking a much larger refactor for a targeted perf report. Syntax-checked; the Completed Campaigns section behaves identically once fully warmed — this only changes what happens in the moment right after a filter surfaces never-before-seen campaigns.",
   "↔️ DAILY DIGEST — CONTRIBUTION MOVED TO LAST COLUMN — Nikhil's direct follow-up. Both Page 3 brand tables (the new Daily brand split and the existing weekly Brand-level study) had Contribution sitting before Ad Spend; swapped so every row now reads Sales → Orders → AOV → Discount → Ad Spend → Contribution — Contribution last, as the bottom-line figure that nets everything to its left. Checked every other table in the report for the same pattern: Page 2's KPI cards and its This-week table already had Net Contribution last, so those were untouched. Full regression re-run, script execution clean.",
@@ -18676,7 +18677,6 @@ function buildKPIEvalRows(){
 // use this instead of the target-relative bands the first mockup used, and instead of the
 // separate RATING_ALERT_THRESHOLD=4.2 Talabat-only bell (a different, simpler tripwire).
 function ratingClr(v){ if(v<4.6)return"#EF4444"; if(v<4.7)return"#FBBF24"; return"#22C55E"; }
-function ratingBadgeBg(clr){ return clr==="#EF4444"?"rgba(239,68,68,.14)":clr==="#FBBF24"?"rgba(251,191,36,.16)":"rgba(34,197,94,.14)"; }
 
 // Per brand × {Talabat, Deliveroo}: simple (unweighted) average of each outlet's latest rating —
 // confirmed with Nikhil rather than weighting by order volume. Reuses buildKPIEvalRows() (the
@@ -18704,25 +18704,30 @@ function buildOvRatingsData(){
 // The compact grid item that sits inside .ov-kpi-row itself, filling the gap beside Active
 // Outlets (grid-column 2/-1 — the rest of that row, whatever the column count, right after
 // Active Outlets in column 1).
+// v498: restyled to match the real KPI-card type system (10px uppercase/700/letter-spaced
+// label, bold tabular-nums values, no filled pill backgrounds) after Nikhil flagged the first
+// version's look (dashed border, emoji tag, colored badge chips) as awkward and out of place
+// next to the plain existing cards. Shown as 3 alternatives in an interactive mockup first;
+// Nikhil picked "Card twin" — reads as just another KPI card rather than a bolted-on widget.
 function renderOvRatingsGridItem(){
-  const T=_darkPage?{card:DARK_THEME.card,border:DARK_THEME.cardBorder,text:DARK_THEME.textPrimary,muted:DARK_THEME.textMuted}
-    :{card:"#FFFFFF",border:"#EDE7D9",text:"#0F172A",muted:"#64748b"};
-  const chip=(brand,agg,val)=>{
-    if(!val)return`<span style="font-size:11px;color:${T.muted}">—</span>`;
-    const c=ratingClr(val.avg);
+  const T=_darkPage?{card:DARK_THEME.card,border:DARK_THEME.cardBorder,text:DARK_THEME.textPrimary,muted:DARK_THEME.textMuted,label:DARK_THEME.textSecondary}
+    :{card:"#FFFFFF",border:"#EDE7D9",text:"#0F172A",muted:"#64748b",label:"#94a3b8"};
+  const val=(brand,agg,v)=>{
+    if(!v)return`<span style="color:${T.muted}">—</span>`;
+    const c=ratingClr(v.avg);
     const ring=ovRatingsExpandedKey===(brand+"|"+agg)?"#f59e0b":"transparent";
-    return`<span onclick="toggleOvRatingsExpand('${brand.replace(/'/g,"\\'")}','${agg}')" style="cursor:pointer;display:inline-flex;align-items:center;padding:2px 7px;border-radius:6px;background:${ratingBadgeBg(c)};color:${c};font-size:12px;font-weight:800;border:1.5px solid ${ring}">${val.avg.toFixed(2)}</span>`;
+    return`<span onclick="toggleOvRatingsExpand('${brand.replace(/'/g,"\\'")}','${agg}')" style="cursor:pointer;color:${c};outline:1.5px solid ${ring};outline-offset:2px;border-radius:4px;padding:0 2px">${v.avg.toFixed(2)}</span>`;
   };
   const tiles=buildOvRatingsData().map(b=>{
     const brandClr=_darkPage?b.darkColor:b.color;
-    return`<div style="flex:1;text-align:center;padding:0 4px;border-left:1px solid ${T.border}">
-      <div style="font-size:10.5px;font-weight:800;color:${brandClr};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:6px">${b.brand}</div>
-      <div style="display:flex;align-items:center;justify-content:center;gap:5px">${chip(b.brand,"Talabat",b.tal)}${chip(b.brand,"Deliveroo",b.del)}</div>
+    return`<div style="flex:1;padding:0 12px;border-left:1px solid ${T.border}">
+      <div style="font-size:12px;font-weight:700;color:${brandClr};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${b.brand}</div>
+      <div style="font-size:16px;font-weight:800;font-variant-numeric:tabular-nums;margin-top:3px;white-space:nowrap">${val(b.brand,"Talabat",b.tal)}<span style="color:${T.border};margin:0 3px">·</span>${val(b.brand,"Deliveroo",b.del)}</div>
     </div>`;
   }).join("");
-  return`<div style="grid-column:2 / -1;position:relative;background:${T.card};border:1px solid ${T.border};border-radius:10px;padding:11px 16px 12px;display:flex;flex-direction:column;justify-content:center">
-    <div style="display:flex;align-items:center;gap:6px;margin-bottom:9px"><span style="font-size:12px">⭐</span><span style="font-size:11px;font-weight:800;color:${T.text}">Avg Ratings — Talabat × Deliveroo</span></div>
-    <div style="display:flex;align-items:stretch;gap:0">${tiles}</div>
+  return`<div style="grid-column:2 / -1;background:${T.card};border:1px solid ${T.border};border-radius:10px;padding:13px 16px;display:flex;flex-direction:column;justify-content:center">
+    <div style="font-size:10px;font-weight:700;color:${T.label};text-transform:uppercase;letter-spacing:1px;margin-bottom:9px">Avg Ratings — Talabat · Deliveroo</div>
+    <div style="display:flex;align-items:stretch">${tiles}</div>
   </div>`;
 }
 
