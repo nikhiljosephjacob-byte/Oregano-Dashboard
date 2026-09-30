@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-09-30-495";
+const BUILD_VERSION="2026-09-30-496";
 const BUILD_NOTES=[
+  "⚡ CAMPAIGNS PAGE STALLING ON FILTER CHANGES — Nikhil caught it directly: filtering Completed Campaigns by aggregator froze the page for a couple of seconds. Root cause: the initial page-load prewarm only precomputes each campaign's real P&L analysis for Running campaigns plus Completed ones from the last 120 days (a deliberate v182 tradeoff to keep first load fast). Switching the aggregator/brand filter recomputes 'the 120 most recent completed campaigns matching this filter' — for a lower-volume aggregator, that set can reach back well past 120 days, pulling in a batch of campaigns that were never precomputed. Rendering their cards was calling the real analysis (which scans sales history, resolves discount allocation against every concurrent same-brand+platform campaign, and — for Keeta — exact order data) synchronously, for as many as showed up, all inside one render. Fixed two ways: (1) that render now checks which of the shown cards are already cached; any that aren't render instantly with a lightweight 'Calculating…' placeholder instead of blocking, while the real analysis for just those runs in the background in small yielding batches (the same pattern already used for the initial-load prewarm) — a follow-up render fills in the real numbers once ready, usually well under a second later, and the page is never blocked. (2) A second, smaller but very real cost found on the same hot path: every rendered card was calling campaignData.indexOf(c) — an O(N) scan of the entire campaign history, repeated per card, on every single render (every filter click, not just cold ones) — replaced with an O(1) lookup Map rebuilt whenever campaign data reloads. (3) Also removed a leftover diagnostic console.log from an earlier bug hunt (v429, resolved at v431) that was unconditionally firing — and building its log string — on every branch-scoped campaign's analysis, cold or warm. Scoped narrowly to the Completed Campaigns card grid specifically, since that's the reported hot path; the dozens of similar lookups deeper inside the analysis engine itself are cache-protected (they only cost anything once per campaign, not per render) and were left untouched to avoid risking a much larger refactor for a targeted perf report. Syntax-checked; the Completed Campaigns section behaves identically once fully warmed — this only changes what happens in the moment right after a filter surfaces never-before-seen campaigns.",
   "↔️ DAILY DIGEST — CONTRIBUTION MOVED TO LAST COLUMN — Nikhil's direct follow-up. Both Page 3 brand tables (the new Daily brand split and the existing weekly Brand-level study) had Contribution sitting before Ad Spend; swapped so every row now reads Sales → Orders → AOV → Discount → Ad Spend → Contribution — Contribution last, as the bottom-line figure that nets everything to its left. Checked every other table in the report for the same pattern: Page 2's KPI cards and its This-week table already had Net Contribution last, so those were untouched. Full regression re-run, script execution clean.",
   "📅 DAILY DIGEST — DAILY BRAND TABLE + DATE RANGES SHOWN EVERYWHERE — Nikhil's direct ask, two parts. (1) He wanted yesterday's Sales split by brand, not just the existing weekly 'Brand-level study' table (This week vs last week) — added a new 'Daily brand split — yesterday' table right above it on Page 3, same columns (Sales, Orders, AOV, Discount, Contribution, Ad spend) but for yesterday vs the same weekday last week — the exact comparison basis Page 2's 'Yesterday at a glance' KPI cards already use, just broken out per brand instead of as one dashboard-wide total. (2) 'no confusion on which dates are being compared with which dates' — every date-based table on Page 3 (new Daily table, the weekly Brand-level study, and the Aggregator × brand matrix) now states its actual date ranges, not vague labels: the section subtitle spells them out in full (e.g. '23 Sep–29 Sep vs last week (16 Sep–22 Sep), 4 weeks back (26 Aug–1 Sep), and last year (Tue 23 Sep 2025–Mon 29 Sep 2025)'), AND every column header now carries a small second line with its own exact range, since a subtitle at the top of a wide table is easy to lose track of once you're reading column 5. Also fixed the alignment/overflow Nikhil flagged: the Contribution column carries three figures (WoW arrow + a '4wk' pill + an 'LY' pill) and on real brand-level totals that row ran wider than the AED amount above it, crowding toward the Ad Spend column instead of sitting cleanly under its own header. Every metric cell now uses a small two-part layout — the amount fixed on its own line, the arrow/pills below it in a right-aligned row that WRAPS onto a second line instead of overflowing past the column — so nothing can drift past its own column border regardless of how wide the real figures are. Verified with a synthetic dataset scaled to real AED magnitudes (400+ days, so 4-week-back and last-year comparisons both had real data to show, not just blanks): re-rendered Page 3 and visually confirmed the new Daily table, the date ranges in every header, and the now-contained Contribution cells — no wrapping past a column, no run-on text into a neighboring one. Full regression re-run, script execution clean.",
   "📊 COMPARE PAGE / PDF EXPORT — DISCOUNT (AND CONTRIBUTION) NO LONGER PROPORTIONALLY SPLIT — Nikhil's direct catch: filtering the Compare page (or its PDF export) to one outlet was estimating that outlet's discount by splitting the brand's whole-window total by sales share, instead of using the real number already sitting in the Google Sheet — 'beats the purpose of having such in-depth data in the sheet then.' Root cause confirmed in the sheet parser itself first: r.disc (the per-record discount the dashboard already holds) is, day by day, the best-available real figure — genuine when 2+ outlets show different amounts that day, corrected against an uploaded order export where one covers that day, and only spread by that SINGLE day's sales when neither applies. So the raw material for an exact per-outlet number was already there; two places were discarding it and re-guessing from scratch across the whole window instead: (1) cmpComputeDisc's Path 3 (the Discount card/PDF figure, for Deliveroo/Talabat/Noon — Careem/Keeta already had a real-data path from the v491/v492 fixes) did brand_disc × outlet_sales ÷ brand_sales; (2) cmpComputeContribution (feeds the Contribution card/KPI, the Outlet-Level Detail table, Brand/Platform Comparison, every Totals row, outlet-movers, and the 'Net contribution declined X%' narrative) did the exact same sales-share guess independently, for EVERY aggregator including Careem/Keeta — it never had the exact-export path at all, so Contribution and Discount could show two different discount figures for the identical filtered outlet. Fixed both: added cmpDirectOutletDisc (sums each selected outlet's own real r.disc directly, excluding the rare '(brand-level)' orphan record that can't be fairly credited to one outlet) and cmpScopedDisc (the shared lookup — no filter → sum everything; Careem/Keeta with an uploaded export → the existing exact-export overlay; otherwise → the new direct sum) — cmpComputeDisc and cmpComputeContribution now both call the same function, so they can't quietly diverge again, and cmpExactDiscForScope's own fallback (when an uploaded export doesn't reconcile within ±5%) was upgraded the same way instead of falling back to a sales-share guess. Verified with a synthetic two-outlet, two-day dataset (one day where both outlets have distinct real discount, one day where the sheet recorded it all on one outlet, plus an orphan brand-level row): the new logic returns each outlet's real number exactly (confirmed against hand-computed expected values); the old formula, run on the same data, was off by 33% for the outlet it under/over-counted — concrete proof the bug was real, not just a theoretical concern. No effect on the brand-level (no outlet filter) view, which already summed real records directly. Full regression re-run, script execution clean.",
@@ -5329,7 +5330,7 @@ async function prewarmCampaigns(){
   const paint=(pct)=>{if(!campEverBuilt)paintCampNavBattery(pct);};
   try{
     paint(3);
-    if(!campLoaded){const csv=await fetchCSV(CAMPAIGN_GID);campaignData=parseCampaigns(csv);campLoaded=true;campAnalysisCache.clear();}
+    if(!campLoaded){const csv=await fetchCSV(CAMPAIGN_GID);campaignData=parseCampaigns(csv);campLoaded=true;campAnalysisCache.clear();rebuildCampIdxMap();}
     paint(10);
     // v182: bound the prewarm set to recent activity instead of the campaign's entire history.
     // toWarm used to include EVERY Completed campaign ever recorded — with 2.5+ years of history
@@ -6388,7 +6389,7 @@ function digestBuildReportHTML(){
 // uses) before building the report, instead of silently omitting those sections.
 async function digestExportPDF(){
   try{
-    if(typeof campLoaded!=="undefined"&&!campLoaded){const csv=await fetchCSV(CAMPAIGN_GID);campaignData=parseCampaigns(csv);campLoaded=true;}
+    if(typeof campLoaded!=="undefined"&&!campLoaded){const csv=await fetchCSV(CAMPAIGN_GID);campaignData=parseCampaigns(csv);campLoaded=true;if(typeof rebuildCampIdxMap==='function')rebuildCampIdxMap();}
     if(typeof cpcLoaded!=="undefined"&&!cpcLoaded){const csv=await fetchCSV(CPC_GID);cpcData=parseCPCSheet(csv);cpcLoaded=true;}
   }catch(e){/* non-fatal — the report still builds fine without these, those sections just omit */}
   const{html}=digestBuildReportHTML();
@@ -10569,6 +10570,21 @@ function campToggleStatus(status){
 // Campaign analysis cache — campAnalysisV2 scans allData repeatedly, so memoize per campaign.
 // Keyed by campaign index + elasticity + latest date. Cleared when data reloads.
 let campAnalysisCache=new Map();
+// v496: Nikhil reported the Campaigns page stalling for a couple of seconds specifically when
+// filtering Completed Campaigns by aggregator. Root cause: campCardGrid() calls
+// `campaignData.indexOf(c)` once per rendered card, on EVERY render, to build each card's
+// onclick handlers — an O(N) scan repeated up to 120 times per render (N = every campaign ever
+// recorded, which only grows). campIdxMap makes this O(1): a plain object→index Map rebuilt
+// once whenever campaignData itself is (re)loaded, not on every render.
+let campIdxMap=new Map();
+function rebuildCampIdxMap(){
+  campIdxMap=new Map();
+  campaignData.forEach((c,i)=>campIdxMap.set(c,i));
+}
+function campIdxOf(c){
+  const v=campIdxMap.get(c);
+  return v===undefined?campaignData.indexOf(c):v; // safety net if the map is ever stale
+}
 // Memoization for observedCampaignRatio (v072) — significant campaign-page speed-up.
 // Invalidated whenever an exact upload changes (each clearXxxData / merge already resets
 // campAnalysisCache; we hook the same points to clear this cache too).
@@ -11485,16 +11501,26 @@ function campOfferLabel(c){
   const pct=pm?`${pm[1]}% off`:(c.name||'');
   return capM?`${pct} · cap AED ${capM[1]}`:pct;
 }
-function campCardGrid(camps,showProfit){
+// v496: pendingSet is an optional Set of campaigns in `camps` whose analysis isn't cached yet
+// (see campWarmMissingThenRerender below) — those cards skip the expensive campAnalysisCached()/
+// campProfitColor() call entirely and show a lightweight placeholder instead, so a filter change
+// that surfaces a batch of never-before-analyzed campaigns paints instantly rather than blocking
+// on all of them synchronously. Cards silently upgrade to real numbers on the follow-up re-render
+// once the background warm pass finishes.
+function campCardGrid(camps,showProfit,pendingSet){
   const T=campTheme();
   if(!camps.length)return `<div class="card"><div style="text-align:center;padding:30px;color:${T.muted}">No campaigns match your filters.</div></div>`;
   const todayKey=dk(new Date());
   const cards=camps.map(c=>{
-    const idx=campaignData.indexOf(c);
+    const idx=campIdxOf(c);
     const st=campStatus(c);
     const stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:T.muted,Cancelled:'#EF4444'}[st]||T.muted;
-    const borderClr=campProfitColor(c,showProfit);
+    const isPending=pendingSet&&pendingSet.has(c);
+    const borderClr=isPending?T.border:campProfitColor(c,showProfit);
     let metricsHTML='';
+    if(isPending){
+      metricsHTML=`<div style="font-size:11px;color:${T.muted};margin-top:9px;font-weight:600">⏳ Calculating…</div>`;
+    }else
     if(showProfit){
       const a=campAnalysisCached(c);
       if(a.needsCoFundClarity){
@@ -12257,20 +12283,13 @@ function campAnalysisV2(c){
   // overlap detection. Replaces the raw cs.disc which would double-count when campaigns overlap.
   const alloc=allocateCampaignDiscount(c,effStart,effEnd);
   const allocatedDisc=alloc.allocatedDisc;
-  // v429: diagnostic logging — Nikhil reported a real, large discount discrepancy (sheet shows
-  // AED 81 for a real branch-scoped, New-Customers-Only campaign; the dashboard's own P&L showed
-  // AED 4). Traced the branch-scope resolution and the overlap-detection guard by hand — both
-  // look structurally correct for this exact case (no other same-brand+aggregator campaign to
-  // overlap with, "AUH Locations only" resolves to the real AUH outlet set) — but confirming the
-  // ACTUAL root cause needs to see what this function really computes for the real campaign,
-  // not what the code appears to do on paper. Gated to only scoped (non-"All") campaigns, so this
-  // doesn't spam the console for the common case — logs the resolved outlet set, which allocation
-  // path ran (exact vs estimated), the computed allocatedDisc, and whether overlap fired, so the
-  // next time this specific campaign (or any other branch-scoped one) is opened, the real numbers
-  // are visible instead of guessed at.
-  if(outletSet){
-    console.log(`[DISC-ALLOC] ${c.brand} × ${c.aggregator} (${[...outletSet].join(',')}) ${effStart}–${effEnd}: source=${alloc.source} allocatedDisc=${allocatedDisc.toFixed(2)} hadOverlap=${alloc.hadOverlap} overlapDays=${(alloc.overlapDays||[]).length} rawCampDisc=${campC.disc.toFixed(2)} rawSumDisc=${cs.disc.toFixed(2)}`);
-  }
+  // v429 diagnostic logging (discount-allocation discrepancy hunt) lived here for a while,
+  // firing on every branch-scoped campaign's analysis — i.e. on every cold campAnalysisV2 call,
+  // not just the one campaign originally being debugged. Its root cause was fixed at v431
+  // (brandTotalSales scope bug, a few lines below). Removed at v496 while chasing a real
+  // Campaigns-page slowdown: building this log line (array spread/join + three toFixed() calls)
+  // on every scoped-campaign analysis was pure unnecessary work on the hot path, on top of
+  // console.log's own overhead when DevTools is open.
   // Patch campC.gross: the discount record is attached to branch="(brand-level)" which gets filtered
   // OUT by scoped campaigns (e.g. AUH-only Flash Sale). So campC.disc=0 and gross=net, which is wrong.
   // The correct gross = net + allocatedDisc (our campaign's proportional share of the day's discount).
@@ -12638,6 +12657,35 @@ function campAnalysisCached(c){
   const a=campAnalysisV2(c);
   campAnalysisCache.set(key,a);
   return a;
+}
+// v496: cheap existence check mirroring campAnalysisCached's own key — lets the Completed
+// Campaigns render (above) tell which shown cards already have a real analysis ready versus
+// which would force a fresh, non-trivial campAnalysisV2 computation right now. Keep this key
+// format in sync with campAnalysisCached's.
+function campAnalysisIsCached(c){
+  const key=`${c.aggregator}|${c.brand}|${c.startDate}|${c.endDate}|${c.name}|${campElasticity}|${latest}`;
+  return campAnalysisCache.has(key);
+}
+// v496: background warm pass for exactly the campaigns a render just found missing from the
+// cache (see the Completed Campaigns history branch above) — same yielding-batch pattern
+// prewarmCampaigns() already uses for the initial load, just scoped to a small ad-hoc list
+// instead of "everything from the last 120 days". Re-renders once done so the pending cards
+// pick up their real numbers; guarded so overlapping filter changes don't stack concurrent
+// warm passes — a later render's own missing-check just catches whatever's still uncached.
+let _campWarmMissingRunning=false;
+async function campWarmMissingThenRerender(list){
+  if(_campWarmMissingRunning)return;
+  _campWarmMissingRunning=true;
+  try{
+    const batch=20;
+    for(let i=0;i<list.length;i+=batch){
+      for(let j=i;j<Math.min(i+batch,list.length);j++){try{campAnalysisCached(list[j]);}catch(e){}}
+      await new Promise(r=>setTimeout(r,0)); // yield to the UI between batches
+    }
+  }finally{
+    _campWarmMissingRunning=false;
+  }
+  if(curPage==='campaigns'&&campTab==='browse'&&typeof renderCampaigns==='function')renderCampaigns();
 }
 // v443: real feature request from Nikhil — a director-level "should we repeat this?" report per
 // campaign, built up across a multi-question design discussion. Matching definition confirmed
@@ -16831,7 +16879,7 @@ async function renderCampaigns(){
   </style>`:"";
   if(!campLoaded){
     pg.innerHTML=`${styleOverride}<div style="padding:30px;text-align:center;color:${T.muted};font-size:13px">⏳ Loading campaigns from Google Sheets...</div>`;
-    try{const csv=await fetchCSV(CAMPAIGN_GID);campaignData=parseCampaigns(csv);campLoaded=true;campAnalysisCache.clear();}
+    try{const csv=await fetchCSV(CAMPAIGN_GID);campaignData=parseCampaigns(csv);campLoaded=true;campAnalysisCache.clear();rebuildCampIdxMap();}
     catch(e){pg.innerHTML=`${styleOverride}<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Could not load Campaign Activations sheet</div><div style="color:${T.muted};font-size:12px">Error: ${e.message}</div></div>`;return;}
   }
   if(campaignData.length===0){pg.innerHTML=`${styleOverride}<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Sheet loaded but no valid campaigns found</div></div>`;return;}
@@ -16885,15 +16933,15 @@ async function renderCampaigns(){
     // "rewards" campaigns. Regular go first as the main grid. Rewards appear below in a labelled
     // sub-section so their unusual ROI (very high or very low from ambient loyalty redemption)
     // doesn't distort the visual comparison of regular campaigns.
-    const renderCampListWithRewardsSplit=(f,showProfit,emptyLabel)=>{
+    const renderCampListWithRewardsSplit=(f,showProfit,emptyLabel,pendingSet)=>{
       const regular=f.filter(c=>!isRewardsCampaign(c));
       const rewards=f.filter(c=>isRewardsCampaign(c));
       let html='';
       html+=`<div style="font-size:11px;color:${T.text==='#0F172A'?'#475569':T.text};font-weight:700;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px">${emptyLabel} (${regular.length})</div>`;
-      html+=campCardGrid(regular,showProfit);
+      html+=campCardGrid(regular,showProfit,pendingSet);
       if(rewards.length>0){
         html+=`<div style="margin-top:22px"><div style="font-size:11px;color:${T.label};font-weight:700;margin:0 0 8px 2px;text-transform:uppercase;letter-spacing:.6px;display:flex;align-items:center;gap:8px">💎 Loyalty programs (${rewards.length}) <span style="font-size:9px;color:${T.muted};text-transform:none;letter-spacing:0;font-weight:500">— shown separately, excluded from regular-campaign profitability comparisons</span></div>`;
-        html+=campCardGrid(rewards,showProfit);
+        html+=campCardGrid(rewards,showProfit,pendingSet);
         html+=`</div>`;
       }
       return html;
@@ -16907,7 +16955,21 @@ async function renderCampaigns(){
       const sections=[];
       if(campStatusFilter.has('active')){const f=sortCampCards(applyCampFilters(activeSorted));sections.push(renderCampListWithRewardsSplit(f,true,'🟢 Active Campaigns'));}
       if(campStatusFilter.has('upcoming')){const f=applyCampFilters(upcoming).slice().sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||''));sections.push(`<div style="font-size:11px;color:${T.text==='#0F172A'?'#475569':T.text};font-weight:700;margin:0 0 12px 2px;text-transform:uppercase;letter-spacing:.6px">⏰ Upcoming Campaigns (${f.length})</div>`+campCardGrid(f,false));}
-      if(campStatusFilter.has('history')){const fcRaw=applyCampFilters(completed);const fc=campQuickFilter!=='all'?sortCampCards(fcRaw):fcRaw.slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));const shown=fc.slice(0,120);sections.push(renderCampListWithRewardsSplit(shown,true,`📋 Completed Campaigns${fc.length>120?' · showing 120 most recent of '+fc.length:''}`));}
+      if(campStatusFilter.has('history')){
+        const fcRaw=applyCampFilters(completed);
+        const fc=campQuickFilter!=='all'?sortCampCards(fcRaw):fcRaw.slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));
+        const shown=fc.slice(0,120);
+        // v496: prewarmCampaigns() only precomputes Completed campaigns from the last 120 days
+        // (intentional — see v182 above it) — so switching the aggregator/brand filter can
+        // surface older campaigns that were never precomputed. Rendering those synchronously
+        // right here is exactly what froze the page for a couple of seconds. Instead: render
+        // instantly with whatever's already cached, mark the rest "pending", and warm just
+        // those in the background — the follow-up re-render fills in real numbers.
+        const missing=shown.filter(c=>!campAnalysisIsCached(c));
+        if(missing.length)campWarmMissingThenRerender(missing);
+        const pendingSet=missing.length?new Set(missing):null;
+        sections.push(renderCampListWithRewardsSplit(shown,true,`📋 Completed Campaigns${fc.length>120?' · showing 120 most recent of '+fc.length:''}`,pendingSet));
+      }
       main=campFilterBar()+sections.join('<div style="height:26px"></div>');
     }
     else if(campTab==='detail'&&selBundle){main=bundleDetailHTML(selBundle);}
