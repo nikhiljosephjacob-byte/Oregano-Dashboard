@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-09-30-496";
+const BUILD_VERSION="2026-09-30-497";
 const BUILD_NOTES=[
+  "⭐ OVERVIEW — NEW \"AVERAGE RATINGS — BRAND × AGGREGATOR\" SECTION — Nikhil's direct ask, worked through as an interactive mockup before this build (placement, coloring rule, and click-to-expand behavior were all shown and confirmed first, not guessed at). Sits in the gap next to the Active Outlets KPI card — the Overview KPI row is now 5 columns instead of 6 specifically so that gap exists for it to fill, rather than the row running edge-to-edge with nothing spare. For each brand, shows the simple (unweighted) average of the latest Talabat and Deliveroo rating across every outlet carrying that brand — confirmed with Nikhil rather than weighting by order volume. This isn't a new data source: it's a new aggregation over buildKPIEvalRows(), the exact same rows the KPI Tracker page already reads (each outlet's most recent dated rating value from the KPI Google Sheet — not pulled live from an API). Click any brand's Talabat/Deliveroo figure and a panel opens below the KPI row with that brand's outlets, worst-rated first, colored red/amber/green — confirmed to reuse the KPI Tracker's own existing threshold (<4.6 / <4.7 / ≥4.7) instead of the target-relative bands the first mockup used, so there's one rating-color rule across the whole dashboard instead of two. Shows the 6 worst outlets inline (confirmed — no need to show the full list here) with a '+N more' count and an 'Open full breakdown in KPI Tracker →' link that jumps straight into the Tracker's own outlet drill-down for that brand/platform/metric, reusing its existing worst-to-best card view rather than building a second one. Verified with an isolated test harness against the real extracted functions (17 checks: aggregation math, non-rating/non-tracked rows correctly excluded, missing brand/platform combinations don't throw, worst-first sort order, below-target flagging, expand/collapse toggling, and the KPI Tracker deep-link) — all passing.",
   "⚡ CAMPAIGNS PAGE STALLING ON FILTER CHANGES — Nikhil caught it directly: filtering Completed Campaigns by aggregator froze the page for a couple of seconds. Root cause: the initial page-load prewarm only precomputes each campaign's real P&L analysis for Running campaigns plus Completed ones from the last 120 days (a deliberate v182 tradeoff to keep first load fast). Switching the aggregator/brand filter recomputes 'the 120 most recent completed campaigns matching this filter' — for a lower-volume aggregator, that set can reach back well past 120 days, pulling in a batch of campaigns that were never precomputed. Rendering their cards was calling the real analysis (which scans sales history, resolves discount allocation against every concurrent same-brand+platform campaign, and — for Keeta — exact order data) synchronously, for as many as showed up, all inside one render. Fixed two ways: (1) that render now checks which of the shown cards are already cached; any that aren't render instantly with a lightweight 'Calculating…' placeholder instead of blocking, while the real analysis for just those runs in the background in small yielding batches (the same pattern already used for the initial-load prewarm) — a follow-up render fills in the real numbers once ready, usually well under a second later, and the page is never blocked. (2) A second, smaller but very real cost found on the same hot path: every rendered card was calling campaignData.indexOf(c) — an O(N) scan of the entire campaign history, repeated per card, on every single render (every filter click, not just cold ones) — replaced with an O(1) lookup Map rebuilt whenever campaign data reloads. (3) Also removed a leftover diagnostic console.log from an earlier bug hunt (v429, resolved at v431) that was unconditionally firing — and building its log string — on every branch-scoped campaign's analysis, cold or warm. Scoped narrowly to the Completed Campaigns card grid specifically, since that's the reported hot path; the dozens of similar lookups deeper inside the analysis engine itself are cache-protected (they only cost anything once per campaign, not per render) and were left untouched to avoid risking a much larger refactor for a targeted perf report. Syntax-checked; the Completed Campaigns section behaves identically once fully warmed — this only changes what happens in the moment right after a filter surfaces never-before-seen campaigns.",
   "↔️ DAILY DIGEST — CONTRIBUTION MOVED TO LAST COLUMN — Nikhil's direct follow-up. Both Page 3 brand tables (the new Daily brand split and the existing weekly Brand-level study) had Contribution sitting before Ad Spend; swapped so every row now reads Sales → Orders → AOV → Discount → Ad Spend → Contribution — Contribution last, as the bottom-line figure that nets everything to its left. Checked every other table in the report for the same pattern: Page 2's KPI cards and its This-week table already had Net Contribution last, so those were untouched. Full regression re-run, script execution clean.",
   "📅 DAILY DIGEST — DAILY BRAND TABLE + DATE RANGES SHOWN EVERYWHERE — Nikhil's direct ask, two parts. (1) He wanted yesterday's Sales split by brand, not just the existing weekly 'Brand-level study' table (This week vs last week) — added a new 'Daily brand split — yesterday' table right above it on Page 3, same columns (Sales, Orders, AOV, Discount, Contribution, Ad spend) but for yesterday vs the same weekday last week — the exact comparison basis Page 2's 'Yesterday at a glance' KPI cards already use, just broken out per brand instead of as one dashboard-wide total. (2) 'no confusion on which dates are being compared with which dates' — every date-based table on Page 3 (new Daily table, the weekly Brand-level study, and the Aggregator × brand matrix) now states its actual date ranges, not vague labels: the section subtitle spells them out in full (e.g. '23 Sep–29 Sep vs last week (16 Sep–22 Sep), 4 weeks back (26 Aug–1 Sep), and last year (Tue 23 Sep 2025–Mon 29 Sep 2025)'), AND every column header now carries a small second line with its own exact range, since a subtitle at the top of a wide table is easy to lose track of once you're reading column 5. Also fixed the alignment/overflow Nikhil flagged: the Contribution column carries three figures (WoW arrow + a '4wk' pill + an 'LY' pill) and on real brand-level totals that row ran wider than the AED amount above it, crowding toward the Ad Spend column instead of sitting cleanly under its own header. Every metric cell now uses a small two-part layout — the amount fixed on its own line, the arrow/pills below it in a right-aligned row that WRAPS onto a second line instead of overflowing past the column — so nothing can drift past its own column border regardless of how wide the real figures are. Verified with a synthetic dataset scaled to real AED magnitudes (400+ days, so 4-week-back and last-year comparisons both had real data to show, not just blanks): re-rendered Page 3 and visually confirmed the new Daily table, the date ranges in every header, and the now-contained Contribution cells — no wrapping past a column, no run-on text into a neighboring one. Full regression re-run, script execution clean.",
@@ -5853,6 +5854,17 @@ function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:n
 let aovDrill=false;
 function toggleAovDrill(){aovDrill=!aovDrill;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 
+// Overview "Average Ratings — Brand × Aggregator" section (v497). Which brand+aggregator's
+// outlet-level breakdown is currently expanded underneath the KPI row, e.g. "Oregano|Talabat".
+// null = nothing expanded. Reset isn't needed on page navigation since renderOverview() just
+// reads it fresh each render, and it's harmless left set when navigating away and back.
+let ovRatingsExpandedKey=null;
+function toggleOvRatingsExpand(brand,agg){
+  const key=brand+"|"+agg;
+  ovRatingsExpandedKey=(ovRatingsExpandedKey===key)?null:key;
+  renderOverview();
+}
+
 // Switch the active aggregator tab on the Overview "Outlet Highlights" card. The verdict data
 // for all 5 aggregators is precomputed in renderOverview and stashed on window._verdByAg so
 // this swap is instant — no re-render of the whole overview.
@@ -6071,7 +6083,7 @@ function renderOverview(){
       #page-overview .fbar .fchip{color:${DARK_THEME.textSecondary}!important}
       #page-overview .sm:hover .kpi-tooltip{display:block!important}
     </style>`+
-    `<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders),null,ordPerDay)}${kpiCard("Total Net Sales",fmtAEDTip(ls.sales),`${compShort}: ${fmtAEDTip(ps.sales)}`,pctOf(ls.sales,ps.sales),null,salesPerDay)}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${(()=>{
+    `<div style="display:grid;grid-template-columns:repeat(5, minmax(0, 1fr));gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Total Orders",ls.orders.toLocaleString(),`${compShort}: ${ps.orders.toLocaleString()}`,pctOf(ls.orders,ps.orders),null,ordPerDay)}${kpiCard("Total Net Sales",fmtAEDTip(ls.sales),`${compShort}: ${fmtAEDTip(ps.sales)}`,pctOf(ls.sales,ps.sales),null,salesPerDay)}${kpiCard("Avg AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,`${compShort}: AED ${ps.orders>0?(ps.sales/ps.orders).toFixed(1):0}`,pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0),`toggleAovDrill()`)}${(()=>{
       // Discount Burn KPI (v072) — merchant discount from allData for the filtered period.
       // Uses same filters (brand/platform/branch/date) as the other KPIs above via `ld`/`ps`.
       // Depth-of-gross % helps benchmark burn vs gross sales at a glance.
@@ -6080,7 +6092,8 @@ function renderOverview(){
       const priorGross=ps.sales+(ps.disc||0);
       const priorDepth=priorGross>0?((ps.disc||0)/priorGross*100):0;
       return kpiCard("Discount Burn",fmtAEDTip(ls.disc||0),`${depth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(ls.disc||0,ps.disc||0),null,null,true);
-    })()}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior),profCur.contribution<0?profitClr(profCur.contribution):null)}${kpiCard("Active Outlets",activeOutlets,"all brands",null,null,null,null,missingOutletsHTML)}</div>
+    })()}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior),profCur.contribution<0?profitClr(profCur.contribution):null)}${kpiCard("Active Outlets",activeOutlets,"all brands",null,null,null,null,missingOutletsHTML)}${renderOvRatingsGridItem()}</div>
+    ${renderOvRatingsExpand()}
     <div class="g2"><div class="sm"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px"><span>${OV_TREND_METRICS[ovTrendMetric].label} Trend</span><span style="display:flex;gap:4px">${OV_TREND_METRIC_KEYS.map(k=>`<span onclick="ovSetTrendMetric('${k}')" style="cursor:pointer;font-size:10px;font-weight:${k===ovTrendMetric?700:500};padding:3px 8px;border-radius:6px;text-transform:none;letter-spacing:0;background:${k===ovTrendMetric?(_darkPage?DARK_THEME.accentOrange+'22':'#F59E0B22'):'transparent'};color:${k===ovTrendMetric?(_darkPage?DARK_THEME.accentOrange:'#B45309'):(_darkPage?DARK_THEME.textMuted:'#64748B')};border:1px solid ${k===ovTrendMetric?(_darkPage?DARK_THEME.accentOrange:'#F59E0B'):'transparent'}">${OV_TREND_METRICS[k].shortLabel}</span>`).join('')}</span></div><div style="position:relative;height:220px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="card" style="padding:14px">
       <div class="ct" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span>Outlet Highlights by Platform</span><span style="color:#8393AB;font-weight:400;text-transform:none;letter-spacing:0;font-size:10px">click a platform to see its top movers</span></div>
@@ -18651,6 +18664,106 @@ function buildKPIEvalRows(){
   });
   return rows;
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// v497 OVERVIEW "AVERAGE RATINGS — BRAND × AGGREGATOR" — Nikhil's direct ask, confirmed against
+// an interactive mockup before this build (placement, coloring rule and expand behavior all
+// signed off). Sits in the empty gap next to the Active Outlets KPI card on the Overview page.
+// ════════════════════════════════════════════════════════════════════════════
+// Same absolute rating-color rule the KPI Tracker's outlet-level views already use (the local
+// rateClr() inside renderKPIMetricView/renderKPIGoogleOutlets) — exposed globally here so this
+// new section matches it exactly instead of inventing a second rule. Confirmed with Nikhil to
+// use this instead of the target-relative bands the first mockup used, and instead of the
+// separate RATING_ALERT_THRESHOLD=4.2 Talabat-only bell (a different, simpler tripwire).
+function ratingClr(v){ if(v<4.6)return"#EF4444"; if(v<4.7)return"#FBBF24"; return"#22C55E"; }
+function ratingBadgeBg(clr){ return clr==="#EF4444"?"rgba(239,68,68,.14)":clr==="#FBBF24"?"rgba(251,191,36,.16)":"rgba(34,197,94,.14)"; }
+
+// Per brand × {Talabat, Deliveroo}: simple (unweighted) average of each outlet's latest rating —
+// confirmed with Nikhil rather than weighting by order volume. Reuses buildKPIEvalRows() (the
+// same rows the KPI Tracker itself is built from) filtered to type==="rating", so this is a new
+// aggregation view over already-loaded data, not a new data source.
+function buildOvRatingsData(){
+  const rows=buildKPIEvalRows().filter(r=>r.type==="rating"&&(r.aggregator==="Talabat"||r.aggregator==="Deliveroo"));
+  return BR.map(b=>{
+    const forAgg=(agg)=>{
+      const rs=rows.filter(r=>r.brand===b.n&&r.aggregator===agg);
+      if(!rs.length)return null;
+      const avg=rs.reduce((s,r)=>s+r.latest,0)/rs.length;
+      // Most common literal kpiName among this group — used only to deep-link into the KPI
+      // Tracker's own metric view. If a couple of outlets spell the KPI column slightly
+      // differently (e.g. trailing whitespace), the deep link may not cover every one of them —
+      // the same pre-existing limitation the KPI Tracker's own per-metric grouping already has.
+      const nameCounts={};rs.forEach(r=>{nameCounts[r.kpiName]=(nameCounts[r.kpiName]||0)+1;});
+      const kpiName=Object.entries(nameCounts).sort((a,c)=>c[1]-a[1])[0][0];
+      return{avg,target:rs[0].target,outlets:rs,kpiName};
+    };
+    return{brand:b.n,color:b.c,darkColor:BRAND_DARK[b.n]||b.c,tal:forAgg("Talabat"),del:forAgg("Deliveroo")};
+  });
+}
+
+// The compact grid item that sits inside .ov-kpi-row itself, filling the gap beside Active
+// Outlets (grid-column 2/-1 — the rest of that row, whatever the column count, right after
+// Active Outlets in column 1).
+function renderOvRatingsGridItem(){
+  const T=_darkPage?{card:DARK_THEME.card,border:DARK_THEME.cardBorder,text:DARK_THEME.textPrimary,muted:DARK_THEME.textMuted}
+    :{card:"#FFFFFF",border:"#EDE7D9",text:"#0F172A",muted:"#64748b"};
+  const chip=(brand,agg,val)=>{
+    if(!val)return`<span style="font-size:11px;color:${T.muted}">—</span>`;
+    const c=ratingClr(val.avg);
+    const ring=ovRatingsExpandedKey===(brand+"|"+agg)?"#f59e0b":"transparent";
+    return`<span onclick="toggleOvRatingsExpand('${brand.replace(/'/g,"\\'")}','${agg}')" style="cursor:pointer;display:inline-flex;align-items:center;padding:2px 7px;border-radius:6px;background:${ratingBadgeBg(c)};color:${c};font-size:12px;font-weight:800;border:1.5px solid ${ring}">${val.avg.toFixed(2)}</span>`;
+  };
+  const tiles=buildOvRatingsData().map(b=>{
+    const brandClr=_darkPage?b.darkColor:b.color;
+    return`<div style="flex:1;text-align:center;padding:0 4px;border-left:1px solid ${T.border}">
+      <div style="font-size:10.5px;font-weight:800;color:${brandClr};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:6px">${b.brand}</div>
+      <div style="display:flex;align-items:center;justify-content:center;gap:5px">${chip(b.brand,"Talabat",b.tal)}${chip(b.brand,"Deliveroo",b.del)}</div>
+    </div>`;
+  }).join("");
+  return`<div style="grid-column:2 / -1;position:relative;background:${T.card};border:1px solid ${T.border};border-radius:10px;padding:11px 16px 12px;display:flex;flex-direction:column;justify-content:center">
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:9px"><span style="font-size:12px">⭐</span><span style="font-size:11px;font-weight:800;color:${T.text}">Avg Ratings — Talabat × Deliveroo</span></div>
+    <div style="display:flex;align-items:stretch;gap:0">${tiles}</div>
+  </div>`;
+}
+
+// Full-width outlet breakdown, worst-rated on top, shown below the KPI row when a chip is
+// clicked. Same card language (colored left border, ⚠ flag, "updated" line) as the KPI
+// Tracker's own renderKPIMetricView, so this reads as one system rather than a second UI.
+// Shows the worst 6 inline (confirmed with Nikhil) with a link through to the KPI Tracker's
+// own drill-down for the rest.
+function renderOvRatingsExpand(){
+  if(!ovRatingsExpandedKey)return"";
+  const sep=ovRatingsExpandedKey.lastIndexOf("|");
+  const brand=ovRatingsExpandedKey.slice(0,sep),agg=ovRatingsExpandedKey.slice(sep+1);
+  const data=buildOvRatingsData().find(b=>b.brand===brand);
+  const val=data&&(agg==="Talabat"?data.tal:data.del);
+  if(!val)return"";
+  const T=_darkPage?{card:DARK_THEME.card,border:DARK_THEME.cardBorder,text:DARK_THEME.textPrimary,muted:DARK_THEME.textMuted,bg:DARK_THEME.bg}
+    :{card:"#FFFFFF",border:"#EDE7D9",text:"#0F172A",muted:"#64748b",bg:"#FAF7EE"};
+  const sorted=[...val.outlets].sort((a,b)=>a.latest-b.latest); // worst first, same rule as renderKPIMetricView
+  const shown=sorted.slice(0,6),rest=sorted.length-shown.length;
+  const cards=shown.map(r=>{
+    const c=ratingClr(r.latest),bad=r.latest<r.target;
+    return`<div style="background:${T.card};border:1px solid ${T.border};border-left:3px solid ${c};border-radius:8px;padding:9px 11px;display:flex;align-items:center;justify-content:space-between">
+      <div><div style="font-size:12px;font-weight:700;color:${T.text}">${r.outlet}</div><div style="font-size:9px;color:${T.muted};margin-top:1px">updated ${r.latestDate?fmtShort(r.latestDate):"—"}</div></div>
+      <div style="text-align:right"><div style="font-size:16px;font-weight:800;color:${c};font-variant-numeric:tabular-nums">${r.latest.toFixed(2)}</div>${bad?`<div style="font-size:8.5px;font-weight:700;color:#EF4444">⚠ below target</div>`:""}</div>
+    </div>`;
+  }).join("");
+  const aggClr=AC[agg]||"#888";
+  return`<div style="background:${T.bg};border:1px solid ${T.border};border-radius:10px;padding:14px 18px;margin-bottom:12px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;flex-wrap:wrap;gap:8px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:13px;font-weight:800;color:${T.text}">${brand}</span><span style="color:${T.muted}">·</span><span style="font-size:12px;font-weight:700;color:${aggClr}">${agg}</span><span style="color:${T.muted}">·</span><span style="font-size:10.5px;color:${T.muted}">brand avg ${val.avg.toFixed(2)} · target ≥ ${val.target.toFixed(2)}</span></div>
+      <button onclick="ovRatingsExpandedKey=null;renderOverview()" style="background:none;border:1px solid ${T.border};border-radius:6px;color:${T.muted};padding:5px 11px;cursor:pointer;font-size:11px">✕ Collapse</button>
+    </div>
+    <div style="font-size:10px;color:${T.muted};margin-bottom:10px">worst on top → best at bottom, same as KPI Tracker</div>
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">${cards}</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;flex-wrap:wrap;gap:6px">
+      <span style="font-size:10px;color:${T.muted}">${rest>0?`+${rest} more outlet${rest!==1?"s":""} below`:`${sorted.length} of ${sorted.length} outlets shown`}</span>
+      <span onclick="kpiSelectedPlatform='${agg}';kpiSelectedBrand='${brand.replace(/'/g,"\\'")}';kpiSelectedMetric='${val.kpiName.replace(/'/g,"\\'")}';gp('kpi')" style="cursor:pointer;font-size:10.5px;font-weight:700;color:#f59e0b">Open full breakdown in KPI Tracker →</span>
+    </div>
+  </div>`;
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // v122 TALABAT RATING ALERT BELL — in-dashboard only (no email/push/Slack). Checks every
 // outlet's Talabat rating against a fixed 4.2 threshold (independent of whatever target each
