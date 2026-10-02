@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-02-502";
+const BUILD_VERSION="2026-10-02-503";
 const BUILD_NOTES=[
+  "⏳ COMPARE PAGE — EXPORT TO PDF \"HANGING THE ENTIRE DASHBOARD\" — direct follow-up to v502, per Nikhil's report right after that fix shipped. Not a new bug — v502 removed what was silently stopping cmpExportPDF early (a crash before any real work happened), so for the first time this code reaches the actual report build: campaign attribution, outlet and brand breakdowns, etc. across whatever's in scope. With no brand/outlet filter narrowing either comparison side (all 5 brands × 50+ outlets), that's genuine synchronous main-thread work that can take several real seconds — and because nothing on screen changed while it ran, a multi-second freeze with zero feedback is indistinguishable from the dashboard actually hanging. Two fixes: (1) the Export to PDF button now flips to a visible \"⏳ Generating…\" state immediately, with the heavy build deferred one tick so the browser paints that state first — doesn't make the computation itself faster (it's still blocking, same as before), but turns silence into visible proof the click registered and nothing is actually frozen. (2) The entire build is now wrapped in try/catch — previously ANY failure here (the v502 bug, or anything else) failed completely silently, which looks identical to a hang from the user's side; now a failure surfaces as a real alert naming the problem, and the button always resets via `finally`, so it can never get stuck on \"Generating…\" either. Also audited getKeetaExactDisc (the source of the repeated '[Keeta attribution]' console warnings visible in Nikhil's screenshot) for a possible runaway loop — it's a single linear pass per campaign, not exponential; those warnings are normal diagnostic output, not evidence of a hang. Full syntax check clean.",
   "🐛 COMPARE PAGE — EXPORT TO PDF CRASHING ON A SINGLE-DAY WINDOW — real bug Nikhil hit directly (console screenshot: \"Cannot read properties of undefined (reading 'trim')\" at cmpBuildReportHTML, called from cmpExportPDF). Root cause: cmpDateLabel() deliberately collapses a window down to one plain date with no \"→\" arrow at all when start and end are the same day (e.g. a single \"3 Sep 2026\" rather than \"3 Sep → 3 Sep 2026\") — a readability choice, not a bug on its own. But the PDF filename builder assumed every dateLabel always contains \"→\" and unconditionally read index [1] after splitting on it; for a single-day window that index doesn't exist, so .trim() ran on undefined and the whole export died before a window could even open. Hit exactly when comparing two single-day custom ranges, which is precisely what Nikhil's screenshot shows (Group A 3 Sep→3 Sep, Group B 1 Oct→1 Oct — both single days, not a typo). Fixed by falling back to the one date that IS there when there's no second half to split out — ranged windows (the common case) are completely unaffected. Scanned the rest of the file for the same split(\"→\")[1] pattern on a dateLabel — this was the only occurrence. Verified directly: the exact failing input (a single-day label) now resolves cleanly, and a normal multi-day range still produces the same filename it always did. Full syntax check clean.",
   "📊 CANCELLATIONS BY OUTLET — NOW A PIVOT TABLE, UNREADABLE NUMBERS FIXED — Nikhil's direct ask: \"The numbers of Cancellations and Orders are not visible, The list is extensive, Create a Table Pivot style which segregates category by outlet and Expands when i click on a category or outlet to let me deep dive.\" Two problems, one redesign. (1) THE VISIBILITY BUG: of the six columns in the old flat table, Cancellations and Orders were the only two with no explicit text color — every other cell set its own color, these two silently fell back to the browser's default, which reads as low-contrast against the dark theme. Every cell now carries explicit color, same as the rest of the row. (2) THE SCALE PROBLEM: one flat row per outlet doesn't hold up once the outlet list gets long. The panel now groups by ONE dimension at a time — By Outlet (rate-sorted, the old default view) or By Category (reason-sorted, new) — switchable with a toggle, and a row's cross-dimension breakdown (outlet → its reason split; reason → its outlet split) only appears once that row is clicked, instead of every number being on screen at once. Switching modes collapses whatever was expanded. The CSV export button is untouched — it already recomputes its own data independently of the on-screen table, so it keeps working exactly as before regardless of how the panel itself is structured. Verified with a full-file syntax check plus an isolated logic test against synthetic data covering zero-order outlets, missing reasons, and ties — sort order, color-coding, and expand/collapse toggling all confirmed correct in both modes before shipping.",
   "🎨 OVERVIEW RATINGS SECTION — FIXED THE EMPTY GAP INSIDE THE BOX — direct follow-up to the v499 data-on-load fix: Nikhil pointed out the ratings box still had a lot of dead vertical space, even once the numbers were loading correctly, because the panel was center-justified inside a fixed-height box with only 2 lines of real content. Showed 3 rendering options (a top-aligned layout with a caption line, a headline + breakdown, and target-proximity bars) — he picked the top-aligned one. Changed renderOvRatingsGridItem(): dropped justify-content:center in favor of natural top alignment, increased the Talabat/Deliveroo value line from 16px to 19px so it carries more visual weight, and added a third line at the bottom — a small muted caption ('Simple average of each outlet's latest rating · click a figure for the outlet breakdown') separated by a border-top divider, exactly matching the same label/value/detail rhythm kpiCard() already uses for every other KPI card's comparison line, so the box now reads as a full 3-line card instead of 2 lines floating in extra padding. Purely visual — no change to the aggregation, coloring, click-to-expand, or KPI Tracker deep-link behavior. Re-verified against the same isolated test harness (21 checks, functions re-extracted verbatim from this file) — all still passing — plus a full-file syntax check.",
@@ -22575,20 +22576,48 @@ function cmpBuildReportHTML(data,chartImg){
 // a new window and hand off to the browser's own print-to-PDF.
 function cmpExportPDF(){
   if(!cmpA.start||!cmpB.start){alert("Set both comparison windows before exporting.");return;}
-  let chartImg=null;
-  try{
-    const canvas=document.getElementById("cmp-chart");
-    if(canvas&&canvas.width>0)chartImg=canvas.toDataURL("image/png");
-  }catch(e){/* chart not rendered on current sub-tab — report proceeds without it */}
-  const data=cmpBuildReportData();
-  const{html,filename}=cmpBuildReportHTML(data,chartImg);
-  const w=window.open("","_blank");
-  if(!w){alert("Please allow pop-ups to export the report.");return;}
-  w.document.open();w.document.write(html);w.document.close();
-  // filename is already baked into the document's <title> (cmpBuildReportHTML sets it),
-  // which is what the browser's print/Save-As dialog uses as the default filename —
-  // Nikhil's explicit ask that the exported file states its own contents.
-  w.onload=()=>{setTimeout(()=>w.print(),300);};
+  // v532: two hardening fixes, both from Nikhil reporting the export "hanging the entire
+  // dashboard" right after the v502 crash fix. The crash fix didn't cause a new bug — it
+  // REMOVED what was silently stopping this function early, so for the first time this code
+  // actually reaches the real work: building the full report (campaign attribution, outlet
+  // breakdown, etc. across whatever brands/platforms/outlets are in scope) is genuine,
+  // synchronous, main-thread JavaScript, and with no brand/outlet filter narrowing either side
+  // (all 5 brands × 50+ outlets in scope) that can take several real seconds. Because nothing
+  // on screen changed while it ran, a multi-second freeze with zero feedback reads exactly like
+  // "the dashboard is hanging" even when it's actually just working. Fix (1): flip the button to
+  // a visible "Generating…" state and defer the heavy work one tick (setTimeout) so the browser
+  // paints that state BEFORE the synchronous work starts — doesn't make the computation faster,
+  // but turns silence into visible, unambiguous progress feedback. Fix (2): the entire build is
+  // now wrapped in try/catch — previously ANY uncaught error here (the v502 bug, or any other)
+  // failed completely silently from the user's point of view, which looks identical to a hang;
+  // now any failure surfaces as an actual alert naming the problem, and the button is always
+  // restored in a `finally`, so it can never get stuck in "Generating…" either.
+  const btn=document.getElementById("cmp-export-pdf-btn");
+  const origLabel=btn?btn.textContent:null;
+  if(btn){btn.disabled=true;btn.style.opacity="0.6";btn.style.cursor="wait";btn.textContent="⏳ Generating…";}
+  setTimeout(()=>{
+    try{
+      let chartImg=null;
+      try{
+        const canvas=document.getElementById("cmp-chart");
+        if(canvas&&canvas.width>0)chartImg=canvas.toDataURL("image/png");
+      }catch(e){/* chart not rendered on current sub-tab — report proceeds without it */}
+      const data=cmpBuildReportData();
+      const{html,filename}=cmpBuildReportHTML(data,chartImg);
+      const w=window.open("","_blank");
+      if(!w){alert("Please allow pop-ups to export the report.");return;}
+      w.document.open();w.document.write(html);w.document.close();
+      // filename is already baked into the document's <title> (cmpBuildReportHTML sets it),
+      // which is what the browser's print/Save-As dialog uses as the default filename —
+      // Nikhil's explicit ask that the exported file states its own contents.
+      w.onload=()=>{setTimeout(()=>w.print(),300);};
+    }catch(err){
+      console.error("[cmpExportPDF] report generation failed:",err);
+      alert("Couldn't generate the PDF report: "+(err&&err.message?err.message:"an unexpected error occurred")+"\n\nIf this keeps happening, try narrowing the comparison to fewer brands/outlets, or check the browser console (F12) for the full error.");
+    }finally{
+      if(btn){btn.disabled=false;btn.style.opacity="";btn.style.cursor="";btn.textContent=origLabel;}
+    }
+  },30);
 }
 // v172: Cancellation Monitor page. Reads via getAllCancellations(), which combines each
 // aggregator's own .cancellations field (now server-synced the same way as everything else),
@@ -23678,7 +23707,7 @@ function renderCompare(){
 
   pg.innerHTML=cmpStyleOverride+`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
       <div style="font-size:18px;font-weight:800;color:${cmpTitleClr}">⚖️ Comparison</div>
-      <div style="display:flex;gap:8px"><button onclick="cmpExportPDF()" style="background:rgba(201,162,75,.12);border:1px solid rgba(201,162,75,.4);border-radius:6px;color:#C9A24B;padding:5px 12px;font-size:12px;cursor:pointer;font-weight:700" title="Generate an Executive Director-level PDF report for the current comparison">📄 Export to PDF</button><button data-act="cmpCopy" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:12px;cursor:pointer" title="Copy A's brand/platform/outlet filters to B">⎘ A→B filters</button><button data-act="cmpSwap" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:12px;cursor:pointer">⇄ Swap A/B</button>${cmpCActive?`<button data-act="cmpSwapBC" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:12px;cursor:pointer">⇄ Swap B/C</button>`:""}</div>
+      <div style="display:flex;gap:8px"><button id="cmp-export-pdf-btn" onclick="cmpExportPDF()" style="background:rgba(201,162,75,.12);border:1px solid rgba(201,162,75,.4);border-radius:6px;color:#C9A24B;padding:5px 12px;font-size:12px;cursor:pointer;font-weight:700" title="Generate an Executive Director-level PDF report for the current comparison">📄 Export to PDF</button><button data-act="cmpCopy" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:12px;cursor:pointer" title="Copy A's brand/platform/outlet filters to B">⎘ A→B filters</button><button data-act="cmpSwap" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:12px;cursor:pointer">⇄ Swap A/B</button>${cmpCActive?`<button data-act="cmpSwapBC" style="background:none;border:1px solid ${cmpBtnBorder};border-radius:6px;color:${cmpBtnTxt};padding:5px 12px;font-size:12px;cursor:pointer">⇄ Swap B/C</button>`:""}</div>
     </div>
     <div style="font-size:12px;color:${cmpSubTxt};font-weight:600;margin-bottom:12px">Pick any combination on each side — brands, platforms, outlets, and dates are fully independent. Example: Oregano+Lollorosso 11–13 May 2026 (A) vs the same 11–13 May 2025 (B).</div>
     ${yearBanner}
