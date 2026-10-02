@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-09-30-500";
+const BUILD_VERSION="2026-10-02-501";
 const BUILD_NOTES=[
+  "📊 CANCELLATIONS BY OUTLET — NOW A PIVOT TABLE, UNREADABLE NUMBERS FIXED — Nikhil's direct ask: \"The numbers of Cancellations and Orders are not visible, The list is extensive, Create a Table Pivot style which segregates category by outlet and Expands when i click on a category or outlet to let me deep dive.\" Two problems, one redesign. (1) THE VISIBILITY BUG: of the six columns in the old flat table, Cancellations and Orders were the only two with no explicit text color — every other cell set its own color, these two silently fell back to the browser's default, which reads as low-contrast against the dark theme. Every cell now carries explicit color, same as the rest of the row. (2) THE SCALE PROBLEM: one flat row per outlet doesn't hold up once the outlet list gets long. The panel now groups by ONE dimension at a time — By Outlet (rate-sorted, the old default view) or By Category (reason-sorted, new) — switchable with a toggle, and a row's cross-dimension breakdown (outlet → its reason split; reason → its outlet split) only appears once that row is clicked, instead of every number being on screen at once. Switching modes collapses whatever was expanded. The CSV export button is untouched — it already recomputes its own data independently of the on-screen table, so it keeps working exactly as before regardless of how the panel itself is structured. Verified with a full-file syntax check plus an isolated logic test against synthetic data covering zero-order outlets, missing reasons, and ties — sort order, color-coding, and expand/collapse toggling all confirmed correct in both modes before shipping.",
   "🎨 OVERVIEW RATINGS SECTION — FIXED THE EMPTY GAP INSIDE THE BOX — direct follow-up to the v499 data-on-load fix: Nikhil pointed out the ratings box still had a lot of dead vertical space, even once the numbers were loading correctly, because the panel was center-justified inside a fixed-height box with only 2 lines of real content. Showed 3 rendering options (a top-aligned layout with a caption line, a headline + breakdown, and target-proximity bars) — he picked the top-aligned one. Changed renderOvRatingsGridItem(): dropped justify-content:center in favor of natural top alignment, increased the Talabat/Deliveroo value line from 16px to 19px so it carries more visual weight, and added a third line at the bottom — a small muted caption ('Simple average of each outlet's latest rating · click a figure for the outlet breakdown') separated by a border-top divider, exactly matching the same label/value/detail rhythm kpiCard() already uses for every other KPI card's comparison line, so the box now reads as a full 3-line card instead of 2 lines floating in extra padding. Purely visual — no change to the aggregation, coloring, click-to-expand, or KPI Tracker deep-link behavior. Re-verified against the same isolated test harness (21 checks, functions re-extracted verbatim from this file) — all still passing — plus a full-file syntax check.",
   "🐛 OVERVIEW RATINGS SECTION — SHOWED DASHES UNTIL REFRESH — real bug Nikhil caught: on a fresh load, the new ratings section showed nothing but '—' for every brand until he refreshed or navigated away and back. Root cause: the KPI Google Sheet data loads asynchronously (loadKPIData(), fired 1.5s after the page first appears) and normally hasn't arrived yet by the time Overview's first render runs — so the dashes themselves were the honest 'not loaded yet' state, not a bug. The actual bug was that nothing ever repainted the section once the data DID land a few seconds later. loadKPIData() already does this for the KPI Tracker page (renderKPI() if it's the active page) but had no equivalent for Overview. Rather than trigger a full renderOverview() — which would also redraw both charts and reset the AOV drilldown for a change that only touches two small elements — added a targeted refreshOvRatingsLive() that swaps just the ratings panel and its expand section in place by id, and wired it into loadKPIData()'s completion alongside the existing KPI Tracker refresh. Covered by 4 new checks in the test harness (data appears after a simulated late load, expand section refreshes too, and it's a no-op when Overview isn't the active page) — 21/21 passing.",
   "🎨 OVERVIEW RATINGS SECTION — RESTYLED — direct follow-up: Nikhil flagged the v497 styling (dashed amber border, ⭐/🆕 emoji tags, colored pill badges) as awkward and out of place next to the plain, understated look of the rest of the KPI row. Rather than guess again, showed 3 restyled alternatives as an interactive mockup — a KPI-card twin (no chrome beyond the card itself, values in the same bold tabular-numeral style the other cards use), a compact data-table version (matching the All Brands/All Platforms table styling), and a minimal ring-badge version — and built the one Nikhil picked: the card twin. No more dashed border or emoji tags; the label now uses the exact same 10px uppercase/700-weight/1px-letter-spacing style every other KPI card label uses, and the Talabat/Deliveroo figures are plain bold colored numbers (still colored red/amber/green by the same KPI Tracker threshold, still independently clickable to open the outlet breakdown) instead of filled badge chips. Removed the now-unused ratingBadgeBg() helper that only existed for the old pill styling. Re-verified against the same 17-check isolated test harness used for the original build (aggregation math, exclusions, worst-first sort, below-target flagging, expand/collapse toggling, KPI Tracker deep-link) — all still passing — plus a full-file syntax check.",
@@ -22592,6 +22593,17 @@ function cancSelectResp(r){cancSelectedResp=(cancSelectedResp===r)?null:r;render
 function cancGoBrands(agg){cancNav={level:"brand",agg,brand:null};renderCancellations();}
 function cancGoOutlets(agg,brand){cancNav={level:"outlet",agg,brand};renderCancellations();}
 function cancGoCollapsed(){cancNav={level:"collapsed",agg:null,brand:null};renderCancellations();}
+// v531: pivot state for the "Cancellations by Outlet" panel, per Nikhil directly ("Create a Table
+// Pivot style which segregates category by outlet and Expands when i click on a category or
+// outlet to let me deep dive"). cancPivotGroupBy picks which dimension the top-level rows group
+// by ("outlet" or "reason"/category); cancPivotExpanded tracks which rows are expanded, keyed as
+// "<mode>:<rowIndex>" rather than by the outlet/reason text itself, so toggling never has to
+// escape arbitrary outlet or reason strings into an onclick attribute. Switching modes clears the
+// expanded set — row indexes aren't comparable across the two groupings.
+let cancPivotGroupBy="outlet";
+let cancPivotExpanded=new Set();
+function cancSetPivotGroupBy(mode){if(cancPivotGroupBy===mode)return;cancPivotGroupBy=mode;cancPivotExpanded=new Set();renderCancellations();}
+function cancTogglePivotRow(mode,idx){const k=mode+":"+idx;if(cancPivotExpanded.has(k))cancPivotExpanded.delete(k);else cancPivotExpanded.add(k);renderCancellations();}
 // Normalizes the "money lost despite cancellation" figure across aggregators with different
 // field names: Talabat has commissionCharged, Careem/Noon/Deliveroo have a signed net figure
 // (negative = restaurant owes), Keeta has no direct fee-charged field (its "loss" shows up as
@@ -22845,56 +22857,126 @@ function renderCancellations(){
     <div style="margin-top:12px;display:flex;align-items:center;gap:8px;font-size:11px;color:${T.textMuted}"><span>Fewer</span><span style="width:70px;height:8px;border-radius:4px;background:linear-gradient(90deg,#3A2020,${T.accentRed})"></span><span>More</span></div>
   </div>`;
 
-  // v484: Cancellations by Outlet — real gap Nikhil caught directly, with a concrete example
-  // (Mirdif does the most Talabat volume for Oregano, so it naturally logs more cancellations in
-  // absolute terms — the page had nowhere that showed this as a RATE, only raw counts, making a
-  // high-volume outlet look disproportionately bad against low-volume ones). The "primary reason
-  // per outlet" data technically already existed — mostCommon() is the exact helper the Outlet
-  // drill-down level already uses — but only reachable 3 clicks deep (Aggregator → Brand →
-  // Outlet), scoped to one brand+aggregator at a time, sorted by raw count with no rate column at
-  // all. This panel surfaces the same mostCommon() computation at the top level, across every
-  // outlet at once, with a real rate (cancellations ÷ that outlet's own order volume over the
-  // same filtered window) as a first-class sortable column — defaulting the sort to rate
-  // (descending), not count, so the ranking actually reflects outlet performance rather than
-  // outlet size. Built on sortableTable, the same shared infra Overview/Brands/Platforms already
-  // use, so every column sorts for free and the page picks up the same interaction pattern
-  // already established elsewhere in the dashboard rather than a bespoke one-off table.
+  // v531: Cancellations by Outlet — rebuilt as an expandable pivot table, per Nikhil directly
+  // ("The numbers of Cancellations and Orders are not visible, The list is extensive, Create a
+  // Table Pivot style which segregates category by outlet and Expands when i click on a category
+  // or outlet to let me deep dive"). Two problems folded into one redesign: (1) Cancellations and
+  // Orders were the only two cells in the old flat table with no explicit color styling —
+  // sortableTable's <td> carries zero default color, so those two rendered in the browser's
+  // low-contrast inherited default against the dark theme while every other column was already
+  // explicitly colored. Every cell below now gets explicit color. (2) One flat row per outlet
+  // doesn't scale once the outlet list gets long, so this now groups by ONE dimension at a time —
+  // Outlet or Category (reason), toggled via cancPivotGroupBy — with only the clicked row's
+  // cross-dimension breakdown expanded (cancPivotExpanded), rather than every number at once.
   const outletCancGroups={};
   filtered.forEach(c=>{
     const k=(c.brand||"Unknown")+" - "+(c.outlet||"Unknown");
     if(!outletCancGroups[k])outletCancGroups[k]={items:[],brand:c.brand||"Unknown",outlet:c.outlet||"Unknown"};
     outletCancGroups[k].items.push(c);
   });
-  const outletRateHeads=["Outlet","Cancellations","Orders","Cancellation Rate","Primary Reason","Responsible"];
-  const outletRateRows=Object.entries(outletCancGroups).map(([k,v])=>{
-    const orders=allData.filter(r=>{
-      if(r.branch==="(brand-level)")return false;
-      if(r.brand!==v.brand||r.branch!==v.outlet)return false;
-      if(f.start&&r.date<f.start)return false;
-      if(f.end&&r.date>f.end)return false;
-      if(f.platforms.size&&!f.platforms.has(r.aggregator))return false;
-      return true;
-    }).reduce((s,r)=>s+(r.orders||0),0);
-    const rate=orders>0?(v.items.length/orders*100):null;
-    const topReason=mostCommon(v.items,"reason");
-    const topResp=mostCommon(v.items,"responsibility");
-    const respClr=topResp==="Restaurant"?T.accentRed:topResp==="Driver"?T.accentOrange:topResp==="Unknown"?T.textMuted:T.accentBlue;
-    return{cells:[
-      `<span style="font-weight:700;color:${T.textPrimary}">${esc(k)}</span>`,
-      v.items.length.toLocaleString(),
-      orders?orders.toLocaleString():`<span style="color:${T.textMuted}">—</span>`,
-      rate!=null?`<span style="font-weight:800;color:${rate>=3?T.accentRed:rate>=1.5?T.accentOrange:T.accentGreen}">${rate.toFixed(2)}%</span>`:`<span style="color:${T.textMuted}">no order data</span>`,
-      `<span style="color:${T.textSecondary}">${esc(topReason)}</span>`,
-      `<span style="font-size:10px;font-weight:800;padding:2px 9px;border-radius:10px;background:${respClr}22;color:${respClr}">${topResp}</span>`
-    ],sortVals:[k,v.items.length,orders,rate==null?-1:rate,topReason,topResp]};
+  const reasonCancGroups={};
+  filtered.forEach(c=>{
+    const k=c.reason||"No reason logged";
+    if(!reasonCancGroups[k])reasonCancGroups[k]={items:[],reason:k};
+    reasonCancGroups[k].items.push(c);
   });
-  const outletRatePanel=outletRateRows.length<2?"":`<div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px;margin-bottom:20px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-      <div style="font-size:15px;font-weight:800;color:${T.textPrimary}">📊 Cancellations by Outlet</div>
-      <span onclick="cancExportOutletRates()" style="cursor:pointer;font-size:12px;color:${T.accentBlue};font-weight:700">⬇ Export CSV</span>
+  const pivotRespClr=resp=>resp==="Restaurant"?T.accentRed:resp==="Driver"?T.accentOrange:resp==="Unknown"?T.textMuted:T.accentBlue;
+  const pivotRateClr=rate=>rate==null?T.textMuted:(rate>=3?T.accentRed:rate>=1.5?T.accentOrange:T.accentGreen);
+  const pivotChevron=isOpen=>`<span style="display:inline-block;width:12px;margin-right:4px;color:${T.textMuted};font-size:10px;transition:transform .15s;transform:rotate(${isOpen?90:0}deg)">▶</span>`;
+  const pivotHeadRow=heads=>`<tr>${heads.map(h=>`<th style="text-align:left;padding:10px;color:${T.textMuted};font-weight:700;font-size:11px;text-transform:uppercase;border-bottom:1px solid ${T.cardBorder}">${h}</th>`).join("")}</tr>`;
+  const pivotSubTable=(heads,rows)=>`<div style="margin:2px 0 10px 24px;border-left:2px solid ${T.cardBorder};padding-left:14px;overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:12px;min-width:420px">
+    <thead><tr>${heads.map(h=>`<th style="text-align:left;padding:5px 10px;color:${T.textMuted};font-weight:700;font-size:10.5px;text-transform:uppercase;border-bottom:1px solid ${T.cardBorder}">${h}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map(r=>`<tr>${r.map(c=>`<td style="padding:7px 10px;border-bottom:1px solid ${T.cardBorder}55">${c}</td>`).join("")}</tr>`).join("")}</tbody>
+  </table></div>`;
+
+  const outletPivotRows=Object.entries(outletCancGroups).map(([k,v])=>{
+    const orders=cancOutletOrders(v.brand,v.outlet,f.start,f.end,f);
+    const rate=orders>0?(v.items.length/orders*100):null;
+    return{key:k,brand:v.brand,outlet:v.outlet,items:v.items,orders,rate,topReason:mostCommon(v.items,"reason"),topResp:mostCommon(v.items,"responsibility")};
+  }).sort((a,b)=>(b.rate==null?-1:b.rate)-(a.rate==null?-1:a.rate));
+
+  const reasonPivotRows=Object.entries(reasonCancGroups).map(([k,v])=>{
+    const outletsAffected=new Set(v.items.map(c=>(c.brand||"Unknown")+" - "+(c.outlet||"Unknown"))).size;
+    const amount=v.items.reduce((s,c)=>s+Math.abs(c.amount||0),0);
+    return{key:k,items:v.items,pctOfTotal:filtered.length>0?v.items.length/filtered.length*100:0,amount,outletsAffected,topResp:mostCommon(v.items,"responsibility")};
+  }).sort((a,b)=>b.items.length-a.items.length);
+
+  let outletRateBody="";
+  if(cancPivotGroupBy==="outlet"){
+    outletRateBody=outletPivotRows.map((r,idx)=>{
+      const isOpen=cancPivotExpanded.has("outlet:"+idx);
+      const respClr=pivotRespClr(r.topResp);
+      const head=`<tr onclick="cancTogglePivotRow('outlet',${idx})" style="cursor:pointer;border-bottom:1px solid ${T.cardBorder}">
+        <td style="padding:10px">${pivotChevron(isOpen)}<span style="font-weight:700;color:${T.textPrimary}">${esc(r.key)}</span></td>
+        <td style="padding:10px;font-weight:800;color:${T.textPrimary}">${r.items.length.toLocaleString()}</td>
+        <td style="padding:10px;font-weight:700;color:${r.orders?T.textPrimary:T.textMuted}">${r.orders?r.orders.toLocaleString():"—"}</td>
+        <td style="padding:10px;font-weight:800;color:${pivotRateClr(r.rate)}">${r.rate!=null?r.rate.toFixed(2)+"%":"no order data"}</td>
+        <td style="padding:10px;color:${T.textSecondary}">${esc(r.topReason)}</td>
+        <td style="padding:10px"><span style="font-size:10px;font-weight:800;padding:2px 9px;border-radius:10px;background:${respClr}22;color:${respClr}">${r.topResp}</span></td>
+      </tr>`;
+      if(!isOpen)return head;
+      const reasonBreak={};
+      r.items.forEach(c=>{const rk=c.reason||"No reason logged";if(!reasonBreak[rk])reasonBreak[rk]={count:0,amount:0,items:[]};reasonBreak[rk].count++;reasonBreak[rk].amount+=Math.abs(c.amount||0);reasonBreak[rk].items.push(c);});
+      const subRows=Object.entries(reasonBreak).sort((a,b)=>b[1].count-a[1].count).map(([rk,d])=>{
+        const pct=r.items.length>0?d.count/r.items.length*100:0;
+        const subResp=mostCommon(d.items,"responsibility"),subClr=pivotRespClr(subResp);
+        return[
+          `<span style="color:${T.textPrimary};font-weight:600">${esc(rk)}</span>`,
+          `<span style="color:${T.textPrimary};font-weight:700">${d.count.toLocaleString()}</span>`,
+          `<span style="color:${T.textSecondary}">${pct.toFixed(1)}%</span>`,
+          `<span style="color:${T.textPrimary}">${fmtAEDTip(d.amount)}</span>`,
+          `<span style="font-size:10px;font-weight:800;padding:2px 9px;border-radius:10px;background:${subClr}22;color:${subClr}">${subResp}</span>`
+        ];
+      });
+      return head+`<tr><td colspan="6" style="padding:0 0 4px 0">${pivotSubTable(["Reason","Count","% of Outlet","Amount","Responsible"],subRows)}</td></tr>`;
+    }).join("");
+  } else {
+    outletRateBody=reasonPivotRows.map((r,idx)=>{
+      const isOpen=cancPivotExpanded.has("reason:"+idx);
+      const respClr=pivotRespClr(r.topResp);
+      const head=`<tr onclick="cancTogglePivotRow('reason',${idx})" style="cursor:pointer;border-bottom:1px solid ${T.cardBorder}">
+        <td style="padding:10px">${pivotChevron(isOpen)}<span style="font-weight:700;color:${T.textPrimary}">${esc(r.key)}</span></td>
+        <td style="padding:10px;font-weight:800;color:${T.textPrimary}">${r.items.length.toLocaleString()}</td>
+        <td style="padding:10px;font-weight:700;color:${T.textPrimary}">${r.pctOfTotal.toFixed(1)}%</td>
+        <td style="padding:10px;font-weight:700;color:${T.textPrimary}">${fmtAEDTip(r.amount)}</td>
+        <td style="padding:10px;color:${T.textSecondary}">${r.outletsAffected.toLocaleString()} outlet${r.outletsAffected===1?"":"s"}</td>
+        <td style="padding:10px"><span style="font-size:10px;font-weight:800;padding:2px 9px;border-radius:10px;background:${respClr}22;color:${respClr}">${r.topResp}</span></td>
+      </tr>`;
+      if(!isOpen)return head;
+      const outletBreak={};
+      r.items.forEach(c=>{const ok=(c.brand||"Unknown")+" - "+(c.outlet||"Unknown");if(!outletBreak[ok])outletBreak[ok]={items:[],brand:c.brand||"Unknown",outlet:c.outlet||"Unknown"};outletBreak[ok].items.push(c);});
+      const subRows=Object.entries(outletBreak).sort((a,b)=>b[1].items.length-a[1].items.length).map(([ok,d])=>{
+        const orders=cancOutletOrders(d.brand,d.outlet,f.start,f.end,f);
+        const rate=orders>0?(d.items.length/orders*100):null;
+        return[
+          `<span style="color:${T.textPrimary};font-weight:600">${esc(ok)}</span>`,
+          `<span style="color:${T.textPrimary};font-weight:700">${d.items.length.toLocaleString()}</span>`,
+          `<span style="color:${orders?T.textPrimary:T.textMuted}">${orders?orders.toLocaleString():"—"}</span>`,
+          `<span style="color:${pivotRateClr(rate)};font-weight:700">${rate!=null?rate.toFixed(2)+"%":"no order data"}</span>`
+        ];
+      });
+      return head+`<tr><td colspan="6" style="padding:0 0 4px 0">${pivotSubTable(["Outlet","Cancellations","Orders","Rate"],subRows)}</td></tr>`;
+    }).join("");
+  }
+
+  const pivotHeads=cancPivotGroupBy==="outlet"
+    ?["Outlet","Cancellations","Orders","Cancellation Rate","Primary Reason","Responsible"]
+    :["Category (Reason)","Cancellations","% of Total","Amount","Outlets Affected","Top Responsible"];
+  const pivotToggleBtn=(mode,label)=>`<span onclick="cancSetPivotGroupBy('${mode}')" style="cursor:pointer;font-size:11.5px;font-weight:800;padding:6px 14px;border-radius:8px;background:${cancPivotGroupBy===mode?T.accentBlue+"22":T.bg};border:1px solid ${cancPivotGroupBy===mode?T.accentBlue:T.cardBorder};color:${cancPivotGroupBy===mode?T.accentBlue:T.textSecondary}">${label}</span>`;
+  const outletRateRowCount=cancPivotGroupBy==="outlet"?outletPivotRows.length:reasonPivotRows.length;
+  const outletRatePanel=outletRateRowCount<2?"":`<div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};padding:20px;margin-bottom:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:4px">
+      <div style="font-size:15px;font-weight:800;color:${T.textPrimary}">📊 Cancellations by ${cancPivotGroupBy==="outlet"?"Outlet":"Category"}</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;gap:6px">${pivotToggleBtn("outlet","By Outlet")}${pivotToggleBtn("reason","By Category")}</div>
+        <span onclick="cancExportOutletRates()" style="cursor:pointer;font-size:12px;color:${T.accentBlue};font-weight:700">⬇ Export CSV</span>
+      </div>
     </div>
-    <div style="font-size:11.5px;color:${T.textMuted};margin-bottom:14px">Sorted by rate, not raw count — a high-volume outlet naturally logs more cancellations without necessarily performing worse. Click any header to sort.</div>
-    ${sortableTable("canc-outlet-rate",outletRateHeads,outletRateRows,3)}
+    <div style="font-size:11.5px;color:${T.textMuted};margin-bottom:10px">${cancPivotGroupBy==="outlet"?"Sorted by rate, not raw count — a high-volume outlet naturally logs more cancellations without necessarily performing worse.":"Sorted by cancellation count across all outlets."} Click any row to expand its ${cancPivotGroupBy==="outlet"?"reason":"outlet"} breakdown.</div>
+    <div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:13px;min-width:640px">
+      <thead>${pivotHeadRow(pivotHeads)}</thead>
+      <tbody>${outletRateBody}</tbody>
+    </table></div>
   </div>`;
 
   const tile=(label,value,sub,clr)=>`<div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:16px;box-shadow:${T.shadow};flex:1;min-width:220px">
