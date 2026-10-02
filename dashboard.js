@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-02-503";
+const BUILD_VERSION="2026-10-02-504";
 const BUILD_NOTES=[
+  "📝 COMPARE PDF — 3-GROUP REPORTS NOW NARRATE BOTH TRANSITIONS, NOT JUST THE LATEST — Nikhil's direct catch from an actual 3-period export (Group A 3 Sep, B 24 Sep, C 1 Oct): the Brand Comparison and Outlet-Level Detail tables correctly showed BOTH transitions (3 Sep→24 Sep, then 24 Sep→1 Oct) as two stacked tables — that part was already fixed in v428 — but the \"Key Observations\" narrative paragraph, the \"What's Working/Worth Watching\" Conclusions page, the Bottom Line verdict, and the Campaigns section all silently read only the LAST two groups (data[length-1]/[length-2]), so the entire 3 Sep→24 Sep move was completely unmentioned in prose anywhere in the report, even though its numbers were sitting right there in the KPI cards. Confirmed by actually reading the PDF Nikhil sent: \"Key Observations\" said \"Thu, 1 Oct 2026 vs. Thu, 24 Sep 2026\" and never named 3 Sep at all; same gap on the Conclusions page. Discussed the options directly rather than guessing — Nikhil picked the one that matches how the rest of the report already works: a separate, clearly-labeled block per transition (own \"X vs Y\" sub-header, own paragraph/Conclusions page/Campaigns section) instead of cramming both moves into one denser sentence or leaving it as-is. cmpReportNarrative, cmpReportConclusions, cmpReportBottomLine and cmpReportCampaignsSection all now take an explicit (prior,latest) pair instead of silently deriving it from the end of the full data array, and cmpBuildReportHTML loops cmpConsecutivePairs(data) — the exact same convention the Brand/Platform/Outlet tables already use — to build one full narrative+conclusions+campaigns block per transition, Conclusions pages separated the same page-break-before way the detail tables already are. A normal 2-group comparison is completely unaffected — it was always exactly one pair and still is. Verified directly against Nikhil's own real numbers from the PDF he sent (Group A→B sales +5.2%, B→C sales -7.5%): the new per-pair narrative correctly produces 'Net sales rose 5.2%' for the first transition (previously never shown anywhere) and the existing, already-correct 'Net sales fell -7.5%' for the second — plus confirmed a plain 2-group scope still produces exactly one pair, unchanged. Full syntax check clean.",
   "⏳ COMPARE PAGE — EXPORT TO PDF \"HANGING THE ENTIRE DASHBOARD\" — direct follow-up to v502, per Nikhil's report right after that fix shipped. Not a new bug — v502 removed what was silently stopping cmpExportPDF early (a crash before any real work happened), so for the first time this code reaches the actual report build: campaign attribution, outlet and brand breakdowns, etc. across whatever's in scope. With no brand/outlet filter narrowing either comparison side (all 5 brands × 50+ outlets), that's genuine synchronous main-thread work that can take several real seconds — and because nothing on screen changed while it ran, a multi-second freeze with zero feedback is indistinguishable from the dashboard actually hanging. Two fixes: (1) the Export to PDF button now flips to a visible \"⏳ Generating…\" state immediately, with the heavy build deferred one tick so the browser paints that state first — doesn't make the computation itself faster (it's still blocking, same as before), but turns silence into visible proof the click registered and nothing is actually frozen. (2) The entire build is now wrapped in try/catch — previously ANY failure here (the v502 bug, or anything else) failed completely silently, which looks identical to a hang from the user's side; now a failure surfaces as a real alert naming the problem, and the button always resets via `finally`, so it can never get stuck on \"Generating…\" either. Also audited getKeetaExactDisc (the source of the repeated '[Keeta attribution]' console warnings visible in Nikhil's screenshot) for a possible runaway loop — it's a single linear pass per campaign, not exponential; those warnings are normal diagnostic output, not evidence of a hang. Full syntax check clean.",
   "🐛 COMPARE PAGE — EXPORT TO PDF CRASHING ON A SINGLE-DAY WINDOW — real bug Nikhil hit directly (console screenshot: \"Cannot read properties of undefined (reading 'trim')\" at cmpBuildReportHTML, called from cmpExportPDF). Root cause: cmpDateLabel() deliberately collapses a window down to one plain date with no \"→\" arrow at all when start and end are the same day (e.g. a single \"3 Sep 2026\" rather than \"3 Sep → 3 Sep 2026\") — a readability choice, not a bug on its own. But the PDF filename builder assumed every dateLabel always contains \"→\" and unconditionally read index [1] after splitting on it; for a single-day window that index doesn't exist, so .trim() ran on undefined and the whole export died before a window could even open. Hit exactly when comparing two single-day custom ranges, which is precisely what Nikhil's screenshot shows (Group A 3 Sep→3 Sep, Group B 1 Oct→1 Oct — both single days, not a typo). Fixed by falling back to the one date that IS there when there's no second half to split out — ranged windows (the common case) are completely unaffected. Scanned the rest of the file for the same split(\"→\")[1] pattern on a dateLabel — this was the only occurrence. Verified directly: the exact failing input (a single-day label) now resolves cleanly, and a normal multi-day range still produces the same filename it always did. Full syntax check clean.",
   "📊 CANCELLATIONS BY OUTLET — NOW A PIVOT TABLE, UNREADABLE NUMBERS FIXED — Nikhil's direct ask: \"The numbers of Cancellations and Orders are not visible, The list is extensive, Create a Table Pivot style which segregates category by outlet and Expands when i click on a category or outlet to let me deep dive.\" Two problems, one redesign. (1) THE VISIBILITY BUG: of the six columns in the old flat table, Cancellations and Orders were the only two with no explicit text color — every other cell set its own color, these two silently fell back to the browser's default, which reads as low-contrast against the dark theme. Every cell now carries explicit color, same as the rest of the row. (2) THE SCALE PROBLEM: one flat row per outlet doesn't hold up once the outlet list gets long. The panel now groups by ONE dimension at a time — By Outlet (rate-sorted, the old default view) or By Category (reason-sorted, new) — switchable with a toggle, and a row's cross-dimension breakdown (outlet → its reason split; reason → its outlet split) only appears once that row is clicked, instead of every number being on screen at once. Switching modes collapses whatever was expanded. The CSV export button is untouched — it already recomputes its own data independently of the on-screen table, so it keeps working exactly as before regardless of how the panel itself is structured. Verified with a full-file syntax check plus an isolated logic test against synthetic data covering zero-order outlets, missing reasons, and ties — sort order, color-coding, and expand/collapse toggling all confirmed correct in both modes before shipping.",
@@ -21817,14 +21818,23 @@ function cmpBuildReportData(){
 // already live elsewhere on this page) into a fuller paragraph that also covers discount burn
 // vs sales growth — the same "don't let a KPI card go unmentioned in the prose" standard this
 // report was built to.
-function cmpReportNarrative(data){
-  const latest=data[data.length-1],prior=data[data.length-2];
+// v533: per-pair narrative — see cmpConsecutivePairs below and the v532 comment on
+// cmpReportConclusions/cmpReportBottomLine/cmpReportCampaignsSection for the full context. This
+// used to take the whole `data` array and silently read only its last two entries
+// (data[data.length-1]/[data.length-2]), so with 3 groups selected the entire "Key Observations"
+// paragraph only ever discussed the LATEST transition and never mentioned the earliest one at
+// all — real gap Nikhil caught directly from an actual 3-period export (the Brand/Platform/Outlet
+// tables already looped every consecutive pair since v428; this narrative never got that same
+// fix). Now takes one explicit (prior,latest) pair — the caller loops cmpConsecutivePairs(data)
+// and renders one of these paragraphs per transition, each under its own "X vs Y" sub-header, so
+// a 3-group report reads as two clearly-labeled short paragraphs instead of one paragraph that
+// quietly drops a third of the comparison.
+function cmpReportNarrative(prior,latest){
   const salesPct=pctOf(latest.sales,prior.sales);
   const discPct=pctOf(latest.discBurn,prior.discBurn);
   const contribPct=pctOf(latest.contribution,prior.contribution);
   const dir=salesPct>=0?"rose":"fell";
-  let lead=`Net sales ${dir} ${fmtPct(salesPct).replace("+","")} `;
-  lead+=data.length===3?`from ${prior.dateLabel} to ${latest.dateLabel}`:`(${prior.dateLabel} → ${latest.dateLabel})`;
+  let lead=`Net sales ${dir} ${fmtPct(salesPct).replace("+","")} (${prior.dateLabel} → ${latest.dateLabel})`;
   let driver="";
   const sorted=[...latest.brandPlatform].sort((a,b)=>b.sales-a.sales);
   if(sorted.length){const top=sorted[0];driver=` — ${top.brand} on ${top.aggregator} was the largest single contributor.`;}
@@ -21903,8 +21913,12 @@ function cmpReportNarrative(data){
 // Rule-based Good/Bad conclusions — thresholds on the real computed deltas, not free-form
 // judgment. Deliberately conservative: only speaks where the numbers clearly support a
 // direction, mirroring the same discipline as the existing single auto-insight sentence.
-function cmpReportConclusions(data){
-  const latest=data[data.length-1],prior=data[data.length-2];
+// v533: same per-pair fix as cmpReportNarrative above, same root cause — used to derive
+// prior/latest from the last two entries of the full `data` array, so with 3 groups selected
+// the "What's working"/"Worth watching" lists only ever covered the latest transition. Now takes
+// one explicit (prior,latest) pair; the caller loops cmpConsecutivePairs(data) and gives each
+// transition its own full Conclusions page, same convention as Brand/Platform/Outlet already use.
+function cmpReportConclusions(prior,latest){
   const good=[],bad=[];
   const salesPct=pctOf(latest.sales,prior.sales);
   const contribPct=pctOf(latest.contribution,prior.contribution);
@@ -21976,7 +21990,7 @@ function cmpReportConclusions(data){
   // explain why, even though that's the most actionable granularity for deciding where to act
   // next. Same discipline as the brand/platform movers: one worst decliner, one best grower, not
   // every outlet — proportionate to how specific the rest of this section already gets.
-  const allOutletNames=[...new Set(data.flatMap(d=>(d.outlets||[]).map(o=>o.outlet)))];
+  const allOutletNames=[...new Set([...(prior.outlets||[]),...(latest.outlets||[])].map(o=>o.outlet))];
   if(allOutletNames.length>=2){
     const outletMovers=allOutletNames.map(name=>{
       const mP=cmpScopedMetrics(prior.cfg,null,null,name);
@@ -22016,8 +22030,10 @@ function cmpReportConclusions(data){
   if(!bad.length)bad.push("Nothing in the data crossed a concern threshold this period.");
   return{good,bad,hasConcern};
 }
-function cmpReportBottomLine(data,concl){
-  const latest=data[data.length-1],prior=data[data.length-2];
+// v533: same per-pair fix — takes the (prior,latest) pair directly instead of deriving it from
+// the full `data` array's last two entries, so each transition gets its own correct bottom line
+// instead of every transition but the last being silently dropped.
+function cmpReportBottomLine(prior,latest,concl){
   const salesPct=pctOf(latest.sales,prior.sales);
   if(salesPct==null)return"Not enough data in one window to draw a comparison.";
   // v386: expanded from one sentence to a fuller paragraph per Nikhil's direct feedback — names
@@ -22320,10 +22336,16 @@ function cmpReportOutletDetail(data){
 // campaigns awareness) — not an approximation, since this code runs inside the live
 // dashboard with full data access, unlike the static-PDF mockup that could only preview the
 // layout with illustrative placeholder numbers.
-function cmpReportCampaignsSection(data){
-  const latest=data[data.length-1],prior=data[data.length-2];
+// v533: same per-pair fix as the other Report functions above — used to take the whole `data`
+// array and silently read only its last two entries, so Group A's campaigns were completely
+// absent from the PDF's Campaigns section whenever a 3rd group was active (while the Brand/
+// Platform/Outlet tables on earlier pages already showed every transition correctly). Now takes
+// one explicit (prior,latest) pair; the caller loops cmpConsecutivePairs(data), same convention
+// as Brand/Platform/Outlet, and each transition's section gets its own "X vs Y" sub-header so
+// it's clear which two periods a given brand/campaign block is comparing.
+function cmpReportCampaignsSection(prior,latest){
   const clrA=cmpClrFor(prior.key),clrB=cmpClrFor(latest.key);
-  const brandsInScope=[...new Set(data.flatMap(d=>d.brandPlatform.map(bp=>bp.brand)))];
+  const brandsInScope=[...new Set([...prior.brandPlatform,...latest.brandPlatform].map(bp=>bp.brand))];
   const sections=brandsInScope.map(brand=>{
     const campsPrior=prior.campaigns.filter(c=>c.brand===brand);
     const campsLatest=latest.campaigns.filter(c=>c.brand===brand);
@@ -22357,7 +22379,7 @@ function cmpReportCampaignsSection(data){
       ${aggBlocks}
     </div>`;
   }).join("");
-  return`<div class="sec-title" style="font-size:14.5px">Discount Campaigns — by Brand</div><div class="sec-sub">Organized by brand, then platform, so the same combination compares directly across both windows. Incr. Contribution and ROI are computed per campaign against a real baseline period, the same calculation already used on the Campaigns page.</div>${sections}`;
+  return`<div class="sec-title" style="font-size:14.5px">Discount Campaigns — by Brand</div><div class="sec-sub">${esc(prior.dateLabel)} vs. ${esc(latest.dateLabel)} — organized by brand, then platform, so the same combination compares directly across both windows. Incr. Contribution and ROI are computed per campaign against a real baseline period, the same calculation already used on the Campaigns page.</div>${sections}`;
 }
 function cmpReportKPISummary(data){
   return data.map((d,i)=>cmpReportKPICards(d,i>0?data[i-1]:null)).join("");
@@ -22439,9 +22461,17 @@ function reportBaseCSS(){
 }
 function cmpBuildReportHTML(data,chartImg){
   const scope=data[0].label,dates=data.map(d=>d.dateLabel).join(" · ");
-  const narrative=cmpReportNarrative(data);
-  const concl=cmpReportConclusions(data);
-  const bottomLine=cmpReportBottomLine(data,concl);
+  // v533: one {prior,latest,...} entry per consecutive transition (A→B, then B→C for a 3-group
+  // report), same convention cmpConsecutivePairs already established for the Brand/Platform/
+  // Outlet tables — see the v533 comments on cmpReportNarrative/cmpReportConclusions/
+  // cmpReportBottomLine/cmpReportCampaignsSection for why this replaced the old single
+  // data[length-1]/[length-2] pair that silently dropped every earlier transition whenever a 3rd
+  // group was active (Nikhil's direct catch, from an actual 3-period exported report where Key
+  // Observations and Conclusions only ever discussed the LATEST pair).
+  const pairs=cmpConsecutivePairs(data).map(([prior,latest])=>{
+    const concl=cmpReportConclusions(prior,latest);
+    return{prior,latest,narrative:cmpReportNarrative(prior,latest),concl,bottomLine:cmpReportBottomLine(prior,latest,concl)};
+  });
   // v386: darker secondary text throughout (#9ca3af -> #6b7280/#4b5563) — flagged as hard to
   // read in print; .camp-col removed from the break-inside list (columns got tall once
   // Incr. Contribution/ROI were added, forcing a whole column together caused real rendering
@@ -22505,10 +22535,16 @@ function cmpBuildReportHTML(data,chartImg){
       <div class="cover-windows">${data.map(d=>`<div><span class="dot" style="background:${cmpClrFor(d.key)}"></span><b>${esc(d.dateLabel)}</b></div>`).join("")}</div>
       <div class="cover-scope-box">Scope: ${esc(scope)}</div></div>
     <div class="cover-bottom"><span>Generated ${fmtDisp(dk(new Date()))}</span><span>Confidential — Internal Use Only</span></div></div>`;
-  const p2=`<div class="page"><div class="runhdr"><div><div class="l">Executive Summary</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page 2</div></div>
-    <div class="sec-title">Key Observations</div><div class="sec-sub">${esc(data[data.length-1].dateLabel)} vs. ${esc(data[data.length-2].dateLabel)}</div>
+  // v533: one "X vs Y" sub-header + narrative paragraph PER TRANSITION, not just the last one —
+  // see the comment on the `pairs` array above. For a straightforward 2-group comparison this is
+  // exactly one block, unchanged from before; a 3-group report now shows two short, clearly
+  // labeled paragraphs instead of one paragraph that silently covered only the latest pair.
+  const keyObsBlocks=pairs.map(({prior,latest,narrative})=>`
+    <div class="sec-sub" style="margin-top:10px">${esc(prior.dateLabel)} vs. ${esc(latest.dateLabel)}</div>
     <div class="exec-narrative">${narrative}</div>
-    ${data[data.length-1].campaigns.length&&!data[data.length-2].campaigns.length?`<div class="caveat">⚠ A campaign ran in ${esc(data[data.length-1].dateLabel)} with no counterpart in ${esc(data[data.length-2].dateLabel)} — see Campaigns That Ran. Part of the movement above may reflect this rather than organic change.</div>`:""}
+    ${latest.campaigns.length&&!prior.campaigns.length?`<div class="caveat">⚠ A campaign ran in ${esc(latest.dateLabel)} with no counterpart in ${esc(prior.dateLabel)} — see Campaigns That Ran. Part of the movement above may reflect this rather than organic change.</div>`:""}`).join("");
+  const p2=`<div class="page"><div class="runhdr"><div><div class="l">Executive Summary</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page 2</div></div>
+    <div class="sec-title">Key Observations</div>${keyObsBlocks}
     ${cmpReportKPISummary(data)}
     <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>2</span></div></div>`;
   // v386: Brand and Platform Comparison are now genuinely separate pages, not crammed onto
@@ -22532,9 +22568,13 @@ function cmpBuildReportHTML(data,chartImg){
       <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>${pageNum}</span></div></div>`);
     pageNum++;
   }
+  // v533: one Campaigns section per transition, same page-break-before convention Brand/
+  // Platform/Outlet already use between pairs — previously this called cmpReportCampaignsSection
+  // once on the raw `data` array, which silently showed only the latest pair's campaigns.
+  const campaignsHTML=pairs.map(({prior,latest})=>cmpReportCampaignsSection(prior,latest)).join('<div style="page-break-before:always"></div>');
   pages.push(`<div class="page"><div class="runhdr"><div><div class="l">Trend &amp; Campaigns</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page ${pageNum}</div></div>
     ${chartImg?`<div class="sec-title" style="font-size:14.5px">Net Sales — Daily Trend</div><div class="chart-box"><img src="${chartImg}" alt="Trend chart"></div>`:""}
-    ${cmpReportCampaignsSection(data)}
+    ${campaignsHTML}
     <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>${pageNum}</span></div></div>`);
   pageNum++;
   const outletHTML=cmpReportOutletDetail(data);
@@ -22544,13 +22584,20 @@ function cmpBuildReportHTML(data,chartImg){
       <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>${pageNum}</span></div></div>`);
     pageNum++;
   }
-  pages.push(`<div class="page"><div class="runhdr"><div><div class="l">Conclusions</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page ${pageNum}</div></div>
-    <div class="sec-title">Explanation &amp; Verdict</div><div class="sec-sub">What moved, what it means, and what to watch</div>
+  // v533: one full Explanation & Verdict block per transition, page-broken the same way Brand/
+  // Platform/Outlet already separate their own per-pair sections — previously this page read
+  // concl/bottomLine computed once from the raw `data` array's last two entries only, so with a
+  // 3rd group active the earliest transition's conclusions never appeared anywhere in the report.
+  const conclBlocks=pairs.map(({prior,latest,concl,bottomLine})=>`
+    <div class="sec-sub">${esc(prior.dateLabel)} vs. ${esc(latest.dateLabel)}</div>
     <div class="concl-grid">
       <div class="concl-box good"><div class="hd">✓ What's working</div><ul>${concl.good.map(g=>`<li>${esc(g)}</li>`).join("")}</ul></div>
       <div class="concl-box bad"><div class="hd">✗ Worth watching</div><ul>${concl.bad.map(b=>`<li>${esc(b)}</li>`).join("")}</ul></div>
     </div>
-    <div class="concl-final"><b>Bottom line:</b> ${esc(bottomLine)}</div>
+    <div class="concl-final"><b>Bottom line:</b> ${esc(bottomLine)}</div>`).join('<div style="page-break-before:always"></div>');
+  pages.push(`<div class="page"><div class="runhdr"><div><div class="l">Conclusions</div><div class="scope">${esc(dates)} — ${esc(scope)}</div></div><div class="p">Oregano Group · Page ${pageNum}</div></div>
+    <div class="sec-title">Explanation &amp; Verdict</div><div class="sec-sub" style="margin-bottom:12px">What moved, what it means, and what to watch</div>
+    ${conclBlocks}
     <div class="footer"><span>Oregano Group — Performance Comparison Report</span><span>${pageNum}</span></div></div>`);
   // v386: dynamic <title> so the browser's "Save As" dialog defaults to a filename that
   // states the report's actual contents, not a generic "Performance Comparison Report" —
