@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-05-506";
+const BUILD_VERSION="2026-10-05-507";
 const BUILD_NOTES=[
+  "📐 BRANDS PAGE — DEEP DIVE PANELS NOW SHOW Δ VS THE COMPARISON PERIOD — direct follow-up to v506, per Nikhil's catch right after it shipped (\"it doesnt show me the comparisons compared to the previous period\"). Root cause: brDeepDiveOutletPanel and brDeepDivePlatformPanel were written taking only the current period's data (ld) — unlike literally every other table on this page (and this dashboard), which always pairs current-period figures with a Δ vs whatever comparison period is selected (pm/pd, shown via fmtChgCell). The two new panels simply never received the prior-period data at all, so there was nothing to compare against — not a display bug, a missing input. Fixed by threading pd (the same prior-period slice renderBrands already computes) through brDeepDiveSection → both panel functions, and adding \"Δ Orders <comp period>\" / \"Δ Net Sales <comp period>\" columns — using the exact same fmtChgCell helper and color convention (green/red, ▲/▼ via +/−) as the existing Outlet × Platform table — to both the top-level rows (outlet ranking / platform ranking) AND the expanded sub-rows (an outlet's platform split, a platform's outlet split), so the comparison is available at every level, not just the summary row. An outlet or platform with no matching prior-period record (e.g. newly opened) correctly shows '—' instead of a bogus or crashing percentage. Verified against the real extracted function code with a mock current period deliberately set 10% above a mock prior period: every row and every expanded sub-row now renders a correctly-colored '+X (+Y%)' Δ, the comparison-period label is in the header, and the no-prior-data edge case renders '—' with no NaN/undefined anywhere in the output. Full syntax check clean.",
   "🔎 BRANDS PAGE — NEW \"DEEP DIVE BY OUTLET\" / \"DEEP DIVE BY PLATFORM\" PANELS — Nikhil's direct ask: \"when i select 1 brand and if i have to do a deepdive, it doesnt show me the option to Deep Dive by Aggregator. Would be good to have 2 Options, Deep Dive by Outlet and Deep Dive per Platform which ones clicked, expands to both.\" Until now the only outlet/platform view on this page was the single combined \"Outlet × Platform\" table at the bottom — useful, but there was no quick way to see just an outlet ranking or just a platform ranking for the selected brand without scanning every combined row by eye. Added a new \"🔍 Deep Dive\" section between the trend/platform charts and that existing table, with two independent toggle buttons — 📍 Deep Dive by Outlet and 📡 Deep Dive by Platform — exactly as asked: either can be open on its own, or both at once, neither forces the other closed. The Outlet panel ranks every outlet for the selected brand by Net Sales with an inline share bar; clicking an outlet expands it in place to show that outlet's own platform split (orders/sales/AOV per aggregator). The Platform panel ranks every aggregator by Net Sales with its % share of the brand's total; clicking a platform expands it to show that platform's outlet split. Same expand-in-place convention as the Cancellations pivot table (v505), so clicking a different row collapses whatever was open and the brand-level marker row is excluded from both groupings the same way every other per-outlet aggregation in this file already excludes it. Shown to Nikhil first as an interactive mockup (a Design canvas artifact) built from the real dashboard's dark theme and this exact brand's colors so he could click it himself before anything real was built — approved as-is (\"Looks Good. Build it\"), then implemented directly into renderBrands() against this file's real data (mkMap/sumR, same aggregation helpers the rest of the page already uses) rather than rebuilt from scratch. Switching brands via the brand-selector buttons now also collapses any expanded row (not the open/closed state of the two panels themselves, which carries over) so a stale expanded outlet from the previous brand can't linger. Verified with an isolated test run against the actual extracted function code (not a retyped copy): both panels correctly group and sort by sales, correctly exclude the brand-level marker row, platform shares sum to ~100%, and every row's expand/collapse toggles independently with no NaN/undefined anywhere in the generated HTML. Full syntax check clean.",
   "↕️ CPC PAGE — \"AGGREGATOR STRENGTH BY OUTLET\" IS NOW SORTABLE — Nikhil's direct ask (\"Make this filterable or sortable by strength of per aggregator or sortable by outlet name\"). Every column header is now clickable: Outlet sorts alphabetically, and each aggregator column (Deliveroo/Talabat/Careem/Noon/Keeta) sorts every outlet by that aggregator's % share — click again to reverse direction — so e.g. clicking \"Talabat\" immediately surfaces which outlets lean on Talabat the most, instead of scanning a long alphabetical list by eye. Reuses the exact same tableSort/sortTableBy click-header mechanism every other sortable table in the dashboard already uses (Overview/Brands/Platforms/Cancellations), but builds its own row markup rather than calling the generic sortableTable() helper directly, because that helper's plain <td> cells have no way to carry the per-cell heatmap background color (darker = stronger aggregator at that outlet) that's the actual value of this table — didn't want to trade that away just to get sorting for free. Verified against the real data from Nikhil's own screenshot (Al Forsan/Al Quoz/Al Reef/Al Reem/DIP): sorting by outlet name correctly flips A-Z/Z-A; sorting by Talabat correctly surfaces Al Reef (52%) and Al Forsan (47%) first on descending, reverses correctly on a second click; and an outlet with no data for a given aggregator (Al Reef has no Careem orders) correctly sorts to the bottom rather than breaking the sort. Full syntax check clean.",
   "📝 COMPARE PDF — 3-GROUP REPORTS NOW NARRATE BOTH TRANSITIONS, NOT JUST THE LATEST — Nikhil's direct catch from an actual 3-period export (Group A 3 Sep, B 24 Sep, C 1 Oct): the Brand Comparison and Outlet-Level Detail tables correctly showed BOTH transitions (3 Sep→24 Sep, then 24 Sep→1 Oct) as two stacked tables — that part was already fixed in v428 — but the \"Key Observations\" narrative paragraph, the \"What's Working/Worth Watching\" Conclusions page, the Bottom Line verdict, and the Campaigns section all silently read only the LAST two groups (data[length-1]/[length-2]), so the entire 3 Sep→24 Sep move was completely unmentioned in prose anywhere in the report, even though its numbers were sitting right there in the KPI cards. Confirmed by actually reading the PDF Nikhil sent: \"Key Observations\" said \"Thu, 1 Oct 2026 vs. Thu, 24 Sep 2026\" and never named 3 Sep at all; same gap on the Conclusions page. Discussed the options directly rather than guessing — Nikhil picked the one that matches how the rest of the report already works: a separate, clearly-labeled block per transition (own \"X vs Y\" sub-header, own paragraph/Conclusions page/Campaigns section) instead of cramming both moves into one denser sentence or leaving it as-is. cmpReportNarrative, cmpReportConclusions, cmpReportBottomLine and cmpReportCampaignsSection all now take an explicit (prior,latest) pair instead of silently deriving it from the end of the full data array, and cmpBuildReportHTML loops cmpConsecutivePairs(data) — the exact same convention the Brand/Platform/Outlet tables already use — to build one full narrative+conclusions+campaigns block per transition, Conclusions pages separated the same page-break-before way the detail tables already are. A normal 2-group comparison is completely unaffected — it was always exactly one pair and still is. Verified directly against Nikhil's own real numbers from the PDF he sent (Group A→B sales +5.2%, B→C sales -7.5%): the new per-pair narrative correctly produces 'Net sales rose 5.2%' for the first transition (previously never shown anywhere) and the existing, already-correct 'Net sales fell -7.5%' for the second — plus confirmed a plain 2-group scope still produces exactly one pair, unchanged. Full syntax check clean.",
@@ -6451,10 +6452,12 @@ function brToggleDeepDiveOutlet(){brDeepDiveOutletOpen=!brDeepDiveOutletOpen;ren
 function brToggleDeepDivePlatform(){brDeepDivePlatformOpen=!brDeepDivePlatformOpen;renderBrands();}
 function brToggleDeepDiveOutletRow(branch){brDeepDiveOutletExpanded=brDeepDiveOutletExpanded===branch?null:branch;renderBrands();}
 function brToggleDeepDivePlatformRow(agg){brDeepDivePlatformExpanded=brDeepDivePlatformExpanded===agg?null:agg;renderBrands();}
-function brDeepDiveOutletPanel(ld,b){
+function brDeepDiveOutletPanel(ld,pd,b){
   const T={border:_darkPage?DARK_THEME.cardBorder:"#E2E8F0",muted:_darkPage?DARK_THEME.textMuted:"#64748B",text:_darkPage?DARK_THEME.textPrimary:"#0F172A",bg:_darkPage?DARK_THEME.bg:"#F8FAFC"};
+  const compShort=getCompShort();
   const m=mkMap(ld.filter(r=>r.branch!=='(brand-level)'),r=>r.branch);
-  const rows=Object.values(m).map(c=>({branch:c.k,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0})).sort((a,b2)=>b2.sales-a.sales);
+  const pm0=mkMap(pd.filter(r=>r.branch!=='(brand-level)'),r=>r.branch);
+  const rows=Object.values(m).map(c=>({branch:c.k,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,prev:pm0[c.k]})).sort((a,b2)=>b2.sales-a.sales);
   const maxSales=Math.max(1,...rows.map(r=>r.sales));
   const brandClr=b?.c||"#f59e0b";
   const body=rows.map(r=>{
@@ -6463,81 +6466,101 @@ function brDeepDiveOutletPanel(ld,b){
     let sub="";
     if(expanded){
       const pm=mkMap(ld.filter(x=>x.branch===r.branch),x=>x.aggregator);
-      const prows=Object.values(pm).map(c=>({aggregator:c.k,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0})).sort((a,b2)=>b2.sales-a.sales);
-      sub=`<div style="margin:0 4px 10px 26px;padding:8px 12px;background:${T.bg};border-radius:8px;border:1px solid ${T.border}">
+      const ppm=mkMap(pd.filter(x=>x.branch===r.branch),x=>x.aggregator);
+      const prows=Object.values(pm).map(c=>({aggregator:c.k,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,prev:ppm[c.k]})).sort((a,b2)=>b2.sales-a.sales);
+      sub=`<div style="margin:0 4px 10px 26px;padding:8px 12px;background:${T.bg};border-radius:8px;border:1px solid ${T.border};overflow-x:auto">
+        <div style="min-width:620px">
         ${prows.map(p=>`<div style="display:flex;align-items:center;gap:10px;padding:4px 0">
           <span style="width:8px;height:8px;border-radius:2px;background:${AC[p.aggregator]||"#888"};flex-shrink:0"></span>
           <span style="flex:2 1 100px;font-size:12px;font-weight:700;color:${AC[p.aggregator]||"#888"}">${p.aggregator}</span>
-          <span style="flex:1 1 60px;text-align:right;font-size:11.5px;color:${T.muted}">${p.orders.toLocaleString()}</span>
-          <span style="flex:1 1 90px;text-align:right;font-size:12px;font-weight:700;color:${T.text}">${fmtAEDTip(p.sales)}</span>
-          <span style="flex:1 1 70px;text-align:right;font-size:11.5px;color:${T.muted}">${p.orders>0?`AED ${p.aov.toFixed(1)}`:"—"}</span>
+          <span style="flex:1 1 55px;text-align:right;font-size:11.5px;color:${T.muted}">${p.orders.toLocaleString()}</span>
+          <span style="flex:1 1 85px;text-align:right;font-size:12px;font-weight:700;color:${T.text}">${fmtAEDTip(p.sales)}</span>
+          <span style="flex:1 1 65px;text-align:right;font-size:11.5px;color:${T.muted}">${p.orders>0?`AED ${p.aov.toFixed(1)}`:"—"}</span>
+          <span style="flex:1 1 80px;text-align:right;font-size:11px">${fmtChgCell(p.orders,p.prev?.orders,false)}</span>
+          <span style="flex:1 1 95px;text-align:right;font-size:11px">${fmtChgCell(p.sales,p.prev?.sales,true)}</span>
         </div>`).join("")}
+        </div>
       </div>`;
     }
     return`<div style="border-top:1px solid ${T.border}">
-      <button onclick="brToggleDeepDiveOutletRow('${r.branch.replace(/'/g,"\\'")}')" style="all:unset;display:flex;align-items:center;gap:14px;padding:10px 4px;cursor:pointer;width:100%;box-sizing:border-box">
+      <button onclick="brToggleDeepDiveOutletRow('${r.branch.replace(/'/g,"\\'")}')" style="all:unset;display:flex;align-items:center;gap:14px;padding:10px 4px;cursor:pointer;width:100%;box-sizing:border-box;min-width:760px">
         <span style="font-size:13px;width:14px;color:${T.muted}">${expanded?"▾":"▸"}</span>
-        <span style="flex:2 1 140px;font-size:13px;font-weight:700;color:${T.text}">${r.branch}</span>
-        <span style="flex:3 1 160px;height:8px;border-radius:4px;background:${T.bg};overflow:hidden;display:block"><span style="display:block;height:100%;background:${brandClr};width:${barPct}%"></span></span>
-        <span style="flex:1 1 70px;text-align:right;font-size:12.5px;color:${T.muted}">${r.orders.toLocaleString()}</span>
-        <span style="flex:1 1 100px;text-align:right;font-size:13px;font-weight:700;color:${T.text}">${fmtAEDTip(r.sales)}</span>
-        <span style="flex:1 1 80px;text-align:right;font-size:12.5px;color:${T.muted}">${r.orders>0?`AED ${r.aov.toFixed(1)}`:"—"}</span>
+        <span style="flex:2 1 130px;font-size:13px;font-weight:700;color:${T.text}">${r.branch}</span>
+        <span style="flex:2 1 90px;height:8px;border-radius:4px;background:${T.bg};overflow:hidden;display:block"><span style="display:block;height:100%;background:${brandClr};width:${barPct}%"></span></span>
+        <span style="flex:1 1 60px;text-align:right;font-size:12.5px;color:${T.muted}">${r.orders.toLocaleString()}</span>
+        <span style="flex:1 1 95px;text-align:right;font-size:13px;font-weight:700;color:${T.text}">${fmtAEDTip(r.sales)}</span>
+        <span style="flex:1 1 70px;text-align:right;font-size:12.5px;color:${T.muted}">${r.orders>0?`AED ${r.aov.toFixed(1)}`:"—"}</span>
+        <span style="flex:1 1 90px;text-align:right;font-size:12px">${fmtChgCell(r.orders,r.prev?.orders,false)}</span>
+        <span style="flex:1 1 105px;text-align:right;font-size:12px">${fmtChgCell(r.sales,r.prev?.sales,true)}</span>
       </button>
       ${sub}
     </div>`;
   }).join("");
   return`<div class="card" style="margin-bottom:12px">
     <div class="ct" style="color:${brandClr}">${selBrand} — Deep Dive by Outlet <span style="color:${T.muted};font-weight:400;text-transform:none;letter-spacing:0;font-size:11px">· click an outlet to see its platform split</span></div>
-    <div style="display:flex;align-items:center;gap:14px;padding:0 4px 8px;font-size:10.5px;color:${T.muted};text-transform:uppercase;font-weight:800;letter-spacing:.5px">
-      <span style="width:14px"></span><span style="flex:2 1 140px">Outlet</span><span style="flex:3 1 160px">Share of brand sales</span><span style="flex:1 1 70px;text-align:right">Orders</span><span style="flex:1 1 100px;text-align:right">Net Sales</span><span style="flex:1 1 80px;text-align:right">AOV</span>
+    <div style="overflow-x:auto">
+    <div style="display:flex;align-items:center;gap:14px;padding:0 4px 8px;font-size:10.5px;color:${T.muted};text-transform:uppercase;font-weight:800;letter-spacing:.5px;min-width:760px">
+      <span style="width:14px"></span><span style="flex:2 1 130px">Outlet</span><span style="flex:2 1 90px">Share</span><span style="flex:1 1 60px;text-align:right">Orders</span><span style="flex:1 1 95px;text-align:right">Net Sales</span><span style="flex:1 1 70px;text-align:right">AOV</span><span style="flex:1 1 90px;text-align:right">Δ Orders <span style="font-weight:400">${compShort}</span></span><span style="flex:1 1 105px;text-align:right">Δ Net Sales <span style="font-weight:400">${compShort}</span></span>
     </div>
     ${body}
+    </div>
   </div>`;
 }
-function brDeepDivePlatformPanel(ld){
+function brDeepDivePlatformPanel(ld,pd){
   const T={border:_darkPage?DARK_THEME.cardBorder:"#E2E8F0",muted:_darkPage?DARK_THEME.textMuted:"#64748B",text:_darkPage?DARK_THEME.textPrimary:"#0F172A",bg:_darkPage?DARK_THEME.bg:"#F8FAFC"};
+  const compShort=getCompShort();
   const total=sumR(ld).sales;
   const m=mkMap(ld,r=>r.aggregator);
-  const rows=Object.values(m).map(c=>({aggregator:c.k,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,share:total>0?c.sales/total*100:0})).sort((a,b2)=>b2.sales-a.sales);
+  const pm0=mkMap(pd,r=>r.aggregator);
+  const rows=Object.values(m).map(c=>({aggregator:c.k,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,share:total>0?c.sales/total*100:0,prev:pm0[c.k]})).sort((a,b2)=>b2.sales-a.sales);
   const body=rows.map(r=>{
     const expanded=brDeepDivePlatformExpanded===r.aggregator;
     const clr=AC[r.aggregator]||"#888";
     let sub="";
     if(expanded){
       const om=mkMap(ld.filter(x=>x.aggregator===r.aggregator&&x.branch!=='(brand-level)'),x=>x.branch);
-      const orows=Object.values(om).map(c=>({branch:c.k,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0})).sort((a,b2)=>b2.sales-a.sales);
-      sub=`<div style="margin:0 4px 10px 26px;padding:8px 12px;background:${T.bg};border-radius:8px;border:1px solid ${T.border}">
+      const pom=mkMap(pd.filter(x=>x.aggregator===r.aggregator&&x.branch!=='(brand-level)'),x=>x.branch);
+      const orows=Object.values(om).map(c=>({branch:c.k,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,prev:pom[c.k]})).sort((a,b2)=>b2.sales-a.sales);
+      sub=`<div style="margin:0 4px 10px 26px;padding:8px 12px;background:${T.bg};border-radius:8px;border:1px solid ${T.border};overflow-x:auto">
+        <div style="min-width:620px">
         ${orows.map(o=>`<div style="display:flex;align-items:center;gap:10px;padding:4px 0">
           <span style="font-size:11px">📍</span>
           <span style="flex:2 1 110px;font-size:12px;font-weight:700;color:${T.text}">${o.branch}</span>
-          <span style="flex:1 1 60px;text-align:right;font-size:11.5px;color:${T.muted}">${o.orders.toLocaleString()}</span>
-          <span style="flex:1 1 90px;text-align:right;font-size:12px;font-weight:700;color:${T.text}">${fmtAEDTip(o.sales)}</span>
-          <span style="flex:1 1 70px;text-align:right;font-size:11.5px;color:${T.muted}">${o.orders>0?`AED ${o.aov.toFixed(1)}`:"—"}</span>
+          <span style="flex:1 1 55px;text-align:right;font-size:11.5px;color:${T.muted}">${o.orders.toLocaleString()}</span>
+          <span style="flex:1 1 85px;text-align:right;font-size:12px;font-weight:700;color:${T.text}">${fmtAEDTip(o.sales)}</span>
+          <span style="flex:1 1 65px;text-align:right;font-size:11.5px;color:${T.muted}">${o.orders>0?`AED ${o.aov.toFixed(1)}`:"—"}</span>
+          <span style="flex:1 1 80px;text-align:right;font-size:11px">${fmtChgCell(o.orders,o.prev?.orders,false)}</span>
+          <span style="flex:1 1 95px;text-align:right;font-size:11px">${fmtChgCell(o.sales,o.prev?.sales,true)}</span>
         </div>`).join("")}
+        </div>
       </div>`;
     }
     return`<div style="border-top:1px solid ${T.border}">
-      <button onclick="brToggleDeepDivePlatformRow('${r.aggregator.replace(/'/g,"\\'")}')" style="all:unset;display:flex;align-items:center;gap:14px;padding:10px 4px;cursor:pointer;width:100%;box-sizing:border-box">
+      <button onclick="brToggleDeepDivePlatformRow('${r.aggregator.replace(/'/g,"\\'")}')" style="all:unset;display:flex;align-items:center;gap:14px;padding:10px 4px;cursor:pointer;width:100%;box-sizing:border-box;min-width:760px">
         <span style="font-size:13px;width:14px;color:${T.muted}">${expanded?"▾":"▸"}</span>
         <span style="width:8px;height:8px;border-radius:2px;background:${clr};flex-shrink:0"></span>
-        <span style="flex:2 1 100px;font-size:13px;font-weight:700;color:${clr}">${r.aggregator}</span>
-        <span style="flex:1 1 70px;text-align:right;font-size:12.5px;color:${T.muted}">${r.share.toFixed(0)}%</span>
-        <span style="flex:1 1 70px;text-align:right;font-size:12.5px;color:${T.muted}">${r.orders.toLocaleString()}</span>
-        <span style="flex:1 1 100px;text-align:right;font-size:13px;font-weight:700;color:${T.text}">${fmtAEDTip(r.sales)}</span>
-        <span style="flex:1 1 80px;text-align:right;font-size:12.5px;color:${T.muted}">${r.orders>0?`AED ${r.aov.toFixed(1)}`:"—"}</span>
+        <span style="flex:2 1 90px;font-size:13px;font-weight:700;color:${clr}">${r.aggregator}</span>
+        <span style="flex:1 1 55px;text-align:right;font-size:12.5px;color:${T.muted}">${r.share.toFixed(0)}%</span>
+        <span style="flex:1 1 60px;text-align:right;font-size:12.5px;color:${T.muted}">${r.orders.toLocaleString()}</span>
+        <span style="flex:1 1 95px;text-align:right;font-size:13px;font-weight:700;color:${T.text}">${fmtAEDTip(r.sales)}</span>
+        <span style="flex:1 1 70px;text-align:right;font-size:12.5px;color:${T.muted}">${r.orders>0?`AED ${r.aov.toFixed(1)}`:"—"}</span>
+        <span style="flex:1 1 90px;text-align:right;font-size:12px">${fmtChgCell(r.orders,r.prev?.orders,false)}</span>
+        <span style="flex:1 1 105px;text-align:right;font-size:12px">${fmtChgCell(r.sales,r.prev?.sales,true)}</span>
       </button>
       ${sub}
     </div>`;
   }).join("");
   return`<div class="card" style="margin-bottom:12px">
     <div class="ct" style="color:#4E9BFF">${selBrand} — Deep Dive by Platform <span style="color:${T.muted};font-weight:400;text-transform:none;letter-spacing:0;font-size:11px">· click a platform to see its outlet split</span></div>
-    <div style="display:flex;align-items:center;gap:14px;padding:0 4px 8px;font-size:10.5px;color:${T.muted};text-transform:uppercase;font-weight:800;letter-spacing:.5px">
-      <span style="width:22px"></span><span style="flex:2 1 100px">Platform</span><span style="flex:1 1 70px;text-align:right">Share</span><span style="flex:1 1 70px;text-align:right">Orders</span><span style="flex:1 1 100px;text-align:right">Net Sales</span><span style="flex:1 1 80px;text-align:right">AOV</span>
+    <div style="overflow-x:auto">
+    <div style="display:flex;align-items:center;gap:14px;padding:0 4px 8px;font-size:10.5px;color:${T.muted};text-transform:uppercase;font-weight:800;letter-spacing:.5px;min-width:760px">
+      <span style="width:22px"></span><span style="flex:2 1 90px">Platform</span><span style="flex:1 1 55px;text-align:right">Share</span><span style="flex:1 1 60px;text-align:right">Orders</span><span style="flex:1 1 95px;text-align:right">Net Sales</span><span style="flex:1 1 70px;text-align:right">AOV</span><span style="flex:1 1 90px;text-align:right">Δ Orders <span style="font-weight:400">${compShort}</span></span><span style="flex:1 1 105px;text-align:right">Δ Net Sales <span style="font-weight:400">${compShort}</span></span>
     </div>
     ${body}
+    </div>
   </div>`;
 }
-function brDeepDiveSection(ld,b){
+function brDeepDiveSection(ld,pd,b){
   const T={border:_darkPage?DARK_THEME.cardBorder:"#E2E8F0",muted:_darkPage?DARK_THEME.textMuted:"#64748B",text:_darkPage?DARK_THEME.textPrimary:"#0F172A"};
   const brandClr=b?.c||"#f59e0b";
   const btn=(label,icon,on,accent,onclick)=>`<button onclick="${onclick}" style="display:inline-flex;align-items:center;gap:9px;padding:10px 18px;border-radius:12px;cursor:pointer;border:2px solid ${on?accent:T.border};background:${on?accent+"1A":(_darkPage?DARK_THEME.card:"#FFFFFF")};color:${on?accent:T.muted};font-size:13px;font-weight:800">${icon} ${label} <span>${on?"▾":"▸"}</span></button>`;
@@ -6550,8 +6573,8 @@ function brDeepDiveSection(ld,b){
       ${btn("Deep Dive by Outlet","📍",brDeepDiveOutletOpen,brandClr,"brToggleDeepDiveOutlet()")}
       ${btn("Deep Dive by Platform","📡",brDeepDivePlatformOpen,"#4E9BFF","brToggleDeepDivePlatform()")}
     </div>
-    ${brDeepDiveOutletOpen?brDeepDiveOutletPanel(ld,b):""}
-    ${brDeepDivePlatformOpen?brDeepDivePlatformPanel(ld):""}
+    ${brDeepDiveOutletOpen?brDeepDiveOutletPanel(ld,pd,b):""}
+    ${brDeepDivePlatformOpen?brDeepDivePlatformPanel(ld,pd):""}
   </div>`;
 }
 function renderBrands(){
@@ -6606,7 +6629,7 @@ function renderBrands(){
     `<div class="brand-sel-row" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
     <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior),profCur.contribution<0?profitClr(profCur.contribution):null)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="g2"><div class="sm"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;color:${b?.c}"><span>${selBrand} — ${OV_TREND_METRICS[brTrendMetric].label} Trend</span><span style="display:flex;gap:4px">${OV_TREND_METRIC_KEYS.map(k=>`<span onclick="brSetTrendMetric('${k}')" style="cursor:pointer;font-size:10px;font-weight:${k===brTrendMetric?700:500};padding:3px 8px;border-radius:6px;text-transform:none;letter-spacing:0;background:${k===brTrendMetric?(b?.c||'#F59E0B')+'22':'transparent'};color:${k===brTrendMetric?(b?.c||'#F59E0B'):(_darkPage?DARK_THEME.textMuted:'#64748B')};border:1px solid ${k===brTrendMetric?(b?.c||'#F59E0B'):'transparent'}">${OV_TREND_METRICS[k].shortLabel}</span>`).join('')}</span></div><div style="position:relative;height:180px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748B;font-weight:600;text-transform:none;letter-spacing:0;font-size:10px">sales bars · order count on top</span></div><div style="position:relative;height:180px"><canvas id="ch-b-agg"></canvas></div></div></div>
-    ${brDeepDiveSection(ld,b)}
+    ${brDeepDiveSection(ld,pd,b)}
     <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>`;
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.brand===selBrand&&(!f.platforms.size||f.platforms.has(r.aggregator))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-b-trend",trend30(mf,f.start,f.end),b?.c||"#888",brTrendMetric);
     // Single bar chart: sales as bar height, orders shown as data label on top of each bar
