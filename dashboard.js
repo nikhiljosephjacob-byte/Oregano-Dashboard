@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-02-504";
+const BUILD_VERSION="2026-10-05-505";
 const BUILD_NOTES=[
+  "↕️ CPC PAGE — \"AGGREGATOR STRENGTH BY OUTLET\" IS NOW SORTABLE — Nikhil's direct ask (\"Make this filterable or sortable by strength of per aggregator or sortable by outlet name\"). Every column header is now clickable: Outlet sorts alphabetically, and each aggregator column (Deliveroo/Talabat/Careem/Noon/Keeta) sorts every outlet by that aggregator's % share — click again to reverse direction — so e.g. clicking \"Talabat\" immediately surfaces which outlets lean on Talabat the most, instead of scanning a long alphabetical list by eye. Reuses the exact same tableSort/sortTableBy click-header mechanism every other sortable table in the dashboard already uses (Overview/Brands/Platforms/Cancellations), but builds its own row markup rather than calling the generic sortableTable() helper directly, because that helper's plain <td> cells have no way to carry the per-cell heatmap background color (darker = stronger aggregator at that outlet) that's the actual value of this table — didn't want to trade that away just to get sorting for free. Verified against the real data from Nikhil's own screenshot (Al Forsan/Al Quoz/Al Reef/Al Reem/DIP): sorting by outlet name correctly flips A-Z/Z-A; sorting by Talabat correctly surfaces Al Reef (52%) and Al Forsan (47%) first on descending, reverses correctly on a second click; and an outlet with no data for a given aggregator (Al Reef has no Careem orders) correctly sorts to the bottom rather than breaking the sort. Full syntax check clean.",
   "📝 COMPARE PDF — 3-GROUP REPORTS NOW NARRATE BOTH TRANSITIONS, NOT JUST THE LATEST — Nikhil's direct catch from an actual 3-period export (Group A 3 Sep, B 24 Sep, C 1 Oct): the Brand Comparison and Outlet-Level Detail tables correctly showed BOTH transitions (3 Sep→24 Sep, then 24 Sep→1 Oct) as two stacked tables — that part was already fixed in v428 — but the \"Key Observations\" narrative paragraph, the \"What's Working/Worth Watching\" Conclusions page, the Bottom Line verdict, and the Campaigns section all silently read only the LAST two groups (data[length-1]/[length-2]), so the entire 3 Sep→24 Sep move was completely unmentioned in prose anywhere in the report, even though its numbers were sitting right there in the KPI cards. Confirmed by actually reading the PDF Nikhil sent: \"Key Observations\" said \"Thu, 1 Oct 2026 vs. Thu, 24 Sep 2026\" and never named 3 Sep at all; same gap on the Conclusions page. Discussed the options directly rather than guessing — Nikhil picked the one that matches how the rest of the report already works: a separate, clearly-labeled block per transition (own \"X vs Y\" sub-header, own paragraph/Conclusions page/Campaigns section) instead of cramming both moves into one denser sentence or leaving it as-is. cmpReportNarrative, cmpReportConclusions, cmpReportBottomLine and cmpReportCampaignsSection all now take an explicit (prior,latest) pair instead of silently deriving it from the end of the full data array, and cmpBuildReportHTML loops cmpConsecutivePairs(data) — the exact same convention the Brand/Platform/Outlet tables already use — to build one full narrative+conclusions+campaigns block per transition, Conclusions pages separated the same page-break-before way the detail tables already are. A normal 2-group comparison is completely unaffected — it was always exactly one pair and still is. Verified directly against Nikhil's own real numbers from the PDF he sent (Group A→B sales +5.2%, B→C sales -7.5%): the new per-pair narrative correctly produces 'Net sales rose 5.2%' for the first transition (previously never shown anywhere) and the existing, already-correct 'Net sales fell -7.5%' for the second — plus confirmed a plain 2-group scope still produces exactly one pair, unchanged. Full syntax check clean.",
   "⏳ COMPARE PAGE — EXPORT TO PDF \"HANGING THE ENTIRE DASHBOARD\" — direct follow-up to v502, per Nikhil's report right after that fix shipped. Not a new bug — v502 removed what was silently stopping cmpExportPDF early (a crash before any real work happened), so for the first time this code reaches the actual report build: campaign attribution, outlet and brand breakdowns, etc. across whatever's in scope. With no brand/outlet filter narrowing either comparison side (all 5 brands × 50+ outlets), that's genuine synchronous main-thread work that can take several real seconds — and because nothing on screen changed while it ran, a multi-second freeze with zero feedback is indistinguishable from the dashboard actually hanging. Two fixes: (1) the Export to PDF button now flips to a visible \"⏳ Generating…\" state immediately, with the heavy build deferred one tick so the browser paints that state first — doesn't make the computation itself faster (it's still blocking, same as before), but turns silence into visible proof the click registered and nothing is actually frozen. (2) The entire build is now wrapped in try/catch — previously ANY failure here (the v502 bug, or anything else) failed completely silently, which looks identical to a hang from the user's side; now a failure surfaces as a real alert naming the problem, and the button always resets via `finally`, so it can never get stuck on \"Generating…\" either. Also audited getKeetaExactDisc (the source of the repeated '[Keeta attribution]' console warnings visible in Nikhil's screenshot) for a possible runaway loop — it's a single linear pass per campaign, not exponential; those warnings are normal diagnostic output, not evidence of a hang. Full syntax check clean.",
   "🐛 COMPARE PAGE — EXPORT TO PDF CRASHING ON A SINGLE-DAY WINDOW — real bug Nikhil hit directly (console screenshot: \"Cannot read properties of undefined (reading 'trim')\" at cmpBuildReportHTML, called from cmpExportPDF). Root cause: cmpDateLabel() deliberately collapses a window down to one plain date with no \"→\" arrow at all when start and end are the same day (e.g. a single \"3 Sep 2026\" rather than \"3 Sep → 3 Sep 2026\") — a readability choice, not a bug on its own. But the PDF filename builder assumed every dateLabel always contains \"→\" and unconditionally read index [1] after splitting on it; for a single-day window that index doesn't exist, so .trim() ran on undefined and the whole export died before a window could even open. Hit exactly when comparing two single-day custom ranges, which is precisely what Nikhil's screenshot shows (Group A 3 Sep→3 Sep, Group B 1 Oct→1 Oct — both single days, not a typo). Fixed by falling back to the one date that IS there when there's no second half to split out — ranged windows (the common case) are completely unaffected. Scanned the rest of the file for the same split(\"→\")[1] pattern on a dateLabel — this was the only occurrence. Verified directly: the exact failing input (a single-day label) now resolves cleanly, and a normal multi-day range still produces the same filename it always did. Full syntax check clean.",
@@ -9755,13 +9756,35 @@ function cpcDecliningOutletsCard(){
   </div>`;
 }
 
+// v534: sortable, per Nikhil directly ("Make this filterable or sortable by strength of per
+// aggregator or sortable by outlet name"). Reuses the exact same tableSort/sortTableBy state and
+// click-to-sort-header mechanism every other sortable table on this dashboard already uses
+// (Overview/Brands/Platforms/Cancellations, via sortableTable()) — but builds its own row markup
+// by hand rather than calling sortableTable() directly, because sortableTable()'s generic <td>
+// wrapper has no way to carry a per-cell background color, and that heatmap shading (darker =
+// stronger aggregator at that outlet) is the whole point of this table and had to be kept, not
+// traded away for free sorting. Column 0 = Outlet (alphabetical), columns 1-5 = each aggregator's
+// % at that outlet ("strength") — click any header to sort by it, click again to reverse,
+// exactly the same interaction as every other sortable table in the dashboard.
 function cpcAreaStrengthCard(priorMonth){
   const T=cpcTheme();
+  const tableId="cpc-agg-strength";
   // Per-outlet aggregator share across all brands
   const outlets=[...new Set(allData.filter(r=>recMonth(r)===priorMonth&&r.sales>0).map(r=>r.branch))].filter(o=>o&&o!=="(brand-level)").sort();
   const aggs=["Deliveroo","Talabat","Careem","Noon","Keeta"];
-  const tRows=outlets.map(o=>{
-    const strength=cpcAreaAggStrength(o,priorMonth);
+  const rows=outlets.map(o=>({outlet:o,strength:cpcAreaAggStrength(o,priorMonth)}));
+  const st=tableSort[tableId]||{col:null,dir:1};
+  tableSort[tableId]=st;
+  let sortedRows=rows;
+  if(st.col!=null){
+    sortedRows=[...rows].sort((a,b)=>{
+      const va=st.col===0?a.outlet:(a.strength[aggs[st.col-1]]||0);
+      const vb=st.col===0?b.outlet:(b.strength[aggs[st.col-1]]||0);
+      if(typeof va==="string"&&typeof vb==="string")return st.dir*va.localeCompare(vb);
+      return st.dir*((va||0)-(vb||0));
+    });
+  }
+  const tRows=sortedRows.map(({outlet:o,strength})=>{
     const cells=aggs.map(ag=>{
       const pct=strength[ag]||0;
       if(!pct)return`<td style="padding:6px;text-align:center;color:${T.secondary};font-size:10.5px">—</td>`;
@@ -9770,10 +9793,12 @@ function cpcAreaStrengthCard(priorMonth){
     }).join("");
     return`<tr style="border-bottom:1px solid ${T.border}"><td style="padding:6px 8px;color:${T.text};font-weight:600;font-size:11.5px">${o}</td>${cells}</tr>`;
   }).join("");
-  const headCells=aggs.map(ag=>`<th style="padding:6px;text-align:center;color:${AC[ag]||'#fff'};font-size:10px;text-transform:uppercase;letter-spacing:.3px">${ag}</th>`).join("");
+  const sortArrow=col=>st.col===col?(st.dir>0?" ▲":" ▼"):' <span style="opacity:.35">↕</span>';
+  const thStyle=col=>`cursor:pointer;${st.col===col?'color:#fbbf24':''}`;
+  const headCells=aggs.map((ag,i)=>`<th onclick="sortTableBy('${tableId}',${i+1})" style="padding:6px;text-align:center;color:${st.col===i+1?'#fbbf24':(AC[ag]||'#fff')};font-size:10px;text-transform:uppercase;letter-spacing:.3px;${thStyle(i+1)}" title="Click to sort by ${ag} strength">${ag}${sortArrow(i+1)}</th>`).join("");
   return`<div class="card">
-    <div style="margin-bottom:10px"><div style="font-size:13px;font-weight:800;color:#fbbf24">🗺️ Aggregator Strength by Outlet</div><div style="font-size:10.5px;color:${T.label};margin-top:2px">% of orders by aggregator at each outlet · informs redirect decisions — boost CPC on the dominant aggregator where ROAS supports it</div></div>
-    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="border-bottom:1px solid ${T.border}"><th style="padding:6px 8px;text-align:left;color:${T.muted};font-size:10px;text-transform:uppercase">Outlet</th>${headCells}</tr></thead><tbody>${tRows}</tbody></table></div>
+    <div style="margin-bottom:10px"><div style="font-size:13px;font-weight:800;color:#fbbf24">🗺️ Aggregator Strength by Outlet</div><div style="font-size:10.5px;color:${T.label};margin-top:2px">% of orders by aggregator at each outlet · informs redirect decisions — boost CPC on the dominant aggregator where ROAS supports it · click any column header to sort</div></div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="border-bottom:1px solid ${T.border}"><th onclick="sortTableBy('${tableId}',0)" style="padding:6px 8px;text-align:left;color:${T.muted};font-size:10px;text-transform:uppercase;${thStyle(0)}" title="Click to sort by outlet name">Outlet${sortArrow(0)}</th>${headCells}</tr></thead><tbody>${tRows}</tbody></table></div>
   </div>`;
 }
 
