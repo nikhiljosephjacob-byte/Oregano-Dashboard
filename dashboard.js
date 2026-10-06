@@ -13,9 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-05-508";
+const BUILD_VERSION="2026-10-05-509";
 const BUILD_NOTES=[
-  "🎯 FEEDBACK PAGE — \"INDEX\" MODE REPLACED WITH \"TARGET\" MODE (0.4% COMPLAINT RATE TARGET) — Nikhil caught a real design flaw: switching the Total Complaints trend chart from All time to This year made June 2026's complaint spike disappear, with the exact same underlying numbers (299 complaints / 52,121 orders either way). Root cause, confirmed by inspection before any fix: Index mode (v464) indexed both the complaints line and the orders line to 100 at whichever month happened to be FIRST in the currently filtered range — Jan 2025 under All time, Jan 2026 under This year. Re-anchoring to a different starting month re-bases the entire growth curve, so the same June numbers measure as \"way ahead of orders\" from one baseline and \"tracking normally\" from the other — not a data bug, a baseline that silently moved underneath the chart depending on which date filter was active. Reported this to Nikhil in full before touching any code, as asked. His follow-up — \"shouldn't it be anchored on industry level targets?\" — was the better design: researched food-delivery/F&B complaint-rate sources directly (restaurant order-accuracy studies, food-safety-manufacturing complaints-per-million forums, DoorDash/Uber Eats merchant-quality docs) and found no publicly published benchmark at the same definition this dashboard uses (complaint tickets ÷ orders) — reported that gap honestly rather than inventing an \"industry standard\" figure, and confirmed with Nikhil to use Oregano Group's own existing 0.4% target instead, labeled plainly as a target, not an industry benchmark. \"Index\" is now \"Target\": the complaints line is the real complaint RATE (count ÷ orders, the exact number already shown in the Count/% tooltip — no separate data path) plotted against a flat dashed 0.4% reference line, and the alert banner now flags whichever month in view sits furthest above that fixed line. Because the target line never moves, a given month's rate and verdict are now IDENTICAL regardless of which date preset is active — verified directly: an isolated test computed June's rate under both an All-time-shaped window and a This-year-shaped window from the same underlying monthly data and got exactly 0.57% / +0.17pts over target in both, plus confirmed a zero-order month renders 0% rather than NaN/Infinity. Full syntax check clean.",
+  "🎯 FEEDBACK PAGE — \"INDEX\" MODE RESTORED WITH A FIXED, PICKABLE BASE MONTH (TARGET MODE REVERTED) — direct course-correction per Nikhil: \"no this doesnt work. I want 2 graphs based on index, but index value should be decided... Targets was a bad idea.\" v508 replaced the two-line Complaints-vs-Orders index chart with a single rate-vs-0.4%-target line — technically consistent across filters, but it lost the actual thing higher management needs from this chart: a visual crossing point showing exactly when the complaints curve outgrew the sales/orders curve. That's gone now; the two-line index chart is back. What's different from the ORIGINAL index chart (the one with the real bug): the baseline month is no longer silently derived from \"whichever month happens to be first in the currently filtered view\" — the actual root cause of Nikhil's original report (All time anchored to Jan 2025, This year anchored to Jan 2026, so the same real June 2026 numbers produced two different-looking stories). It's now a genuinely fixed anchor, independent of the Year/preset filter, with a new \"Base month\" dropdown next to the Index toggle so Nikhil decides which month = 100 — defaulting to the earliest month on record if he hasn't picked one. Two new filter-independent helpers (feedbackAllMonthsEver, feedbackMonthValues) compute the chosen base month's complaint count and order volume from the FULL dataset, never from whatever subset the date filter currently shows, so switching All time ↔ This year ↔ any other preset can no longer reshape the curve — only the base-month picker can, and that's now an explicit, visible choice instead of a hidden side-effect. The y-axis title now names the active base month (e.g. \"Index (Jan 2025 = 100)\") and the over/under-target alert banner does the same, so it's never ambiguous what the 100-line means. Verified against the real extracted helper functions (not a retyped copy): the default base month resolves identically whether viewed under All time or This year; June 2026's complaints-index and orders-index values come out exactly equal between both filter windows; an explicitly chosen base month (e.g. Jan 2026) still matches across windows; and a base month entirely outside the current filter window (e.g. picking Oct 2025 while viewing This year) resolves correctly with no NaN. Full syntax check clean.",
   "📐 BRANDS PAGE — DEEP DIVE PANELS NOW SHOW Δ VS THE COMPARISON PERIOD — direct follow-up to v506, per Nikhil's catch right after it shipped (\"it doesnt show me the comparisons compared to the previous period\"). Root cause: brDeepDiveOutletPanel and brDeepDivePlatformPanel were written taking only the current period's data (ld) — unlike literally every other table on this page (and this dashboard), which always pairs current-period figures with a Δ vs whatever comparison period is selected (pm/pd, shown via fmtChgCell). The two new panels simply never received the prior-period data at all, so there was nothing to compare against — not a display bug, a missing input. Fixed by threading pd (the same prior-period slice renderBrands already computes) through brDeepDiveSection → both panel functions, and adding \"Δ Orders <comp period>\" / \"Δ Net Sales <comp period>\" columns — using the exact same fmtChgCell helper and color convention (green/red, ▲/▼ via +/−) as the existing Outlet × Platform table — to both the top-level rows (outlet ranking / platform ranking) AND the expanded sub-rows (an outlet's platform split, a platform's outlet split), so the comparison is available at every level, not just the summary row. An outlet or platform with no matching prior-period record (e.g. newly opened) correctly shows '—' instead of a bogus or crashing percentage. Verified against the real extracted function code with a mock current period deliberately set 10% above a mock prior period: every row and every expanded sub-row now renders a correctly-colored '+X (+Y%)' Δ, the comparison-period label is in the header, and the no-prior-data edge case renders '—' with no NaN/undefined anywhere in the output. Full syntax check clean.",
   "🔎 BRANDS PAGE — NEW \"DEEP DIVE BY OUTLET\" / \"DEEP DIVE BY PLATFORM\" PANELS — Nikhil's direct ask: \"when i select 1 brand and if i have to do a deepdive, it doesnt show me the option to Deep Dive by Aggregator. Would be good to have 2 Options, Deep Dive by Outlet and Deep Dive per Platform which ones clicked, expands to both.\" Until now the only outlet/platform view on this page was the single combined \"Outlet × Platform\" table at the bottom — useful, but there was no quick way to see just an outlet ranking or just a platform ranking for the selected brand without scanning every combined row by eye. Added a new \"🔍 Deep Dive\" section between the trend/platform charts and that existing table, with two independent toggle buttons — 📍 Deep Dive by Outlet and 📡 Deep Dive by Platform — exactly as asked: either can be open on its own, or both at once, neither forces the other closed. The Outlet panel ranks every outlet for the selected brand by Net Sales with an inline share bar; clicking an outlet expands it in place to show that outlet's own platform split (orders/sales/AOV per aggregator). The Platform panel ranks every aggregator by Net Sales with its % share of the brand's total; clicking a platform expands it to show that platform's outlet split. Same expand-in-place convention as the Cancellations pivot table (v505), so clicking a different row collapses whatever was open and the brand-level marker row is excluded from both groupings the same way every other per-outlet aggregation in this file already excludes it. Shown to Nikhil first as an interactive mockup (a Design canvas artifact) built from the real dashboard's dark theme and this exact brand's colors so he could click it himself before anything real was built — approved as-is (\"Looks Good. Build it\"), then implemented directly into renderBrands() against this file's real data (mkMap/sumR, same aggregation helpers the rest of the page already uses) rather than rebuilt from scratch. Switching brands via the brand-selector buttons now also collapses any expanded row (not the open/closed state of the two panels themselves, which carries over) so a stale expanded outlet from the previous brand can't linger. Verified with an isolated test run against the actual extracted function code (not a retyped copy): both panels correctly group and sort by sales, correctly exclude the brand-level marker row, platform shares sum to ~100%, and every row's expand/collapse toggles independently with no NaN/undefined anywhere in the generated HTML. Full syntax check clean.",
   "↕️ CPC PAGE — \"AGGREGATOR STRENGTH BY OUTLET\" IS NOW SORTABLE — Nikhil's direct ask (\"Make this filterable or sortable by strength of per aggregator or sortable by outlet name\"). Every column header is now clickable: Outlet sorts alphabetically, and each aggregator column (Deliveroo/Talabat/Careem/Noon/Keeta) sorts every outlet by that aggregator's % share — click again to reverse direction — so e.g. clicking \"Talabat\" immediately surfaces which outlets lean on Talabat the most, instead of scanning a long alphabetical list by eye. Reuses the exact same tableSort/sortTableBy click-header mechanism every other sortable table in the dashboard already uses (Overview/Brands/Platforms/Cancellations), but builds its own row markup rather than calling the generic sortableTable() helper directly, because that helper's plain <td> cells have no way to carry the per-cell heatmap background color (darker = stronger aggregator at that outlet) that's the actual value of this table — didn't want to trade that away just to get sorting for free. Verified against the real data from Nikhil's own screenshot (Al Forsan/Al Quoz/Al Reef/Al Reem/DIP): sorting by outlet name correctly flips A-Z/Z-A; sorting by Talabat correctly surfaces Al Reef (52%) and Al Forsan (47%) first on descending, reverses correctly on a second click; and an outlet with no data for a given aggregator (Al Reef has no Careem orders) correctly sorts to the bottom rather than breaking the sort. Full syntax check clean.",
@@ -19537,31 +19537,77 @@ let _feedbackTrendObserver=null; // tracked so any previous observer can be disc
 let feedbackShowCustom=false;       // top-section Option C: presets shown by default, granular month chips + dimension filters hidden behind this
 let feedbackHeatmapMode='count';    // 'count' or 'rate' — which face of the flip heatmap is showing
 let feedbackCompareMode='row';      // 'column' (vs other categories this month) or 'row' (vs this category's own history) — defaults to row per confirmed preference
-let feedbackTrendChartMode='count'; // 'count' (merged count+rate, both shown on hover) or 'target' (complaint rate vs the fixed 0.4% target) — which the trend chart currently shows
+let feedbackTrendChartMode='count'; // 'count' (merged count+rate, both shown on hover) or 'index' (Complaints vs Orders, both indexed to a fixed base month) — which the trend chart currently shows
 let feedbackLastOverviewContext=null; // cached {months,dimRecs,outletRanked,chartCatShort} from the last full render, so mode toggles can redraw the chart directly
+// v509: the Index chart's base month, decided explicitly via the "Base month" picker next to the
+// toggle — NOT derived from whatever the date filter currently shows (that was the actual bug:
+// re-picking "first visible month" every time the filter changed silently moved the 100-point
+// baseline). null = default to the earliest month in the full, unfiltered dataset.
+let feedbackIndexBaseMonth=null;
+function feedbackAllMonthsEver(){
+  if(!feedbackData||!feedbackData.records)return[];
+  return[...new Set(feedbackData.records.map(r=>r.month))].sort();
+}
+// Complaints + orders for ONE specific month, independent of the active date filter (Year/Month)
+// — only the Category/Aggregator/Outlet/Brand dimension filters apply, same as the chart's own
+// per-month series above. This is what lets the Index base month stay fixed no matter which date
+// preset is active: the baseline is always computed fresh from the full dataset, never from
+// whatever happens to be the first month inside the currently filtered window.
+function feedbackMonthValues(m){
+  if(!feedbackData||!feedbackData.records||!m)return{complaints:0,orders:0};
+  const complaints=feedbackData.records.filter(r=>r.month===m
+    &&(!feedbackFilterCategory||r.category===feedbackFilterCategory)
+    &&(!feedbackFilterAggregator||r.aggregator===feedbackFilterAggregator)
+    &&(!feedbackFilterOutlet||r.branch===feedbackFilterOutlet)
+    &&(!feedbackFilterBrand||r.brand===feedbackFilterBrand)
+  ).length;
+  let orders=0;
+  if(typeof allData!=="undefined"){
+    allData.forEach(r=>{
+      if(!r.date||r.date.slice(0,7)!==m)return;
+      if(feedbackFilterBrand&&r.brand!==feedbackFilterBrand)return;
+      if(feedbackFilterOutlet&&r.branch!==feedbackFilterOutlet)return;
+      if(feedbackFilterAggregator&&r.aggregator!==feedbackFilterAggregator)return;
+      orders+=(r.orders||0);
+    });
+  }
+  return{complaints,orders};
+}
+function feedbackSetIndexBaseMonth(m){
+  feedbackIndexBaseMonth=m||null;
+  if(feedbackLastOverviewContext){
+    const c=feedbackLastOverviewContext;
+    feedbackDrawOverviewCharts(c.months,c.dimRecs,c.outletRanked,c.chartCatShort);
+  }
+}
 function feedbackSetTrendChartMode(mode){
   if(mode===feedbackTrendChartMode)return;
   feedbackTrendChartMode=mode;
   const btnCount=document.getElementById('feedback-trend-mode-count');
-  const btnTarget=document.getElementById('feedback-trend-mode-target');
-  if(btnCount&&btnTarget){
+  const btnIndex=document.getElementById('feedback-trend-mode-index');
+  if(btnCount&&btnIndex){
     const mutedColor=btnCount.dataset.mutedColor;
     btnCount.style.background=mode==='count'?'#EA8C3A':'transparent';
     btnCount.style.color=mode==='count'?'#fff':mutedColor;
-    btnTarget.style.background=mode==='target'?'#EA8C3A':'transparent';
-    btnTarget.style.color=mode==='target'?'#fff':mutedColor;
+    btnIndex.style.background=mode==='index'?'#EA8C3A':'transparent';
+    btnIndex.style.color=mode==='index'?'#fff':mutedColor;
   }
-  // v464: legend swaps to two lines in Target mode (both series ARE lines there, unlike the
+  // v464: legend swaps to two lines in Index mode (both series ARE lines there, unlike the
   // Complaints bar in Count/%) — otherwise the swatch would show a square for a series that's
   // actually drawn as a line, same inconsistency-bug-class as everything else this session.
   const legendEl=document.getElementById('feedback-trend-legend');
   if(legendEl){
-    legendEl.innerHTML=mode==='target'
-      ?`<span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${legendEl.dataset.labelColor||''}"><span style="width:16px;height:2px;background:#DE4A42;border-radius:1px"></span>Complaint rate</span>
-        <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${legendEl.dataset.labelColor||''}"><span style="width:16px;height:2px;background:#94A3B8;background-image:repeating-linear-gradient(90deg,#94A3B8 0 4px,transparent 4px 7px)"></span>Target (0.4%)</span>`
+    legendEl.innerHTML=mode==='index'
+      ?`<span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${legendEl.dataset.labelColor||''}"><span style="width:16px;height:2px;background:#DE4A42;border-radius:1px"></span>Complaints (index)</span>
+        <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${legendEl.dataset.labelColor||''}"><span style="width:16px;height:2px;background:#5AB4E8;border-radius:1px"></span>Total orders (index)</span>`
       :`<span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${legendEl.dataset.labelColor||''}"><span style="width:10px;height:10px;border-radius:2px;background:#FF8A3D"></span>Complaints</span>
         <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${legendEl.dataset.labelColor||''}"><span style="width:16px;height:2px;background:#5AB4E8;border-radius:1px"></span>Total orders <span style="color:${legendEl.dataset.mutedColor||''}">(hover a point)</span></span>`;
   }
+  // v509: the "Base month" picker only makes sense in Index mode (it has nothing to do with
+  // Trend/Count) — shown/hidden here the same direct-DOM way the legend swap above already is,
+  // so toggling modes never needs a full renderFeedback().
+  const baseMonthWrap=document.getElementById('feedback-trend-basemonth-wrap');
+  if(baseMonthWrap)baseMonthWrap.style.display=mode==='index'?'inline-flex':'none';
   // v228: redraw the chart directly using the cached context instead of calling renderFeedback()
   // — a full re-render rebuilds the whole page's HTML, which destroys and recreates the canvas
   // element every time, leaving Chart.js's .update() with no real "before" state to animate from.
@@ -20131,9 +20177,17 @@ function feedbackBuildOverview(T){
   const trendHtml=`<div class="card" style="margin-bottom:12px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;flex-wrap:wrap;gap:8px">
       <div class="ct">Total complaints and rate, by month <span style="color:${T.label};font-weight:400;text-transform:none;letter-spacing:0">· click a bar to select that month for Detail</span></div>
-      <div style="display:inline-flex;background:${T.rowBg2||T.rowBg};border:1px solid ${T.border};border-radius:7px;padding:3px">
-        <button id="feedback-trend-mode-count" data-muted-color="${trendMutedColor}" onclick="feedbackSetTrendChartMode('count')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackTrendChartMode==='count'?'#EA8C3A':'transparent'};color:${feedbackTrendChartMode==='count'?'#fff':trendMutedColor}">Trend</button>
-        <button id="feedback-trend-mode-target" data-muted-color="${trendMutedColor}" onclick="feedbackSetTrendChartMode('target')" title="Complaint rate (complaints ÷ orders) each month against the 0.4% target" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackTrendChartMode==='target'?'#EA8C3A':'transparent'};color:${feedbackTrendChartMode==='target'?'#fff':trendMutedColor}">Target</button>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <div style="display:inline-flex;background:${T.rowBg2||T.rowBg};border:1px solid ${T.border};border-radius:7px;padding:3px">
+          <button id="feedback-trend-mode-count" data-muted-color="${trendMutedColor}" onclick="feedbackSetTrendChartMode('count')" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackTrendChartMode==='count'?'#EA8C3A':'transparent'};color:${feedbackTrendChartMode==='count'?'#fff':trendMutedColor}">Trend</button>
+          <button id="feedback-trend-mode-index" data-muted-color="${trendMutedColor}" onclick="feedbackSetTrendChartMode('index')" title="Complaints vs order growth, both indexed to a fixed base month — stays consistent across every date filter" style="padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:800;cursor:pointer;background:${feedbackTrendChartMode==='index'?'#EA8C3A':'transparent'};color:${feedbackTrendChartMode==='index'?'#fff':trendMutedColor}">Index</button>
+        </div>
+        <span id="feedback-trend-basemonth-wrap" style="display:${feedbackTrendChartMode==='index'?'inline-flex':'none'};align-items:center;gap:6px">
+          <span style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Base month</span>
+          <select onchange="feedbackSetIndexBaseMonth(this.value)" title="Which month indexes to 100 — fixed regardless of the date filter above, so the chart never silently reshapes itself" style="background:${T.panelBg||T.rowBg};border:1px solid ${T.border};border-radius:6px;color:${T.text};padding:3px 8px;font-size:11px;color-scheme:dark">
+            ${feedbackAllMonthsEver().map(m=>`<option value="${m}" ${(feedbackIndexBaseMonth||feedbackAllMonthsEver()[0])===m?'selected':''}>${esc(new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short",year:"numeric"}))}</option>`).join('')}
+          </select>
+        </span>
       </div>
     </div>
     <div style="display:flex;gap:14px;margin:6px 0 4px" id="feedback-trend-legend" data-label-color="${T.label}" data-muted-color="${T.muted}">
@@ -20166,81 +20220,92 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
       return s;
     });
     const rates=counts.map((c,i)=>orderVol[i]>0?+(c/orderVol[i]*100).toFixed(2):0);
-    // v508: "Index" mode (v464) is GONE — Nikhil caught it producing opposite-looking charts for
-    // the same real month depending on the date filter (All time vs This year), because it
-    // indexed both series to 100 at whatever the first VISIBLE month happened to be: switch the
-    // filter, the baseline month moves, the whole curve reshapes, even though June's real
-    // complaints/orders never changed. Confirmed and explained directly, not silently patched.
-    // Nikhil's own follow-up question — "shouldn't it be anchored on a target?" — is the fix:
-    // replaced growth-vs-growth indexing with an absolute complaint RATE (already computed above
-    // as `rates`, same number Count/% already shows on hover) plotted against a flat 0.4% TARGET
-    // line (Oregano Group's own existing target, confirmed with Nikhil — NOT presented as an
-    // "industry benchmark": researched food-delivery/F&B complaint-rate sources directly and none
-    // publish a figure at this same definition — complaint tickets ÷ orders — to validate against;
-    // aggregator merchant portals are the one genuinely comparable source and weren't available
-    // here). A flat target has no baseline month at all, so this can never reshape itself when the
-    // date filter changes — "This year" just shows a slice of the exact same line "All time" does.
-    if(feedbackTrendChartMode==='target'){
-      const TARGET_RATE=0.4;
-      // Worst month currently in view that's over target — not a growth gap, just rate vs the
-      // fixed line, so this reads the same regardless of which date preset is active.
+    // v509: Index mode is BACK — Nikhil's call. v508's flat-0.4%-target replacement was "a bad
+    // idea": he wants the two-line Complaints-vs-Orders INDEX restored, because that's the view
+    // that actually answers "when did complaints outgrow sales growth" for higher management —
+    // a flat target only answers "are we above/below one number," not "which line is pulling
+    // ahead of the other." What's different from the original v464 Index (and the actual bug
+    // Nikhil caught, explained to him before this fix): the base month is no longer picked
+    // silently from "whatever's first in the currently filtered view" — that's what made the
+    // exact same June numbers look like a spike under All-time and a non-event under This-year,
+    // because switching the date filter secretly moved the 100-point baseline (Jan 2025 vs Jan
+    // 2026). Now the base month is "decided," per Nikhil's own wording: feedbackIndexBaseMonth is
+    // independent of the date filter entirely, defaults to the earliest month in the FULL
+    // dataset, and is only ever changed via the explicit "Base month" picker next to the toggle —
+    // so the exact same month always indexes to the exact same value no matter which date preset
+    // is active; switching filters now only changes which slice of that one consistent curve is
+    // shown, the same way zooming a stock chart doesn't change the index level at a given date.
+    if(feedbackTrendChartMode==='index'){
+      const allMonthsEver=feedbackAllMonthsEver();
+      const baseMonth=(feedbackIndexBaseMonth&&allMonthsEver.includes(feedbackIndexBaseMonth))?feedbackIndexBaseMonth:allMonthsEver[0];
+      const baseVals=feedbackMonthValues(baseMonth);
+      const ordersBase=baseVals.orders;
+      const complaintsBase=baseVals.complaints;
+      const ordersIdx=orderVol.map(v=>ordersBase>0?+(v/ordersBase*100).toFixed(1):0);
+      const complaintsIdx=counts.map(v=>complaintsBase>0?+(v/complaintsBase*100).toFixed(1):0);
+      const baseMonthLabel=baseMonth?new Date(baseMonth+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short",year:"numeric"}):"—";
+      // v464: alert threshold — complaints index running >15pts ahead of orders index. 15 is a
+      // starting point, not a tuned figure; easy to move if it flags too often or too rarely
+      // once Nikhil's seen it against a few real months.
+      const GAP_ALERT=15;
+      const gaps=complaintsIdx.map((c,i)=>c-ordersIdx[i]);
       const alertHtml=document.getElementById('feedback-trend-alert');
       if(alertHtml){
-        let worstIdx=-1,worstGap=-Infinity;
-        rates.forEach((r,i)=>{if(orderVol[i]>0&&counts[i]>0){const gap=r-TARGET_RATE;if(gap>worstGap){worstGap=gap;worstIdx=i;}}});
-        if(worstIdx>=0&&worstGap>0){
-          const mo=new Date(months[worstIdx]+"-01T12:00:00").toLocaleDateString("en-AE",{month:"long",year:"numeric"});
-          alertHtml.innerHTML=`<div style="margin-top:8px;padding:9px 12px;background:#EF444418;border-radius:7px;display:flex;align-items:center;gap:8px"><span style="font-size:14px">⚠️</span><span style="font-size:11.5px;color:#F87171">${esc(mo)}: complaint rate is ${rates[worstIdx].toFixed(2)}% — ${worstGap.toFixed(2)}pts above the 0.4% target.</span></div>`;
+        let maxGapIdx=-1,maxGap=-Infinity;
+        gaps.forEach((g,i)=>{if(orderVol[i]>0&&counts[i]>0&&g>maxGap){maxGap=g;maxGapIdx=i;}});
+        if(maxGapIdx>=0&&maxGap>GAP_ALERT){
+          const mo=new Date(months[maxGapIdx]+"-01T12:00:00").toLocaleDateString("en-AE",{month:"long",year:"numeric"});
+          alertHtml.innerHTML=`<div style="margin-top:8px;padding:9px 12px;background:#EF444418;border-radius:7px;display:flex;align-items:center;gap:8px"><span style="font-size:14px">⚠️</span><span style="font-size:11.5px;color:#F87171">${esc(mo)}: complaints index is ${maxGap.toFixed(0)}pts above the orders index (base: ${esc(baseMonthLabel)}) — growing faster than order volume explains.</span></div>`;
         }else{
-          alertHtml.innerHTML=`<div style="margin-top:8px;padding:9px 12px;background:#22C55E18;border-radius:7px;display:flex;align-items:center;gap:8px"><span style="font-size:14px">✓</span><span style="font-size:11.5px;color:#4ADE80">Complaint rate is at or below the 0.4% target every month in this view.</span></div>`;
+          alertHtml.innerHTML=`<div style="margin-top:8px;padding:9px 12px;background:#22C55E18;border-radius:7px;display:flex;align-items:center;gap:8px"><span style="font-size:14px">✓</span><span style="font-size:11.5px;color:#4ADE80">Complaints are tracking order volume — no month running materially ahead (base: ${esc(baseMonthLabel)}).</span></div>`;
         }
       }
-      const monthLabelsTarget=months.map(m=>{
+      const monthLabelsIdx=months.map(m=>{
         const short=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"});
         const isJan=m.endsWith("-01");
         return isJan?[short,m.slice(0,4)]:[short];
       });
-      const axisColorTarget=_darkPage?'#D5DCEA':'#334155';
+      const axisColorIdx=_darkPage?'#D5DCEA':'#334155';
       // Same snake-draw TECHNIQUE as the bar+line view below (clip rect widening left to
       // right), adapted for two simultaneous lines instead of one line chained after a bar
-      // animation — there's no bar phase here, so both lines draw together. 3200ms, no leading
-      // dot, matching what Nikhil approved for the Overview page's own line-draw animation
-      // (build 459) rather than reusing this chart's existing 1400ms.
-      const targetSnakeClip={
-        id:'feedbackTargetSnakeClip',
+      // animation — there's no bar phase here, so both lines draw together. Slowed to 3200ms
+      // and dropped the leading dot, matching what Nikhil approved for the Overview page's own
+      // line-draw animation (build 459) rather than reusing this chart's existing 1400ms.
+      const idxSnakeClip={
+        id:'feedbackIdxSnakeClip',
         beforeDatasetDraw(chart){
-          const progress=chart._targetSnakeProgress!==undefined?chart._targetSnakeProgress:1;
+          const progress=chart._idxSnakeProgress!==undefined?chart._idxSnakeProgress:1;
           if(progress>=1)return;
           const area=chart.chartArea;const ctx=chart.ctx;
           ctx.save();ctx.beginPath();
           ctx.rect(area.left,area.top-10,(area.right-area.left)*progress,area.height+20);
           ctx.clip();
-          chart._targetClipped=true;
+          chart._idxClipped=true;
         },
-        afterDatasetDraw(chart){if(chart._targetClipped){chart.ctx.restore();chart._targetClipped=false;}}
+        afterDatasetDraw(chart){if(chart._idxClipped){chart.ctx.restore();chart._idxClipped=false;}}
       };
-      function startTargetSnake(chart){
+      function startIdxSnake(chart){
         const DUR=3200;
-        if(chart._targetSnakeAnimId)cancelAnimationFrame(chart._targetSnakeAnimId);
-        chart._targetSnakeAnimating=true;
-        chart._targetSnakeProgress=0;
+        if(chart._idxSnakeAnimId)cancelAnimationFrame(chart._idxSnakeAnimId);
+        chart._idxSnakeAnimating=true;
+        chart._idxSnakeProgress=0;
         const start=performance.now();
         function step(now){
           const t=Math.min(1,(now-start)/DUR);
-          chart._targetSnakeProgress=1-Math.pow(1-t,3);
+          chart._idxSnakeProgress=1-Math.pow(1-t,3);
           chart.draw();
-          if(t<1){chart._targetSnakeAnimId=requestAnimationFrame(step);}
-          else{chart._targetSnakeAnimating=false;}
+          if(t<1){chart._idxSnakeAnimId=requestAnimationFrame(step);}
+          else{chart._idxSnakeAnimating=false;}
         }
-        chart._targetSnakeAnimId=requestAnimationFrame(step);
+        chart._idxSnakeAnimId=requestAnimationFrame(step);
       }
       destroyChart('feedback-trend-chart');
       if(_feedbackTrendObserver){_feedbackTrendObserver.disconnect();_feedbackTrendObserver=null;}
-      const targetChart=new Chart(trendCtx,{
+      const idxChart=new Chart(trendCtx,{
         type:'line',
-        data:{labels:monthLabelsTarget,datasets:[
-          {label:'Complaint rate',data:rates,borderColor:'#DE4A42',backgroundColor:'#DE4A42',borderWidth:2,pointRadius:0,tension:.3},
-          {label:'Target (0.4%)',data:months.map(()=>TARGET_RATE),borderColor:'#94A3B8',backgroundColor:'#94A3B8',borderWidth:1.5,borderDash:[6,4],pointRadius:0,tension:0}
+        data:{labels:monthLabelsIdx,datasets:[
+          {label:'Complaints (index)',data:complaintsIdx,borderColor:'#DE4A42',backgroundColor:'#DE4A42',borderWidth:2,pointRadius:0,tension:.3},
+          {label:'Total orders (index)',data:ordersIdx,borderColor:'#5AB4E8',backgroundColor:'#5AB4E8',borderWidth:2,pointRadius:0,tension:.3}
         ]},
         options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:12}},
           interaction:{mode:'index',intersect:false},
@@ -20248,30 +20313,35 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
           plugins:{legend:{display:false},
             tooltip:{callbacks:{
               title:items=>{const i=items[0].dataIndex;return new Date(months[i]+"-01T12:00:00").toLocaleDateString("en-AE",{month:"long",year:"numeric"});},
+              // v466: real gap Nikhil caught — "87" and "101" mean nothing on their own to
+              // someone who only thinks in complaint counts and order counts. Every tooltip
+              // line now leads with the real number (already computed above as counts/orderVol
+              // — no new data, just surfacing what was already there) and puts the index value
+              // in parentheses as the secondary, technical detail for anyone who does want it.
               label:c=>{
                 const i=c.dataIndex;
-                if(c.datasetIndex===0)return'Complaints: '+counts[i]+' of '+orderVol[i].toLocaleString()+' orders ('+rates[i].toFixed(2)+'%)';
-                return'Target: '+TARGET_RATE.toFixed(2)+'%';
+                if(c.datasetIndex===0)return'Complaints: '+counts[i]+' (index '+c.parsed.y.toFixed(0)+')';
+                return'Total orders: '+orderVol[i].toLocaleString()+' (index '+c.parsed.y.toFixed(0)+')';
               }
             }}
           },
           scales:{
-            y:{position:'left',title:{display:true,text:'Complaint rate (%)',color:axisColorTarget},grid:{color:_darkPage?'rgba(255,255,255,.06)':'#F1F5F9'},ticks:{color:axisColorTarget,font:{size:12,weight:'600'}}},
-            x:{grid:{display:false},ticks:{color:axisColorTarget,font:{size:12,weight:'600'}}}
+            y:{position:'left',title:{display:true,text:'Index ('+baseMonthLabel+' = 100)',color:axisColorIdx},grid:{color:_darkPage?'rgba(255,255,255,.06)':'#F1F5F9'},ticks:{color:axisColorIdx,font:{size:12,weight:'600'}}},
+            x:{grid:{display:false},ticks:{color:axisColorIdx,font:{size:12,weight:'600'}}}
           }},
-        plugins:[targetSnakeClip]
+        plugins:[idxSnakeClip]
       });
-      targetChart._targetSnakeProgress=0;
-      targetChart._trendMode='target';
-      charts['feedback-trend-chart']=targetChart;
-      startTargetSnake(targetChart);
-      const targetObs=new IntersectionObserver((entries)=>{
+      idxChart._idxSnakeProgress=0;
+      idxChart._trendMode='index';
+      charts['feedback-trend-chart']=idxChart;
+      startIdxSnake(idxChart);
+      const idxObs=new IntersectionObserver((entries)=>{
         if(!entries[0].isIntersecting)return;
-        if(targetChart._targetSnakeAnimating)return;
-        startTargetSnake(targetChart);
+        if(idxChart._idxSnakeAnimating)return;
+        startIdxSnake(idxChart);
       },{threshold:0.2});
-      targetObs.observe(trendCtx);
-      _feedbackTrendObserver=targetObs;
+      idxObs.observe(trendCtx);
+      _feedbackTrendObserver=idxObs;
     }else{
     const selected=feedbackFilterMonths.size?months.map(m=>feedbackFilterMonths.has(m)):months.map(()=>true);
     // v466: was a count/rate ternary — dead now that % is merged into this same view (rate is
