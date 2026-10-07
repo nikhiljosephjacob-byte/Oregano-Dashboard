@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-07-510";
+const BUILD_VERSION="2026-10-07-511";
 const BUILD_NOTES=[
+  "💵 \"WHY DID PROFITABILITY CHANGE?\" POPUP — BOTTOM BREAKDOWN NOW MATCHES WHICH PAGE YOU'RE ON — Nikhil's direct catch: the popup's bottom section always grouped \"By campaign\" (brand · platform · campaign, one row each), even when the popup was already scoped to a single platform (the Platforms page — every row said \"· Deliveroo\", pure repetition) or a single brand (the Brands page — every row said \"Oregano · \", same thing). His fix: group by whichever dimension ISN'T already fixed by the card you're hovering. Reviewed as an interactive mockup first (two Design-canvas artboards built from his own real screenshot numbers, each with a live Current/Proposed toggle so he could compare in place) before touching real code, per his standing \"always show a rendering first\" preference — approved, then clarified the one open design question (what happens to the catch-all row): \"We only have 5 brands and 7 platforms. Brands all 5 you can show, for platforms show Noon/Deliveroo/Talabat/Careem/Keeta, other platforms include Smiles and Instashop since they're smaller.\" Built exactly that: the Platforms-page tile's Contribution popup now groups By Brand — all 5 brands always shown individually, no hidden/merged row, since there are only 5 to begin with. The Brands-page \"💵 Profitability\" KPI card's popup now groups By Platform — Noon/Deliveroo/Talabat/Careem/Keeta always get their own row, and Smiles/Instashop always collapse into one \"Other platforms\" row, by fixed identity rather than a magnitude threshold (unlike the dashboard's existing \"Other brands/platforms\" catch-all elsewhere, which stays threshold-based and is completely untouched). New groupProfitMovers() helper re-sums the same real underlying brand+aggregator+campaign movers computeProfitabilityBreakdown already produces — by brand or by platform — re-deriving each group's discount-depth/sales-change comment with the exact same phrasing logic as the original per-campaign rows, so the language stays consistent. Every OTHER popup on the dashboard (Overview, Outlets, the granular per-outlet/per-row tooltips) was left completely alone — groupBy is optional and defaults to the original \"By campaign\" behavior everywhere it isn't explicitly passed. Verified against the real extracted code (not a retyped copy) using Nikhil's own screenshot numbers for both pages: Platforms-page grouping shows all 5 brands with no platform-name repetition and no hidden row; Brands-page grouping shows the 5 named platforms plus a correctly-summed \"Other platforms\" row (two synthetic Smiles/Instashop movers merging into one +AED 318 row, matching the real screenshot's combined figure); and a regression check confirms the ungrouped/default path (every other popup) renders byte-identical to before — still \"By campaign\", still brand · platform row labels. Full syntax check clean.",
   "📤 TALABAT UPLOAD — \"FORMAT NOT RECOGNIZED\" ON A GENUINE TALABAT FILE — Nikhil hit a hard block trying to upload this week's orderDetails export: the dashboard rejected it outright with \"format not recognized (expected ... Talabat XLSX ...)\" even though it's a real Talabat orderDetails file. Inspected the actual uploaded CSV column-by-column against what the parser expects: Talabat has quietly changed the capitalization of several export columns — \"Talabat-funded voucher\" instead of \"Talabat-Funded Voucher\", \"Operational charges\" instead of \"Operational Charges\", \"Payout amount\" instead of \"Payout Amount\", \"Order items\" instead of \"Order Items\" — while \"Restaurant name\"/\"Order status\"/\"Subtotal\"/etc stayed exactly the same. Both the upload-format detector AND the parser's own column lookups did exact, case-sensitive string matching, so this harmless template tweak on Talabat's side silently blocked every upload, not just this one file. Same root-cause shape as the earlier Keeta header-rename bug (\"Restaurant name\" → \"Store name\"), but this time it's case rather than the whole word, so it slipped past that earlier fix's exact-name matching. Fixed by making both the detector's Talabat check and every column lookup inside parseTalabatXlsx case-insensitive (colIdx is now keyed by lowercased header text, with a colAt()/numAt() helper that lowercases at lookup time) — every other aggregator's detection logic (Keeta/Careem/Deliveroo/Noon) is untouched since none of those were reported broken. Verified directly against Nikhil's actual uploaded file (not synthetic data): the detector now correctly identifies it as Talabat, and the full parser runs end to end with no \"missing columns\" error — 1,694 rows parsed into 198 brand×outlet×day records across all 5 brands (Oregano 1,329 orders, Lollorosso 153, Fyoozhen 81, Smokeys 73, Wicked Wings 40), Oct 1–6 2026, with real non-zero net payout, commission and operational-charge totals confirming the renamed columns are actually being read, not silently defaulting to zero. Full syntax check clean.",
   "🎯 FEEDBACK PAGE — \"INDEX\" MODE RESTORED WITH A FIXED, PICKABLE BASE MONTH (TARGET MODE REVERTED) — direct course-correction per Nikhil: \"no this doesnt work. I want 2 graphs based on index, but index value should be decided... Targets was a bad idea.\" v508 replaced the two-line Complaints-vs-Orders index chart with a single rate-vs-0.4%-target line — technically consistent across filters, but it lost the actual thing higher management needs from this chart: a visual crossing point showing exactly when the complaints curve outgrew the sales/orders curve. That's gone now; the two-line index chart is back. What's different from the ORIGINAL index chart (the one with the real bug): the baseline month is no longer silently derived from \"whichever month happens to be first in the currently filtered view\" — the actual root cause of Nikhil's original report (All time anchored to Jan 2025, This year anchored to Jan 2026, so the same real June 2026 numbers produced two different-looking stories). It's now a genuinely fixed anchor, independent of the Year/preset filter, with a new \"Base month\" dropdown next to the Index toggle so Nikhil decides which month = 100 — defaulting to the earliest month on record if he hasn't picked one. Two new filter-independent helpers (feedbackAllMonthsEver, feedbackMonthValues) compute the chosen base month's complaint count and order volume from the FULL dataset, never from whatever subset the date filter currently shows, so switching All time ↔ This year ↔ any other preset can no longer reshape the curve — only the base-month picker can, and that's now an explicit, visible choice instead of a hidden side-effect. The y-axis title now names the active base month (e.g. \"Index (Jan 2025 = 100)\") and the over/under-target alert banner does the same, so it's never ambiguous what the 100-line means. Verified against the real extracted helper functions (not a retyped copy): the default base month resolves identically whether viewed under All time or This year; June 2026's complaints-index and orders-index values come out exactly equal between both filter windows; an explicitly chosen base month (e.g. Jan 2026) still matches across windows; and a base month entirely outside the current filter window (e.g. picking Oct 2025 while viewing This year) resolves correctly with no NaN. Full syntax check clean.",
   "📐 BRANDS PAGE — DEEP DIVE PANELS NOW SHOW Δ VS THE COMPARISON PERIOD — direct follow-up to v506, per Nikhil's catch right after it shipped (\"it doesnt show me the comparisons compared to the previous period\"). Root cause: brDeepDiveOutletPanel and brDeepDivePlatformPanel were written taking only the current period's data (ld) — unlike literally every other table on this page (and this dashboard), which always pairs current-period figures with a Δ vs whatever comparison period is selected (pm/pd, shown via fmtChgCell). The two new panels simply never received the prior-period data at all, so there was nothing to compare against — not a display bug, a missing input. Fixed by threading pd (the same prior-period slice renderBrands already computes) through brDeepDiveSection → both panel functions, and adding \"Δ Orders <comp period>\" / \"Δ Net Sales <comp period>\" columns — using the exact same fmtChgCell helper and color convention (green/red, ▲/▼ via +/−) as the existing Outlet × Platform table — to both the top-level rows (outlet ranking / platform ranking) AND the expanded sub-rows (an outlet's platform split, a platform's outlet split), so the comparison is available at every level, not just the summary row. An outlet or platform with no matching prior-period record (e.g. newly opened) correctly shows '—' instead of a bogus or crashing percentage. Verified against the real extracted function code with a mock current period deliberately set 10% above a mock prior period: every row and every expanded sub-row now renders a correctly-colored '+X (+Y%)' Δ, the comparison-period label is in the header, and the no-prior-data edge case renders '—' with no NaN/undefined anywhere in the output. Full syntax check clean.",
@@ -1142,10 +1143,57 @@ function profDateRanges(){
   // (computeProfitabilityBreakdown) never prices a day the sales side isn't counting.
   return{cur:{start:f.start,end:dispEnd(f.start,f.end)},prior:{start:cr.s,end:dispEnd(cr.s,cr.e)}};
 }
-function profitabilityTipId(currentRecords,priorRecords,dateRef,labelCur,labelPrior,rangeCur,rangePrior){
-  return storeTip(()=>buildProfitabilityTipHTML(computeProfitabilityBreakdown(priorRecords,currentRecords,dateRef,rangePrior,rangeCur),labelPrior||'Prior period',labelCur||'Current period'));
+function profitabilityTipId(currentRecords,priorRecords,dateRef,labelCur,labelPrior,rangeCur,rangePrior,groupBy){
+  return storeTip(()=>buildProfitabilityTipHTML(computeProfitabilityBreakdown(priorRecords,currentRecords,dateRef,rangePrior,rangeCur),labelPrior||'Prior period',labelCur||'Current period',groupBy));
 }
-function buildProfitabilityTipHTML(bd,labelA,labelB){
+// v511: Nikhil's direct catch-and-fix — the "Why did profitability change?" popup's bottom
+// breakdown always grouped by brand+platform+campaign ("By campaign"), even when the popup is
+// already scoped to ONE platform (the Platforms page, where the platform is fixed by whichever
+// card you opened — "Deliveroo · Deliveroo" on every row was pure noise) or ONE brand (the Brands
+// page, where the brand is fixed the same way). His fix: group by whichever dimension is NOT
+// already fixed by the card — "By Brand" on the Platforms page, "By Platform" on the Brands page
+// — so a brand/platform running several campaigns in the window collapses into one real net
+// number instead of being split across campaign rows. Reviewed as an interactive mockup (two
+// Design-canvas artboards with a live Current/Proposed toggle, built from his own real screenshot
+// numbers) before building, per standing instruction. Confirmed with him which rows always show
+// individually vs. roll into "Other": all 5 brands always show (never hidden — there are only 5),
+// Noon/Deliveroo/Talabat/Careem/Keeta always show individually on platform grouping, and Smiles/
+// Instashop always collapse into "Other platforms" (a fixed list by identity, not a magnitude
+// threshold — unlike the existing ungrouped "Other brands/platforms" catch-all below, which stays
+// magnitude-based and untouched for every other popup on the dashboard).
+const PROFIT_POPUP_BREAKOUT_PLATFORMS=new Set(["Noon","Deliveroo","Talabat","Careem","Keeta"]);
+function groupProfitMovers(movers,groupBy){
+  if(!groupBy)return movers;
+  const keyFn=groupBy==='brand'
+    ?(m=>m.brand)
+    :(m=>PROFIT_POPUP_BREAKOUT_PLATFORMS.has(m.aggregator)?m.aggregator:'Other platforms');
+  const groups={};
+  for(const m of movers){
+    const k=keyFn(m);
+    if(!groups[k])groups[k]={label:k,contribA:0,contribB:0,grossA:0,grossB:0,discA:0,discB:0};
+    const g=groups[k];
+    g.contribA+=m.contribA;g.contribB+=m.contribB;
+    g.grossA+=m.grossA;g.grossB+=m.grossB;
+    g.discA+=m.discA;g.discB+=m.discB;
+  }
+  // Same comment-phrasing logic as the per-campaign movers above (computeProfitabilityBreakdown),
+  // applied to the grouped totals instead of one brand+aggregator+campaign slice.
+  return Object.values(groups).map(g=>{
+    const delta=g.contribB-g.contribA;
+    const depthA=g.grossA>0?g.discA/g.grossA:0,depthB=g.grossB>0?g.discB/g.grossB:0;
+    const depthStr=`${(depthA*100).toFixed(1)}% → ${(depthB*100).toFixed(1)}%`;
+    const salesPct=g.grossA>0?((g.grossB-g.grossA)/g.grossA*100):null;
+    const depthRose=depthB>depthA+0.03,depthFell=depthB<depthA-0.03;
+    let comment;
+    if(delta<0&&depthRose)comment=`discount depth rose ${depthStr} — grew faster than sales did`;
+    else if(delta>=0&&(depthFell||depthB<=depthA))comment=`discount depth ${depthStr}, sales ${salesPct!=null&&salesPct>=0?'grew':'held steady'}`;
+    else if(delta<0&&salesPct!=null&&salesPct<-3)comment=`gross sales fell ${Math.abs(salesPct).toFixed(0)}% (${fmtAEDTip(g.grossA)} → ${fmtAEDTip(g.grossB)}), discount depth ${depthStr}`;
+    else if(delta>=0&&salesPct!=null&&salesPct>3)comment=`gross sales grew ${salesPct.toFixed(0)}%, discount depth ${depthStr}`;
+    else comment=`net contribution ${delta>=0?'up':'down'} ${fmtAEDTip(Math.abs(delta))}, discount depth ${depthStr}`;
+    return{brand:g.label,aggregator:null,campaignName:null,comment,delta,grossA:g.grossA,grossB:g.grossB,discA:g.discA,discB:g.discB};
+  });
+}
+function buildProfitabilityTipHTML(bd,labelA,labelB,groupBy){
   const fAed=v=>Math.round(v).toLocaleString();
   const fSigned=v=>(v<0?'−':'+')+'AED '+Math.abs(Math.round(v)).toLocaleString();
   const good='#2ECC71',bad='#EF4444';
@@ -1184,17 +1232,25 @@ function buildProfitabilityTipHTML(bd,labelA,labelB){
       <span style="font-size:11.5px;font-weight:700;color:${marginPts>=0?good:bad}">${fmtMarginPct(mA)} → ${fmtMarginPct(mB)} · ${marginPts>=0?'+':'−'}${Math.abs(marginPts).toFixed(1)} pts</span>
     </div>`}
     </div>`;
-  const sortedMovers=[...bd.movers].sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta));
-  const shownMovers=sortedMovers.filter(m=>Math.abs(m.delta)>=Math.abs(totalDelta)*0.08||sortedMovers.length<=3).slice(0,4);
+  // v511: grouped mode (groupBy set) bypasses the magnitude-based top-N hiding below entirely —
+  // grouping by brand or platform already produces a small, bounded set of rows on its own (5
+  // brands, or 5 named platforms + one fixed "Other platforms" bucket), so every grouped row is
+  // shown, never threshold-hidden into a second "Other" bucket on top of the first.
+  const groupedMovers=groupProfitMovers(bd.movers,groupBy);
+  const sortedMovers=[...groupedMovers].sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta));
+  const shownMovers=groupBy?sortedMovers:sortedMovers.filter(m=>Math.abs(m.delta)>=Math.abs(totalDelta)*0.08||sortedMovers.length<=3).slice(0,4);
   const shownKeys=new Set(shownMovers.map(m=>m.brand+'|'+m.aggregator));
-  const hiddenMovers=sortedMovers.filter(m=>!shownKeys.has(m.brand+'|'+m.aggregator));
+  const hiddenMovers=groupBy?[]:sortedMovers.filter(m=>!shownKeys.has(m.brand+'|'+m.aggregator));
   const moverRow=(icon,label,campaignName,comment,delta,clr)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #2A3555">
       <div><div style="font-size:11px;font-weight:700">${icon} ${label}</div>${campaignName?`<div style="font-size:9.5px;color:#FBBF24;opacity:.85">🏷️ ${campaignName}</div>`:''}<div style="font-size:9.5px;opacity:.6;line-height:1.4;margin-top:1px">${comment}</div></div>
       <span style="font-size:11.5px;font-weight:700;color:${clr};white-space:nowrap;padding-left:8px">${fSigned(delta)}</span>
       </div>`;
   let moversHTML=shownMovers.map(m=>{
-    const icon=m.aggregator==='Deliveroo'?'🛵':m.aggregator==='Talabat'?'🚴':m.aggregator==='Keeta'?'🥡':m.aggregator==='Careem'?'🚗':m.aggregator==='Noon'?'🌙':'📍';
-    return moverRow(icon,`${m.brand} · ${m.aggregator}`,m.campaignName,m.comment,m.delta,m.delta>=0?good:bad);
+    // Grouped rows (groupBy set) carry no single aggregator — show that dimension's own logo
+    // instead of the aggregator-emoji scheme used for ungrouped brand+platform+campaign rows.
+    const icon=groupBy?logoImg(m.brand,14):(m.aggregator==='Deliveroo'?'🛵':m.aggregator==='Talabat'?'🚴':m.aggregator==='Keeta'?'🥡':m.aggregator==='Careem'?'🚗':m.aggregator==='Noon'?'🌙':'📍');
+    const label=groupBy?m.brand:`${m.brand} · ${m.aggregator}`;
+    return moverRow(icon,label,m.campaignName,m.comment,m.delta,m.delta>=0?good:bad);
   }).join('');
   // v289: fixes Nikhil catching a real gap — the top-level "Discount Burn" card can move a lot
   // even when the shown movers' OWN discount depth looks flat, because smaller brands/platforms
@@ -1215,7 +1271,7 @@ function buildProfitabilityTipHTML(bd,labelA,labelB){
   +`<div style="padding:14px 15px;color:#F1F5F9">`
   +cascade
   +netChangeBox
-  +(moversHTML?`<div style="font-size:9.5px;opacity:.6;text-transform:uppercase;margin-bottom:6px">By campaign</div>${moversHTML}`:'')
+  +(moversHTML?`<div style="font-size:9.5px;opacity:.6;text-transform:uppercase;margin-bottom:6px">${groupBy==='brand'?'By brand':groupBy==='platform'?'By platform':'By campaign'}</div>${moversHTML}`:'')
   +`</div></div>`;
 }
 const BE={Deliveroo:1.32,Noon:1.30,Careem:1.27,Talabat:1.41};
@@ -6641,7 +6697,7 @@ function renderBrands(){
     </style>`:"";
   document.getElementById("page-brands").innerHTML=brandsStyleOverride+makeFilterBar({hideBrand:true})+
     `<div class="brand-sel-row" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
-    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior),profCur.contribution<0?profitClr(profCur.contribution):null)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior,"platform"),profCur.contribution<0?profitClr(profCur.contribution):null)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="g2"><div class="sm"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;color:${b?.c}"><span>${selBrand} — ${OV_TREND_METRICS[brTrendMetric].label} Trend</span><span style="display:flex;gap:4px">${OV_TREND_METRIC_KEYS.map(k=>`<span onclick="brSetTrendMetric('${k}')" style="cursor:pointer;font-size:10px;font-weight:${k===brTrendMetric?700:500};padding:3px 8px;border-radius:6px;text-transform:none;letter-spacing:0;background:${k===brTrendMetric?(b?.c||'#F59E0B')+'22':'transparent'};color:${k===brTrendMetric?(b?.c||'#F59E0B'):(_darkPage?DARK_THEME.textMuted:'#64748B')};border:1px solid ${k===brTrendMetric?(b?.c||'#F59E0B'):'transparent'}">${OV_TREND_METRICS[k].shortLabel}</span>`).join('')}</span></div><div style="position:relative;height:180px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748B;font-weight:600;text-transform:none;letter-spacing:0;font-size:10px">sales bars · order count on top</span></div><div style="position:relative;height:180px"><canvas id="ch-b-agg"></canvas></div></div></div>
     ${brDeepDiveSection(ld,pd,b)}
     <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>`;
@@ -7074,7 +7130,7 @@ function renderPlatforms(){
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">AOV</div><div style="font-size:17px;font-weight:800;color:${T.valuePrimary};margin-top:2px">${a.orders>0?'AED '+a.aov.toFixed(1):'—'}</div></div>
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Disc. Burn</div><div style="font-size:17px;font-weight:800;color:${burnClr};margin-top:2px">${a.disc>0?fmtExact(a.disc):'—'}</div></div>
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Outlets</div><div style="font-size:17px;font-weight:800;color:${T.valuePrimary};margin-top:2px">${a.outlets}</div></div>
-        <div data-ctip="${profitabilityTipId(a.ldA,a.pdA,profDateRefPlat,"this period","prior period",profDateRanges().cur,profDateRanges().prior)}" style="cursor:help;background:${a.prof>=0?'rgba(46,204,113,.1)':'rgba(255,107,107,.1)'};border-radius:6px;margin:-4px -10px -4px -4px;padding:4px 10px 4px 4px"><div style="font-size:9px;color:${a.prof>=0?'#2ECC71':'#FF6B6B'};font-weight:700;text-transform:uppercase;letter-spacing:.1px;white-space:nowrap">💵 Contribution</div><div style="font-size:17px;font-weight:800;color:${a.prof>=0?'#2ECC71':'#FF6B6B'};margin-top:2px">${a.orders>0?fmtExact(a.prof):'—'}</div>${a.orders>0&&contribMarginPct(a.prof,a.sales)!=null?`<div style="font-size:10.5px;font-weight:700;color:${a.prof>=0?'#2ECC71':'#FF6B6B'};opacity:.85;margin-top:1px">${fmtMarginPct(contribMarginPct(a.prof,a.sales))} margin</div>`:''}</div>
+        <div data-ctip="${profitabilityTipId(a.ldA,a.pdA,profDateRefPlat,"this period","prior period",profDateRanges().cur,profDateRanges().prior,"brand")}" style="cursor:help;background:${a.prof>=0?'rgba(46,204,113,.1)':'rgba(255,107,107,.1)'};border-radius:6px;margin:-4px -10px -4px -4px;padding:4px 10px 4px 4px"><div style="font-size:9px;color:${a.prof>=0?'#2ECC71':'#FF6B6B'};font-weight:700;text-transform:uppercase;letter-spacing:.1px;white-space:nowrap">💵 Contribution</div><div style="font-size:17px;font-weight:800;color:${a.prof>=0?'#2ECC71':'#FF6B6B'};margin-top:2px">${a.orders>0?fmtExact(a.prof):'—'}</div>${a.orders>0&&contribMarginPct(a.prof,a.sales)!=null?`<div style="font-size:10.5px;font-weight:700;color:${a.prof>=0?'#2ECC71':'#FF6B6B'};opacity:.85;margin-top:1px">${fmtMarginPct(contribMarginPct(a.prof,a.sales))} margin</div>`:''}</div>
       </div>
       <div style="margin-top:8px;padding-top:8px;border-top:1px dashed ${T.dashedBorder};display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
         <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${T.priorValue};margin-top:2px">${a.orders_prev>0?'AED '+a.aovP.toFixed(1):'—'}</div></div>
