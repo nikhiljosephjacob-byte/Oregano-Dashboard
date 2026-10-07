@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-05-509";
+const BUILD_VERSION="2026-10-07-510";
 const BUILD_NOTES=[
+  "📤 TALABAT UPLOAD — \"FORMAT NOT RECOGNIZED\" ON A GENUINE TALABAT FILE — Nikhil hit a hard block trying to upload this week's orderDetails export: the dashboard rejected it outright with \"format not recognized (expected ... Talabat XLSX ...)\" even though it's a real Talabat orderDetails file. Inspected the actual uploaded CSV column-by-column against what the parser expects: Talabat has quietly changed the capitalization of several export columns — \"Talabat-funded voucher\" instead of \"Talabat-Funded Voucher\", \"Operational charges\" instead of \"Operational Charges\", \"Payout amount\" instead of \"Payout Amount\", \"Order items\" instead of \"Order Items\" — while \"Restaurant name\"/\"Order status\"/\"Subtotal\"/etc stayed exactly the same. Both the upload-format detector AND the parser's own column lookups did exact, case-sensitive string matching, so this harmless template tweak on Talabat's side silently blocked every upload, not just this one file. Same root-cause shape as the earlier Keeta header-rename bug (\"Restaurant name\" → \"Store name\"), but this time it's case rather than the whole word, so it slipped past that earlier fix's exact-name matching. Fixed by making both the detector's Talabat check and every column lookup inside parseTalabatXlsx case-insensitive (colIdx is now keyed by lowercased header text, with a colAt()/numAt() helper that lowercases at lookup time) — every other aggregator's detection logic (Keeta/Careem/Deliveroo/Noon) is untouched since none of those were reported broken. Verified directly against Nikhil's actual uploaded file (not synthetic data): the detector now correctly identifies it as Talabat, and the full parser runs end to end with no \"missing columns\" error — 1,694 rows parsed into 198 brand×outlet×day records across all 5 brands (Oregano 1,329 orders, Lollorosso 153, Fyoozhen 81, Smokeys 73, Wicked Wings 40), Oct 1–6 2026, with real non-zero net payout, commission and operational-charge totals confirming the renamed columns are actually being read, not silently defaulting to zero. Full syntax check clean.",
   "🎯 FEEDBACK PAGE — \"INDEX\" MODE RESTORED WITH A FIXED, PICKABLE BASE MONTH (TARGET MODE REVERTED) — direct course-correction per Nikhil: \"no this doesnt work. I want 2 graphs based on index, but index value should be decided... Targets was a bad idea.\" v508 replaced the two-line Complaints-vs-Orders index chart with a single rate-vs-0.4%-target line — technically consistent across filters, but it lost the actual thing higher management needs from this chart: a visual crossing point showing exactly when the complaints curve outgrew the sales/orders curve. That's gone now; the two-line index chart is back. What's different from the ORIGINAL index chart (the one with the real bug): the baseline month is no longer silently derived from \"whichever month happens to be first in the currently filtered view\" — the actual root cause of Nikhil's original report (All time anchored to Jan 2025, This year anchored to Jan 2026, so the same real June 2026 numbers produced two different-looking stories). It's now a genuinely fixed anchor, independent of the Year/preset filter, with a new \"Base month\" dropdown next to the Index toggle so Nikhil decides which month = 100 — defaulting to the earliest month on record if he hasn't picked one. Two new filter-independent helpers (feedbackAllMonthsEver, feedbackMonthValues) compute the chosen base month's complaint count and order volume from the FULL dataset, never from whatever subset the date filter currently shows, so switching All time ↔ This year ↔ any other preset can no longer reshape the curve — only the base-month picker can, and that's now an explicit, visible choice instead of a hidden side-effect. The y-axis title now names the active base month (e.g. \"Index (Jan 2025 = 100)\") and the over/under-target alert banner does the same, so it's never ambiguous what the 100-line means. Verified against the real extracted helper functions (not a retyped copy): the default base month resolves identically whether viewed under All time or This year; June 2026's complaints-index and orders-index values come out exactly equal between both filter windows; an explicitly chosen base month (e.g. Jan 2026) still matches across windows; and a base month entirely outside the current filter window (e.g. picking Oct 2025 while viewing This year) resolves correctly with no NaN. Full syntax check clean.",
   "📐 BRANDS PAGE — DEEP DIVE PANELS NOW SHOW Δ VS THE COMPARISON PERIOD — direct follow-up to v506, per Nikhil's catch right after it shipped (\"it doesnt show me the comparisons compared to the previous period\"). Root cause: brDeepDiveOutletPanel and brDeepDivePlatformPanel were written taking only the current period's data (ld) — unlike literally every other table on this page (and this dashboard), which always pairs current-period figures with a Δ vs whatever comparison period is selected (pm/pd, shown via fmtChgCell). The two new panels simply never received the prior-period data at all, so there was nothing to compare against — not a display bug, a missing input. Fixed by threading pd (the same prior-period slice renderBrands already computes) through brDeepDiveSection → both panel functions, and adding \"Δ Orders <comp period>\" / \"Δ Net Sales <comp period>\" columns — using the exact same fmtChgCell helper and color convention (green/red, ▲/▼ via +/−) as the existing Outlet × Platform table — to both the top-level rows (outlet ranking / platform ranking) AND the expanded sub-rows (an outlet's platform split, a platform's outlet split), so the comparison is available at every level, not just the summary row. An outlet or platform with no matching prior-period record (e.g. newly opened) correctly shows '—' instead of a bogus or crashing percentage. Verified against the real extracted function code with a mock current period deliberately set 10% above a mock prior period: every row and every expanded sub-row now renders a correctly-colored '+X (+Y%)' Δ, the comparison-period label is in the header, and the no-prior-data edge case renders '—' with no NaN/undefined anywhere in the output. Full syntax check clean.",
   "🔎 BRANDS PAGE — NEW \"DEEP DIVE BY OUTLET\" / \"DEEP DIVE BY PLATFORM\" PANELS — Nikhil's direct ask: \"when i select 1 brand and if i have to do a deepdive, it doesnt show me the option to Deep Dive by Aggregator. Would be good to have 2 Options, Deep Dive by Outlet and Deep Dive per Platform which ones clicked, expands to both.\" Until now the only outlet/platform view on this page was the single combined \"Outlet × Platform\" table at the bottom — useful, but there was no quick way to see just an outlet ranking or just a platform ranking for the selected brand without scanning every combined row by eye. Added a new \"🔍 Deep Dive\" section between the trend/platform charts and that existing table, with two independent toggle buttons — 📍 Deep Dive by Outlet and 📡 Deep Dive by Platform — exactly as asked: either can be open on its own, or both at once, neither forces the other closed. The Outlet panel ranks every outlet for the selected brand by Net Sales with an inline share bar; clicking an outlet expands it in place to show that outlet's own platform split (orders/sales/AOV per aggregator). The Platform panel ranks every aggregator by Net Sales with its % share of the brand's total; clicking a platform expands it to show that platform's outlet split. Same expand-in-place convention as the Cancellations pivot table (v505), so clicking a different row collapses whatever was open and the brand-level marker row is excluded from both groupings the same way every other per-outlet aggregation in this file already excludes it. Shown to Nikhil first as an interactive mockup (a Design canvas artifact) built from the real dashboard's dark theme and this exact brand's colors so he could click it himself before anything real was built — approved as-is (\"Looks Good. Build it\"), then implemented directly into renderBrands() against this file's real data (mkMap/sumR, same aggregation helpers the rest of the page already uses) rather than rebuilt from scratch. Switching brands via the brand-selector buttons now also collapses any expanded row (not the open/closed state of the two panels themselves, which carries over) so a stale expanded outlet from the previous brand can't linger. Verified with an isolated test run against the actual extracted function code (not a retyped copy): both panels correctly group and sort by sales, correctly exclude the brand-level marker row, platform shares sum to ~100%, and every row's expand/collapse toggles independently with no NaN/undefined anywhere in the generated HTML. Full syntax check clean.",
@@ -3037,12 +3038,16 @@ async function handleOrdersUpload(filesOrFile){
       const rowsForDetect=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
       const firstRow=rowsForDetect[0]||[],secondRow=rowsForDetect[1]||[];
       const headers=new Set();
-      firstRow.forEach(h=>headers.add(String(h).replace(/^\uFEFF/,"")));
-      secondRow.forEach(h=>headers.add(String(h).replace(/^\uFEFF/,"")));
+      const headersLower=new Set(); // v509: Talabat has been seen exporting the SAME columns with
+      // different capitalization across files (e.g. "Talabat-funded voucher" vs "Talabat-Funded
+      // Voucher", "Operational charges" vs "Operational Charges") \u2014 case-insensitive detection for
+      // Talabat only, so a harmless export-template casing change can't silently block every upload.
+      firstRow.forEach(h=>{const s=String(h).replace(/^\uFEFF/,"");headers.add(s);headersLower.add(s.toLowerCase());});
+      secondRow.forEach(h=>{const s=String(h).replace(/^\uFEFF/,"");headers.add(s);headersLower.add(s.toLowerCase());});
       let detected=null;
       if(headers.has("Order no.")&&headers.has("Promotion funded by merchant"))detected="keeta";
       else if(headers.has("TOTAL_PAYOUT_AMOUNT")&&headers.has("MERCHANT_AREA"))detected="careem";
-      else if(headers.has("Voucher Funded by you")&&headers.has("Talabat-Funded Voucher"))detected="talabat";
+      else if(headersLower.has("voucher funded by you")&&headersLower.has("talabat-funded voucher"))detected="talabat";
       else if(secondRow.some(h=>String(h).includes("Deliveroo Commission Rate"))&&secondRow.some(h=>String(h).includes("Order Value")))detected="deliveroo";
       // Noon: statement_orders CSV — has "outlet_name" + "order_status" + "item_value" headers on row 0
       else if(headers.has("outlet_name")&&headers.has("order_status")&&headers.has("item_value"))detected="noon";
@@ -3650,9 +3655,16 @@ async function parseTalabatXlsx(file){
   if(row0.includes("Restaurant name")){header=row0;dataStart=1;}
   else if(row1.includes("Restaurant name")){header=row1;dataStart=2;}
   else throw new Error("Talabat parser: couldn't find 'Restaurant name' column in row 0 or row 1 — is this really a Talabat orderDetails export?");
-  const colIdx={};header.forEach((h,i)=>{if(h)colIdx[h]=i;});
+  // v509: colIdx is keyed by LOWERCASED header text — confirmed directly against a real Oct 2026
+  // export that several Talabat columns changed casing (e.g. "Talabat-funded voucher" instead of
+  // "Talabat-Funded Voucher", "Operational charges" instead of "Operational Charges", "Payout
+  // amount" instead of "Payout Amount", "Order items" instead of "Order Items") while "Restaurant
+  // name"/"Order status"/etc stayed the same — a silent template tweak on Talabat's side, not a
+  // real format change. numAt()/colVal() below lowercase their lookup at call time, so every
+  // literal column name elsewhere in this function can stay in its original, readable casing.
+  const colIdx={};header.forEach((h,i)=>{if(h)colIdx[h.toLowerCase()]=i;});
   const required=["Restaurant name","Order status","Order received at","Subtotal","Voucher Funded by you","Commission","Operational Charges","Payout Amount"];
-  const missing=required.filter(c=>!(c in colIdx));
+  const missing=required.filter(c=>!(c.toLowerCase() in colIdx));
   if(missing.length)throw new Error("Talabat parser: missing columns — "+missing.join(", "));
 
   const data=rows.slice(dataStart);
@@ -3667,20 +3679,21 @@ async function parseTalabatXlsx(file){
   // v167: Cancellation Monitor support - see Keeta parser for the same pattern/rationale.
   const cancellations=[];
   const unmappedOutlets={}; // raw name → count
-  const numAt=(row,col)=>{const v=row[colIdx[col]];if(v==null||v==="")return 0;if(typeof v==="number")return v;const n=parseFloat(String(v));return isNaN(n)?0:n;};
+  const numAt=(row,col)=>{const v=row[colIdx[col.toLowerCase()]];if(v==null||v==="")return 0;if(typeof v==="number")return v;const n=parseFloat(String(v));return isNaN(n)?0:n;};
+  const colAt=(name)=>colIdx[String(name).toLowerCase()]; // case-insensitive index lookup, used below in place of raw colIdx["Literal"] accesses
 
   for(const row of data){
     if(!row||row.length===0)continue;
-    const status=String(row[colIdx["Order status"]]||"").trim();
+    const status=String(row[colAt("Order status")]||"").trim();
     if(status.toLowerCase()==="cancelled"){
       skipped.cancelled++;
-      const{brand:cBrand,outlet:cOutlet}=parseTalabatBrandOutlet(row[colIdx["Restaurant name"]]);
-      const colVal=(name)=>colIdx[name]!==undefined?row[colIdx[name]]:null;
+      const{brand:cBrand,outlet:cOutlet}=parseTalabatBrandOutlet(row[colAt("Restaurant name")]);
+      const colVal=(name)=>colAt(name)!==undefined?row[colAt(name)]:null;
       cancellations.push({
         aggregator:"Talabat",
         order_no:colVal("Order ID")||null,
         brand:cBrand||null,outlet:cOutlet||null,
-        date:parseTalabatDate(colVal("Cancelled at"))||parseTalabatDate(row[colIdx["Order received at"]]),
+        date:parseTalabatDate(colVal("Cancelled at"))||parseTalabatDate(row[colAt("Order received at")]),
         reason:colVal("Cancellation reason")||null,
         // v171: normalize Talabat's "Vendor" to "Restaurant" — same meaning (the restaurant
         // itself cancelled), but Talabat's own export uses different wording than Keeta/Careem/
@@ -3694,10 +3707,10 @@ async function parseTalabatXlsx(file){
       });
       continue;
     }
-    const{brand,outlet,rawOutlet}=parseTalabatBrandOutlet(row[colIdx["Restaurant name"]]);
+    const{brand,outlet,rawOutlet}=parseTalabatBrandOutlet(row[colAt("Restaurant name")]);
     if(!brand){skipped.no_brand++;continue;}
     if(!outlet){skipped.no_outlet++;if(rawOutlet)unmappedOutlets[rawOutlet]=(unmappedOutlets[rawOutlet]||0)+1;continue;}
-    const date=parseTalabatDate(row[colIdx["Order received at"]]);
+    const date=parseTalabatDate(row[colAt("Order received at")]);
     if(!date){skipped.no_date++;continue;}
     const key=`${brand}|${outlet}|${date}`;
     if(!agg[key])agg[key]={brand,outlet,date,orders:0,gross:0,net_payout:0,menu_disc:0,talabat_disc:0,commission:0,ops_charges:0};
@@ -3712,9 +3725,9 @@ async function parseTalabatXlsx(file){
     const _orderDisc=numAt(row,"Voucher Funded by you");
     if(_orderDisc>0.01){
       orderDetail.push({
-        o:String(colIdx["Order ID"]!==undefined?row[colIdx["Order ID"]]:`row${orderDetail.length}`),
+        o:String(colAt("Order ID")!==undefined?row[colAt("Order ID")]:`row${orderDetail.length}`),
         d:date,br:brand,ou:outlet,
-        i:String(colIdx["Order Items"]!==undefined?(row[colIdx["Order Items"]]||""):"").slice(0,150),
+        i:String(colAt("Order Items")!==undefined?(row[colAt("Order Items")]||""):"").slice(0,150),
         g:Math.round(numAt(row,"Subtotal")*100)/100,
         n:Math.round(numAt(row,"Payout Amount")*100)/100,
         disc:Math.round(_orderDisc*100)/100
