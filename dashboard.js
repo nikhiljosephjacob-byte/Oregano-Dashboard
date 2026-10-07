@@ -13,8 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-07-514";
+const BUILD_VERSION="2026-10-07-518";
 const BUILD_NOTES=[
+  "🔒 OUTLET CLOSURES — NAS CLOSURE CONFIRMED FINAL (LAST DAY 7 OCT 2026) AND NOW COVERED BY REAL-BEHAVIOUR TESTS — Nikhil confirmed 'Closing Date is October 7th for sure' and that Lollorosso Nad Al Sheba KPI history can be hidden/deleted (it already is, since v516), and asked for the remaining tests to be done. NO BEHAVIOUR CHANGE vs v517 — this build only records the confirmation in the closure registry comment. TESTS ADDED: the real campAnalysisV2 is now executed (not just source-checked): a Lollorosso campaign starting 9 Oct on flat business reads 0% lift (without the v517 guard it reads -50%), and a campaign straddling the closure keeps NAS on both sides; the real cmpOutletCard is rendered and shows '🔒 Lollorosso closed 7 Oct' beside NAS only when NAS is in a window. Both fail when the guard is deliberately removed. STILL SOURCE-LEVEL ONLY: the Outlets-page tile line (inside the huge renderOutlets closure) and the Compare drill-down/report-table markers.",
+  "🔒 OUTLET CLOSURES, PART 2 — CAMPAIGNS, PICKER, COMPARE AND OUTLETS PAGE NOW ALSO KNOW LOLLOROSSO @ NAS HAS CLOSED — completes the v516 work after Nikhil asked to finish the items I had listed as not yet covered. WHAT CHANGED: (1) Campaign analysis baseline — an outlet that closed BEFORE a campaign started is dropped from the 28-day-earlier baseline, so an all-outlet Lollorosso campaign after 7 Oct no longer compares its sales against a baseline that still contains NAS's sales (which read as a fake loss in uplift/ROI). Campaigns that straddle the closure keep NAS on both sides. (2) New-campaign branch picker no longer offers NAS for Lollorosso (Wicked Wings/Fyoozhen at NAS still listed). (3) Campaign alerts (Ends in Xh, Losing money, Below break-even) are suppressed for campaigns scoped ONLY to closed outlets, via new campScopeAllRetired(). (4) Compare page: the Active Outlets hover panel, the per-outlet report table and the outlet drill-down tables show a '🔒 Lollorosso closed 7 Oct' marker next to NAS instead of an unexplained -100% row. (5) Outlets page NAS tile line already shipped in v516 — now covered by a test. VERIFIED: 6 new tests (ad-cost accrual stops at closing day: NAS AED 700 vs live outlet AED 1,400 hand-checked; picker; scope helper; alerts; markers; baseline guard); the picker, scope and alert tests fail on v516 and pass on v517. NOT CHANGED: forecast calibration history, truncation detector (a closure day is a small share of an all-outlet campaign, not a cliff) and KPI history for NAS Lollorosso (removed from KPI tracker in v516).",
+  "🔒 OUTLET CLOSURES — LOLLOROSSO @ NAD AL SHEBA (NAS) CLOSES AFTER 7 OCT 2026; THE DASHBOARD NOW KNOWS — Nikhil's direct request: \"Lollorosso Brand in Nad Al Sheba is closing from tomorrow. Today will be the last date… Automatically in the google sheets, Entries will become Zero or no entries at all. So the Dashboard shouldnt assume that its a Sales or performance problem.\" ROOT CAUSE: the dashboard had no concept of a closed outlet. The sheet parser drops zero-sales days, so after closure NAS rows simply VANISH — present in the prior period, absent in the current one — which Overview, Digest, CPC and the forecaster all read as a -100% collapse. FIX: one OUTLET_CLOSURES registry (brand, branch, every spelling, last trading day) plus helpers outletIsRetired / outletClosedOn / outletClosureLastDay; adding a future closure is one line. Applied at every place that JUDGES an outlet — Overview needs-attention drops and zero-order lists; the 'N outlets with no orders' card (closed outlets now shown muted as 'Closed, not counted as missing'); Overview brief; Weekly Digest top-decliner and watch list; CPC Declining Outlets card and SALES TREND badge; CPC investment-plan rows for Deliveroo/Talabat/Careem/Noon (no budget recommended for a closed outlet); CPC Action Now (no top-up/withdraw/refill advice for closed outlets); the ad-cost extrapolation (no spend accrues after the closing day); the contractual-mandate projection (NAS's final sales are no longer scaled up to a full month); forecast baselines, momentum and seasonality and the break-even baseline (closed outlet excluded from forward-looking numbers); Compare page 'worst outlet' callout; KPI tracker (Lollorosso NAS tab dropped, expected Lollorosso listings 15 → 14, so no false 'missing 1 outlet' warning); Outlets page tile shows '🔒 Lollorosso closed after 7 Oct'. DELIBERATELY UNCHANGED: real historical sales, orders and totals — NAS's past sales stay in every total so numbers still reconcile with the sheet. Wicked Wings / Fyoozhen at NAS are unaffected (closure is per brand×outlet). VERIFIED: 9 new regression tests (registry/aliases, timing boundary, declining list, trend badge, mandate projection hand-check, baseline, Overview brief, KPI count) — all fail on v515 and pass on v516; a deliberate removal of one guard is caught.",
+  "🧾 UNCATEGORIZED BURN — ORDER-ID EXPORT NO LONGER SAYS \"UPLOAD A STATEMENT\" WHEN ONE IS ALREADY UPLOADED — a defect in my own v514, found while scoping better Talabat attribution. ROOT CAUSE: for Talabat/Careem/Deliveroo/Noon, v514 showed the same message — \"no order-level statement uploaded covering this date — upload one\" — whenever no discounted order was found on a gap date. But a statement can cover the date and simply list no discounted order (e.g. Oregano / Talabat / 3 Oct: sheet AED 13.20, statement has no voucher order that day). Telling you to upload something you already uploaded sends you chasing the wrong problem. FIX: new _statementCover(aggregator,brand,date) checks whether an uploaded statement spans the date for that brand and what discount it recorded; the per-date panel and the deep-dive CSV now distinguish (a) NO STATEMENT COVERS THIS DATE → upload prompt, and (b) STATEMENT COVERS THE DATE BUT LISTS NO DISCOUNTED ORDER → says so, quotes the statement's AED figure vs the sheet's, and notes the gap is not explained by order-level discounts in that statement. The deep-dive CSV gains a 16th column, \"Statement Discount That Date (AED)\" (Keeta rows show —). VERIFIED: 46 regression tests pass, incl. 4 new ones (statement-covers-no-orders, out-of-range/never-uploaded still prompt, Noon, 16-column rows not ragged).",
   "📥 UNCATEGORIZED BURN — ORDER IDS NOW SHOWN FOR ALL 5 AGGREGATORS, NOT JUST KEETA — Nikhil downloaded the \"Download all unattributed orders\" CSV and most of it came back blank (Order No, Items, Gross, Net all '—'); asked directly: \"Per item level data is not obtainable. But cant u get the order ID details atleast from all aggregators and their statements i upload.\" Checked first rather than assuming: Talabat, Careem, Deliveroo and Noon uploads were ALL already being parsed into a per-order orderDetail array at upload time (order ID, gross/net, discount amount — Talabat's parser even keeps the item text) via the exact same mechanism Keeta uses — it just had never been wired into the Uncategorized Burn panel or its two CSV exports, which checked `aggregator==='Keeta'` and returned nothing for everyone else even though the real data was sitting right there in the browser (a generic _orderDetailSource(aggregator) helper already existed for this — it just wasn't being called here; it already powers the per-campaign order-export CSV elsewhere in the dashboard). One real, permanent limit remains and is now stated plainly rather than glossed over: only Keeta has item-level campaign-matching rules (KEETA_ITEM_RULES), so only Keeta can say a SPECIFIC order is confirmed as the unattributed one. The other four have no per-order campaign resolution at all — campaigns are matched to orders by date range only — so for them this now lists every discounted order on the gap date as a candidate with a new 'Attribution Basis' column spelling out the distinction ('Item-resolved (Keeta) — confirmed unattributed order' vs 'Date-range matched (X has no item-level campaign rules yet) — candidate, not confirmed'), the same honest framing already used by the dashboard's per-campaign order-export CSV. Applied consistently in three places: the on-page per-date expand panel (discGapOrdersHTML, e.g. the '3 Oct AED 96 ▾' chips under Uncategorized Burn), its single-date CSV download, and the full cross-aggregator 'Download all' CSV Nikhil actually used. A date with no statement uploaded for that aggregator now says so plainly ('upload one to see order IDs here') instead of the old blanket 'order-level detail not available'. Verified against the real extracted code (not a retyped copy) with all 5 aggregators represented: Keeta's existing precise-match behavior is byte-identical to before (including the v306 sheet-vs-campaign-allocation-mismatch case, which still correctly shows its own message rather than an order list); Talabat rows show real order IDs AND real item text; Careem rows show real order IDs with an honest 'no item list' note (Careem's export has none); a genuinely never-uploaded aggregator (Deliveroo, in the test) correctly shows the upload-prompt message instead of crashing or showing a false blank; and a statement that exists but doesn't cover a given date (Noon) degrades to the same honest message rather than a confusing empty row. No NaN/undefined anywhere in any export. Full syntax check clean.",
   "🖱️ OVERVIEW PROFITABILITY POPUP — TOGGLE BUTTONS WERE CLOSING THE POPUP INSTEAD OF SWITCHING TABS — immediate follow-up to v512, per Nikhil's direct report right after that shipped: \"I am not able to click on the toggle of Platform/Brand/Campaign because when i click on it, the Pop up vanishes.\" Real bug, not a flaky repro. Root cause: v512's click-to-dismiss fix checked `e.target.closest('#_ctip')` to decide whether a click landed inside the tooltip — but clicking a toggle button calls profitPopupSetMode(), which replaces #_ctip's ENTIRE innerHTML (to render the new tab's content) WHILE that same click event is still bubbling up toward document. That innerHTML swap detaches the just-clicked button from the DOM a few milliseconds before the document-level dismiss handler runs. `.closest()` walks LIVE parentNode links to find an ancestor — on a now-detached node that chain is broken, so it found nothing, concluded the click must have landed outside the tooltip, and closed it. Exactly matches what Nikhil saw: click the toggle, popup vanishes instead of switching. Fixed by checking `e.composedPath()` instead — the browser computes a event's full path through the DOM ONCE, before dispatch even begins, and that snapshot stays correct no matter what any handler mutates along the way, so it still correctly reports \"this click's path included #_ctip\" even after the button that was clicked has been replaced. `.closest()` is kept as a fallback purely for the rare browser without composedPath support. Impossible to catch with the v512 isolated test, which called profitPopupSetMode() directly as a function — never dispatched a real click event, so it never exercised the actual event-bubbling-during-DOM-mutation race that caused this. This time verified with a real DOM (jsdom) that dispatches genuine click events through actual capture/target/bubble phases: first confirmed the OLD v512 handler reliably reproduces the exact reported bug in this harness (proving the test is meaningful, not just trivially green), then confirmed the NEW handler keeps the popup open through a toggle-button click while a real click truly outside the tooltip still closes it exactly as before — no regression to the core dismiss behavior. Full syntax check clean.",
   "💵 OVERVIEW PAGE — \"WHY DID PROFITABILITY CHANGE?\" POPUP NOW HAS A LIVE BRAND/PLATFORM/CAMPAIGN TOGGLE — direct follow-up to v511, per Nikhil's own catch: \"In the Overview page, Its for All brands and Platforms (unless i filter manually), there is still shows By Campaign below. Would it be better, if we split the Bottom of the P&L Pop up in the overview page to 2 sections, 1 By Brand and 1 by Platform or u have any other ideas?\" v511 fixed this same complaint on the Platforms and Brands pages by grouping by whichever dimension ISN'T already fixed by the card — but the Overview page's top-level Profitability KPI card is unfiltered by default (all 5 brands × all platforms at once), so neither dimension is fixed there and a single forced grouping would just trade one blind spot for another. Rather than guess, showed Nikhil 3 rendered options first (per his own ask, \"Show me renderings for all options for me to choose before building final\"): two stacked sections (his own idea), a 3-way Brand/Platform/Campaign toggle, and a Brand×Platform matrix — with an honest trade-off for each (the toggle needed a scoped change to the tooltip's click-anywhere-dismisses behavior, flagged on the mockup itself before he chose). He picked the toggle (\"I like Option 2\"). Built exactly that: the popup now opens on \"By brand\" with three small pill buttons (Brand/Platform/Campaign) in its header — clicking one re-groups the SAME already-computed breakdown in place via a new profitPopupSetMode() function, with zero recomputation (the underlying computeProfitabilityBreakdown call that builds the P&L cascade and the movers list runs once per hover, not once per click). This required the one flagged technical change: the dashboard's tooltip is a single global #_ctip div that any click anywhere on the page dismisses — made that handler ignore clicks that land inside the tooltip's own content, so clicking a toggle button no longer closes the very popup it's part of; every other click anywhere else on the page still dismisses it exactly as before. Every other popup on the dashboard (Platforms-page By Brand, Brands-page By Platform from v511, and every granular per-row/per-outlet tooltip) is unaffected — the toggle only renders when explicitly enabled, which is only this one Overview card. Verified against the real extracted code (not a retyped copy): the popup opens on \"By brand\" with all 3 tabs visible and Brand highlighted; clicking Platform re-renders to \"By platform\" with the Platform tab now highlighted, with the underlying breakdown computed exactly once across the whole open→toggle→toggle→toggle sequence (confirmed via an instrumented call counter); clicking Campaign correctly falls back to the original brand·platform·campaign row format; and a regression check confirms every other call site (which never passes the new toggle flag) renders with no toggle buttons at all, byte-identical to before. Full syntax check clean.",
@@ -435,6 +439,48 @@ const AC={Deliveroo:"#00CCBC",Talabat:"#FF6000",Noon:"#F5CF00",Careem:"#3DDC73",
 const MM={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
 const BNM={MC:"Motorcity",TQ:"Town Square","Al Qouz":"Al Quoz","Mirdif":"Mirdiff"};
 const AUH=new Set(["Al Forsan","Al Reem","Reem Island","WTC","Al Reef"]);
+// v516: OUTLET CLOSURES — one place that tells the whole dashboard a brand×outlet has permanently
+// closed, so the zero/absent sheet rows that follow are never read as a sales or performance
+// problem. Real data in the closed outlet's history is untouched (totals stay true); what changes is
+// every place that would JUDGE the outlet — decline alerts, "no orders" lists, CPC budget plans,
+// forecast baselines, KPI tabs/listing counts. To record a future closure, add one line here.
+//   lastDay = final trading day (inclusive; NAS date confirmed final by Nikhil). Treated as closed from that day onward for alerts and
+//   planning (the final day's own rows are partial/wind-down), and for data from lastDay+1.
+//   aliases = every spelling of the outlet that appears in sheets/CPC/KPI data (compared lowercased).
+const OUTLET_CLOSURES=[
+  {brand:"Lollorosso",branch:"NAS",aliases:["nas","nad al sheba","nad al sheba 1","nad al sheba 4"],lastDay:"2026-10-07",
+   note:"Lollorosso at Nad Al Sheba closed permanently after 7 Oct 2026 (other brands at NAS keep trading)"}
+];
+function outletClosure(brand,branch){
+  if(!brand||!branch)return null;
+  const b=String(branch).trim().toLowerCase();
+  for(const c of OUTLET_CLOSURES){
+    if(c.brand===brand&&(c.branch.toLowerCase()===b||(c.aliases||[]).includes(b)))return c;
+  }
+  return null;
+}
+// Closed or closing today: use for alerts, "missing outlet" lists and planning (anything forward-looking).
+function outletIsRetired(brand,branch,asOf){
+  const c=outletClosure(brand,branch);
+  return !!c&&(asOf||dk(new Date()))>=c.lastDay;
+}
+// Strictly after the last trading day: use for judging a specific date/window.
+function outletClosedOn(brand,branch,date){
+  const c=outletClosure(brand,branch);
+  return !!c&&date>c.lastDay;
+}
+function outletClosureLastDay(brand,branch){const c=outletClosure(brand,branch);return c?c.lastDay:null;}
+function outletRowRetired(r){return !!r&&outletIsRetired(r.brand,r.branch);}
+// Any closure at this branch (for branch-level tiles that span several brands).
+function branchClosures(branch){return OUTLET_CLOSURES.filter(c=>outletClosure(c.brand,branch)===c);}
+// v517: true when a campaign is scoped ONLY to outlets that have closed (e.g. a Lollorosso campaign on NAS alone).
+function campScopeAllRetired(c){
+  if(!c||!c.brand||c.brand==="All Brands"||typeof campOutlets!=="function")return false;
+  const set=campOutlets(c);
+  if(!set||!set.size)return false;
+  return [...set].every(b=>outletIsRetired(c.brand,b));
+}
+function closureShortDate(d){const m=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];return Number(d.slice(8,10))+" "+m[Number(d.slice(5,7))-1];}
 const COMM={
   Talabat:{
     Oregano:{commission:0.20,pg:0.02,cpc:0,note:"20% + 2% PG"},
@@ -723,7 +769,9 @@ function cpcAdCostForRange(brand,agg,startDate,endDate,viewBranches){
     if(!confirmedEnded&&endDate>knownThrough){
       const extraStartRaw=cpcNextDay(knownThrough);
       const extraStart=extraStartRaw>startDate?extraStartRaw:startDate;
-      const extraEnd=endDate<r.endDate?endDate:r.endDate;
+      let extraEnd=endDate<r.endDate?endDate:r.endDate;
+      const _closeLast=outletClosureLastDay(r.brand,r.branch); // v516: no spend accrues after an outlet closes
+      if(_closeLast&&_closeLast<extraEnd)extraEnd=_closeLast;
       if(extraStart<=extraEnd){
         const{cost}=cpcExtrapolatedCost(r,extraStart,extraEnd,realRate,dow);
         rowCost+=cost;
@@ -1970,6 +2018,32 @@ function _orderDetailSource(aggregator){
     Noon:typeof noonOrdersData!=='undefined'?noonOrdersData:null};
   const src=map[aggregator];
   return(src&&src.orderDetail&&src.orderDetail.length)?src.orderDetail:null;
+}
+// v515: does an uploaded statement for this aggregator+brand cover this date, and what did it
+// say the merchant-funded discount was? Lets "no discounted orders" be told apart from "no
+// statement uploaded" — they need opposite actions from the reader.
+function _statementCover(aggregator,brand,date){
+  const map={Talabat:typeof talabatOrdersData!=='undefined'?talabatOrdersData:null,
+    Careem:typeof careemOrdersData!=='undefined'?careemOrdersData:null,
+    Deliveroo:typeof deliverooOrdersData!=='undefined'?deliverooOrdersData:null,
+    Noon:typeof noonOrdersData!=='undefined'?noonOrdersData:null};
+  const src=map[aggregator];
+  if(!src||!src.records||!src.records.length)return{covered:false,disc:null,orders:0};
+  let lo=null,hi=null,disc=0,orders=0;
+  for(const r of src.records){
+    if(r.brand!==brand)continue;
+    if(!lo||r.date<lo)lo=r.date;
+    if(!hi||r.date>hi)hi=r.date;
+    if(r.date===date){disc+=(r.menu_disc||0);orders+=(r.orders||0);}
+  }
+  const covered=!!lo&&date>=lo&&date<=hi;
+  return{covered,disc:covered?disc:null,orders:covered?orders:0};
+}
+function _noOrdersMessage(aggregator,brand,date,sheetDisc){
+  const c=_statementCover(aggregator,brand,date);
+  if(!c.covered)return{uploaded:false,text:'no '+aggregator+' order-level statement uploaded covering this date — upload one to see order IDs here',stmtDisc:null};
+  const sd=(c.disc||0);
+  return{uploaded:true,stmtDisc:sd,text:'the uploaded '+aggregator+' statement covers this date but lists no discounted order for '+brand+' (statement shows AED '+sd.toFixed(2)+' merchant-funded discount'+(sheetDisc!=null?' vs AED '+sheetDisc.toFixed(2)+' on the sheet':'')+') — the gap is not explained by order-level discounts in this statement'};
 }
 // v135: Talabat has two genuinely different discount mechanisms — voucher-based (shows a
 // per-order amount in "Voucher Funded by you") and item-price-based (the item's listed price
@@ -6054,8 +6128,8 @@ function renderOverview(){
   CORE_VERDICT_AGGS.forEach(ag=>{
     const combosAg=combos.filter(c=>c.aggregator===ag);
     const winnersAg=[...combosAg].filter(o=>o.oc!=null).sort((a,b)=>b.oc-a.oc).slice(0,5);
-    const dropsAg=[...combosAg].filter(o=>o.oc!=null&&o.oc<-20).sort((a,b)=>a.oc-b.oc).slice(0,4);
-    const zerosAg=Object.keys(pm).filter(k=>{const r=pm[k];return r.aggregator===ag&&r.orders>0&&!cm[k];}).map(k=>{const[brand,branch,aggregator]=k.split("|");return{brand,branch,aggregator,orders:0,sales:0,oc:-100};}).slice(0,3);
+    const dropsAg=[...combosAg].filter(o=>o.oc!=null&&o.oc<-20&&!outletIsRetired(o.brand,o.branch)).sort((a,b)=>a.oc-b.oc).slice(0,4);
+    const zerosAg=Object.keys(pm).filter(k=>{const r=pm[k];return r.aggregator===ag&&r.orders>0&&!cm[k]&&!outletIsRetired(k.split("|")[0],k.split("|")[1]);}).map(k=>{const[brand,branch,aggregator]=k.split("|");return{brand,branch,aggregator,orders:0,sales:0,oc:-100};}).slice(0,3);
     const issuesAg=[...zerosAg,...dropsAg].slice(0,5);
     verdByAg[ag]={winners:winnersAg,issues:issuesAg};
   });
@@ -6078,7 +6152,10 @@ function renderOverview(){
       &&(!mf.platforms.size||mf.platforms.has(r.aggregator))
       &&(!mf.branches.size||mf.branches.has(r.branch)));
     const allInScopeKeys=new Set(inScope.map(r=>`${r.brand}|${r.branch}`));
-    const missingKeys=[...allInScopeKeys].filter(k=>!activeOutletKeys.has(k));
+    const missingAll=[...allInScopeKeys].filter(k=>!activeOutletKeys.has(k));
+    // v516: closed outlets are not "missing" — they're closed. Listed separately, muted, never red.
+    const closedKeys=missingAll.filter(k=>outletIsRetired(k.split("|")[0],k.split("|")[1]));
+    const missingKeys=missingAll.filter(k=>!closedKeys.includes(k));
     if(!missingKeys.length)return null;
     const byBrand={};
     missingKeys.forEach(k=>{const[brand,branch]=k.split("|");(byBrand[brand]=byBrand[brand]||[]).push(branch);});
@@ -6091,6 +6168,7 @@ function renderOverview(){
     return`<div style="background:${T.card};border:1px solid ${T.border};border-radius:10px;padding:14px 16px;box-shadow:0 12px 30px rgba(0,0,0,.35)">
       <div style="font-size:12px;font-weight:800;color:${T.red};margin-bottom:10px">${missingKeys.length} outlet${missingKeys.length===1?"":"s"} with no orders ${getPeriodLabel().toLowerCase()}</div>
       ${rows}
+      ${closedKeys.length?`<div style="margin-top:6px;padding-top:8px;border-top:1px dashed ${T.border};font-size:11px;color:#94A3B8">Closed, not counted as missing: ${closedKeys.map(k=>{const[b,br]=k.split("|");const c=outletClosure(b,br);return b+" · "+br+" (last day "+closureShortDate(c.lastDay)+")";}).join("; ")}</div>`:""}
     </div>`;
   })();
   // Renderer used for both initial paint and the tab-switch JS handler below
@@ -6427,6 +6505,7 @@ function digestBuildReportHTML(){
     new Set([...Object.keys(twO),...Object.keys(lwO)]).forEach(o=>{
       const cur=(twO[o]&&twO[o].sales)||0,base=(lwO[o]&&lwO[o].sales)||0;
       if(base<=0)return; // need a real baseline to compute a meaningful % move
+      if(outletIsRetired(b.n,o))return; // v516: a closed outlet's drop isn't a performance move
       const pct=pctOf(cur,base);
       if(pct==null)return;
       const move={brand:b.n,outlet:o,cur,base,pct};
@@ -6864,7 +6943,7 @@ function renderOutlets(){
               <div style="font-size:20px;font-weight:800;color:${textPrimary};letter-spacing:.2px">${t.branch}</div>
               <span style="font-size:10.5px;font-weight:800;padding:3px 8px;border-radius:10px;background:${regionColor}15;color:${regionColor};letter-spacing:.6px">${region}</span>
             </div>
-            <div style="font-size:13px;color:${textMuted};margin-top:4px;font-weight:600">${t.brands.length} brand${t.brands.length!==1?'s':''} · AOV AED ${t.aov.toFixed(1)}</div>
+            <div style="font-size:13px;color:${textMuted};margin-top:4px;font-weight:600">${t.brands.length} brand${t.brands.length!==1?'s':''} · AOV AED ${t.aov.toFixed(1)}</div>${branchClosures(t.branch).map(c=>`<div style="font-size:11px;font-weight:700;color:#94A3B8;margin-top:3px" title="${c.note}">🔒 ${c.brand} closed after ${closureShortDate(c.lastDay)}</div>`).join('')}
           </div>
           <div style="text-align:right;background:${scBg};border-radius:8px;padding:5px 10px;white-space:nowrap"><div style="font-size:14px;color:${scClr};font-weight:800" title="Net Sales change ${getCompShort()}">${fmtPct(t.sc)}</div></div>
         </div>
@@ -7752,6 +7831,7 @@ function buildCPCModel(onProgress){
       const activeByOutlet=new Set();
       for(const r of rows){if((r.status==="Active"||r.status==="Critical"))activeByOutlet.add(`${r.brand}|${r.aggregator}|${r.adType}|${r.branch}`);}
       for(const r of rows){
+        if(outletIsRetired(r.brand,r.branch))continue; // v516: closed outlet — no top-up / withdraw / refill advice
         // Top up: active, good verdict, exhausting soon
         if((r.status==="Active"||r.status==="Critical")&&(r.verdict==="SCALE"||r.verdict==="INVEST")&&r.daysUntilExhausted!=null&&r.daysUntilExhausted<=3){
           const sug=cpcTopUpSuggestion(r);
@@ -8404,7 +8484,9 @@ function cpcProjectedGroupGMV(month,ag){
   const raw=cpcGroupGMV(month,ag);
   const{daysElapsed,daysInMonth,isComplete}=cpcMonthDaysInfo(month);
   if(isComplete||daysElapsed<=0)return{value:raw,projected:false,daysElapsed,daysInMonth};
-  return{value:raw/daysElapsed*daysInMonth,projected:true,daysElapsed,daysInMonth,rawSoFar:raw};
+  // v516: a closed outlet's sales so far are final — they must not be scaled up to a full month.
+  const closedSoFar=allData.filter(r=>r.aggregator===ag&&recMonth(r)===month&&outletRowRetired(r)).reduce((a,r)=>a+(r.sales||0),0);
+  return{value:(raw-closedSoFar)/daysElapsed*daysInMonth+closedSoFar,projected:true,daysElapsed,daysInMonth,rawSoFar:raw};
 }
 
 // Mandatory budget per aggregator per skill rules
@@ -8513,7 +8595,7 @@ function cpcDecliningOutlets(threshold){
     if(m===cur)byKey[k].cur+=(r.sales||0);else byKey[k].prior+=(r.sales||0);
   });
   return Object.values(byKey)
-    .filter(o=>o.prior>1000&&o.cur>0)
+    .filter(o=>o.prior>1000&&o.cur>0&&!outletIsRetired(o.brand,o.outlet))
     .map(o=>({...o,pct:(o.cur-o.prior)/o.prior*100}))
     .filter(o=>o.pct<-(threshold||15))
     .sort((a,b)=>a.pct-b.pct);
@@ -8944,6 +9026,7 @@ function cpcTrendSignal(brand,ag,outlet,curMonth,adType){
 // source powering every other trend figure on this dashboard), completely independent of any
 // CPC/ad-spend data.
 function cpcOutletSalesTrend(brand,ag,outlet,curMonth){
+  if(outletIsRetired(brand,outlet))return null; // v516: closed outlet — no trend verdict
   const prevMonth=monthBefore(curMonth);
   const curRecs=allData.filter(r=>r.brand===brand&&r.aggregator===ag&&r.branch===outlet&&recMonth(r)===curMonth);
   const prevRecs=allData.filter(r=>r.brand===brand&&r.aggregator===ag&&r.branch===outlet&&recMonth(r)===prevMonth);
@@ -9006,7 +9089,7 @@ function cpcDeliverooRows(priorMonth){
   const ag="Deliveroo";
   const floor=CPC_MIN_PER_OUTLET[ag];
   const combos=new Set();
-  allData.filter(r=>r.aggregator===ag&&recMonth(r)===priorMonth&&r.sales>0).forEach(r=>combos.add(`${r.brand}|${r.branch}`));
+  allData.filter(r=>r.aggregator===ag&&recMonth(r)===priorMonth&&r.sales>0&&!outletRowRetired(r)).forEach(r=>combos.add(`${r.brand}|${r.branch}`)); // v516: no budget for closed outlets
   let rows=[...combos].map(k=>{
     const[brand,outlet]=k.split("|");
     const cpcRow=cpcLatestRow(brand,ag,outlet);
@@ -9347,7 +9430,7 @@ function cpcTalabatRows(priorMonth){
   const floor=CPC_MIN_PER_OUTLET[ag];
   const kwFloor=CPC_MIN_KEYWORDS_PER_LISTING;
   const combos=new Set();
-  allData.filter(r=>r.aggregator===ag&&recMonth(r)===priorMonth&&r.sales>0).forEach(r=>combos.add(`${r.brand}|${r.branch}`));
+  allData.filter(r=>r.aggregator===ag&&recMonth(r)===priorMonth&&r.sales>0&&!outletRowRetired(r)).forEach(r=>combos.add(`${r.brand}|${r.branch}`)); // v516: no budget for closed outlets
   if(!combos.size)return{rows:[],noData:true,floor:CPC_MIN_PER_OUTLET[ag],kwFloor:CPC_MIN_KEYWORDS_PER_LISTING,ag};
   const rows=[...combos].map(k=>{
     const[brand,outlet]=k.split("|");
@@ -9840,7 +9923,7 @@ function cpcPoolAllocCard(ag,priorMonth,brandFilter){
   function outletBreakdownFor(brand,poolSpent){
     if(!(ag==="Careem"||ag==="Noon"))return null;
     const beVal=cpcPlanBE(ag,brand);
-    const outlets=[...new Set(allData.filter(rr=>rr.aggregator===ag&&rr.brand===brand&&recMonth(rr)===priorMonth&&rr.branch&&rr.branch!=="(brand-level)").map(rr=>rr.branch))];
+    const outlets=[...new Set(allData.filter(rr=>rr.aggregator===ag&&rr.brand===brand&&recMonth(rr)===priorMonth&&rr.branch&&rr.branch!=="(brand-level)"&&!outletRowRetired(rr)).map(rr=>rr.branch))]; // v516
     const outletRows=outlets.map(outlet=>{
       const cpcRow=cpcLatestRowByType(brand,ag,outlet,"CPC");
       const oROAS=cpcRow&&cpcRow.budgetSpent>0?cpcRow.sales/cpcRow.budgetSpent:null;
@@ -10815,8 +10898,8 @@ function computeLocalBrief(){
   const cm=mkMap(ld,r=>`${r.brand}|${r.branch}|${r.aggregator}`),pm=mkMap(pd,r=>`${r.brand}|${r.branch}|${r.aggregator}`);
   const changes=Object.values(cm).map(c=>{const[brand,branch,aggregator]=c.k.split("|");const pv=pm[c.k];return{brand,branch,aggregator,orders:c.orders,sales:c.sales,oc:pv?pctOf(c.orders,pv.orders):null};});
   const wins=[...changes].filter(x=>x.oc!=null&&x.orders>=3).sort((a,b)=>b.oc-a.oc).slice(0,3);
-  const issues=[...changes].filter(x=>x.oc!=null&&x.oc<-15&&x.orders>=2).sort((a,b)=>a.oc-b.oc).slice(0,3);
-  const zeros=Object.keys(pm).filter(k=>pm[k].orders>=3&&!cm[k]).map(k=>k.split("|")).slice(0,3);
+  const issues=[...changes].filter(x=>x.oc!=null&&x.oc<-15&&x.orders>=2&&!outletIsRetired(x.brand,x.branch)).sort((a,b)=>a.oc-b.oc).slice(0,3);
+  const zeros=Object.keys(pm).filter(k=>pm[k].orders>=3&&!cm[k]&&!outletIsRetired(k.split("|")[0],k.split("|")[1])).map(k=>k.split("|")).slice(0,3);
   const byBrand=BR.map(b=>{const c=sumR(ld.filter(r=>r.brand===b.n));const p=sumR(pd.filter(r=>r.brand===b.n));return{n:b.n,o:c.orders,oc:pctOf(c.orders,p.orders)};}).filter(b=>b.o>0);
   const bestBrand=[...byBrand].filter(b=>b.oc!=null).sort((a,b)=>b.oc-a.oc)[0];
   const worstBrand=[...byBrand].filter(b=>b.oc!=null).sort((a,b)=>a.oc-b.oc)[0];
@@ -12521,7 +12604,10 @@ function campAnalysisV2(c){
   // For "All Brands" we still scan allData (rare path; can't pre-narrow by brand).
   const brandRecs=c.brand==='All Brands'?allData:indexedRecords(c.brand,c.aggregator);
   const cR=brandRecs.filter(r=>r.date>=effStart&&r.date<=effEnd&&flt(r));
-  const bR=brandRecs.filter(r=>r.date>=bStart&&r.date<=bEnd&&flt(r));
+  // v517: an outlet that closed BEFORE this campaign started has no campaign-window rows, so it must not
+  // sit in the baseline either — otherwise the baseline carries sales the campaign window can't have
+  // and uplift/ROI read as a loss. (Campaigns that straddle the closure keep it on both sides.)
+  const bR=brandRecs.filter(r=>r.date>=bStart&&r.date<=bEnd&&flt(r)&&!outletClosedOn(r.brand,r.branch,effStart));
   const cs=sumR(cR),bs=sumR(bR);
   // Use the explicit elapsed-day count for BOTH windows so per-day math is apple-to-apple, rather
   // than counting only days that happen to have data (which caused 7-vs-8-day mismatches).
@@ -14611,6 +14697,8 @@ function campKPIStrip(active){
   </div>`;
 }
 function campNeedsAttentionItems(active,upcoming){
+  active=(active||[]).filter(c=>!campScopeAllRetired(c)); // v517: no alerts for campaigns scoped only to closed outlets
+  upcoming=(upcoming||[]).filter(c=>!campScopeAllRetired(c));
   const items=[];
   const now=new Date();
   const hoursUntil=(dateStr)=>{
@@ -15215,8 +15303,8 @@ function campFcMomentum(brand,agg,campaignStart){
   // recent campaign sitting inside either half would make campaign-driven orders look like
   // organic momentum (or mask a real decline behind a campaign-driven bump).
   const contaminated=campFcContaminatedDates(brand,agg);
-  const recentRecs=allData.filter(r=>r.branch!=="(brand-level)"&&r.brand===brand&&r.aggregator===agg&&r.date>mid&&r.date<=end&&!contaminated.has(r.date));
-  const priorRecs=allData.filter(r=>r.branch!=="(brand-level)"&&r.brand===brand&&r.aggregator===agg&&r.date>=start&&r.date<=mid&&!contaminated.has(r.date));
+  const recentRecs=allData.filter(r=>r.branch!=="(brand-level)"&&r.brand===brand&&r.aggregator===agg&&r.date>mid&&r.date<=end&&!contaminated.has(r.date)&&!outletClosedOn(r.brand,r.branch,campaignStart));
+  const priorRecs=allData.filter(r=>r.branch!=="(brand-level)"&&r.brand===brand&&r.aggregator===agg&&r.date>=start&&r.date<=mid&&!contaminated.has(r.date)&&!outletClosedOn(r.brand,r.branch,campaignStart)); // v516: campaign starts after a closure → outlet excluded from both halves
   const recentDays=new Set(recentRecs.map(r=>r.date)).size;
   const priorDays=new Set(priorRecs.map(r=>r.date)).size;
   if(recentDays<10||priorDays<10)return null;
@@ -15832,7 +15920,7 @@ function campFcUpcomingCampaigns(){
 // running the forecast.
 
 function campFcGetBranches(brand,agg){
-  return[...new Set(allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)').map(r=>r.branch))].sort();
+  return[...new Set(allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)'&&!outletRowRetired(r)).map(r=>r.branch))].sort(); // v517: closed outlets can't be picked for a new campaign
 }
 
 // v154: STRUCTURAL FIX for the forecaster's lookback logic. A newly-opened outlet has zero
@@ -15918,7 +16006,7 @@ function campFcBaseline(brand,agg,branches,days){
     isDegraded=true;
   }
   const dateSet=new Set(cleanDates);
-  const recs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)'&&dateSet.has(r.date)&&(branches.size===0||branches.has(r.branch)));
+  const recs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)'&&dateSet.has(r.date)&&!outletRowRetired(r)&&(branches.size===0||branches.has(r.branch))); // v516: closed outlets can't contribute to a forward baseline
   if(!recs.length)return null;
   const nDays=[...new Set(recs.map(r=>r.date))].length||1;
   const tNet=recs.reduce((s,r)=>s+r.sales,0);
@@ -16304,7 +16392,7 @@ function campFcCleanWindowSearch(brand,agg,branches,windowDays,beforeDate,maxLoo
 function campFcSeasonality(brand,agg,targetStart){
   if(!latest)return{factor:1,pct:0,method:'none'};
   const winAvg=(s,e)=>{
-    const recs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)'&&r.date>=s&&r.date<=e);
+    const recs=allData.filter(r=>r.brand===brand&&r.aggregator===agg&&r.branch!=='(brand-level)'&&r.date>=s&&r.date<=e&&!outletRowRetired(r)); // v516
     if(!recs.length)return null;
     const days=[...new Set(recs.map(r=>r.date))].length||1;
     return recs.reduce((s2,r)=>s2+r.sales,0)/days;
@@ -17061,7 +17149,7 @@ function campBeSameDaysLastMonth(start,end){
 }
 function campBeGetBaseline(brand,agg,start,end){
   if(!start||!end||!allData||!allData.length)return null;
-  const rows=allData.filter(function(r){return r.brand===brand&&r.aggregator===agg&&r.date>=start&&r.date<=end&&r.sales>0;});
+  const rows=allData.filter(function(r){return r.brand===brand&&r.aggregator===agg&&r.date>=start&&r.date<=end&&r.sales>0&&!outletRowRetired(r);}); // v516
   if(!rows.length)return null;
   const dateSet={};rows.forEach(function(r){dateSet[r.date]=1;});
   const days=Object.keys(dateSet).length;
@@ -17661,7 +17749,9 @@ function discGapOrdersHTML(brand,aggregator,date){
   const orders=discGapUnattributedOrders(brand,aggregator,date);
   if(!orders||!orders.length){
     if(aggregator==='Keeta')return '';
-    return '<div style="font-size:10.5px;color:#94a3b8;margin-top:6px;padding-top:6px;border-top:1px dashed #F1F5F9">No '+aggregator+' order-level statement uploaded covering this date — upload one to see order IDs here.</div>';
+    const nm=_noOrdersMessage(aggregator,brand,date,null);
+    const t=nm.text.charAt(0).toUpperCase()+nm.text.slice(1)+'.';
+    return '<div style="font-size:10.5px;color:#94a3b8;margin-top:6px;padding-top:6px;border-top:1px dashed #F1F5F9">'+t+'</div>';
   }
   const rows=orders.slice(0,8).map(o=>{
     const r=_normalizeGapOrderRow(o,aggregator);
@@ -17776,7 +17866,7 @@ function exportUnattributedDeepDive(){
           if(orders&&orders.length){
             for(const o of orders){
               const r=_normalizeGapOrderRow(o,'Keeta');
-              rows.push([escId(r.orderLong),escId(r.orderShort),date,x.brand,x.aggregator,r.outlet,esc(r.items),r.gross.toFixed(2),r.net.toFixed(2),r.disc.toFixed(2),sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),esc(r.basis)].join(','));
+              rows.push([escId(r.orderLong),escId(r.orderShort),date,x.brand,x.aggregator,r.outlet,esc(r.items),r.gross.toFixed(2),r.net.toFixed(2),r.disc.toFixed(2),sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),esc(r.basis),'—'].join(','));
             }
           }else if(typeof keetaOrdersData!=='undefined'&&keetaOrdersData&&keetaOrdersData.orderDetail&&keetaOrdersData.orderDetail.length){
             // v306: fixes the ACTUAL bug — found after ruling out stale cache and server-sync
@@ -17793,25 +17883,28 @@ function exportUnattributedDeepDive(){
             // order data AT ALL for that date, or had complete order data that simply reconciles
             // differently from the sheet — indistinguishable from the CSV's perspective, which is
             // exactly why it looked like "the fix still isn't working" when it actually was.
-            rows.push(['—','—',date,x.brand,x.aggregator,'—',esc('(sheet vs. campaign-allocation mismatch — Keeta\'s own order-level data for this date is already 100% attributed; this gap has a different cause, not missing order detail)'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),'—'].join(','));
+            rows.push(['—','—',date,x.brand,x.aggregator,'—',esc('(sheet vs. campaign-allocation mismatch — Keeta\'s own order-level data for this date is already 100% attributed; this gap has a different cause, not missing order detail)'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),'—','—'].join(','));
           }else{
-            rows.push(['—','—',date,x.brand,x.aggregator,'—',esc('(see per-date detail on page)'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),'—'].join(','));
+            rows.push(['—','—',date,x.brand,x.aggregator,'—',esc('(see per-date detail on page)'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),'—','—'].join(','));
           }
         }else{
           const orders=(otherByBrandDate[x.aggregator]&&otherByBrandDate[x.aggregator][x.brand+'|'+date])||null;
           if(orders&&orders.length){
+            const sc=_statementCover(x.aggregator,x.brand,date);
+            const stmtDiscStr=sc.covered?(sc.disc||0).toFixed(2):'—';
             for(const o of orders){
               const r=_normalizeGapOrderRow(o,x.aggregator);
-              rows.push([escId(r.orderLong),escId(r.orderShort),date,x.brand,x.aggregator,r.outlet,esc(r.items),r.gross.toFixed(2),r.net.toFixed(2),r.disc.toFixed(2),sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),esc(r.basis)].join(','));
+              rows.push([escId(r.orderLong),escId(r.orderShort),date,x.brand,x.aggregator,r.outlet,esc(r.items),r.gross.toFixed(2),r.net.toFixed(2),r.disc.toFixed(2),sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),esc(r.basis),stmtDiscStr].join(','));
             }
           }else{
-            rows.push(['—','—',date,x.brand,x.aggregator,'—',esc('(no '+x.aggregator+' order-level statement uploaded covering this date — upload one to see order IDs here)'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),'—'].join(','));
+            const nm=_noOrdersMessage(x.aggregator,x.brand,date,sheetTotal);
+            rows.push(['—','—',date,x.brand,x.aggregator,'—',esc('('+nm.text+')'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),'—',nm.stmtDisc==null?'—':nm.stmtDisc.toFixed(2)].join(','));
           }
         }
       }
     }
     if(!rows.length){alert('No dates with a real unattributed gap found for the current filters.');return;}
-    const header=['Order No (long)','Order No (short)','Date','Brand','Aggregator','Outlet','Items','Gross (AED)','Net (AED)','Unattributed Discount (AED)','Sheet Burn That Date (AED)','Allocated That Date (AED)','Gap That Date (AED)','Campaigns Covering This Date','Attribution Basis'];
+    const header=['Order No (long)','Order No (short)','Date','Brand','Aggregator','Outlet','Items','Gross (AED)','Net (AED)','Unattributed Discount (AED)','Sheet Burn That Date (AED)','Allocated That Date (AED)','Gap That Date (AED)','Campaigns Covering This Date','Attribution Basis','Statement Discount That Date (AED)'];
     const csv=[header.map(esc).join(','),...rows].join('\r\n');
     const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
     const url=URL.createObjectURL(blob);
@@ -18717,7 +18810,10 @@ const BRAND_EXPECTED_LISTINGS={Oregano:14,Lollorosso:15,Smokeys:14,Fyoozhen:4,"W
 const FULL_LISTING_AGGS=new Set(["Talabat","Deliveroo","Careem"]); // 50-listing platforms
 function expectedListings(brand,aggregator){
   if(!FULL_LISTING_AGGS.has(aggregator))return null; // only the big 3 have the fixed 50-listing structure
-  return BRAND_EXPECTED_LISTINGS[brand]??null;
+  const base=BRAND_EXPECTED_LISTINGS[brand]??null;
+  if(base==null)return null;
+  const retired=OUTLET_CLOSURES.filter(c=>c.brand===brand&&outletIsRetired(c.brand,c.branch)).length; // v516
+  return base-retired;
 }
 // Aggregator block labels we recognise. "Dine in" maps to Google Maps (Google rating lives there).
 const KPI_AGGS=["Talabat","Deliveroo","Noon","Careem","Keeta","Google Maps","Dine in","Dine In"];
@@ -18770,6 +18866,7 @@ function parseKPISheet(csv,outlet){
   // True if `brand` is permitted at this outlet (passes whitelist AND isn't excluded).
   const brandAllowed=(brand)=>{
     if(!brand)return false;
+    if(outletIsRetired(brand,KPI_OUTLET_NAME[outlet]||outlet))return false; // v516: closed brand×outlet drops out of KPI tracking
     if(allowedBrands&&!allowedBrands.includes(brand))return false;
     if(excludedBrands&&excludedBrands.includes(brand))return false;
     return true;
@@ -21893,7 +21990,7 @@ function cmpOutletCard(dA,dB,dC){
   const diff=setA.size-setB.size;
   const diffClr=diff>0?CMP_A_CLR:diff<0?CMP_B_CLR:"#64748b";
   const setC=dC?new Set(dC.map(r=>r.branch)):null;
-  const col=(title,clr,list)=>`<div style="flex:1;min-width:120px"><div style="font-size:10.5px;font-weight:700;color:${clr};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">${title} (${list.length})</div>${list.length?list.map(o=>`<div style="font-size:12.5px;color:${T.vs};padding:1px 0">${o}</div>`).join(""):`<div style="font-size:12.5px;color:${T.vs};font-weight:600">—</div>`}</div>`;
+  const col=(title,clr,list)=>`<div style="flex:1;min-width:120px"><div style="font-size:10.5px;font-weight:700;color:${clr};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">${title} (${list.length})</div>${list.length?list.map(o=>`<div style="font-size:12.5px;color:${T.vs};padding:1px 0">${o}${branchClosures(o).length?` <span style="color:#94A3B8;font-size:11px" title="${branchClosures(o).map(c=>c.note).join('; ')}">🔒 ${branchClosures(o).map(c=>c.brand+' closed '+closureShortDate(c.lastDay)).join(', ')}</span>`:''}</div>`).join(""):`<div style="font-size:12.5px;color:${T.vs};font-weight:600">—</div>`}</div>`;
   // The panel is hidden by default and shown on hover (CSS sibling, inline handlers as fallback)
   const panel=`<div class="cmp-outlet-panel" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:30;margin-top:6px;background:${T.panelBg};border:1px solid ${T.panelBorder};border-radius:10px;padding:12px;box-shadow:${T.panelShadow}">
       <div style="font-size:11.5px;color:${T.muted};margin-bottom:8px">${diff===0?"Both groups cover the same outlets.":`Group ${diff>0?"A":"B"} has ${Math.abs(diff)} more outlet${Math.abs(diff)!==1?"s":""}.`}</div>
@@ -22414,7 +22511,9 @@ function cmpReportConclusions(prior,latest){
       return{name,salesPct:pctOf(mL.sales,mP.sales),contribPct:pctOf(mL.contribution,mP.contribution),
         adPct:pctOf(mL.adSpend,mP.adSpend),priorAdSpend:mP.adSpend,latestAdSpend:mL.adSpend};
     }).filter(m=>m&&m.salesPct!=null);
-    const bySalesPct=[...outletMovers].sort((a,b)=>a.salesPct-b.salesPct);
+    // v516: an outlet name that carries a closure (e.g. NAS, where Lollorosso closed) can't be named
+    // the "worst decliner" — its drop is the closure, not a performance change.
+    const bySalesPct=[...outletMovers].filter(m=>!branchClosures(m.name).length).sort((a,b)=>a.salesPct-b.salesPct);
     const worstOutlet=bySalesPct[0],bestOutlet=bySalesPct[bySalesPct.length-1];
     if(worstOutlet&&worstOutlet.salesPct<=-15){
       const alsoContrib=worstOutlet.contribPct!=null&&worstOutlet.contribPct<worstOutlet.salesPct-5;
@@ -22699,7 +22798,8 @@ function cmpReportOutletDetail(data){
     const clrA=cmpClrFor(prior.key),clrB=cmpClrFor(latest.key);
     const outletRow=(name,brand)=>{
       const mL=cmpScopedMetrics(latest.cfg,brand,null,name),mP=cmpScopedMetrics(prior.cfg,brand,null,name);
-      return`<tr><td>${esc(name)}</td>
+      const _clo=(!brand||outletClosure(brand,name))?branchClosures(name).filter(c=>!brand||c.brand===brand):[];
+      return`<tr><td>${esc(name)}${_clo.length?` <span style="color:#94A3B8;font-size:11px;font-weight:600" title="${_clo.map(c=>esc(c.note)).join('; ')}">🔒 ${_clo.map(c=>esc(c.brand)+' closed '+closureShortDate(c.lastDay)).join(', ')}</span>`:''}</td>
         ${cmpPairedMetricCell(mP.sales,mL.sales,fmtAEDExact,true,clrA,clrB)}
         ${cmpPairedMetricCell(mP.orders,mL.orders,v=>v.toLocaleString(),true,clrA,clrB)}
         ${cmpPairedMetricCell(mP.aov,mL.aov,fmtAEDExact,true,clrA,clrB)}
@@ -23990,7 +24090,7 @@ function renderCompare(){
         ${stickyThLeft("Outlet")}${stickyTh("A Orders")}${stickyTh("B Orders")}${cmpCActive?stickyTh("C Orders"):""}${stickyTh("A Net Sales")}${stickyTh("B Net Sales")}${cmpCActive?stickyTh("C Net Sales"):""}${stickyTh("A Disc.")}${stickyTh("B Disc.")}${cmpCActive?stickyTh("C Disc."):""}${stickyTh("A AOV")}${stickyTh("B AOV")}${cmpCActive?stickyTh("C AOV"):""}
       </tr></thead><tbody>
       ${branchRows.map(r=>`<tr style="border-top:1px solid ${cmpBtnBorder}">
-        <td style="padding:7px 9px;font-weight:700;color:${cmpBtnTxt}">${r.branch}</td>
+        <td style="padding:7px 9px;font-weight:700;color:${cmpBtnTxt}">${r.branch}${outletClosure(xBrand,r.branch)?` <span style="color:#94A3B8;font-size:11px;font-weight:600" title="${esc(outletClosure(xBrand,r.branch).note)}">🔒 closed ${closureShortDate(outletClosure(xBrand,r.branch).lastDay)}</span>`:''}</td>
         <td style="text-align:right;padding:7px 9px">${pillCell(r.a.orders,r.b.orders,true,fInt)}</td>
         <td style="text-align:right;padding:7px 9px">${pillCell(r.b.orders,r.a.orders,true,fInt)}</td>
         ${cmpCActive?`<td style="text-align:right;padding:7px 9px">${r.c?pillCell(r.c.orders,r.b.orders,true,fInt):'<span style="opacity:.5">—</span>'}</td>`:""}
@@ -24016,7 +24116,7 @@ function renderCompare(){
         ${stickyThLeft("Outlet")}${stickyTh("A 💵 Contribution")}${stickyTh("B 💵 Contribution")}${cmpCActive?stickyTh("C 💵 Contribution"):""}${stickyTh("A Ad Spend")}${stickyTh("B Ad Spend")}${cmpCActive?stickyTh("C Ad Spend"):""}
       </tr></thead><tbody>
       ${branchRows.map(r=>`<tr style="border-top:1px solid ${cmpBtnBorder}">
-        <td style="padding:7px 9px;font-weight:700;color:${cmpBtnTxt}">${r.branch}</td>
+        <td style="padding:7px 9px;font-weight:700;color:${cmpBtnTxt}">${r.branch}${outletClosure(xBrand,r.branch)?` <span style="color:#94A3B8;font-size:11px;font-weight:600" title="${esc(outletClosure(xBrand,r.branch).note)}">🔒 closed ${closureShortDate(outletClosure(xBrand,r.branch).lastDay)}</span>`:''}</td>
         <td ${r.tip} style="cursor:help;text-align:right;padding:7px 9px">${pillCell(r.profA,r.profB,true,fAed)}</td>
         <td ${r.tip} style="cursor:help;text-align:right;padding:7px 9px">${pillCell(r.profB,r.profA,true,fAed)}</td>
         ${cmpCActive?`<td style="text-align:right;padding:7px 9px">${r.profC!=null?pillCell(r.profC,r.profB,true,fAed):'<span style="opacity:.5">—</span>'}</td>`:""}
