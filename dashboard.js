@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-07-518";
+const BUILD_VERSION="2026-10-07-519";
 const BUILD_NOTES=[
+  "📈 MoM / YoY GROWTH — NEW \"COMPARE: vs Prior · MoM · YoY\" SWITCH (OPTION C) AND BRAND × PLATFORM GROWTH GRID (OPTION E) — Nikhil's request: show month-on-month and year-on-year growth of orders and sales per brand, per platform and brand×platform together, on the pages where it matters, without using much space; after seeing five rendered options he chose C + E. WHAT WAS BUILT: (C) a three-button switch in the filter bar of Overview, Platforms, Brands and Outlets. It changes the single function every comparison on those pages already reads (getCompRange), so every tile, badge and 'vs …' label follows it automatically with zero extra space: MoM = the same calendar dates one month earlier, YoY = the same dates one year earlier (29 Feb falls back to 28 Feb), anchored to the data-capped end date so a 'This month' view compares 7 days with 7 days. 'vs Prior' is the default and is exactly today's behaviour; the choice is remembered in the browser. Labels now say '(MoM)' / '(YoY)' so a badge is never ambiguous. The switch is deliberately limited to those four pages — Campaigns, CPC, Cancellations, Compare, KPI etc. keep their own comparisons. (E) a heat-map card 'Growth grid · brand × platform' at the bottom of Overview, Platforms and Brands, with Orders/Net sales and MoM/YoY toggles (swaps in place, no page reload). It respects the page's brand/platform/outlet filters; shows 'n/a' where the comparison side has no data (e.g. Keeta/Wicked Wings YoY) and '–' where a brand isn't on a platform; hover shows the raw numbers. Closed outlets (Lollorosso NAS) are excluded from BOTH sides of the grid so a closure doesn't read as a decline, and the footnote names them. VERIFIED: 14 new tests (date maths incl. leap day, lens applies only to the four pages, labels, switch markup, persistence, hand-checked grid percentages, n/a vs –, closure exclusion, filters, overlapping windows, in-place toggle in a real DOM) plus an end-to-end run of the real Overview, Platforms, Brands and Outlets pages under all three modes with no errors. NOT CHANGED: Outlets page gets the switch only (its tiles already carry the comparison; no grid there). KNOWN LIMIT: YoY needs a year of history — the first Keeta/Wicked Wings months show n/a, which is correct.",
   "🔒 OUTLET CLOSURES — NAS CLOSURE CONFIRMED FINAL (LAST DAY 7 OCT 2026) AND NOW COVERED BY REAL-BEHAVIOUR TESTS — Nikhil confirmed 'Closing Date is October 7th for sure' and that Lollorosso Nad Al Sheba KPI history can be hidden/deleted (it already is, since v516), and asked for the remaining tests to be done. NO BEHAVIOUR CHANGE vs v517 — this build only records the confirmation in the closure registry comment. TESTS ADDED: the real campAnalysisV2 is now executed (not just source-checked): a Lollorosso campaign starting 9 Oct on flat business reads 0% lift (without the v517 guard it reads -50%), and a campaign straddling the closure keeps NAS on both sides; the real cmpOutletCard is rendered and shows '🔒 Lollorosso closed 7 Oct' beside NAS only when NAS is in a window. Both fail when the guard is deliberately removed. STILL SOURCE-LEVEL ONLY: the Outlets-page tile line (inside the huge renderOutlets closure) and the Compare drill-down/report-table markers.",
   "🔒 OUTLET CLOSURES, PART 2 — CAMPAIGNS, PICKER, COMPARE AND OUTLETS PAGE NOW ALSO KNOW LOLLOROSSO @ NAS HAS CLOSED — completes the v516 work after Nikhil asked to finish the items I had listed as not yet covered. WHAT CHANGED: (1) Campaign analysis baseline — an outlet that closed BEFORE a campaign started is dropped from the 28-day-earlier baseline, so an all-outlet Lollorosso campaign after 7 Oct no longer compares its sales against a baseline that still contains NAS's sales (which read as a fake loss in uplift/ROI). Campaigns that straddle the closure keep NAS on both sides. (2) New-campaign branch picker no longer offers NAS for Lollorosso (Wicked Wings/Fyoozhen at NAS still listed). (3) Campaign alerts (Ends in Xh, Losing money, Below break-even) are suppressed for campaigns scoped ONLY to closed outlets, via new campScopeAllRetired(). (4) Compare page: the Active Outlets hover panel, the per-outlet report table and the outlet drill-down tables show a '🔒 Lollorosso closed 7 Oct' marker next to NAS instead of an unexplained -100% row. (5) Outlets page NAS tile line already shipped in v516 — now covered by a test. VERIFIED: 6 new tests (ad-cost accrual stops at closing day: NAS AED 700 vs live outlet AED 1,400 hand-checked; picker; scope helper; alerts; markers; baseline guard); the picker, scope and alert tests fail on v516 and pass on v517. NOT CHANGED: forecast calibration history, truncation detector (a closure day is a small share of an all-outlet campaign, not a cliff) and KPI history for NAS Lollorosso (removed from KPI tracker in v516).",
   "🔒 OUTLET CLOSURES — LOLLOROSSO @ NAD AL SHEBA (NAS) CLOSES AFTER 7 OCT 2026; THE DASHBOARD NOW KNOWS — Nikhil's direct request: \"Lollorosso Brand in Nad Al Sheba is closing from tomorrow. Today will be the last date… Automatically in the google sheets, Entries will become Zero or no entries at all. So the Dashboard shouldnt assume that its a Sales or performance problem.\" ROOT CAUSE: the dashboard had no concept of a closed outlet. The sheet parser drops zero-sales days, so after closure NAS rows simply VANISH — present in the prior period, absent in the current one — which Overview, Digest, CPC and the forecaster all read as a -100% collapse. FIX: one OUTLET_CLOSURES registry (brand, branch, every spelling, last trading day) plus helpers outletIsRetired / outletClosedOn / outletClosureLastDay; adding a future closure is one line. Applied at every place that JUDGES an outlet — Overview needs-attention drops and zero-order lists; the 'N outlets with no orders' card (closed outlets now shown muted as 'Closed, not counted as missing'); Overview brief; Weekly Digest top-decliner and watch list; CPC Declining Outlets card and SALES TREND badge; CPC investment-plan rows for Deliveroo/Talabat/Careem/Noon (no budget recommended for a closed outlet); CPC Action Now (no top-up/withdraw/refill advice for closed outlets); the ad-cost extrapolation (no spend accrues after the closing day); the contractual-mandate projection (NAS's final sales are no longer scaled up to a full month); forecast baselines, momentum and seasonality and the break-even baseline (closed outlet excluded from forward-looking numbers); Compare page 'worst outlet' callout; KPI tracker (Lollorosso NAS tab dropped, expected Lollorosso listings 15 → 14, so no false 'missing 1 outlet' warning); Outlets page tile shows '🔒 Lollorosso closed after 7 Oct'. DELIBERATELY UNCHANGED: real historical sales, orders and totals — NAS's past sales stay in every total so numbers still reconcile with the sheet. Wicked Wings / Fyoozhen at NAS are unaffected (closure is per brand×outlet). VERIFIED: 9 new regression tests (registry/aliases, timing boundary, declining list, trend badge, mandate projection hand-check, baseline, Overview brief, KPI count) — all fail on v515 and pass on v516; a deliberate removal of one guard is caught.",
@@ -1385,6 +1386,99 @@ function subDays(k,n){const d=new Date(k+"T12:00:00");d.setDate(d.getDate()-n);r
 // Subtract one calendar month, clamping the day so e.g. Mar 31 → Feb 28 (or 29 in leap years),
 // not the JS default of Feb 31 overflowing into March. Used for "same date prior month" period
 // comparison on the This Month / Last Month presets.
+// v519: GROWTH LENS + BRAND×PLATFORM GROWTH GRID (Nikhil's "C + E").
+// C — a "Compare: vs Prior · MoM · YoY" switch in the filter bar of Overview, Platforms, Brands and
+//     Outlets. It works by changing the ONE function every comparison on those pages already reads
+//     (getCompRange), so every tile/badge/label follows it with no per-tile code. "vs Prior" is the
+//     existing behaviour and the default. Other pages (Campaigns, CPC, Cancellations, Compare…) are
+//     deliberately untouched: the switch only applies while one of the four pages is showing.
+// E — a heat-map card (brands × platforms) with Orders/Net sales and MoM/YoY toggles.
+// MoM = the same calendar dates one month earlier; YoY = the same dates one year earlier.
+const GROWTH_LENS_PAGES=new Set(["overview","platforms","brands","outlets"]);
+let growthLens="prior",growthGridMetric="ord",growthGridPeriod="mom";
+try{
+  const _gl=localStorage.getItem("growthLens");if(_gl==="mom"||_gl==="yoy")growthLens=_gl;
+  const _gm=localStorage.getItem("growthGridMetric");if(_gm==="ord"||_gm==="sal")growthGridMetric=_gm;
+  const _gp=localStorage.getItem("growthGridPeriod");if(_gp==="mom"||_gp==="yoy")growthGridPeriod=_gp;
+}catch(e){}
+function _growthSave(k,v){try{localStorage.setItem(k,v);}catch(e){}}
+function growthLensActive(){return growthLens!=="prior"&&GROWTH_LENS_PAGES.has(curPage);}
+function growthRange(kind,start,end){const sub=kind==="yoy"?subYear:subMonth;return{s:sub(start),e:sub(end)};}
+function setGrowthLens(k){
+  if(k!=="prior"&&k!=="mom"&&k!=="yoy")return;
+  growthLens=k;_growthSave("growthLens",k);
+  Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);
+}
+function growthLensSwitchHTML(){
+  const dark=_darkPage;
+  const bd=dark?DARK_THEME.cardBorder:"#CBD5E1",tx=dark?DARK_THEME.textSecondary:"#475569",lb=dark?DARK_THEME.textSecondary:"#64748B";
+  const b=(k,l,t)=>{const on=growthLens===k;return`<button onclick="setGrowthLens('${k}')" title="${t}" style="background:${on?"#4E9BFF":"transparent"};color:${on?"#06101f":tx};border:0;padding:3px 11px;cursor:pointer;font-size:11px;font-weight:${on?800:600};font-style:normal">${l}</button>`;};
+  return`<span style="display:inline-flex;align-items:center;gap:6px;font-style:normal"><span style="font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:${lb}">Compare</span><span style="display:inline-flex;border:1px solid ${bd};border-radius:14px;overflow:hidden">${b("prior","vs Prior","The comparison period this page has always used")}${b("mom","MoM","Same dates, one month earlier")}${b("yoy","YoY","Same dates, one year earlier")}</span></span>`;
+}
+// Raw numbers behind the growth grid. Windows are tested independently (a long range can overlap
+// its own MoM window). Retired (closed) brand×outlet rows are excluded from BOTH sides so a closure
+// is never shown as a decline; closedList names what was left out.
+function growthGridData(){
+  const f=curFilters();
+  if(!f.start||!f.end)return null;
+  const end=dispEnd(f.start,f.end);
+  const W={cur:{s:f.start,e:end},mom:growthRange("mom",f.start,end),yoy:growthRange("yoy",f.start,end)};
+  const cells={},closed=new Set();
+  for(const r of allData){
+    if(r.branch==="(brand-level)")continue;
+    if(f.brands.size&&!f.brands.has(r.brand))continue;
+    if(f.platforms.size&&!f.platforms.has(r.aggregator))continue;
+    if(f.branches.size&&!f.branches.has(r.branch))continue;
+    const inCur=r.date>=W.cur.s&&r.date<=W.cur.e,inMom=r.date>=W.mom.s&&r.date<=W.mom.e,inYoy=r.date>=W.yoy.s&&r.date<=W.yoy.e;
+    if(!inCur&&!inMom&&!inYoy)continue;
+    if(outletIsRetired(r.brand,r.branch)){closed.add(r.brand+" · "+r.branch);continue;}
+    const k=r.brand+"|"+r.aggregator;
+    const c=cells[k]||(cells[k]={cur:{o:0,s:0},mom:{o:0,s:0},yoy:{o:0,s:0}});
+    if(inCur){c.cur.o+=r.orders||0;c.cur.s+=r.sales||0;}
+    if(inMom){c.mom.o+=r.orders||0;c.mom.s+=r.sales||0;}
+    if(inYoy){c.yoy.o+=r.orders||0;c.yoy.s+=r.sales||0;}
+  }
+  return{W,cells,closed:[...closed].sort()};
+}
+// % change of cur vs comparison; null = comparison side empty (shown "n/a").
+function growthPct(cur,cmp){return cmp>0?(cur-cmp)/cmp*100:null;}
+function growthGridHTML(){
+  const d=growthGridData();
+  if(!d)return"";
+  const brands=BR.map(b=>b.n).filter(b=>AGGS.some(a=>{const c=d.cells[b+"|"+a];return c&&(c.cur.o||c.cur.s||c.mom.o||c.yoy.o);}));
+  const plats=AGGS.filter(a=>BR.some(b=>{const c=d.cells[b.n+"|"+a];return c&&(c.cur.o||c.cur.s||c.mom.o||c.yoy.o);}));
+  if(!brands.length||!plats.length)return"";
+  const dark=_darkPage;
+  const T=dark?{card:DARK_THEME.card,bd:DARK_THEME.cardBorder,tx:DARK_THEME.textPrimary,mu:DARK_THEME.textSecondary}:{card:"#FFFFFF",bd:"#E2E8F0",tx:"#0F172A",mu:"#64748B"};
+  const m=growthGridMetric,p=growthGridPeriod,key=m==="ord"?"o":"s";
+  const segBtn=(on,fn,l)=>`<button onclick="${fn}" style="background:${on?"#4E9BFF":"transparent"};color:${on?"#06101f":T.mu};border:0;padding:3px 11px;cursor:pointer;font-size:11px;font-weight:${on?800:600}">${l}</button>`;
+  const seg=inner=>`<span style="display:inline-flex;border:1px solid ${T.bd};border-radius:14px;overflow:hidden">${inner}</span>`;
+  const cmpW=d.W[p];
+  const bg=v=>v==null?"transparent":v>=0?`rgba(46,204,113,${Math.min(.55,.1+Math.abs(v)/70).toFixed(2)})`:`rgba(255,107,107,${Math.min(.6,.1+Math.abs(v)/55).toFixed(2)})`;
+  const fmtN=n=>m==="ord"?Math.round(n).toLocaleString():"AED "+Math.round(n).toLocaleString();
+  const head=`<tr><th style="text-align:left;padding:6px 8px;border-bottom:1px solid ${T.bd}"></th>${plats.map(a=>`<th style="padding:6px 4px;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:${T.mu};border-bottom:1px solid ${T.bd}">${a}</th>`).join("")}</tr>`;
+  const rows=brands.map(b=>{
+    const tds=plats.map(a=>{
+      const c=d.cells[b+"|"+a];
+      if(!c||!(c.cur.o||c.cur.s||c.mom.o||c.mom.s||c.yoy.o||c.yoy.s))return`<td style="text-align:center;padding:3px"><div style="color:${T.mu};padding:5px 2px">–</div></td>`;
+      const cur=c.cur[key],cmp=c[p][key],v=growthPct(cur,cmp);
+      if(v==null)return`<td style="text-align:center;padding:3px" title="${b} on ${a}: no data in the comparison window (${fmtShort(cmpW.s)}–${fmtShort(cmpW.e)})"><div style="color:${T.mu};padding:5px 2px">n/a</div></td>`;
+      return`<td style="text-align:center;padding:3px" title="${b} on ${a}: ${fmtN(cur)} vs ${fmtN(cmp)} (${v>=0?"+":""}${v.toFixed(1)}%)"><div style="background:${bg(v)};border-radius:6px;font-weight:800;font-size:11.5px;padding:5px 2px;color:${T.tx}">${v>0?"+":""}${Math.abs(v)<10?v.toFixed(1):Math.round(v)}%</div></td>`;
+    }).join("");
+    return`<tr><td style="padding:3px 8px;font-weight:700;color:${BMAP[b]?.c||T.tx};white-space:nowrap">${b}</td>${tds}</tr>`;
+  }).join("");
+  const foot=`Green = growth, red = decline, “n/a” = no data in the comparison window (e.g. platform too new), “–” = brand not on that platform. Each cell compares ${fmtShort(d.W.cur.s)}–${fmtShort(d.W.cur.e)} with ${fmtShort(cmpW.s)}–${fmtShort(cmpW.e)}.${d.closed.length?` Closed outlets are left out of both sides so a closure doesn't read as a decline: ${d.closed.join(", ")}.`:""}`;
+  return`<div class="card" id="growthGridCard" style="margin-top:12px"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><span>Growth grid · brand × platform</span><span style="display:inline-flex;gap:6px;text-transform:none;letter-spacing:0">${seg(segBtn(m==="ord","growthGridSet('m','ord')","Orders")+segBtn(m==="sal","growthGridSet('m','sal')","Net sales"))}${seg(segBtn(p==="mom","growthGridSet('p','mom')","MoM")+segBtn(p==="yoy","growthGridSet('p','yoy')","YoY"))}</span></div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;color:${T.tx}">${head}${rows}</table></div>
+    <div style="color:${T.mu};font-size:10.5px;margin-top:6px;line-height:1.5">${foot}</div></div>`;
+}
+function growthGridSet(which,val){
+  if(which==="m"&&(val==="ord"||val==="sal")){growthGridMetric=val;_growthSave("growthGridMetric",val);}
+  else if(which==="p"&&(val==="mom"||val==="yoy")){growthGridPeriod=val;_growthSave("growthGridPeriod",val);}
+  else return;
+  const el=document.getElementById("growthGridCard");
+  if(el){const tmp=document.createElement("div");tmp.innerHTML=growthGridHTML();if(tmp.firstElementChild)el.replaceWith(tmp.firstElementChild);}
+}
 function subMonth(k){
   const d=new Date(k+"T12:00:00");
   const targetYear=d.getMonth()===0?d.getFullYear()-1:d.getFullYear();
@@ -5608,6 +5702,7 @@ function getCompRange(){
   // of September against 9 real days of August, inflating the prior-period baseline by a whole
   // extra day and skewing every %/absolute change shown against it.
   const effEnd=dispEnd(f.start,f.end);
+  if(growthLensActive())return growthRange(growthLens,f.start,effEnd); // v519: MoM / YoY lens
   // PRESET-AWARE COMPARISON:
   // For "This Month" and "Last Month" presets, the natural comparison is the SAME dates one
   // calendar month back — Jun 1-21 compares to May 1-21, not the trailing 21 days (May 11-31).
@@ -5629,6 +5724,7 @@ function getCompLabel(){
   const{s,e}=getCompRange();
   const f=curFilters();
   const days=f.start===f.end?1:Math.round((new Date(f.end)-new Date(f.start))/86400000)+1;
+  if(growthLensActive())return`vs ${fmtDisp(s)}${s===e?"":"→"+fmtDisp(e)} (same dates, ${growthLens==="yoy"?"prior year":"prior month"})`;
   if(days===1)return`vs ${fmtDisp(s)} (same day prev week)`;
   const suffix=(f.preset==="month"||f.preset==="lmonth")?" (same dates, prior month)":"";
   return`vs ${fmtDisp(s)}→${fmtDisp(e)}${suffix}`;
@@ -5637,6 +5733,7 @@ function getCompLabel(){
 function getCompShort(){
   const{s,e}=getCompRange();
   const f=curFilters();
+  if(growthLensActive())return s===e?`vs ${fmtShort(s)} (${growthLens==="yoy"?"YoY":"MoM"})`:`vs ${fmtShort(s)}–${fmtShort(e)} (${growthLens==="yoy"?"YoY":"MoM"})`;
   if(s===e)return`vs ${fmtShort(s)}`;
   const suffix=(f.preset==="month"||f.preset==="lmonth")?" (prior mo.)":"";
   return`vs ${fmtShort(s)}–${fmtShort(e)}${suffix}`;
@@ -5769,7 +5866,7 @@ function makeFilterBar(opts){
   // content right next to the date label instead of needing its own separate row below the bar —
   // Nikhil's own request, to remove the dedicated line the button used to occupy. Defaults to
   // empty so every other page calling this shared function is completely unaffected.
-  const badge=`<span style="margin-left:auto;font-size:10px;color:#64748b;font-style:italic;display:flex;align-items:center;gap:10px">${getPeriodLabel()}${dateExtra}</span>`;
+  const badge=`<span style="margin-left:auto;font-size:10px;color:#64748b;font-style:italic;display:flex;align-items:center;gap:10px;flex-wrap:wrap">${GROWTH_LENS_PAGES.has(curPage)?growthLensSwitchHTML():""}${getPeriodLabel()}${dateExtra}</span>`;
   const ddRow=(brDD||plDD||ouDD||clearBtn)?`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">${brDD}${plDD}${ouDD}${clearBtn}</div>`:"";
   return`<div class="fbar"><div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">${pH}${badge}</div>${custH}${ddRow}${chips?`<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">${chips}</div>`:""}</div>`;
 }
@@ -6317,7 +6414,7 @@ function renderOverview(){
     </div>
     ${aovBlock}
     <div class="card"><div class="ct">All Brands — ${getPeriodLabel()} <span style="color:#8393AB;font-weight:400;text-transform:none;letter-spacing:0">· click any header to sort</span></div>${sortableTable("ov-brands",heads,brandTableRows,2)}</div>
-    <div class="card"><div class="ct">All Platforms — ${getPeriodLabel()} <span style="color:#8393AB;font-weight:400;text-transform:none;letter-spacing:0">· click any header to sort</span></div>${sortableTable("ov-plats",heads,aggTableRows,2)}</div>`;
+    <div class="card"><div class="ct">All Platforms — ${getPeriodLabel()} <span style="color:#8393AB;font-weight:400;text-transform:none;letter-spacing:0">· click any header to sort</span></div>${sortableTable("ov-plats",heads,aggTableRows,2)}</div>${growthGridHTML()}`;
   setTimeout(()=>{
     // Trend must respect the active brand/platform/outlet filters (not just the date range).
     const f=curFilters();
@@ -6817,7 +6914,7 @@ function renderBrands(){
     <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior,"platform"),profCur.contribution<0?profitClr(profCur.contribution):null)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="g2"><div class="sm"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;color:${b?.c}"><span>${selBrand} — ${OV_TREND_METRICS[brTrendMetric].label} Trend</span><span style="display:flex;gap:4px">${OV_TREND_METRIC_KEYS.map(k=>`<span onclick="brSetTrendMetric('${k}')" style="cursor:pointer;font-size:10px;font-weight:${k===brTrendMetric?700:500};padding:3px 8px;border-radius:6px;text-transform:none;letter-spacing:0;background:${k===brTrendMetric?(b?.c||'#F59E0B')+'22':'transparent'};color:${k===brTrendMetric?(b?.c||'#F59E0B'):(_darkPage?DARK_THEME.textMuted:'#64748B')};border:1px solid ${k===brTrendMetric?(b?.c||'#F59E0B'):'transparent'}">${OV_TREND_METRICS[k].shortLabel}</span>`).join('')}</span></div><div style="position:relative;height:180px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748B;font-weight:600;text-transform:none;letter-spacing:0;font-size:10px">sales bars · order count on top</span></div><div style="position:relative;height:180px"><canvas id="ch-b-agg"></canvas></div></div></div>
     ${brDeepDiveSection(ld,pd,b)}
-    <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>`;
+    <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>${growthGridHTML()}`;
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.brand===selBrand&&(!f.platforms.size||f.platforms.has(r.aggregator))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-b-trend",trend30(mf,f.start,f.end),b?.c||"#888",brTrendMetric);
     // Single bar chart: sales as bar height, orders shown as data label on top of each bar
     barChart("ch-b-agg",aggBar.map(a=>a.ag),aggBar.map(a=>a.sales),aggBar.map(a=>a.clr),aggBar.map(a=>a.orders),"salesWithOrdersOnTop");
@@ -7295,7 +7392,7 @@ function renderPlatforms(){
     ${note?`<div class="card" style="background:rgba(245,158,11,.05);border-color:rgba(245,158,11,.2);margin-bottom:12px"><div style="font-size:12px;color:#FDE68A;line-height:1.7">💡 ${note}</div></div>`:""}
     <div class="sm" style="margin-bottom:12px"><div class="ct" style="color:${clr}">${selPlatform} — Net Sales Trend</div><div style="position:relative;height:130px"><canvas id="ch-p-trend"></canvas></div></div>
     <div class="card"><div class="ct" style="color:${clr}">Brand Performance on ${selPlatform} — ${getPeriodLabel()} <span style="color:${mutedClr};font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("pl-tbl",heads,tRows,2)}</div>
-    ${platMonthlyTableCard()}`;
+    ${platMonthlyTableCard()}${growthGridHTML()}`;
   setTimeout(()=>{const f=curFilters();const mf=(r)=>r.aggregator===selPlatform&&(!f.brands.size||f.brands.has(r.brand))&&(!f.branches.size||f.branches.has(r.branch));trendChart("ch-p-trend",trend30(mf,f.start,f.end),clr);},50);
 }
 
