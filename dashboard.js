@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-07-512";
+const BUILD_VERSION="2026-10-07-514";
 const BUILD_NOTES=[
+  "📥 UNCATEGORIZED BURN — ORDER IDS NOW SHOWN FOR ALL 5 AGGREGATORS, NOT JUST KEETA — Nikhil downloaded the \"Download all unattributed orders\" CSV and most of it came back blank (Order No, Items, Gross, Net all '—'); asked directly: \"Per item level data is not obtainable. But cant u get the order ID details atleast from all aggregators and their statements i upload.\" Checked first rather than assuming: Talabat, Careem, Deliveroo and Noon uploads were ALL already being parsed into a per-order orderDetail array at upload time (order ID, gross/net, discount amount — Talabat's parser even keeps the item text) via the exact same mechanism Keeta uses — it just had never been wired into the Uncategorized Burn panel or its two CSV exports, which checked `aggregator==='Keeta'` and returned nothing for everyone else even though the real data was sitting right there in the browser (a generic _orderDetailSource(aggregator) helper already existed for this — it just wasn't being called here; it already powers the per-campaign order-export CSV elsewhere in the dashboard). One real, permanent limit remains and is now stated plainly rather than glossed over: only Keeta has item-level campaign-matching rules (KEETA_ITEM_RULES), so only Keeta can say a SPECIFIC order is confirmed as the unattributed one. The other four have no per-order campaign resolution at all — campaigns are matched to orders by date range only — so for them this now lists every discounted order on the gap date as a candidate with a new 'Attribution Basis' column spelling out the distinction ('Item-resolved (Keeta) — confirmed unattributed order' vs 'Date-range matched (X has no item-level campaign rules yet) — candidate, not confirmed'), the same honest framing already used by the dashboard's per-campaign order-export CSV. Applied consistently in three places: the on-page per-date expand panel (discGapOrdersHTML, e.g. the '3 Oct AED 96 ▾' chips under Uncategorized Burn), its single-date CSV download, and the full cross-aggregator 'Download all' CSV Nikhil actually used. A date with no statement uploaded for that aggregator now says so plainly ('upload one to see order IDs here') instead of the old blanket 'order-level detail not available'. Verified against the real extracted code (not a retyped copy) with all 5 aggregators represented: Keeta's existing precise-match behavior is byte-identical to before (including the v306 sheet-vs-campaign-allocation-mismatch case, which still correctly shows its own message rather than an order list); Talabat rows show real order IDs AND real item text; Careem rows show real order IDs with an honest 'no item list' note (Careem's export has none); a genuinely never-uploaded aggregator (Deliveroo, in the test) correctly shows the upload-prompt message instead of crashing or showing a false blank; and a statement that exists but doesn't cover a given date (Noon) degrades to the same honest message rather than a confusing empty row. No NaN/undefined anywhere in any export. Full syntax check clean.",
+  "🖱️ OVERVIEW PROFITABILITY POPUP — TOGGLE BUTTONS WERE CLOSING THE POPUP INSTEAD OF SWITCHING TABS — immediate follow-up to v512, per Nikhil's direct report right after that shipped: \"I am not able to click on the toggle of Platform/Brand/Campaign because when i click on it, the Pop up vanishes.\" Real bug, not a flaky repro. Root cause: v512's click-to-dismiss fix checked `e.target.closest('#_ctip')` to decide whether a click landed inside the tooltip — but clicking a toggle button calls profitPopupSetMode(), which replaces #_ctip's ENTIRE innerHTML (to render the new tab's content) WHILE that same click event is still bubbling up toward document. That innerHTML swap detaches the just-clicked button from the DOM a few milliseconds before the document-level dismiss handler runs. `.closest()` walks LIVE parentNode links to find an ancestor — on a now-detached node that chain is broken, so it found nothing, concluded the click must have landed outside the tooltip, and closed it. Exactly matches what Nikhil saw: click the toggle, popup vanishes instead of switching. Fixed by checking `e.composedPath()` instead — the browser computes a event's full path through the DOM ONCE, before dispatch even begins, and that snapshot stays correct no matter what any handler mutates along the way, so it still correctly reports \"this click's path included #_ctip\" even after the button that was clicked has been replaced. `.closest()` is kept as a fallback purely for the rare browser without composedPath support. Impossible to catch with the v512 isolated test, which called profitPopupSetMode() directly as a function — never dispatched a real click event, so it never exercised the actual event-bubbling-during-DOM-mutation race that caused this. This time verified with a real DOM (jsdom) that dispatches genuine click events through actual capture/target/bubble phases: first confirmed the OLD v512 handler reliably reproduces the exact reported bug in this harness (proving the test is meaningful, not just trivially green), then confirmed the NEW handler keeps the popup open through a toggle-button click while a real click truly outside the tooltip still closes it exactly as before — no regression to the core dismiss behavior. Full syntax check clean.",
   "💵 OVERVIEW PAGE — \"WHY DID PROFITABILITY CHANGE?\" POPUP NOW HAS A LIVE BRAND/PLATFORM/CAMPAIGN TOGGLE — direct follow-up to v511, per Nikhil's own catch: \"In the Overview page, Its for All brands and Platforms (unless i filter manually), there is still shows By Campaign below. Would it be better, if we split the Bottom of the P&L Pop up in the overview page to 2 sections, 1 By Brand and 1 by Platform or u have any other ideas?\" v511 fixed this same complaint on the Platforms and Brands pages by grouping by whichever dimension ISN'T already fixed by the card — but the Overview page's top-level Profitability KPI card is unfiltered by default (all 5 brands × all platforms at once), so neither dimension is fixed there and a single forced grouping would just trade one blind spot for another. Rather than guess, showed Nikhil 3 rendered options first (per his own ask, \"Show me renderings for all options for me to choose before building final\"): two stacked sections (his own idea), a 3-way Brand/Platform/Campaign toggle, and a Brand×Platform matrix — with an honest trade-off for each (the toggle needed a scoped change to the tooltip's click-anywhere-dismisses behavior, flagged on the mockup itself before he chose). He picked the toggle (\"I like Option 2\"). Built exactly that: the popup now opens on \"By brand\" with three small pill buttons (Brand/Platform/Campaign) in its header — clicking one re-groups the SAME already-computed breakdown in place via a new profitPopupSetMode() function, with zero recomputation (the underlying computeProfitabilityBreakdown call that builds the P&L cascade and the movers list runs once per hover, not once per click). This required the one flagged technical change: the dashboard's tooltip is a single global #_ctip div that any click anywhere on the page dismisses — made that handler ignore clicks that land inside the tooltip's own content, so clicking a toggle button no longer closes the very popup it's part of; every other click anywhere else on the page still dismisses it exactly as before. Every other popup on the dashboard (Platforms-page By Brand, Brands-page By Platform from v511, and every granular per-row/per-outlet tooltip) is unaffected — the toggle only renders when explicitly enabled, which is only this one Overview card. Verified against the real extracted code (not a retyped copy): the popup opens on \"By brand\" with all 3 tabs visible and Brand highlighted; clicking Platform re-renders to \"By platform\" with the Platform tab now highlighted, with the underlying breakdown computed exactly once across the whole open→toggle→toggle→toggle sequence (confirmed via an instrumented call counter); clicking Campaign correctly falls back to the original brand·platform·campaign row format; and a regression check confirms every other call site (which never passes the new toggle flag) renders with no toggle buttons at all, byte-identical to before. Full syntax check clean.",
   "💵 \"WHY DID PROFITABILITY CHANGE?\" POPUP — BOTTOM BREAKDOWN NOW MATCHES WHICH PAGE YOU'RE ON — Nikhil's direct catch: the popup's bottom section always grouped \"By campaign\" (brand · platform · campaign, one row each), even when the popup was already scoped to a single platform (the Platforms page — every row said \"· Deliveroo\", pure repetition) or a single brand (the Brands page — every row said \"Oregano · \", same thing). His fix: group by whichever dimension ISN'T already fixed by the card you're hovering. Reviewed as an interactive mockup first (two Design-canvas artboards built from his own real screenshot numbers, each with a live Current/Proposed toggle so he could compare in place) before touching real code, per his standing \"always show a rendering first\" preference — approved, then clarified the one open design question (what happens to the catch-all row): \"We only have 5 brands and 7 platforms. Brands all 5 you can show, for platforms show Noon/Deliveroo/Talabat/Careem/Keeta, other platforms include Smiles and Instashop since they're smaller.\" Built exactly that: the Platforms-page tile's Contribution popup now groups By Brand — all 5 brands always shown individually, no hidden/merged row, since there are only 5 to begin with. The Brands-page \"💵 Profitability\" KPI card's popup now groups By Platform — Noon/Deliveroo/Talabat/Careem/Keeta always get their own row, and Smiles/Instashop always collapse into one \"Other platforms\" row, by fixed identity rather than a magnitude threshold (unlike the dashboard's existing \"Other brands/platforms\" catch-all elsewhere, which stays threshold-based and is completely untouched). New groupProfitMovers() helper re-sums the same real underlying brand+aggregator+campaign movers computeProfitabilityBreakdown already produces — by brand or by platform — re-deriving each group's discount-depth/sales-change comment with the exact same phrasing logic as the original per-campaign rows, so the language stays consistent. Every OTHER popup on the dashboard (Overview, Outlets, the granular per-outlet/per-row tooltips) was left completely alone — groupBy is optional and defaults to the original \"By campaign\" behavior everywhere it isn't explicitly passed. Verified against the real extracted code (not a retyped copy) using Nikhil's own screenshot numbers for both pages: Platforms-page grouping shows all 5 brands with no platform-name repetition and no hidden row; Brands-page grouping shows the 5 named platforms plus a correctly-summed \"Other platforms\" row (two synthetic Smiles/Instashop movers merging into one +AED 318 row, matching the real screenshot's combined figure); and a regression check confirms the ungrouped/default path (every other popup) renders byte-identical to before — still \"By campaign\", still brand · platform row labels. Full syntax check clean.",
   "📤 TALABAT UPLOAD — \"FORMAT NOT RECOGNIZED\" ON A GENUINE TALABAT FILE — Nikhil hit a hard block trying to upload this week's orderDetails export: the dashboard rejected it outright with \"format not recognized (expected ... Talabat XLSX ...)\" even though it's a real Talabat orderDetails file. Inspected the actual uploaded CSV column-by-column against what the parser expects: Talabat has quietly changed the capitalization of several export columns — \"Talabat-funded voucher\" instead of \"Talabat-Funded Voucher\", \"Operational charges\" instead of \"Operational Charges\", \"Payout amount\" instead of \"Payout Amount\", \"Order items\" instead of \"Order Items\" — while \"Restaurant name\"/\"Order status\"/\"Subtotal\"/etc stayed exactly the same. Both the upload-format detector AND the parser's own column lookups did exact, case-sensitive string matching, so this harmless template tweak on Talabat's side silently blocked every upload, not just this one file. Same root-cause shape as the earlier Keeta header-rename bug (\"Restaurant name\" → \"Store name\"), but this time it's case rather than the whole word, so it slipped past that earlier fix's exact-name matching. Fixed by making both the detector's Talabat check and every column lookup inside parseTalabatXlsx case-insensitive (colIdx is now keyed by lowercased header text, with a colAt()/numAt() helper that lowercases at lookup time) — every other aggregator's detection logic (Keeta/Careem/Deliveroo/Noon) is untouched since none of those were reported broken. Verified directly against Nikhil's actual uploaded file (not synthetic data): the detector now correctly identifies it as Talabat, and the full parser runs end to end with no \"missing columns\" error — 1,694 rows parsed into 198 brand×outlet×day records across all 5 brands (Oregano 1,329 orders, Lollorosso 153, Fyoozhen 81, Smokeys 73, Wicked Wings 40), Oct 1–6 2026, with real non-zero net payout, commission and operational-charge totals confirming the renamed columns are actually being read, not silently defaulting to zero. Full syntax check clean.",
@@ -14798,7 +14800,20 @@ function initCalcTip(){
   // inside #_ctip and must survive their own click. Every other click anywhere else on the page
   // still closes it exactly as before — this only exempts clicks that land on the tooltip's own
   // content.
-  document.addEventListener('click',e=>{if(e.target.closest('#_ctip'))return;el.style.display='none';});
+  // v513: v512 still closed the popup the instant a toggle button was clicked — real bug Nikhil
+  // hit immediately after that shipped. Root cause: profitPopupSetMode() replaces #_ctip's whole
+  // innerHTML (to re-render the new tab) WHILE this click is still bubbling up toward document —
+  // that detaches the clicked button from the DOM before this handler runs. e.target.closest()
+  // walks LIVE parentNode links, so on a detached node it finds nothing and wrongly concludes the
+  // click landed outside #_ctip. e.composedPath() is computed once by the browser before dispatch
+  // even starts and stays correct regardless of DOM mutations made by handlers along the way, so
+  // checking it instead survives exactly this case; closest() is kept as a fallback for the rare
+  // browser without composedPath support.
+  document.addEventListener('click',e=>{
+    if(typeof e.composedPath==='function'&&e.composedPath().includes(el))return;
+    if(e.target.closest&&e.target.closest('#_ctip'))return;
+    el.style.display='none';
+  });
   document.addEventListener('mousemove',e=>{if(el.style.display==='none')return;if(!e.target.closest('[data-ctip]'))return;pos(e);});
   document.addEventListener('mouseout',e=>{
     if(!e.target.closest('[data-ctip]'))return;
@@ -17611,30 +17626,54 @@ function discAuditToggle(brand,aggregator,date){
 // v295: shows the actual order numbers behind a date's unattributed gap, with a CSV download —
 // Nikhil asked for this directly after the Keeta City-Level fix, so future gaps like this one can
 // be diagnosed from the dashboard itself instead of needing a fresh investigation each time.
-// Keeta-only for now: orderDetail (per-order item/attribution detail) only exists for Keeta —
-// every other aggregator's export lacks item-level data entirely (the same limitation discussed
-// with Nikhil regarding Talabat), so there's no order list to show for them, and the UI says so
-// plainly rather than showing an empty section with no explanation.
+// v514: was Keeta-only — but Talabat/Careem/Deliveroo/Noon's uploaded statements were ALSO
+// already being parsed into orderDetail (per-order ID, gross/net/disc — Talabat even keeps the
+// item text) the whole time via _orderDetailSource(); this just never used it here, so order IDs
+// that already existed in the browser's own data were shown as "not available". Direct ask from
+// Nikhil: "cant u get the order ID details atleast from all aggregators and their statements i
+// upload". The one real, permanent difference: Keeta alone has item-level campaign-matching
+// rules (KEETA_ITEM_RULES), so it can say a specific order IS the unattributed one. No other
+// aggregator has that — campaigns are matched to orders by date range only (see
+// _matchOrdersToCampaign) — so for them this lists every discounted order on the gap date as a
+// CANDIDATE, not a confirmed match, and says so plainly rather than borrowing Keeta's precision.
+function _normalizeGapOrderRow(o,aggregator){
+  if(aggregator==='Keeta'){
+    const match=o.a&&o.a.find(([camp])=>camp==='(Unattributed)');
+    return{orderLong:o.o,orderShort:o.orderRef||'—',outlet:o.ou,items:o.i||'—',gross:o.g||0,net:o.n||0,
+      disc:match?match[1]:0,basis:'Item-resolved (Keeta) — confirmed unattributed order'};
+  }
+  return{orderLong:o.o,orderShort:o.orderRef||'—',outlet:o.ou,
+    items:o.i||('(no item list — '+aggregator+" exports don't include one)"),
+    gross:o.g||0,net:o.n||0,disc:o.disc||0,
+    basis:'Date-range matched ('+aggregator+' has no item-level campaign rules yet) — every discounted order on this date is listed as a candidate, not a confirmed unattributed order'};
+}
 function discGapUnattributedOrders(brand,aggregator,date){
-  if(aggregator!=='Keeta'||typeof keetaOrdersData==='undefined'||!keetaOrdersData||!keetaOrdersData.orderDetail)return null;
-  return keetaOrdersData.orderDetail.filter(o=>o.br===brand&&o.d===date&&o.a.some(([camp])=>camp==='(Unattributed)'));
+  if(aggregator==='Keeta'){
+    if(typeof keetaOrdersData==='undefined'||!keetaOrdersData||!keetaOrdersData.orderDetail)return null;
+    return keetaOrdersData.orderDetail.filter(o=>o.br===brand&&o.d===date&&o.a.some(([camp])=>camp==='(Unattributed)'));
+  }
+  const src=_orderDetailSource(aggregator);
+  if(!src)return null;
+  const rows=src.filter(o=>o.br===brand&&o.d===date);
+  return rows.length?rows:null;
 }
 function discGapOrdersHTML(brand,aggregator,date){
-  if(aggregator!=='Keeta'){
-    return '<div style="font-size:10.5px;color:#94a3b8;margin-top:6px;padding-top:6px;border-top:1px dashed #F1F5F9">Order-level detail isn\'t available for '+aggregator+' yet — its export doesn\'t carry item-level data the way Keeta\'s does.</div>';
-  }
   const orders=discGapUnattributedOrders(brand,aggregator,date);
-  if(!orders||!orders.length)return '';
+  if(!orders||!orders.length){
+    if(aggregator==='Keeta')return '';
+    return '<div style="font-size:10.5px;color:#94a3b8;margin-top:6px;padding-top:6px;border-top:1px dashed #F1F5F9">No '+aggregator+' order-level statement uploaded covering this date — upload one to see order IDs here.</div>';
+  }
   const rows=orders.slice(0,8).map(o=>{
-    const share=o.a.find(([camp])=>camp==='(Unattributed)')[1];
-    return '<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;font-size:10px"><span style="color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px">'+esc_html(o.i||'—')+'</span><span style="font-weight:700;color:#0F172A;white-space:nowrap">AED '+share.toFixed(2)+'</span></div>';
+    const r=_normalizeGapOrderRow(o,aggregator);
+    return '<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;font-size:10px"><span style="color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px">'+esc_html(r.items)+'</span><span style="font-weight:700;color:#0F172A;white-space:nowrap">AED '+r.disc.toFixed(2)+'</span></div>';
   }).join('');
   const more=orders.length>8?'<div style="font-size:9.5px;color:#94a3b8;margin-top:2px">+ '+(orders.length-8)+' more — download for the full list</div>':'';
+  const caveat=aggregator==='Keeta'?'':'<div style="font-size:9px;color:#94a3b8;margin-bottom:4px;font-style:italic">Matched by date only — '+aggregator+' has no item-level campaign rules, so these are candidate orders, not confirmed matches.</div>';
   return '<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #F1F5F9">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
-    +'<span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">'+orders.length+' unattributed orders</span>'
+    +'<span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase">'+orders.length+(aggregator==='Keeta'?' unattributed orders':' discounted orders')+'</span>'
     +'<button onclick="exportDiscGapOrders(\''+brand.replace(/'/g,"\\'")+'\',\''+aggregator+'\',\''+date+'\')" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#16a34a;padding:3px 8px;font-size:9.5px;font-weight:700;cursor:pointer">📥 CSV</button>'
-    +'</div>'+rows+more+'</div>';
+    +'</div>'+caveat+rows+more+'</div>';
 }
 function esc_html(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function exportDiscGapOrders(brand,aggregator,date){
@@ -17642,12 +17681,16 @@ function exportDiscGapOrders(brand,aggregator,date){
   if(!orders||!orders.length){alert('No order-level detail available for this date.');return;}
   const esc=s=>`"${String(s).replace(/"/g,'""')}"`;
   const escId=s=>`="${String(s).replace(/"/g,'""')}"`; // Excel-safe: prevents 16-digit order numbers being mangled into scientific notation
-  const header=['Order No (long)','Order No (short)','Date','Outlet','Items','Gross (AED)','Net (AED)','Unattributed Discount (AED)'];
+  const precise=aggregator==='Keeta';
+  const header=precise
+    ?['Order No (long)','Order No (short)','Date','Outlet','Items','Gross (AED)','Net (AED)','Unattributed Discount (AED)','Attribution Basis']
+    :['Order No (long)','Order No (short)','Date','Outlet','Items','Gross (AED)','Net (AED)','Discount (AED)','Attribution Basis'];
   const csvRows=orders.map(o=>{
-    const share=o.a.find(([camp])=>camp==='(Unattributed)')[1];
-    return[escId(o.o),escId(o.orderRef||'—'),o.d,o.ou,esc(o.i),o.g.toFixed(2),o.n.toFixed(2),share.toFixed(2)].join(',');
+    const r=_normalizeGapOrderRow(o,aggregator);
+    return[escId(r.orderLong),escId(r.orderShort),date,r.outlet,esc(r.items),r.gross.toFixed(2),r.net.toFixed(2),r.disc.toFixed(2),esc(r.basis)].join(',');
   });
-  const csv=[header.map(esc).join(','),...csvRows].join('\r\n');
+  const precisionNote=precise?'':`\r\n"NOTE: ${aggregator} orders are matched by date only — no item-level campaign rules exist for this aggregator yet, so every discounted order on this date is listed as a candidate, not a confirmed match to this specific gap."`;
+  const csv=[header.map(esc).join(','),...csvRows].join('\r\n')+precisionNote;
   const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
   const url=URL.createObjectURL(blob);
   const link=document.createElement('a');
@@ -17662,9 +17705,13 @@ function exportDiscGapOrders(brand,aggregator,date){
 // distinct from discGapOrdersHTML/exportDiscGapOrders (v295), which stay scoped to one date at a
 // time inside an expanded panel. This one walks every brand×aggregator×date currently flagged
 // with a real gap on the page and pulls it all into one CSV, so a full deep-dive doesn't require
-// clicking into each date individually. Keeta-only for the order-level rows (see v295 for why);
-// for every other aggregator, still includes the date-level gap so the discrepancy is visible
-// even without order detail — proposed to Nikhil before building, approved as described.
+// clicking into each date individually.
+// v514: order-level rows were Keeta-only — generalized to all 5 aggregators using the same
+// _normalizeGapOrderRow helper the per-date panel now uses (see that v514 note for the full
+// rationale: Talabat/Careem/Deliveroo/Noon orderDetail was already being parsed at upload time,
+// just never surfaced in this export). Direct ask from Nikhil after downloading this exact CSV
+// and finding most of it blank: "cant u get the order ID details atleast from all aggregators and
+// their statements i upload."
 function exportUnattributedDeepDive(){
   if(!_lastDiscBurnData){alert('No cached data — refresh the Discount Burn page and try again.');return;}
   try{
@@ -17701,6 +17748,19 @@ function exportUnattributedDeepDive(){
         (keetaByBrandDate[k]=keetaByBrandDate[k]||[]).push(o);
       }
     }
+    // v514: same brand|date indexing for the other 4 aggregators, built once up front rather
+    // than re-filtering per gap-date (same perf rationale as the Keeta index above, v297).
+    const otherByBrandDate={};
+    for(const agg of['Talabat','Careem','Deliveroo','Noon']){
+      const src=_orderDetailSource(agg);
+      if(!src)continue;
+      const map={};
+      for(const o of src){
+        const k=o.br+'|'+o.d;
+        (map[k]=map[k]||[]).push(o);
+      }
+      otherByBrandDate[agg]=map;
+    }
     const rows=[];
     for(const x of d.uncategorizedByBrandAgg){
       const datesForCombo=new Set();
@@ -17711,35 +17771,47 @@ function exportUnattributedDeepDive(){
         if(gap<=1)continue;
         const covering=campaignData.filter(c=>c.brand===x.brand&&c.aggregator===x.aggregator&&c.startDate<=date&&c.endDate>=date&&campStatus(c)!=='Cancelled'&&!isRewardsCampaign(c));
         const coveringNames=covering.map(c=>c.name||c.comments||'—').join(' | ')||'(none)';
-        const orders=x.aggregator==='Keeta'?(keetaByBrandDate[x.brand+'|'+date]||null):null;
-        if(orders&&orders.length){
-          for(const o of orders){
-            const share=o.a.find(([camp])=>camp==='(Unattributed)')[1];
-            rows.push([escId(o.o),escId(o.orderRef||'—'),date,x.brand,x.aggregator,o.ou,esc(o.i),o.g.toFixed(2),o.n.toFixed(2),share.toFixed(2),sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames)].join(','));
+        if(x.aggregator==='Keeta'){
+          const orders=keetaByBrandDate[x.brand+'|'+date]||null;
+          if(orders&&orders.length){
+            for(const o of orders){
+              const r=_normalizeGapOrderRow(o,'Keeta');
+              rows.push([escId(r.orderLong),escId(r.orderShort),date,x.brand,x.aggregator,r.outlet,esc(r.items),r.gross.toFixed(2),r.net.toFixed(2),r.disc.toFixed(2),sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),esc(r.basis)].join(','));
+            }
+          }else if(typeof keetaOrdersData!=='undefined'&&keetaOrdersData&&keetaOrdersData.orderDetail&&keetaOrdersData.orderDetail.length){
+            // v306: fixes the ACTUAL bug — found after ruling out stale cache and server-sync
+            // regression (both real bugs, both fixed, neither was this). This gap is computed by
+            // comparing SHEET-level discount totals (matches, from POS/Google Sheet data) against
+            // CAMPAIGN-ALLOCATION totals (campaignBreakdown.dailyAlloc) — a genuinely different
+            // comparison than "does Keeta's own exact per-order engine call any order
+            // unattributed". These two systems can legitimately disagree for reasons that have
+            // nothing to do with individual orders (timing differences between when the sheet vs.
+            // Keeta's statement records a day, FD handling, rounding) — and for Nikhil's exact
+            // dates in this export, the order-level engine already shows 100% attribution
+            // (verified directly, weeks ago, against his real uploaded statement). The old fallback
+            // text ("see per-date detail on page") was identical whether Keeta genuinely had no
+            // order data AT ALL for that date, or had complete order data that simply reconciles
+            // differently from the sheet — indistinguishable from the CSV's perspective, which is
+            // exactly why it looked like "the fix still isn't working" when it actually was.
+            rows.push(['—','—',date,x.brand,x.aggregator,'—',esc('(sheet vs. campaign-allocation mismatch — Keeta\'s own order-level data for this date is already 100% attributed; this gap has a different cause, not missing order detail)'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),'—'].join(','));
+          }else{
+            rows.push(['—','—',date,x.brand,x.aggregator,'—',esc('(see per-date detail on page)'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),'—'].join(','));
           }
-        }else if(x.aggregator==='Keeta'&&typeof keetaOrdersData!=='undefined'&&keetaOrdersData&&keetaOrdersData.orderDetail&&keetaOrdersData.orderDetail.length){
-          // v306: fixes the ACTUAL bug — found after ruling out stale cache and server-sync
-          // regression (both real bugs, both fixed, neither was this). This gap is computed by
-          // comparing SHEET-level discount totals (matches, from POS/Google Sheet data) against
-          // CAMPAIGN-ALLOCATION totals (campaignBreakdown.dailyAlloc) — a genuinely different
-          // comparison than "does Keeta's own exact per-order engine call any order
-          // unattributed". These two systems can legitimately disagree for reasons that have
-          // nothing to do with individual orders (timing differences between when the sheet vs.
-          // Keeta's statement records a day, FD handling, rounding) — and for Nikhil's exact
-          // dates in this export, the order-level engine already shows 100% attribution
-          // (verified directly, weeks ago, against his real uploaded statement). The old fallback
-          // text ("see per-date detail on page") was identical whether Keeta genuinely had no
-          // order data AT ALL for that date, or had complete order data that simply reconciles
-          // differently from the sheet — indistinguishable from the CSV's perspective, which is
-          // exactly why it looked like "the fix still isn't working" when it actually was.
-          rows.push(['—','—',date,x.brand,x.aggregator,'—',esc('(sheet vs. campaign-allocation mismatch — Keeta\'s own order-level data for this date is already 100% attributed; this gap has a different cause, not missing order detail)'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames)].join(','));
         }else{
-          rows.push(['—','—',date,x.brand,x.aggregator,'—',esc(x.aggregator==='Keeta'?'(see per-date detail on page)':'(order-level detail not available for '+x.aggregator+')'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames)].join(','));
+          const orders=(otherByBrandDate[x.aggregator]&&otherByBrandDate[x.aggregator][x.brand+'|'+date])||null;
+          if(orders&&orders.length){
+            for(const o of orders){
+              const r=_normalizeGapOrderRow(o,x.aggregator);
+              rows.push([escId(r.orderLong),escId(r.orderShort),date,x.brand,x.aggregator,r.outlet,esc(r.items),r.gross.toFixed(2),r.net.toFixed(2),r.disc.toFixed(2),sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),esc(r.basis)].join(','));
+            }
+          }else{
+            rows.push(['—','—',date,x.brand,x.aggregator,'—',esc('(no '+x.aggregator+' order-level statement uploaded covering this date — upload one to see order IDs here)'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),'—'].join(','));
+          }
         }
       }
     }
     if(!rows.length){alert('No dates with a real unattributed gap found for the current filters.');return;}
-    const header=['Order No (long)','Order No (short)','Date','Brand','Aggregator','Outlet','Items','Gross (AED)','Net (AED)','Unattributed Discount (AED)','Sheet Burn That Date (AED)','Allocated That Date (AED)','Gap That Date (AED)','Campaigns Covering This Date'];
+    const header=['Order No (long)','Order No (short)','Date','Brand','Aggregator','Outlet','Items','Gross (AED)','Net (AED)','Unattributed Discount (AED)','Sheet Burn That Date (AED)','Allocated That Date (AED)','Gap That Date (AED)','Campaigns Covering This Date','Attribution Basis'];
     const csv=[header.map(esc).join(','),...rows].join('\r\n');
     const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
     const url=URL.createObjectURL(blob);
