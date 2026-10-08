@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-08-526";
+const BUILD_VERSION="2026-10-08-528";
 const BUILD_NOTES=[
+  "🐞 DATA HEALTH BANNER UNREADABLE ON THE DARK OVERVIEW — Nikhil's screenshot of v523: the amber banner showed '1 data check needs a look', but the 'MEDIUM' chip, the issue text and the toggle were invisible — 'how do I know what's wrong, can't even see Medium due to the colour'. ROOT CAUSE: the banner relied on inherited text colour, which is dark-on-dark on the dark Overview (my jsdom check only looked for the text, not its contrast). FIX: every text element now has an explicit theme-aware colour (light text on dark, dark on light), the severity chips have solid contrast with borders, the toggle reads 'Show details ▾', and the COLLAPSED bar now previews the first finding (e.g. 'Stale data — Fyoozhen (+1 more)') so you see what is wrong without opening it. VERIFIED: banner rendered in both themes in jsdom — every cell carries an explicit colour, preview text present; 119 tests pass.",
+  "🏷️ BUILD NUMBER NOW ALWAYS VISIBLE IN THE SIDEBAR — Nikhil (checking v526): 'I can't see the Footer showing the version on my screen.' ROOT CAUSE: my own wrong instruction — there is no footer; the version was only ever shown inside the one-time 'What's new' popup. FIX: the sidebar sync caption now reads e.g. 'Synced just now · v527' (hover shows the full 2026-10-08-527). Nothing else changed. VERIFIED: updateSidebarSyncStatus rendered in jsdom for the syncing and synced states; 117 tests pass.",
   "🐞 DELIVEROO ORDERS OF AED 1,000+ WERE COUNTED AS AED 1 — FOUND BY THE FIRST REAL DELIVEROO FIXTURE; PLUS 'PRICE INCREASED AND DISCOUNTED' WITHOUT A % — Nikhil uploaded real Deliveroo, Noon (x3) and Keeta statements for the parser tests. Writing the Deliveroo reconciliation test exposed a REAL BUG: Deliveroo prints amounts of 1,000 and above with a thousands comma (\"1,010.00\") and the parser used plain parseFloat on that text, so a AED 1,010 order counted as AED 1 gross (and AED 1,182 as 1, and a AED 2,546.02 marketing contribution as 2). The real week's file had two such orders, so gross was understated by ~AED 2,190. FIX: deliverooNum() (thousands-comma aware) used for Order Value / Total Payable / Adjustment in parseDeliverooCSV; parseCareemAmount got the same tolerance. NEW FIXTURES/TESTS (11 new, 117 total pass): real slices of a Keeta Recent Orders xlsx, a Deliveroo statement and Noon statements for Oregano, Lollorosso and Fyoozhen, with totals (orders, gross, payout, discounts, commission, earnings, cancellations) computed independently from the raw files; format detection now also checked against all real headers. Mutation check: reverting the comma fix fails 3 tests. SECOND CHANGE: Nikhil asked to be able to write just 'Price increased and discounted' and let the dashboard calculate. With no % in the comment (and no reference table for that brand/platform) the mark-up is now assumed to be the one that exactly cancels the discount (20% off => +25%, price-neutral) and the Campaigns note says so; a % written in the comment still wins.",
   "🔎 ORDER-FILE FORMAT DETECTION NOW TESTED (NO BEHAVIOUR CHANGE) — parked item 'upload format auto-detection untested'. The Keeta / Careem / Talabat / Deliveroo / Noon header sniffing lived inline inside handleOrdersUpload (which needs an admin session, storage and the file reader), so it could not be tested. Moved verbatim into a pure function detectOrdersFormat(firstRow, secondRow) and handleOrdersUpload now calls it. TESTS (8 new, 106 total pass): real Careem and Talabat fixture headers are recognised; Talabat survives capitalisation changes and a BOM (v509 case); Keeta header on row 1 or 2; Deliveroo needs its markers on the second row; Noon needs all three columns; unknown/empty files return null (the 'format not recognized' message); precedence is stable. LIMIT: Keeta, Deliveroo and Noon are tested with header rows built from the exact marker columns the code looks for, not real exports — real files in tests/fixtures would replace them.",
   "🧹 DEAD-CODE CLEAN-UP (NO VISIBLE CHANGE) — Nikhil chose 'audit and remove safe dead code' for the parked single-file structure item. METHOD: parsed the whole file (acorn), listed every top-level function/constant whose name appears NOWHERE else in the file (not in code, onclick strings, the window-export list or comments), removed them, then repeated until nothing new fell out (3 rounds). REMOVED 29 functions + 7 constants, ~590 lines / 64 KB: old campaign detail/table renderers (campDetailHTML, campTableHTML, sortCampaigns, buildCampBundles, campProsCons), the old local-brief and Ask-AI stubs (computeLocalBrief, localBriefHTML, genBrief, runAskAI), the old break-even helpers (calcBE, getBE, campBeGetBaseline and friends), the unused Keeta/Talabat per-outlet discount helpers and Keeta upload bar, getCompLabel, the 1 KB HR constant and unused campaign-forecast state variables. No duplicate top-level definitions exist. TESTS: 4 tests that exercised removed dead functions were dropped (old local brief, old break-even baseline, getCompLabel wording); 98 pass. VERIFIED: rendered all 11 pages (Overview, Brands, Outlets, Platforms, CPC, Campaigns, Discounts, KPI, Compare, Cancellations, Feedback) on v523 and v524 with the same data — output byte-identical on every page. NOT TOUCHED: unused variables inside multi-variable 'let' lines, and the ~24k-line single-file structure itself.",
@@ -5104,13 +5106,17 @@ async function retryBrand(brandName){
 function updateSidebarSyncStatus(){
   const el=document.getElementById("sidebar-sync-caption");
   if(!el)return;
-  if(!lastSyncAt){el.textContent="Syncing…";return;}
+  // v527: build number shown next to the sync status (hover for the full version) — there was no always-visible version before;
+  // it only appeared in the one-time "What's new" popup.
+  const ver=" · v"+String(BUILD_VERSION).split("-").pop();
+  el.title="Dashboard build "+BUILD_VERSION;
+  if(!lastSyncAt){el.textContent="Syncing…"+ver;return;}
   const secs=Math.round((Date.now()-lastSyncAt)/1000);
   let txt;
   if(secs<60)txt="Synced just now";
   else if(secs<3600)txt=`Synced ${Math.floor(secs/60)}m ago`;
   else txt=`Synced ${Math.floor(secs/3600)}h ago`;
-  el.textContent=txt;
+  el.textContent=txt+ver;
 }
 // v483: removes the standalone "Discount Burn" tab from the sidebar entirely, per Nikhil
 // directly ("if we created it, we should be able to remove it as well") — its content now lives
@@ -6148,7 +6154,7 @@ function dataHealthToggle(){
   _dhOpen=!_dhOpen;
   const b=document.getElementById('dataHealthBody'),t=document.getElementById('dataHealthToggleTxt');
   if(b)b.style.display=_dhOpen?'block':'none';
-  if(t)t.textContent=_dhOpen?'Hide ▴':'Show ▾';
+  if(t)t.textContent=_dhOpen?'Hide ▴':'Show details ▾';
 }
 function dataHealthBannerHTML(){
   if(typeof allData==='undefined'||!allData.length||!latest)return '';
@@ -6156,12 +6162,21 @@ function dataHealthBannerHTML(){
   if(!_dhCache||_dhCache.key!==key)_dhCache={key,issues:dataHealthChecks(allData,latest,cpcRealToday())};
   const issues=_dhCache.issues;
   if(!issues.length)return '';
+  // v528: explicit colours — v523 relied on inherited text colour, which is dark-on-dark on the (dark) Overview page, so the
+  // severity chip, the issue text and the toggle were unreadable (Nikhil's screenshot). Theme-aware, high contrast.
+  const dk_=(typeof _darkPage!=='undefined')&&_darkPage;
+  const tx=dk_?'#F1F5F9':'#1B2430',mu=dk_?'#B4C2D6':'#5B6677',line=dk_?'rgba(148,163,184,.28)':'rgba(100,116,139,.25)',amb=dk_?'#FBBF24':'#B45309',red=dk_?'#FCA5A5':'#B91C1C';
   const hi=issues.filter(i=>i.sev==='high').length,me=issues.length-hi;
-  const chip=sev=>sev==='high'?'<span style="font-size:10.5px;border-radius:99px;padding:2px 8px;font-weight:800;background:rgba(220,38,38,.12);color:#DC2626">HIGH</span>':'<span style="font-size:10.5px;border-radius:99px;padding:2px 8px;font-weight:800;background:rgba(245,158,11,.16);color:#B97800">MEDIUM</span>';
-  const rows=issues.slice(0,15).map(i=>`<tr><td style="padding:7px 6px;border-top:1px solid rgba(128,128,128,.2)">${chip(i.sev)}</td><td style="padding:7px 6px;border-top:1px solid rgba(128,128,128,.2);font-weight:600">${esc(i.check)}</td><td style="padding:7px 6px;border-top:1px solid rgba(128,128,128,.2)">${esc(i.text)}</td><td style="padding:7px 6px;border-top:1px solid rgba(128,128,128,.2);opacity:.75">${esc(i.where)}</td></tr>`).join('');
-  return `<div id="dataHealthCard" style="margin-bottom:14px">
-    <div onclick="dataHealthToggle()" style="display:flex;align-items:center;gap:10px;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.4);border-radius:10px;padding:8px 12px;cursor:pointer"><span>🩺</span><span style="font-size:13px"><b style="color:#D97706">${issues.length} data check${issues.length===1?'':'s'} need${issues.length===1?'s':''} a look</b> · ${hi?hi+' high':''}${hi&&me?', ':''}${me?me+' medium':''}</span><span id="dataHealthToggleTxt" style="margin-left:auto;font-size:12px;opacity:.7">${_dhOpen?'Hide ▴':'Show ▾'}</span></div>
-    <div id="dataHealthBody" style="display:${_dhOpen?'block':'none'};border:1px solid rgba(245,158,11,.4);border-top:0;border-radius:0 0 10px 10px;padding:6px 12px 10px"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><tr style="font-size:10.5px;text-transform:uppercase;opacity:.65;text-align:left"><th style="padding:6px">Severity</th><th style="padding:6px">Check</th><th style="padding:6px">What was found</th><th style="padding:6px">Where</th></tr>${rows}</table><div style="font-size:11.5px;opacity:.7;margin-top:8px">Warnings only — the data is used exactly as entered. Re-checked on every refresh.</div></div></div>`;
+  const chip=sev=>sev==='high'
+    ?`<span style="display:inline-block;font-size:10.5px;border-radius:99px;padding:2px 9px;font-weight:800;background:rgba(239,68,68,.22);color:${red};border:1px solid rgba(239,68,68,.5)">HIGH</span>`
+    :`<span style="display:inline-block;font-size:10.5px;border-radius:99px;padding:2px 9px;font-weight:800;background:rgba(245,158,11,.2);color:${amb};border:1px solid rgba(245,158,11,.5)">MEDIUM</span>`;
+  const td=`padding:8px 8px;border-top:1px solid ${line};color:${tx};vertical-align:top`;
+  const rows=issues.slice(0,15).map(i=>`<tr><td style="${td}">${chip(i.sev)}</td><td style="${td};font-weight:700;white-space:nowrap">${esc(i.check)}</td><td style="${td}">${esc(i.text)}</td><td style="${td};color:${mu}">${esc(i.where)}</td></tr>`).join('');
+  const first=issues[0];
+  const preview=esc(first.check+' — '+first.where)+(issues.length>1?` (+${issues.length-1} more)`:'');
+  return `<div id="dataHealthCard" style="margin-bottom:14px;color:${tx}">
+    <div onclick="dataHealthToggle()" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.55);border-radius:10px;padding:9px 14px;cursor:pointer"><span>🩺</span><span style="font-size:13px;font-weight:800;color:${amb}">${issues.length} data check${issues.length===1?'':'s'} need${issues.length===1?'s':''} a look</span><span style="font-size:12.5px;color:${tx}">${preview}</span><span id="dataHealthToggleTxt" style="margin-left:auto;font-size:12px;font-weight:700;color:${amb}">${_dhOpen?'Hide ▴':'Show details ▾'}</span></div>
+    <div id="dataHealthBody" style="display:${_dhOpen?'block':'none'};border:1px solid rgba(245,158,11,.55);border-top:0;border-radius:0 0 10px 10px;padding:6px 14px 12px;background:${dk_?'rgba(15,23,41,.55)':'rgba(255,255,255,.7)'}"><table style="width:100%;border-collapse:collapse;font-size:12.5px;color:${tx}"><tr style="font-size:10.5px;text-transform:uppercase;text-align:left;color:${mu}"><th style="padding:6px 8px">Severity</th><th style="padding:6px 8px">Check</th><th style="padding:6px 8px">What was found</th><th style="padding:6px 8px">Where</th></tr>${rows}</table><div style="font-size:11.5px;color:${mu};margin-top:8px">Warnings only — the data is used exactly as entered. Re-checked on every refresh.</div></div></div>`;
 }
 function renderOverview(){
   const ld=getLD(),pd=getPD(),ls=sumR(ld),ps=sumR(pd);
