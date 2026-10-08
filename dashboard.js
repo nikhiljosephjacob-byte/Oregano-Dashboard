@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-08-525";
+const BUILD_VERSION="2026-10-08-526";
 const BUILD_NOTES=[
+  "🐞 DELIVEROO ORDERS OF AED 1,000+ WERE COUNTED AS AED 1 — FOUND BY THE FIRST REAL DELIVEROO FIXTURE; PLUS 'PRICE INCREASED AND DISCOUNTED' WITHOUT A % — Nikhil uploaded real Deliveroo, Noon (x3) and Keeta statements for the parser tests. Writing the Deliveroo reconciliation test exposed a REAL BUG: Deliveroo prints amounts of 1,000 and above with a thousands comma (\"1,010.00\") and the parser used plain parseFloat on that text, so a AED 1,010 order counted as AED 1 gross (and AED 1,182 as 1, and a AED 2,546.02 marketing contribution as 2). The real week's file had two such orders, so gross was understated by ~AED 2,190. FIX: deliverooNum() (thousands-comma aware) used for Order Value / Total Payable / Adjustment in parseDeliverooCSV; parseCareemAmount got the same tolerance. NEW FIXTURES/TESTS (11 new, 117 total pass): real slices of a Keeta Recent Orders xlsx, a Deliveroo statement and Noon statements for Oregano, Lollorosso and Fyoozhen, with totals (orders, gross, payout, discounts, commission, earnings, cancellations) computed independently from the raw files; format detection now also checked against all real headers. Mutation check: reverting the comma fix fails 3 tests. SECOND CHANGE: Nikhil asked to be able to write just 'Price increased and discounted' and let the dashboard calculate. With no % in the comment (and no reference table for that brand/platform) the mark-up is now assumed to be the one that exactly cancels the discount (20% off => +25%, price-neutral) and the Campaigns note says so; a % written in the comment still wins.",
   "🔎 ORDER-FILE FORMAT DETECTION NOW TESTED (NO BEHAVIOUR CHANGE) — parked item 'upload format auto-detection untested'. The Keeta / Careem / Talabat / Deliveroo / Noon header sniffing lived inline inside handleOrdersUpload (which needs an admin session, storage and the file reader), so it could not be tested. Moved verbatim into a pure function detectOrdersFormat(firstRow, secondRow) and handleOrdersUpload now calls it. TESTS (8 new, 106 total pass): real Careem and Talabat fixture headers are recognised; Talabat survives capitalisation changes and a BOM (v509 case); Keeta header on row 1 or 2; Deliveroo needs its markers on the second row; Noon needs all three columns; unknown/empty files return null (the 'format not recognized' message); precedence is stable. LIMIT: Keeta, Deliveroo and Noon are tested with header rows built from the exact marker columns the code looks for, not real exports — real files in tests/fixtures would replace them.",
   "🧹 DEAD-CODE CLEAN-UP (NO VISIBLE CHANGE) — Nikhil chose 'audit and remove safe dead code' for the parked single-file structure item. METHOD: parsed the whole file (acorn), listed every top-level function/constant whose name appears NOWHERE else in the file (not in code, onclick strings, the window-export list or comments), removed them, then repeated until nothing new fell out (3 rounds). REMOVED 29 functions + 7 constants, ~590 lines / 64 KB: old campaign detail/table renderers (campDetailHTML, campTableHTML, sortCampaigns, buildCampBundles, campProsCons), the old local-brief and Ask-AI stubs (computeLocalBrief, localBriefHTML, genBrief, runAskAI), the old break-even helpers (calcBE, getBE, campBeGetBaseline and friends), the unused Keeta/Talabat per-outlet discount helpers and Keeta upload bar, getCompLabel, the 1 KB HR constant and unused campaign-forecast state variables. No duplicate top-level definitions exist. TESTS: 4 tests that exercised removed dead functions were dropped (old local brief, old break-even baseline, getCompLabel wording); 98 pass. VERIFIED: rendered all 11 pages (Overview, Brands, Outlets, Platforms, CPC, Campaigns, Discounts, KPI, Compare, Cancellations, Feedback) on v523 and v524 with the same data — output byte-identical on every page. NOT TOUCHED: unused variables inside multi-variable 'let' lines, and the ~24k-line single-file structure itself.",
   "🩺 DATA HEALTH — WARN-ONLY SANITY CHECKS ON THE SYNCED SHEET DATA (OVERVIEW) — Nikhil's parked item 'ingestion sanity checks / Google Sheet fetch fragility'; approved design (mock-up shown first): slim banner on Overview, '3 data checks need a look' → expands to a table, hidden completely when everything is clean. CHECKS (all four groups requested): (1) stale brand — latest entry 2+ days behind the others (4+ = HIGH); (2) sudden zero (HIGH) / drop under 30% of the same weekday's 4-week average (MEDIUM) per brand × core platform, only where the usual level is over AED 500 with 3+ weeks of history; (3) duplicate outlet/day/platform rows, future dates, negative values, orders-without-sales mismatches; (4) implausible values in the last 14 days — AOV under AED 10 or over AED 400 (3+ orders), discount more than 2× sales (judged on the SHEET discount, so the v521 mark-up reclassification never trips it). Closed outlets (NAS) are excluded everywhere. Data is used exactly as entered. The existing failed-brand banner is unchanged. VERIFIED: 10 new tests on the real extracted dataHealthChecks (100 total pass) + full Overview render in jsdom with a planted Talabat zero (banner shows, collapsed by default, toggle works, no errors).",
@@ -3425,7 +3426,7 @@ function parseCareemAmount(v){
   if(v==null||v==="")return 0;
   if(typeof v==="number")return v;
   const s=String(v).trim();
-  const n=parseFloat(s);
+  const n=/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)?parseFloat(s.replace(/,/g,"")):parseFloat(s); // v526: thousands comma
   return isNaN(n)?0:n;
 }
 function parseCareemDate(ts){
@@ -4037,6 +4038,15 @@ function deliverooRecomputeTotals(records){
 // Parse a Deliveroo weekly statement CSV. Handles the multi-section structure (banner row + repeated
 // headers later in the file for "Payments for contested customer refunds" and "Other payments and
 // fees" sections — those rows have Order Number === "Order Number" or Activity === NaN, filtered out).
+// v526: Deliveroo prints amounts of AED 1,000 and above with a thousands comma ("1,010.00"), and the CSV reader hands that
+// over as TEXT, so plain parseFloat read it as 1 — a AED 1,010 order counted as AED 1 gross, and a AED 2,546.02 marketing
+// contribution as 2. Found by the first real Deliveroo statement fixture (two such orders in one week's file).
+function deliverooNum(v){
+  if(typeof v==="number")return v;
+  const s=String(v==null?"":v).trim();
+  if(/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s))return parseFloat(s.replace(/,/g,""));
+  return parseFloat(s);
+}
 async function parseDeliverooCSV(file){
   await loadSheetJS();
   const ab=await file.arrayBuffer();
@@ -4110,7 +4120,7 @@ async function parseDeliverooCSV(file){
     if(!row||!row.length)continue;
     if(String(row[colAct]||"").trim()!=="Delivery")continue;
     const on=row[colOrd];
-    const val=parseFloat(row[colVal]);
+    const val=deliverooNum(row[colVal]);
     if(on!=null&&!isNaN(val))deliverooGrossByOrder[on]=val;
   }
   const cancellations=[];
@@ -4140,8 +4150,8 @@ async function parseDeliverooCSV(file){
           // v172: gross (Order Value), not net payout (Total Payable) — was using the refund/
           // payout amount as if it were the order's gross value, which understates it. Per
           // direct confirmation the Cancellation Monitor should show gross throughout.
-          amount:deliverooGrossByOrder[orderNum]||Math.abs(parseFloat(row[colVal]))||Math.abs(parseFloat(row[colPay]))||0,
-          netImpact:parseFloat(row[colPay])||0, // negative = restaurant debited
+          amount:deliverooGrossByOrder[orderNum]||Math.abs(deliverooNum(row[colVal]))||Math.abs(deliverooNum(row[colPay]))||0,
+          netImpact:deliverooNum(row[colPay])||0, // negative = restaurant debited
           isPostDelivery:true, // these are refunds on DELIVERED orders, not pre-delivery cancellations - flagged for the page to label distinctly
           source_file:file.name
         });
@@ -4159,8 +4169,8 @@ async function parseDeliverooCSV(file){
     if(!dateStr){stats.skippedDate++;continue;}
 
     if(activity==="Delivery"){
-      const orderValue=parseFloat(row[colVal])||0;
-      const totalPayable=parseFloat(row[colPay])||0;
+      const orderValue=deliverooNum(row[colVal])||0;
+      const totalPayable=deliverooNum(row[colPay])||0;
       const marketerDisc=parseDeliverooMarketerDisc(String(row[colNote]||""));
       const key=`${brand}|${outlet}|${dateStr}|marketer_offer`;
       if(!agg[key])agg[key]={brand,outlet,date:dateStr,discount_type:"marketer_offer",orders:0,gross:0,net_payout:0,menu_disc:0};
@@ -4173,7 +4183,7 @@ async function parseDeliverooCSV(file){
           g:Math.round((orderValue+marketerDisc)*100)/100,n:Math.round(totalPayable*100)/100,disc:Math.round(marketerDisc*100)/100});
       }
     }else{
-      const adj=Math.abs(parseFloat(row[colAdj])||0);
+      const adj=Math.abs(deliverooNum(row[colAdj])||0);
       if(adj<=0)continue;
       const discType=DELIVEROO_REWARDS_BRANDS.has(brand)?"rewards":"unknown";
       const key=`${brand}|${outlet}|${dateStr}|${discType}`;
@@ -12050,9 +12060,12 @@ function priceUpliftInfo(c){
   if(!(d>0&&d<1))return null;
   const cu=priceUpliftFromComment(text);
   const ref=priceUpliftRefFor(c.brand,c.aggregator);
-  if(cu==null&&ref==null)return{needsPercent:true,d};
-  const u=cu!=null?cu:ref;
-  return{u,d,commentU:cu,refU:ref,source:cu!=null?'the campaign comment':'the reference price table',
+  // v526: Nikhil — "can I just mention Price increased and discounted rather than exact %'s? Let the dashboard do the
+  // calculations." With no % in the comment (and no reference table) a mark-up-then-discount promotion is, by design, meant to be
+  // price-neutral, so the mark-up is taken as the one that exactly cancels the discount: u = d/(1-d) (20% off ⇒ +25%).
+  const assumed=cu==null&&ref==null;
+  const u=cu!=null?cu:(ref!=null?ref:d/(1-d));
+  return{u,d,commentU:cu,refU:ref,assumed,source:cu!=null?'the campaign comment':(ref!=null?'the reference price table':'an assumed price-neutral mark-up'),
     netFactor:(1+u)*(1-d)}; // customer pays this × normal price (1.00 = neutral)
 }
 let priceUpliftReport=[];
@@ -14096,7 +14109,7 @@ function campDetailV2HTML(c,idx){
     const _i=_up.info,_pc=x=>(x*100).toFixed(1).replace(/\.0$/,'')+'%';
     if(_up.skipped==='nopercent')_notes.push({sev:'amber',t:'Price mark-up mentioned, but no % found — NOT corrected',b:`The comment says prices were marked up, but gives no percentage. Add it to the Comments cell in the sheet, e.g. <em>"Combos prices increased by 25%, then 20% OFF"</em>. Until then the full sheet discount is treated as a real cost.`});
     else if(_up.skipped)_notes.push({sev:'red',t:'Price mark-up detected, but NOT corrected',b:`The comment says prices were raised, but another ${c.aggregator} campaign overlaps these dates (${_up.overlapNames.join(', ')}), so the sheet discount can't be attributed to this one. Profitability still treats the full sheet discount as a real cost.`});
-    else _notes.push({sev:'green',t:'Mark-up-then-discount campaign — profitability corrected',b:`Prices were raised <strong>${_pc(_i.u)}</strong> (read from ${_i.source}) and then <strong>${_pc(_i.d)}</strong> taken off, so customers pay <strong>${(_i.netFactor*100).toFixed(1)}%</strong> of the normal price (${_i.netFactor<0.995?'a real price cut of '+((1-_i.netFactor)*100).toFixed(1)+'%':_i.netFactor>1.005?'slightly above normal':'price-neutral'}). Of the AED ${Math.round(_up.sheetDisc).toLocaleString()} discount on the sheet, only <strong>AED ${Math.round(_up.realDisc).toLocaleString()}</strong> is counted as a real discount cost; the rest just undoes the mark-up. Gross, food/packaging cost and discount burn use the normal-price basis. Sales and commission are as charged.`});
+    else _notes.push({sev:'green',t:'Mark-up-then-discount campaign — profitability corrected',b:`Prices were raised <strong>${_pc(_i.u)}</strong> (read from ${_i.source}${_i.assumed?` — the comment gives no %, so this is the mark-up that exactly cancels a ${_pc(_i.d)} discount; write the real % in the comment if it was different`:''}) and then <strong>${_pc(_i.d)}</strong> taken off, so customers pay <strong>${(_i.netFactor*100).toFixed(1)}%</strong> of the normal price (${_i.netFactor<0.995?'a real price cut of '+((1-_i.netFactor)*100).toFixed(1)+'%':_i.netFactor>1.005?'slightly above normal':'price-neutral'}). Of the AED ${Math.round(_up.sheetDisc).toLocaleString()} discount on the sheet, only <strong>AED ${Math.round(_up.realDisc).toLocaleString()}</strong> is counted as a real discount cost; the rest just undoes the mark-up. Gross, food/packaging cost and discount burn use the normal-price basis. Sales and commission are as charged.`});
   }}
   _notes.push({sev:'blue',t:'Comparison basis',b:`Campaign <strong>${fmtDisp(a.effStart)} → ${fmtDisp(a.effEnd)}</strong> (${a.cDays} day${a.cDays>1?'s':''}) is compared against the same weekdays 4 weeks earlier: <strong>${fmtDisp(a.bStart)} → ${fmtDisp(a.bEnd)}</strong>.`});
   if(a.baselineCampaigns.length)_notes.push({sev:'amber',t:'Baseline period ran promos too',b:`The comparison window also ran: ${a.baselineCampaigns.map(x=>`<strong>${x.name}</strong> (${fmtShort(x.startDate)}–${fmtShort(x.endDate)})`).join(', ')}. "Normal" here means last month's promo mix, not a promo-free period.`});
