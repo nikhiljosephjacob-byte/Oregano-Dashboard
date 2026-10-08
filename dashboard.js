@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-07-520";
+const BUILD_VERSION="2026-10-08-521";
 const BUILD_NOTES=[
+  "💱 MARK-UP-THEN-DISCOUNT CAMPAIGNS NOW PROFIT-CORRECTED (CAREEM OREGANO \"20% OFF COMBOS\", 8–14 OCT) — Nikhil's report: combo prices on Careem were raised and then discounted 20% (\"Combos Price increased by 20% and Discounted\"), net impact zero, so a profitability calc that treats the 20% as a real cost and takes food cost on the inflated gross would be wrong. ROOT CAUSE: the sheet logs the discount on the INFLATED price, and gross = net + discount feeds food/packaging cost everywhere, so both discount burn and food cost were overstated. FIX: priceUpliftInfo() recognises a campaign whose comment says prices were raised N% AND that has an N% OFF; the uplift is taken from Nikhil's Careem-vs-Deliveroo/Talabat price table (11 combos, average +25.6% — NOT 20%, so 1.256 × 0.8 ≈ 1.005 = genuinely price-neutral) and falls back to the comment % for future campaigns. applyPriceUpliftAdjustments() reclassifies the sheet discount once at the data layer (runs on every sales/campaign load, idempotent, raw value kept in discSheet): markup portion removed, real discount cost = normal price − paid (floored at 0). Net sales and commission untouched; all pages inherit it. Overlapping campaigns on the same brand+platform → not corrected and flagged. Campaign detail shows a green explanation note. VERIFIED: 10 new tests on the real extracted code (88 total pass) incl. contribution before/after and mutation checks.",
   "🐞 GROWTH GRID TOGGLES DID NOTHING ON PLATFORMS / BRANDS (ONLY WORKED ON OVERVIEW) — Nikhil's direct report on v519: \"not able to click on the Toggles of Net Sales / MoM and YoY in the tables added below in Brands, Outlets or Platforms page. Only works on Overview page\". ROOT CAUSE: every page's last render stays in the DOM (hidden) when you switch pages, and the growth grid card used one shared id, growthGridCard. The toggle handler found its card with getElementById, which returns the FIRST match in the document — always Overview's hidden copy (Overview sits first in the page). So on Platforms and Brands the click really did run, but it updated the invisible Overview card and left the visible one unchanged; on Overview the first match happened to be the right one. My v519 tests only ever rendered one page at a time, so they could not see it. FIX: the card id now includes the page name (growthGridCard_overview / _platforms / _brands) and the handler targets the current page's card. (Outlets has no grid by design — its tiles carry the comparison; only the Compare switch is there.) VERIFIED: new regression test renders Overview AND Brands into the same document (exactly the real situation), toggles on Brands, and checks the Brands card changed while the hidden Overview card did not; it fails on v519. Full suite passes.",
   "📈 MoM / YoY GROWTH — NEW \"COMPARE: vs Prior · MoM · YoY\" SWITCH (OPTION C) AND BRAND × PLATFORM GROWTH GRID (OPTION E) — Nikhil's request: show month-on-month and year-on-year growth of orders and sales per brand, per platform and brand×platform together, on the pages where it matters, without using much space; after seeing five rendered options he chose C + E. WHAT WAS BUILT: (C) a three-button switch in the filter bar of Overview, Platforms, Brands and Outlets. It changes the single function every comparison on those pages already reads (getCompRange), so every tile, badge and 'vs …' label follows it automatically with zero extra space: MoM = the same calendar dates one month earlier, YoY = the same dates one year earlier (29 Feb falls back to 28 Feb), anchored to the data-capped end date so a 'This month' view compares 7 days with 7 days. 'vs Prior' is the default and is exactly today's behaviour; the choice is remembered in the browser. Labels now say '(MoM)' / '(YoY)' so a badge is never ambiguous. The switch is deliberately limited to those four pages — Campaigns, CPC, Cancellations, Compare, KPI etc. keep their own comparisons. (E) a heat-map card 'Growth grid · brand × platform' at the bottom of Overview, Platforms and Brands, with Orders/Net sales and MoM/YoY toggles (swaps in place, no page reload). It respects the page's brand/platform/outlet filters; shows 'n/a' where the comparison side has no data (e.g. Keeta/Wicked Wings YoY) and '–' where a brand isn't on a platform; hover shows the raw numbers. Closed outlets (Lollorosso NAS) are excluded from BOTH sides of the grid so a closure doesn't read as a decline, and the footnote names them. VERIFIED: 14 new tests (date maths incl. leap day, lens applies only to the four pages, labels, switch markup, persistence, hand-checked grid percentages, n/a vs –, closure exclusion, filters, overlapping windows, in-place toggle in a real DOM) plus an end-to-end run of the real Overview, Platforms, Brands and Outlets pages under all three modes with no errors. NOT CHANGED: Outlets page gets the switch only (its tiles already carry the comparison; no grid there). KNOWN LIMIT: YoY needs a year of history — the first Keeta/Wicked Wings months show n/a, which is correct.",
   "🔒 OUTLET CLOSURES — NAS CLOSURE CONFIRMED FINAL (LAST DAY 7 OCT 2026) AND NOW COVERED BY REAL-BEHAVIOUR TESTS — Nikhil confirmed 'Closing Date is October 7th for sure' and that Lollorosso Nad Al Sheba KPI history can be hidden/deleted (it already is, since v516), and asked for the remaining tests to be done. NO BEHAVIOUR CHANGE vs v517 — this build only records the confirmation in the closure registry comment. TESTS ADDED: the real campAnalysisV2 is now executed (not just source-checked): a Lollorosso campaign starting 9 Oct on flat business reads 0% lift (without the v517 guard it reads -50%), and a campaign straddling the closure keeps NAS on both sides; the real cmpOutletCard is rendered and shows '🔒 Lollorosso closed 7 Oct' beside NAS only when NAS is in a window. Both fail when the guard is deliberately removed. STILL SOURCE-LEVEL ONLY: the Outlets-page tile line (inside the huge renderOutlets closure) and the Compare drill-down/report-table markers.",
@@ -11075,6 +11076,8 @@ let campIdxMap=new Map();
 function rebuildCampIdxMap(){
   campIdxMap=new Map();
   campaignData.forEach((c,i)=>campIdxMap.set(c,i));
+  // v521: campaigns just (re)loaded — re-derive price-uplift reclassification, then re-index + drop stale analyses
+  if(typeof allData!=="undefined"&&allData&&allData.length){buildDataIndex();if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();}
 }
 function campIdxOf(c){
   const v=campIdxMap.get(c);
@@ -12239,7 +12242,77 @@ const dataIndex={
   brandDailySalesByBranch:new Map(), // "brand|agg" -> {date:{branch:netSales}}
   built:false
 };
+// ═══ v521: MARK-UP-THEN-DISCOUNT CAMPAIGNS ("prices raised X%, then Y% off") ═══════════════════════════
+// Nikhil's Careem Oregano "20% OFF COMBOS" (8–14 Oct 2026): combo prices on Careem were set ~25% above the
+// Deliveroo/Talabat price and then 20% was taken off, so the customer pays ≈ the normal price. The sheet still
+// records a 20% discount on the INFLATED price, which would (a) be booked as a real discount cost and (b) inflate
+// gross (= net + discount) and therefore the gross-based food/packaging cost. This reclassifies it once, at the
+// data layer, so every profitability view (Overview/Brands/Outlets/Platforms/Compare/Campaigns) is corrected:
+//   combo gross as listed   G  = sheetDisc ÷ d
+//   same items at normal    B  = G ÷ (1+u)          (what the kitchen actually sold)
+//   markup portion of disc  G − B  → NOT a cost
+//   real discount cost      = max(0, B − net_combo) = sheetDisc − (G − B)
+// Net sales (what the customer paid) and commission (charged on net) are untouched. r.discSheet keeps the raw value.
+// Safe-guards: needs a "price … increased/raised … N%" phrase AND an "N% OFF" in the campaign; skipped (and flagged)
+// if another non-cancelled campaign for the same brand+platform overlaps — the discount can't be attributed then.
+const PRICE_UPLIFT_REFERENCE=[
+  {brand:'Oregano',aggregator:'Careem',basis:'Deliveroo / Talabat price',
+   items:[['LD - Salad',49,62],['LD - Pasta',49,62],['Lunch Combo - 2 pizza',98,123],['Uno Pasta',74,93],['3 pasta',99,124],['3 pizza',99,124],['Pizza party',150,188],['Any 2 pasta + 1 pizza',99,124],['Lasagna with Salad',75,94],['Lasagna with Potato Wedge',69,87],['Lasagna with Garlic Bread',79,99]]}
+];
+function priceUpliftFromComment(text){
+  const t=text||'';
+  let m=t.match(/pric(?:e|es|ing)[^.\n]{0,60}?(?:increas|rais|mark(?:ed)?[\s-]*up|uplift|hik|inflat)[^.\n]{0,40}?(\d+(?:\.\d+)?)\s*%/i);
+  if(!m)m=t.match(/(\d+(?:\.\d+)?)\s*%\s*(?:price\s*)?(?:increase|mark[\s-]*up|uplift|hike)/i);
+  return m?+m[1]/100:null;
+}
+function priceUpliftRefFor(brand,aggregator){
+  const ref=PRICE_UPLIFT_REFERENCE.find(x=>x.brand===brand&&x.aggregator===aggregator);
+  if(!ref||!ref.items.length)return null;
+  return ref.items.reduce((a,i)=>a+i[2]/i[1],0)/ref.items.length-1;
+}
+function priceUpliftInfo(c){
+  if(!c)return null;
+  const cu=priceUpliftFromComment(c.comments);
+  if(cu==null)return null;
+  const dm=((c.name||'')+' '+(c.comments||'')).match(/(\d+(?:\.\d+)?)\s*%\s*off/i);
+  if(!dm)return null;
+  const d=+dm[1]/100;
+  if(!(d>0&&d<1))return null;
+  const ref=priceUpliftRefFor(c.brand,c.aggregator);
+  const u=ref!=null?ref:cu;
+  return{u,d,commentU:cu,refU:ref,source:ref!=null?'your price table':'the campaign comment',
+    netFactor:(1+u)*(1-d)}; // customer pays this × normal price (1.00 = neutral)
+}
+let priceUpliftReport=[];
+function applyPriceUpliftAdjustments(){
+  priceUpliftReport=[];
+  if(typeof allData==="undefined"||!Array.isArray(allData)||!allData.length)return;
+  for(const r of allData){if(r.discSheet!=null){r.disc=r.discSheet;delete r.discSheet;delete r.upliftAdj;}}
+  if(typeof campaignData==="undefined"||!Array.isArray(campaignData)||!campaignData.length)return;
+  for(const c of campaignData){
+    const info=priceUpliftInfo(c);
+    if(!info)continue;
+    const rep={campaign:c,info,records:0,sheetDisc:0,realDisc:0,skipped:null,overlapNames:[]};
+    const overlaps=campaignData.filter(o=>o!==c&&o.aggregator===c.aggregator&&(o.brand===c.brand||o.brand==='All Brands'||c.brand==='All Brands')&&o.startDate<=c.endDate&&o.endDate>=c.startDate&&(typeof campStatus!=="function"||campStatus(o)!=="Cancelled"));
+    if(overlaps.length){rep.skipped='overlap';rep.overlapNames=overlaps.map(o=>o.name||'(unnamed)');priceUpliftReport.push(rep);continue;}
+    let outletSet=null;
+    try{outletSet=campOutlets(c);}catch(e){outletSet=null;}
+    for(const r of allData){
+      if(r.aggregator!==c.aggregator||(c.brand!=='All Brands'&&r.brand!==c.brand))continue;
+      if(r.date<c.startDate||r.date>c.endDate||!(r.disc>0)||r.discSheet!=null)continue;
+      if(outletSet?!outletSet.has(r.branch):false)continue;
+      const G=r.disc/info.d,markup=G*info.u/(1+info.u);
+      r.discSheet=r.disc;
+      r.disc=Math.max(0,r.disc-markup);
+      r.upliftAdj={u:info.u,d:info.d};
+      rep.records++;rep.sheetDisc+=r.discSheet;rep.realDisc+=r.disc;
+    }
+    priceUpliftReport.push(rep);
+  }
+}
+function priceUpliftReportFor(c){return priceUpliftReport.find(x=>x.campaign===c)||null;}
 function buildDataIndex(){
+  applyPriceUpliftAdjustments(); // v521
   dataIndex.byBrandAgg.clear();
   dataIndex.byBrandAggBranch.clear();
   dataIndex.brandBranches.clear();
@@ -12251,9 +12324,12 @@ function buildDataIndex(){
     if(r.branch!=='(brand-level)'){
       let s=dataIndex.brandBranches.get(k);if(!s){s=new Set();dataIndex.brandBranches.set(k,s);}s.add(r.branch);
     }
-    if(r.disc){
+    // v521: the day-level index stays on the SHEET discount (what the platform really charged) so order-level
+    // reconciliation / statement matching is unaffected by the price-uplift reclassification below.
+    const _sheetD=(r.discSheet!=null)?r.discSheet:r.disc;
+    if(_sheetD){
       let m=dataIndex.brandDailyDisc.get(k);if(!m){m={};dataIndex.brandDailyDisc.set(k,m);}
-      m[r.date]=(m[r.date]||0)+r.disc;
+      m[r.date]=(m[r.date]||0)+_sheetD;
     }
     if(r.sales&&r.branch!=='(brand-level)'){
       let m=dataIndex.brandDailySalesByBranch.get(k);if(!m){m={};dataIndex.brandDailySalesByBranch.set(k,m);}
@@ -14259,6 +14335,11 @@ function campDetailV2HTML(c,idx){
   // ── v098 consolidated data notes (replaces the stacked colored banners) ──
   const _notes=[]; // {sev:'red'|'amber'|'blue'|'green', t:title, b:body(HTML)}
   if(a.hasOverlap)_notes.push({sev:'red',t:`Overlap on ${a.overlapDays.length} day${a.overlapDays.length>1?'s':''} — sheet discount can't be split`,b:`On ${a.overlapDays.map(d=>fmtShort(d)).join(', ')}, another ${c.aggregator} campaign for ${c.brand} ran in the <strong>same branches</strong>. The sheet only reports discount at brand level, so sheet-based discount metrics (burn, ROI, depth) are hidden for those days to avoid wrong numbers. Order-count comparisons remain valid. <strong>Verify whether this overlap is real or a data-entry issue.</strong>`});
+  {const _up=priceUpliftReportFor(c);if(_up){
+    const _i=_up.info,_pc=x=>(x*100).toFixed(1).replace(/\.0$/,'')+'%';
+    if(_up.skipped)_notes.push({sev:'red',t:'Price mark-up detected, but NOT corrected',b:`The comment says prices were raised, but another ${c.aggregator} campaign overlaps these dates (${_up.overlapNames.join(', ')}), so the sheet discount can't be attributed to this one. Profitability still treats the full sheet discount as a real cost.`});
+    else _notes.push({sev:'green',t:'Mark-up-then-discount campaign — profitability corrected',b:`Prices were raised <strong>${_pc(_i.u)}</strong> (from ${_i.source}${_i.refU!=null&&Math.abs(_i.refU-_i.commentU)>0.005?`; the comment says ${_pc(_i.commentU)}`:''}) and then <strong>${_pc(_i.d)}</strong> taken off, so customers pay <strong>${(_i.netFactor*100).toFixed(1)}%</strong> of the normal price (${_i.netFactor<0.995?'a real price cut of '+((1-_i.netFactor)*100).toFixed(1)+'%':_i.netFactor>1.005?'slightly above normal':'price-neutral'}). Of the AED ${Math.round(_up.sheetDisc).toLocaleString()} discount on the sheet, only <strong>AED ${Math.round(_up.realDisc).toLocaleString()}</strong> is counted as a real discount cost; the rest just undoes the mark-up. Gross, food/packaging cost and discount burn use the normal-price basis. Sales and commission are as charged.`});
+  }}
   _notes.push({sev:'blue',t:'Comparison basis',b:`Campaign <strong>${fmtDisp(a.effStart)} → ${fmtDisp(a.effEnd)}</strong> (${a.cDays} day${a.cDays>1?'s':''}) is compared against the same weekdays 4 weeks earlier: <strong>${fmtDisp(a.bStart)} → ${fmtDisp(a.bEnd)}</strong>.`});
   if(a.baselineCampaigns.length)_notes.push({sev:'amber',t:'Baseline period ran promos too',b:`The comparison window also ran: ${a.baselineCampaigns.map(x=>`<strong>${x.name}</strong> (${fmtShort(x.startDate)}–${fmtShort(x.endDate)})`).join(', ')}. "Normal" here means last month's promo mix, not a promo-free period.`});
   else _notes.push({sev:'green',t:'Clean baseline',b:'No campaigns ran on this brand+platform during the comparison window.'});
