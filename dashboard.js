@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-08-528";
+const BUILD_VERSION="2026-10-08-529";
 const BUILD_NOTES=[
+  "✅ DATA HEALTH — 'IT'S FINE' AND 'REMIND ME' ON EVERY WARNING — Nikhil (v528 screenshot, Smokeys · Marina · Talabat · 29 Sep 'AOV AED 2'): 'Is there a way to click and dismiss this if it's fine and not an entry error, or keep an option to look at it later and remind me?' and, on the snooze design: 'if there is a remind me later and I checked and it's fine, what do I do?'. NEW: each warning row has [✓ It's fine] (checked, not an entry error — hidden for good) and Remind me: [Tomorrow] [3 days] [Mon] (hidden until that day, then back in the list). A 'Handled (n snoozed, n marked fine)' list sits under the table: a snoozed item can be marked fine from there at any time, and any handled item can be shown again. If everything is handled the banner shrinks to one quiet line ('No open data checks — 1 snoozed') with a Review link so snoozed items stay reachable; if nothing is flagged it is still hidden completely. Remembered per browser (localStorage). IDENTITY: check + where + exact text, so a corrected sheet value or a new bad date is a NEW finding and shows again. VERIFIED: partition/snooze-date logic tested on the real extracted functions (expiry, Monday/tomorrow maths, restore, identity change) + jsdom render of every state; 124 tests pass.",
   "🐞 DATA HEALTH BANNER UNREADABLE ON THE DARK OVERVIEW — Nikhil's screenshot of v523: the amber banner showed '1 data check needs a look', but the 'MEDIUM' chip, the issue text and the toggle were invisible — 'how do I know what's wrong, can't even see Medium due to the colour'. ROOT CAUSE: the banner relied on inherited text colour, which is dark-on-dark on the dark Overview (my jsdom check only looked for the text, not its contrast). FIX: every text element now has an explicit theme-aware colour (light text on dark, dark on light), the severity chips have solid contrast with borders, the toggle reads 'Show details ▾', and the COLLAPSED bar now previews the first finding (e.g. 'Stale data — Fyoozhen (+1 more)') so you see what is wrong without opening it. VERIFIED: banner rendered in both themes in jsdom — every cell carries an explicit colour, preview text present; 119 tests pass.",
   "🏷️ BUILD NUMBER NOW ALWAYS VISIBLE IN THE SIDEBAR — Nikhil (checking v526): 'I can't see the Footer showing the version on my screen.' ROOT CAUSE: my own wrong instruction — there is no footer; the version was only ever shown inside the one-time 'What's new' popup. FIX: the sidebar sync caption now reads e.g. 'Synced just now · v527' (hover shows the full 2026-10-08-527). Nothing else changed. VERIFIED: updateSidebarSyncStatus rendered in jsdom for the syncing and synced states; 117 tests pass.",
   "🐞 DELIVEROO ORDERS OF AED 1,000+ WERE COUNTED AS AED 1 — FOUND BY THE FIRST REAL DELIVEROO FIXTURE; PLUS 'PRICE INCREASED AND DISCOUNTED' WITHOUT A % — Nikhil uploaded real Deliveroo, Noon (x3) and Keeta statements for the parser tests. Writing the Deliveroo reconciliation test exposed a REAL BUG: Deliveroo prints amounts of 1,000 and above with a thousands comma (\"1,010.00\") and the parser used plain parseFloat on that text, so a AED 1,010 order counted as AED 1 gross (and AED 1,182 as 1, and a AED 2,546.02 marketing contribution as 2). The real week's file had two such orders, so gross was understated by ~AED 2,190. FIX: deliverooNum() (thousands-comma aware) used for Order Value / Total Payable / Adjustment in parseDeliverooCSV; parseCareemAmount got the same tolerance. NEW FIXTURES/TESTS (11 new, 117 total pass): real slices of a Keeta Recent Orders xlsx, a Deliveroo statement and Noon statements for Oregano, Lollorosso and Fyoozhen, with totals (orders, gross, payout, discounts, commission, earnings, cancellations) computed independently from the raw files; format detection now also checked against all real headers. Mutation check: reverting the comma fix fails 3 tests. SECOND CHANGE: Nikhil asked to be able to write just 'Price increased and discounted' and let the dashboard calculate. With no % in the comment (and no reference table for that brand/platform) the mark-up is now assumed to be the one that exactly cancels the discount (20% off => +25%, price-neutral) and the Campaigns note says so; a % written in the comment still wins.",
@@ -6149,34 +6150,87 @@ function dataHealthChecks(recs,latestDate,todayDate){
   issues.sort((a,b)=>rank[a.sev]-rank[b.sev]);
   return issues;
 }
-let _dhOpen=false,_dhCache=null;
+let _dhOpen=false,_dhCache=null,_dhVisible=[],_dhHandled=[],_dhHandledOpen=false;
+// v529: dismiss / remind-me-later (Nikhil: "can I click and dismiss this if it's fine and not an entry error, or keep an option
+// to look at it later and remind me?"). Remembered per browser (localStorage). An issue's identity is check + where + the exact
+// text, so if the sheet value is corrected, or a new date goes wrong, it counts as a NEW issue and is shown again.
+const DH_STORE_KEY="oregano_dh_state_v1";
+function dhIssueId(i){return i.check+"|"+i.where+"|"+i.text;}
+function dhLoad(){try{const v=JSON.parse(localStorage.getItem(DH_STORE_KEY)||"{}");return(v&&typeof v==="object")?v:{};}catch(e){return{};}}
+function dhSave(st){try{localStorage.setItem(DH_STORE_KEY,JSON.stringify(st));}catch(e){}}
+// kind: 'tomorrow' | '3days' | 'monday' → start of that local day (midnight), as ms
+function dataHealthSnoozeUntil(kind,now){
+  const d=new Date(now);d.setHours(0,0,0,0);
+  if(kind==='tomorrow')d.setDate(d.getDate()+1);
+  else if(kind==='3days')d.setDate(d.getDate()+3);
+  else if(kind==='monday'){const add=((8-d.getDay())%7)||7;d.setDate(d.getDate()+add);}
+  return d.getTime();
+}
+// Splits the CURRENT issues by what the user did with them. Only issues that are still flagged are ever listed as handled.
+function dataHealthPartition(issues,state,nowMs){
+  const open=[],snoozed=[],dismissed=[];
+  for(const i of issues){
+    const e=state[dhIssueId(i)];
+    if(!e)open.push(i);
+    else if(e.status==='dismissed')dismissed.push({issue:i,entry:e});
+    else if(e.status==='snoozed'&&e.until>nowMs)snoozed.push({issue:i,entry:e});
+    else open.push(i); // snooze expired → back in the open list
+  }
+  return{open,snoozed,dismissed};
+}
+function dataHealthAct(kind,idx,arg){
+  const st=dhLoad();
+  if(kind==='restore'){const h=_dhHandled[idx];if(h)delete st[dhIssueId(h.issue)];}
+  else{
+    const i=(kind==='fine-handled')?(_dhHandled[idx]&&_dhHandled[idx].issue):_dhVisible[idx];
+    if(!i)return;
+    if(kind==='dismiss'||kind==='fine-handled')st[dhIssueId(i)]={status:'dismissed',at:Date.now()};
+    else if(kind==='snooze')st[dhIssueId(i)]={status:'snoozed',until:dataHealthSnoozeUntil(arg,Date.now()),at:Date.now()};
+  }
+  dhSave(st);
+  if(typeof curPage!=='undefined'&&curPage==='overview'&&typeof renderOverview==='function')renderOverview();
+}
 function dataHealthToggle(){
   _dhOpen=!_dhOpen;
   const b=document.getElementById('dataHealthBody'),t=document.getElementById('dataHealthToggleTxt');
   if(b)b.style.display=_dhOpen?'block':'none';
   if(t)t.textContent=_dhOpen?'Hide ▴':'Show details ▾';
 }
+function dataHealthToggleHandled(){
+  _dhHandledOpen=!_dhHandledOpen;
+  const b=document.getElementById('dataHealthHandled');if(b)b.style.display=_dhHandledOpen?'block':'none';
+}
 function dataHealthBannerHTML(){
   if(typeof allData==='undefined'||!allData.length||!latest)return '';
   const key=allData.length+'|'+latest;
   if(!_dhCache||_dhCache.key!==key)_dhCache={key,issues:dataHealthChecks(allData,latest,cpcRealToday())};
-  const issues=_dhCache.issues;
-  if(!issues.length)return '';
-  // v528: explicit colours — v523 relied on inherited text colour, which is dark-on-dark on the (dark) Overview page, so the
-  // severity chip, the issue text and the toggle were unreadable (Nikhil's screenshot). Theme-aware, high contrast.
+  const all=_dhCache.issues;
+  if(!all.length)return '';
+  const part=dataHealthPartition(all,dhLoad(),Date.now());
+  const issues=part.open;_dhVisible=issues;_dhHandled=[...part.snoozed,...part.dismissed];
+  // v528: explicit colours — v523 relied on inherited text colour, which is dark-on-dark on the (dark) Overview page.
   const dk_=(typeof _darkPage!=='undefined')&&_darkPage;
-  const tx=dk_?'#F1F5F9':'#1B2430',mu=dk_?'#B4C2D6':'#5B6677',line=dk_?'rgba(148,163,184,.28)':'rgba(100,116,139,.25)',amb=dk_?'#FBBF24':'#B45309',red=dk_?'#FCA5A5':'#B91C1C';
-  const hi=issues.filter(i=>i.sev==='high').length,me=issues.length-hi;
+  const tx=dk_?'#F1F5F9':'#1B2430',mu=dk_?'#B4C2D6':'#5B6677',line=dk_?'rgba(148,163,184,.28)':'rgba(100,116,139,.25)',amb=dk_?'#FBBF24':'#B45309',red=dk_?'#FCA5A5':'#B91C1C',grn=dk_?'#86EFAC':'#15803D';
   const chip=sev=>sev==='high'
     ?`<span style="display:inline-block;font-size:10.5px;border-radius:99px;padding:2px 9px;font-weight:800;background:rgba(239,68,68,.22);color:${red};border:1px solid rgba(239,68,68,.5)">HIGH</span>`
     :`<span style="display:inline-block;font-size:10.5px;border-radius:99px;padding:2px 9px;font-weight:800;background:rgba(245,158,11,.2);color:${amb};border:1px solid rgba(245,158,11,.5)">MEDIUM</span>`;
+  const btn=(label,onclick,clr,title)=>`<button onclick="event.stopPropagation();${onclick}" title="${title||''}" style="background:transparent;border:1px solid ${clr};color:${clr};border-radius:6px;padding:3px 9px;font-size:11px;font-weight:700;cursor:pointer;margin:2px 4px 2px 0;white-space:nowrap">${label}</button>`;
   const td=`padding:8px 8px;border-top:1px solid ${line};color:${tx};vertical-align:top`;
-  const rows=issues.slice(0,15).map(i=>`<tr><td style="${td}">${chip(i.sev)}</td><td style="${td};font-weight:700;white-space:nowrap">${esc(i.check)}</td><td style="${td}">${esc(i.text)}</td><td style="${td};color:${mu}">${esc(i.where)}</td></tr>`).join('');
+  const fmtDay=ms=>new Date(ms).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+  const rows=issues.slice(0,15).map((i,n)=>`<tr><td style="${td}">${chip(i.sev)}</td><td style="${td};font-weight:700;white-space:nowrap">${esc(i.check)}</td><td style="${td}">${esc(i.text)}</td><td style="${td};color:${mu}">${esc(i.where)}</td><td style="${td};white-space:nowrap">${btn("✓ It's fine",`dataHealthAct('dismiss',${n})`,grn,"Checked — not an entry error. Hides it until the data for it changes.")}<span style="color:${mu};font-size:11px;margin:0 2px 0 4px">Remind me:</span>${btn('Tomorrow',`dataHealthAct('snooze',${n},'tomorrow')`,amb)}${btn('3 days',`dataHealthAct('snooze',${n},'3days')`,amb)}${btn('Mon',`dataHealthAct('snooze',${n},'monday')`,amb,'Next Monday')}</td></tr>`).join('');
+  const handledRows=_dhHandled.map((h,n)=>{const sn=h.entry.status==='snoozed';return `<tr><td style="${td}">${esc(h.issue.check)}</td><td style="${td}">${esc(h.issue.where)} — ${esc(h.issue.text)}</td><td style="${td};color:${mu};white-space:nowrap">${sn?'⏰ Reminds '+fmtDay(h.entry.until):'✓ Marked fine '+fmtDay(h.entry.at)}</td><td style="${td};white-space:nowrap">${sn?btn("✓ It's fine",`dataHealthAct('fine-handled',${n})`,grn,'Checked — not an entry error'):''}${btn('Show again',`dataHealthAct('restore',${n})`,mu)}</td></tr>`;}).join('');
+  const handledBlock=_dhHandled.length?`<div style="margin-top:10px"><div onclick="event.stopPropagation();dataHealthToggleHandled()" style="cursor:pointer;font-size:12px;font-weight:700;color:${mu}">Handled (${part.snoozed.length} snoozed, ${part.dismissed.length} marked fine) ▾</div><div id="dataHealthHandled" style="display:${_dhHandledOpen?'block':'none'}"><table style="width:100%;border-collapse:collapse;font-size:12px;color:${tx}">${handledRows}</table></div></div>`:'';
+  if(!issues.length){
+    // Everything flagged has been handled: stay out of the way, but keep the handled list reachable (to mark a snoozed item fine / restore).
+    const summary=[part.snoozed.length?part.snoozed.length+' snoozed':'',part.dismissed.length?part.dismissed.length+' marked fine':''].filter(Boolean).join(', ');
+    return `<div id="dataHealthCard" style="margin-bottom:14px;color:${tx}"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid ${line};border-radius:10px;padding:7px 14px;font-size:12.5px;color:${mu}"><span>🩺</span><span>No open data checks — ${summary}</span><span onclick="dataHealthToggleHandled()" style="margin-left:auto;cursor:pointer;font-weight:700;color:${amb}">Review ▾</span></div><div id="dataHealthHandled" style="display:${_dhHandledOpen?'block':'none'};padding:0 14px"><table style="width:100%;border-collapse:collapse;font-size:12px;color:${tx}">${handledRows}</table></div></div>`;
+  }
   const first=issues[0];
   const preview=esc(first.check+' — '+first.where)+(issues.length>1?` (+${issues.length-1} more)`:'');
+  const hi=issues.filter(i=>i.sev==='high').length;
   return `<div id="dataHealthCard" style="margin-bottom:14px;color:${tx}">
-    <div onclick="dataHealthToggle()" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.55);border-radius:10px;padding:9px 14px;cursor:pointer"><span>🩺</span><span style="font-size:13px;font-weight:800;color:${amb}">${issues.length} data check${issues.length===1?'':'s'} need${issues.length===1?'s':''} a look</span><span style="font-size:12.5px;color:${tx}">${preview}</span><span id="dataHealthToggleTxt" style="margin-left:auto;font-size:12px;font-weight:700;color:${amb}">${_dhOpen?'Hide ▴':'Show details ▾'}</span></div>
-    <div id="dataHealthBody" style="display:${_dhOpen?'block':'none'};border:1px solid rgba(245,158,11,.55);border-top:0;border-radius:0 0 10px 10px;padding:6px 14px 12px;background:${dk_?'rgba(15,23,41,.55)':'rgba(255,255,255,.7)'}"><table style="width:100%;border-collapse:collapse;font-size:12.5px;color:${tx}"><tr style="font-size:10.5px;text-transform:uppercase;text-align:left;color:${mu}"><th style="padding:6px 8px">Severity</th><th style="padding:6px 8px">Check</th><th style="padding:6px 8px">What was found</th><th style="padding:6px 8px">Where</th></tr>${rows}</table><div style="font-size:11.5px;color:${mu};margin-top:8px">Warnings only — the data is used exactly as entered. Re-checked on every refresh.</div></div></div>`;
+    <div onclick="dataHealthToggle()" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.55);border-radius:10px;padding:9px 14px;cursor:pointer"><span>🩺</span><span style="font-size:13px;font-weight:800;color:${amb}">${issues.length} data check${issues.length===1?'':'s'} need${issues.length===1?'s':''} a look${hi?' · '+hi+' high':''}</span><span style="font-size:12.5px;color:${tx}">${preview}</span><span id="dataHealthToggleTxt" style="margin-left:auto;font-size:12px;font-weight:700;color:${amb}">${_dhOpen?'Hide ▴':'Show details ▾'}</span></div>
+    <div id="dataHealthBody" style="display:${_dhOpen?'block':'none'};border:1px solid rgba(245,158,11,.55);border-top:0;border-radius:0 0 10px 10px;padding:6px 14px 12px;background:${dk_?'rgba(15,23,41,.55)':'rgba(255,255,255,.7)'}"><table style="width:100%;border-collapse:collapse;font-size:12.5px;color:${tx}"><tr style="font-size:10.5px;text-transform:uppercase;text-align:left;color:${mu}"><th style="padding:6px 8px">Severity</th><th style="padding:6px 8px">Check</th><th style="padding:6px 8px">What was found</th><th style="padding:6px 8px">Where</th><th style="padding:6px 8px">Action</th></tr>${rows}</table>${handledBlock}<div style="font-size:11.5px;color:${mu};margin-top:8px">Warnings only — the data is used exactly as entered. "It's fine" hides a finding until its data changes; "Remind me" hides it until that day. Saved in this browser.</div></div></div>`;
 }
 function renderOverview(){
   const ld=getLD(),pd=getPD(),ls=sumR(ld),ps=sumR(pd);
