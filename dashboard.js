@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-08-529";
+const BUILD_VERSION="2026-10-08-530";
 const BUILD_NOTES=[
+  "📦 NAD AL SHEBA (LOLLOROSSO) HISTORY KEPT EVERYWHERE — FINAL DECISION — Nikhil: 'Keep the Nad Al Sheba past sales and data there. We won't want it removed. Consider this decision final.' CHANGES: (1) the MoM/YoY growth grid now COUNTS closed outlets on both sides (v519 left NAS out) and its footnote says 'Includes closed outlets … a drop partly reflects the closure'; (2) the KPI sheet parser no longer drops Lollorosso × NAS (v516 removed its KPI history from the tracker). UNCHANGED (these are not data removal): sales/orders/discount totals on every page always included NAS history; alerts, 'declining outlet' flags, CPC/budget advice, forecasts and new-campaign baselines still skip a closed outlet so its closure is never reported as a performance problem or planned for; the expected-listing count stays 14. VERIFIED: tests updated (grid now counts NAS: Lollorosso reads -33% with the closure footnote; the KPI parser keeps NAS) — 125 pass.",
   "✅ DATA HEALTH — 'IT'S FINE' AND 'REMIND ME' ON EVERY WARNING — Nikhil (v528 screenshot, Smokeys · Marina · Talabat · 29 Sep 'AOV AED 2'): 'Is there a way to click and dismiss this if it's fine and not an entry error, or keep an option to look at it later and remind me?' and, on the snooze design: 'if there is a remind me later and I checked and it's fine, what do I do?'. NEW: each warning row has [✓ It's fine] (checked, not an entry error — hidden for good) and Remind me: [Tomorrow] [3 days] [Mon] (hidden until that day, then back in the list). A 'Handled (n snoozed, n marked fine)' list sits under the table: a snoozed item can be marked fine from there at any time, and any handled item can be shown again. If everything is handled the banner shrinks to one quiet line ('No open data checks — 1 snoozed') with a Review link so snoozed items stay reachable; if nothing is flagged it is still hidden completely. Remembered per browser (localStorage). IDENTITY: check + where + exact text, so a corrected sheet value or a new bad date is a NEW finding and shows again. VERIFIED: partition/snooze-date logic tested on the real extracted functions (expiry, Monday/tomorrow maths, restore, identity change) + jsdom render of every state; 124 tests pass.",
   "🐞 DATA HEALTH BANNER UNREADABLE ON THE DARK OVERVIEW — Nikhil's screenshot of v523: the amber banner showed '1 data check needs a look', but the 'MEDIUM' chip, the issue text and the toggle were invisible — 'how do I know what's wrong, can't even see Medium due to the colour'. ROOT CAUSE: the banner relied on inherited text colour, which is dark-on-dark on the dark Overview (my jsdom check only looked for the text, not its contrast). FIX: every text element now has an explicit theme-aware colour (light text on dark, dark on light), the severity chips have solid contrast with borders, the toggle reads 'Show details ▾', and the COLLAPSED bar now previews the first finding (e.g. 'Stale data — Fyoozhen (+1 more)') so you see what is wrong without opening it. VERIFIED: banner rendered in both themes in jsdom — every cell carries an explicit colour, preview text present; 119 tests pass.",
   "🏷️ BUILD NUMBER NOW ALWAYS VISIBLE IN THE SIDEBAR — Nikhil (checking v526): 'I can't see the Footer showing the version on my screen.' ROOT CAUSE: my own wrong instruction — there is no footer; the version was only ever shown inside the one-time 'What's new' popup. FIX: the sidebar sync caption now reads e.g. 'Synced just now · v527' (hover shows the full 2026-10-08-527). Nothing else changed. VERIFIED: updateSidebarSyncStatus rendered in jsdom for the syncing and synced states; 117 tests pass.",
@@ -1423,8 +1424,8 @@ function growthLensSwitchHTML(){
   return`<span style="display:inline-flex;align-items:center;gap:6px;font-style:normal"><span style="font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:${lb}">Compare</span><span style="display:inline-flex;border:1px solid ${bd};border-radius:14px;overflow:hidden">${b("prior","vs Prior","The comparison period this page has always used")}${b("mom","MoM","Same dates, one month earlier")}${b("yoy","YoY","Same dates, one year earlier")}</span></span>`;
 }
 // Raw numbers behind the growth grid. Windows are tested independently (a long range can overlap
-// its own MoM window). Retired (closed) brand×outlet rows are excluded from BOTH sides so a closure
-// is never shown as a decline; closedList names what was left out.
+// its own MoM window). Retired (closed) brand×outlet rows are INCLUDED (v530, Nikhil's final decision to keep NAS history);
+// closedList names them so the footnote can say a drop may be the closure.
 function growthGridData(){
   const f=curFilters();
   if(!f.start||!f.end)return null;
@@ -1438,7 +1439,8 @@ function growthGridData(){
     if(f.branches.size&&!f.branches.has(r.branch))continue;
     const inCur=r.date>=W.cur.s&&r.date<=W.cur.e,inMom=r.date>=W.mom.s&&r.date<=W.mom.e,inYoy=r.date>=W.yoy.s&&r.date<=W.yoy.e;
     if(!inCur&&!inMom&&!inYoy)continue;
-    if(outletIsRetired(r.brand,r.branch)){closed.add(r.brand+" · "+r.branch);continue;}
+    // v530: Nikhil — NAS's past sales and data stay in (final decision). Closed outlets are counted, and only NAMED in the footnote.
+    if(outletIsRetired(r.brand,r.branch))closed.add(r.brand+" · "+r.branch);
     const k=r.brand+"|"+r.aggregator;
     const c=cells[k]||(cells[k]={cur:{o:0,s:0},mom:{o:0,s:0},yoy:{o:0,s:0}});
     if(inCur){c.cur.o+=r.orders||0;c.cur.s+=r.sales||0;}
@@ -1474,7 +1476,7 @@ function growthGridHTML(){
     }).join("");
     return`<tr><td style="padding:3px 8px;font-weight:700;color:${BMAP[b]?.c||T.tx};white-space:nowrap">${b}</td>${tds}</tr>`;
   }).join("");
-  const foot=`Green = growth, red = decline, “n/a” = no data in the comparison window (e.g. platform too new), “–” = brand not on that platform. Each cell compares ${fmtShort(d.W.cur.s)}–${fmtShort(d.W.cur.e)} with ${fmtShort(cmpW.s)}–${fmtShort(cmpW.e)}.${d.closed.length?` Closed outlets are left out of both sides so a closure doesn't read as a decline: ${d.closed.join(", ")}.`:""}`;
+  const foot=`Green = growth, red = decline, “n/a” = no data in the comparison window (e.g. platform too new), “–” = brand not on that platform. Each cell compares ${fmtShort(d.W.cur.s)}–${fmtShort(d.W.cur.e)} with ${fmtShort(cmpW.s)}–${fmtShort(cmpW.e)}.${d.closed.length?` Includes closed outlets (their sales are real history, so a drop partly reflects the closure, not performance): ${d.closed.join(", ")}.`:""}`;
   return`<div class="card" id="growthGridCard_${curPage}" style="margin-top:12px"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><span>Growth grid · brand × platform</span><span style="display:inline-flex;gap:6px;text-transform:none;letter-spacing:0">${seg(segBtn(m==="ord","growthGridSet('m','ord')","Orders")+segBtn(m==="sal","growthGridSet('m','sal')","Net sales"))}${seg(segBtn(p==="mom","growthGridSet('p','mom')","MoM")+segBtn(p==="yoy","growthGridSet('p','yoy')","YoY"))}</span></div>
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;color:${T.tx}">${head}${rows}</table></div>
     <div style="color:${T.mu};font-size:10.5px;margin-top:6px;line-height:1.5">${foot}</div></div>`;
@@ -18667,7 +18669,7 @@ function parseKPISheet(csv,outlet){
   // True if `brand` is permitted at this outlet (passes whitelist AND isn't excluded).
   const brandAllowed=(brand)=>{
     if(!brand)return false;
-    if(outletIsRetired(brand,KPI_OUTLET_NAME[outlet]||outlet))return false; // v516: closed brand×outlet drops out of KPI tracking
+    // v530: closed brand×outlet KEEPS its KPI history (Nikhil: keep Nad Al Sheba data, final) — v516 used to drop it here.
     if(allowedBrands&&!allowedBrands.includes(brand))return false;
     if(excludedBrands&&excludedBrands.includes(brand))return false;
     return true;
