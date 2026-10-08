@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-08-530";
+const BUILD_VERSION="2026-10-08-531";
 const BUILD_NOTES=[
+  "🧪 UPLOAD SUMMARY SAID '2 FILES' FOR ONE FILE — FOUND BY THE NEW END-TO-END UPLOAD TEST — Nikhil asked me to test the real upload path (file → recognise → parse → merge → save in browser → sync to server → message). I ran every platform's real sample file through the REAL handleOrdersUpload inside the full dashboard: Keeta, Careem, Talabat, Deliveroo and Noon all recognised, stored, saved and synced correctly, and re-uploading the same file adds no duplicates. ONE REAL BUG: the pop-up counted summary LINES (each file adds a result line plus a coverage line), so a single file read 'Successfully loaded 2 files'. FIX: it now counts files. ALSO CONFIRMED: your new Careem wording '20% OFF on Combos only, Combos price increased and discounted' is recognised — Oregano×Careem uses the +25.6% reference table, brands without a table use the price-neutral +25% assumption — nothing else needed in the sheet. VERIFIED: 3 new upload tests + 5 Careem-wording tests; full suite green.",
   "📦 NAD AL SHEBA (LOLLOROSSO) HISTORY KEPT EVERYWHERE — FINAL DECISION — Nikhil: 'Keep the Nad Al Sheba past sales and data there. We won't want it removed. Consider this decision final.' CHANGES: (1) the MoM/YoY growth grid now COUNTS closed outlets on both sides (v519 left NAS out) and its footnote says 'Includes closed outlets … a drop partly reflects the closure'; (2) the KPI sheet parser no longer drops Lollorosso × NAS (v516 removed its KPI history from the tracker). UNCHANGED (these are not data removal): sales/orders/discount totals on every page always included NAS history; alerts, 'declining outlet' flags, CPC/budget advice, forecasts and new-campaign baselines still skip a closed outlet so its closure is never reported as a performance problem or planned for; the expected-listing count stays 14. VERIFIED: tests updated (grid now counts NAS: Lollorosso reads -33% with the closure footnote; the KPI parser keeps NAS) — 125 pass.",
   "✅ DATA HEALTH — 'IT'S FINE' AND 'REMIND ME' ON EVERY WARNING — Nikhil (v528 screenshot, Smokeys · Marina · Talabat · 29 Sep 'AOV AED 2'): 'Is there a way to click and dismiss this if it's fine and not an entry error, or keep an option to look at it later and remind me?' and, on the snooze design: 'if there is a remind me later and I checked and it's fine, what do I do?'. NEW: each warning row has [✓ It's fine] (checked, not an entry error — hidden for good) and Remind me: [Tomorrow] [3 days] [Mon] (hidden until that day, then back in the list). A 'Handled (n snoozed, n marked fine)' list sits under the table: a snoozed item can be marked fine from there at any time, and any handled item can be shown again. If everything is handled the banner shrinks to one quiet line ('No open data checks — 1 snoozed') with a Review link so snoozed items stay reachable; if nothing is flagged it is still hidden completely. Remembered per browser (localStorage). IDENTITY: check + where + exact text, so a corrected sheet value or a new bad date is a NEW finding and shows again. VERIFIED: partition/snooze-date logic tested on the real extracted functions (expiry, Monday/tomorrow maths, restore, identity change) + jsdom render of every state; 124 tests pass.",
   "🐞 DATA HEALTH BANNER UNREADABLE ON THE DARK OVERVIEW — Nikhil's screenshot of v523: the amber banner showed '1 data check needs a look', but the 'MEDIUM' chip, the issue text and the toggle were invisible — 'how do I know what's wrong, can't even see Medium due to the colour'. ROOT CAUSE: the banner relied on inherited text colour, which is dark-on-dark on the dark Overview (my jsdom check only looked for the text, not its contrast). FIX: every text element now has an explicit theme-aware colour (light text on dark, dark on light), the severity chips have solid contrast with borders, the toggle reads 'Show details ▾', and the COLLAPSED bar now previews the first finding (e.g. 'Stale data — Fyoozhen (+1 more)') so you see what is wrong without opening it. VERIFIED: banner rendered in both themes in jsdom — every cell carries an explicit colour, preview text present; 119 tests pass.",
@@ -3213,6 +3214,7 @@ async function handleOrdersUpload(filesOrFile){
   const oldTitle=tab?tab.title:"";
   const results=[];
   const errors=[];
+  let loadedCount=0; // v531: count files, not summary lines (a file adds 2-3 lines, so 1 file used to read "2 files")
 
   for(let n=0;n<files.length;n++){
     const file=files[n];
@@ -3250,6 +3252,7 @@ async function handleOrdersUpload(filesOrFile){
       // that was the root cause of cancellations not surviving a refresh/reset/different device
       // the way every other aggregator's data does.
       const dr=fresh.metadata.date_range||[];
+      loadedCount++;
       results.push(`✓ ${file.name} (${detected.charAt(0).toUpperCase()+detected.slice(1)}): ${fresh.records.length.toLocaleString()} records, ${dr[0]||"?"} → ${dr[1]||"?"}`);
       // v491: surface unmapped brand/outlet names instead of silently dropping their orders.
       // Root cause of the "Careem discount = AED 0 at every outlet" bug: unrecognized
@@ -3283,7 +3286,7 @@ async function handleOrdersUpload(filesOrFile){
 
   // Summary alert — one message even when multiple files are processed.
   const summary=[];
-  if(results.length)summary.push(`Successfully loaded ${results.length} file${results.length>1?"s":""}:\n\n${results.join("\n")}`);
+  if(loadedCount)summary.push(`Successfully loaded ${loadedCount} file${loadedCount>1?"s":""}:\n\n${results.join("\n")}`);
   if(errors.length)summary.push(`\n\n${errors.length} file${errors.length>1?"s":""} failed:\n\n${errors.join("\n\n")}`);
   if(summary.length)alert(summary.join(""));
 
