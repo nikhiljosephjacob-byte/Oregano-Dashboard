@@ -13,8 +13,12 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-08-521";
+const BUILD_VERSION="2026-10-08-525";
 const BUILD_NOTES=[
+  "🔎 ORDER-FILE FORMAT DETECTION NOW TESTED (NO BEHAVIOUR CHANGE) — parked item 'upload format auto-detection untested'. The Keeta / Careem / Talabat / Deliveroo / Noon header sniffing lived inline inside handleOrdersUpload (which needs an admin session, storage and the file reader), so it could not be tested. Moved verbatim into a pure function detectOrdersFormat(firstRow, secondRow) and handleOrdersUpload now calls it. TESTS (8 new, 106 total pass): real Careem and Talabat fixture headers are recognised; Talabat survives capitalisation changes and a BOM (v509 case); Keeta header on row 1 or 2; Deliveroo needs its markers on the second row; Noon needs all three columns; unknown/empty files return null (the 'format not recognized' message); precedence is stable. LIMIT: Keeta, Deliveroo and Noon are tested with header rows built from the exact marker columns the code looks for, not real exports — real files in tests/fixtures would replace them.",
+  "🧹 DEAD-CODE CLEAN-UP (NO VISIBLE CHANGE) — Nikhil chose 'audit and remove safe dead code' for the parked single-file structure item. METHOD: parsed the whole file (acorn), listed every top-level function/constant whose name appears NOWHERE else in the file (not in code, onclick strings, the window-export list or comments), removed them, then repeated until nothing new fell out (3 rounds). REMOVED 29 functions + 7 constants, ~590 lines / 64 KB: old campaign detail/table renderers (campDetailHTML, campTableHTML, sortCampaigns, buildCampBundles, campProsCons), the old local-brief and Ask-AI stubs (computeLocalBrief, localBriefHTML, genBrief, runAskAI), the old break-even helpers (calcBE, getBE, campBeGetBaseline and friends), the unused Keeta/Talabat per-outlet discount helpers and Keeta upload bar, getCompLabel, the 1 KB HR constant and unused campaign-forecast state variables. No duplicate top-level definitions exist. TESTS: 4 tests that exercised removed dead functions were dropped (old local brief, old break-even baseline, getCompLabel wording); 98 pass. VERIFIED: rendered all 11 pages (Overview, Brands, Outlets, Platforms, CPC, Campaigns, Discounts, KPI, Compare, Cancellations, Feedback) on v523 and v524 with the same data — output byte-identical on every page. NOT TOUCHED: unused variables inside multi-variable 'let' lines, and the ~24k-line single-file structure itself.",
+  "🩺 DATA HEALTH — WARN-ONLY SANITY CHECKS ON THE SYNCED SHEET DATA (OVERVIEW) — Nikhil's parked item 'ingestion sanity checks / Google Sheet fetch fragility'; approved design (mock-up shown first): slim banner on Overview, '3 data checks need a look' → expands to a table, hidden completely when everything is clean. CHECKS (all four groups requested): (1) stale brand — latest entry 2+ days behind the others (4+ = HIGH); (2) sudden zero (HIGH) / drop under 30% of the same weekday's 4-week average (MEDIUM) per brand × core platform, only where the usual level is over AED 500 with 3+ weeks of history; (3) duplicate outlet/day/platform rows, future dates, negative values, orders-without-sales mismatches; (4) implausible values in the last 14 days — AOV under AED 10 or over AED 400 (3+ orders), discount more than 2× sales (judged on the SHEET discount, so the v521 mark-up reclassification never trips it). Closed outlets (NAS) are excluded everywhere. Data is used exactly as entered. The existing failed-brand banner is unchanged. VERIFIED: 10 new tests on the real extracted dataHealthChecks (100 total pass) + full Overview render in jsdom with a planted Talabat zero (banner shows, collapsed by default, toggle works, no errors).",
+  "💱 MARK-UP % NOW READ FROM THE SHEET COMMENT (COMMENT WINS) — Nikhil's instruction on v521: \"Judge it on the Comments mentioned in the Google sheet. If I mention that prices have been marked up and discounted, understand what it means.\" CHANGE: the % written in the Comments cell is now authoritative (wordings: prices increased/raised/marked up/inflated/hiked by N%, N% price increase, mark-up N%; ranges like 25-26% use the midpoint). The Careem-vs-Deliveroo price table is only a FALLBACK when a comment says prices were marked up without a number. A mark-up comment with no % and no table is not corrected and shows an amber note asking for the % in the sheet. NOTE: the live Careem Oregano comment says 20%, so it now reads as a 4% real price cut (1.2 × 0.8 = 0.96); the price table shows the true markup is ~25.6% (price-neutral), so write 'increased by 25%' to reflect it. VERIFIED: 90 tests pass (12 uplift tests incl. wordings, ranges, no-% case, floor at zero, overlap skip).",
   "💱 MARK-UP-THEN-DISCOUNT CAMPAIGNS NOW PROFIT-CORRECTED (CAREEM OREGANO \"20% OFF COMBOS\", 8–14 OCT) — Nikhil's report: combo prices on Careem were raised and then discounted 20% (\"Combos Price increased by 20% and Discounted\"), net impact zero, so a profitability calc that treats the 20% as a real cost and takes food cost on the inflated gross would be wrong. ROOT CAUSE: the sheet logs the discount on the INFLATED price, and gross = net + discount feeds food/packaging cost everywhere, so both discount burn and food cost were overstated. FIX: priceUpliftInfo() recognises a campaign whose comment says prices were raised N% AND that has an N% OFF; the uplift is taken from Nikhil's Careem-vs-Deliveroo/Talabat price table (11 combos, average +25.6% — NOT 20%, so 1.256 × 0.8 ≈ 1.005 = genuinely price-neutral) and falls back to the comment % for future campaigns. applyPriceUpliftAdjustments() reclassifies the sheet discount once at the data layer (runs on every sales/campaign load, idempotent, raw value kept in discSheet): markup portion removed, real discount cost = normal price − paid (floored at 0). Net sales and commission untouched; all pages inherit it. Overlapping campaigns on the same brand+platform → not corrected and flagged. Campaign detail shows a green explanation note. VERIFIED: 10 new tests on the real extracted code (88 total pass) incl. contribution before/after and mutation checks.",
   "🐞 GROWTH GRID TOGGLES DID NOTHING ON PLATFORMS / BRANDS (ONLY WORKED ON OVERVIEW) — Nikhil's direct report on v519: \"not able to click on the Toggles of Net Sales / MoM and YoY in the tables added below in Brands, Outlets or Platforms page. Only works on Overview page\". ROOT CAUSE: every page's last render stays in the DOM (hidden) when you switch pages, and the growth grid card used one shared id, growthGridCard. The toggle handler found its card with getElementById, which returns the FIRST match in the document — always Overview's hidden copy (Overview sits first in the page). So on Platforms and Brands the click really did run, but it updated the invisible Overview card and left the visible one unchanged; on Overview the first match happened to be the right one. My v519 tests only ever rendered one page at a time, so they could not see it. FIX: the card id now includes the page name (growthGridCard_overview / _platforms / _brands) and the handler targets the current page's card. (Outlets has no grid by design — its tiles carry the comparison; only the Compare switch is there.) VERIFIED: new regression test renders Overview AND Brands into the same document (exactly the real situation), toggles on Brands, and checks the Brands card changed while the hidden Overview card did not; it fails on v519. Full suite passes.",
   "📈 MoM / YoY GROWTH — NEW \"COMPARE: vs Prior · MoM · YoY\" SWITCH (OPTION C) AND BRAND × PLATFORM GROWTH GRID (OPTION E) — Nikhil's request: show month-on-month and year-on-year growth of orders and sales per brand, per platform and brand×platform together, on the pages where it matters, without using much space; after seeing five rendered options he chose C + E. WHAT WAS BUILT: (C) a three-button switch in the filter bar of Overview, Platforms, Brands and Outlets. It changes the single function every comparison on those pages already reads (getCompRange), so every tile, badge and 'vs …' label follows it automatically with zero extra space: MoM = the same calendar dates one month earlier, YoY = the same dates one year earlier (29 Feb falls back to 28 Feb), anchored to the data-capped end date so a 'This month' view compares 7 days with 7 days. 'vs Prior' is the default and is exactly today's behaviour; the choice is remembered in the browser. Labels now say '(MoM)' / '(YoY)' so a badge is never ambiguous. The switch is deliberately limited to those four pages — Campaigns, CPC, Cancellations, Compare, KPI etc. keep their own comparisons. (E) a heat-map card 'Growth grid · brand × platform' at the bottom of Overview, Platforms and Brands, with Orders/Net sales and MoM/YoY toggles (swaps in place, no page reload). It respects the page's brand/platform/outlet filters; shows 'n/a' where the comparison side has no data (e.g. Keeta/Wicked Wings YoY) and '–' where a brand isn't on a platform; hover shows the raw numbers. Closed outlets (Lollorosso NAS) are excluded from BOTH sides of the grid so a closure doesn't read as a decline, and the footnote names them. VERIFIED: 14 new tests (date maths incl. leap day, lens applies only to the four pages, labels, switch markup, persistence, hand-checked grid percentages, n/a vs –, closure exclusion, filters, overlapping windows, in-place toggle in a real DOM) plus an end-to-end run of the real Overview, Platforms, Brands and Outlets pages under all three modes with no errors. NOT CHANGED: Outlets page gets the switch only (its tiles already carry the comparison; no grid there). KNOWN LIMIT: YoY needs a year of history — the first Keeta/Wicked Wings months show n/a, which is correct.",
@@ -514,8 +518,6 @@ const COMM={
 // Keeta's commission steps up to 20% on 1-Jan-2027 if not renegotiated. Resolve the rate for a
 // given date so historical/forward analysis uses the correct number.
 function keetaCommissionFor(dateStr){const d=COMM.Keeta.DEFAULT;if(d.futureFrom&&dateStr&&dateStr>=d.futureFrom)return d.futureCommission;return d.commission;}
-function calcBE(agg,brand){const c=COMM[agg]?.[brand]||COMM[agg]?.DEFAULT;if(!c)return null;const t=(c.commission||0)+(c.pg||0)+(c.cpc||0)+(c.processingFee||0)+(c.cancellation||0);if(t>=1)return null;return 1/(1-t);}
-function getBE(agg,brand){const v=calcBE(agg,brand);return v?Math.round(v*100)/100:null;}
 // ── FOOD + PACKAGING COST (% of GROSS sales = Net Sales + Discounts), per brand ──
 // Source: confirmed brand cost table. Applied to GROSS sales (what the customer's order was
 // worth before discount), while commission is applied to NET sales (what we book as revenue).
@@ -1367,7 +1369,6 @@ const BE={Deliveroo:1.32,Noon:1.30,Careem:1.27,Talabat:1.41};
 const BMAP=Object.fromEntries(BR.map(b=>[b.n,b]));
 const SKIP_BR=new Set(["total","grand total","subtotal","sub total","totals","all","all outlets","group total"]);
 const ANOTES={Keeta:"No mandatory CPC — tracked for volume only.",Smiles:"e& Smiles — 47 listings, no mandatory CPC obligation.",Instashop:"Oregano only — 13 listings, grocery format, no CPC obligation."};
-const HR={"Oregano|Deliveroo":{Villa:14.7,Furjan:12.37,Motorcity:12.18,"Town Square":12.04,DMC:11.63,Marina:11.49,DIP:11.4,"Al Quoz":10.92,DSO:9.96,Mirdiff:8.78,"Al Forsan":8.71,Jumeirah:8.01,"Al Reem":5.86},"Oregano|Noon":{"Town Square":8.02,DSO:6.21,Motorcity:6.18,Furjan:5.92,Marina:5.36,"Al Quoz":5.33,DMC:5.23,Jumeirah:4.94,"Al Forsan":3.27,"Al Reem":3.21,Mirdiff:3.94,DIP:3.57,Villa:4.76},"Oregano|Careem":{"Town Square":14.61,Furjan:11.04,DIP:10.79,DMC:10.22,DSO:10.2,Marina:9.57,"Al Quoz":9.52,Motorcity:9.17,Jumeirah:7.51,"Al Forsan":5.05,"Al Reem":4.56},"Oregano|Talabat":{"Town Square":13.85,Villa:10.2,Motorcity:9.17,DSO:8.44,Marina:8.32,Mirdiff:8.82,DIP:8.21,Furjan:8.21,"Al Quoz":7.98,DMC:7.58,"Al Forsan":7.11,Jumeirah:4.63,"Al Reem":3.37},"Lollorosso|Deliveroo":{Villa:7.58,DIP:7.43,Marina:6.46,"Town Square":6.13,"Al Quoz":5.33,Motorcity:5.58,Jumeirah:4.38,Furjan:4.61,DMC:4.33,"Al Forsan":4.23,DSO:4.79,NAS:3.28,Mirdiff:3.87,"Al Reem":2.19},"Smokeys|Deliveroo":{DIP:5.74,"Town Square":4.56,DMC:3.24,Motorcity:3.41,DSO:1.98,"Al Forsan":1.08,"Al Reem":1.82,Jumeirah:1.62,Marina:1.38,Mirdiff:0.57}};
 const AS_LC=new Map(AGGS.map(a=>[a.toLowerCase(),a]));
 // Aggregator header aliases — sheets sometimes spell these differently (spacing/case).
 // Without these, an unmatched header column gets skipped or mis-paired to the nearest
@@ -1556,16 +1557,6 @@ function fmtChgCell(cur,prev,isMoney){
   const pct=pctOf(cur,prev);
   const diff=cur-(prev||0);
   const clr=pctClr(pct);
-  const absFmt=isMoney?fmtAEDTip(Math.abs(diff)):Math.abs(Math.round(diff)).toLocaleString();
-  if(pct==null||isNaN(pct))return'<span style="color:#94a3b8">—</span>';
-  const sign=diff>=0?'+':'−';
-  return`<span style="color:${clr};font-weight:700">${fmtPct(pct)}</span><br><span style="font-size:11px;color:#94a3b8;font-weight:500">${sign}${absFmt}</span>`;
-}
-// Inverted version for discount burn — decrease is green
-function fmtChgCellInv(cur,prev,isMoney){
-  const pct=pctOf(cur,prev);
-  const diff=cur-(prev||0);
-  const clr=pctClr(pct!=null?-pct:null);
   const absFmt=isMoney?fmtAEDTip(Math.abs(diff)):Math.abs(Math.round(diff)).toLocaleString();
   if(pct==null||isNaN(pct))return'<span style="color:#94a3b8">—</span>';
   const sign=diff>=0?'+':'−';
@@ -2465,11 +2456,6 @@ async function saveFeedbackToStorage(){
   trySaveLocalOrderData(FEEDBACK_STORAGE_KEY,feedbackData,"Feedback");
   await syncOrderDataToServer('feedback',feedbackData);
 }
-function clearFeedbackData(){
-  feedbackData=null;
-  try{localStorage.removeItem(FEEDBACK_STORAGE_KEY);}catch(e){}
-  renderFeedback();clearOrderDataOnServer('feedback');
-}
 // Category names are inconsistently spelled/typo'd across monthly files (confirmed directly
 // against all 7 uploaded months) — same class of issue as BRANCH_ALIASES above, same fix shape.
 const FEEDBACK_CATEGORY_ALIASES={
@@ -2712,24 +2698,6 @@ function getKeetaExactDisc(c,start,end){
   const covEnd=end<dr[1]?end:dr[1];
   const coveredDays=daysIn(covStart,covEnd);
   return{menuDisc,dailyAlloc,matchedRecords:matched,coveredDays,totalDays,partialCoverage:coveredDays<totalDays,uncoveredStart:end>dr[1]?dr[1]:null,uncoveredEnd:end>dr[1]?end:null};
-}
-// Per-outlet exact menu_disc for a campaign window — used by campOutletBreakdownHTML to show
-// the exact contribution of each branch when Keeta exact data is available.
-function getKeetaExactDiscPerOutlet(c,start,end){
-  if(!keetaOrdersData||!keetaOrdersData.records||!keetaOrdersData.metadata)return null;
-  const dr=keetaOrdersData.metadata.date_range||[];
-  if(!dr[0]||!dr[1])return null;
-  if(end<dr[0]||start>dr[1])return null; // any overlap is enough
-  const myScope=campOutlets(c);
-  const byOutlet={};
-  for(const rec of keetaOrdersData.records){
-    if(rec.brand!==c.brand)continue;
-    if(rec.campaign!==c.name)continue;
-    if(rec.date<start||rec.date>end)continue;
-    if(myScope&&!myScope.has(rec.outlet))continue;
-    byOutlet[rec.outlet]=(byOutlet[rec.outlet]||0)+rec.menu_disc;
-  }
-  return Object.keys(byOutlet).length?byOutlet:null;
 }
 
 // ── AED parsing for Keeta cell values like "-AED\u00a017.30" ─────────────
@@ -3157,76 +3125,6 @@ function campDataFreshnessStrip(){
   </div>`;
 }
 
-function keetaUploadBarHTML(){
-  const STALE_HOURS=72;
-  const fmtAgo=(iso)=>{
-    if(!iso)return"";
-    const ms=Date.now()-new Date(iso).getTime();
-    const h=ms/3600000;
-    if(h<1)return"just now";
-    if(h<24)return`${Math.floor(h)}h ago`;
-    const d=Math.floor(h/24);
-    return d===1?"1 day ago":`${d} days ago`;
-  };
-  const isStale=(iso)=>{if(!iso)return false;return(Date.now()-new Date(iso).getTime())>STALE_HOURS*3600000;};
-  const aggButton=(label,logoKey,data,clearFn,placeholder)=>{
-    const accent=AC[logoKey]||AC[label]||'#f59e0b';
-    const md=data&&data.metadata?data.metadata:null;
-    const uploadDate=md?md.uploadDate:null;
-    const stale=!placeholder&&isStale(uploadDate);
-    const dr=md?md.date_range:[null,null];
-    let orders=0,totalDisc=0;
-    if(md){
-      if(md.totals&&md.totals.orders)orders=md.totals.orders;
-      else if(md.totals_per_brand)Object.values(md.totals_per_brand).forEach(t=>{orders+=t.orders||0;});
-      if(md.totals_per_brand){
-        Object.values(md.totals_per_brand).forEach(t=>{
-          totalDisc+=(t.menu_disc||0)+(t.marketer_offer_disc||0)+(t.rewards_disc||0)+(t.unknown_disc||0);
-        });
-      }
-    }
-    const isLoaded=!!md&&!placeholder;
-    // Premium card: white base + colored top stripe + shadow. Loaded/not-uploaded/placeholder each get distinct treatment.
-    const topStripe=isLoaded?accent:(placeholder?'#94a3b8':'#F59E0B');
-    const border=isLoaded?`1px solid ${accent}44`:(placeholder?'1px dashed #CBD5E1':'1px dashed #FCD34D');
-    const handler=placeholder
-      ?`alert('Noon parser is being built next. For now, Noon discount data still uses sales-weighted estimation from the brand totals in your Google Sheet.');`
-      :`document.getElementById('orders-file-${label.toLowerCase()}').click()`;
-    const blinkClass=stale?'agg-btn-blink':'';
-    const statusLine=placeholder
-      ?`<div style="font-size:10px;color:#64748B;line-height:1.4;font-weight:600">Coming soon<br/><em style="color:#94A3B8">parser pending</em></div>`
-      :isLoaded
-        ?`<div style="font-size:10px;color:#475569;line-height:1.4;font-weight:600"><strong style="color:${accent};font-size:12px">${orders.toLocaleString()}</strong> orders<br/><span style="color:#64748B">${dr[0]?fmtShort(dr[0]):'?'} → ${dr[1]?fmtShort(dr[1]):'?'}</span><br/><span style="color:#94A3B8;font-size:9.5px">${fmtAgo(uploadDate)}${stale?' ⚠️':''}</span></div>`
-        :`<div style="font-size:10px;color:#94A3B8;line-height:1.4;font-weight:600">Not uploaded<br/><em style="color:#64748B">click to upload</em></div>`;
-    const clearBtn=isLoaded?`<button onclick="event.stopPropagation();if(confirm('Clear uploaded ${label} data? It will revert to sales-weighted estimation.'))${clearFn}()" title="Clear ${label} data" style="position:absolute;top:8px;right:8px;background:#F1F5F9;border:none;color:#64748B;font-size:11px;cursor:pointer;padding:2px 6px;line-height:1;border-radius:4px">✕</button>`:'';
-    return`<div class="agg-upload-btn ${blinkClass}" onclick="${handler}" style="position:relative;cursor:pointer;background:#FFFFFF;border:${border};border-radius:12px;padding:0;text-align:center;transition:all .2s ease;min-height:130px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04)" onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 12px 20px -5px rgba(15,23,42,.1)';this.style.borderColor='${accent}'" onmouseout="this.style.transform='none';this.style.boxShadow='0 4px 6px -1px rgba(15,23,42,.06),0 2px 4px -2px rgba(15,23,42,.04)';this.style.borderColor=''" title="${placeholder?'Noon parser coming soon':isLoaded?(stale?'⚠️ Data is over 72h old — upload a fresh file (select multiple to bulk-update)':'Click to upload more files — select multiple at once to add several weeks in one go'):'Click to upload your '+label+' order exports — select multiple files for bulk import'}">
-      <div style="height:4px;background:${topStripe}"></div>
-      ${clearBtn}
-      <div style="padding:12px 10px 10px;display:flex;flex-direction:column;align-items:center;gap:6px;flex:1">
-        <div style="height:32px;display:flex;align-items:center;justify-content:center">${logoImg(logoKey,32)}</div>
-        <div style="font-size:12px;font-weight:800;color:${placeholder?'#64748B':accent};letter-spacing:.4px">${label}</div>
-        ${statusLine}
-      </div>
-    </div>`;
-  };
-  const buttons=[
-    aggButton("Deliveroo","Deliveroo",deliverooOrdersData,"clearDeliverooData",false),
-    aggButton("Talabat","Talabat",talabatOrdersData,"clearTalabatData",false),
-    aggButton("Careem","Careem",careemOrdersData,"clearCareemData",false),
-    aggButton("Noon","Noon",noonOrdersData,"clearNoonData",false),
-    aggButton("Keeta","Keeta",keetaOrdersData,"clearKeetaData",false)
-  ].join("");
-  const inputs=`<input type="file" id="orders-file-deliveroo" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
-                <input type="file" id="orders-file-talabat" accept=".xlsx,.xls,.csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
-                <input type="file" id="orders-file-careem" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
-                <input type="file" id="orders-file-noon" accept=".csv" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">
-                <input type="file" id="orders-file-keeta" accept=".xlsx,.xls" multiple style="display:none" onchange="handleOrdersUpload(this.files);this.value='';">`;
-  return`<div style="margin-bottom:14px">
-    <div style="font-size:10px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">📊 Per-order data sources</div>
-    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px">${buttons}</div>
-    ${inputs}
-  </div>`;
-}
 
 // CSS for the 72-hour stale-data blink + responsive grid. Injected once via injectResponsiveCSS.
 const AGG_UPLOAD_CSS=`
@@ -3276,6 +3174,22 @@ const AGG_UPLOAD_CSS=`
 //   xlsx + "Voucher Funded by you" / "Talabat-Funded Voucher" → Talabat path (two-row header,
 //                                                               check row 0 AND row 1)
 // Routes to the right parser and stores in the right state slot.
+// v525: order-file format detection pulled out of handleOrdersUpload as a pure function so it can be tested
+// (behaviour unchanged). Looks at the first TWO rows because some exports put the real header on row 2.
+function detectOrdersFormat(firstRow,secondRow){
+  firstRow=firstRow||[];secondRow=secondRow||[];
+  const headers=new Set();
+  const headersLower=new Set(); // v509: Talabat has been seen exporting the SAME columns with different capitalization across files (e.g. "Talabat-funded voucher" vs "Talabat-Funded Voucher", "Operational charges" vs "Operational Charges") — case-insensitive detection for Talabat only, so a harmless export-template casing change can't silently block every upload.
+  firstRow.forEach(h=>{const s=String(h).replace(/^\uFEFF/,"");headers.add(s);headersLower.add(s.toLowerCase());});
+  secondRow.forEach(h=>{const s=String(h).replace(/^\uFEFF/,"");headers.add(s);headersLower.add(s.toLowerCase());});
+  if(headers.has("Order no.")&&headers.has("Promotion funded by merchant"))return"keeta";
+  if(headers.has("TOTAL_PAYOUT_AMOUNT")&&headers.has("MERCHANT_AREA"))return"careem";
+  if(headersLower.has("voucher funded by you")&&headersLower.has("talabat-funded voucher"))return"talabat";
+  if(secondRow.some(h=>String(h).includes("Deliveroo Commission Rate"))&&secondRow.some(h=>String(h).includes("Order Value")))return"deliveroo";
+  // Noon: statement_orders CSV — has "outlet_name" + "order_status" + "item_value" headers on row 0
+  if(headers.has("outlet_name")&&headers.has("order_status")&&headers.has("item_value"))return"noon";
+  return null;
+}
 async function handleOrdersUpload(filesOrFile){
   // v112: uploads are admin-only — the parsed result now syncs to the SHARED server copy that
   // every user reads, so a non-admin upload would either diverge locally (defeating the single
@@ -3304,20 +3218,7 @@ async function handleOrdersUpload(filesOrFile){
       const ws=wb.Sheets[wb.SheetNames[0]];
       const rowsForDetect=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
       const firstRow=rowsForDetect[0]||[],secondRow=rowsForDetect[1]||[];
-      const headers=new Set();
-      const headersLower=new Set(); // v509: Talabat has been seen exporting the SAME columns with
-      // different capitalization across files (e.g. "Talabat-funded voucher" vs "Talabat-Funded
-      // Voucher", "Operational charges" vs "Operational Charges") \u2014 case-insensitive detection for
-      // Talabat only, so a harmless export-template casing change can't silently block every upload.
-      firstRow.forEach(h=>{const s=String(h).replace(/^\uFEFF/,"");headers.add(s);headersLower.add(s.toLowerCase());});
-      secondRow.forEach(h=>{const s=String(h).replace(/^\uFEFF/,"");headers.add(s);headersLower.add(s.toLowerCase());});
-      let detected=null;
-      if(headers.has("Order no.")&&headers.has("Promotion funded by merchant"))detected="keeta";
-      else if(headers.has("TOTAL_PAYOUT_AMOUNT")&&headers.has("MERCHANT_AREA"))detected="careem";
-      else if(headersLower.has("voucher funded by you")&&headersLower.has("talabat-funded voucher"))detected="talabat";
-      else if(secondRow.some(h=>String(h).includes("Deliveroo Commission Rate"))&&secondRow.some(h=>String(h).includes("Order Value")))detected="deliveroo";
-      // Noon: statement_orders CSV — has "outlet_name" + "order_status" + "item_value" headers on row 0
-      else if(headers.has("outlet_name")&&headers.has("order_status")&&headers.has("item_value"))detected="noon";
+      const detected=detectOrdersFormat(firstRow,secondRow);
       if(!detected){
         errors.push(`${file.name}: format not recognized (expected Keeta XLSX, Careem CSV, Talabat XLSX, Deliveroo CSV, or Noon statement_orders CSV).`);
         continue;
@@ -3382,8 +3283,6 @@ async function handleOrdersUpload(filesOrFile){
 
   if(tab){tab.style.opacity="1";tab.title=oldTitle;}
 }
-// Back-compat: keep the old handler name in case external code references it
-async function handleKeetaUpload(file){return handleOrdersUpload(file);}
 // ═══════════════════════════════════════════════════════════════
 // END KEETA MODULE
 // ═══════════════════════════════════════════════════════════════
@@ -3856,22 +3755,6 @@ function getTalabatExactDisc(c,start,end){
   return{menuDisc,talabatDisc,dailyAlloc,itemTopUp,matchedRecords:matched,coveredDays,totalDays,partialCoverage:coveredDays<totalDays,uncoveredStart:end>dr[1]?dr[1]:null,uncoveredEnd:end>dr[1]?end:null};
 }
 
-// Per-outlet exact menu_disc for a campaign window — used by campOutletBreakdownHTML
-function getTalabatExactDiscPerOutlet(c,start,end){
-  if(!talabatOrdersData||!talabatOrdersData.records||!talabatOrdersData.metadata)return null;
-  const dr=talabatOrdersData.metadata.date_range||[];
-  if(!dr[0]||!dr[1])return null;
-  if(end<dr[0]||start>dr[1])return null;
-  const myScope=campOutlets(c);
-  const byOutlet={};
-  for(const rec of talabatOrdersData.records){
-    if(rec.brand!==c.brand)continue;
-    if(rec.date<start||rec.date>end)continue;
-    if(myScope&&!myScope.has(rec.outlet))continue;
-    byOutlet[rec.outlet]=(byOutlet[rec.outlet]||0)+rec.menu_disc;
-  }
-  return Object.keys(byOutlet).length?byOutlet:null;
-}
 
 // Talabat date format: "2026-06-01 11:34" or Excel serial (number). Return "YYYY-MM-DD" or null.
 function parseTalabatDate(v){
@@ -5725,15 +5608,6 @@ function getCompRange(){
   return{s:dk(cs),e:dk(ce)};
 }
 function getPD(){const{s,e}=getCompRange();const f=curFilters();return allData.filter(r=>{if(r.date<s||r.date>e)return false;if(f.brands.size&&!f.brands.has(r.brand))return false;if(f.platforms.size&&!f.platforms.has(r.aggregator))return false;if(f.branches.size&&!f.branches.has(r.branch))return false;return true;});}
-function getCompLabel(){
-  const{s,e}=getCompRange();
-  const f=curFilters();
-  const days=f.start===f.end?1:Math.round((new Date(f.end)-new Date(f.start))/86400000)+1;
-  if(growthLensActive())return`vs ${fmtDisp(s)}${s===e?"":"→"+fmtDisp(e)} (same dates, ${growthLens==="yoy"?"prior year":"prior month"})`;
-  if(days===1)return`vs ${fmtDisp(s)} (same day prev week)`;
-  const suffix=(f.preset==="month"||f.preset==="lmonth")?" (same dates, prior month)":"";
-  return`vs ${fmtDisp(s)}→${fmtDisp(e)}${suffix}`;
-}
 // Short comparison label for table column headers (so the "change" columns aren't ambiguous)
 function getCompShort(){
   const{s,e}=getCompRange();
@@ -6142,8 +6016,6 @@ function renderPage(p){
   // file for pages whose own chart-drawing is deferred until after their innerHTML is committed.
   setTimeout(()=>{if(typeof animateKpiCountUp==="function")animateKpiCountUp(document.getElementById(`page-${p}`));},60);
 }
-function toggleBrandRow(name){expandedBrand=expandedBrand===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
-function togglePlatformRow(name){expandedPlatform=expandedPlatform===name?null:name;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
 // AOV drilldown state
 let aovDrill=false;
 function toggleAovDrill(){aovDrill=!aovDrill;Object.values(charts).forEach(c=>c.destroy());charts={};renderOverview();}
@@ -6197,6 +6069,90 @@ function selectVerdAggregator(ag){
 }
 
 // OVERVIEW
+// ═══ v523: DATA HEALTH — warn-only sanity checks on the synced Google Sheet data ═══════════════════════════════
+// Nikhil's request (parked item "ingestion sanity checks"): when the daily sheet looks wrong (forgotten entry,
+// platform suddenly at zero, duplicated rows, shifted column), say so on Overview instead of silently showing
+// wrong numbers. Warn-only: data is used exactly as entered. Closed outlets (OUTLET_CLOSURES) are excluded from
+// every check so NAS's disappearance never reads as a problem. Pure function so it can be unit-tested.
+const DH_CORE_AGGS=['Deliveroo','Talabat','Careem','Noon','Keeta'];
+function dataHealthChecks(recs,latestDate,todayDate){
+  const issues=[];
+  if(!recs||!recs.length||!latestDate)return issues;
+  const add=(sev,check,text,where)=>issues.push({sev,check,text,where});
+  const fmtD=d=>{const x=new Date(d+'T12:00:00');return x.getDate()+' '+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][x.getMonth()];};
+  const live=recs.filter(r=>r.branch!=='(brand-level)'&&!outletRowRetired(r));
+  const sd=r=>(r.discSheet!=null?r.discSheet:(r.disc||0)); // judge the discount as entered in the sheet
+  const daysBetween=(a,b)=>Math.round((new Date(b+'T12:00:00')-new Date(a+'T12:00:00'))/86400000);
+  const recent=(r,n)=>daysBetween(r.date,latestDate)<=n&&r.date<=latestDate;
+  // 1 · Stale brand — latest entry for a brand is 2+ days behind the rest
+  const maxByBrand={};
+  for(const r of live){if(r.sales>0&&(!maxByBrand[r.brand]||r.date>maxByBrand[r.brand]))maxByBrand[r.brand]=r.date;}
+  for(const b of Object.keys(maxByBrand)){
+    const gap=daysBetween(maxByBrand[b],latestDate);
+    if(gap>=2)add(gap>=4?'high':'medium','Stale data',`Latest entry is ${fmtD(maxByBrand[b])}; the other brands are on ${fmtD(latestDate)}`,b);
+  }
+  // 2 · Sudden zero / drop — brand × platform vs its same weekday over the previous 4 weeks
+  const day={};// brand|agg -> date -> sales
+  for(const r of live){if(!DH_CORE_AGGS.includes(r.aggregator))continue;const k=r.brand+'|'+r.aggregator;(day[k]=day[k]||{});day[k][r.date]=(day[k][r.date]||0)+(r.sales||0);}
+  for(const k of Object.keys(day)){
+    const m=day[k];const base=[];
+    for(const w of [7,14,21,28]){const v=m[subDays(latestDate,w)];if(v>0)base.push(v);}
+    if(base.length<3)continue;
+    const avg=base.reduce((a,b)=>a+b,0)/base.length;
+    if(avg<500)continue;
+    const today=m[latestDate]||0;
+    const [b,a]=k.split('|');
+    if(today<=0)add('high','Sudden zero',`No ${a} sales on ${fmtD(latestDate)}; normally about AED ${Math.round(avg).toLocaleString()} on this weekday`,`${b} × ${a}`);
+    else if(today<avg*0.3)add('medium','Sudden drop',`${a} sales AED ${Math.round(today).toLocaleString()} on ${fmtD(latestDate)}, only ${Math.round(today/avg*100)}% of the usual AED ${Math.round(avg).toLocaleString()}`,`${b} × ${a}`);
+  }
+  // 3 · Duplicate / odd rows (last 60 days; future dates anywhere)
+  const seen={},dups={};
+  for(const r of live){
+    if(r.date>todayDate){add('medium','Future date',`Entry dated ${fmtD(r.date)} is after today`,`${r.brand} · ${r.branch}`);continue;}
+    if(!recent(r,60))continue;
+    const k=[r.brand,r.branch,r.date,r.aggregator].join('|');
+    if(seen[k])dups[k]=r;else seen[k]=true;
+  }
+  const dupList=Object.values(dups);
+  if(dupList.length){const ex=dupList.slice(0,3).map(r=>`${r.branch} · ${r.aggregator} · ${fmtD(r.date)}`).join('; ');
+    add('medium','Duplicate rows',`${dupList.length} outlet/day/platform entr${dupList.length>1?'ies appear':'y appears'} more than once (${ex}${dupList.length>3?'; …':''})`,[...new Set(dupList.map(r=>r.brand))].join(', '));}
+  const neg=live.filter(r=>recent(r,60)&&(r.sales<0||r.orders<0));
+  if(neg.length)add('medium','Negative values',`${neg.length} entr${neg.length>1?'ies have':'y has'} negative sales or orders (e.g. ${neg[0].branch} · ${neg[0].aggregator} · ${fmtD(neg[0].date)})`,[...new Set(neg.map(r=>r.brand))].join(', '));
+  const mism=live.filter(r=>recent(r,14)&&((r.orders>0&&!(r.sales>0))||(r.sales>0&&!(r.orders>0))));
+  if(mism.length)add('medium','Orders/sales mismatch',`${mism.length} entr${mism.length>1?'ies have':'y has'} orders without sales or sales without orders (e.g. ${mism[0].branch} · ${mism[0].aggregator} · ${fmtD(mism[0].date)})`,[...new Set(mism.map(r=>r.brand))].join(', '));
+  // 4 · Implausible values (last 14 days)
+  const odd=[];
+  for(const r of live){
+    if(!recent(r,14))continue;
+    if(r.orders>=3&&r.sales>0){const aov=r.sales/r.orders;if(aov<10||aov>400)odd.push({r,why:`AOV AED ${Math.round(aov)}`});}
+    if(r.sales>0&&sd(r)>200&&sd(r)>2*r.sales)odd.push({r,why:`discount AED ${Math.round(sd(r)).toLocaleString()} is more than twice the sales`});
+  }
+  odd.slice(0,4).forEach(o=>add('medium','Implausible value',`${o.why} — possible typo or shifted column`,`${o.r.brand} · ${o.r.branch} · ${o.r.aggregator} · ${fmtD(o.r.date)}`));
+  if(odd.length>4)add('medium','Implausible value',`${odd.length-4} more implausible entries in the last 14 days`,'various');
+  const rank={high:0,medium:1};
+  issues.sort((a,b)=>rank[a.sev]-rank[b.sev]);
+  return issues;
+}
+let _dhOpen=false,_dhCache=null;
+function dataHealthToggle(){
+  _dhOpen=!_dhOpen;
+  const b=document.getElementById('dataHealthBody'),t=document.getElementById('dataHealthToggleTxt');
+  if(b)b.style.display=_dhOpen?'block':'none';
+  if(t)t.textContent=_dhOpen?'Hide ▴':'Show ▾';
+}
+function dataHealthBannerHTML(){
+  if(typeof allData==='undefined'||!allData.length||!latest)return '';
+  const key=allData.length+'|'+latest;
+  if(!_dhCache||_dhCache.key!==key)_dhCache={key,issues:dataHealthChecks(allData,latest,cpcRealToday())};
+  const issues=_dhCache.issues;
+  if(!issues.length)return '';
+  const hi=issues.filter(i=>i.sev==='high').length,me=issues.length-hi;
+  const chip=sev=>sev==='high'?'<span style="font-size:10.5px;border-radius:99px;padding:2px 8px;font-weight:800;background:rgba(220,38,38,.12);color:#DC2626">HIGH</span>':'<span style="font-size:10.5px;border-radius:99px;padding:2px 8px;font-weight:800;background:rgba(245,158,11,.16);color:#B97800">MEDIUM</span>';
+  const rows=issues.slice(0,15).map(i=>`<tr><td style="padding:7px 6px;border-top:1px solid rgba(128,128,128,.2)">${chip(i.sev)}</td><td style="padding:7px 6px;border-top:1px solid rgba(128,128,128,.2);font-weight:600">${esc(i.check)}</td><td style="padding:7px 6px;border-top:1px solid rgba(128,128,128,.2)">${esc(i.text)}</td><td style="padding:7px 6px;border-top:1px solid rgba(128,128,128,.2);opacity:.75">${esc(i.where)}</td></tr>`).join('');
+  return `<div id="dataHealthCard" style="margin-bottom:14px">
+    <div onclick="dataHealthToggle()" style="display:flex;align-items:center;gap:10px;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.4);border-radius:10px;padding:8px 12px;cursor:pointer"><span>🩺</span><span style="font-size:13px"><b style="color:#D97706">${issues.length} data check${issues.length===1?'':'s'} need${issues.length===1?'s':''} a look</b> · ${hi?hi+' high':''}${hi&&me?', ':''}${me?me+' medium':''}</span><span id="dataHealthToggleTxt" style="margin-left:auto;font-size:12px;opacity:.7">${_dhOpen?'Hide ▴':'Show ▾'}</span></div>
+    <div id="dataHealthBody" style="display:${_dhOpen?'block':'none'};border:1px solid rgba(245,158,11,.4);border-top:0;border-radius:0 0 10px 10px;padding:6px 12px 10px"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><tr style="font-size:10.5px;text-transform:uppercase;opacity:.65;text-align:left"><th style="padding:6px">Severity</th><th style="padding:6px">Check</th><th style="padding:6px">What was found</th><th style="padding:6px">Where</th></tr>${rows}</table><div style="font-size:11.5px;opacity:.7;margin-top:8px">Warnings only — the data is used exactly as entered. Re-checked on every refresh.</div></div></div>`;
+}
 function renderOverview(){
   const ld=getLD(),pd=getPD(),ls=sumR(ld),ps=sumR(pd);
   const compShort=getCompShort();
@@ -6371,6 +6327,7 @@ function renderOverview(){
   const digestExportBtn=`<button onclick="digestExportPDF()" style="background:rgba(201,162,75,.12);border:1px solid rgba(201,162,75,.4);border-radius:6px;color:#C9A24B;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:700;font-style:normal" title="Generate a PDF: yesterday's numbers + this week vs last week / 4 weeks back / last year">📄 Export Daily Digest</button>`;
   document.getElementById("page-overview").innerHTML=makeFilterBar({dateExtra:digestExportBtn})+
     failedBrandBanner("every figure on this page, including the profitability breakdown, only reflects the brands that DID load")+
+    dataHealthBannerHTML()+
     // v158/v159: scoped style override — .card/.sm/.g2/.ct/.fbar are defined in an external
     // stylesheet this file doesn't control, so overriding their colors here (scoped to
     // #page-overview via the ID prefix, which wins on specificity without needing !important)
@@ -7982,12 +7939,6 @@ function cpcTopUpSuggestion(r){
   if(daysLeftInMonth<=0)return null;
   return{daysLeftInMonth,suggested:Math.round(r.dailyBurn*daysLeftInMonth),burnPerDay:r.dailyBurn};
 }
-function cpcBidSuggestion(r){
-  if(r.aggregator!=="Deliveroo"||!r.verdict||!r.avgBid)return null;
-  if(r.verdict==="SCALE")return{action:"raise",to:Math.round(r.avgBid*1.15*100)/100,reason:"Strong ROAS — raise bid to win more impressions"};
-  if(r.verdict==="WITHDRAW")return{action:"lower",to:Math.max(1.5,Math.round(r.avgBid*0.7*100)/100),reason:"Below break-even — lower bid or pause"};
-  return{action:"hold",to:r.avgBid,reason:"Bid level looks right for current ROAS"};
-}
 
 // ── DRILL-DOWN STATE ──
 let cpcDrill={level:"agg",agg:null,brand:null},cpcSort={col:"roas",dir:-1},cpcAdTypeFilter="all",cpcMonthFilter="all";
@@ -8008,12 +7959,6 @@ function cpcSetView(mode){cpcViewMode=mode;renderCPC();window.scrollTo({top:0,be
 let cpcAggViewMonth=null;
 function cpcSetAggMonth(m){cpcAggViewMonth=m;renderCPC();}
 function cpcResetAggMonth(){cpcAggViewMonth=null;renderCPC();}
-// Shift a "YYYY-MM" string by N months (negative = past). Used to compute the Quick View buttons.
-function cpcShiftMonth(monthStr,delta){
-  const[y,m]=monthStr.split("-").map(Number);
-  const d=new Date(y,m-1+delta,1);
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
-}
 // History view filters — Date/Brand/Aggregator/Outlet, plus an optional month-vs-month compare mode
 let cpcHistFilters={month:"all",brand:"all",aggregator:"all",outlet:"all",adType:"all"};
 let cpcHistCompare=false;
@@ -10992,59 +10937,7 @@ function renderCPCOutletDetail(){
 }
 
 
-// ── LOCAL BRIEF (always works, even off Claude.ai) ──
-// Computes wins/issues directly from the data so the morning brief is never blank.
-function computeLocalBrief(){
-  const ld=getLD(),pd=getPD(),ls=sumR(ld),ps=sumR(pd);
-  const oc=pctOf(ls.orders,ps.orders),sc=pctOf(ls.sales,ps.sales);
-  const cm=mkMap(ld,r=>`${r.brand}|${r.branch}|${r.aggregator}`),pm=mkMap(pd,r=>`${r.brand}|${r.branch}|${r.aggregator}`);
-  const changes=Object.values(cm).map(c=>{const[brand,branch,aggregator]=c.k.split("|");const pv=pm[c.k];return{brand,branch,aggregator,orders:c.orders,sales:c.sales,oc:pv?pctOf(c.orders,pv.orders):null};});
-  const wins=[...changes].filter(x=>x.oc!=null&&x.orders>=3).sort((a,b)=>b.oc-a.oc).slice(0,3);
-  const issues=[...changes].filter(x=>x.oc!=null&&x.oc<-15&&x.orders>=2&&!outletIsRetired(x.brand,x.branch)).sort((a,b)=>a.oc-b.oc).slice(0,3);
-  const zeros=Object.keys(pm).filter(k=>pm[k].orders>=3&&!cm[k]&&!outletIsRetired(k.split("|")[0],k.split("|")[1])).map(k=>k.split("|")).slice(0,3);
-  const byBrand=BR.map(b=>{const c=sumR(ld.filter(r=>r.brand===b.n));const p=sumR(pd.filter(r=>r.brand===b.n));return{n:b.n,o:c.orders,oc:pctOf(c.orders,p.orders)};}).filter(b=>b.o>0);
-  const bestBrand=[...byBrand].filter(b=>b.oc!=null).sort((a,b)=>b.oc-a.oc)[0];
-  const worstBrand=[...byBrand].filter(b=>b.oc!=null).sort((a,b)=>a.oc-b.oc)[0];
-  return{ls,ps,oc,sc,wins,issues,zeros,bestBrand,worstBrand};
-}
-function localBriefHTML(){
-  const b=computeLocalBrief();
-  const dirWord=b.oc==null?"flat":b.oc>=0?"up":"down";
-  const headline=`Group ${dirWord} ${fmtPct(b.oc)} on orders, ${fmtPct(b.sc)} on Net Sales vs ${getCompShort().replace('vs ','')}.`;
-  const winLines=b.wins.length?b.wins.map(w=>`<div style="font-size:12px;margin-bottom:4px;line-height:1.5">• <strong>${w.brand} ${w.branch}</strong> on ${w.aggregator}: ${fmtPct(w.oc)} (${w.orders} orders)</div>`).join(""):`<div style="font-size:12px;color:#475569;font-weight:600">No standout gainers in this window.</div>`;
-  const issueLines=(b.issues.length||b.zeros.length)?[...b.issues.map(w=>`<div style="font-size:12px;margin-bottom:4px;line-height:1.5">• <strong>${w.brand} ${w.branch}</strong> on ${w.aggregator}: ${fmtPct(w.oc)}</div>`),...b.zeros.map(z=>`<div style="font-size:12px;margin-bottom:4px;line-height:1.5">• <strong>${z[0]} ${z[1]}</strong> on ${z[2]}: <span style="color:#EF4444;font-weight:700">ZERO orders</span> (had sales last period)</div>`)].join(""):`<div style="font-size:12px;color:#22C55E">Nothing alarming — no major drops or zero-order outlets.</div>`;
-  const brandLine=b.bestBrand&&b.worstBrand?`Best brand: <strong style="color:${BMAP[b.bestBrand.n]?.c}">${b.bestBrand.n}</strong> ${fmtPct(b.bestBrand.oc)}. Weakest: <strong style="color:${BMAP[b.worstBrand.n]?.c}">${b.worstBrand.n}</strong> ${fmtPct(b.worstBrand.oc)}.`:"";
-  return `<div style="font-size:15px;font-weight:700;color:#FCD34D;margin-bottom:12px;line-height:1.4">${headline}</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-bottom:12px">
-      <div><div style="font-size:10px;font-weight:700;color:#22C55E;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">✅ What Worked</div>${winLines}</div>
-      <div><div style="font-size:10px;font-weight:700;color:#EF4444;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">⚠️ Needs Attention</div>${issueLines}</div>
-    </div>
-    ${brandLine?`<div style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);border-radius:6px;padding:8px 12px;font-size:12px;color:#FDE68A;line-height:1.6">💡 ${brandLine}</div>`:""}`;
-}
 
-// LOCAL BRIEF — computed instantly from your data, no API calls
-async function genBrief(){
-  const el=document.getElementById("brief-content");if(!el)return;
-  el.innerHTML=localBriefHTML();
-}
-async function runAskAI(){
-  const input=document.getElementById('ai-ask-input'),btn=document.getElementById('ai-ask-btn'),answer=document.getElementById('ai-ask-answer');
-  if(!input||!answer)return;const q=input.value.trim();if(!q)return;
-  if(btn){btn.textContent='⏳';btn.disabled=true;}
-  answer.innerHTML=`<div style="margin-top:10px;font-size:11px;color:#94a3b8;font-style:italic">🤔 Thinking...</div>`;
-  const ld=getLD(),pd=getPD(),ls=sumR(ld),ps=sumR(pd);
-  const byBrand=BR.map(b=>{const c=sumR(ld.filter(r=>r.brand===b.n));const p=sumR(pd.filter(r=>r.brand===b.n));return`${b.n}: ${c.orders} orders AED ${c.sales.toFixed(0)} (WoW ${fmtPct(pctOf(c.orders,p.orders))})`;}).join('; ');
-  const byPlat=AGGS.map(a=>{const c=sumR(ld.filter(r=>r.aggregator===a));return`${a}: ${c.orders} orders`;}).join('; ');
-  const prompt=`BD analyst for Oregano Restaurants UAE. DATA ${getPeriodLabel()} vs ${getCompLabel()}: Total ${ls.orders} orders AED ${ls.sales.toFixed(0)} (WoW orders ${fmtPct(pctOf(ls.orders,ps.orders))}). BY BRAND: ${byBrand}. BY PLATFORM: ${byPlat}. QUESTION: ${q}. Answer in 2-4 sentences with specific numbers. No preamble.`;
-  try{
-    const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:500,messages:[{role:"user",content:prompt}]})});
-    if(!r.ok)throw new Error('cors');const j=await r.json();if(j.error)throw new Error(j.error.message);
-    const ans=(j.content?.[0]?.text||'').trim();
-    answer.innerHTML=`<div style="margin-top:10px;padding:10px 12px;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.25);border-radius:6px;line-height:1.6;font-size:12px"><div style="font-size:10px;color:#60A5FA;font-weight:700;margin-bottom:5px">💬 ${q}</div><div style="white-space:pre-wrap;color:#0F172A">${ans.replace(/</g,'&lt;')}</div></div>`;
-    input.value='';
-  }catch(e){answer.innerHTML=`<div style="margin-top:10px;padding:10px 12px;background:rgba(239,68,68,.05);border:1px solid rgba(239,68,68,.2);border-radius:6px;font-size:12px;color:#94a3b8">⚠️ AI chat only works in Claude.ai (CORS restriction on external hosts). The morning brief above is computed locally and always works.</div>`;}
-  if(btn){btn.textContent='Ask →';btn.disabled=false;}
-}
 
 // ── CAMPAIGN MANAGER ──────────────────────────────────────────────────────
 const CAMPAIGN_GID="1647275459";
@@ -11746,23 +11639,6 @@ function sortCampCards(camps){
 }
 function campSetDate(which,val){if(which==="from")campFStartFrom=val;else campFStartTo=val;renderCampaigns();}
 function campClearDates(){campFStartFrom="";campFStartTo="";renderCampaigns();}
-function sortCampaigns(camps){
-  const{col,dir}=campSort;
-  return[...camps].sort((a,b)=>{
-    let va,vb;
-    if(col==='startDate'){va=a.startDate;vb=b.startDate;}
-    else if(col==='name'){va=a.name||'';vb=b.name||'';}
-    else if(col==='brand'){va=a.brand;vb=b.brand;}
-    else if(col==='platform'){va=a.aggregator;vb=b.aggregator;}
-    else if(col==='ordersLift'){const ia=campImpact(a),ib=campImpact(b);va=ia.hasData?ia.ordersLift:-999;vb=ib.hasData?ib.ordersLift:-999;}
-    else if(col==='salesLift'){const ia=campImpact(a),ib=campImpact(b);va=ia.hasData?ia.salesLift:-999;vb=ib.hasData?ib.salesLift:-999;}
-    else if(col==='momLift'){const ia=campImpactExtended(a),ib=campImpactExtended(b);va=ia.momSalesLift!=null?ia.momSalesLift:-999;vb=ib.momSalesLift!=null?ib.momSalesLift:-999;}
-    else if(col==='profitability'){const ia=campImpactExtended(a),ib=campImpactExtended(b);va=ia.profitability!=null?ia.profitability:-9999;vb=ib.profitability!=null?ib.profitability:-9999;}
-    else{va=a[col];vb=b[col];}
-    if(typeof va==='string')return dir*va.localeCompare(vb);
-    return dir*((va||0)-(vb||0));
-  });
-}
 function campTheme(){
   return _darkPage?{
     muted:DARK_THEME.textMuted,label:DARK_THEME.textMuted,border:DARK_THEME.cardBorder,
@@ -11873,65 +11749,6 @@ function detectExclusion(group){
   return{exclusive,paused};
 }
 
-// CAMPAIGN BUNDLING — bundles require an EXACT outlet match.
-// Two campaigns are eligible to bundle only when they share brand + aggregator + outlet AND
-// their date ranges overlap. Different outlet scopes (e.g. AUH vs DXB, or All vs DXB) are
-// kept as separate standalone campaigns, so a Dubai-only campaign isn't conflated with an
-// Abu Dhabi-only one just because the brand and platform match.
-function buildCampBundles(camps){
-  // The bundle key is the RESOLVED branch set (after applying comment refinements).
-  // Two campaigns can only bundle if they actually cover the same branches — so the
-  // sandwich-30%-OFF (excludes 6) and the 40%-OFF (only those 6) get different keys
-  // even though both say "Select Locations" in the outlet field.
-  const outletKey=(c)=>{
-    const set=campOutlets(c);
-    if(!set)return"all";
-    return [...set].sort().join("|");
-  };
-  // Group by brand|aggregator|resolvedBranchSet
-  const groups={};
-  camps.forEach(c=>{const k=`${c.brand}|${c.aggregator}|${outletKey(c)}`;(groups[k]=groups[k]||[]).push(c);});
-  const bundles=[],standalone=[];
-  Object.values(groups).forEach(arr=>{
-    if(arr.length<=1){standalone.push(...arr);return;}
-    // Find overlapping date clusters within this brand+aggregator group
-    const remaining=[...arr];
-    while(remaining.length){
-      const seed=remaining.shift();
-      const cluster=[seed];
-      let changed=true;
-      while(changed){
-        changed=false;
-        for(let i=remaining.length-1;i>=0;i--){
-          const c=remaining[i];
-          // overlaps cluster if its range intersects ANY member's range
-          if(cluster.some(m=>!(c.endDate<m.startDate||c.startDate>m.endDate))){
-            cluster.push(c);remaining.splice(i,1);changed=true;
-          }
-        }
-      }
-      if(cluster.length>1){
-        // Bundle: shared brand+platform, overlapping dates
-        const start=cluster.reduce((m,c)=>c.startDate<m?c.startDate:m,cluster[0].startDate);
-        const end=cluster.reduce((m,c)=>c.endDate>m?c.endDate:m,cluster[0].endDate);
-        const exc=detectExclusion(cluster);
-        bundles.push({
-          isBundle:true,
-          brand:seed.brand,
-          aggregator:seed.aggregator,
-          startDate:start,endDate:end,
-          outlet:cluster.every(c=>c.outlet===cluster[0].outlet)?cluster[0].outlet:"Mixed",
-          campaigns:cluster,
-          exclusive:exc.exclusive,
-          pausedByExclusive:exc.paused,
-          name:`🎯 ${seed.brand} ${seed.aggregator} Bundle (${cluster.length} segments)`,
-          comments:cluster.map(c=>c.name||c.comments||"").filter(Boolean).join(" + ")
-        });
-      }else standalone.push(seed);
-    }
-  });
-  return{bundles,standalone};
-}
 // Analyze a bundle as ONE combined effort. Uses real Disc totals (which are already the
 // combined discount across all campaigns in the bundle, since your sheet sums them).
 function bundleAnalysis(bundle){
@@ -12145,65 +11962,6 @@ function campCardGrid(camps,showProfit,pendingSet){
   return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px">${cards}</div>`;
 }
 
-function campTableHTML(title,camps,showImpact){
-  const T=campTheme();
-  if(!camps.length)return`<div class="card"><div class="ct">${title}</div><div style="color:${T.muted};font-size:12px;padding:8px 0">No campaigns match your filters.</div></div>`;
-  // Detect bundles BEFORE sorting/rendering. Bundles render as a single combined row.
-  const{bundles,standalone}=buildCampBundles(camps);
-  // For sorting/iteration we treat bundles as pseudo-campaigns (their fields satisfy sortCampaigns)
-  const sortable=[...bundles,...standalone];
-  const sorted=sortCampaigns(sortable);const sc=campSort.col,sd=campSort.dir;
-  const sH=(col,label)=>`<th onclick="campSortBy('${col}')" style="cursor:pointer;${sc===col?'color:#f59e0b':''}">${label} ${sc===col?(sd>0?'▲':'▼'):'<span style="opacity:.3">↕</span>'}</th>`;
-  let headers=`${sH('name','Campaign')}${sH('brand','Brand')}${sH('platform','Platform')}<th>Offer</th>${sH('startDate','Dates')}<th>Outlet</th>`;
-  if(showImpact)headers+=`${sH('ordersLift','WoW Orders')}${sH('salesLift','WoW Net Sales')}${sH('momLift','MoM Net Sales')}${sH('profitability','Profitability')}<th></th>`;else headers+=`<th>Status</th><th></th>`;
-  const rows=sorted.map(c=>{
-    // Bundle row: shows combined analysis using real Disc totals (which already sum all segments)
-    if(c.isBundle){
-      const a=bundleAnalysis(c);
-      const profClr=a.profitabilityPct==null?T.muted:a.profitabilityPct>0?'#22C55E':a.profitabilityPct>-20?'#FBBF24':'#EF4444';
-      const profStr=a.profitabilityPct==null?'—':`${a.profitabilityPct>=0?'+':''}${a.profitabilityPct.toFixed(1)}%`;
-      const segChips=c.campaigns.map(seg=>`<span style="background:rgba(245,158,11,.08);color:#FBBF24;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-right:3px;border:1px solid rgba(245,158,11,.25)">${seg.name||'(unnamed)'}</span>`).join('');
-      const bundleIdx="bundle:"+c.campaigns.map(seg=>campaignData.indexOf(seg)).join(",");
-      const viewBtn=`<button onclick="selectBundleByKey('${bundleIdx}')" style="background:#f59e0b22;border:1px solid #f59e0b66;border-radius:5px;color:#f59e0b;padding:3px 8px;font-size:10px;cursor:pointer;white-space:nowrap;font-weight:700">View Bundle →</button>`;
-      const b=BMAP[c.brand];
-      const exclLabel=c.exclusive&&c.exclusive.length?`<span style="font-size:11px;color:${T.label}">${c.campaigns.length} segments · <span style="color:#FBBF24;font-weight:700">⚠️ Mutual exclusion detected</span> — ${c.exclusive.length} pauses the other${c.pausedByExclusive.length>1?'s':''}</span>`:`<span style="font-size:11px;color:${T.label}">${c.campaigns.length} concurrent segments — combined analysis</span>`;
-      let row=`<tr style="background:rgba(245,158,11,.04)"><td><strong style="font-size:12px;color:#FBBF24">🎯 ${c.brand} ${c.aggregator} Bundle</strong><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px">${segChips}</div></td><td><span style="color:${b?.c||'#888'};font-weight:700;font-size:11px">${c.brand}</span></td><td><span style="color:${AC[c.aggregator]||'#888'};font-weight:700;font-size:11px">${c.aggregator}</span></td><td>${exclLabel}</td><td><span style="white-space:nowrap;font-size:11px">${fmtCampDateRange(c.startDate,c.endDate)}</span></td><td><span style="font-size:11px">${c.outlet}</span></td>`;
-      if(showImpact){
-        if(a.cs&&a.cs.orders>0){
-          const ordClr=pctClr(a.ordersLift),salClr=pctClr(a.salesLift);
-          row+=`<td style="color:${ordClr};font-weight:700;font-size:11px">${fmtPct(a.ordersLift)}</td><td style="color:${salClr};font-weight:700;font-size:11px">${fmtPct(a.salesLift)}</td><td style="color:${T.muted};font-size:11px">—</td><td style="color:${profClr};font-weight:700;font-size:11px">${profStr}</td>`;
-        }else row+=`<td style="color:${T.muted}">—</td><td style="color:${T.muted}">—</td><td style="color:${T.muted}">—</td><td style="color:${T.muted}">—</td>`;
-      }else row+=`<td><span style="color:#22C55E;font-weight:700;font-size:11px">Running</span></td>`;
-      row+=`<td>${viewBtn}</td></tr>`;return row;
-    }
-    const realIdx=campaignData.indexOf(c);const st=campStatus(c),stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:T.muted,Cancelled:'#EF4444'}[st]||T.muted;const b=BMAP[c.brand];
-    const imp=showImpact&&(st==='Completed'||st==='Running')?campImpactExtended(c):null;
-    const viewBtn=`<button onclick="selectCamp(${realIdx})" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:3px 8px;font-size:10px;cursor:pointer;white-space:nowrap">View →</button>`;
-    // Offer cell now shows comment + resolved-branch chip + co-funding chip when applicable
-    const parsedC=parseCampComment(c);
-    const resolvedSet=campOutlets(c);
-    const allBrandBranches=[...new Set(allData.filter(r=>r.brand===c.brand).map(r=>r.branch))].filter(b=>b!=='(brand-level)');
-    const isFullCoverage=resolvedSet&&resolvedSet.size>=allBrandBranches.length;
-    let branchChip='';
-    if(resolvedSet&&!isFullCoverage){
-      const list=[...resolvedSet].sort();
-      const summary=list.length<=6?list.join(', '):`${list.slice(0,4).join(', ')} +${list.length-4} more`;
-      const fullList=list.join(', ');
-      branchChip=`<div style="margin-top:4px"><span title="${fullList}" style="font-size:10px;color:#60A5FA;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.25);padding:2px 7px;border-radius:8px;font-weight:600;cursor:help">📍 ${list.length} branch${list.length!==1?'es':''}: ${summary}</span></div>`;
-    }
-    const coFundChip=parsedC.coFundedPctOfDiscount?` <span style="font-size:9px;background:rgba(168,85,247,.12);color:#C084FC;font-weight:700;padding:2px 7px;border-radius:8px;border:1px solid rgba(168,85,247,.3);margin-left:5px" title="${c.aggregator} funds ${Math.round(parsedC.coFundedPctOfDiscount*100)}% of the discount; ${c.brand} funds the rest">🤝 ${c.aggregator} ${Math.round(parsedC.coFundedPctOfDiscount*100)}%</span>`:'';
-    const unresolvedChip=parsedC.unresolved.length?` <span title="Unrecognized in comment: ${parsedC.unresolved.join(', ')}" style="font-size:9px;background:rgba(239,68,68,.12);color:#FCA5A5;font-weight:700;padding:2px 7px;border-radius:8px;border:1px solid rgba(239,68,68,.3);margin-left:5px;cursor:help">⚠ needs clarification</span>`:'';
-    const offer=`<div><span style="font-size:11px;color:${T.label}" title="${(c.comments||'').replace(/"/g,'&quot;')}">${(c.comments||'').length>60?(c.comments||'').slice(0,60)+'…':(c.comments||'')}</span>${coFundChip}${unresolvedChip}${branchChip}</div>`;
-    const addonTag=(c.addons&&c.addons.length)?` <span style="background:rgba(232,214,20,0.15);color:#E8D614;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:5px;border:1px solid rgba(232,214,20,0.3)">+ ${c.addons.map(a=>a.name).join(', ')}</span>`:'';
-    let row=`<tr><td><strong style="font-size:12px">${c.name||'(no name)'}</strong>${addonTag}</td><td><span style="color:${b?.c||'#888'};font-weight:700;font-size:11px">${c.brand}</span></td><td><span style="color:${AC[c.aggregator]||'#888'};font-weight:700;font-size:11px">${c.aggregator}</span></td><td>${offer}</td><td><span style="white-space:nowrap;font-size:11px">${fmtCampDateRange(c.startDate,c.endDate)}</span></td><td><span style="font-size:11px">${c.outlet||'All'}</span></td>`;
-    if(showImpact){
-      if(imp&&imp.hasData){const profClr=imp.profitability==null?T.muted:imp.profitability>0?'#22C55E':imp.profitability>-20?'#FBBF24':'#EF4444';const profStr=imp.profitability==null?'—':`${imp.profitability>=0?'+':''}${imp.profitability.toFixed(1)}%`;row+=`<td style="color:${pctClr(imp.wowOrdersLift)};font-weight:700;font-size:11px">${fmtPct(imp.wowOrdersLift)}</td><td style="color:${pctClr(imp.wowSalesLift)};font-weight:700;font-size:11px">${fmtPct(imp.wowSalesLift)}</td><td style="color:${pctClr(imp.momSalesLift)};font-weight:700;font-size:11px">${fmtPct(imp.momSalesLift)}</td><td style="color:${profClr};font-weight:700;font-size:11px">${profStr}</td>`;}
-      else row+=`<td style="color:${T.muted}">—</td><td style="color:${T.muted}">—</td><td style="color:${T.muted}">—</td><td style="color:${T.muted}">—</td>`;
-    }else row+=`<td><span style="color:${stClr};font-weight:700;font-size:11px">${st}</span></td>`;
-    row+=`<td>${viewBtn}</td></tr>`;return row;
-  }).join('');
-  return`<div class="card"><div class="ct">${title} (${camps.length}${bundles.length?` · ${bundles.length} bundle${bundles.length>1?'s':''}`:''})</div>${bundles.length?`<div style="font-size:10px;color:${T.label};padding:0 0 8px 0;font-style:italic">🎯 = Concurrent campaigns on the same brand + platform, analyzed together (real combined discount). Click "View Bundle" to see per-segment breakdown.</div>`:''}<div style="overflow-x:auto"><table class="tbl"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
-}
 // ════════════════════════════════════════════════════════════════════════════
 // CAMPAIGN ANALYSIS V2 — weekday-aligned previous-month baseline + true per-brand
 // incremental contribution + elasticity counterfactual.
@@ -12259,11 +12017,23 @@ const PRICE_UPLIFT_REFERENCE=[
   {brand:'Oregano',aggregator:'Careem',basis:'Deliveroo / Talabat price',
    items:[['LD - Salad',49,62],['LD - Pasta',49,62],['Lunch Combo - 2 pizza',98,123],['Uno Pasta',74,93],['3 pasta',99,124],['3 pizza',99,124],['Pizza party',150,188],['Any 2 pasta + 1 pizza',99,124],['Lasagna with Salad',75,94],['Lasagna with Potato Wedge',69,87],['Lasagna with Garlic Bread',79,99]]}
 ];
+// v522: Nikhil — "judge it on the Comments in the Google Sheet". The comment's own % is authoritative
+// (ranges like "25-26%" use the midpoint). The reference table is only a fallback for a comment that says
+// prices were marked up WITHOUT a number.
+const PRICE_UPLIFT_WORDS="(?:increas|rais|mark(?:ed)?[\\s-]*up|uplift|hik|inflat|hiked|boost)";
+function priceUpliftMentioned(text){
+  const t=text||'';
+  return new RegExp("pric(?:e|es|ing)[^.\\n]{0,60}?"+PRICE_UPLIFT_WORDS,"i").test(t)||/mark(?:ed)?[\s-]*up/i.test(t)||/\bprice\s*(?:increase|hike|uplift)\b/i.test(t);
+}
 function priceUpliftFromComment(text){
   const t=text||'';
-  let m=t.match(/pric(?:e|es|ing)[^.\n]{0,60}?(?:increas|rais|mark(?:ed)?[\s-]*up|uplift|hik|inflat)[^.\n]{0,40}?(\d+(?:\.\d+)?)\s*%/i);
-  if(!m)m=t.match(/(\d+(?:\.\d+)?)\s*%\s*(?:price\s*)?(?:increase|mark[\s-]*up|uplift|hike)/i);
-  return m?+m[1]/100:null;
+  const num="(\\d+(?:\\.\\d+)?)(?:\\s*(?:-|–|to)\\s*(\\d+(?:\\.\\d+)?))?\\s*%";
+  let m=t.match(new RegExp("pric(?:e|es|ing)[^.\\n]{0,60}?"+PRICE_UPLIFT_WORDS+"[^.\\n]{0,40}?"+num,"i"));
+  if(!m)m=t.match(new RegExp("mark(?:ed)?[\\s-]*up[^.\\n]{0,40}?"+num,"i"));
+  if(!m)m=t.match(new RegExp(num+"\\s*(?:price\\s*)?(?:increase|mark[\\s-]*up|uplift|hike)","i"));
+  if(!m)return null;
+  const lo=+m[1],hi=m[2]!=null?+m[2]:lo;
+  return ((lo+hi)/2)/100;
 }
 function priceUpliftRefFor(brand,aggregator){
   const ref=PRICE_UPLIFT_REFERENCE.find(x=>x.brand===brand&&x.aggregator===aggregator);
@@ -12272,15 +12042,17 @@ function priceUpliftRefFor(brand,aggregator){
 }
 function priceUpliftInfo(c){
   if(!c)return null;
-  const cu=priceUpliftFromComment(c.comments);
-  if(cu==null)return null;
-  const dm=((c.name||'')+' '+(c.comments||'')).match(/(\d+(?:\.\d+)?)\s*%\s*off/i);
+  const text=(c.comments||'');
+  if(!priceUpliftMentioned(text))return null;
+  const dm=((c.name||'')+' '+text).match(/(\d+(?:\.\d+)?)\s*%\s*off/i);
   if(!dm)return null;
   const d=+dm[1]/100;
   if(!(d>0&&d<1))return null;
+  const cu=priceUpliftFromComment(text);
   const ref=priceUpliftRefFor(c.brand,c.aggregator);
-  const u=ref!=null?ref:cu;
-  return{u,d,commentU:cu,refU:ref,source:ref!=null?'your price table':'the campaign comment',
+  if(cu==null&&ref==null)return{needsPercent:true,d};
+  const u=cu!=null?cu:ref;
+  return{u,d,commentU:cu,refU:ref,source:cu!=null?'the campaign comment':'the reference price table',
     netFactor:(1+u)*(1-d)}; // customer pays this × normal price (1.00 = neutral)
 }
 let priceUpliftReport=[];
@@ -12293,6 +12065,7 @@ function applyPriceUpliftAdjustments(){
     const info=priceUpliftInfo(c);
     if(!info)continue;
     const rep={campaign:c,info,records:0,sheetDisc:0,realDisc:0,skipped:null,overlapNames:[]};
+    if(info.needsPercent){rep.skipped='nopercent';priceUpliftReport.push(rep);continue;}
     const overlaps=campaignData.filter(o=>o!==c&&o.aggregator===c.aggregator&&(o.brand===c.brand||o.brand==='All Brands'||c.brand==='All Brands')&&o.startDate<=c.endDate&&o.endDate>=c.startDate&&(typeof campStatus!=="function"||campStatus(o)!=="Cancelled"));
     if(overlaps.length){rep.skipped='overlap';rep.overlapNames=overlaps.map(o=>o.name||'(unnamed)');priceUpliftReport.push(rep);continue;}
     let outletSet=null;
@@ -13738,22 +13511,6 @@ function campAnalysis(c){
     campContribution,baseContribution,campContribPerDay,baseContribPerDay,contribDiffPerDay,profitabilityPct,
     incrOrdersPerDay,incrSalesPerDay,discountROI,concurrent,sameBrandPlatConcurrent,bStart,bEnd};
 }
-function campProsCons(a){
-  const pros=[],cons=[];
-  if(a.ordersLift!=null){if(a.ordersLift>=10)pros.push(`Orders rose ${fmtPct(a.ordersLift)} per day vs the prior period`);else if(a.ordersLift<=-5)cons.push(`Orders fell ${fmtPct(a.ordersLift)} per day vs the prior period`);}
-  if(a.salesLift!=null){if(a.salesLift>=10)pros.push(`Net sales rose ${fmtPct(a.salesLift)} per day`);else if(a.salesLift<=-5)cons.push(`Net sales fell ${fmtPct(a.salesLift)} per day`);}
-  if(a.aovChange!=null){if(a.aovChange>=5)pros.push(`AOV improved ${fmtPct(a.aovChange)} — customers spent more per order`);else if(a.aovChange<=-10)cons.push(`AOV dropped ${fmtPct(a.aovChange)} — discount may have shrunk basket value`);}
-  if(a.discAvailable){
-    if(a.discPctOfSales!=null&&a.discPctOfSales>25)cons.push(`Heavy discount depth: ${a.discPctOfSales.toFixed(0)}% of sales given back (AED ${Math.round(a.discPerDay)}/day)`);
-    else if(a.discPctOfSales!=null&&a.discPctOfSales>0)pros.push(`Reasonable discount depth at ${a.discPctOfSales.toFixed(0)}% of sales`);
-    if(a.discountROI!=null){if(a.discountROI>=1)pros.push(`Discount paid for itself: +AED ${(a.discountROI).toFixed(2)} contribution per AED discounted`);else if(a.discountROI<0)cons.push(`Discount lost money: incremental contribution was negative`);else cons.push(`Weak discount efficiency: only AED ${(a.discountROI).toFixed(2)} contribution per AED spent`);}
-  }
-  if(a.profitabilityPct!=null){if(a.profitabilityPct>=10)pros.push(`Daily contribution up ${fmtPct(a.profitabilityPct)} after discounts & commission`);else if(a.profitabilityPct<=-5)cons.push(`Daily contribution down ${fmtPct(a.profitabilityPct)} after discounts & commission`);}
-  if(a.sameBrandPlatConcurrent.length>0)cons.push(`${a.sameBrandPlatConcurrent.length} other ${a.brand}/${a.aggregator} campaign(s) overlapped — discount figure is combined, so attribution is shared`);
-  if(pros.length===0)pros.push('No clearly positive signals in the data for this window');
-  if(cons.length===0)cons.push('No clear downsides detected');
-  return{pros,cons};
-}
 
 // ════════════════════════════════════════════════════════════════════════════
 // REDESIGNED campaign detail (V2) — clean, card-based, matches Ads Performance.
@@ -14337,8 +14094,9 @@ function campDetailV2HTML(c,idx){
   if(a.hasOverlap)_notes.push({sev:'red',t:`Overlap on ${a.overlapDays.length} day${a.overlapDays.length>1?'s':''} — sheet discount can't be split`,b:`On ${a.overlapDays.map(d=>fmtShort(d)).join(', ')}, another ${c.aggregator} campaign for ${c.brand} ran in the <strong>same branches</strong>. The sheet only reports discount at brand level, so sheet-based discount metrics (burn, ROI, depth) are hidden for those days to avoid wrong numbers. Order-count comparisons remain valid. <strong>Verify whether this overlap is real or a data-entry issue.</strong>`});
   {const _up=priceUpliftReportFor(c);if(_up){
     const _i=_up.info,_pc=x=>(x*100).toFixed(1).replace(/\.0$/,'')+'%';
-    if(_up.skipped)_notes.push({sev:'red',t:'Price mark-up detected, but NOT corrected',b:`The comment says prices were raised, but another ${c.aggregator} campaign overlaps these dates (${_up.overlapNames.join(', ')}), so the sheet discount can't be attributed to this one. Profitability still treats the full sheet discount as a real cost.`});
-    else _notes.push({sev:'green',t:'Mark-up-then-discount campaign — profitability corrected',b:`Prices were raised <strong>${_pc(_i.u)}</strong> (from ${_i.source}${_i.refU!=null&&Math.abs(_i.refU-_i.commentU)>0.005?`; the comment says ${_pc(_i.commentU)}`:''}) and then <strong>${_pc(_i.d)}</strong> taken off, so customers pay <strong>${(_i.netFactor*100).toFixed(1)}%</strong> of the normal price (${_i.netFactor<0.995?'a real price cut of '+((1-_i.netFactor)*100).toFixed(1)+'%':_i.netFactor>1.005?'slightly above normal':'price-neutral'}). Of the AED ${Math.round(_up.sheetDisc).toLocaleString()} discount on the sheet, only <strong>AED ${Math.round(_up.realDisc).toLocaleString()}</strong> is counted as a real discount cost; the rest just undoes the mark-up. Gross, food/packaging cost and discount burn use the normal-price basis. Sales and commission are as charged.`});
+    if(_up.skipped==='nopercent')_notes.push({sev:'amber',t:'Price mark-up mentioned, but no % found — NOT corrected',b:`The comment says prices were marked up, but gives no percentage. Add it to the Comments cell in the sheet, e.g. <em>"Combos prices increased by 25%, then 20% OFF"</em>. Until then the full sheet discount is treated as a real cost.`});
+    else if(_up.skipped)_notes.push({sev:'red',t:'Price mark-up detected, but NOT corrected',b:`The comment says prices were raised, but another ${c.aggregator} campaign overlaps these dates (${_up.overlapNames.join(', ')}), so the sheet discount can't be attributed to this one. Profitability still treats the full sheet discount as a real cost.`});
+    else _notes.push({sev:'green',t:'Mark-up-then-discount campaign — profitability corrected',b:`Prices were raised <strong>${_pc(_i.u)}</strong> (read from ${_i.source}) and then <strong>${_pc(_i.d)}</strong> taken off, so customers pay <strong>${(_i.netFactor*100).toFixed(1)}%</strong> of the normal price (${_i.netFactor<0.995?'a real price cut of '+((1-_i.netFactor)*100).toFixed(1)+'%':_i.netFactor>1.005?'slightly above normal':'price-neutral'}). Of the AED ${Math.round(_up.sheetDisc).toLocaleString()} discount on the sheet, only <strong>AED ${Math.round(_up.realDisc).toLocaleString()}</strong> is counted as a real discount cost; the rest just undoes the mark-up. Gross, food/packaging cost and discount burn use the normal-price basis. Sales and commission are as charged.`});
   }}
   _notes.push({sev:'blue',t:'Comparison basis',b:`Campaign <strong>${fmtDisp(a.effStart)} → ${fmtDisp(a.effEnd)}</strong> (${a.cDays} day${a.cDays>1?'s':''}) is compared against the same weekdays 4 weeks earlier: <strong>${fmtDisp(a.bStart)} → ${fmtDisp(a.bEnd)}</strong>.`});
   if(a.baselineCampaigns.length)_notes.push({sev:'amber',t:'Baseline period ran promos too',b:`The comparison window also ran: ${a.baselineCampaigns.map(x=>`<strong>${x.name}</strong> (${fmtShort(x.startDate)}–${fmtShort(x.endDate)})`).join(', ')}. "Normal" here means last month's promo mix, not a promo-free period.`});
@@ -14612,159 +14370,6 @@ function campDetailV2HTML(c,idx){
     +campCollapseSection('💡 Elasticity Scenarios',scenarioBox);
 }
 
-function campDetailHTML(c,idx){
-  const st=campStatus(c),stClr={Running:'#22C55E',Upcoming:'#F59E0B',Completed:'#64748b'}[st]||'#64748b';
-  const b=BMAP[c.brand],a=campAnalysis(c),imp=a;
-  const accent=b?.c||'#f59e0b';
-  // ── Scope badge (which outlets are being compared) ──
-  const scopeStr=campScopeLabel(c);
-  const isScoped=scopeStr!=="All outlets";
-  const scopeBadge=isScoped?`<div style="margin-top:10px;padding:8px 12px;background:rgba(96,165,250,.08);border-left:3px solid #60A5FA;border-radius:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="font-size:18px">📍</div><div style="flex:1;min-width:200px"><div style="font-size:10px;color:#60A5FA;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Location-Scoped Analysis</div><div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.5">${scopeStr} — performance is compared against the <strong style="color:#0F172A">same outlets only</strong> in the prior period (apples-to-apples).</div></div></div>`:'';
-  // ── Exclusion badge — surfaces the comments-detected mutual-exclusion rule ──
-  const isExcl=campIsExclusive(c);
-  // Concurrent campaigns for exclusion purposes: same brand + platform + matching resolved
-  // branch set (campaigns running in different branches don't interact with each other).
-  const mySet=campOutlets(c);
-  const myKey=mySet?[...mySet].sort().join("|"):"all";
-  const concurrent=campaignData.filter(o=>{
-    if(o===c||o.brand!==c.brand||o.aggregator!==c.aggregator)return false;
-    if(o.endDate<c.startDate||o.startDate>c.endDate)return false;
-    const oSet=campOutlets(o);
-    const oKey=oSet?[...oSet].sort().join("|"):"all";
-    return oKey===myKey;
-  });
-  const exclusiveSiblings=concurrent.filter(campIsExclusive);
-  let exclBadge='';
-  if(isExcl&&concurrent.length){
-    exclBadge=`<div style="margin-top:8px;padding:8px 12px;background:rgba(245,158,11,.08);border-left:3px solid #FBBF24;border-radius:4px;display:flex;align-items:flex-start;gap:10px"><div style="font-size:18px;line-height:1">⚡</div><div style="flex:1;min-width:200px"><div style="font-size:10px;color:#FBBF24;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Exclusive — Pauses Other Offers</div><div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.5">The comments flag this as exclusive — while it's running, ${concurrent.length} other concurrent ${c.brand}/${c.aggregator} campaign${concurrent.length>1?'s are':' is'} effectively paused to avoid double-discounting.</div></div></div>`;
-  }else if(exclusiveSiblings.length){
-    exclBadge=`<div style="margin-top:8px;padding:8px 12px;background:rgba(100,116,139,.08);border-left:3px solid #94a3b8;border-radius:4px;display:flex;align-items:flex-start;gap:10px"><div style="font-size:18px;line-height:1">⏸</div><div style="flex:1;min-width:200px"><div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Paused When Exclusive Offer Runs</div><div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.5">Another ${c.brand}/${c.aggregator} campaign — ${exclusiveSiblings.map(x=>'"'+(x.name||'unnamed')+'"').join(', ')} — is marked exclusive and overlaps these dates. During those overlapping days, this campaign was effectively paused, so its standalone lift figures should be read with that in mind.</div></div></div>`;
-  }
-  const header=`<div class="card" style="border-color:${accent}44;margin-bottom:12px"><div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px"><div style="flex:1;min-width:280px"><div style="font-size:16px;font-weight:800;color:${accent}">${c.name||'(no name)'}</div><div style="font-size:12px;color:#475569;font-weight:600;margin-top:6px;line-height:2"><span style="color:${accent};font-weight:700">${c.brand}</span> · <span style="color:${AC[c.aggregator]||'#888'};font-weight:700">${c.aggregator}</span> · ${!c.outlet||c.outlet==='All'?'All Outlets':c.outlet}<br>${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)} (${a.days} day${a.days!==1?'s':''})<br><span style="color:#0F172A;line-height:1.6">${c.comments||''}</span>${(c.addons&&c.addons.length)?`<div style="margin-top:10px;padding:8px 12px;background:rgba(232,214,20,0.08);border-left:3px solid #E8D614;border-radius:4px"><div style="font-size:10px;color:#E8D614;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">⊕ Co-funded Add-ons</div>${c.addons.map(ad=>`<div style="font-size:11px;color:#FCD34D;line-height:1.5"><strong>${ad.name}</strong> · ${ad.comments} · ${fmtCampDateRange(ad.startDate,ad.endDate)}</div>`).join('')}</div>`:''}</div>${scopeBadge}${exclBadge}</div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0"><div style="padding:4px 14px;border-radius:12px;font-size:11px;font-weight:700;background:${stClr}22;color:${stClr};border:1px solid ${stClr}44">${st}</div>${st==='Completed'?`<button onclick="campReportExportPDF(${idx})" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer" title="Full P&L for every past run of this exact campaign">📄 History report</button>`:''}<button onclick="campTab='browse';renderCampaigns()" style="background:none;border:1px solid #E2E8F0;border-radius:5px;color:#64748b;padding:3px 10px;font-size:10px;cursor:pointer">← Back</button></div></div></div>`;
-
-  if(st==='Upcoming')return header+`<div class="card"><div style="color:#F59E0B;font-size:13px;padding:4px 0">⏰ Campaign starts ${fmtDisp(c.startDate)} — performance data will appear once live.</div></div>`;
-  if(!a.hasData)return header+`<div class="card"><div style="color:#64748b;font-size:12px;padding:4px 0">No sales data found for this campaign period.</div></div>`;
-
-  // ── Performance KPIs (vs matched baseline) ──
-  const kpis=`<div class="g4">${kpiCard('Orders During',a.campOrders.toLocaleString(),`Baseline: ${a.baseOrders.toLocaleString()}`,a.ordersLift)}${kpiCard('Net Sales During',fmtAEDTip(a.campSales),`Baseline: ${fmtAEDTip(a.baseSales)}`,a.salesLift)}${kpiCard('AOV During',`AED ${a.campAOV.toFixed(1)}`,`Baseline: AED ${a.baseAOV.toFixed(1)}`,a.aovChange)}${kpiCard('Duration',`${a.days} day${a.days!==1?'s':''}`,`vs ${fmtDisp(a.bStart)} → ${fmtDisp(a.bEnd)}`,null)}</div>`;
-
-  // ── Order volume change banner ──
-  const ovUp=a.incrOrdersPerDay>=0;
-  const ovBanner=`<div class="card" style="border-color:${ovUp?'rgba(34,197,94,.3)':'rgba(239,68,68,.3)'};margin-bottom:12px"><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><div style="font-size:34px">${ovUp?'📈':'📉'}</div><div style="flex:1;min-width:200px"><div style="font-size:13px;font-weight:800;color:${ovUp?'#22C55E':'#EF4444'}">Order volume ${ovUp?'increased':'decreased'} ${fmtPct(a.ordersLift)} per day</div><div style="font-size:12px;color:#94a3b8;margin-top:3px">${ovUp?'+':''}${Math.round(a.incrOrdersPerDay)} orders/day vs baseline · ${ovUp?'+':''}${fmtAEDTip(a.incrSalesPerDay).replace('AED ','AED ')} net sales/day</div></div></div></div>`;
-
-  // ── Daily sales chart ──
-  const chart=`<div class="sm" style="margin-bottom:12px"><div class="ct" style="color:${accent}">Daily Sales — ${fmtDisp(c.startDate)} → ${fmtDisp(c.endDate)}</div><div style="position:relative;height:130px"><canvas id="ch-camp"></canvas></div></div>`;
-
-  // ── Profitability & discount section ──
-  let profitSection;
-  if(a.discAvailable){
-    const roiClr=a.discountROI==null?'#64748b':a.discountROI>=1?'#22C55E':a.discountROI<0?'#EF4444':'#FBBF24';
-    const profClr=a.profitabilityPct==null?'#64748b':pctClr(a.profitabilityPct);
-    const cfBanner=a.coFundedPct>0?(c.aggregator==='Deliveroo'
-      ?`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(168,85,247,.08);border-left:3px solid #A855F7;border-radius:4px">🤝 <strong style="color:#C084FC">Co-funded ${Math.round(a.coFundedPct*100)}% by Deliveroo</strong> — Deliveroo charges the full discount to us upfront and credits their share back in a later statement (Finance's reconciliation, tracked separately from this ROI). ${c.brand}'s actual burn is <strong style="color:#0F172A">${fmtAEDTip(a.ourDiscCost)}</strong> (${Math.round((1-a.coFundedPct)*100)}% of the ${fmtAEDTip(a.totalCustomerDisc)} shown in the Deliveroo statement), Deliveroo's declared share is <strong style="color:#A855F7">${fmtAEDTip(a.aggInferredCoFund)}</strong>. ROI below is against ${c.brand}'s actual cost only.</div>`
-      :`<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(168,85,247,.08);border-left:3px solid #A855F7;border-radius:4px">🤝 <strong style="color:#C084FC">Co-funded ${Math.round(a.coFundedPct*100)}% by ${c.aggregator}</strong> — statements only show the merchant portion, so we infer the platform's share from the split. ${c.brand} paid <strong style="color:#0F172A">${fmtAEDTip(a.ourDiscCost)}</strong> (as shown in the ${c.aggregator} export), ${c.aggregator} absorbed <strong style="color:#A855F7">${fmtAEDTip(a.aggInferredCoFund)}</strong> (inferred, invoiced separately), total customer discount was <strong style="color:#0F172A">${fmtAEDTip(a.totalCustomerDisc)}</strong>. ROI below is against ${c.brand}'s actual cost only.</div>`
-      ):'';
-    const subsidyBanner=a.dataMismatchSuspected?`<div style="font-size:12px;color:#0F172A;margin-bottom:12px;line-height:1.55;padding:10px 14px;background:rgba(239,68,68,.08);border-left:4px solid #EF4444;border-radius:6px">
-      ⚠️ <strong style="color:#EF4444">Discount data mismatch detected — the exact ${c.aggregator} upload may be stale or incomplete for this window.</strong>
-      <div style="margin-top:6px;color:#475569;font-size:11px;line-height:1.6">Two independent sources disagree for this campaign's ${a.cDays}-day window:</div>
-      <ul style="margin:4px 0 4px 18px;padding:0;color:#475569;font-size:11px;line-height:1.6">
-        <li>Exact ${c.aggregator} upload → <strong style="color:#EF4444">${fmtAEDTip(a.allocatedDisc)}</strong></li>
-        <li>Google Sheet daily aggregates → <strong style="color:#0F172A">${fmtAEDTip(a.sheetDisc)}</strong></li>
-      </ul>
-      <div style="margin-top:6px;color:#64748b;font-size:11px;line-height:1.6"><strong>Most likely cause:</strong> the ${c.aggregator} export uploaded to the dashboard was made before this campaign ended, so it doesn't include all the days. Discount ROI is <strong>suppressed</strong> to avoid a misleading number.</div>
-      <div style="margin-top:6px;color:#64748b;font-size:11px;line-height:1.6"><strong>Fix:</strong> re-export ${c.aggregator} orders covering ${fmtShort(a.effStart)}–${fmtShort(a.effEnd)} and upload it via the data strip on the Campaigns page. The mismatch will resolve on next render.</div>
-    </div>`:'';
-    profitSection=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#f59e0b">💰 Profitability Analysis <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· real discount data + commission${a.coFundedPct>0?' + co-funding':''}</span></div>
-      <div style="display:flex;align-items:stretch;gap:14px;flex-wrap:wrap;margin-bottom:14px;padding:12px 14px;background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.18);border-radius:8px">
-        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">${a.coFundedPct>0?'Total Customer Discount':'Total Discount Given'}</div><div style="font-size:22px;font-weight:800;color:#EF4444;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAEDTip(a.coFundedPct>0?a.totalCustomerDisc:a.ourDiscCost)}</div>${a.coFundedPct>0?`<div style="font-size:10px;color:#94a3b8;margin-top:2px"><strong style="color:#0F172A">${c.brand}'s share:</strong> ${fmtAEDTip(a.ourDiscCost)} · <strong style="color:#A855F7">${c.aggregator}:</strong> ${fmtAEDTip(a.aggInferredCoFund)}</div>`:''}</div>
-        <div style="width:1px;background:rgba(245,158,11,.2)"></div>
-        <div style="flex:1;min-width:130px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Net Sales Generated</div><div style="font-size:22px;font-weight:800;color:#22C55E;font-variant-numeric:tabular-nums;line-height:1.2">${fmtAEDTip(a.cs.sales)}</div></div>
-        <div style="width:1px;background:rgba(245,158,11,.2)"></div>
-        <div style="flex:1;min-width:150px"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.8px">Actual Discount Depth</div><div style="font-size:22px;font-weight:800;color:#FBBF24;font-variant-numeric:tabular-nums;line-height:1.2">${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'%':'—'}</div><div style="font-size:10px;color:#64748b;margin-top:2px">of net sales went back as discount</div></div>
-      </div>
-      ${cfBanner}
-      ${subsidyBanner}
-      ${(()=>{const m=(c.comments||'').match(/(\d{1,2})\s*%/);if(m&&a.discPctOfSales!=null){const headline=parseInt(m[1]);if(a.discPctOfSales<headline-3)return `<div style="font-size:11px;color:#94a3b8;margin-bottom:12px;line-height:1.6;padding:8px 12px;background:rgba(34,197,94,.06);border-left:3px solid #22C55E;border-radius:4px">ℹ️ The headline offer is <strong>${headline}% off</strong>, but because it only applies to selected items (not every order), the <strong>actual blended discount was just ${a.discPctOfSales.toFixed(1)}% of net sales</strong> — far less costly than ${headline}% on everything. This is the real figure used in the profitability math below.</div>`;}return '';})()}
-      <div class="g4">
-        ${kpiCard(a.coFundedPct>0?`${c.brand}'s Discount Cost`:'Discount Given',fmtAEDTip(a.ourDiscCost),`AED ${Math.round(a.ourDiscPerDay)}/day · ${a.discPctOfSales!=null?a.discPctOfSales.toFixed(1)+'% of sales':'—'}${a.coFundedPct>0?` · after ${Math.round(a.coFundedPct*100)}% co-fund`:''}`,null)}
-        ${kpiCard('Commission Rate',`${(a.commRate*100).toFixed(0)}%`,`${c.aggregator} · ${c.brand}`,null)}
-        <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Daily Contribution</div><div style="font-size:21px;font-weight:800;color:${a.contribDiffPerDay>=0?'#22C55E':'#EF4444'};font-variant-numeric:tabular-nums;line-height:1">${a.contribDiffPerDay>=0?'+':''}${fmtAEDTip(a.contribDiffPerDay)}</div><div style="font-size:11px;color:#475569;font-weight:600;margin-top:3px">vs baseline /day</div><div style="font-size:11px;color:${profClr};font-weight:700;margin-top:3px">${fmtPct(a.profitabilityPct)}</div></div>
-        <div class="sm"><div style="font-size:9px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Discount ROI</div><div style="font-size:21px;font-weight:800;color:${roiClr};font-variant-numeric:tabular-nums;line-height:1">${a.discountROI==null?'—':(a.discountROI>=0?'+':'')+a.discountROI.toFixed(2)+'×'}</div><div style="font-size:11px;color:#475569;font-weight:600;margin-top:3px">contrib. per AED ${a.coFundedPct>0?'we spend':'disc.'}</div></div>
-      </div>
-      <div style="font-size:11px;color:#475569;font-weight:600;margin-top:10px;line-height:1.6">Contribution = Net Sales × (1 − ${(a.commRate*100).toFixed(0)}% commission) − ${a.coFundedPct>0?`our share of discount (${Math.round((1-a.coFundedPct)*100)}% of AED ${fmtAEDTip(a.campDisc).replace('AED ','')})`:'discount'}. ${a.discountROI!=null&&a.discountROI>=1?`<span style="color:#22C55E">The discount generated more incremental contribution than it cost — profitable.</span>`:a.discountROI!=null&&a.discountROI<0?`<span style="color:#EF4444">Incremental contribution was negative — the campaign lost money after discounts.</span>`:a.discountROI!=null?`<span style="color:#FBBF24">The discount returned less than AED 1 of contribution per AED spent — marginal.</span>`:''}</div></div>`;
-  }else{
-    profitSection=`<div class="card" style="margin-bottom:12px"><div class="ct" style="color:#64748b">💰 Profitability Analysis</div><div style="font-size:12px;color:#475569;font-weight:600;padding:4px 0">Discount data is only available from 1 May 2026. This campaign started ${fmtDisp(c.startDate)}, so profitability can't factor in actual discounts.</div></div>`;
-  }
-
-  // ── Pros & Cons ──
-  const {pros,cons}=campProsCons(a);
-  const prosCons=`<div class="g2" style="margin-bottom:12px"><div class="sm"><div class="ct" style="color:#22C55E">✅ Pros</div>${pros.map(p=>`<div style="display:flex;gap:8px;margin-bottom:7px;font-size:12px;color:#0F172A;line-height:1.5"><span style="color:#22C55E;flex-shrink:0">▸</span><span>${p}</span></div>`).join('')}</div><div class="sm"><div class="ct" style="color:#EF4444">⚠️ Cons</div>${cons.map(p=>`<div style="display:flex;gap:8px;margin-bottom:7px;font-size:12px;color:#0F172A;line-height:1.5"><span style="color:#EF4444;flex-shrink:0">▸</span><span>${p}</span></div>`).join('')}</div></div>`;
-
-  // ── Concurrent campaigns (what else was running, which was better & why) ──
-  let concurrentSection='';
-  if(a.concurrent.length>0){
-    const rows=a.concurrent.map(x=>{
-      const xa=campAnalysis(x);
-      const better=xa.hasData&&a.hasData?(xa.salesLift!=null&&a.salesLift!=null?(xa.salesLift>a.salesLift?'them':'us'):null):null;
-      const overlap=x.brand===c.brand&&x.aggregator===c.aggregator;
-      return{x,xa,better,overlap};
-    });
-    const trows=rows.map(({x,xa,better,overlap})=>[
-      `<span style="display:inline-flex;align-items:center;gap:6px"><span style="color:${BMAP[x.brand]?.c||'#888'};font-weight:700;font-size:11px">${x.name||'(no name)'}</span>${overlap?'<span style="background:rgba(232,214,20,.15);color:#E8D614;font-size:8px;font-weight:700;padding:1px 5px;border-radius:6px">SHARED DISC</span>':''}</span>`,
-      `<span style="font-size:11px;color:${BMAP[x.brand]?.c||'#888'}">${x.brand}</span> <span style="font-size:11px;color:${AC[x.aggregator]||'#888'}">${x.aggregator}</span>`,
-      `<span style="font-size:10px;color:#64748b;white-space:nowrap">${fmtCampDateRange(x.startDate,x.endDate)}</span>`,
-      xa.hasData?`<span style="color:${pctClr(xa.ordersLift)};font-weight:700">${fmtPct(xa.ordersLift)}</span>`:'<span style="color:#64748b">—</span>',
-      xa.hasData?`<span style="color:${pctClr(xa.salesLift)};font-weight:700">${fmtPct(xa.salesLift)}</span>`:'<span style="color:#64748b">—</span>',
-      better==null?'<span style="color:#64748b;font-size:11px">—</span>':better==='them'?'<span style="color:#FBBF24;font-size:11px;font-weight:700">▲ Outperformed this</span>':'<span style="color:#22C55E;font-size:11px;font-weight:700">This won</span>'
-    ]);
-    const overlapCount=rows.filter(r=>r.overlap).length;
-    concurrentSection=`<div class="card" style="margin-bottom:12px"><div class="ct">🔀 Campaigns Running at the Same Time (${a.concurrent.length})</div>${mkTable(['Campaign','Brand · Platform','Dates','Orders Lift','Net Sales Lift','vs This'],trows)}<div style="font-size:11px;color:#475569;font-weight:600;margin-top:8px;line-height:1.6">${overlapCount>0?`<span style="color:#E8D614">⚠ ${overlapCount} campaign(s) ran on the same brand + platform — their discounts are combined into this campaign's discount figure, so per-campaign profitability is shared and approximate.</span>`:'No overlapping campaigns on the same brand + platform, so the discount figure is clean for this campaign.'} "Net Sales Lift" compares each campaign's daily run-rate to its own prior-period baseline, so they're comparable even with different durations.</div></div>`;
-  }
-
-  // ── Similar past campaigns ──
-  const similar=campaignData.filter(x=>x.brand===c.brand&&x.aggregator===c.aggregator&&campaignData.indexOf(x)!==idx&&campStatus(x)==='Completed');
-  const simRows=similar.slice(0,8).map(x=>{const xi=campImpact(x);return[`<span style="font-size:11px">${x.name||'(no name)'}</span>`,`<span style="font-size:11px;color:#475569;font-weight:600;white-space:nowrap">${fmtDisp(x.startDate).replace(/,.*$/,'')}</span>`,xi.hasData?`<span style="color:${pctClr(xi.ordersLift)};font-weight:700">${fmtPct(xi.ordersLift)}</span>`:'<span style="color:#64748b">—</span>',xi.hasData?`<span style="color:${pctClr(xi.salesLift)};font-weight:700">${fmtPct(xi.salesLift)}</span>`:'<span style="color:#64748b">—</span>',`<span style="font-size:11px;color:#94a3b8">${(x.comments||'').length>50?(x.comments||'').slice(0,50)+'…':(x.comments||'')}</span>`];});
-  const simTable=similar.length>0?`<div class="card"><div class="ct">Past Campaigns — ${c.brand} on ${c.aggregator} (${similar.length} total)</div>${mkTable(['Campaign','Date','Orders Lift','Net Sales Lift','Offer'],simRows)}</div>`:'';
-
-  // ── PER-BRANCH BREAKDOWN ──
-  // For each branch in the campaign's scope, compare campaign-window vs same-weekdays-prior-week.
-  // Also flag if another same-platform campaign was running in that branch during the baseline.
-  let perBranchSection='';
-  if(a.hasData&&st!=='Upcoming'){
-    const outletSet=a.outletSet||campOutlets(c);
-    const effectiveEnd=c.endDate<latest?c.endDate:latest;
-    const effectiveStart=c.startDate;
-    const bStart=subDays(effectiveStart,7),bEnd=subDays(effectiveEnd,7);
-    const branchesInScope=outletSet?[...outletSet].sort():[...(dataIndex.brandBranches.get(`${c.brand}|${c.aggregator}`)||new Set())].sort();
-    // Find same-platform/brand campaigns that overlapped each branch during the baseline window
-    const baselineCamps=campaignData.filter(o=>o!==c&&o.brand===c.brand&&o.aggregator===c.aggregator&&!(o.endDate<bStart||o.startDate>bEnd));
-    const baselineCampForBranch=(branch)=>{
-      return baselineCamps.filter(o=>{const oSet=campOutlets(o);if(!oSet)return true;return oSet.has(branch);});
-    };
-    const rows=branchesInScope.map(br=>{
-      const branchRecs=indexedBranchRecords(c.brand,c.aggregator,br);
-      const cR=branchRecs.filter(r=>r.date>=effectiveStart&&r.date<=effectiveEnd);
-      const bR=branchRecs.filter(r=>r.date>=bStart&&r.date<=bEnd);
-      const cs=sumR(cR),bs=sumR(bR);
-      const cdays=new Set(cR.map(r=>r.date)).size||1,bdays=new Set(bR.map(r=>r.date)).size||1;
-      const cAOV=cs.orders>0?cs.sales/cs.orders:0,bAOV=bs.orders>0?bs.sales/bs.orders:0;
-      const ordChg=pctOf(cs.orders/cdays,bs.orders/bdays);
-      const salChg=pctOf(cs.sales/cdays,bs.sales/bdays);
-      const aovChg=pctOf(cAOV,bAOV);
-      const prior=baselineCampForBranch(br);
-      const priorBadge=prior.length?`<span title="${prior.map(p=>(p.name||'unnamed')+' ('+fmtCampDateRange(p.startDate,p.endDate)+')').join('; ')}" style="font-size:9px;background:rgba(251,191,36,.12);color:#FBBF24;font-weight:700;padding:2px 7px;border-radius:8px;border:1px solid rgba(251,191,36,.3);white-space:nowrap;display:inline-block;margin-top:3px;cursor:help">⚠ ${prior.length} other campaign${prior.length>1?'s':''} ran here previously</span>`:`<span style="font-size:9px;color:#64748b;font-weight:600;font-style:italic">clean baseline</span>`;
-      const fmtN=(n)=>Math.round(n).toLocaleString();
-      return `<tr><td style="font-weight:700;color:#0F172A">${br}</td><td style="font-variant-numeric:tabular-nums">${fmtN(cs.orders)}<span style="color:#64748b;font-size:10px;margin-left:5px">vs ${fmtN(bs.orders)}</span><div style="font-size:10px;color:${pctClr(ordChg)};font-weight:700">${fmtPct(ordChg)}</div></td><td style="font-variant-numeric:tabular-nums">${fmtAEDTip(cs.sales)}<span style="color:#64748b;font-size:10px;margin-left:5px">vs ${fmtAEDTip(bs.sales)}</span><div style="font-size:10px;color:${pctClr(salChg)};font-weight:700">${fmtPct(salChg)}</div></td><td style="font-variant-numeric:tabular-nums">AED ${cAOV.toFixed(1)}<span style="color:#64748b;font-size:10px;margin-left:5px">vs AED ${bAOV.toFixed(1)}</span><div style="font-size:10px;color:${pctClr(aovChg)};font-weight:700">${fmtPct(aovChg)}</div></td><td>${priorBadge}</td></tr>`;
-    }).join('');
-    const baselineLabel=`${fmtShort(bStart)} → ${fmtShort(bEnd)} (${a.bDays} day${a.bDays!==1?'s':''}, same weekdays prior week)`;
-    perBranchSection=`<div class="card" style="margin-bottom:12px"><div class="ct">📍 Per-Branch Breakdown — Campaign vs Prior Week</div><div style="font-size:11px;color:#94a3b8;margin-bottom:10px;line-height:1.6">Each branch in the campaign's scope compared with its own performance during ${baselineLabel}. The "⚠" badge flags branches where another <strong>${c.aggregator}</strong> campaign was already running in the same period — those baseline numbers aren't clean, so the lift figure should be read with that in mind.</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Branch</th><th>Orders</th><th>Net Sales</th><th>AOV</th><th>Baseline period</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
-  }
-
-  // ── AI section ──
-  const aiSection=`<div class="card" style="border-color:rgba(245,158,11,.25)" id="camp-ai-box"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><div class="ct" style="color:#f59e0b;margin-bottom:0">✨ AI Campaign Analysis</div><button id="camp-ai-btn" onclick="runCampAI(${idx})" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:4px 14px;font-size:11px;cursor:pointer;font-weight:600">Generate Analysis</button></div><div id="camp-ai-content" style="color:#64748b;font-size:12px">Click to generate an AI analysis comparing this campaign to ${similar.length} similar historical campaigns.</div></div>`;
-
-  return header+kpis+ovBanner+chart+perBranchSection+profitSection+prosCons+concurrentSection+simTable+aiSection;
-}
 async function runCampAI(idx){
   const btn=document.getElementById('camp-ai-btn'),content=document.getElementById('camp-ai-content');if(!btn||!content)return;
   btn.textContent='⏳ Analysing...';btn.disabled=true;
@@ -15291,33 +14896,6 @@ function buildCampCalcTipHTML(a,c){
   +`<div style="padding:14px 16px;color:#F1F5F9">`
   +detailsPanel+mainPanel
   +(recentHTML?`<div style="height:10px"></div>${recentHTML}`:'')
-  +'</div></div>';
-}
-// Build tooltip HTML for a forecaster scenario card.
-function buildFcCalcTipHTML(sc,brand,agg,discPct,cap,coFundPct,dateStr){
-  const comm=commissionRateFor(agg,brand,dateStr);const food=foodPkgPct(brand);
-  const fA=v=>'AED '+Math.abs(Math.round(v)).toLocaleString();
-  const fSigned=v=>(v<0?'−':'')+fA(v);
-  const row=(l,v,extra='')=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:1px 0;font-size:11px"><span style="opacity:.72;white-space:nowrap">${l}</span><span style="text-align:right">${v}${extra?` <span style="opacity:.55;font-size:9px">${extra}</span>`:''}</span></div>`;
-  const sep='<div style="border-top:1px solid rgba(255,255,255,.18);margin:5px 0 3px"></div>';
-  const ic=sc.incrContrib>=0?'#4ade80':'#f87171';
-  return`<div style="max-width:300px;background:#0F172A;color:#E2E8F0;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:10px 14px">`
-  +`<div style="font-size:12px;font-weight:600;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid rgba(255,255,255,.2)">Forecast · ${brand} × ${agg}</div>`
-  +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">How discount affects each order</div>`
-  +row('Gross AOV (baseline)',fA(sc.grossAOV))
-  +row(`${discPct}% off  · cap AED ${cap}`,'−'+fA(sc.effDisc),'per order')
-  +row('Net AOV after discount',fA(sc.netAOV))
-  +`<div style="font-size:9px;opacity:.6;text-transform:uppercase;letter-spacing:.6px;margin:8px 0 4px">Contribution calculation</div>`
-  +row('Campaign net sales',fA(sc.campNet))
-  +row(`Commission ${+(comm*100).toFixed(0)}%`,'−'+fA(sc.campNet*comm))
-  +row(`Food/pkg ${+(food*100).toFixed(0)}% × gross`,'−'+fA(sc.campGross*food))
-  +sep+row('<strong>Camp. contribution</strong>','<strong>'+fA(sc.campContrib)+'</strong>')
-  +row('Baseline contribution','−'+fA(Math.abs(sc.baseContrib)))
-  +sep+row(sc.incrContrib>=0?'<strong>Incremental contribution (increase)</strong>':'<strong>Incremental contribution (decrease)</strong>',`<strong style="color:${ic}">${fSigned(sc.incrContrib)}</strong>`)
-  +`<div style="border-top:1px solid rgba(255,255,255,.3);margin-top:8px;padding-top:6px">`
-  +row('Total merchant discount',fA(sc.merchantDisc))
-  +(coFundPct>0?row(`${coFundPct}% co-funded by ${agg}`,fA(sc.aggCoDisc)):'')
-  +(sc.roi!=null?row('ROI',`<strong style="color:${ic}">${sc.roi.toFixed(2)}×</strong>`,'('+fA(sc.incrContrib)+' ÷ '+fA(sc.merchantDisc)+')'):'')
   +'</div></div>';
 }
 
@@ -16072,12 +15650,9 @@ let campFcShowAllMatches=false;
 let campFcExpandedMatches=new Set();
 // v399: which scenario cards (Conservative/Expected/Optimistic) have their discount/ROI detail
 // expanded — same per-item toggle pattern as campFcExpandedMatches above.
-let campFcScenarioDetailOpen=new Set();
 let campFcDiscPct=30,campFcCap=20,campFcCoFund=true,campFcCoFundPct=50;
 // v250: campaign structure type — 'menu' is the original, unchanged model. 'selectItems' is the
 // new type, using real historical per-order discount data instead of a discPct/cap formula.
-let campFcType='menu';
-let campFcComments='';
 let campFcBranches=new Set(),campFcResult=null,campFcCollapsed=false;
 
 
@@ -16323,7 +15898,6 @@ function campFcDetectShortDuration(c,allCandidates){
 // v252: shared type-label text, used by the summary chip (live state) and the history panel
 // (saved forecast fields) — one definition per type instead of repeating the same ternary logic
 // in multiple places as more types get added.
-const CAMP_FC_TYPE_NAMES={selectItems:'select items',bogo:'BOGO',ofu:'OFU-style',platformEvent:'platform-wide event'};
 function campFcTypeLabel(type,discPct,cap){
   if(type==='bogo')return'BOGO';
   if(type==='selectItems')return discPct+'% off · select items';
@@ -17306,10 +16880,8 @@ function campPlanExport(){
 // packaging cost is charged on gross (the kitchen makes the food regardless of the discount).
 let campBeBrand=(typeof BR!=='undefined'&&BR[0])?BR[0].n:'Oregano',campBeAgg='Talabat',campBeDiscType='pct_cap';
 let campBeDiscPct=30,campBeCap=20,campBeCoFund=0,campBeAttach=60,campBeFreeItemPct=25;
-let campBeUseHistorical=true;
 let campBeStart='',campBeEnd='',campBePriorStart='',campBePriorEnd='';
 let campBeMonthStart='',campBeMonthEnd='',campBeShowDateEdit=false;
-let campBeResult=null;
 // v368: interactive hero+dial state — which scenario (0=base,1=flat,2=be,3=p10,4=p20) is
 // currently highlighted across the hero/dial/track/econ-panel/cards, the auto-play timer handle,
 // and a cache of the last-rendered scenario array so campBeSetActive can update DOM nodes
@@ -17320,41 +16892,6 @@ let campBeResult=null;
 // replace this DOM (old nodes are about to die) and restarted only after the new DOM is in place.
 let campBeActiveIdx=0,campBeScenCache=null,campBeAutoTimer=null;
 
-function campBeDateOffset(dateStr,days){
-  const d=new Date(dateStr+'T12:00:00');d.setDate(d.getDate()+days);return dk(d);
-}
-function campBeSameDaysLastMonth(start,end){
-  const s=new Date(start+'T12:00:00'),e=new Date(end+'T12:00:00');
-  const ms=new Date(s);ms.setMonth(ms.getMonth()-1);
-  const me=new Date(e);me.setMonth(me.getMonth()-1);
-  return{start:dk(ms),end:dk(me)};
-}
-function campBeGetBaseline(brand,agg,start,end){
-  if(!start||!end||!allData||!allData.length)return null;
-  const rows=allData.filter(function(r){return r.brand===brand&&r.aggregator===agg&&r.date>=start&&r.date<=end&&r.sales>0&&!outletRowRetired(r);}); // v516
-  if(!rows.length)return null;
-  const dateSet={};rows.forEach(function(r){dateSet[r.date]=1;});
-  const days=Object.keys(dateSet).length;
-  const totalNet=rows.reduce(function(s,r){return s+r.sales;},0);
-  const totalOrders=rows.reduce(function(s,r){return s+(r.orders||0);},0);
-  const totalDisc=rows.reduce(function(s,r){return s+(r.disc||0);},0);
-  const totalGross=totalNet+totalDisc;
-  const opd=totalOrders/days;
-  const netAOV=totalOrders?totalNet/totalOrders:0;
-  const grossAOV=totalOrders?totalGross/totalOrders:netAOV;
-  const campDuring=(typeof campaignData!=='undefined'?campaignData:[]).filter(function(c){
-    if(c.brand!==brand&&c.brand!=='All Brands')return false;
-    if(c.aggregator!==agg&&c.aggregator!=='All')return false;
-    const st=campStatus(c);
-    return c.startDate<=end&&(c.endDate||end)>=start&&(st==='Active'||st==='Completed');
-  });
-  return{opd:opd,netAOV:netAOV,grossAOV:grossAOV,totalOrders:totalOrders,totalNet:totalNet,days:days,
-    hasCampaign:campDuring.length>0,campNames:campDuring.map(function(c){return c.name||'';}).filter(Boolean)};
-}
-// v368: dial geometry helpers — same math verified earlier for the approved mockup (CX must equal
-// viewBox width/2, confirmed by dividing the actual viewBox value rather than re-asserting a
-// carried-over constant, which is exactly the bug that caused the dial to render off-center twice).
-function campBePolar(cx,cy,r,deg){const rad=(deg-90)*Math.PI/180;return{x:cx+r*Math.cos(rad),y:cy+r*Math.sin(rad)};}
 // v406: real historical discount-per-order lookup for BOGO/Select-Items, replacing the "guess a
 // percentage" manual fields with an actual average pulled from past completed campaigns — built
 // after Nikhil directly asked "shouldn't the dashboard learn this itself?" and confirmed via a
@@ -20321,11 +19858,6 @@ function feedbackBuildMatrix(records,groupKey){
   });
   return{matrix,totals};
 }
-function feedbackDominantCategory(rowMatrix){
-  let best=null,bestN=0;
-  for(const[cat,n] of Object.entries(rowMatrix||{})){if(n>bestN){best=cat;bestN=n;}}
-  return best;
-}
 // Cell color intensity is relative to that ROW's own max — the point is to make each row's
 // worst category pop, not to compare absolute counts across differently-sized rows/brands.
 // "Option 2" — a genuine green→amber→orange→red traffic light, bold saturation. Chosen after
@@ -22808,19 +22340,6 @@ function cmpPairedMetricCell(valA,valB,fmt,higherIsGood,clrA,clrB,hasDataA,hasDa
     <div style="font-size:9.5px;color:${clrA}">${showA}</div>
     <div style="font-size:10.5px;font-weight:700;color:${clrB}">${showB} ${arrowHtml}</div>
   </td>`;
-}
-// Same rendering, but for callers that already have a % change directly (e.g. outlet rows,
-// where the underlying record set makes back-solving a prior value from latest+% safer to
-// avoid than error-prone) — avoids any division-by-zero edge case entirely.
-function cmpMetricCellFromPct(latest,pct,fmt,higherIsGood){
-  let arrow="—",dcolor="#9ca3af";
-  if(pct!=null){
-    const isIncrease=pct>=0;
-    const good=higherIsGood?isIncrease:!isIncrease;
-    dcolor=good?"#15803d":"#b91c1c";
-    arrow=`${isIncrease?"▲":"▼"}${Math.abs(pct).toFixed(1)}%`;
-  }
-  return`<td style="text-align:right;padding:6px 9px">${fmt(latest)}<div style="font-size:8.5px;font-weight:700;margin-top:1px;color:${dcolor}">${arrow}</div></td>`;
 }
 // SVG pie chart — JS port of the same chart used in the mockup review, so the shipped
 // feature matches exactly what was approved rather than a fresh re-implementation.
