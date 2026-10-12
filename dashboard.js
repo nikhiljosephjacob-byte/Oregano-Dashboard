@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-08-531";
+const BUILD_VERSION="2026-10-12-532";
 const BUILD_NOTES=[
+  "🎯 CAMPAIGN PLANNER — KEETA 50% UPLIFT WAS UNDERSTATED (OPTIMISTIC BELOW BREAK-EVEN) — FIXED FOR MENU-WIDE CAMPAIGNS — Nikhil (Oregano × Keeta, 50% OFF cap 30, 18–24 Oct): 'Optimistic order volume is showing lower than the Breakeven… August 20% OFF CAP 20 uplift was better, so 50% should be more.' ROOT CAUSES FOUND ON THE REAL DATA: (1) each past campaign's uplift was measured against the window just BEFORE it — on Keeta that is almost always another discounted period, so the 'before' was already inflated; (2) recency weight e^(−d/45) put ~47% of all weight on one understated July campaign; (3) results of +150% or more were thrown away as 'outliers' — exactly the deep-discount campaigns; (4) the seasonality factor (0.843) was multiplied onto the uplift % and shrank it again; (5) Optimistic was capped at +200% and calibration had learned a negative correction from the understated uplifts. FIX (Planner only, menu-wide type only): uplift = campaign orders/day ÷ orders/day on NORMAL days (no entire-menu, BOGO or platform-event promo, ±28 days around it, ±56 if fewer than 7 days; select-items/OFU stay in the background); similarity-first weighting (discount depth, cap) with gentle 120-day recency and no single campaign above 35% of the weight; seasonality no longer scales uplift — the 14-day trend nudges the BASELINE only (max ±5%); outlier limit 400% for this method and Optimistic cap +400%; calibration restarts for menu forecasts (learns only from forecasts saved on build 532+, judged on the same normal-days basis). NEW ON SCREEN: each match shows its normal-days uplift with the old figure underneath, the orders/day it was compared with, and a day 1–3 vs day 4+ ramp note. Campaigns page analyses are unchanged. VERIFIED: 11 new tests (promo-day exclusion, early/late split, fallback, 35% cap, similarity weighting, planner Expected/Optimistic above break-even on Keeta-like data, seasonality not applied, ramp, outlier limit, calibration build gate).",
   "🧪 UPLOAD SUMMARY SAID '2 FILES' FOR ONE FILE — FOUND BY THE NEW END-TO-END UPLOAD TEST — Nikhil asked me to test the real upload path (file → recognise → parse → merge → save in browser → sync to server → message). I ran every platform's real sample file through the REAL handleOrdersUpload inside the full dashboard: Keeta, Careem, Talabat, Deliveroo and Noon all recognised, stored, saved and synced correctly, and re-uploading the same file adds no duplicates. ONE REAL BUG: the pop-up counted summary LINES (each file adds a result line plus a coverage line), so a single file read 'Successfully loaded 2 files'. FIX: it now counts files. ALSO CONFIRMED: your new Careem wording '20% OFF on Combos only, Combos price increased and discounted' is recognised — Oregano×Careem uses the +25.6% reference table, brands without a table use the price-neutral +25% assumption — nothing else needed in the sheet. VERIFIED: 3 new upload tests + 5 Careem-wording tests; full suite green.",
   "📦 NAD AL SHEBA (LOLLOROSSO) HISTORY KEPT EVERYWHERE — FINAL DECISION — Nikhil: 'Keep the Nad Al Sheba past sales and data there. We won't want it removed. Consider this decision final.' CHANGES: (1) the MoM/YoY growth grid now COUNTS closed outlets on both sides (v519 left NAS out) and its footnote says 'Includes closed outlets … a drop partly reflects the closure'; (2) the KPI sheet parser no longer drops Lollorosso × NAS (v516 removed its KPI history from the tracker). UNCHANGED (these are not data removal): sales/orders/discount totals on every page always included NAS history; alerts, 'declining outlet' flags, CPC/budget advice, forecasts and new-campaign baselines still skip a closed outlet so its closure is never reported as a performance problem or planned for; the expected-listing count stays 14. VERIFIED: tests updated (grid now counts NAS: Lollorosso reads -33% with the closure footnote; the KPI parser keeps NAS) — 125 pass.",
   "✅ DATA HEALTH — 'IT'S FINE' AND 'REMIND ME' ON EVERY WARNING — Nikhil (v528 screenshot, Smokeys · Marina · Talabat · 29 Sep 'AOV AED 2'): 'Is there a way to click and dismiss this if it's fine and not an entry error, or keep an option to look at it later and remind me?' and, on the snooze design: 'if there is a remind me later and I checked and it's fine, what do I do?'. NEW: each warning row has [✓ It's fine] (checked, not an entry error — hidden for good) and Remind me: [Tomorrow] [3 days] [Mon] (hidden until that day, then back in the list). A 'Handled (n snoozed, n marked fine)' list sits under the table: a snoozed item can be marked fine from there at any time, and any handled item can be shown again. If everything is handled the banner shrinks to one quiet line ('No open data checks — 1 snoozed') with a Review link so snoozed items stay reachable; if nothing is flagged it is still hidden completely. Remembered per browser (localStorage). IDENTITY: check + where + exact text, so a corrected sheet value or a new bad date is a NEW finding and shows again. VERIFIED: partition/snooze-date logic tested on the real extracted functions (expiry, Monday/tomorrow maths, restore, identity change) + jsdom render of every state; 124 tests pass.",
@@ -15075,15 +15076,22 @@ function campFcReopenForecast(id){
 // brand+aggregator-specific figure; falls back to a broader pool otherwise rather than
 // calibrating off 1-2 noisy data points. Running campaigns (status==='Running') are excluded —
 // only a genuinely finished result is real evidence of forecast accuracy.
-function campFcCalibrationBias(brand,agg){
+function campFcCalibrationBias(brand,agg,type){
   if(!campFcHistory||!campFcHistory.length||typeof campLoaded==='undefined'||!campLoaded)return null;
   const MIN_SAMPLES=3;
   const rawRecords=campFcHistory.map(f=>{
+    const bgMode=type==='menu';
+    // v532: menu-wide calibration only learns from menu forecasts made on the background-baseline method
+    // (build >= 532) and judges them against the background-baseline actual — never mixes the two bases.
+    if(bgMode&&(f.type!=='menu'||campBgBuildNum(f.algoVersion)<CAMP_BG_METHOD_MIN_BUILD))return null;
     const match=campFcMatchActual(f);
-    if(!match||match.actualUpliftPct==null||match.status==='Running')return null;
+    if(!match||match.status==='Running')return null;
     const exp=f.scenarios&&f.scenarios.expected;
     if(!exp||exp.upliftPct==null)return null;
-    return{brand:f.brand,agg:f.agg,start:f.start,end:f.end,savedAt:f.savedAt,biasPts:match.actualUpliftPct-exp.upliftPct};
+    let actual=match.actualUpliftPct;
+    if(bgMode){actual=campBgActualFor(match.c,f.brand,f.agg,Array.isArray(f.branches)&&f.branches.length?new Set(f.branches):null);}
+    if(actual==null)return null;
+    return{brand:f.brand,agg:f.agg,start:f.start,end:f.end,savedAt:f.savedAt,biasPts:actual-exp.upliftPct};
   }).filter(Boolean);
   if(!rawRecords.length)return null;
 
@@ -15352,17 +15360,19 @@ function campPlanHTML(){
   const verdictBad=!r.breakEven||r.expected.orders<r.breakEven.orders;
   const calibNote=r.calib?`<div style="font-size:10.5px;color:#4ADE80;margin-top:7px;padding-top:7px;border-top:0.5px dashed ${T.border}">📐 Calibrated ${r.calib.biasPts>=0?'+':''}${r.calib.biasPts.toFixed(1)}pts vs raw historical uplift, based on ${r.calib.sampleCount} of your own past forecast${r.calib.sampleCount!==1?'s':''} vs their real result${r.calib.isSpecific?'':' (not enough history for '+esc(campPlanBrand)+' × '+esc(campPlanAgg)+' specifically yet, using the whole account)'}.</div>`:'';
   const momNote=r.mom?`<div style="font-size:10.5px;color:#60A5FA;margin-top:5px">📈 Recent momentum: ${r.mom.momentum>=1?'+':''}${((r.mom.momentum-1)*100).toFixed(0)}% — last ~45 real days averaging ${Math.round(r.mom.recentOrders)}/day vs ${Math.round(r.mom.priorOrders)}/day the ~45 days before that.</div>`:'';
+  const bgNote=r.useBg?`<div style="font-size:10.5px;color:#A78BFA;margin-top:5px">🧭 Uplift measured vs normal days: each past campaign is compared with orders/day on days with no entire-menu, BOGO or platform-event promo (±28 days around it), then weighted by similarity (discount depth, cap) with gentle recency. No single campaign carries more than 35% of the weight.</div>`:'';
+  const rampNote=(r.ramp)?`<div style="font-size:10.5px;color:#34D399;margin-top:5px">📊 Typical ramp (${r.ramp.n} comparable campaigns): days 1–3 about <strong>${Math.round(r.ramp.earlyOrders)}/day</strong> (${r.ramp.early>=0?'+':''}${r.ramp.early.toFixed(0)}%), day 4 onward about <strong>${Math.round(r.ramp.lateOrders)}/day</strong> (${r.ramp.late>=0?'+':''}${r.ramp.late.toFixed(0)}%) — before calibration.</div>`:'';
   const aovNote=r.aovRatio?`<div style="font-size:10.5px;color:#F59E0B;margin-top:5px">📉 Real AOV drop applied: campaign AOV ${fA(r.campaignAOV)} vs baseline ${fA(r.grossAOV)} (${((r.aovRatio.ratio-1)*100).toFixed(0)}%), from ${r.aovRatio.sampleCount} real past campaign${r.aovRatio.sampleCount!==1?'s':''}${r.aovRatio.isCoFundSpecific?' with the same co-funding status':' (not enough co-funding-specific history yet, using all past campaigns)'}.</div>`:'';
   const verdict=verdictBad
     ?`<div style="border-radius:10px;padding:15px 18px;margin-bottom:14px;background:#EF44441A;border:1px solid #EF444455">
         <div style="font-size:13.5px;font-weight:800;color:#F87171">⚠️ Likely to fall short of break-even at this discount depth</div>
         <div style="font-size:11.5px;color:${T.secondary};margin-top:5px;line-height:1.6">Your Expected forecast is <strong>${r.expected.upliftPct>=0?'+':''}${r.expected.upliftPct.toFixed(0)}% uplift</strong> (${Math.round(r.expected.orders)}/day) — break-even needs <strong>${r.breakEven?(r.breakEven.upliftPct>=0?'+':'')+r.breakEven.upliftPct.toFixed(0)+'%':'—'}</strong> (${r.breakEven?Math.round(r.breakEven.orders):'—'}/day)${optClears?'':', and even Optimistic does not clear it either'}.</div>
-        ${calibNote}${momNote}${aovNote}
+        ${calibNote}${momNote}${bgNote}${rampNote}${aovNote}
       </div>`
     :`<div style="border-radius:10px;padding:15px 18px;margin-bottom:14px;background:#22C55E1A;border:1px solid #22C55E55">
         <div style="font-size:13.5px;font-weight:800;color:#4ADE80">✓ Expected forecast clears break-even</div>
         <div style="font-size:11.5px;color:${T.secondary};margin-top:5px;line-height:1.6">Your Expected forecast is <strong>+${r.expected.upliftPct.toFixed(0)}% uplift</strong> (${Math.round(r.expected.orders)}/day) — comfortably above the <strong>+${r.breakEven.upliftPct.toFixed(0)}%</strong> (${Math.round(r.breakEven.orders)}/day) needed to break even.</div>
-        ${calibNote}${momNote}${aovNote}
+        ${calibNote}${momNote}${bgNote}${rampNote}${aovNote}
       </div>`;
 
   const CATS=[
@@ -15470,7 +15480,8 @@ function campPlanHTML(){
     if(!r.matches.length)return `<div style="font-size:11px;color:#F59E0B;padding:8px;background:rgba(245,158,11,.08);border-radius:6px;margin-bottom:10px">No exact matches — using fallback estimates. Consider selecting a comparable past campaign.</div>`;
     const matchRows=r.matches.slice(0,campPlanShowAllMatches?r.matches.length:8).map((m,idx)=>{
       const ic=m.discountROI!=null?(m.discountROI>=0?'#22C55E':'#EF4444'):T.muted;
-      const isOutlier=Math.abs(m.upliftPct||0)>=150;
+      const isOutlier=r.useBg?!!m.excluded:Math.abs(m.upliftPct||0)>=150;
+      const effU=(r.useBg&&m.bgUpliftPct!=null)?m.bgUpliftPct:m.upliftPct;
       const flagHTML=isOutlier
         ?'<span style="font-size:8px;color:#EF4444;background:rgba(239,68,68,.1);padding:1px 5px;border-radius:4px;margin-left:4px">⚠ statistical outlier · excluded</span>'
         :(m.isAtypical?'<span style="font-size:8px;color:#F59E0B;background:rgba(245,158,11,.1);padding:1px 5px;border-radius:4px;margin-left:4px">🎪 atypical event · down-weighted</span>':'');
@@ -15479,7 +15490,7 @@ function campPlanHTML(){
       const row=`<div onclick="campPlanToggleMatchExpand(${idx})" style="cursor:pointer;display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr 0.3fr;gap:4px;padding:8px 0;border-bottom:0.5px solid ${T.border};font-size:13px;align-items:center${isOutlier?';opacity:.45':''}">`
       +`<div style="color:${T.secondary}">${m.c.name||m.c.comments||'—'}${flagHTML}<div style="font-size:11px;color:${T.muted}">${m.c.startDate} – ${m.c.endDate}</div></div>`
       +`<div style="color:${T.muted}">${m.cDays}d</div>`
-      +`<div style="color:${(m.upliftPct||0)>=0?'#16a34a':'#dc2626'};font-weight:600">${m.upliftPct!=null?fP(m.upliftPct):'—'}</div>`
+      +`<div style="color:${(effU||0)>=0?'#16a34a':'#dc2626'};font-weight:600">${effU!=null?fP(effU):'—'}${(r.useBg&&m.bgUpliftPct!=null&&m.upliftPct!=null)?`<div style="font-size:9.5px;color:${T.muted};font-weight:400">dashboard method ${fP(m.upliftPct)}</div>`:''}</div>`
       +`<div style="color:${T.text}">${m.campOrdersPerDay!=null?Math.round(m.campOrdersPerDay).toLocaleString():'—'}</div>`
       +`<div style="color:${T.text}">${m.campSalesPerDay!=null?fA(m.campSalesPerDay):'—'}</div>`
       +`<div style="color:#F59E0B">${m.ourDiscPerDay!=null&&m.ourDiscPerDay>0?fA(m.ourDiscPerDay):'—'}</div>`
@@ -15495,7 +15506,7 @@ function campPlanHTML(){
         return`<div style="padding:4px 0 12px;display:grid;grid-template-columns:1fr 1fr;gap:14px;background:${T.rowBg};border-radius:8px;padding:12px 14px;margin-bottom:6px">`
           +col('Before',T.muted,m.bStart&&m.bEnd?`${fmtShort(m.bStart)}–${fmtShort(m.bEnd)}`:'',m.baseOrdersPerDay,(m.baseOrdersPerDay||0)*(m.baseAOV||0),m.baseAOV)
           +col('During (campaign)',accent,`${fmtShort(m.c.startDate)}–${fmtShort(m.c.endDate)}`,m.campOrdersPerDay,m.campSalesPerDay,m.campAOV)
-          +`<div style="grid-column:1/3;text-align:center;font-size:11px;color:${T.muted};padding-top:6px;border-top:0.5px dashed ${T.border}">Uplift <strong style="color:${(m.upliftPct||0)>=0?'#16a34a':'#dc2626'}">${fP(m.upliftPct)}</strong> orders · <strong style="color:${ic}">${m.discountROI!=null?m.discountROI.toFixed(2)+'×':'—'} ROI</strong> on ${m.ourDiscPerDay!=null?fA(m.ourDiscPerDay*m.cDays):'—'} merchant discount</div>`
+          +`<div style="grid-column:1/3;text-align:center;font-size:11px;color:${T.muted};padding-top:6px;border-top:0.5px dashed ${T.border}">Uplift <strong style="color:${(effU||0)>=0?'#16a34a':'#dc2626'}">${fP(effU)}</strong> orders${(r.useBg&&m.bg)?` vs <strong>${Math.round(m.bg.bgPerDay)}/day</strong> background (${m.bg.nBg} non-promo days within ±${m.bg.window}d)${m.bg.early!=null?` · day 1–3 ${fP(m.bg.early)}, day 4+ ${fP(m.bg.late)}`:''}`:''} · <strong style="color:${ic}">${m.discountROI!=null?m.discountROI.toFixed(2)+'×':'—'} ROI</strong> on ${m.ourDiscPerDay!=null?fA(m.ourDiscPerDay*m.cDays):'—'} merchant discount</div>`
           +'</div>';
       })():'';
       return row+detail;
@@ -15507,7 +15518,7 @@ function campPlanHTML(){
         <span style="font-size:10px;color:${T.muted}">used to build the scenarios above · click to view</span>
       </summary>
       <div style="padding:0 14px 14px">
-        <div style="font-size:10px;color:${T.muted};margin-bottom:6px">${campPlanMatchCriteriaLabel()} · <em style="opacity:.7">dimmed = statistical outlier · excluded</em></div>
+        <div style="font-size:10px;color:${T.muted};margin-bottom:6px">${campPlanMatchCriteriaLabel()} · <em style="opacity:.7">dimmed = statistical outlier · excluded</em>${r.useBg?` · <em style="opacity:.7">uplift = campaign orders/day vs normal (non-promo) days around it</em>`:''}</div>
         <div style="display:grid;grid-template-columns:2.2fr 0.4fr 0.7fr 0.9fr 0.9fr 0.9fr 0.7fr 0.3fr;gap:4px;padding:5px 0;border-bottom:0.5px solid ${T.border};font-size:11px;font-weight:600;color:${T.muted};text-transform:uppercase;letter-spacing:.5px"><div>Campaign</div><div>Days</div><div>Uplift</div><div>Orders/day</div><div>Sales/day</div><div>Disc/day</div><div>ROI</div><div></div></div>
         ${matchRows}
         ${r.matches.length>8?`<div onclick="campPlanShowAllMatches=!campPlanShowAllMatches;renderCampaigns()" style="cursor:pointer;font-size:11px;font-weight:700;color:#60A5FA;padding:8px 0 2px;text-align:center">${campPlanShowAllMatches?'↑ Show fewer':'Show all '+r.matches.length+' matches (used in the average below) →'}</div>`:''}
@@ -15545,7 +15556,7 @@ function campPlanHTML(){
     const flags=[];
     if(r.conc.length){flags.push({lvl:'warn',msg:`<strong>Concurrent campaign:</strong> "${r.conc[0].name||r.conc[0].comments||'—'}" overlaps this window on ${esc(campPlanBrand)} × ${esc(campPlanAgg)}. Forecast does not adjust for campaign-on-campaign dilution.`});}
     if(!r.lyHasDisc){flags.push({lvl:'info',msg:`No discount data on record for ${fmtShort(r.lyStart)}–${fmtShort(r.lyEnd)} ${r.lyStart.slice(0,4)} yet. Year-over-year comparison shows sales only — no burn figures from that period to compare.`});}
-    if(r.seas&&r.seas.pct!==0){flags.push({lvl:'info',msg:`Seasonality correction applied: <strong>${r.seas.pct>0?'+':''}${r.seas.pct}%</strong> vs periods when historical matches ran (${r.matches.length} campaign${r.matches.length!==1?'s':''}).`});}
+    if(r.seas&&r.seas.trendAdj&&Math.abs(r.seas.trendAdj-1)>0.0005){flags.push({lvl:'info',msg:`Recent trend adjusts the <strong>baseline</strong> by <strong>${r.seas.trendAdj>1?'+':''}${((r.seas.trendAdj-1)*100).toFixed(1)}%</strong> (capped ±5%). Seasonality is no longer applied to the uplift %.`});}
     if(!r.matches.length){flags.push({lvl:'warn',msg:`No exact historical matches found for ${esc(campPlanBrand)} × ${esc(campPlanAgg)} at ${campPlanMatchCriteriaLabel()}. Fallback uplifts used. Find and select a comparable past campaign for better accuracy.`});}
     if(r.cleanWindowCompare){
       const cw=r.cleanWindowCompare;
@@ -16354,6 +16365,141 @@ function campFcHasDiscDataForPeriod(brand,agg,start,end){
 // (campFcFindBogoMatches passes discPct=null — no percentage filtering happens at all). This
 // mirrors exactly which filter each type's match-finder actually applies, so the label can never
 // again claim a criterion the matching itself doesn't use.
+// ── v532: Planner uplift measured against BACKGROUND (non-promo) demand ──────────────────────────
+// Nikhil's report (Oregano × Keeta, 50% OFF cap 30): Optimistic came out BELOW break-even even though
+// every comparable 50% campaign had actually delivered +120% … +290%, and 20% OFF cap 20 in August
+// (10–13 & 17–20 Aug) had delivered a clear uplift. Root causes found on the real data:
+//  (1) Each past match's uplift was measured against the PRECEDING window — on Keeta that window is
+//      nearly always another discounted period, so the "before" was already inflated and uplift was understated.
+//  (2) Recency weight e^(−d/45) put ~47% of all weight on one understated July match.
+//  (3) |uplift| ≥ 150% matches were thrown away as "outliers" — exactly the deep-discount results.
+//  (4) The seasonality factor (0.843) was multiplied onto the uplift PERCENTAGE, shrinking it again.
+//  (5) Optimistic capped at +200% and calibration learned a negative bias from those understated uplifts.
+// Fix: uplift = campaign orders/day ÷ orders/day on days with NO entire-menu / BOGO / platform-event promo
+// running (same brand or All Brands, same aggregator), looking ±28 days around the campaign (±56 if too few).
+// Select-items / OFU always-on offers stay in the background — they are the normal state of the outlet.
+const CAMP_BG_METHOD_MIN_BUILD=532;
+function campBgBuildNum(v){const m=String(v||'').match(/-(\d+)$/);return m?parseInt(m[1],10):0;}
+function campBgIsPromoCampaign(c){
+  if(!c)return false;
+  if(c.discountStructure==='entireMenu'||c.discountStructure==='bogo')return true;
+  if(c.discountStructure==='selectItems')return false;
+  const text=`${c.name||''} ${c.comments||''}`;
+  if(CAMP_FC_BOGO_RE.test(text)||CAMP_FC_PLATFORM_EVENT_RE.test(text))return true;
+  if(campFcIsSelectItemsText(text)||CAMP_FC_OFU_RE.test(text))return false;
+  return /\d{1,3}\s*%/.test(text);
+}
+// Set of dates (start..end+1, the +1 covers the tail of a campaign) on which a promo ran for brand+agg.
+function campBgPromoDays(brand,agg){
+  const set=new Set();
+  if(typeof campLoaded==='undefined'||!campLoaded)return set;
+  campaignData.forEach(c=>{
+    if(c.aggregator!==agg)return;
+    if(c.brand!==brand&&c.brand!=='All Brands')return;
+    if(campStatus(c)==='Cancelled')return;
+    if(!c.startDate||!c.endDate||!campBgIsPromoCampaign(c))return;
+    let d=c.startDate;const last=subDays(c.endDate,-1);let guard=0;
+    while(d<=last&&guard++<800){set.add(d);d=subDays(d,-1);}
+  });
+  return set;
+}
+// date → total orders for brand+agg (optionally limited to a branch set), skipping closed outlets.
+function campBgOrdersIndex(brand,agg,branches){
+  const idx={};
+  const use=branches&&branches.size?branches:null;
+  allData.forEach(r=>{
+    if(r.brand!==brand||r.aggregator!==agg||r.branch==='(brand-level)')return;
+    if(use&&!use.has(r.branch))return;
+    if(typeof outletClosedOn==='function'&&outletClosedOn(brand,r.branch,r.date))return;
+    idx[r.date]=(idx[r.date]||0)+(r.orders||0);
+  });
+  return idx;
+}
+// Pure: campaign orders/day vs mean orders/day on non-promo days around it.
+function campBgCompute(startDate,endDate,ordersByDate,promoDays){
+  const span=[];
+  let d=startDate,g=0;
+  while(d<=endDate&&g++<800){span.push(d);d=subDays(d,-1);}
+  const campDates=span.filter(x=>ordersByDate[x]!=null&&ordersByDate[x]>0);
+  if(!campDates.length)return null;
+  const campPerDay=campDates.reduce((s,x)=>s+ordersByDate[x],0)/campDates.length;
+  let bgDates=[],win=0;
+  for(const W of [28,56]){
+    bgDates=[];
+    const lo=subDays(startDate,W),hi=subDays(endDate,-W);
+    let x=lo,gg=0;
+    while(x<=hi&&gg++<800){
+      if((x<startDate||x>endDate)&&!promoDays.has(x)&&ordersByDate[x]!=null&&ordersByDate[x]>0)bgDates.push(x);
+      x=subDays(x,-1);
+    }
+    win=W;
+    if(bgDates.length>=7)break;
+  }
+  if(bgDates.length<7)return null;
+  const bgPerDay=bgDates.reduce((s,x)=>s+ordersByDate[x],0)/bgDates.length;
+  if(!(bgPerDay>0))return null;
+  const upl=v=>(v/bgPerDay-1)*100;
+  let early=null,late=null;
+  if(campDates.length>=5){
+    const e=campDates.slice(0,3),l=campDates.slice(3);
+    early=upl(e.reduce((s,x)=>s+ordersByDate[x],0)/e.length);
+    late=upl(l.reduce((s,x)=>s+ordersByDate[x],0)/l.length);
+  }
+  return{campPerDay,bgPerDay,upliftPct:upl(campPerDay),nCamp:campDates.length,nBg:bgDates.length,spanDays:span.length,window:win,early,late};
+}
+// Annotates each match with m.bg / m.bgUpliftPct (null when the background can't be measured).
+function campBgAnnotateMatches(matches,brand,agg,branches){
+  const promo=campBgPromoDays(brand,agg);
+  const cache={};
+  matches.forEach(m=>{
+    let scope=branches&&branches.size?branches:null;
+    try{const s=campOutlets(m.c);if(s&&s.size)scope=s;}catch(e){}
+    const key=scope?[...scope].sort().join('|'):'*';
+    if(!cache[key])cache[key]=campBgOrdersIndex(brand,agg,scope);
+    m.bg=campBgCompute(m.c.startDate,m.c.endDate,cache[key],promo);
+    m.bgUpliftPct=m.bg?m.bg.upliftPct:null;
+  });
+  return matches;
+}
+// Real result of one completed/running campaign on the background method (used by calibration).
+function campBgActualFor(c,brand,agg,branches){
+  const promo=campBgPromoDays(brand,agg);
+  let scope=branches&&branches.size?branches:null;
+  try{const s=campOutlets(c);if(s&&s.size)scope=s;}catch(e){}
+  const r=campBgCompute(c.startDate,c.endDate,campBgOrdersIndex(brand,agg,scope),promo);
+  return r?r.upliftPct:null;
+}
+// Similarity-first, gentle recency (120-day half-life). No single match may carry > share of total weight.
+function campPlanMatchWeight(m,discPct,cap,start){
+  const daysAgo=Math.max(1,daysBetweenInclusive(m.c.endDate,start));
+  const rec=Math.pow(0.5,daysAgo/120);
+  const dd=(m.discPct!=null&&discPct!=null)?Math.abs(m.discPct-discPct):null;
+  const depth=dd==null?0.75:Math.max(0.2,1-dd/16);
+  const capS=(cap&&m.cap)?1-Math.min(0.7,Math.abs(m.cap-cap)/20):0.75;
+  const typeW=(m.isAtypical||m.isTruncated)?0.3:1;
+  return rec*depth*capS*typeW;
+}
+function campFcCapWeightShare(weighted,share){
+  const out=weighted.map(x=>({u:x.u,w:x.w}));
+  if(out.length*share<1)return out; // can't satisfy the cap with so few points
+  // Exact: cap the k largest weights at c where c = share × (sum of the rest + k·c).
+  const order=out.map((x,i)=>i).sort((i,j)=>out[j].w-out[i].w);
+  for(let k=0;k<order.length&&k*share<1;k++){
+    let rest=0;for(let q=k;q<order.length;q++)rest+=out[order[q]].w;
+    const c=share*rest/(1-k*share);
+    if(out[order[k]].w<=c+1e-12){
+      for(let q=0;q<k;q++)out[order[q]].w=c;
+      break;
+    }
+  }
+  return out;
+}
+function campBgWeightedMedian(vals){
+  if(!vals.length)return null;
+  const s=[...vals].sort((a,b)=>a-b),n=s.length;
+  return n%2?s[(n-1)/2]:(s[n/2-1]+s[n/2])/2;
+}
+
 // v407: Campaign Planner — combines the Forecaster's real historical uplift derivation with real
 // per-brand/aggregator economics for the discount/break-even side, per Nikhil's explicit
 // correction: "the calculations must be based on the filters applied," not fixed assumptions.
@@ -16382,31 +16528,51 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
   const mom=campFcMomentum(brand,agg,start);
   const momFactor=mom?mom.momentum:1;
 
+  // v532: for menu-wide campaigns each match's uplift is measured against BACKGROUND demand (see the
+  // v532 block above campPlanCompute). Other structures keep the Forecaster's original uplift.
+  const useBg=type==='menu'&&typeof campLoaded!=='undefined'&&campLoaded;
+  if(useBg)campBgAnnotateMatches(matches,brand,agg,branches||new Set());
+  const outlierLimit=useBg?400:150;
+  matches.forEach(m=>{
+    m.effUpliftPct=(useBg&&m.bgUpliftPct!=null)?m.bgUpliftPct:m.upliftPct;
+    m.excluded=m.effUpliftPct==null||Math.abs(m.effUpliftPct)>=outlierLimit;
+  });
+  // v532: seasonality is NO LONGER multiplied onto the uplift % (it shrank every uplift by ~16% on top of
+  // the baseline already being trend-aware). The 14-day trend instead nudges the BASELINE, capped ±5%.
+  const trendAdj=Math.min(1.05,Math.max(0.95,(seas&&seas.trendFactor)||1));
+  let ramp=null;
   let cU=0.10,eU=0.20,oU=0.35;
   if(matches.length){
-    const usable=matches.filter(m=>m.upliftPct!=null&&Math.abs(m.upliftPct)<150);
-    const useM=usable.length?usable:matches.filter(m=>m.upliftPct!=null);
-    const weighted=useM.map(m=>{
-      const daysAgo=Math.max(1,daysBetweenInclusive(m.c.endDate,start));
-      const recencyW=Math.exp(-daysAgo/45);
-      const typeW=(m.isAtypical||m.isTruncated)?0.3:1;
-      return{u:m.upliftPct/100,w:recencyW*typeW};
+    const usable=matches.filter(m=>!m.excluded);
+    const useM=usable.length?usable:matches.filter(m=>m.effUpliftPct!=null);
+    let weighted=useM.map(m=>{
+      let w;
+      if(useBg)w=campPlanMatchWeight(m,discPct,cap,start);
+      else{
+        const daysAgo=Math.max(1,daysBetweenInclusive(m.c.endDate,start));
+        w=Math.exp(-daysAgo/45)*((m.isAtypical||m.isTruncated)?0.3:1);
+      }
+      return{u:m.effUpliftPct/100,w};
     });
+    if(useBg)weighted=campFcCapWeightShare(weighted,0.35);
     if(weighted.length){
-      cU=Math.max(-0.20,campFcWeightedPercentile(weighted,25)*seas.factor*momFactor);
-      eU=Math.max(-0.10,campFcWeightedPercentile(weighted,50)*seas.factor*momFactor);
-      oU=Math.min(2.0,Math.max(0.05,campFcWeightedPercentile(weighted,75)*seas.factor*momFactor));
+      cU=Math.max(-0.20,campFcWeightedPercentile(weighted,25)*momFactor);
+      eU=Math.max(-0.10,campFcWeightedPercentile(weighted,50)*momFactor);
+      oU=Math.min(useBg?4.0:2.0,Math.max(0.05,campFcWeightedPercentile(weighted,75)*momFactor));
     }
-  }else{cU*=seas.factor*momFactor;eU*=seas.factor*momFactor;oU*=seas.factor*momFactor;}
+    if(useBg&&nDays>=4){
+      const withRamp=usable.filter(m=>m.bg&&m.bg.early!=null&&m.bg.late!=null);
+      if(withRamp.length>=2){
+        ramp={early:campBgWeightedMedian(withRamp.map(m=>m.bg.early)),late:campBgWeightedMedian(withRamp.map(m=>m.bg.late)),n:withRamp.length};
+      }
+    }
+  }else{cU*=momFactor;eU*=momFactor;oU*=momFactor;}
   if(eU<cU)eU=cU;
   if(oU<eU)oU=eU;
 
-  // v412: forecast calibration — shift all three scenarios by the recency-weighted average gap
-  // between what this method has forecasted before and what actually happened, per Nikhil's own
-  // observation that every past forecast has been beaten by the real result. Applied AFTER the
-  // ordering enforcement above so Conservative<=Expected<=Optimistic still holds afterward (a
-  // uniform shift preserves the ordering either way, but this keeps the invariant explicit).
-  const calib=campFcCalibrationBias(brand,agg);
+  // v412: forecast calibration (v532: for menu campaigns it only learns from forecasts saved on the new
+  // method, measured against the same background baseline — old understated results are not carried over).
+  const calib=campFcCalibrationBias(brand,agg,type);
   if(calib){
     const shift=calib.biasPts/100;
     cU+=shift;eU+=shift;oU+=shift;
@@ -16476,7 +16642,8 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
   const baseCommPo=baseNetPo*commRate;
   const contribPoBaseline=baseNetPo-baseFoodPo-baseCommPo;
 
-  const baselineOrders=baseline.dailyOrders;
+  const baselineOrders=baseline.dailyOrders*trendAdj;
+  if(ramp){ramp.earlyOrders=baselineOrders*(1+ramp.early/100);ramp.lateOrders=baselineOrders*(1+ramp.late/100);}
   const baselineContribDay=baselineOrders*contribPoBaseline;
   const breakEvenOrders=contribPoCampaign>0?baselineContribDay/contribPoCampaign:null;
 
@@ -16552,7 +16719,8 @@ function campPlanCompute(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,b
   const weekOfMonthMismatch=campWeekPos!==baselineWeekPos?{campaign:campWeekPos,baseline:baselineWeekPos}:null;
 
   return{
-    grossAOV,campaignAOV,aovRatio,commRate,foodRate,nDays,matches,seas,calib,mom,histMatch,
+    grossAOV,campaignAOV,aovRatio,commRate,foodRate,nDays,matches,calib,mom,histMatch,useBg,ramp,
+    seas:Object.assign({},seas,{appliedToUplift:false,trendAdj}),
     baselineMeta:{windowStart:baseline.windowStart,windowEnd:baseline.windowEnd,excludedDays:baseline.excludedDays,refDays:baseline.refDays,isDegraded:baseline.isDegraded},
     lyOrders:lyRecs.length?lyRecs.reduce((s,r)=>s+r.orders,0)/lyDays:null,
     lyNet:lyRecs.length?lyRecs.reduce((s,r)=>s+r.sales,0)/lyDays:null,
