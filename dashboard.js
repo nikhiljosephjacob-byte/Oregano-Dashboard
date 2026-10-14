@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-14-543";
+const BUILD_VERSION="2026-10-14-544";
 const BUILD_NOTES=[
+  "🎨 POS SYNC: DINE-IN & TAKEAWAY TAB NOW LOOKS LIKE THE DELIVERY TABS — Nikhil: the new tab can't be bare numbers and outlet names; it needs the same borders, margins and formatting as the delivery tabs in the LIVE sheet. After every pull the dashboard now copies the Oregano tab's own formatting onto the Dine-In & Takeaway tab: header rows (fills, fonts, merged group headers), outlet rows, Total row and the gap row between days (borders, number formats, alignment), column widths and frozen panes. Dine-In takes the Deliveroo block's style, Takeaway the Talabat block's, Total the Total block's. Formats only — no values change, and the Oregano tab is only read. A '🎨 Re-apply sheet formatting' button re-runs it on demand (e.g. after a manual style change to the delivery tabs).",
   "📶 POS SYNC: PROGRESS BAR — Nikhil asked for a clear sign of when a pull is finished, for him and Nicole. Pull POS Data now shows a progress bar under the button and on the result card: 'Day 2 of 7 · 44% · about 1 min left', turning green with '✅ Completed — 7 days written in 2 min' at the end (orange if any day failed). While a pull runs, the browser warns before the page is closed or reloaded, since leaving stops the pull.",
   "⚠ POS SYNC STEP 4 — LOW-SALES FLAGS + ONE-CLICK RE-PULL — Nikhil wants outlet-days with unusually low sales flagged (a POS server that didn't sync leaves the day short) and re-pulled once he confirms the fix. Every pull now compares each outlet's POS net sales (all channels, Sales Summary by Outlet) with its average for the same weekday over the previous 4 weeks; under half → flagged (outlets averaging under AED 1,500 are skipped as noise). Open flags show at the top of POS Sync with '✔ Data is correct' and '↻ Re-pull this day' (re-pull overwrites that day in every tab; the flag clears itself when the numbers look normal), and as a red count on the POS Sync tab. Flags are stored on the server, so Nikhil and Nicole see the same list.",
   "⚖️ POS SYNC: ONE VAT BASIS FOR EVERY CHANNEL — Nikhil: dine-in/takeaway and delivery must be uniform. Delivery in the brand tabs is incl. VAT (Credit Sales amount = POS × 1.05 exactly), so the Dine-In & Takeaway tab is back to incl. VAT: POS Sales Summary figure × 1.05 (13 Oct: dine-in 33,547.30, takeaway 10,377.55; Mirdiff dine-in 5,882.99). Nicole's v540 check figures were the same numbers before VAT. The Noon Dine Out → Dine-In discount fix from v540 stays.",
@@ -24846,6 +24847,49 @@ function psFlagsFor(dayNet,baseNets){
 }
 if(typeof module!=="undefined")Object.assign(module.exports,{psNetByLoc,psFlagsFor});
 
+// ── v544 FORMATTING — make the Dine-In & Takeaway tab look like the delivery tabs by copying the
+// Oregano tab's own formats (fills, fonts, borders, number formats, alignment, column widths, frozen
+// panes). Column mapping: Branch/Date/Day ← same; Dine-In Disc/Sales/Orders/AOV ← Deliveroo block,
+// Guests ← Orders style, Spend/Guest ← AOV style; Takeaway ← Talabat block; Total ← Total block.
+// Rows: header rows ← Oregano rows 1-2; each outlet row ← an Oregano outlet row; Total row ← an
+// Oregano Total row; the gap row ← Oregano's gap row. Formats only — no values are touched.
+function psInstoreFormatRequests(src,dst){
+  // src: {sheetId,header,ab,widths,frozenRows,frozenCols}  dst: {sheetId,ab}
+  const cm=psColMap(src.header),g=(grp,f)=>cm[grp]&&cm[grp][f]!=null?cm[grp][f]:null;
+  const need=[["Deliveroo","Disc"],["Deliveroo","Sales"],["Deliveroo","Orders"],["Deliveroo","AOV"],["Talabat","Disc"],["Talabat","AOV"],["Total","Disc"],["Total","AOV"]];
+  for(const[a,b]of need)if(g(a,b)==null)throw new Error(`Oregano tab: couldn't find the ${a} ${b} column to copy formatting from`);
+  // dest col (0-based) → source col
+  const map=[0,1,2,g("Deliveroo","Disc"),g("Deliveroo","Sales"),g("Deliveroo","Orders"),g("Deliveroo","AOV"),g("Deliveroo","Orders"),g("Deliveroo","AOV"),
+    g("Talabat","Disc"),g("Talabat","Sales"),g("Talabat","Orders"),g("Talabat","AOV"),g("Total","Disc"),g("Total","Sales"),g("Total","Orders"),g("Total","AOV")];
+  // source template rows (0-based): the last complete block in Oregano (outlet rows … Total, then a gap row)
+  const ab=src.ab||[];let tot=-1;for(let i=ab.length-1;i>=2;i--){if(String((ab[i]||[])[0]||"").trim().toLowerCase()==="total"&&i>=6){tot=i;break;}}
+  if(tot<0)throw new Error("Oregano tab: no complete date block found to copy formatting from");
+  const dLbl=String((ab[tot]||[])[1]||"").trim();let st=tot;while(st-1>=2&&String((ab[st-1]||[])[1]||"").trim()===dLbl)st--;
+  const gap=tot+1; // block = first outlet row (st), middle rows (st+1), last outlet row (tot-1), Total (tot), gap row
+  // destination blocks
+  const dab=dst.ab||[];let first=-1;for(let i=2;i<dab.length;i++){if(String((dab[i]||[])[1]||"").trim()&&String((dab[i]||[])[0]||"").trim()){first=i;break;}}
+  if(first<0)return[];
+  const n=PS_INSTORE_ORDER.length,period=n+2,last=dab.length-1;
+  const R=[],S=src.sheetId,D=dst.sheetId;
+  const cp=(sr,sc,dr0,dr1,dc)=>R.push({copyPaste:{source:{sheetId:S,startRowIndex:sr,endRowIndex:sr+1,startColumnIndex:sc,endColumnIndex:sc+1},destination:{sheetId:D,startRowIndex:dr0,endRowIndex:dr1,startColumnIndex:dc,endColumnIndex:dc+1},pasteType:"PASTE_FORMAT"}});
+  // header rows 1-2 and the blank row 3, column by column
+  map.forEach((sc,dc)=>{for(const r of[0,1])cp(r,sc,r,r+1,dc);cp(gap,sc,2,3,dc);});
+  // first block: outlet rows, Total row, gap row
+  map.forEach((sc,dc)=>{cp(st,sc,first,first+1,dc);if(n>2)cp(Math.min(st+1,tot-1),sc,first+1,first+n-1,dc);cp(tot-1,sc,first+n-1,first+n,dc);
+    cp(tot,sc,first+n,first+n+1,dc);cp(gap,sc,first+n+1,first+period,dc);});
+  // tile the first block down over every later block
+  if(last>=first+period)R.push({copyPaste:{source:{sheetId:D,startRowIndex:first,endRowIndex:first+period,startColumnIndex:0,endColumnIndex:map.length},
+    destination:{sheetId:D,startRowIndex:first+period,endRowIndex:first+period*Math.ceil((last-first+1)/period),startColumnIndex:0,endColumnIndex:map.length},pasteType:"PASTE_FORMAT"}});
+  // group headers merged across their columns, like the aggregator headers
+  R.push({unmergeCells:{range:{sheetId:D,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:map.length}}});
+  for(const[a,b]of[[3,9],[9,13],[13,17]])R.push({mergeCells:{range:{sheetId:D,startRowIndex:0,endRowIndex:1,startColumnIndex:a,endColumnIndex:b},mergeType:"MERGE_ALL"}});
+  // column widths and frozen panes
+  if(Array.isArray(src.widths))map.forEach((sc,dc)=>{const w=src.widths[sc];if(w)R.push({updateDimensionProperties:{range:{sheetId:D,dimension:"COLUMNS",startIndex:dc,endIndex:dc+1},properties:{pixelSize:w},fields:"pixelSize"}});});
+  R.push({updateSheetProperties:{properties:{sheetId:D,gridProperties:{frozenRowCount:src.frozenRows||2,frozenColumnCount:src.frozenCols||3}},fields:"gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}});
+  return R;
+}
+if(typeof module!=="undefined")Object.assign(module.exports,{psInstoreFormatRequests});
+
 // ════════════════════════════════════════════════════════════════════════════
 // v535 POS SYNC — STEP 1 OF 4 (connection test). Replaces the desktop POS Uploader: the
 // dashboard's server signs in to Microsys (Kull ERP), pulls Credit Sales / Sales Discount
@@ -24896,6 +24940,17 @@ function posFlagsCardHTML(T,card,ct,btn){
   h+=`<div style="font-size:12px;color:${T.textSecondary};line-height:1.5">Rule: an outlet is flagged when its POS net sales (all channels) are under half its average for the same weekday over the previous 4 weeks. Re-pulling overwrites that day in every tab; a flag clears itself once the numbers look normal.</div></div>`;
   return h;
 }
+// v544: copy the Oregano tab's look (borders, fills, fonts, number formats, widths, frozen panes) onto the Dine-In & Takeaway tab
+async function posFormatInstore(sheet){
+  const meta=await posApi("/api/pos/sheet/meta",{sheet});const sr=await posApi("/api/pos/sheet/read",{sheet,tabs:["Oregano",PS_INSTORE_TAB]});
+  (sr.present||[]).forEach((t,k)=>{const vr=(sr.google&&sr.google.valueRanges)||[];sr.tabs[t]={header:(vr[2*k]&&vr[2*k].values)||[],ab:(vr[2*k+1]&&vr[2*k+1].values)||[]};});
+  const o=meta.sheets.find(x=>x.title==="Oregano"),d=meta.sheets.find(x=>x.title===PS_INSTORE_TAB);
+  if(!o||!sr.tabs.Oregano||sr.tabs.Oregano.missing)throw new Error("Oregano tab not found");if(!d||!sr.tabs[PS_INSTORE_TAB]||sr.tabs[PS_INSTORE_TAB].missing)throw new Error("Dine-In & Takeaway tab not found — pull a day first");
+  const reqs=psInstoreFormatRequests({sheetId:o.sheetId,header:sr.tabs.Oregano.header,ab:sr.tabs.Oregano.ab,widths:o.widths,frozenRows:o.frozenRows,frozenCols:o.frozenCols},{sheetId:d.sheetId,ab:sr.tabs[PS_INSTORE_TAB].ab});
+  if(!reqs.length)return 0;for(let i=0;i<reqs.length;i+=350)await posApi("/api/pos/sheet/batch",{sheet,requests:reqs.slice(i,i+350)});return reqs.length;
+}
+async function posFormatNow(){const P=posSyncState;if(P.pulling||P.formatting)return;P.formatting="⏳ Formatting…";renderPosSync();
+  try{const n=await posFormatInstore(P.sheet);P.formatting=`✅ Dine-In & Takeaway tab formatted (${n} steps)`;}catch(e){P.formatting="❌ "+e.message;}renderPosSync();setTimeout(()=>{if(!String(P.formatting).startsWith("⏳")){P.formatting=null;renderPosSync();}},8000);}
 async function posFlagOk(date,loc){try{await posApi("/api/pos/flag/ok",{date,loc});}catch(e){alert(e.message);}await posLoadStatus();}
 function posRepull(date){posSyncState.preset="c";posSyncState.from=date;posSyncState.to=date;renderPosSync();posStartPull();}
 function posFmtTs(iso){try{const d=new Date(iso);return d.toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Asia/Dubai"});}catch(e){return iso||"";}}
@@ -25009,6 +25064,7 @@ function posPullCardHTML(T,card,ct,btn){
   h+=`</div><div style="font-size:12px;color:${T.textSecondary};margin-bottom:12px">${dates.length} day${dates.length===1?"":"s"}: ${dates.length?posFmtDate(dates[0])+(dates.length>1?" → "+posFmtDate(dates[dates.length-1]):""):"—"} · writes to the <b style="color:${P.sheet==="live"?T.accentRed:T.accentGreen}">${P.sheet==="live"?"LIVE":"TEST"}</b> sheet</div>`;
   h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${btn(P.pulling?"⏳ Pulling…":"⬇ Pull POS Data","posStartPull()",true,P.pulling||!dates.length)}</div>`;
   if(P.bar)h+=`<div style="margin-top:14px">${posProgressHTML(T)}</div>`;
+  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">${btn("🎨 Re-apply sheet formatting","posFormatNow()",false,P.pulling||String(P.formatting||"").startsWith("⏳"))}${P.formatting?`<span style="font-size:12px;font-weight:700;color:${String(P.formatting).startsWith("❌")?T.accentRed:T.textSecondary}">${esc(P.formatting)}</span>`:`<span style="font-size:12px;color:${T.textSecondary}">Formats the Dine-In &amp; Takeaway tab like the delivery tabs (runs automatically after each pull)</span>`}</div>`;
   h+=`<div style="font-size:12px;color:${T.textSecondary};margin-top:10px;line-height:1.5">For each day: Credit Sales + Sales Discount Details from Microsys → the same rules as POS Uploader v4.9 → Oregano, Lollorosso, Smokeys, Wicked Wings and Fyoozhen tabs; plus Sales Summary by Outlet + in-store discounts → the Dine-In &amp; Takeaway tab (created on first pull). New date rows are added if missing; existing ones are overwritten, as the Uploader does.</div></div>`;
   return h;
 }
@@ -25020,7 +25076,7 @@ async function posStartPull(){
   if(P.sheet==="live"&&!confirm("Final check: this writes to the REAL sheet the dashboard reads. Continue?"))return;
   P.pulling=true;P.progress=[];P.results={sheet:P.sheet,days:[]};
   // v543: progress bar — 6 steps per day (Credit Sales, Discounts, Sales Summary, read sheet, write, low-sales check)
-  P.bar={total:dates.length*6,done:0,start:Date.now(),day:0,days:dates.length,finished:false,failed:0};
+  P.bar={total:dates.length*6+1,done:0,start:Date.now(),day:0,days:dates.length,finished:false,failed:0};
   window.addEventListener("beforeunload",posBeforeUnload);renderPosSync();
   const step=(t,st)=>{P.progress.push({t,st:st||"run"});renderPosSync();return P.progress.length-1;};
   const done=(i,st,t)=>{if(P.progress[i].st==="run"&&P.bar)P.bar.done=Math.min(P.bar.total,P.bar.done+1);P.progress[i].st=st;if(t)P.progress[i].t=t;renderPosSync();};
@@ -25073,6 +25129,7 @@ async function posStartPull(){
     P.bar.done=Math.max(P.bar.done,stepsBefore+6); // a failed day still counts as finished for the bar
     P.results.days.push(day);renderPosSync();
   }
+  if(okDays){const fi=step("Formatting the Dine-In & Takeaway tab like the delivery tabs");try{const n=await posFormatInstore(P.sheet);done(fi,"ok",`Dine-In & Takeaway tab formatted like the delivery tabs (${n} format steps)`);}catch(e){done(fi,"err","Formatting failed: "+e.message);}}
   try{await posApi("/api/pos/log",{sheet:P.sheet,dates:dates.length===1?dates[0]:dates[0]+" → "+dates[dates.length-1],result:`${okDays} ok${failDays?", "+failDays+" failed":""}`});}catch(e){}
   P.pulling=false;P.bar.done=P.bar.total;P.bar.finished=true;P.bar.failed=failDays;P.bar.end=Date.now();
   window.removeEventListener("beforeunload",posBeforeUnload);await posLoadStatus();
@@ -25108,4 +25165,4 @@ function posResultsHTML(T,card,ct){
   }
   return h+`</div>`;
 }
-window.posStartPull=posStartPull;window.posBeforeUnload=posBeforeUnload;window.posFlagOk=posFlagOk;window.posRepull=posRepull;window.posSetPreset=posSetPreset;window.posSetCustom=posSetCustom;
+window.posStartPull=posStartPull;window.posFormatNow=posFormatNow;window.posBeforeUnload=posBeforeUnload;window.posFlagOk=posFlagOk;window.posRepull=posRepull;window.posSetPreset=posSetPreset;window.posSetCustom=posSetCustom;
