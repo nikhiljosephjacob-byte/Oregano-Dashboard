@@ -711,6 +711,23 @@ async function handlePosSheetWrite(request, env) {
   if (!Array.isArray(data) || !data.length) return json({ error: "no_data" }, 400);
   for (const d of data) { const t = posTabOfRange(d.range); if (!POS_TABS.includes(t) || !Array.isArray(d.values)) return json({ error: "range_not_allowed: " + d.range }, 400); }
   const { token } = await googleTokenCached(env);
+  // v546: a new tab has only 1,000 rows and Google refuses writes beyond the grid — grow the
+  // Dine-In & Takeaway tab first when a write goes past its last row (history backfill, or simply
+  // a few months of daily pulls at 20 rows a day).
+  const instoreMax = data.filter(d => posTabOfRange(d.range) === "Dine-In & Takeaway")
+    .reduce((m, d) => { const x = String(d.range).match(/!\$?[A-Z]+\$?(\d+)(?::\$?[A-Z]+\$?(\d+))?$/); return x ? Math.max(m, +(x[2] || x[1])) : m; }, 0);
+  if (instoreMax) {
+    const mr = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${posSheetId(sheet)}?fields=sheets(properties(sheetId,title,gridProperties(rowCount)))`, { headers: { Authorization: "Bearer " + token } });
+    const mj = await mr.json();
+    const t = ((mj && mj.sheets) || []).map(x => x.properties).find(p => p.title === "Dine-In & Takeaway");
+    if (t && instoreMax > (t.gridProperties.rowCount || 0)) {
+      const add = instoreMax - t.gridProperties.rowCount + 500;
+      const ar = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${posSheetId(sheet)}:batchUpdate`, { method: "POST",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify({ requests: [{ appendDimension: { sheetId: t.sheetId, dimension: "ROWS", length: add } }] }) });
+      if (!ar.ok) { const aj = await ar.json(); return json({ error: "Couldn't add rows to the Dine-In & Takeaway tab: " + ((aj.error && aj.error.message) || ar.status) }, 502); }
+    }
+  }
   const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${posSheetId(sheet)}/values:batchUpdate`, {
     method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
     body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }) });
@@ -730,7 +747,7 @@ async function handlePosAddTab(request, env) {
   if (((meta && meta.sheets) || []).some(x => x.properties.title === title)) return json({ ok: true, created: false });
   const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}:batchUpdate`, { method: "POST",
     headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-    body: JSON.stringify({ requests: [{ addSheet: { properties: { title, gridProperties: { frozenRowCount: 2, frozenColumnCount: 3 } } } }] }) });
+    body: JSON.stringify({ requests: [{ addSheet: { properties: { title, gridProperties: { rowCount: 2000, columnCount: 20, frozenRowCount: 2, frozenColumnCount: 3 } } } }] }) });
   const j = await r.json();
   if (!r.ok) return json({ error: (j.error && j.error.message) || ("HTTP " + r.status) }, 502);
   return json({ ok: true, created: true });
@@ -817,11 +834,24 @@ async function handlePosSheetBatch(request, env) {
   if (!r.ok) return json({ error: (j.error && j.error.message) || ("HTTP " + r.status) }, 502);
   return json({ ok: true, applied: requests.length });
 }
+// v546: backfill re-layout — clears the VALUES below the header of the Dine-In & Takeaway tab only
+// (formatting stays), so history can be written in date order from 1 Jan 2025.
+async function handlePosClearInstore(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { sheet } = await readBody(request);
+  const { token } = await googleTokenCached(env);
+  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${posSheetId(sheet)}/values/${encodeURIComponent("'Dine-In & Takeaway'!A3:Q")}:clear`, { method: "POST", headers: { Authorization: "Bearer " + token } });
+  const j = await r.json();
+  if (!r.ok) return json({ error: (j.error && j.error.message) || ("HTTP " + r.status) }, 502);
+  await posLog(env, { user: s.user, kind: "clear", sheet: sheet === "live" ? "LIVE" : "TEST", result: "Dine-In & Takeaway rows cleared for backfill" });
+  return json({ ok: true });
+}
 async function handlePosLogWrite(request, env) {
   const s = await requirePosUser(request, env);
   if (!s) return json({ error: "forbidden" }, 403);
   const b = await readBody(request);
-  await posLog(env, { user: s.user, kind: "pull", sheet: b.sheet === "live" ? "LIVE" : "TEST", dates: String(b.dates || "").slice(0, 80), result: String(b.result || "").slice(0, 200) });
+  await posLog(env, { user: s.user, kind: b.kind === "backfill" ? "backfill" : "pull", sheet: b.sheet === "live" ? "LIVE" : "TEST", dates: String(b.dates || "").slice(0, 80), result: String(b.result || "").slice(0, 200) });
   return json({ ok: true });
 }
 
@@ -911,6 +941,7 @@ export default {
       if (path === "/api/pos/sheet/addtab"&& method === "POST") return await handlePosAddTab(request, env);
       if (path === "/api/pos/flags"       && method === "POST") return await handlePosFlags(request, env);
       if (path === "/api/pos/sheet/meta"  && method === "POST") return await handlePosSheetMeta(request, env);
+      if (path === "/api/pos/sheet/clear-instore" && method === "POST") return await handlePosClearInstore(request, env);
       if (path === "/api/pos/sheet/batch" && method === "POST") return await handlePosSheetBatch(request, env);
       if (path === "/api/pos/flag/ok"     && method === "POST") return await handlePosFlagOk(request, env);
     } catch (e) {
