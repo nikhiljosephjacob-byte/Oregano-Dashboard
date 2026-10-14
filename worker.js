@@ -464,6 +464,7 @@ const POS_SHEETS = {
 const MSYS = "https://erp.microsystc.com";
 const MSYS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
 const MSYS_SESSION_TTL = 15 * 60;
+const MSYS_TENANT = "ORE"; // TenantID cookie value the portal uses for Oregano Restaurants
 // Report viewer (Stimulsoft 2020.5.2) parameters — copied from a real export made in the portal.
 const STI_PARAMS = {"viewerId":"MvcViewer","routes":{"action":"Reports","controller":"AnalysisEMReportView"},"formValues":{},"cacheMode":"ObjectCache","cacheTimeout":10,"cacheItemPriority":"Default","pageNumber":0,"originalPageNumber":0,"reportType":"Report","zoom":100,"viewMode":"SinglePage","showBookmarks":true,"openLinksWindow":"_blank","chartRenderType":"AnimatedVector","reportDisplayMode":"Table","drillDownParameters":[],"editableParameters":null,"useRelativeUrls":true,"passQueryParametersForResources":true,"passQueryParametersToReport":false,"version":"2020.5.2","reportDesignerMode":false,"imagesQuality":"Normal","parametersPanelSortDataItems":true,"combineReportPages":false,"exportFormat":"Csv","exportSettings":{"CodePage":"Default","UseDefaultSystemEncoding":true,"SkipColumnHeaders":false,"TableName":null,"Separator":",","DataType":"Csv","ExportDataOnly":false,"PageRange":"All","Encoding":"65001","DataExportMode":"Data"}};
 
@@ -517,7 +518,10 @@ async function msysLogin(env, force = false) {
   const credsRaw = await env.SESSIONS.get("pos:creds");
   if (!credsRaw) throw new Error("NO_CREDS");
   const { user, pass } = JSON.parse(credsRaw);
-  const jar = {};
+  // v536: Microsys is multi-tenant — the tenant comes from a "TenantID" cookie that the portal's
+  // own browser login carries (value "ORE" for Oregano). Without it /Home/Login answers "4"
+  // ("Invalid Tenant. Please check the URL") — exactly what build 535's first test returned.
+  const jar = { TenantID: MSYS_TENANT };
   const steps = [];
   // 1) login page → cookies + anti-forgery tokens
   const r1 = await msysFetch(jar, "/Home/Index");
@@ -533,7 +537,13 @@ async function msysLogin(env, force = false) {
     body: `{'Username':'${eu}','Password':'${ep}', 'Company':'', 'Language':'EN', 'ChainID':'', 'LocationID':'' }` });
   const t2 = (await r2.text()).trim();
   steps.push("login " + r2.status + " " + t2.slice(0, 40));
-  if (t2.replace(/"/g, "") !== "1") throw new Error("MSYS_BAD_LOGIN — Microsys rejected the username/password (" + t2.slice(0, 120) + ")");
+  const code = t2.replace(/"/g, "");
+  // Response codes from the portal's own Login.js: 1 ok · 2 "User already logged in" ·
+  // 3 "Invalid username and password" · 4 "Invalid Tenant" · anything else "Invalid Login".
+  if (code === "2") throw new Error("MSYS_ALREADY_LOGGED_IN — Microsys says this user is already logged in elsewhere (code 2)");
+  if (code === "3") throw new Error("MSYS_BAD_LOGIN — Microsys rejected the username/password (code 3)");
+  if (code === "4") throw new Error("MSYS_BAD_TENANT — Microsys said 'Invalid Tenant' (code 4)");
+  if (code !== "1") throw new Error("MSYS_LOGIN_FAILED — Microsys answered: " + t2.slice(0, 120));
   // 3) company/chain/location — reuse the user's last work location, else ORE/ORE/ALQ
   let company = "ORE", chain = "ORE", location = "ALQ";
   try {
