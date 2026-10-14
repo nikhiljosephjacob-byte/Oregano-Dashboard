@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-14-537";
+const BUILD_VERSION="2026-10-14-538";
 const BUILD_NOTES=[
+  "⬇ POS SYNC STEP 2 — PULL DELIVERY DATA INTO THE BRAND TABS — Nikhil's v537 test passed (Microsys ✅ signed in from Cloudflare, Sales Summary 13 Oct, 20 outlets; Google ✅). New '⬇ Pull POS Data' card: pick Yesterday / Last 2 / Last 7 days / Custom; for each day it pulls Credit Sales + Sales Discount Details straight from Microsys and writes the Oregano, Lollorosso, Smokeys, Wicked Wings and Fyoozhen tabs of the TEST (or LIVE) sheet. The rules are a line-for-line port of POS Uploader v4.9 (LOCATION_MAP, #DL/#DT/#PO brand detection, Meituan→Keeta, Eat Easy→Smiles, discount exclusion list, header discovery, date-row search, new-row scaffold, Total row) and were checked cell-by-cell against the Python original on the same inputs: 3,396 cells, 0 differences (incl. Python's round-half-even on AOV). Each discount file is now pulled for exactly one day, so the discount date can no longer be mis-typed. Dine-in & takeaway tab comes next.",
   "🔑 POS SYNC: TENANT FIX, TAKE 2 — v536 still got Microsys code 4 (Invalid Tenant). The portal sets the company on its side when the login page is opened as /Home/Login?ORE (the same address its own 'session expired' prompt sends you to), not from the cookie alone. The server login now opens that address first.",
   "🔑 POS SYNC: MICROSYS 'INVALID TENANT' FIXED — Nikhil's first Test connection on v535: Google ✅ (TEST sheet opened, all 8 tabs read) but Microsys ❌ with code 4. Checked the portal's own Login.js: code 4 = 'Invalid Tenant', not a wrong password. The portal identifies the company from a TenantID cookie (ORE) that the browser login carries; the server login now sends it too. Error messages now name every Microsys login code (2 already logged in, 3 wrong password, 4 tenant).",
   "🔄 NEW: POS SYNC (STEP 1 OF 4 — CONNECTION TEST) — Nikhil asked to replace the desktop POS Uploader with one button on the dashboard that pulls straight from Microsys (Kull ERP) and works on laptop and mobile. This build adds the POS Sync page (Nikhil and Nicole only), a one-time Microsys login prompt (saved on the server, never sent back to the browser), a TEST/LIVE sheet switch and a read-only Test connection: sign in to Microsys from Cloudflare, pull yesterday's Sales Summary by Outlet, and read the Google Sheet's tab list. Nothing is written to any sheet yet. Next builds: delivery to brand tabs (same rules as Uploader v4.9), the Dine-In & Takeaway tab, then low-sales flags.",
@@ -24602,6 +24603,170 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
   fns.forEach(fn=>{try{if(typeof fn==="function")window[fn.name]=fn;}catch(e){}});
 })();
 
+// ── v538 POS SYNC CORE — JavaScript port of POS Uploader v4.9's processing + sheet-writing logic.
+// Kept line-for-line equivalent to app.py (LOCATION_MAP, brand/aggregator detection, discount
+// exclusion list, header discovery, date-row search, scaffold, per-branch and Total cells), and
+// verified against the Python original on the same inputs before shipping. Pure functions only —
+// no DOM, no network — so the same code can be tested outside the browser.
+const PS_LOCATION_MAP={"ALQ - Al Quoz":"Al Quoz","TSQ - Town Square":"Town Square","DMR - Dubai Marina":"Marina","ALW - Jumeirah-Al Wasl":"Jumeirah","REM - Al Reem Island":"Al Reem","REF - AL Reef":"Al Reef","MIR - Mirdif":"Mirdiff","MSS - Mirdif Sports Society":"Mirdiff","DMC - Dubai Media City":"DMC","MTC - Motor City":"MC","DSO - Dubai Silicon Oasis":"DSO","VLA - The Villa":"Villa","DIP - Dubai Investment Park-ORE":"DIP","FUR - Al Furjan":"Furjan","ALF - Khalifa City":"Al Forsan","DIP - Dubai Investment Park-FYZ":"DIP","NAD - Nad Al Sheba":"NAS","WTC - World Trade Center":"WTC","ALF - Khalifa City (Fyoozhen)":"Al Forsan"};
+const PS_FYZ_LOCS=new Set(["DIP - Dubai Investment Park-FYZ","NAD - Nad Al Sheba","WTC - World Trade Center","ALF - Khalifa City (Fyoozhen)"]);
+const PS_AGG_ORDER=["Deliveroo","Talabat","Careem","Noon","Instashop","Smiles","Keeta"];
+const PS_BRANCH_ORDER={
+  "Oregano":["Mirdiff","DMC","MC","DSO","Villa","DIP","Furjan","Al Forsan","Al Quoz","Town Square","Marina","Jumeirah","Al Reem","Al Reef"],
+  "Lollorosso":["Mirdiff","DMC","MC","DSO","Villa","DIP","Furjan","Al Forsan","Al Quoz","Town Square","Marina","Jumeirah","Al Reem","NAS","Al Reef"],
+  "Smokeys":["Mirdiff","DMC","MC","DSO","Villa","DIP","Furjan","Al Forsan","Al Quoz","Town Square","Marina","Jumeirah","Al Reem","Al Reef"],
+  "Wicked Wings":["NAS","Al Forsan","Al Reem","Al Reef"],
+  "Fyoozhen":["Al Forsan","WTC","NAS","DIP"]};
+const PS_BRAND_TABS=["Oregano","Lollorosso","Smokeys","Wicked Wings","Fyoozhen"];
+const PS_DISC_EXCLUDE=["SALES PROMO","BOD DIS","BOD 1","BOD 5","STAFF","CUSTOMER DISCOUNT","GEN MANAGER","CHEF ","SECURITY","FOOD TRIAL","MANAGER 1","MANAGER 3","MANAGER 5","CAREEM DINE","NOON - OUT","NOON_OUT","ESAAD","GEMS ","KINGSPAN","MALL DISC","PALMA","Z PRO","ASST OPS","AR MGR","CUSTOMER DISC","FOOD TRIAL","ENTERTAINER","HAPPY TUESDAY","MANAGERS DISCOUNT","SUPERVISOR DISCOUNT","COMP MEAL","BOD 100","BUSINESS DEV","SECURITY DISC","STAFF DISC"];
+const PS_MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const PS_DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+// Python's round(): nearest, exact binary ties to even (JS toFixed rounds ties up).
+function psRound(x,n){
+  // exact decimal expansion of the binary value (toFixed is exact up to 100 digits); only a TRUE
+  // tie (…5000…) goes to even, like Python — everything else rounds to nearest via toFixed(n).
+  if(!isFinite(x))return x;const ex=Math.abs(x).toFixed(60),dot=ex.indexOf("."),tail=ex.slice(dot+1+n);
+  if(/^50*$/.test(tail)){const kept=ex.slice(0,dot+1+n).replace(".","");const last=Number(kept[kept.length-1]);
+    const down=Number(ex.slice(0,dot+1+n));const up=down+Math.pow(10,-n);const r=last%2===0?down:up;return Number((x<0?-r:r).toFixed(n));}
+  return Number(x.toFixed(n));}
+function psParseCSV(text){
+  const rows=[];let row=[],cell="",q=false;
+  for(let i=0;i<text.length;i++){const c=text[i];
+    if(q){if(c==='"'){if(text[i+1]==='"'){cell+='"';i++;}else q=false;}else cell+=c;}
+    else if(c==='"')q=true;else if(c===','){row.push(cell);cell="";}
+    else if(c==='\n'||c==='\r'){if(c==='\r'&&text[i+1]==='\n')i++;row.push(cell);rows.push(row);row=[];cell="";}
+    else cell+=c;}
+  if(cell!==""||row.length){row.push(cell);rows.push(row);}
+  return rows.filter(r=>r.length>1||(r[0]||"").trim()!=="");
+}
+const psNum=s=>{const v=parseFloat(String(s==null?"":s).replace(/,/g,""));return isNaN(v)?0:v;};
+function psGetBrand(name,suffix,loc){
+  if(suffix==="DI"||suffix==="TO")return null;
+  if(name.includes("Fyoozhen Keeta")||name.includes("1052 -"))return"Fyoozhen";
+  if(name.includes("Wicked Wings")||name.includes("WCKD Wings"))return"Wicked Wings";
+  if(PS_FYZ_LOCS.has(loc)){if(suffix==="DT")return"Lollorosso";if(suffix==="DL")return"Fyoozhen";if(suffix==="PO")return"Wicked Wings";return null;}
+  if(suffix==="DT")return"Lollorosso";if(suffix==="PO")return"Smokeys";
+  if(suffix==="DL"){if(["Fyoo zhen","Fyoozhen","Slider COD"].some(k=>name.includes(k)))return"Fyoozhen";return"Oregano";}
+  return null;
+}
+function psGetAgg(name){
+  const n=name.toLowerCase();
+  if(name.trim().toUpperCase().startsWith("ONLINE#"))return"Keeta";
+  for(const[k,v]of[["talabat","Talabat"],["deliveroo","Deliveroo"],["careem","Careem"],["noon","Noon"],["keeta","Keeta"],["meituan","Keeta"],["instashop","Instashop"],["slider","Instashop"],["smiles","Smiles"],["eat_easy","Smiles"]])if(n.includes(k))return v;
+  return null;
+}
+const PS_AGG_SHORT={DEL:"Deliveroo",TAL:"Talabat",CAR:"Careem",NOON:"Noon"},PS_BRAND_SHORT={FZ:"Fyoozhen",LR:"Lollorosso",SMK:"Smokeys"};
+function psShorthand(name){const p=name.trim().split(/\s+/);if(p.length>=2){const a=p[0].toUpperCase(),b=p[1].toUpperCase();if(PS_AGG_SHORT[a]&&PS_BRAND_SHORT[b])return[PS_AGG_SHORT[a],PS_BRAND_SHORT[b]];}return[null,null];}
+function psDiscSuffix(name){const t=name.trim();const last=t?t.split(/\s+/).pop():"";return(last.includes("#")?last.split("#").pop():last).toUpperCase();}
+function psExcluded(name){const n=name.toUpperCase();return PS_DISC_EXCLUDE.some(k=>n.includes(k.toUpperCase()));}
+function psGetDiscBrand(name,loc){
+  const n=name.toUpperCase(),suf=psDiscSuffix(name);
+  if(suf==="DI"||suf==="TO")return null;if(psExcluded(name))return null;
+  const b=psShorthand(name)[1];if(b)return b;
+  if(name.includes("WW ")||n.includes("WCKD")||n.includes("WICKED WINGS"))return"Wicked Wings";
+  if(PS_FYZ_LOCS.has(loc)){if(suf==="DL")return"Fyoozhen";if(suf==="DT")return"Lollorosso";if(suf==="PO")return"Wicked Wings";return null;}
+  if(suf==="DL")return"Oregano";if(suf==="DT")return"Lollorosso";if(suf==="PO")return"Smokeys";return null;
+}
+function psGetDiscAgg(name){
+  const n=name.toUpperCase(),suf=psDiscSuffix(name);
+  if(suf==="DI"||suf==="TO")return null;if(psExcluded(name))return null;
+  const a=psShorthand(name)[0];if(a)return a;
+  if(name.trim().toUpperCase().startsWith("ONLINE "))return"Keeta";
+  if(n.includes("DELIVEROO")||n.includes(" DEL ")||n.startsWith("WW DEL"))return"Deliveroo";
+  if(n.includes("TALABAT")||n.startsWith("WW TAL"))return"Talabat";
+  if(n.includes("CAREEM"))return"Careem";if(n.includes("NOON"))return"Noon";if(n.includes("KEETA"))return"Keeta";
+  if(n.includes("MEITUAN"))return"Keeta";if(n.includes("INSTASHOP"))return"Instashop";if(n.includes("SMILES"))return"Smiles";if(n.includes("EAT_EASY"))return"Smiles";
+  return null;
+}
+// Credit Sales CSV → {rows:[{brand,branch,agg,sales,orders}], lines, kept, excluded, dates:Set}
+function psProcessCredit(csv,isoDate){
+  const t=psParseCSV(csv);if(!t.length)return{rows:[],lines:0,kept:0,excluded:0,otherDates:0};
+  const h=t[0].map(x=>x.trim());const ix=k=>h.indexOf(k);
+  const iC=ix("CustomerName"),iO=ix("OrderNo"),iD=ix("Date"),iL=ix("Location"),iA=ix("Amount");
+  if(iC<0||iA<0||iL<0)throw new Error("Credit Sales CSV columns changed: "+h.join(", "));
+  const map=new Map();let kept=0,excl=0,other=0;
+  for(const r of t.slice(1)){
+    const cn=r[iC]||"",loc=r[iL]||"";const m=cn.match(/#(\w+)$/);const suf=m?m[1]:null;
+    if(iD>=0&&isoDate){const d=(r[iD]||"").split("/");if(d.length===3&&`${d[2]}-${d[1].padStart(2,"0")}-${d[0].padStart(2,"0")}`!==isoDate){other++;continue;}}
+    const b=psGetBrand(cn,suf,loc),a=psGetAgg(cn),br=PS_LOCATION_MAP[loc];
+    if(!b||!a||!br){excl++;continue;}
+    kept++;const k=b+"|"+br+"|"+a;const o=map.get(k)||{brand:b,branch:br,agg:a,sales:0,orders:0};o.sales+=psNum(r[iA]);o.orders++;map.set(k,o);
+  }
+  const rows=[...map.values()];rows.forEach(o=>o.sales=psRound(o.sales,2));
+  return{rows,lines:t.length-1,kept,excluded:excl,otherDates:other};
+}
+// Sales Discount Details CSV (single-day layout Text15/Text1/Text38/Text7, multi-day Text16/Text12/…/Text5)
+function psProcessDisc(csv){
+  const t=psParseCSV(csv);if(!t.length)return{rows:[],instore:[],lines:0,kept:0,excluded:0};
+  const h=t[0].map(x=>x.trim());
+  const find=(c,pos)=>{for(const x of c){const i=h.indexOf(x);if(i>=0)return i;}return pos<h.length?pos:-1;};
+  const iN=find(["Text16","Text15","DiscountName","Name"],0),iB=find(["Text12","Text1","Location","Branch"],1),iV=find(["Text5","Text7","DiscAmt","DiscountAmount"],3);
+  const map=new Map(),instore=[];let kept=0,excl=0;
+  for(const r of t.slice(1)){
+    const n=r[iN]||"",loc=r[iB]||"",v=psNum(r[iV]);
+    const b=psGetDiscBrand(n,loc),a=psGetDiscAgg(n),br=PS_LOCATION_MAP[loc];
+    if(!b||!a||!br){excl++;instore.push({name:n,loc,amount:v});continue;}
+    kept++;const k=b+"|"+br+"|"+a;const o=map.get(k)||{brand:b,branch:br,agg:a,disc:0};o.disc+=v;map.set(k,o);
+  }
+  const rows=[...map.values()];rows.forEach(o=>o.disc=psRound(o.disc,2));
+  return{rows,instore,lines:t.length-1,kept,excluded:excl};
+}
+function psColMap(header){
+  const r1=(header[0]||[]).slice(),r2=(header[1]||[]).slice();const L=Math.max(r1.length,r2.length);
+  while(r1.length<L)r1.push("");while(r2.length<L)r2.push("");
+  const title=s=>s.replace(/[A-Za-z]+/g,w=>w[0].toUpperCase()+w.slice(1).toLowerCase());
+  const cm={};let cur=null;
+  for(let i=0;i<L;i++){const a=String(r1[i]).trim(),b=String(r2[i]).trim();if(a)cur=title(a);let sub=title(b);if(sub==="Aov")sub="AOV";
+    if(cur&&["Sales","Orders","AOV","Disc"].includes(sub)){(cm[cur]=cm[cur]||{})[sub]=i;}}
+  return cm;
+}
+function psDateLabels(iso){const[y,m,d]=iso.split("-").map(Number);const mon=PS_MON[m-1],yy=String(y).slice(2),dd=String(d).padStart(2,"0"),mm=String(m).padStart(2,"0");
+  return{label:`${d}-${mon}-${yy}`,day:PS_DOW[new Date(Date.UTC(y,m-1,d)).getUTCDay()],formats:[`${d}-${mon}-${yy}`,`${dd}-${mon}-${yy}`,`${d}-${mon}-${y}`,`${dd}/${mm}/${y}`,`${d}/${mm}/${y}`,`${y}-${mm}-${dd}`]};}
+// Same as write_brand_to_sheet for ONE date. Returns {cells:Map("r,c"→value), scaffolded, rowsFound}.
+function psCellsForBrand(header,ab,pos,disc,brand,iso){
+  const cm=psColMap(header),order=PS_BRANCH_ORDER[brand]||[],L=psDateLabels(iso);
+  const dPos=(pos||[]).filter(x=>x.brand===brand),dDisc=(disc||[]).filter(x=>x.brand===brand);
+  const found={};
+  ab.forEach((row,i)=>{const cv=String(row[1]==null?"":row[1]).trim(),bv=String(row[0]==null?"":row[0]).trim();
+    for(const f of L.formats){if(cv.toLowerCase()===f.toLowerCase()){if(bv)found[bv]=i+1;break;}}});
+  const cells=new Map();const set=(r,c,v)=>cells.set(r+","+c,v);
+  let rows=Object.keys(found).length?found:null,scaffolded=false;
+  if(!rows){const colB=ab.map(r=>r[1]==null?"":String(r[1]));while(colB.length&&!colB[colB.length-1].trim())colB.pop();
+    const next=colB.length+2;order.forEach((b,i)=>{set(next+i,1,b);set(next+i,2,L.label);set(next+i,3,L.day);});
+    const tr=next+order.length;set(tr,1,"Total");set(tr,2,L.label);set(tr,3,L.day);
+    rows={};order.forEach((b,i)=>rows[b]=next+i);rows.Total=tr;scaffolded=true;}
+  const hasPos=dPos.length>0,hasDisc=dDisc.length>0;
+  const sum=(arr,f,k)=>arr.filter(f).reduce((s,x)=>s+x[k],0);
+  for(const br of order){const rn=rows[br];if(!rn)continue;let bs=0,bo=0,bd=0;
+    for(const a of PS_AGG_ORDER){if(!cm[a])continue;const ac=cm[a];
+      const sp=hasPos?dPos.filter(x=>x.branch===br&&x.agg===a):[],sd=hasDisc?dDisc.filter(x=>x.branch===br&&x.agg===a):[];
+      const sales=sp.length?psRound(sp.reduce((s,x)=>s+x.sales,0),2):0,orders=sp.length?sp.reduce((s,x)=>s+x.orders,0):0,aov=orders?psRound(sales/orders,1):0,dsc=sd.length?psRound(sd.reduce((s,x)=>s+x.disc,0),2):0;
+      bs+=sales;bo+=orders;bd+=dsc;
+      if(hasDisc&&ac.Disc!=null)set(rn,ac.Disc+1,dsc);if(hasPos&&ac.Sales!=null)set(rn,ac.Sales+1,sales);if(hasPos&&ac.Orders!=null)set(rn,ac.Orders+1,orders);if(hasPos&&ac.AOV!=null)set(rn,ac.AOV+1,aov);}
+    if(cm.Total){const tc=cm.Total,ba=bo?psRound(bs/bo,1):0;
+      if(hasDisc&&tc.Disc!=null)set(rn,tc.Disc+1,psRound(bd,2));if(hasPos&&tc.Sales!=null)set(rn,tc.Sales+1,psRound(bs,2));if(hasPos&&tc.Orders!=null)set(rn,tc.Orders+1,bo);if(hasPos&&tc.AOV!=null)set(rn,tc.AOV+1,ba);}}
+  const trn=rows.Total;
+  if(trn){let gs=0,go=0,gd=0;
+    for(const a of PS_AGG_ORDER){if(!cm[a])continue;const ac=cm[a];
+      const ts=psRound(sum(dPos,x=>x.agg===a,"sales"),2),to=sum(dPos,x=>x.agg===a,"orders"),ta=to?psRound(ts/to,1):0,td=psRound(sum(dDisc,x=>x.agg===a,"disc"),2);
+      gs+=ts;go+=to;gd+=td;
+      if(hasDisc&&ac.Disc!=null)set(trn,ac.Disc+1,td);if(hasPos&&ac.Sales!=null)set(trn,ac.Sales+1,ts);if(hasPos&&ac.Orders!=null)set(trn,ac.Orders+1,to);if(hasPos&&ac.AOV!=null)set(trn,ac.AOV+1,ta);}
+    if(cm.Total){const tc=cm.Total,ga=go?psRound(gs/go,1):0;
+      if(hasDisc&&tc.Disc!=null)set(trn,tc.Disc+1,psRound(gd,2));if(hasPos&&tc.Sales!=null)set(trn,tc.Sales+1,psRound(gs,2));if(hasPos&&tc.Orders!=null)set(trn,tc.Orders+1,go);if(hasPos&&tc.AOV!=null)set(trn,tc.AOV+1,ga);}}
+  return{cells,scaffolded,rowsFound:Object.keys(found).length};
+}
+function psColLetter(c){let s="";while(c>0){const m=(c-1)%26;s=String.fromCharCode(65+m)+s;c=Math.floor((c-1)/26);}return s;}
+// Group cells into contiguous horizontal runs → [{range:"'Tab'!D12:G12", values:[[...]]}]
+function psCellsToRanges(tab,cells){
+  const byRow=new Map();for(const[k,v]of cells){const[r,c]=k.split(",").map(Number);if(!byRow.has(r))byRow.set(r,[]);byRow.get(r).push([c,v]);}
+  const out=[];const q="'"+tab.replace(/'/g,"''")+"'";
+  for(const[r,list]of[...byRow].sort((a,b)=>a[0]-b[0])){list.sort((a,b)=>a[0]-b[0]);let start=null,vals=[],prev=null;
+    const flush=()=>{if(start!=null)out.push({range:`${q}!${psColLetter(start)}${r}:${psColLetter(prev)}${r}`,values:[vals]});};
+    for(const[c,v]of list){if(prev!=null&&c===prev+1){vals.push(v);prev=c;}else{flush();start=c;prev=c;vals=[v];}}flush();}
+  return out;
+}
+if(typeof module!=="undefined")module.exports={psParseCSV,psProcessCredit,psProcessDisc,psColMap,psCellsForBrand,psCellsToRanges,psRound,psDateLabels,PS_BRAND_TABS,PS_LOCATION_MAP};
+
 // ════════════════════════════════════════════════════════════════════════════
 // v535 POS SYNC — STEP 1 OF 4 (connection test). Replaces the desktop POS Uploader: the
 // dashboard's server signs in to Microsys (Kull ERP), pulls Credit Sales / Sales Discount
@@ -24611,7 +24776,7 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
 // same list server-side (POS_USERS), the client check here is just to hide the tab.
 // ════════════════════════════════════════════════════════════════════════════
 const POS_SYNC_USERS=["nikhil","nicole"];
-let posSyncState={status:null,loading:false,testing:false,test:null,sheet:"test",err:null};
+let posSyncState={status:null,loading:false,testing:false,test:null,sheet:"test",err:null,preset:"y",from:"",to:"",pulling:false,progress:[],results:null};
 function posSyncAllowed(){const s=getActiveSession();return !!(s&&(s.admin||POS_SYNC_USERS.includes(String(s.user||"").toLowerCase())));}
 function injectPosSyncTab(){
   if(!posSyncAllowed())return;
@@ -24703,8 +24868,10 @@ function renderPosSync(){
   if(st)h+=pill(st.hasGoogle,st.hasGoogle?"Google key added in Cloudflare":"Google key missing in Cloudflare");
   h+=`</div>`;
   h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px"><span style="font-size:12px;color:${T.textSecondary};font-weight:700">Sheet:</span><span style="display:inline-flex;border:1px solid ${T.cardBorder};border-radius:8px;overflow:hidden">${modeBtn("test","🟢 TEST",T.accentGreen)}${modeBtn("live","🔴 LIVE",T.accentRed)}</span></div>`;
-  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${btn(posSyncState.testing?"⏳ Testing…":"🧪 Test connection","posRunTest()",true,posSyncState.testing)}${btn("🔑 Microsys login","posOpenCreds()",false,false)}${btn("⬇ Pull POS Data — next build","",false,true)}</div>`;
-  h+=`<div style="font-size:12px;color:${T.textSecondary};margin-top:10px;line-height:1.5">The test signs in to Microsys, pulls yesterday's Sales Summary by Outlet, and reads the tab list of the chosen Google Sheet. It doesn't write anything.</div></div>`;
+  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${btn(posSyncState.testing?"⏳ Testing…":"🧪 Test connection","posRunTest()",true,posSyncState.testing)}${btn("🔑 Microsys login","posOpenCreds()",false,false)}</div>`;
+  h+=`<div style="font-size:12px;color:${T.textSecondary};margin-top:10px;line-height:1.5">Test connection is read-only: it signs in to Microsys, pulls yesterday's Sales Summary by Outlet, and reads the tab list of the chosen Google Sheet.</div></div>`;
+  h+=posPullCardHTML(T,card,ct,btn);
+  if(posSyncState.progress.length||posSyncState.results)h+=posResultsHTML(T,card,ct);
   if(ts){
     const row=(ok,title,body)=>`<div style="display:flex;gap:12px;align-items:flex-start;padding:12px;border-radius:10px;background:${ok?T.accentGreen+"14":T.accentRed+"14"};margin-bottom:8px"><div style="font-size:18px">${ok?"✅":"❌"}</div><div style="flex:1;min-width:0"><div style="font-weight:800">${title}</div><div style="font-size:12px;color:${T.textSecondary};margin-top:3px;word-break:break-word;line-height:1.5">${body}</div></div></div>`;
     const m=ts.microsys||{},g=ts.google||{};
@@ -24716,10 +24883,99 @@ function renderPosSync(){
   const hist=(st&&st.history)||[];
   h+=`<div style="${card}"><div style="${ct}">History</div>`;
   if(!hist.length)h+=`<div style="font-size:13px;color:${T.textSecondary}">No tests or pulls yet.</div>`;
-  else{h+=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">`+
+  else{h+=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;color:${T.textPrimary}">`+
     `<tr>${["When","Who","What","Sheet","Result"].map(x=>`<th style="text-align:left;padding:7px 8px;color:${T.textSecondary};font-size:11px;text-transform:uppercase;border-bottom:1px solid ${T.cardBorder}">${x}</th>`).join("")}</tr>`+
-    hist.map(r=>`<tr><td style="padding:7px 8px;white-space:nowrap">${posFmtTs(r.ts)}</td><td style="padding:7px 8px">${esc(r.user||"")}</td><td style="padding:7px 8px">${r.kind==="test"?"Connection test":esc(r.kind||"")}</td><td style="padding:7px 8px">${esc(r.sheet||"")}</td><td style="padding:7px 8px">${r.kind==="test"?`Microsys ${r.microsysOk?"✅":"❌"} · Google ${r.googleOk?"✅":"❌"}`:esc(r.result||"")}</td></tr>`).join("")+`</table></div>`;}
+    hist.map(r=>`<tr><td style="padding:7px 8px;white-space:nowrap">${posFmtTs(r.ts)}</td><td style="padding:7px 8px">${esc(r.user||"")}</td><td style="padding:7px 8px">${r.kind==="test"?"Connection test":r.kind==="pull"?"Pull "+esc(r.dates||""):esc(r.kind||"")}</td><td style="padding:7px 8px">${esc(r.sheet||"")}</td><td style="padding:7px 8px">${r.kind==="test"?`Microsys ${r.microsysOk?"✅":"❌"} · Google ${r.googleOk?"✅":"❌"}`:esc(r.result||"")}</td></tr>`).join("")+`</table></div>`;}
   h+=`</div></div>`;
   pg.innerHTML=h;
 }
 window.injectPosSyncTab=injectPosSyncTab;window.renderPosSync=renderPosSync;window.posRunTest=posRunTest;window.posOpenCreds=posOpenCreds;window.posSaveCreds=posSaveCreds;window.posSetSheet=posSetSheet;
+
+// ── v538 STEP 2: pull delivery (Credit Sales + Sales Discount Details) → 5 brand tabs ──
+function posDubaiToday(){const d=new Date(Date.now()+4*3600*1000);return d.toISOString().slice(0,10);}
+function posAddDays(iso,n){const d=new Date(iso+"T00:00:00Z");d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);}
+function posFmtDate(iso){const[y,m,d]=iso.split("-").map(Number);return `${PS_DOW[new Date(Date.UTC(y,m-1,d)).getUTCDay()]} ${d} ${PS_MON[m-1]}`;}
+function posSelectedDates(){
+  const y=posAddDays(posDubaiToday(),-1);let from=y,to=y;const p=posSyncState.preset;
+  if(p==="2")from=posAddDays(y,-1);else if(p==="7")from=posAddDays(y,-6);
+  else if(p==="c"){from=posSyncState.from||y;to=posSyncState.to||from;}
+  if(from>to){const t=from;from=to;to=t;}if(to>y)to=y;
+  const out=[];for(let d=from;d<=to&&out.length<31;d=posAddDays(d,1))out.push(d);return out;
+}
+function posSetPreset(p){posSyncState.preset=p;renderPosSync();}
+function posSetCustom(which,v){posSyncState[which]=v;renderPosSync();}
+function posPullCardHTML(T,card,ct,btn){
+  const P=posSyncState,dates=posSelectedDates(),y=posAddDays(posDubaiToday(),-1);
+  const pre=(k,l)=>`<button onclick="posSetPreset('${k}')" style="padding:6px 12px;border-radius:6px;border:1px solid ${P.preset===k?T.accentOrange:T.cardBorder};background:${P.preset===k?T.accentOrange+"22":"transparent"};color:${P.preset===k?T.accentOrange:T.textSecondary};font-size:12px;font-weight:700;cursor:pointer">${l}</button>`;
+  const inp=(w,v)=>`<input type="date" max="${y}" value="${v}" onchange="posSetCustom('${w}',this.value)" style="padding:6px 8px;border-radius:6px;border:1px solid ${T.cardBorder};background:${T.bg};color:${T.textPrimary};font:inherit;font-size:12px;color-scheme:dark">`;
+  let h=`<div style="${card}"><div style="${ct}">⬇ Pull delivery data → brand tabs</div>`;
+  h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">${pre("y","Yesterday")}${pre("2","Last 2 days")}${pre("7","Last 7 days")}${pre("c","Custom")}`;
+  if(P.preset==="c")h+=`<span style="display:inline-flex;gap:6px;align-items:center">${inp("from",P.from||y)}<span style="color:${T.textSecondary}">→</span>${inp("to",P.to||P.from||y)}</span>`;
+  h+=`</div><div style="font-size:12px;color:${T.textSecondary};margin-bottom:12px">${dates.length} day${dates.length===1?"":"s"}: ${dates.length?posFmtDate(dates[0])+(dates.length>1?" → "+posFmtDate(dates[dates.length-1]):""):"—"} · writes to the <b style="color:${P.sheet==="live"?T.accentRed:T.accentGreen}">${P.sheet==="live"?"LIVE":"TEST"}</b> sheet</div>`;
+  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${btn(P.pulling?"⏳ Pulling…":"⬇ Pull POS Data","posStartPull()",true,P.pulling||!dates.length)}</div>`;
+  h+=`<div style="font-size:12px;color:${T.textSecondary};margin-top:10px;line-height:1.5">For each day: Credit Sales + Sales Discount Details from Microsys → the same rules as POS Uploader v4.9 → Oregano, Lollorosso, Smokeys, Wicked Wings and Fyoozhen tabs (new date rows are added if missing; existing ones are overwritten, as the Uploader does). Dine-in &amp; takeaway come in the next build.</div></div>`;
+  return h;
+}
+async function posStartPull(){
+  const P=posSyncState,dates=posSelectedDates();if(!dates.length||P.pulling)return;
+  if(P.status&&!P.status.hasCreds){posOpenCreds();return;}
+  const where=P.sheet==="live"?"the LIVE Virtual Brands Performance sheet":"the TEST sheet";
+  if(!confirm(`Pull ${dates.length} day(s) (${posFmtDate(dates[0])}${dates.length>1?" → "+posFmtDate(dates[dates.length-1]):""}) from Microsys and write delivery sales & discounts to ${where}?`))return;
+  if(P.sheet==="live"&&!confirm("Final check: this writes to the REAL sheet the dashboard reads. Continue?"))return;
+  P.pulling=true;P.progress=[];P.results={sheet:P.sheet,days:[]};renderPosSync();
+  const step=(t,st)=>{P.progress.push({t,st:st||"run"});renderPosSync();return P.progress.length-1;};
+  const done=(i,st,t)=>{P.progress[i].st=st;if(t)P.progress[i].t=t;renderPosSync();};
+  let okDays=0,failDays=0;
+  for(const iso of dates){
+    const day={date:iso,brands:{},cells:0,newRows:[],updatedRows:[],warn:[],error:null,instoreDisc:0,deliveryDisc:0};
+    let i=step(`${posFmtDate(iso)} — Credit Sales`);
+    try{
+      const cr=await posApi("/api/pos/report",{kind:"credit",date:iso});const C=psProcessCredit(cr.csv,iso);
+      done(i,"ok",`${posFmtDate(iso)} — Credit Sales: ${C.lines.toLocaleString()} lines, ${C.kept.toLocaleString()} delivery orders`);
+      if(C.otherDates)day.warn.push(`${C.otherDates} Credit Sales line(s) dated another day were skipped`);
+      i=step(`${posFmtDate(iso)} — Sales Discount Details`);
+      const dr=await posApi("/api/pos/report",{kind:"disc",date:iso});const D=psProcessDisc(dr.csv);
+      day.instoreDisc=psRound(D.instore.reduce((s,x)=>s+x.amount,0),2);day.deliveryDisc=psRound(D.rows.reduce((s,x)=>s+x.disc,0),2);
+      done(i,"ok",`${posFmtDate(iso)} — Discounts: ${D.kept} delivery lines (AED ${day.deliveryDisc.toLocaleString()}), ${D.excluded} in-store`);
+      if(!C.kept)day.warn.push("No delivery orders found in Credit Sales for this day");
+      const brands=[...new Set([...C.rows.map(x=>x.brand),...D.rows.map(x=>x.brand)])].filter(b=>PS_BRAND_TABS.includes(b)).sort();
+      brands.forEach(b=>{const r=C.rows.filter(x=>x.brand===b),d=D.rows.filter(x=>x.brand===b);
+        day.brands[b]={sales:psRound(r.reduce((s,x)=>s+x.sales,0),2),orders:r.reduce((s,x)=>s+x.orders,0),disc:psRound(d.reduce((s,x)=>s+x.disc,0),2)};});
+      i=step(`${posFmtDate(iso)} — Reading ${P.sheet==="live"?"LIVE":"TEST"} sheet`);
+      const sr=await posApi("/api/pos/sheet/read",{sheet:P.sheet,tabs:brands});
+      (sr.present||[]).forEach((t,k)=>{const vr=(sr.google&&sr.google.valueRanges)||[];sr.tabs[t]={header:(vr[2*k]&&vr[2*k].values)||[],ab:(vr[2*k+1]&&vr[2*k+1].values)||[]};});
+      const data=[];
+      for(const b of brands){const tab=sr.tabs[b];if(!tab||tab.missing){day.warn.push(`Tab '${b}' not found — skipped`);continue;}
+        const res=psCellsForBrand(tab.header,tab.ab,C.rows,D.rows,b,iso);
+        (res.scaffolded?day.newRows:day.updatedRows).push(b);data.push(...psCellsToRanges(b,res.cells));}
+      done(i,"ok");
+      if(data.length){i=step(`${posFmtDate(iso)} — Writing ${brands.length} brand tab(s)`);
+        const wr=await posApi("/api/pos/sheet/write",{sheet:P.sheet,data});day.cells=wr.updatedCells;
+        done(i,"ok",`${posFmtDate(iso)} — Wrote ${wr.updatedCells.toLocaleString()} cells (${day.newRows.length?"new rows: "+day.newRows.join(", "):""}${day.newRows.length&&day.updatedRows.length?" · ":""}${day.updatedRows.length?"updated: "+day.updatedRows.join(", "):""})`);}
+      okDays++;
+    }catch(e){day.error=e.message;done(i,"err",`${posFmtDate(iso)} — ❌ ${e.message}`);failDays++;}
+    P.results.days.push(day);renderPosSync();
+  }
+  try{await posApi("/api/pos/log",{sheet:P.sheet,dates:dates.length===1?dates[0]:dates[0]+" → "+dates[dates.length-1],result:`${okDays} ok${failDays?", "+failDays+" failed":""}`});}catch(e){}
+  P.pulling=false;await posLoadStatus();
+}
+function posResultsHTML(T,card,ct){
+  const P=posSyncState;let h=`<div style="${card}"><div style="${ct}">${P.pulling?"Pulling…":"Pull result"} <span style="text-transform:none;letter-spacing:0;font-weight:600">· ${(P.results&&P.results.sheet)==="live"?"LIVE":"TEST"} sheet</span></div>`;
+  h+=`<div style="display:grid;gap:4px;margin-bottom:12px">`+P.progress.map(p=>`<div style="font-size:12.5px;padding:5px 8px;border-radius:6px;background:${p.st==="err"?T.accentRed+"18":p.st==="ok"?T.accentGreen+"10":T.accentOrange+"14"};color:${p.st==="err"?T.accentRed:p.st==="ok"?T.textPrimary:T.accentOrange}">${p.st==="ok"?"✓":p.st==="err"?"✕":"◐"} ${esc(p.t)}</div>`).join("")+`</div>`;
+  const days=(P.results&&P.results.days)||[];
+  if(days.length){
+    const th=x=>`<th style="text-align:right;padding:7px 8px;color:${T.textSecondary};font-size:11px;text-transform:uppercase;border-bottom:1px solid ${T.cardBorder};white-space:nowrap">${x}</th>`;
+    const td=(x,l)=>`<td style="padding:7px 8px;text-align:${l?"left":"right"};white-space:nowrap;font-variant-numeric:tabular-nums">${x}</td>`;
+    const f=n=>Number(n||0).toLocaleString("en-US",{maximumFractionDigits:2});
+    h+=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;color:${T.textPrimary}"><tr>${th("Day").replace("right","left")}${PS_BRAND_TABS.map(b=>th(b)).join("")}${th("Delivery total")}${th("Delivery disc.")}${th("Cells")}</tr>`;
+    for(const d of days){
+      if(d.error){h+=`<tr>${td(posFmtDate(d.date),1)}<td colspan="${PS_BRAND_TABS.length+3}" style="padding:7px 8px;color:${T.accentRed}">${esc(d.error)}</td></tr>`;continue;}
+      const tot=Object.values(d.brands).reduce((s,x)=>s+x.sales,0),ord=Object.values(d.brands).reduce((s,x)=>s+x.orders,0);
+      h+=`<tr>${td(posFmtDate(d.date),1)}${PS_BRAND_TABS.map(b=>td(d.brands[b]?`${f(d.brands[b].sales)}<div style="font-size:11px;color:${T.textSecondary}">${d.brands[b].orders} orders</div>`:`<span style="color:${T.textMuted}">–</span>`)).join("")}${td(`<b>${f(tot)}</b><div style="font-size:11px;color:${T.textSecondary}">${ord} orders</div>`)}${td(f(d.deliveryDisc))}${td(f(d.cells))}</tr>`;
+      if(d.warn.length)h+=`<tr><td colspan="${PS_BRAND_TABS.length+4}" style="padding:2px 8px 8px;font-size:12px;color:${T.accentOrange}">⚠ ${d.warn.map(esc).join(" · ")}</td></tr>`;
+    }
+    h+=`</table></div><div style="font-size:12px;color:${T.textSecondary};margin-top:8px">Sales incl. VAT, as the Uploader writes them. Open the ${P.results.sheet==="live"?"LIVE":"TEST"} sheet to check the rows; compare a day against a normal Uploader run before we switch to LIVE.</div>`;
+  }
+  return h+`</div>`;
+}
+window.posStartPull=posStartPull;window.posSetPreset=posSetPreset;window.posSetCustom=posSetCustom;
