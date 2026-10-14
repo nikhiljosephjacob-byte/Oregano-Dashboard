@@ -647,8 +647,11 @@ async function handlePosStatus(request, env) {
   const logs = await env.SESSIONS.list({ prefix: "pos:log:", limit: 1000 });
   const recent = logs.keys.sort((a, b) => b.name.localeCompare(a.name)).slice(0, 15);
   const history = (await Promise.all(recent.map(k => env.SESSIONS.get(k.name)))).filter(Boolean).map(r => JSON.parse(r));
+  const fk = (await env.SESSIONS.list({ prefix: "pos:flags:", limit: 1000 })).keys.sort((a, b) => b.name.localeCompare(a.name)).slice(0, 60);
+  const flags = [];
+  (await Promise.all(fk.map(k => env.SESSIONS.get(k.name)))).forEach((raw, i) => { if (!raw) return; const date = fk[i].name.slice("pos:flags:".length); JSON.parse(raw).forEach(f => flags.push(Object.assign({ date }, f))); });
   return json({ ok: true, hasCreds: !!c, credsUser: c ? c.user : null, credsSetBy: c ? c.setBy : null, credsSetAt: c ? c.setAt : null,
-    hasGoogle: !!env.GOOGLE_SA_JSON, history });
+    hasGoogle: !!env.GOOGLE_SA_JSON, history, flags });
 }
 
 async function handlePosCreds(request, env) {
@@ -731,6 +734,39 @@ async function handlePosAddTab(request, env) {
   const j = await r.json();
   if (!r.ok) return json({ error: (j.error && j.error.message) || ("HTTP " + r.status) }, 502);
   return json({ ok: true, created: true });
+}
+// v542: low-sales flags — one KV key per day (pos:flags:<date>) holding that day's flagged outlets.
+// A re-pull replaces the day's list: outlets still low stay "open" (or "ok" if someone already
+// confirmed them), outlets no longer low become "fixed".
+async function handlePosFlags(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { date, flags } = await readBody(request);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "") || !Array.isArray(flags)) return json({ error: "bad_request" }, 400);
+  const key = `pos:flags:${date}`;
+  const prev = JSON.parse((await env.SESSIONS.get(key)) || "[]");
+  const now = new Date().toISOString();
+  const out = flags.slice(0, 40).map(f => {
+    const old = prev.find(p => p.loc === f.loc);
+    return { loc: String(f.loc).slice(0, 80), net: +f.net || 0, base: +f.base || 0, pct: +f.pct || 0,
+      status: old && old.status === "ok" ? "ok" : "open", by: old && old.status === "ok" ? old.by : s.user, at: old && old.status === "ok" ? old.at : now };
+  });
+  prev.filter(p => !out.find(o => o.loc === p.loc) && p.status !== "fixed").forEach(p => out.push(Object.assign({}, p, { status: "fixed", by: s.user, at: now })));
+  if (!out.length && !prev.length) return json({ ok: true, flags: [] }); // nothing to store — saves a KV write
+  await env.SESSIONS.put(key, JSON.stringify(out), { expirationTtl: 60 * 60 * 24 * 120 });
+  return json({ ok: true, flags: out });
+}
+async function handlePosFlagOk(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { date, loc } = await readBody(request);
+  const key = `pos:flags:${date}`;
+  const list = JSON.parse((await env.SESSIONS.get(key)) || "[]");
+  const f = list.find(x => x.loc === loc);
+  if (!f) return json({ error: "flag_not_found" }, 404);
+  f.status = "ok"; f.by = s.user; f.at = new Date().toISOString();
+  await env.SESSIONS.put(key, JSON.stringify(list), { expirationTtl: 60 * 60 * 24 * 120 });
+  return json({ ok: true });
 }
 async function handlePosLogWrite(request, env) {
   const s = await requirePosUser(request, env);
@@ -824,6 +860,8 @@ export default {
       if (path === "/api/pos/sheet/write" && method === "POST") return await handlePosSheetWrite(request, env);
       if (path === "/api/pos/log"         && method === "POST") return await handlePosLogWrite(request, env);
       if (path === "/api/pos/sheet/addtab"&& method === "POST") return await handlePosAddTab(request, env);
+      if (path === "/api/pos/flags"       && method === "POST") return await handlePosFlags(request, env);
+      if (path === "/api/pos/flag/ok"     && method === "POST") return await handlePosFlagOk(request, env);
     } catch (e) {
       return json({ error: "server_error", detail: String(e.message || e) }, 500);
     }
