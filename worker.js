@@ -775,12 +775,18 @@ async function handlePosFlagOk(request, env) {
 async function posSheetMeta(env, sheet) {
   const { token } = await googleTokenCached(env);
   const id = posSheetId(sheet);
-  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?ranges=${encodeURIComponent("'Oregano'!A1:AZ1")}&fields=sheets(properties(sheetId,title,gridProperties(frozenRowCount,frozenColumnCount)),data(columnMetadata(pixelSize)))`, { headers: { Authorization: "Bearer " + token } });
-  const j = await r.json();
+  // v545: two calls — asking for a `ranges` restricts the response to the sheets in those ranges, so
+  // v544's single call never listed the Dine-In & Takeaway tab ("tab not found" on Nikhil's LIVE pull).
+  const h = { headers: { Authorization: "Bearer " + token } };
+  const [r, rw] = await Promise.all([
+    fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=sheets(properties(sheetId,title,gridProperties(frozenRowCount,frozenColumnCount)))`, h),
+    fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?ranges=${encodeURIComponent("'Oregano'!A1:AZ1")}&fields=sheets(data(columnMetadata(pixelSize)))`, h)]);
+  const j = await r.json(), jw = await rw.json();
   if (!r.ok) throw new Error((j.error && j.error.message) || ("HTTP " + r.status));
+  const widths = rw.ok ? ((((jw.sheets || [])[0] || {}).data || [])[0] || {}).columnMetadata || [] : [];
   return { token, id, sheets: (j.sheets || []).map(x => ({ title: x.properties.title, sheetId: x.properties.sheetId,
     frozenRows: (x.properties.gridProperties || {}).frozenRowCount || 0, frozenCols: (x.properties.gridProperties || {}).frozenColumnCount || 0,
-    widths: x.properties.title === "Oregano" ? (((x.data || [])[0] || {}).columnMetadata || []).map(c => c.pixelSize || 100) : undefined })) };
+    widths: x.properties.title === "Oregano" ? widths.map(c => c.pixelSize || 100) : undefined })) };
 }
 async function handlePosSheetMeta(request, env) {
   const s = await requirePosUser(request, env);
