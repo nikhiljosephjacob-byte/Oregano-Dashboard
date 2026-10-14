@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-14-534";
+const BUILD_VERSION="2026-10-14-535";
 const BUILD_NOTES=[
+  "🔄 NEW: POS SYNC (STEP 1 OF 4 — CONNECTION TEST) — Nikhil asked to replace the desktop POS Uploader with one button on the dashboard that pulls straight from Microsys (Kull ERP) and works on laptop and mobile. This build adds the POS Sync page (Nikhil and Nicole only), a one-time Microsys login prompt (saved on the server, never sent back to the browser), a TEST/LIVE sheet switch and a read-only Test connection: sign in to Microsys from Cloudflare, pull yesterday's Sales Summary by Outlet, and read the Google Sheet's tab list. Nothing is written to any sheet yet. Next builds: delivery to brand tabs (same rules as Uploader v4.9), the Dine-In & Takeaway tab, then low-sales flags.",
   "⏳ CPC 'DAYS UNTIL EXHAUSTED' UNDERSTATED HOW FAST BUDGETS BURN (LIVE PACE NOW USED) + WICKED WINGS EXPECTS 4 LISTINGS — Nikhil asked me to investigate why the dashboard showed Smokeys Marina / Motorcity with ~3 days of budget when the real runway was ~1. ROOT CAUSE: the parser computed each CPC row's dailyBurn as spend ÷ the WHOLE planned window (Start→End, e.g. 31 days for a month-long CPC) instead of ÷ the days that have actually elapsed. Smokeys-Motorcity had spent AED 543.6 in 12 days (45/day) but the old figure divided by 31 (17.5/day), so it looked like it would last 3x longer than it really would; every top-up, restart and pool-pace suggestion that used the same number was understated by the same factor. FIX: new cpcLiveBurn(row) = spend ÷ days from Start through the day BEFORE the sheet's update date (the same confirmed-data boundary the ad-cost maths already used, honouring day-of-week schedules); stored as row.liveBurn and used for days-until-exhausted, the Critical/Action-Now top-up suggestion, the pool pace and the active/restart investment recommendations. dailyBurn itself is untouched because the ad-cost functions depend on it (they already used the real rate). ALSO: BRAND_EXPECTED_LISTINGS for Wicked Wings 3 → 4 because Wicked Wings went live at the Al Reef branch on 9 Oct 2026 (the sales already flowed through the sheet parser automatically; only the KPI listing count needed the update). Includes everything in v533 (break-even now deducts the Keeta FD on the baseline side as well). VERIFIED: new tests (real-pace maths, update-date boundary, day-of-week schedule, fallback when dates are missing, expected listings = 4); full suite re-run.",
   "⚖️ PLANNER BREAK-EVEN SAT ABOVE BASELINE ON KEETA (FD COST MISSING FROM THE TARGET) — Nikhil's v532 re-run screenshot (Oregano × Keeta): Baseline contribution AED 3,425/day but Break-even contribution AED 3,595/day — break-even should equal baseline. ROOT CAUSE: the displayed Baseline already deducts Keeta's AED 2/order FD cost (85 orders × 2 = AED 170), but the break-even TARGET (baseline contribution used to solve the break-even orders) did not, so it demanded AED 170/day more than the baseline actually earns — overstating break-even orders by ~5%. FIX: the baseline per-order contribution now also deducts FD (Keeta only; other aggregators unchanged). VERIFIED: new test asserts Break-even contribution equals Baseline contribution for Keeta and other aggregators; v532 uplift results otherwise confirmed on Nikhil's real run (Expected 241/day, Optimistic 322/day, both above break-even).",
   "🎯 CAMPAIGN PLANNER — KEETA 50% UPLIFT WAS UNDERSTATED (OPTIMISTIC BELOW BREAK-EVEN) — FIXED FOR MENU-WIDE CAMPAIGNS — Nikhil (Oregano × Keeta, 50% OFF cap 30, 18–24 Oct): 'Optimistic order volume is showing lower than the Breakeven… August 20% OFF CAP 20 uplift was better, so 50% should be more.' ROOT CAUSES FOUND ON THE REAL DATA: (1) each past campaign's uplift was measured against the window just BEFORE it — on Keeta that is almost always another discounted period, so the 'before' was already inflated; (2) recency weight e^(−d/45) put ~47% of all weight on one understated July campaign; (3) results of +150% or more were thrown away as 'outliers' — exactly the deep-discount campaigns; (4) the seasonality factor (0.843) was multiplied onto the uplift % and shrank it again; (5) Optimistic was capped at +200% and calibration had learned a negative correction from the understated uplifts. FIX (Planner only, menu-wide type only): uplift = campaign orders/day ÷ orders/day on NORMAL days (no entire-menu, BOGO or platform-event promo, ±28 days around it, ±56 if fewer than 7 days; select-items/OFU stay in the background); similarity-first weighting (discount depth, cap) with gentle 120-day recency and no single campaign above 35% of the weight; seasonality no longer scales uplift — the 14-day trend nudges the BASELINE only (max ±5%); outlier limit 400% for this method and Optimistic cap +400%; calibration restarts for menu forecasts (learns only from forecasts saved on build 532+, judged on the same normal-days basis). NEW ON SCREEN: each match shows its normal-days uplift with the old figure underneath, the orders/day it was compared with, and a day 1–3 vs day 4+ ramp note. Campaigns page analyses are unchanged. VERIFIED: 11 new tests (promo-day exclusion, early/late split, fallback, 35% cap, similarity weighting, planner Expected/Optimistic above break-even on Keeta-like data, seasonality not applied, ramp, outlier limit, calibration build gate).",
@@ -5028,6 +5029,7 @@ async function doLoad(){
   injectCompareTab();
   injectCancellationsTab();
   injectFeedbackTab();
+  if(typeof injectPosSyncTab==="function")injectPosSyncTab(); // v535 POS Sync (Nikhil + Nicole only)
   tagTabsWithPageIds();
   addTabIcons();
   restructureTabIcons();
@@ -6029,7 +6031,7 @@ function mNavGo(page){
 // dark theme one at a time. Adding a page here is the ONLY change needed at the dispatcher —
 // each page's own render function still needs its own scoped style override and theme-aware
 // calls, same as Overview's build.
-const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare","discounts","kpi","campaigns","feedback","cpc"]);
+const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare","discounts","kpi","campaigns","feedback","cpc","possync"]);
 function renderPage(p){
   // v286: fixes the profitability explainer (and, it turns out, every campaign popup before it)
   // not appearing at all for anyone who hadn't visited the Campaigns page first in that browser
@@ -6043,7 +6045,7 @@ function renderPage(p){
   // unconditionally, on every single page render, is free after the first call and guarantees
   // it's ready no matter which page loads first.
   initCalcTip();
-  _darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();else if(p==="cancellations")renderCancellations();else if(p==="feedback")renderFeedback();
+  _darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();else if(p==="cancellations")renderCancellations();else if(p==="feedback")renderFeedback();else if(p==="possync")renderPosSync();
   // v460: real bug Nikhil caught — "1 didn't work at all". The count-up was hooked into gp(),
   // but gp() is only ONE of several callers of this same renderPage() dispatcher (the tab-click
   // handler) — fApply/fToggle/fClear (filters), sortTableBy, dismissRec/undismissRec, and
@@ -24597,3 +24599,123 @@ document.addEventListener("DOMContentLoaded",tryInitAdmin);
     renderAdmin,adminKick,adminBan,adminUnban,initAdminUI];
   fns.forEach(fn=>{try{if(typeof fn==="function")window[fn.name]=fn;}catch(e){}});
 })();
+
+// ════════════════════════════════════════════════════════════════════════════
+// v535 POS SYNC — STEP 1 OF 4 (connection test). Replaces the desktop POS Uploader: the
+// dashboard's server signs in to Microsys (Kull ERP), pulls Credit Sales / Sales Discount
+// Details / Sales Summary by Outlet, and writes the Google Sheet itself. This build only adds
+// the page, the one-time Microsys login prompt and a read-only "Test connection" — nothing is
+// written to any sheet yet. Visible to Nikhil (admin) and Nicole only; the Worker enforces the
+// same list server-side (POS_USERS), the client check here is just to hide the tab.
+// ════════════════════════════════════════════════════════════════════════════
+const POS_SYNC_USERS=["nikhil","nicole"];
+let posSyncState={status:null,loading:false,testing:false,test:null,sheet:"test",err:null};
+function posSyncAllowed(){const s=getActiveSession();return !!(s&&(s.admin||POS_SYNC_USERS.includes(String(s.user||"").toLowerCase())));}
+function injectPosSyncTab(){
+  if(!posSyncAllowed())return;
+  if(document.getElementById("page-possync"))return;
+  const anyPage=document.querySelector(".pg");
+  if(anyPage&&anyPage.parentNode){const div=document.createElement("div");div.className="pg";div.id="page-possync";anyPage.parentNode.appendChild(div);}
+  const tabs=document.querySelectorAll(".tab");
+  if(tabs.length){
+    const btn=document.createElement(tabs[0].tagName.toLowerCase());
+    btn.className="tab";btn.innerHTML="🔄 POS Sync";btn.dataset.pg="possync";
+    btn.onclick=()=>gp("possync");
+    const last=tabs[tabs.length-1];last.parentNode.insertBefore(btn,last.nextSibling);
+  }
+}
+async function posApi(path,body){
+  const sess=getActiveSession();
+  const opt={method:body?"POST":"GET",headers:{"X-Session-Id":sess?sess.sessionId:""}};
+  if(body){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(body);}
+  const res=await fetch(path,opt);let j=null;try{j=await res.json();}catch(e){}
+  if(!res.ok)throw new Error((j&&(j.error+(j.detail?": "+j.detail:"")))||("HTTP "+res.status));
+  return j;
+}
+async function posLoadStatus(){
+  posSyncState.loading=true;posSyncState.err=null;
+  try{posSyncState.status=await posApi("/api/pos/status");}catch(e){posSyncState.err=e.message;}
+  posSyncState.loading=false;if(curPage==="possync")renderPosSync();
+}
+function posFmtTs(iso){try{const d=new Date(iso);return d.toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Asia/Dubai"});}catch(e){return iso||"";}}
+function posSetSheet(v){if(v==="live"&&!confirm("Switch to the LIVE sheet? (The test is read-only, but later pulls will write to the real Virtual Brands Performance sheet.)"))return;posSyncState.sheet=v;renderPosSync();}
+function posOpenCreds(){
+  const T=DARK_THEME;let m=document.getElementById("pos-creds-modal");if(m)m.remove();
+  m=document.createElement("div");m.id="pos-creds-modal";
+  m.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px";
+  m.innerHTML=`<div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:14px;padding:20px;max-width:380px;width:100%;color:${T.textPrimary};box-shadow:${T.shadow}">
+    <div style="font-size:16px;font-weight:800;margin-bottom:6px">🔑 Microsys (Kull ERP) login</div>
+    <div style="font-size:12px;color:${T.textSecondary};line-height:1.5">Saved once on the dashboard server and never sent back to any browser. Nikhil or Nicole can change it here anytime.</div>
+    <label style="display:block;font-size:12px;color:${T.textSecondary};font-weight:700;margin:14px 0 4px">Username</label>
+    <input id="pos-cu" type="text" autocomplete="off" placeholder="e.g. OREOPERATION" style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid ${T.cardBorder};background:${T.bg};color:${T.textPrimary};font:inherit">
+    <label style="display:block;font-size:12px;color:${T.textSecondary};font-weight:700;margin:12px 0 4px">Password</label>
+    <input id="pos-cp" type="password" autocomplete="new-password" style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid ${T.cardBorder};background:${T.bg};color:${T.textPrimary};font:inherit">
+    <div id="pos-cerr" style="color:${T.accentRed};font-size:12px;margin-top:8px;min-height:14px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+      <button onclick="document.getElementById('pos-creds-modal').remove()" style="padding:9px 14px;border-radius:8px;border:1px solid ${T.cardBorder};background:transparent;color:${T.textSecondary};font-weight:700;cursor:pointer">Cancel</button>
+      <button id="pos-csave" onclick="posSaveCreds()" style="padding:9px 16px;border-radius:8px;border:none;background:${T.accentOrange};color:#fff;font-weight:800;cursor:pointer">Save</button>
+    </div></div>`;
+  document.body.appendChild(m);setTimeout(()=>{const i=document.getElementById("pos-cu");if(i)i.focus();},50);
+}
+async function posSaveCreds(){
+  const u=(document.getElementById("pos-cu")||{}).value||"",p=(document.getElementById("pos-cp")||{}).value||"";
+  const err=document.getElementById("pos-cerr"),b=document.getElementById("pos-csave");
+  if(!u.trim()||!p){err.textContent="Enter both username and password";return;}
+  b.disabled=true;b.textContent="Saving…";
+  try{await posApi("/api/pos/creds",{user:u.trim(),pass:p});document.getElementById("pos-creds-modal").remove();await posLoadStatus();}
+  catch(e){err.textContent=e.message;b.disabled=false;b.textContent="Save";}
+}
+async function posRunTest(){
+  if(posSyncState.status&&!posSyncState.status.hasCreds){posOpenCreds();return;}
+  posSyncState.testing=true;posSyncState.test=null;renderPosSync();
+  try{posSyncState.test=await posApi("/api/pos/test",{sheet:posSyncState.sheet});}
+  catch(e){posSyncState.test={microsys:{ok:false,error:e.message},google:{ok:false,error:e.message}};}
+  posSyncState.testing=false;await posLoadStatus();
+}
+function posExplain(err){
+  const e=String(err||"");
+  if(/NO_CREDS/.test(e))return"No Microsys login saved yet — click “🔑 Microsys login”.";
+  if(/MSYS_BAD_LOGIN/.test(e))return"Microsys rejected the username/password. Re-enter it with “🔑 Microsys login”.";
+  if(/NO_GOOGLE_SECRET/.test(e))return"The Google key isn't added in Cloudflare yet (secret GOOGLE_SA_JSON).";
+  if(/caller does not have permission|PERMISSION_DENIED|403/.test(e))return"The sheet isn't shared with the service account as Editor.";
+  if(/MSYS_LOGIN_PAGE_CHANGED|MSYS_NO_VIEWER/.test(e))return"Signed in, but Microsys didn't return the report page — send me this message.";
+  if(/fetch failed|network|connect|timed out|522|521|1006|403 Forbidden/i.test(e))return"Cloudflare couldn't reach Microsys (possibly blocked). Send me this message.";
+  return"";
+}
+function renderPosSync(){
+  const pg=document.getElementById("page-possync");if(!pg)return;
+  const T=DARK_THEME,st=posSyncState.status,ts=posSyncState.test;
+  if(!st&&!posSyncState.loading&&!posSyncState.err){posLoadStatus();}
+  const card=`background:${T.card};border:1px solid ${T.cardBorder};border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:${T.shadow};color:${T.textPrimary}`;
+  const ct=`font-size:13px;color:${T.textSecondary};font-weight:800;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:12px`;
+  const pill=(on,txt)=>`<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:14px;font-size:12px;font-weight:700;background:${on?T.accentGreen+"22":T.accentRed+"22"};color:${on?T.accentGreen:T.accentRed}">${on?"●":"○"} ${txt}</span>`;
+  const btn=(label,fn,primary,dis)=>`<button ${dis?"disabled":""} onclick="${fn}" style="padding:${primary?"11px 20px":"8px 14px"};border-radius:${primary?10:8}px;border:${primary?"none":"1px solid "+T.cardBorder};background:${primary?T.accentOrange:"transparent"};color:${primary?"#fff":T.textSecondary};font-weight:800;font-size:${primary?14:12}px;cursor:${dis?"default":"pointer"};opacity:${dis?.55:1}">${label}</button>`;
+  const modeBtn=(v,label,col)=>`<button onclick="posSetSheet('${v}')" style="border:none;padding:7px 14px;font-weight:800;font-size:12px;cursor:pointer;background:${posSyncState.sheet===v?col+"33":"transparent"};color:${posSyncState.sheet===v?col:T.textSecondary}">${label}</button>`;
+  let h=`<div style="background:${T.bg};border-radius:12px;padding:16px 20px">`;
+  h+=`<div style="${card}"><div style="${ct}">🔄 POS Sync <span style="text-transform:none;letter-spacing:0;font-weight:600">— pulls straight from Microsys, replaces the desktop POS Uploader</span></div>`;
+  if(posSyncState.err)h+=`<div style="color:${T.accentRed};font-size:13px;margin-bottom:10px">Couldn't load status: ${esc(posSyncState.err)}</div>`;
+  h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">`;
+  h+=st?pill(st.hasCreds,st.hasCreds?`Microsys login saved (${esc(st.credsUser||"")} · by ${esc(st.credsSetBy||"")} · ${posFmtTs(st.credsSetAt)})`:"Microsys login not set"):`<span style="color:${T.textSecondary};font-size:12px">Loading…</span>`;
+  if(st)h+=pill(st.hasGoogle,st.hasGoogle?"Google key added in Cloudflare":"Google key missing in Cloudflare");
+  h+=`</div>`;
+  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px"><span style="font-size:12px;color:${T.textSecondary};font-weight:700">Sheet:</span><span style="display:inline-flex;border:1px solid ${T.cardBorder};border-radius:8px;overflow:hidden">${modeBtn("test","🟢 TEST",T.accentGreen)}${modeBtn("live","🔴 LIVE",T.accentRed)}</span></div>`;
+  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${btn(posSyncState.testing?"⏳ Testing…":"🧪 Test connection","posRunTest()",true,posSyncState.testing)}${btn("🔑 Microsys login","posOpenCreds()",false,false)}${btn("⬇ Pull POS Data — next build","",false,true)}</div>`;
+  h+=`<div style="font-size:12px;color:${T.textSecondary};margin-top:10px;line-height:1.5">The test signs in to Microsys, pulls yesterday's Sales Summary by Outlet, and reads the tab list of the chosen Google Sheet. It doesn't write anything.</div></div>`;
+  if(ts){
+    const row=(ok,title,body)=>`<div style="display:flex;gap:12px;align-items:flex-start;padding:12px;border-radius:10px;background:${ok?T.accentGreen+"14":T.accentRed+"14"};margin-bottom:8px"><div style="font-size:18px">${ok?"✅":"❌"}</div><div style="flex:1;min-width:0"><div style="font-weight:800">${title}</div><div style="font-size:12px;color:${T.textSecondary};margin-top:3px;word-break:break-word;line-height:1.5">${body}</div></div></div>`;
+    const m=ts.microsys||{},g=ts.google||{};
+    h+=`<div style="${card}"><div style="${ct}">Test result</div>`;
+    h+=row(!!m.ok,"Microsys (Kull ERP)",m.ok?`Signed in from Cloudflare and pulled Sales Summary for ${esc(m.date)} — ${m.outlets} outlets, ${(m.ms/1000).toFixed(1)}s.`:`${esc(posExplain(m.error))} <span style="opacity:.75">(${esc(m.error)})</span>`);
+    h+=row(!!g.ok,"Google Sheet ("+esc(g.sheet||posSyncState.sheet.toUpperCase())+")",g.ok?`Opened “${esc(g.title)}” — tabs: ${g.tabs.map(esc).join(", ")}.`:`${esc(posExplain(g.error))} <span style="opacity:.75">(${esc(g.error)})</span>`);
+    h+=`</div>`;
+  }
+  const hist=(st&&st.history)||[];
+  h+=`<div style="${card}"><div style="${ct}">History</div>`;
+  if(!hist.length)h+=`<div style="font-size:13px;color:${T.textSecondary}">No tests or pulls yet.</div>`;
+  else{h+=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">`+
+    `<tr>${["When","Who","What","Sheet","Result"].map(x=>`<th style="text-align:left;padding:7px 8px;color:${T.textSecondary};font-size:11px;text-transform:uppercase;border-bottom:1px solid ${T.cardBorder}">${x}</th>`).join("")}</tr>`+
+    hist.map(r=>`<tr><td style="padding:7px 8px;white-space:nowrap">${posFmtTs(r.ts)}</td><td style="padding:7px 8px">${esc(r.user||"")}</td><td style="padding:7px 8px">${r.kind==="test"?"Connection test":esc(r.kind||"")}</td><td style="padding:7px 8px">${esc(r.sheet||"")}</td><td style="padding:7px 8px">${r.kind==="test"?`Microsys ${r.microsysOk?"✅":"❌"} · Google ${r.googleOk?"✅":"❌"}`:esc(r.result||"")}</td></tr>`).join("")+`</table></div>`;}
+  h+=`</div></div>`;
+  pg.innerHTML=h;
+}
+window.injectPosSyncTab=injectPosSyncTab;window.renderPosSync=renderPosSync;window.posRunTest=posRunTest;window.posOpenCreds=posOpenCreds;window.posSaveCreds=posSaveCreds;window.posSetSheet=posSetSheet;
