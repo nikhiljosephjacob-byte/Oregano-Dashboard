@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-12-533";
+const BUILD_VERSION="2026-10-14-534";
 const BUILD_NOTES=[
+  "⏳ CPC 'DAYS UNTIL EXHAUSTED' UNDERSTATED HOW FAST BUDGETS BURN (LIVE PACE NOW USED) + WICKED WINGS EXPECTS 4 LISTINGS — Nikhil asked me to investigate why the dashboard showed Smokeys Marina / Motorcity with ~3 days of budget when the real runway was ~1. ROOT CAUSE: the parser computed each CPC row's dailyBurn as spend ÷ the WHOLE planned window (Start→End, e.g. 31 days for a month-long CPC) instead of ÷ the days that have actually elapsed. Smokeys-Motorcity had spent AED 543.6 in 12 days (45/day) but the old figure divided by 31 (17.5/day), so it looked like it would last 3x longer than it really would; every top-up, restart and pool-pace suggestion that used the same number was understated by the same factor. FIX: new cpcLiveBurn(row) = spend ÷ days from Start through the day BEFORE the sheet's update date (the same confirmed-data boundary the ad-cost maths already used, honouring day-of-week schedules); stored as row.liveBurn and used for days-until-exhausted, the Critical/Action-Now top-up suggestion, the pool pace and the active/restart investment recommendations. dailyBurn itself is untouched because the ad-cost functions depend on it (they already used the real rate). ALSO: BRAND_EXPECTED_LISTINGS for Wicked Wings 3 → 4 because Wicked Wings went live at the Al Reef branch on 9 Oct 2026 (the sales already flowed through the sheet parser automatically; only the KPI listing count needed the update). Includes everything in v533 (break-even now deducts the Keeta FD on the baseline side as well). VERIFIED: new tests (real-pace maths, update-date boundary, day-of-week schedule, fallback when dates are missing, expected listings = 4); full suite re-run.",
   "⚖️ PLANNER BREAK-EVEN SAT ABOVE BASELINE ON KEETA (FD COST MISSING FROM THE TARGET) — Nikhil's v532 re-run screenshot (Oregano × Keeta): Baseline contribution AED 3,425/day but Break-even contribution AED 3,595/day — break-even should equal baseline. ROOT CAUSE: the displayed Baseline already deducts Keeta's AED 2/order FD cost (85 orders × 2 = AED 170), but the break-even TARGET (baseline contribution used to solve the break-even orders) did not, so it demanded AED 170/day more than the baseline actually earns — overstating break-even orders by ~5%. FIX: the baseline per-order contribution now also deducts FD (Keeta only; other aggregators unchanged). VERIFIED: new test asserts Break-even contribution equals Baseline contribution for Keeta and other aggregators; v532 uplift results otherwise confirmed on Nikhil's real run (Expected 241/day, Optimistic 322/day, both above break-even).",
   "🎯 CAMPAIGN PLANNER — KEETA 50% UPLIFT WAS UNDERSTATED (OPTIMISTIC BELOW BREAK-EVEN) — FIXED FOR MENU-WIDE CAMPAIGNS — Nikhil (Oregano × Keeta, 50% OFF cap 30, 18–24 Oct): 'Optimistic order volume is showing lower than the Breakeven… August 20% OFF CAP 20 uplift was better, so 50% should be more.' ROOT CAUSES FOUND ON THE REAL DATA: (1) each past campaign's uplift was measured against the window just BEFORE it — on Keeta that is almost always another discounted period, so the 'before' was already inflated; (2) recency weight e^(−d/45) put ~47% of all weight on one understated July campaign; (3) results of +150% or more were thrown away as 'outliers' — exactly the deep-discount campaigns; (4) the seasonality factor (0.843) was multiplied onto the uplift % and shrank it again; (5) Optimistic was capped at +200% and calibration had learned a negative correction from the understated uplifts. FIX (Planner only, menu-wide type only): uplift = campaign orders/day ÷ orders/day on NORMAL days (no entire-menu, BOGO or platform-event promo, ±28 days around it, ±56 if fewer than 7 days; select-items/OFU stay in the background); similarity-first weighting (discount depth, cap) with gentle 120-day recency and no single campaign above 35% of the weight; seasonality no longer scales uplift — the 14-day trend nudges the BASELINE only (max ±5%); outlier limit 400% for this method and Optimistic cap +400%; calibration restarts for menu forecasts (learns only from forecasts saved on build 532+, judged on the same normal-days basis). NEW ON SCREEN: each match shows its normal-days uplift with the old figure underneath, the orders/day it was compared with, and a day 1–3 vs day 4+ ramp note. Campaigns page analyses are unchanged. VERIFIED: 11 new tests (promo-day exclusion, early/late split, fallback, 35% cap, similarity weighting, planner Expected/Optimistic above break-even on Keeta-like data, seasonality not applied, ramp, outlier limit, calibration build gate).",
   "🧪 UPLOAD SUMMARY SAID '2 FILES' FOR ONE FILE — FOUND BY THE NEW END-TO-END UPLOAD TEST — Nikhil asked me to test the real upload path (file → recognise → parse → merge → save in browser → sync to server → message). I ran every platform's real sample file through the REAL handleOrdersUpload inside the full dashboard: Keeta, Careem, Talabat, Deliveroo and Noon all recognised, stored, saved and synced correctly, and re-uploading the same file adds no duplicates. ONE REAL BUG: the pop-up counted summary LINES (each file adds a result line plus a coverage line), so a single file read 'Successfully loaded 2 files'. FIX: it now counts files. ALSO CONFIRMED: your new Careem wording '20% OFF on Combos only, Combos price increased and discounted' is recognised — Oregano×Careem uses the +25.6% reference table, brands without a table use the price-neutral +25% assumption — nothing else needed in the sheet. VERIFIED: 3 new upload tests + 5 Careem-wording tests; full suite green.",
@@ -675,6 +676,23 @@ function parseCpcSchedule(cellRaw){
   return{kind:'label',label,days:null,daypart:null};    // unrecognized → show label, treat as all days
 }
 // Count days in [lo,hi] inclusive whose weekday is in daysSet; all calendar days when daysSet is null.
+// v534: REAL daily pace of a CPC row = spend so far ÷ days actually elapsed (through the day BEFORE the
+// sheet's update date, same boundary cpcAdCostForRange uses) — NOT ÷ the whole planned window. The
+// parse-time dailyBurn divides by the full Start→End length (e.g. 31 days for a month-long CPC), which
+// understates the pace of a still-running CPC (Smokeys-MC: AED 543.6 over 12 days = 45/day, but the old
+// figure said 17.5/day, so 'days until exhausted' read ~3 when it was ~1). dailyBurn is left untouched
+// because the ad-cost functions rely on it; every 'how long will the budget last / how much to top up'
+// calculation uses this instead.
+function cpcLiveBurn(r){
+  if(!r)return 0;
+  if(!r.startDate||!r.endDate||r.budgetSpent==null)return r.dailyBurn||0;
+  const confirmedEnded=r.updateDate&&r.updateDate>r.endDate;
+  const knownThrough=(!confirmedEnded&&r.updateDate&&r.updateDate<r.endDate)?cpcPrevDay(r.updateDate):r.endDate;
+  const dow=(r.schedule&&r.schedule.days)?r.schedule.days:null;
+  const days=cpcDowDaysBetween(r.startDate,knownThrough,dow);
+  if(days<1)return r.dailyBurn||0;
+  return r.budgetSpent/days;
+}
 function cpcDowDaysBetween(lo,hi,daysSet){
   if(!lo||!hi||lo>hi)return 0;
   const start=new Date(lo+'T12:00:00'),end=new Date(hi+'T12:00:00');
@@ -7789,7 +7807,8 @@ function parseCPCSheet(csv){
       else if(today>rec.endDate)rec.status=rec.budgetSpent>=rec.budgetAlloc*0.95?"Exhausted":"Completed";
       else rec.status="Upcoming";
     }else rec.status="Unknown";
-    rec.daysUntilExhausted=(rec.status==="Active"&&rec.dailyBurn>0)?Math.floor(rec.leftover/rec.dailyBurn):null;
+    rec.liveBurn=cpcLiveBurn(rec);
+    rec.daysUntilExhausted=(rec.status==="Active"&&rec.liveBurn>0)?Math.floor(rec.leftover/rec.liveBurn):null; // v534: real pace, not diluted dailyBurn
     rec.be=cpcBE(brand,aggregator);
     rec.verdict=cpcVerdict(rec.roi,rec.be);
     recs.push(rec);
@@ -8023,7 +8042,7 @@ function cpcTopUpSuggestion(r){
   const lastDay=new Date(dt.getFullYear(),dt.getMonth()+1,0).getDate();
   const daysLeftInMonth=lastDay-dt.getDate();
   if(daysLeftInMonth<=0)return null;
-  return{daysLeftInMonth,suggested:Math.round(r.dailyBurn*daysLeftInMonth),burnPerDay:r.dailyBurn};
+  const _lb=r.liveBurn||r.dailyBurn;return{daysLeftInMonth,suggested:Math.round(_lb*daysLeftInMonth),burnPerDay:_lb}; // v534
 }
 
 // ── DRILL-DOWN STATE ──
@@ -8409,7 +8428,7 @@ function cpcPoolInvestRec(pooledRows){
     // Sum dailyBurn from the most recent month-row of each outlet (active or not).
     // The pool's actual burn IS the sum of what each contributing outlet spent per day.
     const lastRow=t.monthRows&&t.monthRows.length?t.monthRows[t.monthRows.length-1]:t.liveRow;
-    poolBurn+=(lastRow&&lastRow.dailyBurn)||0;
+    poolBurn+=(lastRow&&(lastRow.liveBurn||lastRow.dailyBurn))||0; // v534
   });
   const poolLeftover=Math.max(0,poolAlloc-poolSpent);
   const poolROI=poolSpent>0?poolSales/poolSpent:null;
@@ -8476,12 +8495,12 @@ function cpcInvestRec(ag,brand,outlet,curRow,bidOpt){
   // most recent (this-month) row's historical daily burn as the basis for a restart.
   let burn,leftover,mode;
   if(liveRows.length){
-    burn=liveRows.reduce((s,r)=>s+(r.dailyBurn||0),0);
+    burn=liveRows.reduce((s,r)=>s+(r.liveBurn||r.dailyBurn||0),0); // v534
     leftover=liveRows.reduce((s,r)=>s+(r.leftover||0),0);
     mode="active";
   }else{
     // No active row — budget exhausted/completed this month. Use this row's burn as restart basis.
-    burn=curRow.dailyBurn||0;
+    burn=curRow.liveBurn||curRow.dailyBurn||0; // v534
     leftover=0; // nothing left, so the full remaining-month projection is "additional"
     mode="restart";
   }
@@ -18783,7 +18802,7 @@ function kpiOutletName(tab){return KPI_OUTLET_NAME[tab]||tab;}
 const KPI_BRANDS=["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"];
 // Expected number of listings (outlets) per brand on the "big 3" aggregators (Talabat, Deliveroo, Careem).
 // Total should be 50 per aggregator. Used to flag when a KPI view is missing outlets.
-const BRAND_EXPECTED_LISTINGS={Oregano:14,Lollorosso:15,Smokeys:14,Fyoozhen:4,"Wicked Wings":3};
+const BRAND_EXPECTED_LISTINGS={Oregano:14,Lollorosso:15,Smokeys:14,Fyoozhen:4,"Wicked Wings":4}; // v534: Al Reef added 9 Oct 2026
 const FULL_LISTING_AGGS=new Set(["Talabat","Deliveroo","Careem"]); // 50-listing platforms
 function expectedListings(brand,aggregator){
   if(!FULL_LISTING_AGGS.has(aggregator))return null; // only the big 3 have the fixed 50-listing structure
