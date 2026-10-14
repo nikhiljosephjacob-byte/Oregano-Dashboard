@@ -524,7 +524,10 @@ async function msysLogin(env, force = false) {
   const jar = { TenantID: MSYS_TENANT };
   const steps = [];
   // 1) login page → cookies + anti-forgery tokens
-  const r1 = await msysFetch(jar, "/Home/Index");
+  // v537: the tenant is fixed server-side when the login page is opened via /Home/Login?<tenant>
+  // (the portal's own "session expired" redirect uses exactly this URL); it then redirects to
+  // /Home/Index. Sending only the TenantID cookie (v536) wasn't enough — still code 4.
+  const r1 = await msysFetch(jar, "/Home/Login?" + MSYS_TENANT);
   const html = await r1.text();
   steps.push("page " + r1.status);
   const reqTok = (html.match(/name="__RequestVerificationToken"[^>]*value="([^"]+)"/) || html.match(/value="([^"]+)"[^>]*name="__RequestVerificationToken"/) || [])[1];
@@ -532,6 +535,7 @@ async function msysLogin(env, force = false) {
   if (!reqTok || !forgery) throw new Error("MSYS_LOGIN_PAGE_CHANGED (" + steps.join(", ") + ")");
   const eu = await msysEnc(user), ep = await msysEnc(pass);
   const ajax = { "Content-Type": "application/json", "VerificationToken": forgery, "X-Requested-With": "XMLHttpRequest", "Origin": MSYS, "Referer": MSYS + "/Home/Index" };
+  steps.push("cookies " + Object.keys(jar).join(","));
   // 2) credentials check
   const r2 = await msysFetch(jar, "/Home/Login", { method: "POST", headers: ajax,
     body: `{'Username':'${eu}','Password':'${ep}', 'Company':'', 'Language':'EN', 'ChainID':'', 'LocationID':'' }` });
@@ -542,7 +546,7 @@ async function msysLogin(env, force = false) {
   // 3 "Invalid username and password" · 4 "Invalid Tenant" · anything else "Invalid Login".
   if (code === "2") throw new Error("MSYS_ALREADY_LOGGED_IN — Microsys says this user is already logged in elsewhere (code 2)");
   if (code === "3") throw new Error("MSYS_BAD_LOGIN — Microsys rejected the username/password (code 3)");
-  if (code === "4") throw new Error("MSYS_BAD_TENANT — Microsys said 'Invalid Tenant' (code 4)");
+  if (code === "4") throw new Error("MSYS_BAD_TENANT — Microsys said 'Invalid Tenant' (code 4) [" + steps.join(" | ") + "]");
   if (code !== "1") throw new Error("MSYS_LOGIN_FAILED — Microsys answered: " + t2.slice(0, 120));
   // 3) company/chain/location — reuse the user's last work location, else ORE/ORE/ALQ
   let company = "ORE", chain = "ORE", location = "ALQ";
