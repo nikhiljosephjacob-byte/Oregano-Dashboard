@@ -820,12 +820,14 @@ async function handlePosSheetBatch(request, env) {
   const m = await posSheetMeta(env, sheet);
   const dst = (m.sheets.find(x => x.title === "Dine-In & Takeaway") || {}).sheetId;
   if (dst == null) return json({ error: "Dine-In & Takeaway tab not found" }, 400);
-  const allowed = ["copyPaste", "mergeCells", "unmergeCells", "updateDimensionProperties", "updateSheetProperties", "repeatCell", "updateBorders"];
+  const allowed = ["copyPaste", "mergeCells", "unmergeCells", "updateDimensionProperties", "updateSheetProperties", "repeatCell", "updateBorders", "insertDimension"];
   for (const q of requests) {
     const k = Object.keys(q); if (k.length !== 1 || !allowed.includes(k[0])) return json({ error: "request_not_allowed: " + k.join(",") }, 400);
     const v = q[k[0]];
     const target = k[0] === "copyPaste" ? v.destination : k[0] === "updateSheetProperties" ? v.properties : v.range;
     if (!target || target.sheetId !== dst) return json({ error: "only the Dine-In & Takeaway tab can be formatted" }, 400);
+    // v549: backfill may insert empty ROWS below the 2 header rows (to slot earlier days above later ones)
+    if (k[0] === "insertDimension" && (v.range.dimension !== "ROWS" || !(v.range.startIndex >= 2) || !(v.range.endIndex - v.range.startIndex <= 400))) return json({ error: "only rows below the header may be inserted" }, 400);
     if (k[0] === "updateSheetProperties" && v.fields !== "gridProperties.frozenRowCount,gridProperties.frozenColumnCount") return json({ error: "only frozen rows/cols may change" }, 400);
   }
   const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${m.id}:batchUpdate`, { method: "POST",
