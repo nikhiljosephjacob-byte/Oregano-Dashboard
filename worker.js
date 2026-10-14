@@ -715,6 +715,23 @@ async function handlePosSheetWrite(request, env) {
   if (!r.ok) return json({ error: (j.error && j.error.message) || ("HTTP " + r.status) }, 502);
   return json({ ok: true, updatedCells: j.totalUpdatedCells || 0, updatedRanges: (j.responses || []).length });
 }
+// v539: create the "Dine-In & Takeaway" tab on first use (only that exact tab — nothing else).
+async function handlePosAddTab(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { sheet } = await readBody(request);
+  const title = "Dine-In & Takeaway";
+  const { token } = await googleTokenCached(env);
+  const id = posSheetId(sheet);
+  const meta = await (await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=sheets.properties.title`, { headers: { Authorization: "Bearer " + token } })).json();
+  if (((meta && meta.sheets) || []).some(x => x.properties.title === title)) return json({ ok: true, created: false });
+  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}:batchUpdate`, { method: "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ requests: [{ addSheet: { properties: { title, gridProperties: { frozenRowCount: 2, frozenColumnCount: 3 } } } }] }) });
+  const j = await r.json();
+  if (!r.ok) return json({ error: (j.error && j.error.message) || ("HTTP " + r.status) }, 502);
+  return json({ ok: true, created: true });
+}
 async function handlePosLogWrite(request, env) {
   const s = await requirePosUser(request, env);
   if (!s) return json({ error: "forbidden" }, 403);
@@ -806,6 +823,7 @@ export default {
       if (path === "/api/pos/sheet/read"  && method === "POST") return await handlePosSheetRead(request, env);
       if (path === "/api/pos/sheet/write" && method === "POST") return await handlePosSheetWrite(request, env);
       if (path === "/api/pos/log"         && method === "POST") return await handlePosLogWrite(request, env);
+      if (path === "/api/pos/sheet/addtab"&& method === "POST") return await handlePosAddTab(request, env);
     } catch (e) {
       return json({ error: "server_error", detail: String(e.message || e) }, 500);
     }
