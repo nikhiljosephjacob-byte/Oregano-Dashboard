@@ -21,6 +21,12 @@
 //                           Tagged with the dashboard's BUILD_VERSION at save time so a future
 //                           algorithm change never gets silently misread as "what the model
 //                           predicted" under different logic.
+//   pos:creds             → JSON {user, pass, setBy, setAt} — Microsys (Kull ERP) login used by
+//                           POS Sync. Entered once from the dashboard; never sent back to any
+//                           browser (only "is it set / who set it / when").
+//   pos:msys              → JSON {cookies, ts} — cached Microsys login session (15 min TTL) so
+//                           a multi-day pull doesn't sign in again for every step.
+//   pos:log:<ts>:<rand>   → JSON of one POS Sync run/test (who, what, result). 180-day TTL.
 // ═══════════════════════════════════════════════════════════════
 
 // User directory. Edit here to add/remove users — these passwords are NEVER
@@ -439,6 +445,228 @@ async function handleAdminUnban(request, env) {
   return json({ ok: true });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// POS SYNC (build 535, step 1 of 4) — pulls Microsys "Kull ERP" reports and writes the
+// "Virtual Brands Performance" Google Sheet directly, replacing the desktop POS Uploader.
+// Step 1 = plumbing + a connection test only (sign in to Microsys, pull one small report,
+// read the Google Sheet's tab list). Nothing is written to any sheet in this step.
+//
+// Secrets (Cloudflare → Worker → Settings → Variables and Secrets, type "Secret"):
+//   GOOGLE_SA_JSON  → the full contents of the POS Uploader's credentials.json
+// Microsys login is NOT a Cloudflare secret — it's entered from the dashboard the first time
+// (KV pos:creds) so Nikhil/Nicole can update it without touching Cloudflare.
+// ═══════════════════════════════════════════════════════════════════════════════
+const POS_USERS = ["nikhil", "nicole"];
+const POS_SHEETS = {
+  test: "1089unJKCbXtwM42Jgemg-0rDS6qIGB86Q6s1KpHnEN4",
+  live: "1-NXDz4mZIOqzCPf5zHz7w8cX8nUVSiTm_7T2QCUEcWU"
+};
+const MSYS = "https://erp.microsystc.com";
+const MSYS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
+const MSYS_SESSION_TTL = 15 * 60;
+// Report viewer (Stimulsoft 2020.5.2) parameters — copied from a real export made in the portal.
+const STI_PARAMS = {"viewerId":"MvcViewer","routes":{"action":"Reports","controller":"AnalysisEMReportView"},"formValues":{},"cacheMode":"ObjectCache","cacheTimeout":10,"cacheItemPriority":"Default","pageNumber":0,"originalPageNumber":0,"reportType":"Report","zoom":100,"viewMode":"SinglePage","showBookmarks":true,"openLinksWindow":"_blank","chartRenderType":"AnimatedVector","reportDisplayMode":"Table","drillDownParameters":[],"editableParameters":null,"useRelativeUrls":true,"passQueryParametersForResources":true,"passQueryParametersToReport":false,"version":"2020.5.2","reportDesignerMode":false,"imagesQuality":"Normal","parametersPanelSortDataItems":true,"combineReportPages":false,"exportFormat":"Csv","exportSettings":{"CodePage":"Default","UseDefaultSystemEncoding":true,"SkipColumnHeaders":false,"TableName":null,"Separator":",","DataType":"Csv","ExportDataOnly":false,"PageRange":"All","Encoding":"65001","DataExportMode":"Data"}};
+
+async function requirePosUser(request, env) {
+  const session = await getSession(env, request.headers.get("X-Session-Id"));
+  if (!session) return null;
+  if (!session.admin && !POS_USERS.includes(session.user)) return null;
+  return session;
+}
+
+// ── tiny cookie jar (Workers fetch has no jar of its own) ──
+function jarAdd(jar, res) {
+  const list = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie()
+    : (res.headers.get("set-cookie") ? [res.headers.get("set-cookie")] : []);
+  for (const c of list) {
+    const first = c.split(";")[0];
+    const i = first.indexOf("=");
+    if (i > 0) jar[first.slice(0, i).trim()] = first.slice(i + 1).trim();
+  }
+}
+const jarStr = jar => Object.entries(jar).map(([k, v]) => `${k}=${v}`).join("; ");
+async function msysFetch(jar, path, opts = {}) {
+  const headers = Object.assign({ "User-Agent": MSYS_UA, "Cookie": jarStr(jar) }, opts.headers || {});
+  let res = await fetch(MSYS + path, { method: opts.method || "GET", headers, body: opts.body, redirect: "manual" });
+  jarAdd(jar, res);
+  let hops = 0;
+  while (res.status >= 300 && res.status < 400 && hops < 5) {
+    const loc = res.headers.get("location"); if (!loc) break;
+    const next = loc.startsWith("http") ? loc : MSYS + (loc.startsWith("/") ? loc : "/" + loc);
+    res = await fetch(next, { headers: { "User-Agent": MSYS_UA, "Cookie": jarStr(jar) }, redirect: "manual" });
+    jarAdd(jar, res); hops++;
+  }
+  return res;
+}
+
+// Microsys login page encrypts username/password with AES-128-CBC, key = iv = "8080808080808080",
+// PKCS7, base64 output (CryptoJS defaults) before sending. Reproduced exactly.
+async function msysEnc(text) {
+  const k = new TextEncoder().encode("8080808080808080");
+  const key = await crypto.subtle.importKey("raw", k, { name: "AES-CBC" }, false, ["encrypt"]);
+  const ct = await crypto.subtle.encrypt({ name: "AES-CBC", iv: k }, key, new TextEncoder().encode(text));
+  let s = ""; new Uint8Array(ct).forEach(b => s += String.fromCharCode(b));
+  return btoa(s);
+}
+
+async function msysLogin(env, force = false) {
+  if (!force) {
+    const cached = await env.SESSIONS.get("pos:msys");
+    if (cached) return JSON.parse(cached).jar;
+  }
+  const credsRaw = await env.SESSIONS.get("pos:creds");
+  if (!credsRaw) throw new Error("NO_CREDS");
+  const { user, pass } = JSON.parse(credsRaw);
+  const jar = {};
+  const steps = [];
+  // 1) login page → cookies + anti-forgery tokens
+  const r1 = await msysFetch(jar, "/Home/Index");
+  const html = await r1.text();
+  steps.push("page " + r1.status);
+  const reqTok = (html.match(/name="__RequestVerificationToken"[^>]*value="([^"]+)"/) || html.match(/value="([^"]+)"[^>]*name="__RequestVerificationToken"/) || [])[1];
+  const forgery = (html.match(/id="forgeryToken"[^>]*value="([^"]+)"/) || [])[1];
+  if (!reqTok || !forgery) throw new Error("MSYS_LOGIN_PAGE_CHANGED (" + steps.join(", ") + ")");
+  const eu = await msysEnc(user), ep = await msysEnc(pass);
+  const ajax = { "Content-Type": "application/json", "VerificationToken": forgery, "X-Requested-With": "XMLHttpRequest", "Origin": MSYS, "Referer": MSYS + "/Home/Index" };
+  // 2) credentials check
+  const r2 = await msysFetch(jar, "/Home/Login", { method: "POST", headers: ajax,
+    body: `{'Username':'${eu}','Password':'${ep}', 'Company':'', 'Language':'EN', 'ChainID':'', 'LocationID':'' }` });
+  const t2 = (await r2.text()).trim();
+  steps.push("login " + r2.status + " " + t2.slice(0, 40));
+  if (t2.replace(/"/g, "") !== "1") throw new Error("MSYS_BAD_LOGIN — Microsys rejected the username/password (" + t2.slice(0, 120) + ")");
+  // 3) company/chain/location — reuse the user's last work location, else ORE/ORE/ALQ
+  let company = "ORE", chain = "ORE", location = "ALQ";
+  try {
+    const r3 = await msysFetch(jar, "/Home/GetLastWorkLocation", { method: "POST", headers: ajax, body: `{'Username':'${eu}'}` });
+    const d3 = JSON.parse(await r3.text());
+    const row = Array.isArray(d3) ? d3[0] : (typeof d3 === "string" ? JSON.parse(d3)[0] : null);
+    if (row && row.CompanyID) { company = row.CompanyID; chain = row.ChainID || chain; location = row.LocationID || location; }
+  } catch (e) { steps.push("lastloc n/a"); }
+  await msysFetch(jar, "/Home/SetCompanySession", { method: "POST", headers: ajax, body: `{'CompanyID':'${company}'}` });
+  // 4) final form post (what the "Continue" button submits)
+  const form = new URLSearchParams({ __RequestVerificationToken: reqTok, Username: user, Password: pass, hdLoginStatus: "true",
+    LangID: "en", CompanyID: company, ChainID: chain, LocationID: location });
+  const r4 = await msysFetch(jar, "/Home/Index", { method: "POST", body: form.toString(),
+    headers: { "Content-Type": "application/x-www-form-urlencoded", "Origin": MSYS, "Referer": MSYS + "/Home/Index" } });
+  steps.push("continue " + r4.status);
+  await r4.text();
+  await env.SESSIONS.put("pos:msys", JSON.stringify({ jar, ts: new Date().toISOString() }), { expirationTtl: MSYS_SESSION_TTL });
+  return jar;
+}
+
+const pad2 = n => String(n).padStart(2, "0");
+const toDMY = iso => { const [y, m, d] = iso.split("-"); return `${d}/${m}/${y}`; };
+function reportQuery(kind, isoDate) {
+  const d = toDMY(isoDate);
+  if (kind === "credit") return `MenuID=RPTEMANALYSISCREDITSALES&ArrayValueForChain=all&ArrayValueForlocation=all&ArrayValueForCustomer=all&EMCreditSalesFromDate=${d}&EMCreditSalesToDate=${d}`;
+  if (kind === "disc")   return `MenuID=RPTEMANALYSISSALESDISDTLS&ArrayValueForChain=all&ArrayValueForlocation=all&EMSalesDiscountDetailsFromDate=${d}&EMSalesDiscountDetailsToDate=${d}`;
+  if (kind === "summary")return `MenuID=RPTEMANALYSISSALESSUMMARYBYOUTLET-S-NEW&ArrayValueForChain=all&ArrayValueForlocation=all&EMSalesSummaryByOutletFromDate=${d}&EMSalesSummaryByOutletToDate=${d}&SalesByPayment=N`;
+  throw new Error("unknown report " + kind);
+}
+function b64utf8(s) { const b = new TextEncoder().encode(s); let o = ""; b.forEach(x => o += String.fromCharCode(x)); return btoa(o); }
+
+// Pull one report for one day as CSV text. Retries once with a fresh Microsys login if the
+// cached session has expired (the portal answers with its login page instead of the viewer).
+async function msysReportCSV(env, kind, isoDate) {
+  const q = reportQuery(kind, isoDate).replace(/\//g, "%2f");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const jar = await msysLogin(env, attempt > 0);
+    const r = await msysFetch(jar, "/AnalysisEMReportView/Reports?" + q);
+    const html = await r.text();
+    const g = (html.match(/"clientGuid"\s*:\s*"([^"]+)"/) || [])[1];
+    if (!g) { if (attempt === 0) continue; throw new Error("MSYS_NO_VIEWER (logged out or report page changed)"); }
+    const post = (action, act, extra) => msysFetch(jar, `/AnalysisEMReportView/${action}?` + q, { method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ stiweb_component: "Viewer", stiweb_action: act,
+        stiweb_parameters: b64utf8(JSON.stringify(Object.assign({}, STI_PARAMS, { clientGuid: g }, extra || {}))) }).toString() });
+    const rb = await post("GetReportFromLocal", "GetReport", { action: "GetReport" }); await rb.text();
+    const re = await post("ExportReport", "ExportReport");
+    const csv = await re.text();
+    if (/^ServerError/.test(csv)) throw new Error("MSYS_EXPORT_ERROR " + csv.slice(0, 120));
+    return csv;
+  }
+}
+
+// ── Google service account → access token (RS256 JWT, WebCrypto) ──
+function b64url(bytes) { let s = ""; new Uint8Array(bytes).forEach(b => s += String.fromCharCode(b)); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+async function googleToken(env) {
+  if (!env.GOOGLE_SA_JSON) throw new Error("NO_GOOGLE_SECRET — add GOOGLE_SA_JSON in Cloudflare");
+  const sa = JSON.parse(env.GOOGLE_SA_JSON);
+  const now = Math.floor(Date.now() / 1000);
+  const head = b64url(new TextEncoder().encode(JSON.stringify({ alg: "RS256", typ: "JWT" })));
+  const claim = b64url(new TextEncoder().encode(JSON.stringify({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/spreadsheets",
+    aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3300 })));
+  const pem = sa.private_key.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
+  const der = Uint8Array.from(atob(pem), c => c.charCodeAt(0));
+  const key = await crypto.subtle.importKey("pkcs8", der, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(head + "." + claim));
+  const res = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: head + "." + claim + "." + b64url(sig) }).toString() });
+  const j = await res.json();
+  if (!j.access_token) throw new Error("GOOGLE_AUTH_FAILED " + JSON.stringify(j).slice(0, 200));
+  return { token: j.access_token, email: sa.client_email };
+}
+
+async function posLog(env, rec) {
+  const ts = new Date().toISOString();
+  await env.SESSIONS.put(`pos:log:${ts}:${crypto.randomUUID().slice(0, 6)}`, JSON.stringify(Object.assign({ ts }, rec)), { expirationTtl: 60 * 60 * 24 * 180 });
+}
+
+// ── endpoints ──
+async function handlePosStatus(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const raw = await env.SESSIONS.get("pos:creds");
+  const c = raw ? JSON.parse(raw) : null;
+  const logs = await env.SESSIONS.list({ prefix: "pos:log:", limit: 1000 });
+  const recent = logs.keys.sort((a, b) => b.name.localeCompare(a.name)).slice(0, 15);
+  const history = (await Promise.all(recent.map(k => env.SESSIONS.get(k.name)))).filter(Boolean).map(r => JSON.parse(r));
+  return json({ ok: true, hasCreds: !!c, credsUser: c ? c.user : null, credsSetBy: c ? c.setBy : null, credsSetAt: c ? c.setAt : null,
+    hasGoogle: !!env.GOOGLE_SA_JSON, history });
+}
+
+async function handlePosCreds(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { user, pass } = await readBody(request);
+  if (!user || !pass) return json({ error: "Enter both username and password" }, 400);
+  await env.SESSIONS.put("pos:creds", JSON.stringify({ user: String(user).trim(), pass: String(pass), setBy: s.user, setAt: new Date().toISOString() }));
+  await env.SESSIONS.delete("pos:msys");
+  return json({ ok: true });
+}
+
+async function handlePosTest(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { sheet } = await readBody(request);
+  const out = { microsys: null, google: null };
+  // Microsys: sign in fresh + pull yesterday's Sales Summary by Outlet (small report)
+  const y = new Date(Date.now() + 4 * 3600 * 1000 - 86400000); // Dubai "yesterday"
+  const iso = `${y.getUTCFullYear()}-${pad2(y.getUTCMonth() + 1)}-${pad2(y.getUTCDate())}`;
+  try {
+    const t0 = Date.now();
+    await msysLogin(env, true);
+    const csv = await msysReportCSV(env, "summary", iso);
+    const lines = csv.split(/\r?\n/).filter(Boolean);
+    out.microsys = { ok: true, date: iso, outlets: Math.max(0, lines.length - 1), header: (lines[0] || "").slice(0, 120), ms: Date.now() - t0 };
+  } catch (e) {
+    out.microsys = { ok: false, error: String(e.message || e) };
+  }
+  // Google: token + read tab names of the chosen sheet (read-only)
+  try {
+    const { token, email } = await googleToken(env);
+    const id = POS_SHEETS[sheet === "live" ? "live" : "test"];
+    const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=properties.title,sheets.properties.title`, { headers: { Authorization: "Bearer " + token } });
+    const j = await r.json();
+    if (!r.ok) throw new Error((j.error && j.error.message) || ("HTTP " + r.status));
+    out.google = { ok: true, sheet: sheet === "live" ? "LIVE" : "TEST", title: j.properties.title, tabs: j.sheets.map(x => x.properties.title), serviceAccount: email };
+  } catch (e) {
+    out.google = { ok: false, error: String(e.message || e) };
+  }
+  await posLog(env, { user: s.user, kind: "test", sheet: sheet === "live" ? "LIVE" : "TEST", microsysOk: !!(out.microsys && out.microsys.ok), googleOk: !!(out.google && out.google.ok) });
+  return json(out);
+}
+
 // ─── main router ─────────────────────────────────────────────────────────────
 export default {
   async fetch(request, env, ctx) {
@@ -483,6 +711,9 @@ export default {
       if (path === "/api/admin/kick"      && method === "POST") return await handleAdminKick(request, env);
       if (path === "/api/admin/ban"       && method === "POST") return await handleAdminBan(request, env);
       if (path === "/api/admin/unban"     && method === "POST") return await handleAdminUnban(request, env);
+      if (path === "/api/pos/status"      && method === "GET")  return await handlePosStatus(request, env);
+      if (path === "/api/pos/creds"       && method === "POST") return await handlePosCreds(request, env);
+      if (path === "/api/pos/test"        && method === "POST") return await handlePosTest(request, env);
     } catch (e) {
       return json({ error: "server_error", detail: String(e.message || e) }, 500);
     }
