@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-14-550";
+const BUILD_VERSION="2026-10-15-551";
 const BUILD_NOTES=[
+  "🍽️ DASHBOARD REDESIGN — ALL SALES, NOT JUST DELIVERY. (1) Menu now in sections: Group (Overview, All Channels, Outlets, Compare) · Delivery (Brands, Platforms, Ads, Campaigns, KPI, Cancellations, Feedback) · Dine-in · Tools. (2) A 🛵 Delivery / 🍽️ All sales switch in the top bar and on Overview, Brands, Outlets, Platforms and Compare — All sales adds Dine-In and Takeaway as two more channels (from the Dine-In & Takeaway tab, incl. VAT like delivery). Overview gets a Group-sales headline (delivery / dine-in / takeaway split, physical vs virtual brands) and every outlet ranked by total sales. (3) New All Channels page: KPIs per channel, channel-mix chart, outlet ranking, and (4) what the virtual brands add to each kitchen. (5) New Dine-In & Takeaway page: guests, spend per guest, check average, takeaway, discounts, trend, average day of the week and an outlet table. (6) Daily Digest gains an all-channels section, outlets yesterday and POS low-sales alerts; the health banner warns when the dine-in data falls behind or a POS flag is open. Profitability stays delivery-only (marked 'delivery only') until site costs are added. POS Sync: a backfill on an old-layout tab no longer re-pulls days before your range; a day that hits a Microsys session error retries once.",
   "🗂 POS SYNC: BACKFILL IN ANY ORDER + ⏹ STOP + FASTER + SHEET LOOK FIXED — tested on the TEST sheet: 1 Jan → 13 Oct 2026 (286 days) written with no failures, in date order with no gaps. Earlier days are now inserted above later ones, so history can be filled 2026 first and then 2025 month by month backwards. New ⏹ Stop button on Pull and Backfill (finishes the current day, saves, formats). Backfill fetches the next 2 days while writing the current one. Dine-In & Takeaway formatting now matches the delivery tabs: green only on the Total row (Branch/Date/Day), black lines on every cell, thick dividers around Dine-In, Takeaway and Total, wider Branch column. Backfill defaults to 1 Jan 2026; the coverage card is hidden.",
   "📅 POS SYNC: DATA COVERAGE CHECK — Nikhil's screenshot of Microsys for 19 Jan 2025 shows only one outlet (Al Reem, AED 153), so the Jan 2025 zeros came from Microsys not having that period's sales, not from the dashboard. New '📅 Check data coverage' card: reads the Sales Summary by Outlet on the 1st and 15th of every month since Jan 2025 (read-only) and shows outlets reporting, net sales and the dine-in/takeaway split per date, then names the first date from which Microsys looks complete — that's where the backfill should start.",
   "🧱 POS SYNC: DINE-IN TAB LAYOUT = DELIVERY TABS + NO MORE ZERO DAYS — Nikhil's January 2025 backfill on LIVE showed (1) an empty gap row after every Total, which the delivery tabs don't have, and (2) whole days of zeros. Fixes: the tab now starts on row 3 and each day follows the previous Total directly, exactly like the brand tabs (19 rows per day). A backfill detects the old layout and re-lays the tab once (values cleared, formatting kept, every day already there re-pulled). Days where Microsys's Sales Summary has no dine-in/takeaway split (or no rows at all) are no longer written as zeros — they are skipped and listed, so the cause can be checked. New '🔍 Check a raw Microsys report' card shows exactly what Microsys returns for any report and day (read-only).",
@@ -4975,6 +4976,8 @@ async function doLoad(){
   setTimeout(()=>{clearInterval(ticker);setLoadingProgress(100);},100);
   allData=all;
   buildDataIndex();
+  if(typeof lensReset==="function")lensReset(); // v551: delivery data reloaded — the All-sales switch re-applies on the next render
+  if(typeof loadInstoreData==="function")loadInstoreData(); // v551: Dine-In & Takeaway tab (async, non-blocking)
   // Restore any previously-uploaded exact-discount data from localStorage (both aggregators)
   loadKeetaFromStorage();
   loadCareemFromStorage();
@@ -5043,6 +5046,7 @@ async function doLoad(){
   injectCompareTab();
   injectCancellationsTab();
   injectFeedbackTab();
+  if(typeof injectChannelsTab==="function")injectChannelsTab(); // v551 All Channels + Dine-In & Takeaway pages
   if(typeof injectPosSyncTab==="function")injectPosSyncTab(); // v535 POS Sync (Nikhil + Nicole only)
   tagTabsWithPageIds();
   addTabIcons();
@@ -5184,7 +5188,7 @@ function buildSidebarNav(){
     if(document.getElementById("app-sidebar"))return;
     if(new URLSearchParams(location.search).get("nosidebar")==="1")return;
     const tabs=[...document.querySelectorAll(".tab")];
-    if(tabs.length<8||tabs.length>14)return; // sanity check — expected ~10-11; unexpected shape → bail
+    if(tabs.length<8||tabs.length>20)return; // sanity check — expected ~10-11; unexpected shape → bail
     if(!tabs[0].parentElement)return;
 
     // v183: reorder by data-pg (set by tagTabsWithPageIds, called before this) rather than
@@ -5194,7 +5198,7 @@ function buildSidebarNav(){
     // (campTab==='discounts'), not a standalone page. The tab itself is deleted from the DOM
     // outright by removeDiscountBurnTab() before this function ever runs, so it wouldn't reach
     // ORDER's mapping anyway — removed here too so ORDER stays an accurate list of real pages.
-    const ORDER=["overview","brands","outlets","platforms","cpc","campaigns","kpi","cancellations","feedback","compare"];
+    const ORDER=["overview","channels","outlets","compare","brands","platforms","cpc","campaigns","kpi","cancellations","feedback","dinein","possync"]; // v551 grouped: Group · Delivery · Dine-in · Tools
     const byPg={};
     tabs.forEach(t=>{if(t.dataset.pg)byPg[t.dataset.pg]=t;});
     const orderedTabs=ORDER.map(id=>byPg[id]).filter(Boolean);
@@ -5244,6 +5248,7 @@ function buildSidebarNav(){
     }
 
     document.body.insertBefore(sidebar,document.body.firstChild);
+    if(typeof navSectionize==="function")navSectionize(); // v551 menu sections
 
     const css=document.createElement("style");
     css.id="sidebar-css";
@@ -6045,7 +6050,7 @@ function mNavGo(page){
 // dark theme one at a time. Adding a page here is the ONLY change needed at the dispatcher —
 // each page's own render function still needs its own scoped style override and theme-aware
 // calls, same as Overview's build.
-const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare","discounts","kpi","campaigns","feedback","cpc","possync"]);
+const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare","discounts","kpi","campaigns","feedback","cpc","possync","channels","dinein"]);
 function renderPage(p){
   // v286: fixes the profitability explainer (and, it turns out, every campaign popup before it)
   // not appearing at all for anyone who hadn't visited the Campaigns page first in that browser
@@ -6059,7 +6064,7 @@ function renderPage(p){
   // unconditionally, on every single page render, is free after the first call and guarantees
   // it's ready no matter which page loads first.
   initCalcTip();
-  _darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();else if(p==="cancellations")renderCancellations();else if(p==="feedback")renderFeedback();else if(p==="possync")renderPosSync();
+  _darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();else if(p==="cancellations")renderCancellations();else if(p==="feedback")renderFeedback();else if(p==="possync")renderPosSync();else if(p==="channels")renderChannels();else if(p==="dinein")renderDineIn();
   // v460: real bug Nikhil caught — "1 didn't work at all". The count-up was hooked into gp(),
   // but gp() is only ONE of several callers of this same renderPage() dispatcher (the tab-click
   // handler) — fApply/fToggle/fClear (filters), sortTableBy, dismissRec/undismissRec, and
@@ -6282,7 +6287,7 @@ function renderOverview(){
   // same simplification already used for campaign-level contribution math elsewhere in this file.
   const profDateRef=curFilters().end||dk(new Date());
   const profCur=computeProfitability(ld,profDateRef),profPrev=computeProfitability(pd,profDateRef);
-  const profMarginCur=ls.sales>0?profCur.contribution/ls.sales*100:0;
+  const _pds=typeof lensDelSales==="function"?lensDelSales(ld):ls.sales;const profMarginCur=_pds>0?profCur.contribution/_pds*100:0;
   const profMarginPrev=ps.sales>0?profPrev.contribution/ps.sales*100:0;
   // Day counts for per-day averages: span of the selected filter range, and of the comparison range.
   const f=curFilters();
@@ -6483,7 +6488,7 @@ function renderOverview(){
       const priorGross=ps.sales+(ps.disc||0);
       const priorDepth=priorGross>0?((ps.disc||0)/priorGross*100):0;
       return kpiCard("Discount Burn",fmtAEDTip(ls.disc||0),`${depth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(ls.disc||0,ps.disc||0),null,null,true);
-    })()}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior,"brand",true),profCur.contribution<0?profitClr(profCur.contribution):null)}${kpiCard("Active Outlets",activeOutlets,"all brands",null,null,null,null,missingOutletsHTML)}${renderOvRatingsGridItem()}</div>
+    })()}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin${typeof lensProfNote==="function"?lensProfNote():""}<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior,"brand",true),profCur.contribution<0?profitClr(profCur.contribution):null)}${kpiCard("Active Outlets",activeOutlets,"all brands",null,null,null,null,missingOutletsHTML)}${renderOvRatingsGridItem()}</div>
     <div id="ov-ratings-expand-wrap">${renderOvRatingsExpand()}</div>
     <div class="g2"><div class="sm"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px"><span>${OV_TREND_METRICS[ovTrendMetric].label} Trend</span><span style="display:flex;gap:4px">${OV_TREND_METRIC_KEYS.map(k=>`<span onclick="ovSetTrendMetric('${k}')" style="cursor:pointer;font-size:10px;font-weight:${k===ovTrendMetric?700:500};padding:3px 8px;border-radius:6px;text-transform:none;letter-spacing:0;background:${k===ovTrendMetric?(_darkPage?DARK_THEME.accentOrange+'22':'#F59E0B22'):'transparent'};color:${k===ovTrendMetric?(_darkPage?DARK_THEME.accentOrange:'#B45309'):(_darkPage?DARK_THEME.textMuted:'#64748B')};border:1px solid ${k===ovTrendMetric?(_darkPage?DARK_THEME.accentOrange:'#F59E0B'):'transparent'}">${OV_TREND_METRICS[k].shortLabel}</span>`).join('')}</span></div><div style="position:relative;height:220px"><canvas id="ch-trend"></canvas></div></div><div class="sm"><div class="ct">${getPeriodLabel()} by Platform</div><div style="position:relative;height:220px"><canvas id="ch-agg"></canvas></div></div></div>
     <div class="card" style="padding:14px">
@@ -6948,7 +6953,7 @@ function renderBrands(){
   const ls=sumR(ld),ps=sumR(pd);const compShort=getCompShort();
   const profDateRef=curFilters().end||dk(new Date());
   const profCur=computeProfitability(ld,profDateRef),profPrev=computeProfitability(pd,profDateRef);
-  const profMarginCur=ls.sales>0?profCur.contribution/ls.sales*100:0;
+  const _pds=typeof lensDelSales==="function"?lensDelSales(ld):ls.sales;const profMarginCur=_pds>0?profCur.contribution/_pds*100:0;
   const cm=mkMap(ld,r=>`${r.branch}|${r.aggregator}`),pm=mkMap(pd,r=>`${r.branch}|${r.aggregator}`);
   const rows=Object.values(cm).map(c=>{const[branch,aggregator]=c.k.split("|");const pv=pm[c.k];return{branch,aggregator,orders:c.orders,sales:c.sales,disc:c.disc||0,aov:c.orders>0?c.sales/c.orders:0,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};});
   const aggBar=AGGS.map(ag=>{const c=sumR(ld.filter(r=>r.aggregator===ag));return{ag,sales:c.sales,orders:c.orders,clr:AC[ag]};}).filter(a=>a.orders>0).sort((a,b)=>b.sales-a.sales);
@@ -6993,7 +6998,7 @@ function renderBrands(){
     </style>`:"";
   document.getElementById("page-brands").innerHTML=brandsStyleOverride+makeFilterBar({hideBrand:true})+
     `<div class="brand-sel-row" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${btnH}</div>
-    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior,"platform"),profCur.contribution<0?profitClr(profCur.contribution):null)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px" class="ov-kpi-row">${kpiCard("Orders",ls.orders.toLocaleString(),compShort+": "+ps.orders,pctOf(ls.orders,ps.orders))}${kpiCard("Net Sales",fmtAEDTip(ls.sales),compShort+": "+fmtAEDTip(ps.sales),pctOf(ls.sales,ps.sales))}${kpiCard("AOV",`AED ${ls.orders>0?(ls.sales/ls.orders).toFixed(1):0}`,compShort+": AED "+(ps.orders>0?(ps.sales/ps.orders).toFixed(1):0),pctOf(ls.orders>0?ls.sales/ls.orders:0,ps.orders>0?ps.sales/ps.orders:0))}${kpiCard("Discount Burn",fmtAEDTip(brandDisc),`${brandDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(ps.disc||0)}`,pctOf(brandDisc,ps.disc||0),null,null,true)}${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin${typeof lensProfNote==="function"?lensProfNote():""}<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(ld,pd,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior,"platform"),profCur.contribution<0?profitClr(profCur.contribution):null)}${kpiCard("Active Outlets",new Set(ld.filter(r=>r.branch!=='(brand-level)').map(r=>r.branch)).size,"outlets",null)}</div>
     <div class="g2"><div class="sm"><div class="ct" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;color:${b?.c}"><span>${selBrand} — ${OV_TREND_METRICS[brTrendMetric].label} Trend</span><span style="display:flex;gap:4px">${OV_TREND_METRIC_KEYS.map(k=>`<span onclick="brSetTrendMetric('${k}')" style="cursor:pointer;font-size:10px;font-weight:${k===brTrendMetric?700:500};padding:3px 8px;border-radius:6px;text-transform:none;letter-spacing:0;background:${k===brTrendMetric?(b?.c||'#F59E0B')+'22':'transparent'};color:${k===brTrendMetric?(b?.c||'#F59E0B'):(_darkPage?DARK_THEME.textMuted:'#64748B')};border:1px solid ${k===brTrendMetric?(b?.c||'#F59E0B'):'transparent'}">${OV_TREND_METRICS[k].shortLabel}</span>`).join('')}</span></div><div style="position:relative;height:180px"><canvas id="ch-b-trend"></canvas></div></div><div class="sm"><div class="ct" style="color:${b?.c}">${selBrand} — By Platform <span style="color:#64748B;font-weight:600;text-transform:none;letter-spacing:0;font-size:10px">sales bars · order count on top</span></div><div style="position:relative;height:180px"><canvas id="ch-b-agg"></canvas></div></div></div>
     ${brDeepDiveSection(ld,pd,b)}
     <div class="card"><div class="ct" style="color:${b?.c}">${selBrand} — Outlet × Platform (${getPeriodLabel()}) <span style="color:#64748b;font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("br-tbl",heads,tRows,3)}</div>${growthGridHTML()}`;
@@ -7017,7 +7022,7 @@ function renderOutlets(){
     const brandsHere=[...new Set(outletData.map(r=>r.brand))];
     const profDateRef=curFilters().end||dk(new Date());
     const profCur=computeProfitability(outletData,profDateRef),profPrev=computeProfitability(outletPrev,profDateRef);
-    const profMarginCur=tot.sales>0?profCur.contribution/tot.sales*100:0;
+    const _pds=typeof lensDelSales==="function"?lensDelSales(outletData):tot.sales;const profMarginCur=_pds>0?profCur.contribution/_pds*100:0;
     const cm=mkMap(outletData,r=>`${r.brand}|${r.aggregator}`),pmM=mkMap(outletPrev,r=>`${r.brand}|${r.aggregator}`);
     const rows=Object.values(cm).map(c=>{const[brand,aggregator]=c.k.split("|");const pv=pmM[c.k];return{brand,aggregator,orders:c.orders,sales:c.sales,disc:c.disc||0,aov:c.orders>0?c.sales/c.orders:0,oc:pv?pctOf(c.orders,pv.orders):null,sc:pv?pctOf(c.sales,pv.sales):null};});
     const brandRows=brandsHere.map(brand=>{const c=sumR(outletData.filter(r=>r.brand===brand));const p=sumR(outletPrev.filter(r=>r.brand===brand));return{brand,...c,aov:c.orders>0?c.sales/c.orders:0,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};});
@@ -7085,7 +7090,7 @@ function renderOutlets(){
         ${kpiCard("Net Sales",fmtAEDTip(tot.sales),compShort+": "+fmtAEDTip(prev.sales),pctOf(tot.sales,prev.sales))}
         ${kpiCard("AOV",`AED ${tot.orders>0?(tot.sales/tot.orders).toFixed(1):0}`,"per order",null)}
         ${kpiCard("Discount Burn",fmtAEDTip(outDisc),`${outDepth.toFixed(1)}% of gross<br>${compShort}: ${fmtAEDTip(prev.disc||0)}`,pctOf(outDisc,prev.disc||0),null,null,true)}
-        ${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(outletData,outletPrev,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior),profCur.contribution<0?profitClr(profCur.contribution):null)}
+        ${kpiCard("💵 Profitability",fmtAEDTip(profCur.contribution),`${profMarginCur.toFixed(1)}% margin${typeof lensProfNote==="function"?lensProfNote():""}<br>${compShort}: ${fmtAEDTip(profPrev.contribution)}`,pctOf(profCur.contribution,profPrev.contribution),null,null,null,null,profitabilityTipId(outletData,outletPrev,profDateRef,"this period","prior period",profDateRanges().cur,profDateRanges().prior),profCur.contribution<0?profitClr(profCur.contribution):null)}
         ${kpiCard("Brands",brandsHere.length,brandsHere.join(", "),null)}
       </div>
       <div class="card"><div class="ct">${selOutlet} — Brand Performance (${getPeriodLabel()}) <span style="color:${mutedClr};font-weight:400;text-transform:none;letter-spacing:0">· click headers to sort</span></div>${sortableTable("ou-brands",brHeads,brTRows,2)}</div>
@@ -25276,8 +25281,10 @@ async function posStartBackfill(){
     let extra=[];
     // v549: earlier days are now INSERTED above later ones, so only the old (pre-v547) layout needs a re-lay.
     if(legacy){
-      const existing=[...have].sort();extra=existing.filter(d=>d<from||d>to); // old layout: every day already there is re-pulled into the new layout
-      done(i,"ok",`Old layout (blank row 3 + gap rows) — re-laying it (the ${existing.length} day(s) already there are re-pulled)`);
+      // v551: only days AFTER the chosen range are re-pulled (e.g. the latest daily pulls) — never days before it,
+      // so a run for Jan 2026 doesn't first go back over old Jan 2025 attempts. Earlier days can be backfilled separately.
+      const existing=[...have].sort();extra=existing.filter(d=>d>to);
+      done(i,"ok",`Old layout (blank row 3 + gap rows) — re-laying it${extra.length?` (re-pulling the ${extra.length} later day(s) already there)`:""}`);
       i=step("Clearing the Dine-In & Takeaway rows (formatting kept)");await posApi("/api/pos/sheet/clear-instore",{sheet:P.sheet});
       tab.ab=tab.ab.slice(0,2);have.clear();done(i,"ok");
     }else done(i,"ok",`Tab has ${have.size} day(s) already — those are skipped`);
@@ -25288,7 +25295,7 @@ async function posStartBackfill(){
       const wr=await posApi("/api/pos/sheet/write",{sheet:P.sheet,data:pending});pending=[];done(wi,"ok",`Wrote ${wr.updatedCells.toLocaleString()} cells (${ok} day(s) so far)`);};
     let sinceFlush=0;
     // v549: fetch the next days' reports while the current one is processed (3 days in flight) — ~3× faster
-    const PS_BF_AHEAD=2,inflight={},todo=dates.filter(d=>!have.has(d));
+    const PS_BF_AHEAD=1,inflight={},todo=dates.filter(d=>!have.has(d));
     const fetchDay=iso=>{if(!inflight[iso])inflight[iso]=Promise.all([posApi("/api/pos/report",{kind:"summary",date:iso}),posApi("/api/pos/report",{kind:"disc",date:iso})]);
       const k=todo.indexOf(iso);for(let j=k+1;j<=k+PS_BF_AHEAD&&j<todo.length;j++)if(!inflight[todo[j]]&&!P.stop){const d=todo[j];inflight[d]=Promise.all([posApi("/api/pos/report",{kind:"summary",date:d}),posApi("/api/pos/report",{kind:"disc",date:d})]);inflight[d].catch(()=>{});}
       const pr=inflight[iso];delete inflight[iso];return pr;};
@@ -25299,7 +25306,8 @@ async function posStartBackfill(){
       if(have.has(iso)){skipped++;P.bar.done++;renderPosSync();continue;}
       const di=step(`${posFmtDate(iso)} ${iso.slice(0,4)} — Sales Summary + discounts`);
       try{
-        const[sum,disc]=await fetchDay(iso);
+        let sum,disc;try{[sum,disc]=await fetchDay(iso);}catch(e1){ // v551: one retry after a short pause (Microsys sometimes drops a session mid-run)
+          await new Promise(r=>setTimeout(r,2500));[sum,disc]=await Promise.all([posApi("/api/pos/report",{kind:"summary",date:iso}),posApi("/api/pos/report",{kind:"disc",date:iso})]);}
         const sp=psSummaryHasSplit(sum.csv);
         if(!sp.rows){nodata++;done(di,"err",`${posFmtDate(iso)} ${iso.slice(0,4)} — no Sales Summary rows in Microsys for this day — not written`);continue;}
         if(!sp.split){nosplit++;done(di,"err",`${posFmtDate(iso)} ${iso.slice(0,4)} — Microsys has net sales (AED ${Math.round(sp.net).toLocaleString()}) but no dine-in/takeaway split for this day — not written`);continue;}
@@ -25372,4 +25380,471 @@ async function posCoverageScan(){
     P.cov.done++;renderPosSync();
   }
   P.cov.running=false;renderPosSync();
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// ALL CHANNELS page — delivery (brand tabs) + dine-in + takeaway (POS Sync's "Dine-In & Takeaway"
+// tab) side by side, per physical outlet. Every figure incl. VAT by default (delivery = Credit
+// Sales amount, dine-in/takeaway = POS × 1.05 — same basis, per Nikhil); "Excl. VAT" divides
+// sales by 1.05. Discounts are shown as recorded.
+// ════════════════════════════════════════════════════════════════════════════
+const CH_TAB_NAME="Dine-In & Takeaway";
+const CH_CLR={Delivery:"#4E9BFF","Dine-In":"#FF8A3D",Takeaway:"#A78BFA"};
+const CH_LIST=["Delivery","Dine-In","Takeaway"];
+let instoreData=[];            // [{date,outlet,di:{disc,sales,orders,guests},to:{disc,sales,orders}}]
+let instoreLoaded=false,instoreErr=null;
+let chState={vat:"incl",metric:"sales",outlet:null};
+if(typeof pageFilters!=="undefined"&&!pageFilters.channels)pageFilters.channels=newFilterState();
+// Physical outlet a delivery row belongs to — the two DIP branches are separate kitchens.
+function chOutletOfDelivery(r){if(r.branch==="DIP")return r.brand==="Fyoozhen"?"DIP (Fyoozhen)":"DIP (Oregano)";return r.branch;}
+function chNormOutlet(n){n=String(n||"").trim();if(/^DIP \((Oregano|Fyoozhen)\)$/.test(n))return n;return normB(n);}
+async function loadInstoreData(){
+  try{
+    const raw=`${PUB}?single=true&output=csv&sheet=${encodeURIComponent(CH_TAB_NAME)}&_cb=${Date.now()}`;
+    const r=await fetchWithTimeout(raw,12000);if(!r.ok)throw new Error("HTTP "+r.status);
+    const rows=parseCSV(await r.text());
+    const hi=rows.findIndex(x=>(x[0]||"").toLowerCase()==="branch");if(hi<1)throw new Error("Dine-In & Takeaway tab header not found");
+    const g=rows[hi-1],h=rows[hi];let grp="";const col={};
+    h.forEach((f,i)=>{if((g[i]||"").trim())grp=g[i].trim().toLowerCase();col[grp+"|"+f.trim().toLowerCase()]=i;});
+    const n=(row,k)=>{const i=col[k];if(i==null)return 0;const v=parseFloat(String(row[i]||"").replace(/,/g,""));return isNaN(v)?0:v;};
+    const out=[];
+    for(const row of rows.slice(hi+1)){const o=(row[0]||"").trim();if(!o||/^total$/i.test(o))continue;const d=parseDate(row[1]);if(!d)continue;
+      out.push({date:dk(d),outlet:chNormOutlet(o),
+        di:{disc:n(row,"dine-in|disc"),sales:n(row,"dine-in|sales"),orders:n(row,"dine-in|orders"),guests:n(row,"dine-in|guests")},
+        to:{disc:n(row,"takeaway|disc"),sales:n(row,"takeaway|sales"),orders:n(row,"takeaway|orders")}});}
+    instoreData=out;instoreLoaded=true;instoreErr=null;
+  }catch(e){instoreErr=e.message;instoreLoaded=true;}
+  lensVer++;try{_dhCache=null;}catch(e){}
+  if(typeof curPage!=="undefined"&&(curPage==="channels"||curPage==="dinein"||(lensMode==="all"&&LENS_PAGES.has(curPage)))){Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
+}
+function injectChannelsTab(){
+  const add=(id,label)=>{if(document.getElementById("page-"+id))return;
+    const anyPage=document.querySelector(".pg");
+    if(anyPage&&anyPage.parentNode){const div=document.createElement("div");div.className="pg";div.id="page-"+id;anyPage.parentNode.appendChild(div);}
+    const tabs=document.querySelectorAll(".tab");
+    if(tabs.length){const btn=document.createElement(tabs[0].tagName.toLowerCase());btn.className="tab";btn.innerHTML=label;btn.dataset.pg=id;btn.onclick=()=>gp(id);
+      const last=tabs[tabs.length-1];last.parentNode.insertBefore(btn,last.nextSibling);}};
+  add("channels","🍽️ All Channels");add("dinein","🪑 Dine-In & Takeaway");
+}
+// One period's numbers, per outlet and in total. vat factor applied to sales only.
+function chAggregate(s,e,allOutlets){
+  const vf=chState.vat==="excl"?1/1.05:1,sel=allOutlets?null:chState.outlet;
+  const blank=()=>({Delivery:{sales:0,orders:0,disc:0},"Dine-In":{sales:0,orders:0,disc:0,guests:0},Takeaway:{sales:0,orders:0,disc:0}});
+  const by={},tot=blank(),days={};
+  const add=(o,ch,x,date)=>{if(sel&&o!==sel)return;(by[o]=by[o]||blank());for(const T of[by[o][ch],tot[ch]]){T.sales+=x.sales*vf;T.orders+=x.orders;T.disc+=x.disc||0;if(x.guests!=null&&T.guests!=null)T.guests+=x.guests;}
+    const dd=(days[date]=days[date]||blank());dd[ch].sales+=x.sales*vf;dd[ch].orders+=x.orders;dd[ch].disc+=x.disc||0;};
+  for(const r of allData){if(r.channel==="instore"||r.branch==="(brand-level)"||r.date<s||r.date>e)continue;add(chOutletOfDelivery(r),"Delivery",{sales:r.sales,orders:r.orders,disc:r.disc||0},r.date);}
+  for(const r of instoreData){if(r.date<s||r.date>e)continue;add(r.outlet,"Dine-In",r.di,r.date);add(r.outlet,"Takeaway",{sales:r.to.sales,orders:r.to.orders,disc:r.to.disc},r.date);}
+  const sum=o=>CH_LIST.reduce((a,c)=>a+o[c].sales,0);
+  return{by,tot,days,total:sum(tot),sum};
+}
+function chSet(k,v){chState[k]=(k==="outlet"&&chState.outlet===v)?null:v;Object.values(charts).forEach(c=>c.destroy());charts={};renderPage("channels");}
+function renderChannels(){
+  const pg=document.getElementById("page-channels");if(!pg)return;
+  const T=DARK_THEME,f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),cmp=getCompRange(),compShort=getCompShort();
+  const cur=chAggregate(s,e),prev=chAggregate(cmp.s,cmp.e);
+  const instoreFirst=instoreData.length?instoreData.reduce((m,r)=>r.date<m?r.date:m,instoreData[0].date):null;
+  const style=`<style>
+    #page-channels{background:${T.bg};border-radius:12px;padding:16px 20px}
+    #page-channels .card{background:${T.card}!important;border:1px solid ${T.cardBorder}!important;box-shadow:${T.shadow}!important;color:${T.textPrimary}}
+    #page-channels .ct{color:${T.textPrimary}!important}
+    #page-channels .sm{background:${T.card}!important;border:1px solid ${T.cardBorder}!important;box-shadow:${T.shadow}!important;color:${T.textPrimary}}
+    #page-channels .fbar{background:${T.card}!important;border:1px solid ${T.cardBorder}!important;box-shadow:${T.shadow}!important}
+    #page-channels .fbar .preset{background:${T.bg}!important;border:1px solid ${T.cardBorder}!important;color:${T.textSecondary}!important}
+    #page-channels .fbar .preset.act{background:${T.accentOrange}22!important;border-color:${T.accentOrange}!important;color:${T.accentOrange}!important}
+    #page-channels .tbl th{color:${T.textSecondary};border-bottom-color:${T.cardBorder}}
+    #page-channels .tbl td{border-bottom-color:${T.cardBorder}55;color:${T.textPrimary}}
+    #page-channels .tbl tr:hover td{background:${T.cardBorder}33}
+    #page-channels .tbl td{white-space:nowrap}
+    #page-channels .ch-seg{display:inline-flex;border:1px solid ${T.cardBorder};border-radius:7px;overflow:hidden}
+    #page-channels .ch-seg button{border:none;background:${T.bg};color:${T.textSecondary};padding:5px 11px;font-size:11px;font-weight:700;cursor:pointer}
+    #page-channels .ch-seg button.on{background:${T.accentOrange}22;color:${T.accentOrange}}
+    #page-channels .ch-row{cursor:pointer}
+    #page-channels .ch-share{display:flex;height:10px;border-radius:5px;overflow:hidden;background:${T.bg}}
+    @media (max-width:900px){#page-channels{padding:12px}}
+  </style>`;
+  const seg=(k,opts)=>`<span class="ch-seg">${opts.map(([v,l])=>`<button class="${chState[k]===v?"on":""}" onclick="chSet('${k}','${v}')">${l}</button>`).join("")}</span>`;
+  const vatSeg=seg("vat",[["incl","Incl. VAT"],["excl","Excl. VAT"]]);
+  let h=style+makeFilterBar({hideBrand:true,hidePlatform:true,hideOutlet:true,dateExtra:vatSeg});
+  if(instoreErr)h+=`<div class="card" style="border-color:${T.accentRed}!important;color:${T.accentRed}">⚠ Couldn't load the Dine-In & Takeaway tab: ${esc(instoreErr)}. Delivery figures below are still correct.</div>`;
+  else if(instoreFirst&&s<instoreFirst)h+=`<div style="font-size:11px;color:${T.accentOrange};font-weight:600;margin:-4px 0 12px">ⓘ Dine-in & takeaway data starts ${fmtDisp(instoreFirst)} — days before that show delivery only.</div>`;
+  if(chState.outlet)h+=`<div style="margin:-4px 0 12px"><span class="fchip" onclick="chSet('outlet','${esc(chState.outlet)}')" style="cursor:pointer;background:${T.accentOrange}22;color:${T.accentOrange};border:1px solid ${T.accentOrange}55;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:700">✕ Outlet: ${esc(chState.outlet)}</span></div>`;
+  // KPI row
+  const share=v=>cur.total>0?`${(v/cur.total*100).toFixed(1)}% of total`:"—";
+  const discAll=CH_LIST.reduce((a,c)=>a+cur.tot[c].disc,0),discAllP=CH_LIST.reduce((a,c)=>a+prev.tot[c].disc,0);
+  const grossAll=cur.total+discAll;
+  h+=`<div class="g4 ov-kpi-row">`+
+    kpiCard("Total Sales · all channels",fmtAEDTip(cur.total),`${CH_LIST.reduce((a,c)=>a+cur.tot[c].orders,0).toLocaleString()} orders · ${compShort}`,pctOf(cur.total,prev.total))+
+    CH_LIST.map(c=>kpiCard(`<span style="color:${CH_CLR[c]}">●</span> ${c}`,fmtAEDTip(cur.tot[c].sales),`${share(cur.tot[c].sales)} · ${cur.tot[c].orders.toLocaleString()} ${c==="Dine-In"?"checks":"orders"}`,pctOf(cur.tot[c].sales,prev.tot[c].sales))).join("")+
+    kpiCard("Discounts · all channels",fmtAEDTip(discAll),`${grossAll>0?(discAll/grossAll*100).toFixed(1):"0.0"}% of gross · ${compShort}`,pctOf(discAll,discAllP),null,null,true)+
+  `</div>`;
+  // Channel mix chart
+  const metricSeg=seg("metric",[["sales","Sales"],["orders","Orders"],["disc","Discounts"]]);
+  const nDays=Math.round((new Date(e+"T12:00:00")-new Date(s+"T12:00:00"))/86400000)+1;
+  const gran=nDays<=45?"day":nDays<=200?"week":"month";
+  h+=`<div class="card"><div class="ct" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">📊 Channel mix${chState.outlet?" · "+esc(chState.outlet):""} <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">by ${gran}</span><span style="margin-left:auto">${metricSeg}</span></div>`;
+  h+=`<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">${CH_LIST.map(c=>{const v=cur.tot[c][chState.metric],tv=CH_LIST.reduce((a,x)=>a+cur.tot[x][chState.metric],0);return`<div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:${T.textSecondary}"><span style="width:10px;height:10px;border-radius:3px;background:${CH_CLR[c]}"></span>${c} <span style="color:${T.textPrimary}">${tv>0?(v/tv*100).toFixed(1):"0.0"}%</span></div>`;}).join("")}</div>`;
+  h+=`<div class="ch-share" style="margin-bottom:14px">${CH_LIST.map(c=>{const v=cur.tot[c][chState.metric],tv=CH_LIST.reduce((a,x)=>a+cur.tot[x][chState.metric],0);return`<div style="width:${tv>0?v/tv*100:0}%;background:${CH_CLR[c]}"></div>`;}).join("")}</div>`;
+  h+=`<div style="height:300px"><canvas id="ch-mix"></canvas></div></div>`;
+  // Dine-in / takeaway quality strip
+  const di=cur.tot["Dine-In"],dip=prev.tot["Dine-In"],to=cur.tot.Takeaway,top=prev.tot.Takeaway,del=cur.tot.Delivery,delp=prev.tot.Delivery;
+  const stat=(lbl,val,chg,sub)=>`<div class="sm" style="background:${T.bg};border:1px solid ${T.cardBorder};box-shadow:none"><div style="font-size:10px;color:${T.textSecondary};font-weight:700;text-transform:uppercase;letter-spacing:.8px">${lbl}</div><div style="font-size:20px;font-weight:800;margin-top:4px;font-variant-numeric:tabular-nums">${val}</div><div style="font-size:12px;margin-top:2px;color:${T.textMuted}">${chg!=null&&!isNaN(chg)?`<span style="color:${pctClr(chg)};font-weight:800">${fmtPct(chg)}</span> `:""}${sub||""}</div></div>`;
+  const spg=x=>x.guests>0?x.sales/x.guests:0,aov=x=>x.orders>0?x.sales/x.orders:0,depth=x=>(x.sales+x.disc)>0?x.disc/(x.sales+x.disc)*100:0;
+  h+=`<div class="card"><div class="ct">🍽️ Dine-in & takeaway at a glance</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">`+
+    stat("Guests",Math.round(di.guests).toLocaleString(),pctOf(di.guests,dip.guests),compShort)+
+    stat("Spend / guest",`AED ${spg(di).toFixed(1)}`,pctOf(spg(di),spg(dip)),compShort)+
+    stat("Dine-in check",`AED ${aov(di).toFixed(1)}`,pctOf(aov(di),aov(dip)),"per check")+
+    stat("Takeaway AOV",`AED ${aov(to).toFixed(1)}`,pctOf(aov(to),aov(top)),"per order")+
+    stat("Delivery AOV",`AED ${aov(del).toFixed(1)}`,pctOf(aov(del),aov(delp)),"per order")+
+    stat("Discount depth",`${depth(di).toFixed(1)}% · ${depth(to).toFixed(1)}% · ${depth(del).toFixed(1)}%`,null,"dine-in · takeaway · delivery")+
+  `</div></div>`;
+  // Outlet table — always every outlet (the selected one is highlighted), so another can be picked
+  const curA=chState.outlet?chAggregate(s,e,true):cur,prevA=chState.outlet?chAggregate(cmp.s,cmp.e,true):prev;
+  const outlets=Object.keys(curA.by).filter(o=>curA.sum(curA.by[o])>0); // an outlet with nothing in the period (e.g. Safari Park off-season) is left out
+  const heads=["Outlet",`<span style="color:${CH_CLR.Delivery}">Delivery</span>`,`<span style="color:${CH_CLR["Dine-In"]}">Dine-In</span>`,`<span style="color:${CH_CLR.Takeaway}">Takeaway</span>`,"Total","Mix","Guests","Spend / guest","Disc. %",`Δ Total <span style="font-weight:400;color:${T.textMuted}">${compShort}</span>`];
+  const rankOf={};outlets.slice().sort((a,b)=>curA.sum(curA.by[b])-curA.sum(curA.by[a])).forEach((o,i)=>rankOf[o]=i+1);
+  const rows=outlets.map(o=>{const c=curA.by[o],p=prevA.by[o],t=curA.sum(c),pt=p?curA.sum(p):0,disc=CH_LIST.reduce((a,x)=>a+c[x].disc,0);const dsc=(t+disc)>0?disc/(t+disc)*100:0;
+    const mix=`<div class="ch-share" style="width:110px;height:8px">${CH_LIST.map(x=>`<div title="${x} ${t>0?(c[x].sales/t*100).toFixed(0):0}%" style="width:${t>0?c[x].sales/t*100:0}%;background:${CH_CLR[x]}"></div>`).join("")}</div>`;
+    const m=v=>v>0?fmtAEDTip(v):`<span style="color:${T.textMuted}">—</span>`;
+    return{cells:[`<span class="ch-row" onclick="chSet('outlet','${esc(o)}')" style="font-weight:800;${chState.outlet===o?`color:${T.accentOrange}`:""}"><span style="display:inline-block;min-width:22px;color:${rankOf[o]<=3?T.accentOrange:T.textMuted};font-variant-numeric:tabular-nums">${rankOf[o]}</span>${esc(o)}${AUH.has(o)?` <span style="font-size:10px;color:${T.textMuted}">AUH</span>`:""}</span>`,
+      m(c.Delivery.sales),m(c["Dine-In"].sales),m(c.Takeaway.sales),`<strong>${fmtAEDTip(t)}</strong>`,mix,
+      c["Dine-In"].guests?Math.round(c["Dine-In"].guests).toLocaleString():"—",c["Dine-In"].guests?`AED ${spg(c["Dine-In"]).toFixed(1)}`:"—",
+      `<span style="color:${dsc>=20?T.accentRed:dsc>=10?"#F59E0B":"#22C55E"};font-weight:700">${dsc.toFixed(1)}%</span>`,fmtChgCell(t,pt,true)],
+      sortVals:[o,c.Delivery.sales,c["Dine-In"].sales,c.Takeaway.sales,t,t>0?c["Dine-In"].sales/t:0,c["Dine-In"].guests,spg(c["Dine-In"]),dsc,pctOf(t,pt)]};});
+  h+=`<div class="card"><div class="ct">📍 Outlets ranked by total sales — all channels <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· click an outlet to focus the page on it</span></div>${sortableTable("ch-outlets",heads,rows,4)}</div>`;
+  h+=chVirtualCardHTML(s,e,cmp);
+  pg.innerHTML=h;
+  // chart
+  const keys=Object.keys(cur.days).sort();const bucket=d=>{if(gran==="day")return d;if(gran==="month")return d.slice(0,7)+"-01";const x=new Date(d+"T12:00:00");x.setDate(x.getDate()-((x.getDay()+6)%7));return dk(x);};
+  const b={};keys.forEach(d=>{const k=bucket(d);b[k]=b[k]||{Delivery:0,"Dine-In":0,Takeaway:0};CH_LIST.forEach(c=>b[k][c]+=cur.days[d][c][chState.metric]);});
+  const labels=Object.keys(b).sort();
+  const ctx=document.getElementById("ch-mix")?.getContext("2d");if(!ctx)return;destroyChart("ch-mix");
+  const isMoney=chState.metric!=="orders";
+  charts["ch-mix"]=new Chart(ctx,{type:"bar",data:{labels:labels.map(l=>gran==="month"?new Date(l+"T12:00:00").toLocaleDateString("en-AE",{month:"short",year:"2-digit"}):gran==="week"?"w/c "+fmtShort(l):fmtShort(l)),
+    datasets:CH_LIST.map(c=>({label:c,data:labels.map(l=>b[l][c]),backgroundColor:CH_CLR[c],borderRadius:3,stack:"s"}))},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},
+      plugins:{legend:{display:false},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,
+        callbacks:{label:c=>`${c.dataset.label}: ${isMoney?"AED "+Math.round(c.raw).toLocaleString():Math.round(c.raw).toLocaleString()}`,footer:items=>{const t=items.reduce((a,i)=>a+i.raw,0);return `Total: ${isMoney?"AED "+Math.round(t).toLocaleString():Math.round(t).toLocaleString()}`;}}}},
+      scales:{x:{stacked:true,ticks:{color:T.textSecondary,font:{size:10}},grid:{display:false},border:{display:false}},y:{stacked:true,ticks:{color:T.textMuted,font:{size:10},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#2A3450"},border:{display:false}}}}});
+}
+window.renderChannels=renderChannels;window.chSet=chSet;window.injectChannelsTab=injectChannelsTab;window.loadInstoreData=loadInstoreData;
+
+// ════════════════════════════════════════════════════════════════════════════
+// CHANNEL LENS — one switch that turns the whole dashboard from "Delivery" into "All sales"
+// (delivery + dine-in + takeaway). Dine-in and takeaway become two more "platforms" in allData,
+// so every supported page (Overview, Brands, Outlets, Platforms, Compare) recomputes with them
+// through its existing code. Physical-brand attribution: dine-in/takeaway at the Fyoozhen-only
+// sites (DIP Fyoozhen, NAS, WTC) → Fyoozhen; everywhere else → Oregano. Pages that are about
+// delivery platforms only (Ads, Campaigns, KPI, Cancellations, Feedback) always use delivery data.
+// ════════════════════════════════════════════════════════════════════════════
+const LENS_PAGES=new Set(["overview","brands","outlets","platforms","compare"]);
+const LENS_CH=["Dine-In","Takeaway"];
+const LENS_FYZ_SITES=new Set(["DIP (Fyoozhen)","NAS","WTC"]);
+let lensMode="delivery",lensBase=null,lensApplied="delivery",lensVer=0;
+try{lensMode=localStorage.getItem("oregano_channel_lens")||"delivery";}catch(e){}
+function lensInstoreRecords(){
+  const out=[];
+  for(const r of (typeof instoreData!=="undefined"?instoreData:[])){
+    const brand=LENS_FYZ_SITES.has(r.outlet)?"Fyoozhen":"Oregano";
+    const branch=/^DIP \(/.test(r.outlet)?"DIP":r.outlet;
+    if(r.di.sales||r.di.orders)out.push({brand,branch,aggregator:"Dine-In",date:r.date,sales:r.di.sales,orders:r.di.orders,disc:r.di.disc||0,guests:r.di.guests||0,channel:"instore"});
+    if(r.to.sales||r.to.orders)out.push({brand,branch,aggregator:"Takeaway",date:r.date,sales:r.to.sales,orders:r.to.orders,disc:r.to.disc||0,channel:"instore"});
+  }
+  return out;
+}
+// Swap allData for the page about to render. Cheap: concat + index rebuild only when it changes.
+function lensSync(page){
+  if(!lensBase)lensBase=allData.filter(r=>r.channel!=="instore");
+  const want=(lensMode==="all"&&LENS_PAGES.has(page))?"all":"delivery";
+  const key=want==="all"?"all:"+lensVer:"delivery"; // re-applies when the Dine-In & Takeaway tab (re)loads
+  if(key===lensApplied)return;
+  allData=want==="all"?lensBase.concat(lensInstoreRecords()):lensBase;
+  LENS_CH.forEach(c=>{const i=AGGS.indexOf(c);if(want==="all"&&i<0)AGGS.push(c);if(want!=="all"&&i>=0)AGGS.splice(i,1);});
+  buildDataIndex();lensApplied=key;
+}
+// Called right after the dashboard (re)loads delivery data: forget the old copy so the next page render re-applies the lens.
+function lensReset(){lensBase=null;lensApplied="delivery";LENS_CH.forEach(c=>{const i=AGGS.indexOf(c);if(i>=0)AGGS.splice(i,1);});}
+// Run fn on delivery-only data (digest export, health checks), then put the page's view back.
+function lensDeliveryOnly(fn){if(lensApplied==="delivery")return fn();const page=curPage;lensSync("__delivery");try{return fn();}finally{lensSync(page);}}
+function lensDelSales(recs){let s=0;for(const r of recs||[])if(r.channel!=="instore")s+=r.sales||0;return s;}
+function lensProfNote(){return lensMode==="all"&&LENS_PAGES.has(curPage)?' · <span title="Dine-in & takeaway profitability is hidden until site costs (rent, staff, utilities) are added">delivery only</span>':"";}
+function lensSet(m){lensMode=m;try{localStorage.setItem("oregano_channel_lens",m);}catch(e){}lensSync(curPage);Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);lensHeaderPaint();}
+function lensControlHTML(){
+  const T=DARK_THEME,on=LENS_PAGES.has(curPage);
+  if(!on)return`<span style="font-size:11px;font-weight:700;color:${T.textMuted}" title="This page is about delivery platforms only">🛵 Delivery only</span>`;
+  const b=(m,l,tip)=>`<button title="${tip}" onclick="lensSet('${m}')" style="border:none;padding:5px 11px;font-size:11px;font-weight:800;cursor:pointer;background:${lensMode===m?T.accentOrange+"26":T.bg};color:${lensMode===m?T.accentOrange:T.textSecondary}">${l}</button>`;
+  return`<span style="display:inline-flex;border:1px solid ${T.cardBorder};border-radius:7px;overflow:hidden">${b("delivery","🛵 Delivery","Delivery platforms only")}${b("all","🍽️ All sales","Delivery + dine-in + takeaway")}</span>`;
+}
+// Header switch (top bar, next to Refresh) — visible on every page.
+function lensHeaderPaint(){
+  let el=document.getElementById("lens-hdr");
+  const ts=document.getElementById("ts-label");if(!ts)return;
+  if(!el){el=document.createElement("span");el.id="lens-hdr";el.style.cssText="margin-right:10px;display:inline-flex;align-items:center";ts.parentNode.insertBefore(el,ts);}
+  el.innerHTML=lensControlHTML();
+}
+(function lensHook(){
+  if(typeof renderPage!=="function"||typeof makeFilterBar!=="function")return setTimeout(lensHook,200);
+  const _rp=renderPage;renderPage=function(p){try{if(typeof allData!=="undefined"&&allData.length)lensSync(p);}catch(e){}_rp(p);lensHeaderPaint();};window.renderPage=renderPage;
+  const _mf=makeFilterBar;makeFilterBar=function(o){const h=_mf(o);if(!LENS_PAGES.has(curPage))return h;
+    return h.replace('<div class="fbar">',`<div class="fbar"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid ${DARK_THEME.cardBorder}"><span style="font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:${DARK_THEME.textSecondary}">Sales shown</span>${lensControlHTML()}${lensMode==="all"?`<span style="font-size:11px;color:${DARK_THEME.textMuted}">Dine-In &amp; Takeaway appear as two extra channels next to the delivery platforms</span>`:""}</div>`);};window.makeFilterBar=makeFilterBar;
+  if(typeof commissionRateFor==="function"){const _cr=commissionRateFor;commissionRateFor=function(a,b,d){return LENS_CH.includes(a)?0:_cr(a,b,d);};window.commissionRateFor=commissionRateFor;}
+  if(typeof AC!=="undefined"){AC["Dine-In"]="#FF8A3D";AC["Takeaway"]="#A78BFA";}
+})();
+window.lensSet=lensSet;window.lensReset=lensReset;
+
+// ── OPTION B: "Group sales" hero at the top of Overview when All sales is on ──
+var lensHero=true;
+function lensHeroHTML(){
+  const T=DARK_THEME,f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),cmp=getCompRange(),cs=getCompShort();
+  const sumBy=(a,b,fn)=>allData.filter(r=>r.branch!=="(brand-level)"&&r.date>=a&&r.date<=b&&fn(r)).reduce((x,r)=>({s:x.s+r.sales,o:x.o+r.orders,d:x.d+(r.disc||0)}),{s:0,o:0,d:0});
+  const isDel=r=>!LENS_CH.includes(r.aggregator);
+  const ch=[["Delivery","#4E9BFF",isDel],["Dine-In","#FF8A3D",r=>r.aggregator==="Dine-In"],["Takeaway","#A78BFA",r=>r.aggregator==="Takeaway"]];
+  const cur=ch.map(([n,c,fn])=>({n,c,v:sumBy(s,e,fn),p:sumBy(cmp.s,cmp.e,fn)}));
+  const tot=cur.reduce((a,x)=>a+x.v.s,0),totP=cur.reduce((a,x)=>a+x.p.s,0);
+  const phys=new Set(["Oregano","Fyoozhen"]);
+  const physV=sumBy(s,e,r=>phys.has(r.brand)).s,virtV=tot-physV;
+  const chg=v=>v==null||isNaN(v)?"":`<span style="color:${pctClr(v)};font-weight:800">${fmtPct(v)}</span>`;
+  return`<div class="card" id="lens-hero" style="background:linear-gradient(135deg,${T.card} 0%,#1E2A44 100%)!important">
+    <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-end;justify-content:space-between">
+      <div><div style="font-size:11px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:${T.textSecondary}">Group sales · all channels · ${getPeriodLabel()}</div>
+        <div style="font-size:40px;font-weight:900;letter-spacing:-1px;font-variant-numeric:tabular-nums;margin-top:4px">${fmtAEDExact(tot)}</div>
+        <div style="font-size:13px;color:${T.textMuted};margin-top:2px">${chg(pctOf(tot,totP))} ${cs}</div></div>
+      <div style="display:flex;gap:22px;flex-wrap:wrap">${cur.map(x=>`<div><div style="font-size:11px;font-weight:800;color:${x.c}">● ${x.n}</div><div style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(x.v.s)}</div><div style="font-size:12px;color:${T.textMuted}">${tot>0?(x.v.s/tot*100).toFixed(1):"0.0"}% · ${chg(pctOf(x.v.s,x.p.s))}</div></div>`).join("")}</div>
+    </div>
+    <div style="display:flex;height:12px;border-radius:6px;overflow:hidden;margin:16px 0 10px;background:${T.bg}">${cur.map(x=>`<div title="${x.n}" style="width:${tot>0?x.v.s/tot*100:0}%;background:${x.c}"></div>`).join("")}</div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:${T.textSecondary}">
+      <span><b style="color:${T.textPrimary}">Physical brands</b> (Oregano + Fyoozhen, incl. dine-in) ${fmtAED(physV)} · ${tot>0?(physV/tot*100).toFixed(0):0}%</span>
+      <span><b style="color:${T.textPrimary}">Virtual brands</b> (Lollorosso, Smokeys, Wicked Wings) ${fmtAED(virtV)} · ${tot>0?(virtV/tot*100).toFixed(0):0}%</span>
+      <span style="margin-left:auto;cursor:pointer;color:${T.accentOrange};font-weight:800" onclick="gp('channels')">Open All Channels →</span></div>
+  </div>`;
+}
+(function lensHeroHook(){
+  if(typeof renderPage!=="function"||!window.lensSet)return setTimeout(lensHeroHook,250);
+  const _rp=renderPage;renderPage=function(p){_rp(p);if(p!=="overview"||!lensHero||lensMode!=="all")return;
+    const pg=document.getElementById("page-overview");const fb=pg&&pg.querySelector(".fbar");if(!fb||document.getElementById("lens-hero"))return;
+    fb.insertAdjacentHTML("afterend",lensHeroHTML()+lensRankHTML());};window.renderPage=renderPage;
+})();
+
+// ── Idea 2: outlet-first ranking on Overview (All sales) — every physical outlet ranked by total sales, all channels
+function lensRankHTML(){
+  const T=DARK_THEME,f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),cmp=getCompRange(),cs=getCompShort();
+  const cur=chAggregate(s,e,true),prev=chAggregate(cmp.s,cmp.e,true);
+  const list=Object.keys(cur.by).map(o=>({o,t:cur.sum(cur.by[o]),p:prev.by[o]?prev.sum(prev.by[o]):0,c:cur.by[o]})).filter(x=>x.t>0).sort((a,b)=>b.t-a.t);
+  if(!list.length)return"";const max=list[0].t;
+  const row=(x,i)=>`<div onclick="chState.outlet='${esc(x.o)}';gp('channels')" title="Open ${esc(x.o)} on All Channels" style="display:grid;grid-template-columns:26px minmax(90px,150px) 1fr 92px 64px;gap:10px;align-items:center;padding:6px 4px;border-bottom:1px solid ${T.cardBorder}55;cursor:pointer;font-size:12.5px">
+    <span style="font-weight:800;color:${i<3?T.accentOrange:T.textMuted};font-variant-numeric:tabular-nums">${i+1}</span>
+    <span style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(x.o)}</span>
+    <span style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:${T.bg};width:${(x.t/max*100).toFixed(1)}%">${CH_LIST.map(c=>`<span title="${c} ${fmtAED(x.c[c].sales)}" style="width:${x.t>0?x.c[c].sales/x.t*100:0}%;background:${CH_CLR[c]}"></span>`).join("")}</span>
+    <span style="text-align:right;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(x.t)}</span>
+    <span style="text-align:right;font-size:11.5px;font-weight:700;color:${pctClr(pctOf(x.t,x.p))}">${x.p?fmtPct(pctOf(x.t,x.p)):"—"}</span></div>`;
+  return`<div class="card" id="lens-rank"><div class="ct" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">📍 Outlets ranked by total sales <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· all channels · Δ ${cs} · click an outlet for its detail</span>
+    <span style="margin-left:auto;display:flex;gap:12px;font-size:11px;font-weight:700;text-transform:none;letter-spacing:0">${CH_LIST.map(c=>`<span style="color:${T.textSecondary}"><span style="color:${CH_CLR[c]}">●</span> ${c}</span>`).join("")}</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(420px,100%),1fr));column-gap:28px">${[list.slice(0,Math.ceil(list.length/2)),list.slice(Math.ceil(list.length/2))].map((half,k)=>`<div>${half.map((x,i)=>row(x,i+k*Math.ceil(list.length/2))).join("")}</div>`).join("")}</div></div>`;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// v551 REDESIGN — Idea 4 (virtual-brand contribution per site), Idea 3 (Dine-In & Takeaway page),
+// Idea 1 (menu sections), Idea 7 (Daily Digest section + health alerts), and the guards that keep
+// delivery-only maths delivery-only when the "All sales" switch is on.
+// ════════════════════════════════════════════════════════════════════════════
+if(typeof pageFilters!=="undefined"&&!pageFilters.dinein)pageFilters.dinein=newFilterState();
+const RD_PHYS=new Set(["Oregano","Fyoozhen"]),RD_VIRT=["Lollorosso","Smokeys","Wicked Wings"];
+const RD_BRANDS=["Oregano","Fyoozhen","Lollorosso","Smokeys","Wicked Wings"];
+function rdBrandClr(b){const x=(typeof BR!=="undefined"?BR:[]).find(z=>z.n===b);return x?x.c:"#94A3B8";}
+// sales per physical site × brand (delivery by brand; dine-in & takeaway to the site's own physical brand)
+function rdSiteBrand(s,e){
+  const vf=chState.vat==="excl"?1/1.05:1,by={};
+  const add=(site,brand,v)=>{const o=(by[site]=by[site]||{});o[brand]=(o[brand]||0)+v*vf;};
+  for(const r of allData){if(r.channel==="instore"||r.branch==="(brand-level)"||r.date<s||r.date>e)continue;add(chOutletOfDelivery(r),r.brand,r.sales);}
+  for(const r of instoreData){if(r.date<s||r.date>e)continue;const b=LENS_FYZ_SITES.has(r.outlet)?"Fyoozhen":"Oregano";add(r.outlet,b,(r.di.sales||0)+(r.to.sales||0));}
+  return by;
+}
+// ── Idea 4: what the virtual brands add to each kitchen
+function chVirtualCardHTML(s,e,cmp){
+  const T=DARK_THEME,cur=rdSiteBrand(s,e),prev=rdSiteBrand(cmp.s,cmp.e),cs=getCompShort();
+  const tot=o=>RD_BRANDS.reduce((a,b)=>a+(o[b]||0),0),virt=o=>RD_VIRT.reduce((a,b)=>a+(o[b]||0),0);
+  const sites=Object.keys(cur).filter(x=>tot(cur[x])>0).sort((a,b)=>tot(cur[b])-tot(cur[a]));
+  if(!sites.length)return"";
+  const G=sites.reduce((a,x)=>{RD_BRANDS.forEach(b=>a[b]=(a[b]||0)+(cur[x][b]||0));return a;},{});
+  const gv=virt(G),gt=tot(G);
+  const heads=["Site",...RD_BRANDS.map(b=>`<span style="color:${rdBrandClr(b)}">${b}</span>`),"Site total","Virtual brands",`Virtual share`,`Δ virtual <span style="font-weight:400;color:${T.textMuted}">${cs}</span>`];
+  const m=v=>v>0?fmtAEDTip(v):`<span style="color:${T.textMuted}">—</span>`;
+  const rows=sites.map(x=>{const c=cur[x],p=prev[x]||{},t=tot(c),v=virt(c),sh=t>0?v/t*100:0;
+    const bar=`<div style="display:flex;height:8px;width:120px;border-radius:4px;overflow:hidden;background:${T.bg}">${RD_BRANDS.map(b=>`<span title="${b} ${t>0?((c[b]||0)/t*100).toFixed(0):0}%" style="width:${t>0?(c[b]||0)/t*100:0}%;background:${RD_PHYS.has(b)?"#475569":rdBrandClr(b)}"></span>`).join("")}</div>`;
+    return{cells:[`<span style="font-weight:800">${esc(x)}</span>`,...RD_BRANDS.map(b=>m(c[b]||0)),`<strong>${fmtAEDTip(t)}</strong>`,m(v),
+      `<div style="display:flex;align-items:center;gap:8px">${bar}<b style="font-variant-numeric:tabular-nums">${sh.toFixed(0)}%</b></div>`,fmtChgCell(v,virt(p),true)],
+      sortVals:[x,...RD_BRANDS.map(b=>c[b]||0),t,v,sh,pctOf(v,virt(p))]};});
+  return`<div class="card"><div class="ct">🏭 What the virtual brands add to each kitchen <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· Oregano &amp; Fyoozhen include their dine-in &amp; takeaway</span></div>
+    <div style="font-size:12.5px;color:${T.textSecondary};margin:-2px 0 12px;line-height:1.55">Across these sites the virtual brands (Lollorosso, Smokeys, Wicked Wings) brought <b style="color:${T.textPrimary}">${fmtAEDExact(gv)}</b> — <b style="color:${T.accentOrange}">${gt>0?(gv/gt*100).toFixed(1):"0.0"}%</b> of everything those kitchens sold, with no extra rent or front-of-house.</div>
+    ${sortableTable("ch-virtual",heads,rows,7)}</div>`;
+}
+
+// ── Idea 3: Dine-In & Takeaway page
+let dnState={outlet:null};
+function dnSet(k,v){dnState[k]=(k==="outlet"&&dnState.outlet===v)?null:v;Object.values(charts).forEach(c=>c.destroy());charts={};renderPage("dinein");}
+function dnAgg(s,e,allOutlets){
+  const vf=chState.vat==="excl"?1/1.05:1,sel=allOutlets?null:dnState.outlet,by={},days={};
+  const z=()=>({di:{sales:0,orders:0,guests:0,disc:0},to:{sales:0,orders:0,disc:0},n:0});const tot=z();
+  for(const r of instoreData){if(r.date<s||r.date>e||(sel&&r.outlet!==sel))continue;
+    for(const o of[(by[r.outlet]=by[r.outlet]||z()),tot,(days[r.date]=days[r.date]||z())]){
+      o.di.sales+=r.di.sales*vf;o.di.orders+=r.di.orders;o.di.guests+=r.di.guests||0;o.di.disc+=r.di.disc||0;
+      o.to.sales+=r.to.sales*vf;o.to.orders+=r.to.orders;o.to.disc+=r.to.disc||0;}}
+  return{by,tot,days};
+}
+function renderDineIn(){
+  const pg=document.getElementById("page-dinein");if(!pg)return;
+  const T=DARK_THEME,f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),cmp=getCompRange(),cs=getCompShort();
+  const cur=dnAgg(s,e),prev=dnAgg(cmp.s,cmp.e);
+  const style=`<style>
+    #page-dinein{background:${T.bg};border-radius:12px;padding:16px 20px}
+    #page-dinein .card,#page-dinein .sm,#page-dinein .fbar{background:${T.card}!important;border:1px solid ${T.cardBorder}!important;box-shadow:${T.shadow}!important;color:${T.textPrimary}}
+    #page-dinein .ct{color:${T.textPrimary}!important}
+    #page-dinein .fbar .preset{background:${T.bg}!important;border:1px solid ${T.cardBorder}!important;color:${T.textSecondary}!important}
+    #page-dinein .fbar .preset.act{background:${T.accentOrange}22!important;border-color:${T.accentOrange}!important;color:${T.accentOrange}!important}
+    #page-dinein .tbl th{color:${T.textSecondary};border-bottom-color:${T.cardBorder}}
+    #page-dinein .tbl td{border-bottom-color:${T.cardBorder}55;color:${T.textPrimary}}
+    #page-dinein .tbl tr:hover td{background:${T.cardBorder}33}
+    #page-dinein .tbl td{white-space:nowrap}
+    #page-dinein .ch-seg{display:inline-flex;border:1px solid ${T.cardBorder};border-radius:7px;overflow:hidden}
+    #page-dinein .ch-seg button{border:none;background:${T.bg};color:${T.textSecondary};padding:5px 11px;font-size:11px;font-weight:700;cursor:pointer}
+    #page-dinein .ch-seg button.on{background:${T.accentOrange}22;color:${T.accentOrange}}
+    #page-dinein .dn-two{display:grid;grid-template-columns:3fr 2fr;gap:14px}
+    #page-dinein .dn-two>*{min-width:0}
+    @media (max-width:900px){#page-dinein{padding:12px}#page-dinein .dn-two{grid-template-columns:1fr}}
+  </style>`;
+  const vatSeg=`<span class="ch-seg">${[["incl","Incl. VAT"],["excl","Excl. VAT"]].map(([v,l])=>`<button class="${chState.vat===v?"on":""}" onclick="chState.vat='${v}';dnSet('vat','${v}')">${l}</button>`).join("")}</span>`;
+  let h=style+makeFilterBar({hideBrand:true,hidePlatform:true,hideOutlet:true,dateExtra:vatSeg});
+  const first=instoreData.length?instoreData.reduce((m,r)=>r.date<m?r.date:m,instoreData[0].date):null,last=instoreData.length?instoreData.reduce((m,r)=>r.date>m?r.date:m,instoreData[0].date):null;
+  if(instoreErr)h+=`<div class="card" style="color:${T.accentRed}">⚠ Couldn't load the Dine-In & Takeaway tab: ${esc(instoreErr)}</div>`;
+  else if(!instoreLoaded)h+=`<div class="card" style="color:${T.textSecondary}">Loading the Dine-In & Takeaway tab…</div>`;
+  else if(first&&(s<first||e>last))h+=`<div style="font-size:11px;color:${T.accentOrange};font-weight:600;margin:-4px 0 12px">ⓘ The Dine-In & Takeaway tab has ${fmtDisp(first)} → ${fmtDisp(last)}${e>last?" — run POS Sync → Pull for later days":""}.</div>`;
+  if(dnState.outlet)h+=`<div style="margin:-4px 0 12px"><span onclick="dnSet('outlet','${esc(dnState.outlet)}')" style="cursor:pointer;background:${T.accentOrange}22;color:${T.accentOrange};border:1px solid ${T.accentOrange}55;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:700">✕ Outlet: ${esc(dnState.outlet)}</span></div>`;
+  const di=cur.tot.di,dp=prev.tot.di,to=cur.tot.to,tp=prev.tot.to;
+  const spg=x=>x.guests>0?x.sales/x.guests:0,aov=x=>x.orders>0?x.sales/x.orders:0,dep=x=>(x.sales+x.disc)>0?x.disc/(x.sales+x.disc)*100:0;
+  h+=`<div class="g4 ov-kpi-row">`+
+    kpiCard(`<span style="color:${CH_CLR["Dine-In"]}">●</span> Dine-in sales`,fmtAEDTip(di.sales),`${di.orders.toLocaleString()} checks · ${cs}`,pctOf(di.sales,dp.sales))+
+    kpiCard("Guests",Math.round(di.guests).toLocaleString(),`AED ${spg(di).toFixed(1)} per guest · ${cs}`,pctOf(di.guests,dp.guests))+
+    kpiCard("Spend / guest",`AED ${spg(di).toFixed(1)}`,`check avg AED ${aov(di).toFixed(1)} · ${cs}`,pctOf(spg(di),spg(dp)))+
+    kpiCard(`<span style="color:${CH_CLR.Takeaway}">●</span> Takeaway sales`,fmtAEDTip(to.sales),`${to.orders.toLocaleString()} orders · AOV AED ${aov(to).toFixed(1)}`,pctOf(to.sales,tp.sales))+
+    kpiCard("Discounts · in-store",fmtAEDTip(di.disc+to.disc),`${dep({sales:di.sales+to.sales,disc:di.disc+to.disc}).toFixed(1)}% of gross · ${cs}`,pctOf(di.disc+to.disc,dp.disc+tp.disc),null,null,true)+
+  `</div>`;
+  // trend + weekday
+  const nDays=Math.round((new Date(e+"T12:00:00")-new Date(s+"T12:00:00"))/86400000)+1,gran=nDays<=45?"day":nDays<=200?"week":"month";
+  h+=`<div class="dn-two"><div class="card"><div class="ct">📈 Dine-in &amp; takeaway trend <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· by ${gran} · line = guests</span></div><div style="height:280px"><canvas id="dn-trend"></canvas></div></div>
+    <div class="card"><div class="ct">🗓️ Average day of the week <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· for staffing</span></div><div style="height:280px"><canvas id="dn-dow"></canvas></div></div></div>`;
+  // outlet table
+  const curA=dnState.outlet?dnAgg(s,e,true):cur,prevA=dnState.outlet?dnAgg(cmp.s,cmp.e,true):prev;
+  const allCh=chAggregate(s,e,true);
+  const outlets=Object.keys(curA.by).filter(o=>curA.by[o].di.sales+curA.by[o].to.sales>0);
+  const rank={};outlets.slice().sort((a,b)=>(curA.by[b].di.sales+curA.by[b].to.sales)-(curA.by[a].di.sales+curA.by[a].to.sales)).forEach((o,i)=>rank[o]=i+1);
+  const heads=["Outlet","In-store total","Dine-in sales","Checks","Guests","Spend / guest","Check avg","Takeaway sales","TA orders","TA AOV","Disc. %","In-store share",`Δ in-store <span style="font-weight:400;color:${T.textMuted}">${cs}</span>`];
+  const rows=outlets.map(o=>{const c=curA.by[o],p=prevA.by[o],ins=c.di.sales+c.to.sales,pins=p?p.di.sales+p.to.sales:0,
+      d=dep({sales:ins,disc:c.di.disc+c.to.disc}),allT=allCh.by[o]?allCh.sum(allCh.by[o]):ins,share=allT>0?ins/allT*100:0;
+    return{cells:[`<span onclick="dnSet('outlet','${esc(o)}')" style="cursor:pointer;font-weight:800;${dnState.outlet===o?`color:${T.accentOrange}`:""}"><span style="display:inline-block;min-width:22px;color:${rank[o]<=3?T.accentOrange:T.textMuted}">${rank[o]}</span>${esc(o)}</span>`,
+      `<strong>${fmtAEDTip(ins)}</strong>`,fmtAEDTip(c.di.sales),c.di.orders.toLocaleString(),Math.round(c.di.guests).toLocaleString(),c.di.guests?`AED ${spg(c.di).toFixed(1)}`:"—",c.di.orders?`AED ${aov(c.di).toFixed(1)}`:"—",
+      fmtAEDTip(c.to.sales),c.to.orders.toLocaleString(),c.to.orders?`AED ${aov(c.to).toFixed(1)}`:"—",
+      `<span style="color:${d>=20?T.accentRed:d>=10?"#F59E0B":"#22C55E"};font-weight:700">${d.toFixed(1)}%</span>`,
+      `<span title="Dine-in + takeaway as a share of everything this outlet sold, incl. delivery">${share.toFixed(0)}%</span>`,fmtChgCell(ins,pins,true)],
+      sortVals:[o,ins,c.di.sales,c.di.orders,c.di.guests,spg(c.di),aov(c.di),c.to.sales,c.to.orders,aov(c.to),d,share,pctOf(ins,pins)]};});
+  h+=`<div class="card"><div class="ct">📍 Outlets — dine-in &amp; takeaway <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· ranked by in-store sales · click an outlet to focus the page</span></div>${sortableTable("dn-outlets",heads,rows,1)}</div>`;
+  h+=`<div style="font-size:11px;color:${T.textMuted};margin-top:4px">Source: the Dine-In &amp; Takeaway tab filled by POS Sync (Microsys Sales Summary by Outlet × 1.05, so on the same incl.-VAT basis as delivery). Profitability is not shown for dine-in until site costs are added.</div>`;
+  pg.innerHTML=h;
+  // charts
+  const bucket=d=>{if(gran==="day")return d;if(gran==="month")return d.slice(0,7)+"-01";const x=new Date(d+"T12:00:00");x.setDate(x.getDate()-((x.getDay()+6)%7));return dk(x);};
+  const b={};Object.keys(cur.days).sort().forEach(d=>{const k=bucket(d),x=cur.days[d];b[k]=b[k]||{di:0,to:0,g:0};b[k].di+=x.di.sales;b[k].to+=x.to.sales;b[k].g+=x.di.guests;});
+  const labels=Object.keys(b).sort();
+  const tip={backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8};
+  const ax={ticks:{color:T.textMuted,font:{size:10}},grid:{color:"#2A3450"},border:{display:false}};
+  const c1=document.getElementById("dn-trend")?.getContext("2d");
+  if(c1){destroyChart("dn-trend");charts["dn-trend"]=new Chart(c1,{type:"bar",data:{labels:labels.map(l=>gran==="month"?new Date(l+"T12:00:00").toLocaleDateString("en-AE",{month:"short",year:"2-digit"}):gran==="week"?"w/c "+fmtShort(l):fmtShort(l)),
+    datasets:[{label:"Dine-in",data:labels.map(l=>b[l].di),backgroundColor:CH_CLR["Dine-In"],borderRadius:3,stack:"s",yAxisID:"y"},{label:"Takeaway",data:labels.map(l=>b[l].to),backgroundColor:CH_CLR.Takeaway,borderRadius:3,stack:"s",yAxisID:"y"},
+      {type:"line",label:"Guests",data:labels.map(l=>b[l].g),borderColor:"#F1F5F9",backgroundColor:"#F1F5F9",pointRadius:0,borderWidth:2,tension:.3,yAxisID:"y2"}]},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{labels:{color:T.textSecondary,boxWidth:10,font:{size:11}}},tooltip:{...tip,callbacks:{label:c=>c.dataset.label==="Guests"?`Guests: ${Math.round(c.raw).toLocaleString()}`:`${c.dataset.label}: AED ${Math.round(c.raw).toLocaleString()}`}}},
+      scales:{x:{stacked:true,ticks:{color:T.textSecondary,font:{size:10}},grid:{display:false},border:{display:false}},y:{...ax,stacked:true,ticks:{...ax.ticks,callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v}},y2:{position:"right",grid:{display:false},ticks:{color:T.textMuted,font:{size:10}},border:{display:false}}}}});}
+  // weekday averages (Mon → Sun), over the days in range that have data
+  const dw=[0,1,2,3,4,5,6].map(()=>({di:0,to:0,g:0,n:0}));
+  Object.keys(cur.days).forEach(d=>{const i=(new Date(d+"T12:00:00").getDay()+6)%7,x=cur.days[d];dw[i].di+=x.di.sales;dw[i].to+=x.to.sales;dw[i].g+=x.di.guests;dw[i].n++;});
+  const c2=document.getElementById("dn-dow")?.getContext("2d");
+  if(c2){destroyChart("dn-dow");charts["dn-dow"]=new Chart(c2,{type:"bar",data:{labels:["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],
+    datasets:[{label:"Dine-in",data:dw.map(x=>x.n?x.di/x.n:0),backgroundColor:CH_CLR["Dine-In"],borderRadius:3,stack:"s"},{label:"Takeaway",data:dw.map(x=>x.n?x.to/x.n:0),backgroundColor:CH_CLR.Takeaway,borderRadius:3,stack:"s"}]},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{display:false},tooltip:{...tip,callbacks:{label:c=>`${c.dataset.label}: AED ${Math.round(c.raw).toLocaleString()} / day`,footer:it=>{const i=it[0].dataIndex;return dw[i].n?`Guests: ${Math.round(dw[i].g/dw[i].n).toLocaleString()} / day · ${dw[i].n} day(s)`:"";}}}},
+      scales:{x:{stacked:true,ticks:{color:T.textSecondary,font:{size:11}},grid:{display:false},border:{display:false}},y:{...ax,stacked:true,ticks:{...ax.ticks,callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v}}}}});}
+}
+window.renderDineIn=renderDineIn;window.dnSet=dnSet;
+
+// ── Idea 1: menu sections (Group / Delivery / Dine-in / Tools) — labels inserted around the existing tabs
+const NAV_SECTIONS=[["Group",["overview","channels","outlets","compare"]],["Delivery",["brands","platforms","cpc","campaigns","kpi","cancellations","feedback"]],["Dine-in",["dinein"]],["Tools",["possync"]]];
+function navSectionize(){
+  const sb=document.getElementById("app-sidebar");if(!sb||sb.dataset.sections)return;
+  const tabs=[...sb.querySelectorAll(".tab")].filter(t=>t.dataset.pg!=="admin");if(!tabs.length)return;
+  const wrap=tabs[0].parentNode,byPg={};tabs.forEach(t=>byPg[t.dataset.pg]=t);
+  const placed=new Set();
+  for(const[label,ids]of NAV_SECTIONS){const items=ids.map(id=>byPg[id]).filter(Boolean);if(!items.length)continue;
+    const h=document.createElement("div");h.className="nav-sec";h.innerHTML=`<span class="nav-sec-txt">${label}</span>`;wrap.appendChild(h);
+    items.forEach(t=>{wrap.appendChild(t);placed.add(t);});}
+  tabs.filter(t=>!placed.has(t)).forEach(t=>wrap.appendChild(t)); // anything new still shows, at the end
+  if(!document.getElementById("nav-sec-css")){const css=document.createElement("style");css.id="nav-sec-css";
+    css.textContent=`#app-sidebar .nav-sec{font-size:10px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;color:${DARK_THEME.textMuted};padding:12px 10px 4px}
+#app-sidebar .nav-sec:first-child{padding-top:2px}
+#app-sidebar[data-collapsed="1"] .nav-sec{padding:6px 8px}
+#app-sidebar[data-collapsed="1"] .nav-sec-txt{display:none}
+#app-sidebar[data-collapsed="1"] .nav-sec::after{content:"";display:block;border-top:1px solid ${DARK_THEME.cardBorder}}`;document.head.appendChild(css);}
+  sb.dataset.sections="1";
+}
+window.navSectionize=navSectionize;
+
+// ── Guards: delivery-only maths stays delivery-only when "All sales" is on
+(function rdGuards(){
+  if(typeof computeProfitability!=="function"||typeof dataHealthChecks!=="function")return setTimeout(rdGuards,200);
+  const noIn=a=>Array.isArray(a)?a.filter(r=>r.channel!=="instore"):a;
+  const _cp=computeProfitability;computeProfitability=function(recs,...a){return _cp(noIn(recs),...a);};window.computeProfitability=computeProfitability;
+  if(typeof computeProfitabilityBreakdown==="function"){const _cb=computeProfitabilityBreakdown;computeProfitabilityBreakdown=function(A,B,...a){return _cb(noIn(A),noIn(B),...a);};window.computeProfitabilityBreakdown=computeProfitabilityBreakdown;}
+  const _dh=dataHealthChecks;dataHealthChecks=function(recs,latestDate,todayDate){const out=_dh(noIn(recs),latestDate,todayDate);try{out.push(...rdHealthIssues(latestDate));}catch(e){}return out;};window.dataHealthChecks=dataHealthChecks;
+  // All-sales view: profitability stays delivery-only — label the columns, blank dine-in/takeaway rows, drop margin % that would mix in dine-in sales
+  if(typeof sortableTable==="function"){const _st=sortableTable;sortableTable=function(id,heads,rows,dc){
+    if(!(lensMode==="all"&&LENS_PAGES.has(curPage))||!Array.isArray(heads)||!Array.isArray(rows))return _st(id,heads,rows,dc);
+    const txt=x=>String(x==null?"":x).replace(/<[^>]+>/g," ");
+    const idx=heads.map((h,i)=>/Profitab|Contribution/i.test(txt(h))?i:-1).filter(i=>i>=0);if(!idx.length)return _st(id,heads,rows,dc);
+    const H=heads.map((h,i)=>idx.includes(i)?h+'<div style="font-size:9px;font-weight:600;color:#8393AB;text-transform:none">delivery only</div>':h);
+    const R=rows.map(r=>{if(!r||!Array.isArray(r.cells))return r;const inst=/\b(Dine-In|Takeaway)\b/.test(txt(r.cells[0])+" "+txt(r.cells[1]));const cells=r.cells.slice(),sv=Array.isArray(r.sortVals)?r.sortVals.slice():r.sortVals;
+      idx.forEach(i=>{if(inst){cells[i]='<span style="color:#8393AB" title="Dine-in & takeaway profitability is hidden until site costs are added">—</span>';if(Array.isArray(sv))sv[i]=null;}
+        else if(/Profitab/i.test(txt(heads[i])))cells[i]=String(cells[i]).replace(/<span[^>]*>\s*-?\d+(\.\d+)?%\s*<\/span>/g,"");});
+      return Object.assign({},r,{cells,sortVals:sv});});
+    return _st(id,H,R,dc);};window.sortableTable=sortableTable;}
+  if(typeof digestBuildReportHTML==="function"){const _db=digestBuildReportHTML;digestBuildReportHTML=function(){const res=lensDeliveryOnly(()=>_db());try{res.html=res.html.replace(/<\/body>/i,rdDigestSectionHTML()+"</body>");}catch(e){}return res;};window.digestBuildReportHTML=digestBuildReportHTML;}
+})();
+
+// ── Idea 7a: health banner — dine-in data falling behind, and open POS low-sales flags
+function rdHealthIssues(latestDate){
+  const out=[];if(!instoreLoaded||instoreErr||!latestDate)return out;
+  const fmtD=d=>{const x=new Date(d+"T12:00:00");return x.getDate()+" "+["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][x.getMonth()];};
+  if(instoreData.length){const last=instoreData.reduce((m,r)=>r.date>m?r.date:m,"");
+    const gap=Math.round((new Date(latestDate+"T12:00:00")-new Date(last+"T12:00:00"))/86400000);
+    if(gap>=2)out.push({sev:gap>=4?"high":"medium",check:"Dine-in data behind",text:`The Dine-In & Takeaway tab ends ${fmtD(last)}; delivery is on ${fmtD(latestDate)}. Run POS Sync → Pull.`,where:"Dine-In & Takeaway"});}
+  const fl=(typeof posSyncState!=="undefined"&&posSyncState.status&&posSyncState.status.flags)||[];
+  for(const f of fl.filter(x=>x.status==="open"))out.push({sev:"high",check:"Low POS sales",text:`${fmtD(f.date)}: POS net sales AED ${Math.round(f.net).toLocaleString()} vs usual ≈ AED ${Math.round(f.base).toLocaleString()} (${f.pct}%). Check the outlet's POS server, then re-pull in POS Sync.`,where:(f.loc.split(" - ")[1]||f.loc)});
+  return out;
+}
+// ── Idea 7b: Daily Digest — dine-in & takeaway section (yesterday + this week), outlet split, POS alerts
+function rdDigestSectionHTML(){
+  if(!instoreData.length)return"";
+  const dr=digestDateRanges(),sum=(a,b)=>chAggregate(a,b,true);
+  const Y=sum(dr.yesterday.start,dr.yesterday.end),YS=sum(dr.sameDayLastWeek.start,dr.sameDayLastWeek.end),TW=sum(dr.thisWeek.start,dr.thisWeek.end),LW=sum(dr.lastWeek.start,dr.lastWeek.end),FW=sum(dr.fourWeeksBack.start,dr.fourWeeksBack.end),LY=sum(dr.lastYear.start,dr.lastYear.end);
+  const ar=(c,b)=>{const p=pctOf(c,b);if(p==null||!b)return`<span class="sub">—</span>`;return`<span class="${p>=0?"up":"down"}">${p>=0?"▲":"▼"}${Math.abs(p).toFixed(1)}%</span>`;};
+  const chRow=(lbl,k)=>{const g=x=>k?x.tot[k].sales:x.total;return`<tr><td>${lbl}</td><td style="text-align:right">${fmtAEDExact(g(Y))}</td><td style="text-align:right">${ar(g(Y),g(YS))}</td><td style="text-align:right">${fmtAEDExact(g(TW))}</td><td style="text-align:right">${ar(g(TW),g(LW))}</td><td style="text-align:right">${ar(g(TW),g(FW))}</td><td style="text-align:right">${ar(g(TW),g(LY))}</td></tr>`;};
+  const guests=x=>x.tot["Dine-In"].guests,spg=x=>x.tot["Dine-In"].guests>0?x.tot["Dine-In"].sales/x.tot["Dine-In"].guests:0;
+  let h=`<div class="sec-title">All channels — delivery, dine-in &amp; takeaway</div><div class="sec-sub">Sales incl. VAT. Yesterday ${esc(fmtDisp(dr.yesterday.start))} vs ${esc(fmtDisp(dr.sameDayLastWeek.start))}; this week ${esc(fmtShort(dr.thisWeek.start))}–${esc(fmtShort(dr.thisWeek.end))} vs last week / 4 weeks back / last year.</div>
+    <table><thead><tr><th style="text-align:left">Channel</th><th>Yesterday</th><th>vs same day LW</th><th>This week</th><th>vs last week</th><th>vs 4 weeks ago</th><th>vs last year</th></tr></thead><tbody>
+    ${chRow("Delivery","Delivery")}${chRow("Dine-in","Dine-In")}${chRow("Takeaway","Takeaway")}${chRow("<b>Group total</b>",null)}
+    <tr><td>Dine-in guests</td><td style="text-align:right">${Math.round(guests(Y)).toLocaleString()}</td><td style="text-align:right">${ar(guests(Y),guests(YS))}</td><td style="text-align:right">${Math.round(guests(TW)).toLocaleString()}</td><td style="text-align:right">${ar(guests(TW),guests(LW))}</td><td style="text-align:right">${ar(guests(TW),guests(FW))}</td><td style="text-align:right">${ar(guests(TW),guests(LY))}</td></tr>
+    <tr><td>Spend / guest</td><td style="text-align:right">AED ${spg(Y).toFixed(1)}</td><td style="text-align:right">${ar(spg(Y),spg(YS))}</td><td style="text-align:right">AED ${spg(TW).toFixed(1)}</td><td style="text-align:right">${ar(spg(TW),spg(LW))}</td><td style="text-align:right">${ar(spg(TW),spg(FW))}</td><td style="text-align:right">${ar(spg(TW),spg(LY))}</td></tr></tbody></table>`;
+  const outs=Object.keys(Y.by).filter(o=>Y.sum(Y.by[o])>0).sort((a,b)=>Y.sum(Y.by[b])-Y.sum(Y.by[a]));
+  h+=`<div class="sec-title">Outlets yesterday — all channels</div><div class="sec-sub">${esc(fmtDisp(dr.yesterday.start))}, ranked by total; change vs the same weekday last week.</div>
+    <table><thead><tr><th style="text-align:left">#</th><th style="text-align:left">Outlet</th><th>Delivery</th><th>Dine-in</th><th>Takeaway</th><th>Total</th><th>vs same day LW</th></tr></thead><tbody>
+    ${outs.map((o,i)=>{const c=Y.by[o],p=YS.by[o];return`<tr><td>${i+1}</td><td>${esc(o)}</td><td style="text-align:right">${fmtAEDExact(c.Delivery.sales)}</td><td style="text-align:right">${fmtAEDExact(c["Dine-In"].sales)}</td><td style="text-align:right">${fmtAEDExact(c.Takeaway.sales)}</td><td style="text-align:right"><b>${fmtAEDExact(Y.sum(c))}</b></td><td style="text-align:right">${ar(Y.sum(c),p?YS.sum(p):0)}</td></tr>`;}).join("")}</tbody></table>`;
+  const fl=((typeof posSyncState!=="undefined"&&posSyncState.status&&posSyncState.status.flags)||[]).filter(x=>x.status==="open");
+  if(fl.length)h+=`<div class="sec-title">POS alerts — unusually low outlet sales</div><div class="sec-sub">Outlet-days whose POS net sales are under half their usual for that weekday — usually a POS server that didn't sync.</div>
+    <table><thead><tr><th style="text-align:left">Day</th><th style="text-align:left">Outlet</th><th>POS net</th><th>Usual</th><th>Gap</th></tr></thead><tbody>${fl.map(f=>`<tr><td>${esc(fmtDisp(f.date))}</td><td>${esc(f.loc)}</td><td style="text-align:right">${fmtAEDExact(f.net)}</td><td style="text-align:right">${fmtAEDExact(f.base)}</td><td style="text-align:right"><span class="down">${f.pct}%</span></td></tr>`).join("")}</tbody></table>`;
+  return h;
 }
