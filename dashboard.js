@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-14-541";
+const BUILD_VERSION="2026-10-14-543";
 const BUILD_NOTES=[
+  "📶 POS SYNC: PROGRESS BAR — Nikhil asked for a clear sign of when a pull is finished, for him and Nicole. Pull POS Data now shows a progress bar under the button and on the result card: 'Day 2 of 7 · 44% · about 1 min left', turning green with '✅ Completed — 7 days written in 2 min' at the end (orange if any day failed). While a pull runs, the browser warns before the page is closed or reloaded, since leaving stops the pull.",
+  "⚠ POS SYNC STEP 4 — LOW-SALES FLAGS + ONE-CLICK RE-PULL — Nikhil wants outlet-days with unusually low sales flagged (a POS server that didn't sync leaves the day short) and re-pulled once he confirms the fix. Every pull now compares each outlet's POS net sales (all channels, Sales Summary by Outlet) with its average for the same weekday over the previous 4 weeks; under half → flagged (outlets averaging under AED 1,500 are skipped as noise). Open flags show at the top of POS Sync with '✔ Data is correct' and '↻ Re-pull this day' (re-pull overwrites that day in every tab; the flag clears itself when the numbers look normal), and as a red count on the POS Sync tab. Flags are stored on the server, so Nikhil and Nicole see the same list.",
   "⚖️ POS SYNC: ONE VAT BASIS FOR EVERY CHANNEL — Nikhil: dine-in/takeaway and delivery must be uniform. Delivery in the brand tabs is incl. VAT (Credit Sales amount = POS × 1.05 exactly), so the Dine-In & Takeaway tab is back to incl. VAT: POS Sales Summary figure × 1.05 (13 Oct: dine-in 33,547.30, takeaway 10,377.55; Mirdiff dine-in 5,882.99). Nicole's v540 check figures were the same numbers before VAT. The Noon Dine Out → Dine-In discount fix from v540 stays.",
   "✅ POS SYNC: DINE-IN & TAKEAWAY CORRECTIONS FROM NICOLE'S 13 OCT CHECK — (1) Sales: Nicole's correct column matched the POS Sales Summary figure exactly (e.g. Mirdiff dine-in 5,602.85, takeaway 574.75; total dine-in 31,949.81, takeaway 9,883.39), so the ×1.05 VAT uplift is removed — dine-in/takeaway Sales are written as-is (after discount, excl. VAT); AOV and Spend/Guest follow. (2) Noon Dine Out discounts belong to Dine-In, not Takeaway (DSO: dine-in disc 2,201.70, takeaway 0). All other discount cells were already confirmed correct.",
   "🍽️ POS SYNC STEP 3 — DINE-IN & TAKEAWAY TAB — Nikhil confirmed v538's delivery pull for 13 Oct matched Nicole's Uploader figures in the sheet. Each pull now also fetches Sales Summary by Outlet and writes a new 'Dine-In & Takeaway' tab (created automatically on first pull, same two-row header style as the brand tabs): Dine-In Disc/Sales/Orders/AOV/Guests/Spend-per-guest, Takeaway Disc/Sales/Orders/AOV, Total. Sales incl. VAT (POS figure × 1.05) to match the delivery tabs. Rows as Nikhil set them: Mirdif + MSS combined, Al Forsan (Oregano + Fyoozhen) combined, DIP Oregano and DIP Fyoozhen separate, Safari Park, WTC and Nad Al Sheba on their own rows. Discounts: every line the delivery rules don't take (no aggregator) is in-store — ending TO (or Noon 'out') → Takeaway, everything else (DI, Happy Tuesday, Entertainer, staff/manager meals, the odd DL/PO staff line) → Dine-In, per Nikhil's classification. Checked on the real 13 Oct Sales Summary: dine-in AED 31,949.81 → 33,547.30 incl. VAT, takeaway 9,883.39 → 10,377.55 (1 fils rounding across outlets).",
@@ -24829,6 +24831,21 @@ function psCellsForInstore(header,ab,rowsData,iso){
 }
 if(typeof module!=="undefined")Object.assign(module.exports,{psProcessInstore,psCellsForInstore,psInstoreHeader,PS_INSTORE_TAB,PS_INSTORE_ORDER});
 
+// ── v542 LOW-SALES FLAGS (step 4) — an outlet-day is flagged when its POS net sales (all channels,
+// Sales Summary by Outlet) are below half of its average for the same weekday over the previous
+// 4 weeks — the usual sign that a POS server didn't sync all of that day's sales to the back end.
+// Only outlets averaging at least AED 1,500 on that weekday are checked (avoids noise on tiny units).
+const PS_FLAG_RATIO=0.5,PS_FLAG_MIN_BASE=1500;
+function psNetByLoc(summaryCsv){const t=psParseCSV(summaryCsv||"");if(!t.length)return{};const h=t[0].map(x=>x.trim());const iL=h.indexOf("Location"),iN=h.indexOf("NetSalesValue");if(iL<0||iN<0)return{};
+  const o={};for(const r of t.slice(1)){const l=(r[iL]||"").trim();if(!l||/^total/i.test(l))continue;o[l]=(o[l]||0)+psNum(r[iN]);}return o;}
+function psFlagsFor(dayNet,baseNets){
+  const locs=new Set([...Object.keys(dayNet),...baseNets.flatMap(b=>Object.keys(b))]);const out=[];
+  for(const l of locs){const vals=baseNets.map(b=>b[l]||0).filter(v=>v>0);if(vals.length<2)continue;const base=vals.reduce((a,b)=>a+b,0)/vals.length;if(base<PS_FLAG_MIN_BASE)continue;
+    const net=dayNet[l]||0;if(net<base*PS_FLAG_RATIO)out.push({loc:l,net:psRound(net,2),base:psRound(base,2),pct:psRound((net/base-1)*100,1)});}
+  return out.sort((a,b)=>a.pct-b.pct);
+}
+if(typeof module!=="undefined")Object.assign(module.exports,{psNetByLoc,psFlagsFor});
+
 // ════════════════════════════════════════════════════════════════════════════
 // v535 POS SYNC — STEP 1 OF 4 (connection test). Replaces the desktop POS Uploader: the
 // dashboard's server signs in to Microsys (Kull ERP), pulls Credit Sales / Sales Discount
@@ -24852,6 +24869,7 @@ function injectPosSyncTab(){
     btn.onclick=()=>gp("possync");
     const last=tabs[tabs.length-1];last.parentNode.insertBefore(btn,last.nextSibling);
   }
+  setTimeout(()=>{posLoadStatus();},2500); // v542: red badge on the tab when there are open low-sales flags
 }
 async function posApi(path,body){
   const sess=getActiveSession();
@@ -24864,8 +24882,22 @@ async function posApi(path,body){
 async function posLoadStatus(){
   posSyncState.loading=true;posSyncState.err=null;
   try{posSyncState.status=await posApi("/api/pos/status");}catch(e){posSyncState.err=e.message;}
-  posSyncState.loading=false;if(curPage==="possync")renderPosSync();
+  posSyncState.loading=false;posUpdateTabBadge();if(curPage==="possync")renderPosSync();
 }
+function posOpenFlags(){return((posSyncState.status&&posSyncState.status.flags)||[]).filter(f=>f.status==="open");}
+function posUpdateTabBadge(){const t=document.querySelector('.tab[data-pg="possync"]');if(!t)return;const n=posOpenFlags().length;let b=t.querySelector(".pos-badge");
+  if(!n){if(b)b.remove();return;}if(!b){b=document.createElement("span");b.className="pos-badge";b.style.cssText="margin-left:6px;background:#EF4444;color:#fff;border-radius:9px;padding:0 6px;font-size:10px;font-weight:800;line-height:16px;display:inline-block";(t.querySelector(".tab-label")||t).appendChild(b);}b.textContent=n;b.title=n+" outlet-day(s) with unusually low POS sales";}
+function posFlagsCardHTML(T,card,ct,btn){
+  const fl=posOpenFlags();if(!fl.length)return"";const f=n=>Number(n||0).toLocaleString("en-US",{maximumFractionDigits:0});
+  let h=`<div style="${card};border-color:${T.accentRed}!important"><div style="${ct};color:${T.accentRed}">⚠ Unusually low outlet sales (${fl.length})</div>`;
+  h+=fl.map(x=>`<div style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:10px 12px;border-radius:8px;background:${T.accentRed}14;margin-bottom:8px">
+    <div style="min-width:0"><div style="font-weight:800">${esc(x.loc)} · ${posFmtDate(x.date)}</div><div style="font-size:12px;color:${T.textSecondary};margin-top:2px">POS net sales AED ${f(x.net)} vs usual ${PS_DOW[new Date(x.date+"T12:00:00Z").getUTCDay()]} ≈ AED ${f(x.base)} (<b style="color:${T.accentRed}">${x.pct}%</b>). The POS may not have synced all sales — check the outlet's server, then re-pull.</div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${btn("✔ Data is correct",`posFlagOk('${x.date}','${esc(x.loc).replace(/'/g,"\\'")}')`,false,posSyncState.pulling)}${btn("↻ Re-pull this day",`posRepull('${x.date}')`,false,posSyncState.pulling)}</div></div>`).join("");
+  h+=`<div style="font-size:12px;color:${T.textSecondary};line-height:1.5">Rule: an outlet is flagged when its POS net sales (all channels) are under half its average for the same weekday over the previous 4 weeks. Re-pulling overwrites that day in every tab; a flag clears itself once the numbers look normal.</div></div>`;
+  return h;
+}
+async function posFlagOk(date,loc){try{await posApi("/api/pos/flag/ok",{date,loc});}catch(e){alert(e.message);}await posLoadStatus();}
+function posRepull(date){posSyncState.preset="c";posSyncState.from=date;posSyncState.to=date;renderPosSync();posStartPull();}
 function posFmtTs(iso){try{const d=new Date(iso);return d.toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Asia/Dubai"});}catch(e){return iso||"";}}
 function posSetSheet(v){if(v==="live"&&!confirm("Switch to the LIVE sheet? (The test is read-only, but later pulls will write to the real Virtual Brands Performance sheet.)"))return;posSyncState.sheet=v;renderPosSync();}
 function posOpenCreds(){
@@ -24932,6 +24964,7 @@ function renderPosSync(){
   h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px"><span style="font-size:12px;color:${T.textSecondary};font-weight:700">Sheet:</span><span style="display:inline-flex;border:1px solid ${T.cardBorder};border-radius:8px;overflow:hidden">${modeBtn("test","🟢 TEST",T.accentGreen)}${modeBtn("live","🔴 LIVE",T.accentRed)}</span></div>`;
   h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${btn(posSyncState.testing?"⏳ Testing…":"🧪 Test connection","posRunTest()",true,posSyncState.testing)}${btn("🔑 Microsys login","posOpenCreds()",false,false)}</div>`;
   h+=`<div style="font-size:12px;color:${T.textSecondary};margin-top:10px;line-height:1.5">Test connection is read-only: it signs in to Microsys, pulls yesterday's Sales Summary by Outlet, and reads the tab list of the chosen Google Sheet.</div></div>`;
+  h+=posFlagsCardHTML(T,card,ct,btn);
   h+=posPullCardHTML(T,card,ct,btn);
   if(posSyncState.progress.length||posSyncState.results)h+=posResultsHTML(T,card,ct);
   if(ts){
@@ -24975,6 +25008,7 @@ function posPullCardHTML(T,card,ct,btn){
   if(P.preset==="c")h+=`<span style="display:inline-flex;gap:6px;align-items:center">${inp("from",P.from||y)}<span style="color:${T.textSecondary}">→</span>${inp("to",P.to||P.from||y)}</span>`;
   h+=`</div><div style="font-size:12px;color:${T.textSecondary};margin-bottom:12px">${dates.length} day${dates.length===1?"":"s"}: ${dates.length?posFmtDate(dates[0])+(dates.length>1?" → "+posFmtDate(dates[dates.length-1]):""):"—"} · writes to the <b style="color:${P.sheet==="live"?T.accentRed:T.accentGreen}">${P.sheet==="live"?"LIVE":"TEST"}</b> sheet</div>`;
   h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${btn(P.pulling?"⏳ Pulling…":"⬇ Pull POS Data","posStartPull()",true,P.pulling||!dates.length)}</div>`;
+  if(P.bar)h+=`<div style="margin-top:14px">${posProgressHTML(T)}</div>`;
   h+=`<div style="font-size:12px;color:${T.textSecondary};margin-top:10px;line-height:1.5">For each day: Credit Sales + Sales Discount Details from Microsys → the same rules as POS Uploader v4.9 → Oregano, Lollorosso, Smokeys, Wicked Wings and Fyoozhen tabs; plus Sales Summary by Outlet + in-store discounts → the Dine-In &amp; Takeaway tab (created on first pull). New date rows are added if missing; existing ones are overwritten, as the Uploader does.</div></div>`;
   return h;
 }
@@ -24984,11 +25018,16 @@ async function posStartPull(){
   const where=P.sheet==="live"?"the LIVE Virtual Brands Performance sheet":"the TEST sheet";
   if(!confirm(`Pull ${dates.length} day(s) (${posFmtDate(dates[0])}${dates.length>1?" → "+posFmtDate(dates[dates.length-1]):""}) from Microsys and write delivery sales & discounts to ${where}?`))return;
   if(P.sheet==="live"&&!confirm("Final check: this writes to the REAL sheet the dashboard reads. Continue?"))return;
-  P.pulling=true;P.progress=[];P.results={sheet:P.sheet,days:[]};renderPosSync();
+  P.pulling=true;P.progress=[];P.results={sheet:P.sheet,days:[]};
+  // v543: progress bar — 6 steps per day (Credit Sales, Discounts, Sales Summary, read sheet, write, low-sales check)
+  P.bar={total:dates.length*6,done:0,start:Date.now(),day:0,days:dates.length,finished:false,failed:0};
+  window.addEventListener("beforeunload",posBeforeUnload);renderPosSync();
   const step=(t,st)=>{P.progress.push({t,st:st||"run"});renderPosSync();return P.progress.length-1;};
-  const done=(i,st,t)=>{P.progress[i].st=st;if(t)P.progress[i].t=t;renderPosSync();};
-  let okDays=0,failDays=0;
+  const done=(i,st,t)=>{if(P.progress[i].st==="run"&&P.bar)P.bar.done=Math.min(P.bar.total,P.bar.done+1);P.progress[i].st=st;if(t)P.progress[i].t=t;renderPosSync();};
+  let okDays=0,failDays=0;const sumCache={};
+  const getSummary=async d=>{if(sumCache[d]==null){try{sumCache[d]=(await posApi("/api/pos/report",{kind:"summary",date:d})).csv;}catch(e){sumCache[d]="";}}return sumCache[d];};
   for(const iso of dates){
+    P.bar.day++;const stepsBefore=P.bar.done;
     const day={date:iso,brands:{},cells:0,newRows:[],updatedRows:[],warn:[],error:null,instoreDisc:0,deliveryDisc:0,instore:null};
     let i=step(`${posFmtDate(iso)} — Credit Sales`);
     try{
@@ -25001,7 +25040,7 @@ async function posStartPull(){
       done(i,"ok",`${posFmtDate(iso)} — Discounts: ${D.kept} delivery lines (AED ${day.deliveryDisc.toLocaleString()}), ${D.excluded} in-store`);
       if(!C.kept)day.warn.push("No delivery orders found in Credit Sales for this day");
       i=step(`${posFmtDate(iso)} — Sales Summary by Outlet (dine-in & takeaway)`);
-      const sr0=await posApi("/api/pos/report",{kind:"summary",date:iso});const I=psProcessInstore(sr0.csv,D.instore);
+      const sumCsv=await getSummary(iso);if(!sumCsv)throw new Error("Sales Summary by Outlet couldn't be pulled");sumCache[iso]=sumCsv;const I=psProcessInstore(sumCsv,D.instore);
       I.warn.forEach(w=>day.warn.push(w));
       const it=Object.values(I.rows).reduce((a,o)=>({di:a.di+o.di.sales,to:a.to+o.to.sales,dd:a.dd+o.di.disc,td:a.td+o.to.disc,g:a.g+o.di.guests}),{di:0,to:0,dd:0,td:0,g:0});
       day.instore={di:psRound(it.di,2),to:psRound(it.to,2),dd:psRound(it.dd,2),td:psRound(it.td,2),guests:it.g};
@@ -25026,13 +25065,31 @@ async function posStartPull(){
         done(i,"ok",`${posFmtDate(iso)} — Wrote ${wr.updatedCells.toLocaleString()} cells (${day.newRows.length?"new rows: "+day.newRows.join(", "):""}${day.newRows.length&&day.updatedRows.length?" · ":""}${day.updatedRows.length?"updated: "+day.updatedRows.join(", "):""})`);}
       okDays++;
     }catch(e){day.error=e.message;done(i,"err",`${posFmtDate(iso)} — ❌ ${e.message}`);failDays++;}
+    if(!day.error){try{const ii=step(`${posFmtDate(iso)} — Checking for unusually low outlet sales`);
+      const base=[];for(const w of[7,14,21,28])base.push(psNetByLoc(await getSummary(posAddDays(iso,-w))));
+      day.flags=psFlagsFor(psNetByLoc(sumCache[iso]),base);await posApi("/api/pos/flags",{date:iso,flags:day.flags});
+      done(ii,day.flags.length?"err":"ok",`${posFmtDate(iso)} — ${day.flags.length?`⚠ ${day.flags.length} outlet(s) unusually low: ${day.flags.map(f=>f.loc.split(" - ")[1]||f.loc).join(", ")}`:"No unusually low outlets"}`);}
+      catch(e){day.warn.push("Low-sales check failed: "+e.message);}}
+    P.bar.done=Math.max(P.bar.done,stepsBefore+6); // a failed day still counts as finished for the bar
     P.results.days.push(day);renderPosSync();
   }
   try{await posApi("/api/pos/log",{sheet:P.sheet,dates:dates.length===1?dates[0]:dates[0]+" → "+dates[dates.length-1],result:`${okDays} ok${failDays?", "+failDays+" failed":""}`});}catch(e){}
-  P.pulling=false;await posLoadStatus();
+  P.pulling=false;P.bar.done=P.bar.total;P.bar.finished=true;P.bar.failed=failDays;P.bar.end=Date.now();
+  window.removeEventListener("beforeunload",posBeforeUnload);await posLoadStatus();
+}
+function posBeforeUnload(e){if(posSyncState.pulling){e.preventDefault();e.returnValue="A POS pull is still running. Leaving now stops it.";return e.returnValue;}}
+function posProgressHTML(T){
+  const b=posSyncState.bar;if(!b)return"";const pct=Math.round(b.done/b.total*100);
+  const el=((b.end||Date.now())-b.start)/1000,left=b.done>0&&!b.finished?el/b.done*(b.total-b.done):0;
+  const fmtS=x=>x>=90?`${Math.round(x/60)} min`:`${Math.max(1,Math.round(x))} s`;
+  const clr=b.finished?(b.failed?T.accentOrange:T.accentGreen):T.accentOrange;
+  const label=b.finished?(b.failed?`Finished with ${b.failed} day(s) failed — see below`:`✅ Completed — ${b.days} day${b.days>1?"s":""} written in ${fmtS(el)}`)
+    :`Day ${Math.min(b.day,b.days)} of ${b.days} · ${pct}%${left?` · about ${fmtS(left)} left`:""}`;
+  return`<div style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:13px;font-weight:800;margin-bottom:6px;color:${clr}"><span>${label}</span>${b.finished?"":`<span style="color:${T.textSecondary};font-weight:600">Keep this page open until it finishes</span>`}</div>
+    <div style="height:12px;border-radius:6px;background:${T.bg};border:1px solid ${T.cardBorder};overflow:hidden"><div style="height:100%;width:${pct}%;background:${clr};border-radius:6px;transition:width .4s ease"></div></div></div>`;
 }
 function posResultsHTML(T,card,ct){
-  const P=posSyncState;let h=`<div style="${card}"><div style="${ct}">${P.pulling?"Pulling…":"Pull result"} <span style="text-transform:none;letter-spacing:0;font-weight:600">· ${(P.results&&P.results.sheet)==="live"?"LIVE":"TEST"} sheet</span></div>`;
+  const P=posSyncState;let h=`<div style="${card}"><div style="${ct}">${P.pulling?"Pulling…":"Pull result"} <span style="text-transform:none;letter-spacing:0;font-weight:600">· ${(P.results&&P.results.sheet)==="live"?"LIVE":"TEST"} sheet</span></div>`+posProgressHTML(T);
   h+=`<div style="display:grid;gap:4px;margin-bottom:12px">`+P.progress.map(p=>`<div style="font-size:12.5px;padding:5px 8px;border-radius:6px;background:${p.st==="err"?T.accentRed+"18":p.st==="ok"?T.accentGreen+"10":T.accentOrange+"14"};color:${p.st==="err"?T.accentRed:p.st==="ok"?T.textPrimary:T.accentOrange}">${p.st==="ok"?"✓":p.st==="err"?"✕":"◐"} ${esc(p.t)}</div>`).join("")+`</div>`;
   const days=(P.results&&P.results.days)||[];
   if(days.length){
@@ -25044,10 +25101,11 @@ function posResultsHTML(T,card,ct){
       if(d.error){h+=`<tr>${td(posFmtDate(d.date),1)}<td colspan="${PS_BRAND_TABS.length+6}" style="padding:7px 8px;color:${T.accentRed}">${esc(d.error)}</td></tr>`;continue;}
       const tot=Object.values(d.brands).reduce((s,x)=>s+x.sales,0),ord=Object.values(d.brands).reduce((s,x)=>s+x.orders,0);
       h+=`<tr>${td(posFmtDate(d.date),1)}${PS_BRAND_TABS.map(b=>td(d.brands[b]?`${f(d.brands[b].sales)}<div style="font-size:11px;color:${T.textSecondary}">${d.brands[b].orders} orders</div>`:`<span style="color:${T.textMuted}">–</span>`)).join("")}${td(`<b>${f(tot)}</b><div style="font-size:11px;color:${T.textSecondary}">${ord} orders</div>`)}${td(f(d.deliveryDisc))}${d.instore?td(`${f(d.instore.di)}<div style="font-size:11px;color:${T.textSecondary}">${d.instore.guests} guests</div>`)+td(f(d.instore.to))+td(f(d.instore.dd+d.instore.td)):td("–")+td("–")+td("–")}${td(f(d.cells))}</tr>`;
+      if(d.flags&&d.flags.length)h+=`<tr><td colspan="${PS_BRAND_TABS.length+7}" style="padding:2px 8px 8px;font-size:12px;color:${T.accentRed}">⚠ Unusually low: ${d.flags.map(x=>`${esc(x.loc)} AED ${Math.round(x.net).toLocaleString()} vs ≈${Math.round(x.base).toLocaleString()} (${x.pct}%)`).join(" · ")}</td></tr>`;
       if(d.warn.length)h+=`<tr><td colspan="${PS_BRAND_TABS.length+7}" style="padding:2px 8px 8px;font-size:12px;color:${T.accentOrange}">⚠ ${d.warn.map(esc).join(" · ")}</td></tr>`;
     }
-    h+=`</table></div><div style="font-size:12px;color:${T.textSecondary};margin-top:8px">All sales incl. VAT on the same basis: delivery = Credit Sales amount (as the Uploader writes it); dine-in/takeaway = POS Sales Summary figure × 1.05. Open the ${P.results.sheet==="live"?"LIVE":"TEST"} sheet to check the rows; compare a day against a normal Uploader run before we switch to LIVE.</div>`;
+    h+=`</table></div><div style="font-size:12px;color:${T.textSecondary};margin-top:8px">All sales incl. VAT (dine-in/takeaway = POS figure × 1.05, matching the delivery tabs). Open the ${P.results.sheet==="live"?"LIVE":"TEST"} sheet to check the rows; compare a day against a normal Uploader run before we switch to LIVE.</div>`;
   }
   return h+`</div>`;
 }
-window.posStartPull=posStartPull;window.posSetPreset=posSetPreset;window.posSetCustom=posSetCustom;
+window.posStartPull=posStartPull;window.posBeforeUnload=posBeforeUnload;window.posFlagOk=posFlagOk;window.posRepull=posRepull;window.posSetPreset=posSetPreset;window.posSetCustom=posSetCustom;
