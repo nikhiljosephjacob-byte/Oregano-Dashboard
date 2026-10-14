@@ -768,6 +768,49 @@ async function handlePosFlagOk(request, env) {
   await env.SESSIONS.put(key, JSON.stringify(list), { expirationTtl: 60 * 60 * 24 * 120 });
   return json({ ok: true });
 }
+// v544: formatting for the Dine-In & Takeaway tab, copied from the Oregano tab so it looks like the
+// delivery tabs. /meta returns sheet ids, frozen rows/cols and Oregano's column widths; /batch runs
+// formatting-only requests whose DESTINATION must be the Dine-In & Takeaway tab (nothing else is
+// ever changed — the Oregano tab is only read from as the source).
+async function posSheetMeta(env, sheet) {
+  const { token } = await googleTokenCached(env);
+  const id = posSheetId(sheet);
+  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?ranges=${encodeURIComponent("'Oregano'!A1:AZ1")}&fields=sheets(properties(sheetId,title,gridProperties(frozenRowCount,frozenColumnCount)),data(columnMetadata(pixelSize)))`, { headers: { Authorization: "Bearer " + token } });
+  const j = await r.json();
+  if (!r.ok) throw new Error((j.error && j.error.message) || ("HTTP " + r.status));
+  return { token, id, sheets: (j.sheets || []).map(x => ({ title: x.properties.title, sheetId: x.properties.sheetId,
+    frozenRows: (x.properties.gridProperties || {}).frozenRowCount || 0, frozenCols: (x.properties.gridProperties || {}).frozenColumnCount || 0,
+    widths: x.properties.title === "Oregano" ? (((x.data || [])[0] || {}).columnMetadata || []).map(c => c.pixelSize || 100) : undefined })) };
+}
+async function handlePosSheetMeta(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { sheet } = await readBody(request);
+  const m = await posSheetMeta(env, sheet);
+  return json({ ok: true, sheets: m.sheets });
+}
+async function handlePosSheetBatch(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { sheet, requests } = await readBody(request);
+  if (!Array.isArray(requests) || !requests.length || requests.length > 400) return json({ error: "bad_requests" }, 400);
+  const m = await posSheetMeta(env, sheet);
+  const dst = (m.sheets.find(x => x.title === "Dine-In & Takeaway") || {}).sheetId;
+  if (dst == null) return json({ error: "Dine-In & Takeaway tab not found" }, 400);
+  const allowed = ["copyPaste", "mergeCells", "unmergeCells", "updateDimensionProperties", "updateSheetProperties", "repeatCell", "updateBorders"];
+  for (const q of requests) {
+    const k = Object.keys(q); if (k.length !== 1 || !allowed.includes(k[0])) return json({ error: "request_not_allowed: " + k.join(",") }, 400);
+    const v = q[k[0]];
+    const target = k[0] === "copyPaste" ? v.destination : k[0] === "updateSheetProperties" ? v.properties : v.range;
+    if (!target || target.sheetId !== dst) return json({ error: "only the Dine-In & Takeaway tab can be formatted" }, 400);
+    if (k[0] === "updateSheetProperties" && v.fields !== "gridProperties.frozenRowCount,gridProperties.frozenColumnCount") return json({ error: "only frozen rows/cols may change" }, 400);
+  }
+  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${m.id}:batchUpdate`, { method: "POST",
+    headers: { Authorization: "Bearer " + m.token, "Content-Type": "application/json" }, body: JSON.stringify({ requests }) });
+  const j = await r.json();
+  if (!r.ok) return json({ error: (j.error && j.error.message) || ("HTTP " + r.status) }, 502);
+  return json({ ok: true, applied: requests.length });
+}
 async function handlePosLogWrite(request, env) {
   const s = await requirePosUser(request, env);
   if (!s) return json({ error: "forbidden" }, 403);
@@ -861,6 +904,8 @@ export default {
       if (path === "/api/pos/log"         && method === "POST") return await handlePosLogWrite(request, env);
       if (path === "/api/pos/sheet/addtab"&& method === "POST") return await handlePosAddTab(request, env);
       if (path === "/api/pos/flags"       && method === "POST") return await handlePosFlags(request, env);
+      if (path === "/api/pos/sheet/meta"  && method === "POST") return await handlePosSheetMeta(request, env);
+      if (path === "/api/pos/sheet/batch" && method === "POST") return await handlePosSheetBatch(request, env);
       if (path === "/api/pos/flag/ok"     && method === "POST") return await handlePosFlagOk(request, env);
     } catch (e) {
       return json({ error: "server_error", detail: String(e.message || e) }, 500);
