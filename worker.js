@@ -446,7 +446,7 @@ async function handleAdminUnban(request, env) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// POS SYNC (build 535, step 1 of 4) — pulls Microsys "Kull ERP" reports and writes the
+// POS SYNC (build 535 step 1 · build 538 step 2: delivery → brand tabs) — pulls Microsys "Kull ERP" reports and writes the
 // "Virtual Brands Performance" Google Sheet directly, replacing the desktop POS Uploader.
 // Step 1 = plumbing + a connection test only (sign in to Microsys, pull one small report,
 // read the Google Sheet's tab list). Nothing is written to any sheet in this step.
@@ -626,6 +626,18 @@ async function posLog(env, rec) {
   await env.SESSIONS.put(`pos:log:${ts}:${crypto.randomUUID().slice(0, 6)}`, JSON.stringify(Object.assign({ ts }, rec)), { expirationTtl: 60 * 60 * 24 * 180 });
 }
 
+// Google token cached in KV (~50 min) so repeated pull steps don't re-sign a JWT every call.
+async function googleTokenCached(env) {
+  const c = await env.SESSIONS.get("pos:gtoken");
+  if (c) return JSON.parse(c);
+  const t = await googleToken(env);
+  await env.SESSIONS.put("pos:gtoken", JSON.stringify(t), { expirationTtl: 3000 });
+  return t;
+}
+const POS_TABS = ["Oregano", "Lollorosso", "Smokeys", "Wicked Wings", "Fyoozhen", "Dine-In & Takeaway"];
+function posSheetId(sheet) { return POS_SHEETS[sheet === "live" ? "live" : "test"]; }
+function posTabOfRange(range) { const m = String(range).match(/^'((?:[^']|'')+)'!/) || String(range).match(/^([^!]+)!/); return m ? m[1].replace(/''/g, "'") : null; }
+
 // ── endpoints ──
 async function handlePosStatus(request, env) {
   const s = await requirePosUser(request, env);
@@ -646,6 +658,68 @@ async function handlePosCreds(request, env) {
   if (!user || !pass) return json({ error: "Enter both username and password" }, 400);
   await env.SESSIONS.put("pos:creds", JSON.stringify({ user: String(user).trim(), pass: String(pass), setBy: s.user, setAt: new Date().toISOString() }));
   await env.SESSIONS.delete("pos:msys");
+  return json({ ok: true });
+}
+
+// v538: one report, one day → raw CSV (the browser does the Uploader-identical processing).
+async function handlePosReport(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { kind, date } = await readBody(request);
+  if (!["credit", "disc", "summary"].includes(kind) || !/^\d{4}-\d{2}-\d{2}$/.test(date || "")) return json({ error: "bad_request" }, 400);
+  try {
+    const csv = await msysReportCSV(env, kind, date);
+    return json({ ok: true, kind, date, csv });
+  } catch (e) { return json({ error: String(e.message || e) }, 502); }
+}
+// v538: read header rows + Branch/Date columns of the brand tabs (read-only).
+async function handlePosSheetRead(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { sheet, tabs } = await readBody(request);
+  const list = (Array.isArray(tabs) ? tabs : []).filter(t => POS_TABS.includes(t));
+  if (!list.length) return json({ error: "no_tabs" }, 400);
+  const { token } = await googleTokenCached(env);
+  const id = posSheetId(sheet);
+  const meta = await (await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=sheets.properties.title`, { headers: { Authorization: "Bearer " + token } })).json();
+  const existing = new Set(((meta && meta.sheets) || []).map(x => x.properties.title));
+  const present = list.filter(t => existing.has(t));
+  const out = {};
+  list.forEach(t => { if (!existing.has(t)) out[t] = { missing: true }; });
+  if (present.length) {
+    const q = present.flatMap(t => { const n = "'" + t.replace(/'/g, "''") + "'"; return [`${n}!1:2`, `${n}!A:B`]; })
+      .map(r => "ranges=" + encodeURIComponent(r)).join("&");
+    const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values:batchGet?${q}&valueRenderOption=FORMATTED_VALUE`, { headers: { Authorization: "Bearer " + token } });
+    const raw = await r.text();
+    if (!r.ok) { let m = "HTTP " + r.status; try { m = JSON.parse(raw).error.message; } catch (e) {} return json({ error: m }, 502); }
+    // Pass Google's body straight through (no JSON.parse/stringify of ~45k rows here) — keeps the
+    // Worker's CPU time tiny; the browser maps valueRanges[2i] → header, [2i+1] → A:B.
+    return new Response(`{"ok":true,"sheet":"${sheet === "live" ? "LIVE" : "TEST"}","present":${JSON.stringify(present)},"tabs":${JSON.stringify(out)},"google":${raw}}`,
+      { headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
+  }
+  return json({ ok: true, sheet: sheet === "live" ? "LIVE" : "TEST", present: [], tabs: out });
+}
+// v538: write cells (contiguous runs) to the brand tabs. Only the 5 brand tabs + the new
+// Dine-In & Takeaway tab are writable; anything else in the request is rejected outright.
+async function handlePosSheetWrite(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { sheet, data } = await readBody(request);
+  if (!Array.isArray(data) || !data.length) return json({ error: "no_data" }, 400);
+  for (const d of data) { const t = posTabOfRange(d.range); if (!POS_TABS.includes(t) || !Array.isArray(d.values)) return json({ error: "range_not_allowed: " + d.range }, 400); }
+  const { token } = await googleTokenCached(env);
+  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${posSheetId(sheet)}/values:batchUpdate`, {
+    method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }) });
+  const j = await r.json();
+  if (!r.ok) return json({ error: (j.error && j.error.message) || ("HTTP " + r.status) }, 502);
+  return json({ ok: true, updatedCells: j.totalUpdatedCells || 0, updatedRanges: (j.responses || []).length });
+}
+async function handlePosLogWrite(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const b = await readBody(request);
+  await posLog(env, { user: s.user, kind: "pull", sheet: b.sheet === "live" ? "LIVE" : "TEST", dates: String(b.dates || "").slice(0, 80), result: String(b.result || "").slice(0, 200) });
   return json({ ok: true });
 }
 
@@ -728,6 +802,10 @@ export default {
       if (path === "/api/pos/status"      && method === "GET")  return await handlePosStatus(request, env);
       if (path === "/api/pos/creds"       && method === "POST") return await handlePosCreds(request, env);
       if (path === "/api/pos/test"        && method === "POST") return await handlePosTest(request, env);
+      if (path === "/api/pos/report"      && method === "POST") return await handlePosReport(request, env);
+      if (path === "/api/pos/sheet/read"  && method === "POST") return await handlePosSheetRead(request, env);
+      if (path === "/api/pos/sheet/write" && method === "POST") return await handlePosSheetWrite(request, env);
+      if (path === "/api/pos/log"         && method === "POST") return await handlePosLogWrite(request, env);
     } catch (e) {
       return json({ error: "server_error", detail: String(e.message || e) }, 500);
     }
