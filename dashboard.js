@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-14-539";
+const BUILD_VERSION="2026-10-14-540";
 const BUILD_NOTES=[
+  "✅ POS SYNC: DINE-IN & TAKEAWAY CORRECTIONS FROM NICOLE'S 13 OCT CHECK — (1) Sales: Nicole's correct column matched the POS Sales Summary figure exactly (e.g. Mirdiff dine-in 5,602.85, takeaway 574.75; total dine-in 31,949.81, takeaway 9,883.39), so the ×1.05 VAT uplift is removed — dine-in/takeaway Sales are written as-is (after discount, excl. VAT); AOV and Spend/Guest follow. (2) Noon Dine Out discounts belong to Dine-In, not Takeaway (DSO: dine-in disc 2,201.70, takeaway 0). All other discount cells were already confirmed correct.",
   "🍽️ POS SYNC STEP 3 — DINE-IN & TAKEAWAY TAB — Nikhil confirmed v538's delivery pull for 13 Oct matched Nicole's Uploader figures in the sheet. Each pull now also fetches Sales Summary by Outlet and writes a new 'Dine-In & Takeaway' tab (created automatically on first pull, same two-row header style as the brand tabs): Dine-In Disc/Sales/Orders/AOV/Guests/Spend-per-guest, Takeaway Disc/Sales/Orders/AOV, Total. Sales incl. VAT (POS figure × 1.05) to match the delivery tabs. Rows as Nikhil set them: Mirdif + MSS combined, Al Forsan (Oregano + Fyoozhen) combined, DIP Oregano and DIP Fyoozhen separate, Safari Park, WTC and Nad Al Sheba on their own rows. Discounts: every line the delivery rules don't take (no aggregator) is in-store — ending TO (or Noon 'out') → Takeaway, everything else (DI, Happy Tuesday, Entertainer, staff/manager meals, the odd DL/PO staff line) → Dine-In, per Nikhil's classification. Checked on the real 13 Oct Sales Summary: dine-in AED 31,949.81 → 33,547.30 incl. VAT, takeaway 9,883.39 → 10,377.55 (1 fils rounding across outlets).",
   "⬇ POS SYNC STEP 2 — PULL DELIVERY DATA INTO THE BRAND TABS — Nikhil's v537 test passed (Microsys ✅ signed in from Cloudflare, Sales Summary 13 Oct, 20 outlets; Google ✅). New '⬇ Pull POS Data' card: pick Yesterday / Last 2 / Last 7 days / Custom; for each day it pulls Credit Sales + Sales Discount Details straight from Microsys and writes the Oregano, Lollorosso, Smokeys, Wicked Wings and Fyoozhen tabs of the TEST (or LIVE) sheet. The rules are a line-for-line port of POS Uploader v4.9 (LOCATION_MAP, #DL/#DT/#PO brand detection, Meituan→Keeta, Eat Easy→Smiles, discount exclusion list, header discovery, date-row search, new-row scaffold, Total row) and were checked cell-by-cell against the Python original on the same inputs: 3,396 cells, 0 differences (incl. Python's round-half-even on AOV). Each discount file is now pulled for exactly one day, so the discount date can no longer be mis-typed. Dine-in & takeaway tab comes next.",
   "🔑 POS SYNC: TENANT FIX, TAKE 2 — v536 still got Microsys code 4 (Invalid Tenant). The portal sets the company on its side when the login page is opened as /Home/Login?ORE (the same address its own 'session expired' prompt sends you to), not from the cookie alone. The server login now opens that address first.",
@@ -24776,12 +24777,14 @@ const PS_INSTORE_MAP={"MIR - Mirdif":"Mirdiff","MSS - Mirdif Sports Society":"Mi
 const PS_INSTORE_ORDER=["Mirdiff","DMC","MC","DSO","Villa","DIP (Oregano)","DIP (Fyoozhen)","Furjan","Al Forsan","Al Quoz","Town Square","Marina","Jumeirah","Al Reem","Al Reef","NAS","WTC","Safari Park"];
 // Column layout of the tab (row 1 = group, row 2 = field), same style as the brand tabs.
 const PS_INSTORE_COLS=[["Dine-In",["Disc","Sales","Orders","AOV","Guests","Spend/Guest"]],["Takeaway",["Disc","Sales","Orders","AOV"]],["Total",["Disc","Sales","Orders","AOV"]]];
-const PS_VAT=1.05;
+// v540: Nicole checked 13 Oct — the correct dine-in/takeaway sales are the POS Sales Summary figures
+// AS-IS (after discount, excl. VAT), not ×1.05. Kept as a constant so the basis is explicit.
+const PS_VAT=1;
 function psInstoreHeader(){const r1=["","",""],r2=["Branch","Date","Day"];for(const[g,fs]of PS_INSTORE_COLS){fs.forEach((f,i)=>{r1.push(i?"":g);r2.push(f);});}return[r1,r2];}
-// Channel of an in-store discount line (one the delivery rules did NOT take): ends in TO, or a
-// Noon "out"/takeaway line → Takeaway; everything else (DI-tagged, untagged staff/manager meals,
+// Channel of an in-store discount line (one the delivery rules did NOT take): ends in TO → Takeaway; everything else (DI-tagged, untagged staff/manager meals,
 // Happy Tuesday, Entertainer, and the odd DL/PO-tagged staff line) → Dine-In, as Nikhil classified.
-function psInstoreChannel(name){const suf=psDiscSuffix(name),n=name.toUpperCase();if(suf==="TO"||n.includes("NOON - OUT")||n.includes("NOON_OUT"))return"Takeaway";return"Dine-In";}
+// v540: Noon "Dine Out" (NOON - OUT / NOON_OUT) is eaten in the restaurant → Dine-In (Nicole, DSO 13 Oct).
+function psInstoreChannel(name){const suf=psDiscSuffix(name);if(suf==="TO")return"Takeaway";return"Dine-In";}
 // Sales Summary CSV + the instore list from psProcessDisc → per row {di:{sales,orders,guests,disc}, to:{...}}
 function psProcessInstore(summaryCsv,instoreDisc){
   const t=psParseCSV(summaryCsv);const out={},warn=[];if(!t.length)return{rows:out,warn:["Sales Summary was empty"],totals:null};
@@ -24999,7 +25002,7 @@ async function posStartPull(){
       I.warn.forEach(w=>day.warn.push(w));
       const it=Object.values(I.rows).reduce((a,o)=>({di:a.di+o.di.sales,to:a.to+o.to.sales,dd:a.dd+o.di.disc,td:a.td+o.to.disc,g:a.g+o.di.guests}),{di:0,to:0,dd:0,td:0,g:0});
       day.instore={di:psRound(it.di,2),to:psRound(it.to,2),dd:psRound(it.dd,2),td:psRound(it.td,2),guests:it.g};
-      done(i,"ok",`${posFmtDate(iso)} — Sales Summary: dine-in AED ${day.instore.di.toLocaleString()}, takeaway AED ${day.instore.to.toLocaleString()} (incl. VAT)`);
+      done(i,"ok",`${posFmtDate(iso)} — Sales Summary: dine-in AED ${day.instore.di.toLocaleString()}, takeaway AED ${day.instore.to.toLocaleString()}`);
       const brands=[...new Set([...C.rows.map(x=>x.brand),...D.rows.map(x=>x.brand)])].filter(b=>PS_BRAND_TABS.includes(b)).sort();
       brands.forEach(b=>{const r=C.rows.filter(x=>x.brand===b),d=D.rows.filter(x=>x.brand===b);
         day.brands[b]={sales:psRound(r.reduce((s,x)=>s+x.sales,0),2),orders:r.reduce((s,x)=>s+x.orders,0),disc:psRound(d.reduce((s,x)=>s+x.disc,0),2)};});
@@ -25040,7 +25043,7 @@ function posResultsHTML(T,card,ct){
       h+=`<tr>${td(posFmtDate(d.date),1)}${PS_BRAND_TABS.map(b=>td(d.brands[b]?`${f(d.brands[b].sales)}<div style="font-size:11px;color:${T.textSecondary}">${d.brands[b].orders} orders</div>`:`<span style="color:${T.textMuted}">–</span>`)).join("")}${td(`<b>${f(tot)}</b><div style="font-size:11px;color:${T.textSecondary}">${ord} orders</div>`)}${td(f(d.deliveryDisc))}${d.instore?td(`${f(d.instore.di)}<div style="font-size:11px;color:${T.textSecondary}">${d.instore.guests} guests</div>`)+td(f(d.instore.to))+td(f(d.instore.dd+d.instore.td)):td("–")+td("–")+td("–")}${td(f(d.cells))}</tr>`;
       if(d.warn.length)h+=`<tr><td colspan="${PS_BRAND_TABS.length+7}" style="padding:2px 8px 8px;font-size:12px;color:${T.accentOrange}">⚠ ${d.warn.map(esc).join(" · ")}</td></tr>`;
     }
-    h+=`</table></div><div style="font-size:12px;color:${T.textSecondary};margin-top:8px">All sales incl. VAT (dine-in/takeaway = POS figure × 1.05, matching the delivery tabs). Open the ${P.results.sheet==="live"?"LIVE":"TEST"} sheet to check the rows; compare a day against a normal Uploader run before we switch to LIVE.</div>`;
+    h+=`</table></div><div style="font-size:12px;color:${T.textSecondary};margin-top:8px">Delivery sales as the Uploader writes them (Credit Sales amount); dine-in/takeaway = POS Sales Summary figure as-is (after discount, excl. VAT). Open the ${P.results.sheet==="live"?"LIVE":"TEST"} sheet to check the rows; compare a day against a normal Uploader run before we switch to LIVE.</div>`;
   }
   return h+`</div>`;
 }
