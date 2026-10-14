@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-14-538";
+const BUILD_VERSION="2026-10-14-539";
 const BUILD_NOTES=[
+  "🍽️ POS SYNC STEP 3 — DINE-IN & TAKEAWAY TAB — Nikhil confirmed v538's delivery pull for 13 Oct matched Nicole's Uploader figures in the sheet. Each pull now also fetches Sales Summary by Outlet and writes a new 'Dine-In & Takeaway' tab (created automatically on first pull, same two-row header style as the brand tabs): Dine-In Disc/Sales/Orders/AOV/Guests/Spend-per-guest, Takeaway Disc/Sales/Orders/AOV, Total. Sales incl. VAT (POS figure × 1.05) to match the delivery tabs. Rows as Nikhil set them: Mirdif + MSS combined, Al Forsan (Oregano + Fyoozhen) combined, DIP Oregano and DIP Fyoozhen separate, Safari Park, WTC and Nad Al Sheba on their own rows. Discounts: every line the delivery rules don't take (no aggregator) is in-store — ending TO (or Noon 'out') → Takeaway, everything else (DI, Happy Tuesday, Entertainer, staff/manager meals, the odd DL/PO staff line) → Dine-In, per Nikhil's classification. Checked on the real 13 Oct Sales Summary: dine-in AED 31,949.81 → 33,547.30 incl. VAT, takeaway 9,883.39 → 10,377.55 (1 fils rounding across outlets).",
   "⬇ POS SYNC STEP 2 — PULL DELIVERY DATA INTO THE BRAND TABS — Nikhil's v537 test passed (Microsys ✅ signed in from Cloudflare, Sales Summary 13 Oct, 20 outlets; Google ✅). New '⬇ Pull POS Data' card: pick Yesterday / Last 2 / Last 7 days / Custom; for each day it pulls Credit Sales + Sales Discount Details straight from Microsys and writes the Oregano, Lollorosso, Smokeys, Wicked Wings and Fyoozhen tabs of the TEST (or LIVE) sheet. The rules are a line-for-line port of POS Uploader v4.9 (LOCATION_MAP, #DL/#DT/#PO brand detection, Meituan→Keeta, Eat Easy→Smiles, discount exclusion list, header discovery, date-row search, new-row scaffold, Total row) and were checked cell-by-cell against the Python original on the same inputs: 3,396 cells, 0 differences (incl. Python's round-half-even on AOV). Each discount file is now pulled for exactly one day, so the discount date can no longer be mis-typed. Dine-in & takeaway tab comes next.",
   "🔑 POS SYNC: TENANT FIX, TAKE 2 — v536 still got Microsys code 4 (Invalid Tenant). The portal sets the company on its side when the login page is opened as /Home/Login?ORE (the same address its own 'session expired' prompt sends you to), not from the cookie alone. The server login now opens that address first.",
   "🔑 POS SYNC: MICROSYS 'INVALID TENANT' FIXED — Nikhil's first Test connection on v535: Google ✅ (TEST sheet opened, all 8 tabs read) but Microsys ❌ with code 4. Checked the portal's own Login.js: code 4 = 'Invalid Tenant', not a wrong password. The portal identifies the company from a TenantID cookie (ORE) that the browser login carries; the server login now sends it too. Error messages now name every Microsys login code (2 already logged in, 3 wrong password, 4 tenant).",
@@ -24767,6 +24768,61 @@ function psCellsToRanges(tab,cells){
 }
 if(typeof module!=="undefined")module.exports={psParseCSV,psProcessCredit,psProcessDisc,psColMap,psCellsForBrand,psCellsToRanges,psRound,psDateLabels,PS_BRAND_TABS,PS_LOCATION_MAP};
 
+// ── v539 DINE-IN & TAKEAWAY (step 3) — Sales Summary by Outlet + in-store discounts → one tab.
+// Rows per Nikhil: MSS + Mirdif combined, Al Forsan (Oregano + Fyoozhen) combined, the two DIP
+// branches separate, Safari Park / WTC / Nad Al Sheba on their own rows.
+const PS_INSTORE_TAB="Dine-In & Takeaway";
+const PS_INSTORE_MAP={"MIR - Mirdif":"Mirdiff","MSS - Mirdif Sports Society":"Mirdiff","DMC - Dubai Media City":"DMC","MTC - Motor City":"MC","DSO - Dubai Silicon Oasis":"DSO","VLA - The Villa":"Villa","DIP - Dubai Investment Park-ORE":"DIP (Oregano)","DIP - Dubai Investment Park-FYZ":"DIP (Fyoozhen)","FUR - Al Furjan":"Furjan","ALF - Khalifa City":"Al Forsan","ALF - Khalifa City (Fyoozhen)":"Al Forsan","ALQ - Al Quoz":"Al Quoz","TSQ - Town Square":"Town Square","DMR - Dubai Marina":"Marina","ALW - Jumeirah-Al Wasl":"Jumeirah","REM - Al Reem Island":"Al Reem","REF - AL Reef":"Al Reef","NAD - Nad Al Sheba":"NAS","WTC - World Trade Center":"WTC","DSP - Dubai Safari Park":"Safari Park"};
+const PS_INSTORE_ORDER=["Mirdiff","DMC","MC","DSO","Villa","DIP (Oregano)","DIP (Fyoozhen)","Furjan","Al Forsan","Al Quoz","Town Square","Marina","Jumeirah","Al Reem","Al Reef","NAS","WTC","Safari Park"];
+// Column layout of the tab (row 1 = group, row 2 = field), same style as the brand tabs.
+const PS_INSTORE_COLS=[["Dine-In",["Disc","Sales","Orders","AOV","Guests","Spend/Guest"]],["Takeaway",["Disc","Sales","Orders","AOV"]],["Total",["Disc","Sales","Orders","AOV"]]];
+const PS_VAT=1.05;
+function psInstoreHeader(){const r1=["","",""],r2=["Branch","Date","Day"];for(const[g,fs]of PS_INSTORE_COLS){fs.forEach((f,i)=>{r1.push(i?"":g);r2.push(f);});}return[r1,r2];}
+// Channel of an in-store discount line (one the delivery rules did NOT take): ends in TO, or a
+// Noon "out"/takeaway line → Takeaway; everything else (DI-tagged, untagged staff/manager meals,
+// Happy Tuesday, Entertainer, and the odd DL/PO-tagged staff line) → Dine-In, as Nikhil classified.
+function psInstoreChannel(name){const suf=psDiscSuffix(name),n=name.toUpperCase();if(suf==="TO"||n.includes("NOON - OUT")||n.includes("NOON_OUT"))return"Takeaway";return"Dine-In";}
+// Sales Summary CSV + the instore list from psProcessDisc → per row {di:{sales,orders,guests,disc}, to:{...}}
+function psProcessInstore(summaryCsv,instoreDisc){
+  const t=psParseCSV(summaryCsv);const out={},warn=[];if(!t.length)return{rows:out,warn:["Sales Summary was empty"],totals:null};
+  const h=t[0].map(x=>x.trim()),ix=k=>h.indexOf(k);const iL=ix("Location"),iTO=ix("TakeOut"),iDI=ix("DineIn"),iTC=ix("TakeOutCnt"),iDC=ix("DineInCount"),iG=ix("GuestCnt");
+  if(iL<0||iTO<0||iDI<0)throw new Error("Sales Summary CSV columns changed: "+h.join(", "));
+  const get=b=>out[b]||(out[b]={di:{sales:0,orders:0,guests:0,disc:0},to:{sales:0,orders:0,disc:0}});
+  for(const r of t.slice(1)){const loc=(r[iL]||"").trim();if(!loc||/^total/i.test(loc))continue;const b=PS_INSTORE_MAP[loc];
+    const di=psNum(r[iDI]),to=psNum(r[iTO]);if(!b){if(di||to)warn.push(`Unknown POS location '${loc}' (dine-in ${di}, takeaway ${to}) — not written`);continue;}
+    const o=get(b);o.di.sales+=di*PS_VAT;o.di.orders+=iDC>=0?psNum(r[iDC]):0;o.di.guests+=iG>=0?psNum(r[iG]):0;o.to.sales+=to*PS_VAT;o.to.orders+=iTC>=0?psNum(r[iTC]):0;}
+  let unk=0;for(const d of instoreDisc||[]){if(psGetDiscAgg(d.name)&&!["DI","TO"].includes(psDiscSuffix(d.name)))continue; // aggregator line the Uploader couldn't place — not in-store
+    const b=PS_INSTORE_MAP[(d.loc||"").trim()];if(!b){unk+=d.amount;continue;}const o=get(b);if(psInstoreChannel(d.name)==="Takeaway")o.to.disc+=d.amount;else o.di.disc+=d.amount;}
+  if(unk)warn.push(`AED ${psRound(unk,2)} in-store discount at unknown locations — not written`);
+  for(const o of Object.values(out)){o.di.sales=psRound(o.di.sales,2);o.to.sales=psRound(o.to.sales,2);o.di.disc=psRound(o.di.disc,2);o.to.disc=psRound(o.to.disc,2);}
+  return{rows:out,warn};
+}
+function psCellsForInstore(header,ab,rowsData,iso){
+  const L=psDateLabels(iso),order=PS_INSTORE_ORDER,cells=new Map(),set=(r,c,v)=>cells.set(r+","+c,v);
+  // columns from the sheet's own header (so a moved column still lands right); fall back to layout
+  const cm=psColMap(header&&header.length>=2?header:psInstoreHeader());
+  const g=(grp,f)=>{const k=Object.keys(cm).find(x=>x.toLowerCase()===grp.toLowerCase());if(!k)return null;const kk=Object.keys(cm[k]).find(x=>x.toLowerCase()===f.toLowerCase());return kk!=null?cm[k][kk]:null;};
+  // psColMap only knows Sales/Orders/AOV/Disc — locate Guests and Spend/Guest by header text
+  const r2=(header&&header[1])||psInstoreHeader()[1];const gi=r2.findIndex(x=>String(x).trim().toLowerCase()==="guests"),si=r2.findIndex(x=>String(x).trim().toLowerCase()==="spend/guest");
+  const found={};(ab||[]).forEach((row,i)=>{const cv=String(row[1]==null?"":row[1]).trim(),bv=String(row[0]==null?"":row[0]).trim();for(const f of L.formats){if(cv.toLowerCase()===f.toLowerCase()){if(bv)found[bv]=i+1;break;}}});
+  let rows=Object.keys(found).length?found:null,scaffolded=false;
+  if(!rows){const colB=(ab||[]).map(r=>r[1]==null?"":String(r[1]));while(colB.length&&!colB[colB.length-1].trim())colB.pop();
+    const next=Math.max(colB.length+2,4);order.forEach((b,i)=>{set(next+i,1,b);set(next+i,2,L.label);set(next+i,3,L.day);});
+    const tr=next+order.length;set(tr,1,"Total");set(tr,2,L.label);set(tr,3,L.day);rows={};order.forEach((b,i)=>rows[b]=next+i);rows.Total=tr;scaffolded=true;}
+  const T={di:{sales:0,orders:0,guests:0,disc:0},to:{sales:0,orders:0,disc:0}};
+  const put=(rn,v)=>{const aov=(s,o)=>o?psRound(s/o,1):0;
+    const w=(grp,f,val)=>{const c=g(grp,f);if(c!=null)set(rn,c+1,val);};
+    w("Dine-In","Disc",psRound(v.di.disc,2));w("Dine-In","Sales",psRound(v.di.sales,2));w("Dine-In","Orders",v.di.orders);w("Dine-In","AOV",aov(v.di.sales,v.di.orders));
+    if(gi>=0)set(rn,gi+1,v.di.guests);if(si>=0)set(rn,si+1,v.di.guests?psRound(v.di.sales/v.di.guests,1):0);
+    w("Takeaway","Disc",psRound(v.to.disc,2));w("Takeaway","Sales",psRound(v.to.sales,2));w("Takeaway","Orders",v.to.orders);w("Takeaway","AOV",aov(v.to.sales,v.to.orders));
+    const ts=v.di.sales+v.to.sales,to=v.di.orders+v.to.orders;w("Total","Disc",psRound(v.di.disc+v.to.disc,2));w("Total","Sales",psRound(ts,2));w("Total","Orders",to);w("Total","AOV",aov(ts,to));};
+  for(const b of order){const rn=rows[b];if(!rn)continue;const v=rowsData[b]||{di:{sales:0,orders:0,guests:0,disc:0},to:{sales:0,orders:0,disc:0}};put(rn,v);
+    for(const k of["sales","orders","guests","disc"]){if(k in T.di)T.di[k]+=v.di[k]||0;if(k in T.to)T.to[k]+=v.to[k]||0;}}
+  if(rows.Total)put(rows.Total,T);
+  return{cells,scaffolded,totals:T};
+}
+if(typeof module!=="undefined")Object.assign(module.exports,{psProcessInstore,psCellsForInstore,psInstoreHeader,PS_INSTORE_TAB,PS_INSTORE_ORDER});
+
 // ════════════════════════════════════════════════════════════════════════════
 // v535 POS SYNC — STEP 1 OF 4 (connection test). Replaces the desktop POS Uploader: the
 // dashboard's server signs in to Microsys (Kull ERP), pulls Credit Sales / Sales Discount
@@ -24908,12 +24964,12 @@ function posPullCardHTML(T,card,ct,btn){
   const P=posSyncState,dates=posSelectedDates(),y=posAddDays(posDubaiToday(),-1);
   const pre=(k,l)=>`<button onclick="posSetPreset('${k}')" style="padding:6px 12px;border-radius:6px;border:1px solid ${P.preset===k?T.accentOrange:T.cardBorder};background:${P.preset===k?T.accentOrange+"22":"transparent"};color:${P.preset===k?T.accentOrange:T.textSecondary};font-size:12px;font-weight:700;cursor:pointer">${l}</button>`;
   const inp=(w,v)=>`<input type="date" max="${y}" value="${v}" onchange="posSetCustom('${w}',this.value)" style="padding:6px 8px;border-radius:6px;border:1px solid ${T.cardBorder};background:${T.bg};color:${T.textPrimary};font:inherit;font-size:12px;color-scheme:dark">`;
-  let h=`<div style="${card}"><div style="${ct}">⬇ Pull delivery data → brand tabs</div>`;
+  let h=`<div style="${card}"><div style="${ct}">⬇ Pull POS data → Google Sheet</div>`;
   h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">${pre("y","Yesterday")}${pre("2","Last 2 days")}${pre("7","Last 7 days")}${pre("c","Custom")}`;
   if(P.preset==="c")h+=`<span style="display:inline-flex;gap:6px;align-items:center">${inp("from",P.from||y)}<span style="color:${T.textSecondary}">→</span>${inp("to",P.to||P.from||y)}</span>`;
   h+=`</div><div style="font-size:12px;color:${T.textSecondary};margin-bottom:12px">${dates.length} day${dates.length===1?"":"s"}: ${dates.length?posFmtDate(dates[0])+(dates.length>1?" → "+posFmtDate(dates[dates.length-1]):""):"—"} · writes to the <b style="color:${P.sheet==="live"?T.accentRed:T.accentGreen}">${P.sheet==="live"?"LIVE":"TEST"}</b> sheet</div>`;
   h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${btn(P.pulling?"⏳ Pulling…":"⬇ Pull POS Data","posStartPull()",true,P.pulling||!dates.length)}</div>`;
-  h+=`<div style="font-size:12px;color:${T.textSecondary};margin-top:10px;line-height:1.5">For each day: Credit Sales + Sales Discount Details from Microsys → the same rules as POS Uploader v4.9 → Oregano, Lollorosso, Smokeys, Wicked Wings and Fyoozhen tabs (new date rows are added if missing; existing ones are overwritten, as the Uploader does). Dine-in &amp; takeaway come in the next build.</div></div>`;
+  h+=`<div style="font-size:12px;color:${T.textSecondary};margin-top:10px;line-height:1.5">For each day: Credit Sales + Sales Discount Details from Microsys → the same rules as POS Uploader v4.9 → Oregano, Lollorosso, Smokeys, Wicked Wings and Fyoozhen tabs; plus Sales Summary by Outlet + in-store discounts → the Dine-In &amp; Takeaway tab (created on first pull). New date rows are added if missing; existing ones are overwritten, as the Uploader does.</div></div>`;
   return h;
 }
 async function posStartPull(){
@@ -24927,7 +24983,7 @@ async function posStartPull(){
   const done=(i,st,t)=>{P.progress[i].st=st;if(t)P.progress[i].t=t;renderPosSync();};
   let okDays=0,failDays=0;
   for(const iso of dates){
-    const day={date:iso,brands:{},cells:0,newRows:[],updatedRows:[],warn:[],error:null,instoreDisc:0,deliveryDisc:0};
+    const day={date:iso,brands:{},cells:0,newRows:[],updatedRows:[],warn:[],error:null,instoreDisc:0,deliveryDisc:0,instore:null};
     let i=step(`${posFmtDate(iso)} — Credit Sales`);
     try{
       const cr=await posApi("/api/pos/report",{kind:"credit",date:iso});const C=psProcessCredit(cr.csv,iso);
@@ -24938,18 +24994,28 @@ async function posStartPull(){
       day.instoreDisc=psRound(D.instore.reduce((s,x)=>s+x.amount,0),2);day.deliveryDisc=psRound(D.rows.reduce((s,x)=>s+x.disc,0),2);
       done(i,"ok",`${posFmtDate(iso)} — Discounts: ${D.kept} delivery lines (AED ${day.deliveryDisc.toLocaleString()}), ${D.excluded} in-store`);
       if(!C.kept)day.warn.push("No delivery orders found in Credit Sales for this day");
+      i=step(`${posFmtDate(iso)} — Sales Summary by Outlet (dine-in & takeaway)`);
+      const sr0=await posApi("/api/pos/report",{kind:"summary",date:iso});const I=psProcessInstore(sr0.csv,D.instore);
+      I.warn.forEach(w=>day.warn.push(w));
+      const it=Object.values(I.rows).reduce((a,o)=>({di:a.di+o.di.sales,to:a.to+o.to.sales,dd:a.dd+o.di.disc,td:a.td+o.to.disc,g:a.g+o.di.guests}),{di:0,to:0,dd:0,td:0,g:0});
+      day.instore={di:psRound(it.di,2),to:psRound(it.to,2),dd:psRound(it.dd,2),td:psRound(it.td,2),guests:it.g};
+      done(i,"ok",`${posFmtDate(iso)} — Sales Summary: dine-in AED ${day.instore.di.toLocaleString()}, takeaway AED ${day.instore.to.toLocaleString()} (incl. VAT)`);
       const brands=[...new Set([...C.rows.map(x=>x.brand),...D.rows.map(x=>x.brand)])].filter(b=>PS_BRAND_TABS.includes(b)).sort();
       brands.forEach(b=>{const r=C.rows.filter(x=>x.brand===b),d=D.rows.filter(x=>x.brand===b);
         day.brands[b]={sales:psRound(r.reduce((s,x)=>s+x.sales,0),2),orders:r.reduce((s,x)=>s+x.orders,0),disc:psRound(d.reduce((s,x)=>s+x.disc,0),2)};});
       i=step(`${posFmtDate(iso)} — Reading ${P.sheet==="live"?"LIVE":"TEST"} sheet`);
-      const sr=await posApi("/api/pos/sheet/read",{sheet:P.sheet,tabs:brands});
+      const sr=await posApi("/api/pos/sheet/read",{sheet:P.sheet,tabs:[...brands,PS_INSTORE_TAB]});
       (sr.present||[]).forEach((t,k)=>{const vr=(sr.google&&sr.google.valueRanges)||[];sr.tabs[t]={header:(vr[2*k]&&vr[2*k].values)||[],ab:(vr[2*k+1]&&vr[2*k+1].values)||[]};});
       const data=[];
       for(const b of brands){const tab=sr.tabs[b];if(!tab||tab.missing){day.warn.push(`Tab '${b}' not found — skipped`);continue;}
         const res=psCellsForBrand(tab.header,tab.ab,C.rows,D.rows,b,iso);
         (res.scaffolded?day.newRows:day.updatedRows).push(b);data.push(...psCellsToRanges(b,res.cells));}
+      {let tab=sr.tabs[PS_INSTORE_TAB];
+        if(!tab||tab.missing){await posApi("/api/pos/sheet/addtab",{sheet:P.sheet});const hd=psInstoreHeader();
+          data.push({range:`'${PS_INSTORE_TAB}'!A1:${psColLetter(hd[0].length)}2`,values:hd});tab={header:hd,ab:hd.map(r=>r.slice(0,2))};day.warn.push("Created the 'Dine-In & Takeaway' tab");}
+        const res=psCellsForInstore(tab.header,tab.ab,I.rows,iso);(res.scaffolded?day.newRows:day.updatedRows).push("Dine-In & Takeaway");data.push(...psCellsToRanges(PS_INSTORE_TAB,res.cells));}
       done(i,"ok");
-      if(data.length){i=step(`${posFmtDate(iso)} — Writing ${brands.length} brand tab(s)`);
+      if(data.length){i=step(`${posFmtDate(iso)} — Writing ${brands.length} brand tab(s) + Dine-In & Takeaway`);
         const wr=await posApi("/api/pos/sheet/write",{sheet:P.sheet,data});day.cells=wr.updatedCells;
         done(i,"ok",`${posFmtDate(iso)} — Wrote ${wr.updatedCells.toLocaleString()} cells (${day.newRows.length?"new rows: "+day.newRows.join(", "):""}${day.newRows.length&&day.updatedRows.length?" · ":""}${day.updatedRows.length?"updated: "+day.updatedRows.join(", "):""})`);}
       okDays++;
@@ -24967,14 +25033,14 @@ function posResultsHTML(T,card,ct){
     const th=x=>`<th style="text-align:right;padding:7px 8px;color:${T.textSecondary};font-size:11px;text-transform:uppercase;border-bottom:1px solid ${T.cardBorder};white-space:nowrap">${x}</th>`;
     const td=(x,l)=>`<td style="padding:7px 8px;text-align:${l?"left":"right"};white-space:nowrap;font-variant-numeric:tabular-nums">${x}</td>`;
     const f=n=>Number(n||0).toLocaleString("en-US",{maximumFractionDigits:2});
-    h+=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;color:${T.textPrimary}"><tr>${th("Day").replace("right","left")}${PS_BRAND_TABS.map(b=>th(b)).join("")}${th("Delivery total")}${th("Delivery disc.")}${th("Cells")}</tr>`;
+    h+=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;color:${T.textPrimary}"><tr>${th("Day").replace("right","left")}${PS_BRAND_TABS.map(b=>th(b)).join("")}${th("Delivery total")}${th("Delivery disc.")}${th("Dine-in")}${th("Takeaway")}${th("In-store disc.")}${th("Cells")}</tr>`;
     for(const d of days){
-      if(d.error){h+=`<tr>${td(posFmtDate(d.date),1)}<td colspan="${PS_BRAND_TABS.length+3}" style="padding:7px 8px;color:${T.accentRed}">${esc(d.error)}</td></tr>`;continue;}
+      if(d.error){h+=`<tr>${td(posFmtDate(d.date),1)}<td colspan="${PS_BRAND_TABS.length+6}" style="padding:7px 8px;color:${T.accentRed}">${esc(d.error)}</td></tr>`;continue;}
       const tot=Object.values(d.brands).reduce((s,x)=>s+x.sales,0),ord=Object.values(d.brands).reduce((s,x)=>s+x.orders,0);
-      h+=`<tr>${td(posFmtDate(d.date),1)}${PS_BRAND_TABS.map(b=>td(d.brands[b]?`${f(d.brands[b].sales)}<div style="font-size:11px;color:${T.textSecondary}">${d.brands[b].orders} orders</div>`:`<span style="color:${T.textMuted}">–</span>`)).join("")}${td(`<b>${f(tot)}</b><div style="font-size:11px;color:${T.textSecondary}">${ord} orders</div>`)}${td(f(d.deliveryDisc))}${td(f(d.cells))}</tr>`;
-      if(d.warn.length)h+=`<tr><td colspan="${PS_BRAND_TABS.length+4}" style="padding:2px 8px 8px;font-size:12px;color:${T.accentOrange}">⚠ ${d.warn.map(esc).join(" · ")}</td></tr>`;
+      h+=`<tr>${td(posFmtDate(d.date),1)}${PS_BRAND_TABS.map(b=>td(d.brands[b]?`${f(d.brands[b].sales)}<div style="font-size:11px;color:${T.textSecondary}">${d.brands[b].orders} orders</div>`:`<span style="color:${T.textMuted}">–</span>`)).join("")}${td(`<b>${f(tot)}</b><div style="font-size:11px;color:${T.textSecondary}">${ord} orders</div>`)}${td(f(d.deliveryDisc))}${d.instore?td(`${f(d.instore.di)}<div style="font-size:11px;color:${T.textSecondary}">${d.instore.guests} guests</div>`)+td(f(d.instore.to))+td(f(d.instore.dd+d.instore.td)):td("–")+td("–")+td("–")}${td(f(d.cells))}</tr>`;
+      if(d.warn.length)h+=`<tr><td colspan="${PS_BRAND_TABS.length+7}" style="padding:2px 8px 8px;font-size:12px;color:${T.accentOrange}">⚠ ${d.warn.map(esc).join(" · ")}</td></tr>`;
     }
-    h+=`</table></div><div style="font-size:12px;color:${T.textSecondary};margin-top:8px">Sales incl. VAT, as the Uploader writes them. Open the ${P.results.sheet==="live"?"LIVE":"TEST"} sheet to check the rows; compare a day against a normal Uploader run before we switch to LIVE.</div>`;
+    h+=`</table></div><div style="font-size:12px;color:${T.textSecondary};margin-top:8px">All sales incl. VAT (dine-in/takeaway = POS figure × 1.05, matching the delivery tabs). Open the ${P.results.sheet==="live"?"LIVE":"TEST"} sheet to check the rows; compare a day against a normal Uploader run before we switch to LIVE.</div>`;
   }
   return h+`</div>`;
 }
