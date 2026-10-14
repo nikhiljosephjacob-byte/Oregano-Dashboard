@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-15-551";
+const BUILD_VERSION="2026-10-15-552";
 const BUILD_NOTES=[
+  "🔧 ALL CHANNELS / DINE-IN SHOWED AED 0 — the dashboard asked Google for the Dine-In & Takeaway tab by NAME, which the published link ignores (it silently returned the Oregano tab, which has no dine-in columns). It now asks by the tab's ID, so dine-in and takeaway appear. If the link ever returns the wrong tab again, the page shows a clear warning instead of zeros.",
   "🍽️ DASHBOARD REDESIGN — ALL SALES, NOT JUST DELIVERY. (1) Menu now in sections: Group (Overview, All Channels, Outlets, Compare) · Delivery (Brands, Platforms, Ads, Campaigns, KPI, Cancellations, Feedback) · Dine-in · Tools. (2) A 🛵 Delivery / 🍽️ All sales switch in the top bar and on Overview, Brands, Outlets, Platforms and Compare — All sales adds Dine-In and Takeaway as two more channels (from the Dine-In & Takeaway tab, incl. VAT like delivery). Overview gets a Group-sales headline (delivery / dine-in / takeaway split, physical vs virtual brands) and every outlet ranked by total sales. (3) New All Channels page: KPIs per channel, channel-mix chart, outlet ranking, and (4) what the virtual brands add to each kitchen. (5) New Dine-In & Takeaway page: guests, spend per guest, check average, takeaway, discounts, trend, average day of the week and an outlet table. (6) Daily Digest gains an all-channels section, outlets yesterday and POS low-sales alerts; the health banner warns when the dine-in data falls behind or a POS flag is open. Profitability stays delivery-only (marked 'delivery only') until site costs are added. POS Sync: a backfill on an old-layout tab no longer re-pulls days before your range; a day that hits a Microsys session error retries once.",
   "🗂 POS SYNC: BACKFILL IN ANY ORDER + ⏹ STOP + FASTER + SHEET LOOK FIXED — tested on the TEST sheet: 1 Jan → 13 Oct 2026 (286 days) written with no failures, in date order with no gaps. Earlier days are now inserted above later ones, so history can be filled 2026 first and then 2025 month by month backwards. New ⏹ Stop button on Pull and Backfill (finishes the current day, saves, formats). Backfill fetches the next 2 days while writing the current one. Dine-In & Takeaway formatting now matches the delivery tabs: green only on the Total row (Branch/Date/Day), black lines on every cell, thick dividers around Dine-In, Takeaway and Total, wider Branch column. Backfill defaults to 1 Jan 2026; the coverage card is hidden.",
   "📅 POS SYNC: DATA COVERAGE CHECK — Nikhil's screenshot of Microsys for 19 Jan 2025 shows only one outlet (Al Reem, AED 153), so the Jan 2025 zeros came from Microsys not having that period's sales, not from the dashboard. New '📅 Check data coverage' card: reads the Sales Summary by Outlet on the 1st and 15th of every month since Jan 2025 (read-only) and shows outlets reporting, net sales and the dine-in/takeaway split per date, then names the first date from which Microsys looks complete — that's where the backfill should start.",
@@ -25389,7 +25390,7 @@ async function posCoverageScan(){
 // Sales amount, dine-in/takeaway = POS × 1.05 — same basis, per Nikhil); "Excl. VAT" divides
 // sales by 1.05. Discounts are shown as recorded.
 // ════════════════════════════════════════════════════════════════════════════
-const CH_TAB_NAME="Dine-In & Takeaway";
+const CH_TAB_NAME="Dine-In & Takeaway",CH_TAB_GID="950740798"; // gid of the tab in the LIVE Virtual Brands Performance sheet
 const CH_CLR={Delivery:"#4E9BFF","Dine-In":"#FF8A3D",Takeaway:"#A78BFA"};
 const CH_LIST=["Delivery","Dine-In","Takeaway"];
 let instoreData=[];            // [{date,outlet,di:{disc,sales,orders,guests},to:{disc,sales,orders}}]
@@ -25401,10 +25402,12 @@ function chOutletOfDelivery(r){if(r.branch==="DIP")return r.brand==="Fyoozhen"?"
 function chNormOutlet(n){n=String(n||"").trim();if(/^DIP \((Oregano|Fyoozhen)\)$/.test(n))return n;return normB(n);}
 async function loadInstoreData(){
   try{
-    const raw=`${PUB}?single=true&output=csv&sheet=${encodeURIComponent(CH_TAB_NAME)}&_cb=${Date.now()}`;
+    // v552: the published link picks a tab by its gid only (a sheet= name is ignored and returns the first tab)
+    const raw=`${PUB}?gid=${CH_TAB_GID}&single=true&output=csv&_cb=${Date.now()}`;
     const r=await fetchWithTimeout(raw,12000);if(!r.ok)throw new Error("HTTP "+r.status);
     const rows=parseCSV(await r.text());
     const hi=rows.findIndex(x=>(x[0]||"").toLowerCase()==="branch");if(hi<1)throw new Error("Dine-In & Takeaway tab header not found");
+    if(!rows[hi-1].some(x=>/^dine-in$/i.test(String(x||"").trim())))throw new Error("the published link returned a different tab (no Dine-In columns)");
     const g=rows[hi-1],h=rows[hi];let grp="";const col={};
     h.forEach((f,i)=>{if((g[i]||"").trim())grp=g[i].trim().toLowerCase();col[grp+"|"+f.trim().toLowerCase()]=i;});
     const n=(row,k)=>{const i=col[k];if(i==null)return 0;const v=parseFloat(String(row[i]||"").replace(/,/g,""));return isNaN(v)?0:v;};
