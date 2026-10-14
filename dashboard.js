@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-14-546";
+const BUILD_VERSION="2026-10-14-547";
 const BUILD_NOTES=[
+  "🧱 POS SYNC: DINE-IN TAB LAYOUT = DELIVERY TABS + NO MORE ZERO DAYS — Nikhil's January 2025 backfill on LIVE showed (1) an empty gap row after every Total, which the delivery tabs don't have, and (2) whole days of zeros. Fixes: the tab now starts on row 3 and each day follows the previous Total directly, exactly like the brand tabs (19 rows per day). A backfill detects the old layout and re-lays the tab once (values cleared, formatting kept, every day already there re-pulled). Days where Microsys's Sales Summary has no dine-in/takeaway split (or no rows at all) are no longer written as zeros — they are skipped and listed, so the cause can be checked. New '🔍 Check a raw Microsys report' card shows exactly what Microsys returns for any report and day (read-only).",
   "🗂 POS SYNC: BACKFILL DINE-IN & TAKEAWAY HISTORY — new 'Backfill' card on POS Sync. Pick a range (default from 1 Jan 2025); for each day it pulls Sales Summary + Discount Details and writes ONLY the Dine-In & Takeaway tab — the five delivery tabs are never touched, since they already hold the Uploader's history incl. manual corrections. Days sit on a fixed date grid (row 4 = first day, then 20 rows per day), so history lands in date order and later daily pulls and re-pulls drop into their own slot. If the tab currently starts later than the backfill (LIVE starts 13 Oct), it is re-laid from the start date: rows cleared (formatting kept) and the days already there re-pulled into their new slots. Days already in the tab are skipped, so a run can be stopped and continued. Writes every 7 days, formats at the end, and the server now adds rows to the tab automatically when needed (a new tab has only 1,000 rows). Recommended: one month per run.",
   "🎨 POS SYNC: FORMATTING FIX — Nikhil's first LIVE pull wrote every number correctly but the formatting step said 'Dine-In & Takeaway tab not found'. Cause: the server asked Google for the sheet list together with the Oregano column widths in one request, and Google then lists only the Oregano tab. Now two separate requests. Click '🎨 Re-apply sheet formatting' once to format the 13 Oct block already in the LIVE sheet; later pulls format automatically.",
   "🎨 POS SYNC: DINE-IN & TAKEAWAY TAB NOW LOOKS LIKE THE DELIVERY TABS — Nikhil: the new tab can't be bare numbers and outlet names; it needs the same borders, margins and formatting as the delivery tabs in the LIVE sheet. After every pull the dashboard now copies the Oregano tab's own formatting onto the Dine-In & Takeaway tab: header rows (fills, fonts, merged group headers), outlet rows, Total row and the gap row between days (borders, number formats, alignment), column widths and frozen panes. Dine-In takes the Deliveroo block's style, Takeaway the Talabat block's, Total the Total block's. Formats only — no values change, and the Oregano tab is only read. A '🎨 Re-apply sheet formatting' button re-runs it on demand (e.g. after a manual style change to the delivery tabs).",
@@ -24820,7 +24821,8 @@ function psCellsForInstore(header,ab,rowsData,iso){
   if(!rows){const colB=(ab||[]).map(r=>r[1]==null?"":String(r[1]));while(colB.length&&!colB[colB.length-1].trim())colB.pop();
     // v546: fixed date grid — once the tab starts at a known date (row 4), every day has its own slot
     // (row 4 + days × block height), so backfilled history and later re-pulls stay in date order.
-    let next=Math.max(colB.length+2,4);const slot=psInstoreSlotRow(ab,iso);if(slot)next=slot;
+    // v547: like the delivery tabs — data starts on row 3, and each day follows the previous Total row directly (no gap row)
+    let next=Math.max(colB.length+1,3);const slot=psInstoreSlotRow(ab,iso);if(slot)next=slot;
     order.forEach((b,i)=>{set(next+i,1,b);set(next+i,2,L.label);set(next+i,3,L.day);});
     const tr=next+order.length;set(tr,1,"Total");set(tr,2,L.label);set(tr,3,L.day);rows={};order.forEach((b,i)=>rows[b]=next+i);rows.Total=tr;scaffolded=true;}
   const T={di:{sales:0,orders:0,guests:0,disc:0},to:{sales:0,orders:0,disc:0}};
@@ -24870,18 +24872,18 @@ function psInstoreFormatRequests(src,dst){
   const ab=src.ab||[];let tot=-1;for(let i=ab.length-1;i>=2;i--){if(String((ab[i]||[])[0]||"").trim().toLowerCase()==="total"&&i>=6){tot=i;break;}}
   if(tot<0)throw new Error("Oregano tab: no complete date block found to copy formatting from");
   const dLbl=String((ab[tot]||[])[1]||"").trim();let st=tot;while(st-1>=2&&String((ab[st-1]||[])[1]||"").trim()===dLbl)st--;
-  const gap=tot+1; // block = first outlet row (st), middle rows (st+1), last outlet row (tot-1), Total (tot), gap row
+  // block = first outlet row (st), middle rows (st+1), last outlet row (tot-1), Total (tot). No gap row (v547).
   // destination blocks
   const dab=dst.ab||[];let first=-1;for(let i=2;i<dab.length;i++){if(String((dab[i]||[])[1]||"").trim()&&String((dab[i]||[])[0]||"").trim()){first=i;break;}}
   if(first<0)return[];
-  const n=PS_INSTORE_ORDER.length,period=n+2,last=dab.length-1;
+  const n=PS_INSTORE_ORDER.length,period=n+1,last=dab.length-1;
   const R=[],S=src.sheetId,D=dst.sheetId;
   const cp=(sr,sc,dr0,dr1,dc)=>R.push({copyPaste:{source:{sheetId:S,startRowIndex:sr,endRowIndex:sr+1,startColumnIndex:sc,endColumnIndex:sc+1},destination:{sheetId:D,startRowIndex:dr0,endRowIndex:dr1,startColumnIndex:dc,endColumnIndex:dc+1},pasteType:"PASTE_FORMAT"}});
   // header rows 1-2 and the blank row 3, column by column
-  map.forEach((sc,dc)=>{for(const r of[0,1])cp(r,sc,r,r+1,dc);cp(gap,sc,2,3,dc);});
+  map.forEach((sc,dc)=>{for(const r of[0,1])cp(r,sc,r,r+1,dc);});
   // first block: outlet rows, Total row, gap row
   map.forEach((sc,dc)=>{cp(st,sc,first,first+1,dc);if(n>2)cp(Math.min(st+1,tot-1),sc,first+1,first+n-1,dc);cp(tot-1,sc,first+n-1,first+n,dc);
-    cp(tot,sc,first+n,first+n+1,dc);cp(gap,sc,first+n+1,first+period,dc);});
+    cp(tot,sc,first+n,first+n+1,dc);});
   // tile the first block down over every later block
   if(last>=first+period)R.push({copyPaste:{source:{sheetId:D,startRowIndex:first,endRowIndex:first+period,startColumnIndex:0,endColumnIndex:map.length},
     destination:{sheetId:D,startRowIndex:first+period,endRowIndex:first+period*Math.ceil((last-first+1)/period),startColumnIndex:0,endColumnIndex:map.length},pasteType:"PASTE_FORMAT"}});
@@ -24897,11 +24899,19 @@ if(typeof module!=="undefined")Object.assign(module.exports,{psInstoreFormatRequ
 
 // v546: slot of a date in the fixed grid, or null when the tab has no anchor date yet / the date is before it.
 function psParseLabel(lbl){const m=String(lbl||"").trim().match(/^(\d{1,2})-([A-Za-z]{3})-(\d{2,4})$/);if(!m)return null;const mo=PS_MON.indexOf(m[2][0].toUpperCase()+m[2].slice(1).toLowerCase());if(mo<0)return null;let y=+m[3];if(y<100)y+=2000;return `${y}-${String(mo+1).padStart(2,"0")}-${String(+m[1]).padStart(2,"0")}`;}
-const PS_INSTORE_PERIOD=()=>PS_INSTORE_ORDER.length+2;
+const PS_INSTORE_PERIOD=()=>PS_INSTORE_ORDER.length+1; // 18 outlets + Total, no gap row (v547)
 function psDaysBetween(a,b){return Math.round((Date.UTC(+b.slice(0,4),+b.slice(5,7)-1,+b.slice(8,10))-Date.UTC(+a.slice(0,4),+a.slice(5,7)-1,+a.slice(8,10)))/86400000);}
-function psInstoreSlotRow(ab,iso){const anchor=psParseLabel(((ab||[])[3]||[])[1]);if(!anchor||iso<=anchor)return null;
-  const row=4+psDaysBetween(anchor,iso)*PS_INSTORE_PERIOD();const occ=String(((ab||[])[row-1]||[])[1]||"").trim();if(occ&&psParseLabel(occ)!==iso)return null;return row;}
+function psInstoreSlotRow(ab,iso){const anchor=psParseLabel(((ab||[])[2]||[])[1]);if(!anchor||iso<=anchor)return null;
+  const row=3+psDaysBetween(anchor,iso)*PS_INSTORE_PERIOD();const occ=String(((ab||[])[row-1]||[])[1]||"").trim();if(occ&&psParseLabel(occ)!==iso)return null;return row;}
 if(typeof module!=="undefined")Object.assign(module.exports,{psInstoreSlotRow,psParseLabel});
+
+// v547: tabs written by v539–v546 have a blank row 3 and a gap row after every Total — detect them so a backfill re-lays them.
+function psInstoreLegacyLayout(ab){const r3=(ab||[])[2]||[],r4=(ab||[])[3]||[];return !String(r3[1]||"").trim()&&!!psParseLabel(r4[1]);}
+// v547: does a Sales Summary carry a dine-in / takeaway split at all? (older POS periods may only have totals)
+function psSummaryHasSplit(summaryCsv){const t=psParseCSV(summaryCsv||"");if(t.length<2)return{rows:0,split:false,net:0};const h=t[0].map(x=>x.trim());const iDI=h.indexOf("DineIn"),iTO=h.indexOf("TakeOut"),iN=h.indexOf("NetSalesValue");
+  let di=0,to=0,net=0;for(const r of t.slice(1)){if(/^total/i.test((r[0]||"").trim()))continue;if(iDI>=0)di+=psNum(r[iDI]);if(iTO>=0)to+=psNum(r[iTO]);if(iN>=0)net+=psNum(r[iN]);}
+  return{rows:t.length-1,split:(di+to)>0,net,header:h};}
+if(typeof module!=="undefined")Object.assign(module.exports,{psInstoreLegacyLayout,psSummaryHasSplit});
 
 // ════════════════════════════════════════════════════════════════════════════
 // v535 POS SYNC — STEP 1 OF 4 (connection test). Replaces the desktop POS Uploader: the
@@ -25035,6 +25045,7 @@ function renderPosSync(){
   h+=posFlagsCardHTML(T,card,ct,btn);
   h+=posPullCardHTML(T,card,ct,btn);
   h+=posBackfillCardHTML(T,card,ct,btn);
+  h+=posInspectCardHTML(T,card,ct,btn);
   if(posSyncState.progress.length||posSyncState.results)h+=posResultsHTML(T,card,ct);
   if(ts){
     const row=(ok,title,body)=>`<div style="display:flex;gap:12px;align-items:flex-start;padding:12px;border-radius:10px;background:${ok?T.accentGreen+"14":T.accentRed+"14"};margin-bottom:8px"><div style="font-size:18px">${ok?"✅":"❌"}</div><div style="flex:1;min-width:0"><div style="font-weight:800">${title}</div><div style="font-size:12px;color:${T.textSecondary};margin-top:3px;word-break:break-word;line-height:1.5">${body}</div></div></div>`;
@@ -25111,6 +25122,7 @@ async function posStartPull(){
       if(!C.kept)day.warn.push("No delivery orders found in Credit Sales for this day");
       i=step(`${posFmtDate(iso)} — Sales Summary by Outlet (dine-in & takeaway)`);
       const sumCsv=await getSummary(iso);if(!sumCsv)throw new Error("Sales Summary by Outlet couldn't be pulled");sumCache[iso]=sumCsv;const I=psProcessInstore(sumCsv,D.instore);
+      const SP=psSummaryHasSplit(sumCsv);if(!SP.split){I.skip=true;day.warn.push("Microsys has no dine-in/takeaway split for this day — Dine-In & Takeaway tab not written");}
       I.warn.forEach(w=>day.warn.push(w));
       const it=Object.values(I.rows).reduce((a,o)=>({di:a.di+o.di.sales,to:a.to+o.to.sales,dd:a.dd+o.di.disc,td:a.td+o.to.disc,g:a.g+o.di.guests}),{di:0,to:0,dd:0,td:0,g:0});
       day.instore={di:psRound(it.di,2),to:psRound(it.to,2),dd:psRound(it.dd,2),td:psRound(it.td,2),guests:it.g};
@@ -25125,7 +25137,7 @@ async function posStartPull(){
       for(const b of brands){const tab=sr.tabs[b];if(!tab||tab.missing){day.warn.push(`Tab '${b}' not found — skipped`);continue;}
         const res=psCellsForBrand(tab.header,tab.ab,C.rows,D.rows,b,iso);
         (res.scaffolded?day.newRows:day.updatedRows).push(b);data.push(...psCellsToRanges(b,res.cells));}
-      {let tab=sr.tabs[PS_INSTORE_TAB];
+      if(!I.skip){let tab=sr.tabs[PS_INSTORE_TAB];
         if(!tab||tab.missing){await posApi("/api/pos/sheet/addtab",{sheet:P.sheet});const hd=psInstoreHeader();
           data.push({range:`'${PS_INSTORE_TAB}'!A1:${psColLetter(hd[0].length)}2`,values:hd});tab={header:hd,ab:hd.map(r=>r.slice(0,2))};day.warn.push("Created the 'Dine-In & Takeaway' tab");}
         const res=psCellsForInstore(tab.header,tab.ab,I.rows,iso);(res.scaffolded?day.newRows:day.updatedRows).push("Dine-In & Takeaway");data.push(...psCellsToRanges(PS_INSTORE_TAB,res.cells));}
@@ -25179,7 +25191,7 @@ function posResultsHTML(T,card,ct){
   }
   return h+`</div>`;
 }
-window.posStartPull=posStartPull;window.posStartBackfill=posStartBackfill;window.posBfSet=posBfSet;window.posFormatNow=posFormatNow;window.posBeforeUnload=posBeforeUnload;window.posFlagOk=posFlagOk;window.posRepull=posRepull;window.posSetPreset=posSetPreset;window.posSetCustom=posSetCustom;
+window.posStartPull=posStartPull;window.posInspect=posInspect;window.posStartBackfill=posStartBackfill;window.posBfSet=posBfSet;window.posFormatNow=posFormatNow;window.posBeforeUnload=posBeforeUnload;window.posFlagOk=posFlagOk;window.posRepull=posRepull;window.posSetPreset=posSetPreset;window.posSetCustom=posSetCustom;
 
 // ── v546 BACKFILL — dine-in & takeaway history into the Dine-In & Takeaway tab ONLY. The five
 // delivery tabs are never touched (they already hold the Uploader's history, incl. manual corrections).
@@ -25206,7 +25218,7 @@ async function posStartBackfill(){
   P.pulling=true;P.progress=[];P.results={sheet:P.sheet,days:[]};window.addEventListener("beforeunload",posBeforeUnload);
   const step=(t,st)=>{P.progress.push({t,st:st||"run"});renderPosSync();return P.progress.length-1;};
   const done=(i,st,t)=>{if(P.progress[i].st==="run"&&P.bar)P.bar.done=Math.min(P.bar.total,P.bar.done+1);P.progress[i].st=st;if(t)P.progress[i].t=t;renderPosSync();};
-  let ok=0,skipped=0,failed=0,written=0;const unknown=new Set();
+  let ok=0,skipped=0,failed=0,written=0,nodata=0,nosplit=0;const unknown=new Set();
   try{
     let i=step("Reading the Dine-In & Takeaway tab");
     const rd=async()=>{const sr=await posApi("/api/pos/sheet/read",{sheet:P.sheet,tabs:[PS_INSTORE_TAB]});const vr=(sr.google&&sr.google.valueRanges)||[];
@@ -25214,17 +25226,19 @@ async function posStartBackfill(){
     let tab=await rd();const data0=[];
     if(!tab){await posApi("/api/pos/sheet/addtab",{sheet:P.sheet});const hd=psInstoreHeader();data0.push({range:`'${PS_INSTORE_TAB}'!A1:${psColLetter(hd[0].length)}2`,values:hd});tab={header:hd,ab:hd.map(r=>r.slice(0,2))};}
     const have=new Set();tab.ab.forEach(r=>{const d=psParseLabel(r&&r[1]);if(d&&String(r[0]||"").trim())have.add(d);});
-    const anchor=psParseLabel(((tab.ab||[])[3]||[])[1]);
+    const legacy=psInstoreLegacyLayout(tab.ab);
+    const anchor=legacy?psParseLabel(((tab.ab||[])[3]||[])[1]):psParseLabel(((tab.ab||[])[2]||[])[1]);
     // If history must go BEFORE the tab's first day, re-lay the tab from the backfill start date:
     // clear the rows (formatting stays) and re-pull the days that were there, so all stays in date order.
     let extra=[];
-    if(anchor&&from<anchor){
+    if(legacy||(anchor&&from<anchor)){
       const existing=[...have].sort();extra=existing.filter(d=>d>to); // re-pulled into their new slots; the days in between stay empty until backfilled
-      done(i,"ok",`Tab starts ${posFmtDate(anchor)} — re-laying it from ${posFmtDate(from)} ${from.slice(0,4)} (the ${existing.length} day(s) already there are re-pulled)`);
+      if(legacy)extra=existing.filter(d=>d<from||d>to); // old layout: every day already there is re-pulled into the new layout
+      done(i,"ok",`${legacy?"Old layout (blank row 3 + gap rows)":"Tab starts "+posFmtDate(anchor)} — re-laying it from ${posFmtDate(from)} ${from.slice(0,4)} (the ${existing.length} day(s) already there are re-pulled)`);
       i=step("Clearing the Dine-In & Takeaway rows (formatting kept)");await posApi("/api/pos/sheet/clear-instore",{sheet:P.sheet});
       tab.ab=tab.ab.slice(0,2);have.clear();done(i,"ok");
     }else done(i,"ok",`Tab has ${have.size} day(s) already — those are skipped`);
-    const dates=[];for(let d=from;d<=to;d=posAddDays(d,1))dates.push(d);dates.push(...extra);
+    const dates=[];extra.filter(d=>d<from).sort().forEach(d=>dates.push(d));for(let d=from;d<=to;d=posAddDays(d,1))dates.push(d);dates.push(...extra.filter(d=>d>to).sort());
     P.bar={total:dates.length+1,done:0,start:Date.now(),day:0,days:dates.length,finished:false,failed:0};renderPosSync();
     let pending=data0.slice();
     const flush=async()=>{if(!pending.length)return;const wi=step(`Writing ${written?"next ":""}days to the sheet`);P.bar.done=Math.max(0,P.bar.done-1);
@@ -25236,6 +25250,9 @@ async function posStartBackfill(){
       const di=step(`${posFmtDate(iso)} ${iso.slice(0,4)} — Sales Summary + discounts`);
       try{
         const[sum,disc]=await Promise.all([posApi("/api/pos/report",{kind:"summary",date:iso}),posApi("/api/pos/report",{kind:"disc",date:iso})]);
+        const sp=psSummaryHasSplit(sum.csv);
+        if(!sp.rows){nodata++;done(di,"err",`${posFmtDate(iso)} ${iso.slice(0,4)} — no Sales Summary rows in Microsys for this day — not written`);continue;}
+        if(!sp.split){nosplit++;done(di,"err",`${posFmtDate(iso)} ${iso.slice(0,4)} — Microsys has net sales (AED ${Math.round(sp.net).toLocaleString()}) but no dine-in/takeaway split for this day — not written`);continue;}
         const D=psProcessDisc(disc.csv),I=psProcessInstore(sum.csv,D.instore);
         I.warn.forEach(w=>{const m=w.match(/Unknown POS location '([^']+)'/);if(m)unknown.add(m[1]);});
         const res=psCellsForInstore(tab.header,tab.ab,I.rows,iso);pending.push(...psCellsToRanges(PS_INSTORE_TAB,res.cells));
@@ -25250,7 +25267,7 @@ async function posStartBackfill(){
     await flush();
     const fi=step("Formatting the Dine-In & Takeaway tab like the delivery tabs");
     try{await posFormatInstore(P.sheet);done(fi,"ok");}catch(e){done(fi,"err","Formatting failed: "+e.message+" — use 🎨 Re-apply sheet formatting");}
-    step(`Done — ${ok} day(s) written, ${skipped} already there and skipped${failed?`, ${failed} failed (run the same range again to retry them)`:""}`,failed?"err":"ok");
+    step(`Done — ${ok} day(s) written, ${skipped} already there and skipped${nosplit?`, ${nosplit} without a dine-in/takeaway split in Microsys`:""}${nodata?`, ${nodata} with no POS data`:""}${failed?`, ${failed} failed (run the same range again to retry them)`:""}`,failed||nosplit||nodata?"err":"ok");
     if(unknown.size)step(`⚠ Not written — POS locations with no row in the tab: ${[...unknown].join(", ")}. Tell Claude which row they belong to.`,"err");
   }catch(e){step("❌ Backfill stopped: "+e.message,"err");failed++;}
   P.pulling=false;if(P.bar){P.bar.done=P.bar.total;P.bar.finished=true;P.bar.failed=failed;P.bar.end=Date.now();}
@@ -25259,3 +25276,22 @@ async function posStartBackfill(){
   try{await posApi("/api/pos/log",{kind:"backfill",sheet:P.sheet,dates:from+" → "+to,result:`${ok} written, ${skipped} skipped${failed?", "+failed+" failed":""}`});}catch(e){}
   await posLoadStatus();
 }
+
+// ── v547 RAW REPORT CHECK — shows exactly what Microsys returns for one report on one day (read-only),
+// so a day that comes out empty can be diagnosed without opening the portal.
+function posInspectCardHTML(T,card,ct,btn){
+  const P=posSyncState,y=posAddDays(posDubaiToday(),-1),d=P.in_date||y,k=P.in_kind||"summary";
+  const sel=`<select onchange="posBfSet('in_kind',this.value)" style="padding:6px 8px;border-radius:6px;border:1px solid ${T.cardBorder};background:${T.bg};color:${T.textPrimary};font:inherit;font-size:12px">${[["summary","Sales Summary by Outlet"],["disc","Sales Discount Details"],["credit","Credit Sales"]].map(([v,l])=>`<option value="${v}" ${k===v?"selected":""}>${l}</option>`).join("")}</select>`;
+  let h=`<div style="${card}"><div style="${ct}">🔍 Check a raw Microsys report</div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px"><input type="date" max="${y}" value="${d}" onchange="posBfSet('in_date',this.value)" style="padding:6px 8px;border-radius:6px;border:1px solid ${T.cardBorder};background:${T.bg};color:${T.textPrimary};font:inherit;font-size:12px;color-scheme:dark">${sel}${btn(P.in_busy?"⏳ Loading…":"Show","posInspect()",false,!!P.in_busy)}</div>`;
+  const R=P.in_res;
+  if(R&&R.err)h+=`<div style="color:${T.accentRed};font-size:12px">${esc(R.err)}</div>`;
+  else if(R){const t=psParseCSV(R.csv||"");const hd=t[0]||[];const body=t.slice(1);
+    const sums=hd.map((_,i)=>{let s=0,num=0;body.forEach(r=>{const v=parseFloat(String(r[i]||"").replace(/,/g,""));if(!isNaN(v)){s+=v;num++;}});return num===body.length&&body.length?psRound(s,2):"";});
+    h+=`<div style="font-size:12px;color:${T.textSecondary};margin-bottom:6px">${esc(R.kind)} · ${posFmtDate(R.date)} ${R.date.slice(0,4)} · ${body.length} row(s)</div><div style="overflow-x:auto;max-height:420px"><table style="border-collapse:collapse;font-size:11.5px;color:${T.textPrimary}"><tr>${hd.map(x=>`<th style="text-align:left;padding:5px 8px;border-bottom:1px solid ${T.cardBorder};color:${T.textSecondary};white-space:nowrap">${esc(x)}</th>`).join("")}</tr>`+
+      body.slice(0,40).map(r=>`<tr>${hd.map((_,i)=>`<td style="padding:4px 8px;border-bottom:1px solid ${T.cardBorder}55;white-space:nowrap">${esc(r[i]||"")}</td>`).join("")}</tr>`).join("")+
+      `<tr>${sums.map((x,i)=>`<td style="padding:5px 8px;font-weight:800;white-space:nowrap">${i===0?"Sum":x===""?"":x.toLocaleString()}</td>`).join("")}</tr></table></div>${body.length>40?`<div style="font-size:11px;color:${T.textMuted};margin-top:4px">First 40 of ${body.length} rows shown; Sum covers all rows.</div>`:""}`;}
+  return h+`</div>`;
+}
+async function posInspect(){const P=posSyncState,y=posAddDays(posDubaiToday(),-1),d=P.in_date||y,k=P.in_kind||"summary";P.in_busy=true;renderPosSync();
+  try{const r=await posApi("/api/pos/report",{kind:k,date:d});P.in_res={kind:{summary:"Sales Summary by Outlet",disc:"Sales Discount Details",credit:"Credit Sales"}[k],date:d,csv:r.csv};}
+  catch(e){P.in_res={err:e.message};}P.in_busy=false;renderPosSync();}
