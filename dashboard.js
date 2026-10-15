@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-15-555";
+const BUILD_VERSION="2026-10-15-562";
 const BUILD_NOTES=[
+  "🧭 DASHBOARD REDESIGN, PART 2 — NEW MENU, CLEARER PAGES, DINE-IN DISCOUNTS. (1) New menu (design 2 · Channel colours): Today (Overview) → Delivery (Performance: Brands · Outlets · Platforms; Marketing: Promotions · Advertising; Service: KPI tracker · Cancellations · Feedback) → In-store (Guests & spend; Discounts & ROI) → Analyse (Compare) → Tools (POS Sync; Admin). Line icons, a colour per section, sub-pages open under the active item, a sliding highlight, red badges only when something needs attention (high-priority data checks, POS low-sales flags), and entrance/hover animations; the phone menu lists the same. (2) Pages by channel: Overview and Compare show any mix of Delivery / Dine-in / Takeaway (channel chips); the Delivery pages are delivery-only; the In-store pages are in-store only. Overview = Group sales headline (animated count-up), outlets ranked across all channels, channel mix over time and what the delivery-only brands add to each kitchen; the All Brands / All Platforms tables moved to Brands and Platforms. (3) Filters in one tidy toolbar on every page: Channels · Compare · Filter on top, Period below. (4) Marketing tabs renamed Promotions and Advertising. (5) New In-store → Discounts & ROI: every in-store discount (Entertainer, Esaad, Z Pro, Careem Dine Out, Happy Tuesday, BOD, staff…) with checks, discount given, sales on those checks, average check vs the normal dine-in check, depth and return per AED 1; trend and outlet × discount matrix. POS Sync now also fills a new 'Dine-In Discounts' tab (daily Pull and Backfill) from Microsys Sales Discount Details. (6) Charts, bars and headline numbers animate in.",
   "🍔 AL REEF DINE-IN & TAKEAWAY = SMOKEYS — per Nikhil: at Al Reef (AUH) the dine-in and takeaway sales belong to Smokeys; Oregano, Lollorosso and Wicked Wings only deliver from there. With All sales on, Al Reef's dine-in/takeaway now count under Smokeys (Brands, Platforms, Compare). Each site now has a front-of-house brand (Oregano by default, Fyoozhen at DIP Fyoozhen/NAS/WTC, Smokeys at Al Reef); the All Channels card is now 'What the delivery-only brands add to each kitchen' — every brand that only delivers from a site counts there (e.g. Oregano at Al Reef, Fyoozhen at Al Forsan) — and the Overview headline splits front-of-house vs delivery-only brands the same way.",
   "🔤 POS SYNC: SAME FONT ON EVERY DAY OF THE DINE-IN TAB — days formatted at different times had different fonts and sizes (older days had copied the Oregano font, newer ones only the size). Formatting now reads the exact font, size, bold, alignment and number format of a real Oregano day (outlet row and Total row) and applies it to EVERY day of the Dine-In & Takeaway tab, so all days look the same and match the delivery tabs. Needs the new worker.js (read-only route that reads cell formats).",
   "🎨 POS SYNC: LIVE DINE-IN TAB NOT FORMATTED — the formatting step copied its look from rows of the Oregano tab, and Google refuses to copy from rows that a filter on that tab is hiding (the LIVE Oregano tab has a filter; TEST doesn't). The Dine-In & Takeaway tab is now formatted directly — white rows, black cell lines, thick frames around Dine-In / Takeaway / Total, green Branch·Date·Day on Total rows, the delivery tabs' number formats — so filters on any tab can't break it.",
@@ -4982,6 +4983,7 @@ async function doLoad(){
   buildDataIndex();
   if(typeof lensReset==="function")lensReset(); // v551: delivery data reloaded — the All-sales switch re-applies on the next render
   if(typeof loadInstoreData==="function")loadInstoreData(); // v551: Dine-In & Takeaway tab (async, non-blocking)
+  if(typeof loadDinDiscData==="function")loadDinDiscData(); // v556: Dine-In Discounts tab
   // Restore any previously-uploaded exact-discount data from localStorage (both aggregators)
   loadKeetaFromStorage();
   loadCareemFromStorage();
@@ -5202,7 +5204,7 @@ function buildSidebarNav(){
     // (campTab==='discounts'), not a standalone page. The tab itself is deleted from the DOM
     // outright by removeDiscountBurnTab() before this function ever runs, so it wouldn't reach
     // ORDER's mapping anyway — removed here too so ORDER stays an accurate list of real pages.
-    const ORDER=["overview","channels","outlets","compare","brands","platforms","cpc","campaigns","kpi","cancellations","feedback","dinein","possync"]; // v551 grouped: Group · Delivery · Dine-in · Tools
+    const ORDER=["overview","channels","outlets","compare","brands","platforms","cpc","campaigns","kpi","cancellations","feedback","dinein","dindisc","possync"]; // v551 grouped: Group · Delivery · Dine-in · Tools
     const byPg={};
     tabs.forEach(t=>{if(t.dataset.pg)byPg[t.dataset.pg]=t;});
     const orderedTabs=ORDER.map(id=>byPg[id]).filter(Boolean);
@@ -6054,7 +6056,7 @@ function mNavGo(page){
 // dark theme one at a time. Adding a page here is the ONLY change needed at the dispatcher —
 // each page's own render function still needs its own scoped style override and theme-aware
 // calls, same as Overview's build.
-const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare","discounts","kpi","campaigns","feedback","cpc","possync","channels","dinein"]);
+const DARK_PAGES=new Set(["overview","brands","outlets","cancellations","platforms","compare","discounts","kpi","campaigns","feedback","cpc","possync","channels","dinein","dindisc"]);
 function renderPage(p){
   // v286: fixes the profitability explainer (and, it turns out, every campaign popup before it)
   // not appearing at all for anyone who hadn't visited the Campaigns page first in that browser
@@ -6068,7 +6070,7 @@ function renderPage(p){
   // unconditionally, on every single page render, is free after the first call and guarantees
   // it's ready no matter which page loads first.
   initCalcTip();
-  _darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();else if(p==="cancellations")renderCancellations();else if(p==="feedback")renderFeedback();else if(p==="possync")renderPosSync();else if(p==="channels")renderChannels();else if(p==="dinein")renderDineIn();
+  _darkPage=DARK_PAGES.has(p);document.body.style.background=_darkPage?DARK_THEME.bg:"";if(p==="overview")renderOverview();else if(p==="brands")renderBrands();else if(p==="outlets")renderOutlets();else if(p==="platforms")renderPlatforms();else if(p==="cpc")renderCPC();else if(p==="campaigns")renderCampaigns();else if(p==="discounts")renderDiscounts();else if(p==="kpi")renderKPI();else if(p==="compare")renderCompare();else if(p==="cancellations")renderCancellations();else if(p==="feedback")renderFeedback();else if(p==="possync")renderPosSync();else if(p==="channels")renderChannels();else if(p==="dinein")renderDineIn();else if(p==="dindisc")renderDinDisc();
   // v460: real bug Nikhil caught — "1 didn't work at all". The count-up was hooked into gp(),
   // but gp() is only ONE of several callers of this same renderPage() dispatcher (the tab-click
   // handler) — fApply/fToggle/fClear (filters), sortTableBy, dismissRec/undismissRec, and
@@ -24962,6 +24964,22 @@ function psInstorePlace(ab,iso){const bl=psInstoreBlocks(ab);const ex=bl.find(b=
   const nx=bl.filter(b=>b.iso>iso).sort((a,b)=>a.row-b.row)[0];if(nx)return{row:nx.row,insert:true};return{append:true};}
 if(typeof module!=="undefined")Object.assign(module.exports,{psInstoreBlocks,psInstorePlace});
 
+// v562: DINE-IN DISCOUNTS — every in-store discount line of Microsys "Sales Discount Details" for one day:
+// Text15 = discount name, Text1 = location, Text38 = checks, Text7 = discount, Text13 = net sales, Text17 = gross sales
+// of the checks that used it. "In-store" = the lines psProcessDisc does NOT book to a delivery brand × aggregator.
+const PS_DD_TAB="Dine-In Discounts",PS_DD_HEAD=["Date","Outlet","Discount name","Checks","Discount AED","Net sales","Gross sales"];
+function psDiscInstoreRows(csv){
+  const t=psParseCSV(csv||"");if(!t.length)return[];const h=t[0].map(x=>x.trim());
+  const ix=(c,pos)=>{for(const x of c){const i=h.indexOf(x);if(i>=0)return i;}return pos;};
+  const iN=ix(["Text15","Text16"],0),iB=ix(["Text1","Text12"],1),iC=ix(["Text38"],2),iV=ix(["Text7","Text5"],3),iNet=ix(["Text13"],4),iG=ix(["Text17"],5);
+  const out=[];
+  for(const r of t.slice(1)){const n=(r[iN]||"").trim(),loc=(r[iB]||"").trim();if(!n||!loc||/^total/i.test(n))continue;
+    if(psGetDiscBrand(n,loc)&&psGetDiscAgg(n)&&PS_LOCATION_MAP[loc])continue; // a delivery discount → already in the brand tabs
+    out.push({outlet:PS_INSTORE_MAP[loc]||loc,name:n,checks:psNum(r[iC]),disc:psRound(psNum(r[iV]),2),net:psRound(psNum(r[iNet]),2),gross:psRound(psNum(r[iG]),2)});}
+  return out;
+}
+if(typeof module!=="undefined")Object.assign(module.exports,{psDiscInstoreRows,PS_DD_TAB,PS_DD_HEAD});
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // v535 POS SYNC — STEP 1 OF 4 (connection test). Replaces the desktop POS Uploader: the
@@ -25021,6 +25039,20 @@ async function posInstorePrep(sheet,tab,iso){
   const n=PS_INSTORE_PERIOD();
   await posApi("/api/pos/sheet/batch",{sheet,requests:[{insertDimension:{range:{sheetId:posInstoreSheetIds[sheet],dimension:"ROWS",startIndex:pl.row-1,endIndex:pl.row-1+n},inheritFromBefore:false}}]});
   tab.ab.splice(pl.row-1,0,...Array.from({length:n},()=>["",""]));return pl.row;
+}
+// v562: writer for the Dine-In Discounts tab (long format, one row per day × outlet × discount). A re-pulled day's old
+// rows are blanked and the new ones appended at the end, so pulls and backfills can run in any order.
+async function posDDWriter(sheet){
+  const rd=async()=>{const sr=await posApi("/api/pos/sheet/read",{sheet,tabs:[PS_DD_TAB]});const vr=(sr.google&&sr.google.valueRanges)||[];return (sr.present||[]).includes(PS_DD_TAB)?((vr[1]&&vr[1].values)||[]):null;};
+  let ab=await rd();const W={created:false};
+  if(!ab){await posApi("/api/pos/sheet/addtab",{sheet,tab:PS_DD_TAB});ab=[];W.created=true;}
+  let next=ab.length+1;if(next<2)next=2;
+  W.queue=(iso,rows)=>{const lbl=psDateLabels(iso).label,out=[];if(W.created&&!W.head){out.push({range:`'${PS_DD_TAB}'!A1:G1`,values:[PS_DD_HEAD]});W.head=true;}
+    for(let i=1;i<ab.length;i++){if(String((ab[i]||[])[0]||"").trim()===lbl){out.push({range:`'${PS_DD_TAB}'!A${i+1}:G${i+1}`,values:[["","","","","","",""]]});ab[i]=["",""];}}
+    if(rows.length){out.push({range:`'${PS_DD_TAB}'!A${next}:G${next+rows.length-1}`,values:rows.map(x=>[lbl,x.outlet,x.name,x.checks,x.disc,x.net,x.gross])});
+      rows.forEach((x,k)=>{ab[next-1+k]=[lbl,x.outlet];});next+=rows.length;}
+    return out;};
+  return W;
 }
 // v544: copy the Oregano tab's look (borders, fills, fonts, number formats, widths, frozen panes) onto the Dine-In & Takeaway tab
 async function posFormatInstore(sheet){
@@ -25171,7 +25203,7 @@ async function posStartPull(){
   window.addEventListener("beforeunload",posBeforeUnload);renderPosSync();
   const step=(t,st)=>{P.progress.push({t,st:st||"run"});renderPosSync();return P.progress.length-1;};
   const done=(i,st,t)=>{if(P.progress[i].st==="run"&&P.bar)P.bar.done=Math.min(P.bar.total,P.bar.done+1);P.progress[i].st=st;if(t)P.progress[i].t=t;renderPosSync();};
-  let okDays=0,failDays=0;const sumCache={};
+  let okDays=0,failDays=0,ddW=null;const sumCache={};
   const getSummary=async d=>{if(sumCache[d]==null){try{sumCache[d]=(await posApi("/api/pos/report",{kind:"summary",date:d})).csv;}catch(e){sumCache[d]="";}}return sumCache[d];};
   P.stop=false;
   for(const iso of dates){
@@ -25209,8 +25241,9 @@ async function posStartPull(){
         if(!tab||tab.missing){await posApi("/api/pos/sheet/addtab",{sheet:P.sheet});const hd=psInstoreHeader();
           data.push({range:`'${PS_INSTORE_TAB}'!A1:${psColLetter(hd[0].length)}2`,values:hd});tab={header:hd,ab:hd.map(r=>r.slice(0,2))};day.warn.push("Created the 'Dine-In & Takeaway' tab");}
         const at=await posInstorePrep(P.sheet,tab,iso);const res=psCellsForInstore(tab.header,tab.ab,I.rows,iso,at);(res.scaffolded?day.newRows:day.updatedRows).push("Dine-In & Takeaway");data.push(...psCellsToRanges(PS_INSTORE_TAB,res.cells));}
+      try{if(!ddW)ddW=await posDDWriter(P.sheet);const dd=psDiscInstoreRows(dr.csv);data.push(...ddW.queue(iso,dd));day.ddRows=dd.length;}catch(e){day.warn.push("Dine-In Discounts tab not updated: "+e.message);}
       done(i,"ok");
-      if(data.length){i=step(`${posFmtDate(iso)} — Writing ${brands.length} brand tab(s) + Dine-In & Takeaway`);
+      if(data.length){i=step(`${posFmtDate(iso)} — Writing ${brands.length} brand tab(s) + Dine-In & Takeaway + Dine-In Discounts`);
         const wr=await posApi("/api/pos/sheet/write",{sheet:P.sheet,data});day.cells=wr.updatedCells;
         done(i,"ok",`${posFmtDate(iso)} — Wrote ${wr.updatedCells.toLocaleString()} cells (${day.newRows.length?"new rows: "+day.newRows.join(", "):""}${day.newRows.length&&day.updatedRows.length?" · ":""}${day.updatedRows.length?"updated: "+day.updatedRows.join(", "):""})`);}
       okDays++;
@@ -25313,7 +25346,7 @@ async function posStartBackfill(){
     }else done(i,"ok",`Tab has ${have.size} day(s) already — those are skipped`);
     const dates=[];extra.filter(d=>d<from).sort().forEach(d=>dates.push(d));for(let d=from;d<=to;d=posAddDays(d,1))dates.push(d);dates.push(...extra.filter(d=>d>to).sort());
     P.bar={total:dates.length+1,done:0,start:Date.now(),day:0,days:dates.length,finished:false,failed:0};renderPosSync();
-    let pending=data0.slice();
+    let pending=data0.slice();let ddW=null;try{ddW=await posDDWriter(P.sheet);}catch(e){step("Dine-In Discounts tab couldn't be prepared ("+e.message+") — only Dine-In & Takeaway will be written","err");}
     const flush=async()=>{if(!pending.length)return;const wi=step(`Writing ${written?"next ":""}days to the sheet`);P.bar.done=Math.max(0,P.bar.done-1);
       const wr=await posApi("/api/pos/sheet/write",{sheet:P.sheet,data:pending});pending=[];done(wi,"ok",`Wrote ${wr.updatedCells.toLocaleString()} cells (${ok} day(s) so far)`);};
     let sinceFlush=0;
@@ -25335,6 +25368,7 @@ async function posStartBackfill(){
         if(!sp.rows){nodata++;done(di,"err",`${posFmtDate(iso)} ${iso.slice(0,4)} — no Sales Summary rows in Microsys for this day — not written`);continue;}
         if(!sp.split){nosplit++;done(di,"err",`${posFmtDate(iso)} ${iso.slice(0,4)} — Microsys has net sales (AED ${Math.round(sp.net).toLocaleString()}) but no dine-in/takeaway split for this day — not written`);continue;}
         const D=psProcessDisc(disc.csv),I=psProcessInstore(sum.csv,D.instore);
+        if(ddW)pending.push(...ddW.queue(iso,psDiscInstoreRows(disc.csv)));
         I.warn.forEach(w=>{const m=w.match(/Unknown POS location '([^']+)'/);if(m)unknown.add(m[1]);});
         const at=await posInstorePrep(P.sheet,tab,iso);const res=psCellsForInstore(tab.header,tab.ab,I.rows,iso,at);pending.push(...psCellsToRanges(PS_INSTORE_TAB,res.cells));
         // keep the local copy of column A:B in step with what will be written
@@ -25450,7 +25484,7 @@ function injectChannelsTab(){
     const tabs=document.querySelectorAll(".tab");
     if(tabs.length){const btn=document.createElement(tabs[0].tagName.toLowerCase());btn.className="tab";btn.innerHTML=label;btn.dataset.pg=id;btn.onclick=()=>gp(id);
       const last=tabs[tabs.length-1];last.parentNode.insertBefore(btn,last.nextSibling);}};
-  add("channels","🍽️ All Channels");add("dinein","🪑 Dine-In & Takeaway");
+  add("channels","🍽️ All Channels");add("dinein","🪑 Dine-In & Takeaway");add("dindisc","🎟️ Dine-in discounts");
 }
 // One period's numbers, per outlet and in total. vat factor applied to sales only.
 function chAggregate(s,e,allOutlets){
@@ -25530,7 +25564,7 @@ function renderChannels(){
   const heads=["Outlet",`<span style="color:${CH_CLR.Delivery}">Delivery</span>`,`<span style="color:${CH_CLR["Dine-In"]}">Dine-In</span>`,`<span style="color:${CH_CLR.Takeaway}">Takeaway</span>`,"Total","Mix","Guests","Spend / guest","Disc. %",`Δ Total <span style="font-weight:400;color:${T.textMuted}">${compShort}</span>`];
   const rankOf={};outlets.slice().sort((a,b)=>curA.sum(curA.by[b])-curA.sum(curA.by[a])).forEach((o,i)=>rankOf[o]=i+1);
   const rows=outlets.map(o=>{const c=curA.by[o],p=prevA.by[o],t=curA.sum(c),pt=p?curA.sum(p):0,disc=CH_LIST.reduce((a,x)=>a+c[x].disc,0);const dsc=(t+disc)>0?disc/(t+disc)*100:0;
-    const mix=`<div class="ch-share" style="width:110px;height:8px">${CH_LIST.map(x=>`<div title="${x} ${t>0?(c[x].sales/t*100).toFixed(0):0}%" style="width:${t>0?c[x].sales/t*100:0}%;background:${CH_CLR[x]}"></div>`).join("")}</div>`;
+    const mix=`<div class="ch-share rd-grow" style="width:110px;height:8px">${CH_LIST.map(x=>`<div title="${x} ${t>0?(c[x].sales/t*100).toFixed(0):0}%" style="width:${t>0?c[x].sales/t*100:0}%;background:${CH_CLR[x]}"></div>`).join("")}</div>`;
     const m=v=>v>0?fmtAEDTip(v):`<span style="color:${T.textMuted}">—</span>`;
     return{cells:[`<span class="ch-row" onclick="chSet('outlet','${esc(o)}')" style="font-weight:800;${chState.outlet===o?`color:${T.accentOrange}`:""}"><span style="display:inline-block;min-width:22px;color:${rankOf[o]<=3?T.accentOrange:T.textMuted};font-variant-numeric:tabular-nums">${rankOf[o]}</span>${esc(o)}${AUH.has(o)?` <span style="font-size:10px;color:${T.textMuted}">AUH</span>`:""}</span>`,
       m(c.Delivery.sales),m(c["Dine-In"].sales),m(c.Takeaway.sales),`<strong>${fmtAEDTip(t)}</strong>`,mix,
@@ -25563,7 +25597,9 @@ window.renderChannels=renderChannels;window.chSet=chSet;window.injectChannelsTab
 // sites (DIP Fyoozhen, NAS, WTC) → Fyoozhen; everywhere else → Oregano. Pages that are about
 // delivery platforms only (Ads, Campaigns, KPI, Cancellations, Feedback) always use delivery data.
 // ════════════════════════════════════════════════════════════════════════════
-const LENS_PAGES=new Set(["overview","brands","outlets","platforms","compare"]);
+// v559: channel split by page — Overview & Compare show any mix of channels; the Delivery pages (Brands/Outlets/Platforms)
+// are delivery-only, and the Dine-In & Takeaway pages are in-store only.
+const LENS_PAGES=new Set(["overview","compare"]);
 const LENS_CH=["Dine-In","Takeaway"];
 const LENS_FYZ_SITES=new Set(["DIP (Fyoozhen)","NAS","WTC"]);
 // v555: which brand a site's dine-in & takeaway belongs to (its front-of-house brand). Default Oregano.
@@ -25571,7 +25607,15 @@ const LENS_FYZ_SITES=new Set(["DIP (Fyoozhen)","NAS","WTC"]);
 const INSTORE_SITE_BRAND={"DIP (Fyoozhen)":"Fyoozhen","NAS":"Fyoozhen","WTC":"Fyoozhen","Al Reef":"Smokeys"};
 function instoreBrandOf(site){return INSTORE_SITE_BRAND[site]||"Oregano";}
 let lensMode="delivery",lensBase=null,lensApplied="delivery",lensVer=0;
-try{lensMode=localStorage.getItem("oregano_channel_lens")||"delivery";}catch(e){}
+// v556: channels shown = any combination of Delivery (D), Dine-in (I), Takeaway (T). lensMode stays as the summary
+// "delivery" (D only) / "all" (any in-store channel included) that the profitability guards etc. read.
+let lensSel=new Set(["D"]);
+try{const v=localStorage.getItem("oregano_channel_sel")||(localStorage.getItem("oregano_channel_lens")==="all"?"DIT":"D");lensSel=new Set(String(v).split("").filter(c=>"DIT".includes(c)));if(!lensSel.size)lensSel.add("D");}catch(e){}
+function lensSelKey(){return["D","I","T"].filter(c=>lensSel.has(c)).join("");}
+function lensRecalcMode(){lensMode=lensSelKey()==="D"?"delivery":"all";}
+lensRecalcMode();
+const LENS_CH_KEY={D:"Delivery",I:"Dine-In",T:"Takeaway"};
+function lensChannelsShown(){return["D","I","T"].filter(c=>lensSel.has(c)).map(c=>LENS_CH_KEY[c]);}
 function lensInstoreRecords(){
   const out=[];
   for(const r of (typeof instoreData!=="undefined"?instoreData:[])){
@@ -25585,11 +25629,13 @@ function lensInstoreRecords(){
 // Swap allData for the page about to render. Cheap: concat + index rebuild only when it changes.
 function lensSync(page){
   if(!lensBase)lensBase=allData.filter(r=>r.channel!=="instore");
-  const want=(lensMode==="all"&&LENS_PAGES.has(page))?"all":"delivery";
-  const key=want==="all"?"all:"+lensVer:"delivery"; // re-applies when the Dine-In & Takeaway tab (re)loads
+  const sel=LENS_PAGES.has(page)?lensSelKey():"D";
+  const key=sel==="D"?"delivery":sel+":"+lensVer; // re-applies when the Dine-In & Takeaway tab (re)loads
   if(key===lensApplied)return;
-  allData=want==="all"?lensBase.concat(lensInstoreRecords()):lensBase;
-  LENS_CH.forEach(c=>{const i=AGGS.indexOf(c);if(want==="all"&&i<0)AGGS.push(c);if(want!=="all"&&i>=0)AGGS.splice(i,1);});
+  const ins=sel==="D"?[]:lensInstoreRecords().filter(r=>(r.aggregator==="Dine-In"&&sel.includes("I"))||(r.aggregator==="Takeaway"&&sel.includes("T")));
+  allData=sel.includes("D")?(ins.length?lensBase.concat(ins):lensBase):ins;
+  const want={"Dine-In":sel.includes("I"),"Takeaway":sel.includes("T")};
+  LENS_CH.forEach(c=>{const i=AGGS.indexOf(c);if(want[c]&&i<0)AGGS.push(c);if(!want[c]&&i>=0)AGGS.splice(i,1);});
   buildDataIndex();lensApplied=key;
 }
 // Called right after the dashboard (re)loads delivery data: forget the old copy so the next page render re-applies the lens.
@@ -25598,29 +25644,40 @@ function lensReset(){lensBase=null;lensApplied="delivery";LENS_CH.forEach(c=>{co
 function lensDeliveryOnly(fn){if(lensApplied==="delivery")return fn();const page=curPage;lensSync("__delivery");try{return fn();}finally{lensSync(page);}}
 function lensDelSales(recs){let s=0;for(const r of recs||[])if(r.channel!=="instore")s+=r.sales||0;return s;}
 function lensProfNote(){return lensMode==="all"&&LENS_PAGES.has(curPage)?' · <span title="Dine-in & takeaway profitability is hidden until site costs (rent, staff, utilities) are added">delivery only</span>':"";}
-function lensSet(m){lensMode=m;try{localStorage.setItem("oregano_channel_lens",m);}catch(e){}lensSync(curPage);Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);lensHeaderPaint();}
+function lensApply(){lensRecalcMode();try{localStorage.setItem("oregano_channel_sel",lensSelKey());}catch(e){}lensSync(curPage);Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);lensHeaderPaint();}
+function lensToggle(c){if(lensSel.has(c)){if(lensSel.size===1)return;lensSel.delete(c);}else lensSel.add(c);lensApply();}
+function lensOnly(c){lensSel=new Set([c]);lensApply();}
+function lensAll(){lensSel=new Set(["D","I","T"]);lensApply();}
+// kept for older calls: "delivery" → D only, "all" → all three
+function lensSet(m){lensSel=new Set(m==="all"?["D","I","T"]:["D"]);lensApply();}
 function lensControlHTML(){
   const T=DARK_THEME,on=LENS_PAGES.has(curPage);
   if(!on)return`<span style="font-size:11px;font-weight:700;color:${T.textMuted}" title="This page is about delivery platforms only">🛵 Delivery only</span>`;
-  const b=(m,l,tip)=>`<button title="${tip}" onclick="lensSet('${m}')" style="border:none;padding:5px 11px;font-size:11px;font-weight:800;cursor:pointer;background:${lensMode===m?T.accentOrange+"26":T.bg};color:${lensMode===m?T.accentOrange:T.textSecondary}">${l}</button>`;
-  return`<span style="display:inline-flex;border:1px solid ${T.cardBorder};border-radius:7px;overflow:hidden">${b("delivery","🛵 Delivery","Delivery platforms only")}${b("all","🍽️ All sales","Delivery + dine-in + takeaway")}</span>`;
+  const clr={D:"#4E9BFF",I:"#FF8A3D",T:"#A78BFA"},lbl={D:"🛵 Delivery",I:"🍽️ Dine-in",T:"🥡 Takeaway"};
+  const chip=c=>{const on=lensSel.has(c);return`<button onclick="lensToggle('${c}')" ondblclick="lensOnly('${c}')" title="${on?"Click to hide":"Click to add"} ${LENS_CH_KEY[c]} · double-click to show only ${LENS_CH_KEY[c]}" style="display:inline-flex;align-items:center;gap:6px;border:1px solid ${on?clr[c]:T.cardBorder};border-radius:7px;padding:5px 11px;font-size:11.5px;font-weight:800;cursor:pointer;background:${on?clr[c]+"22":T.bg};color:${on?T.textPrimary:T.textMuted}"><span style="width:12px;height:12px;border-radius:3px;border:2px solid ${clr[c]};background:${on?clr[c]:"transparent"};display:inline-block"></span>${lbl[c]}</button>`;};
+  const all=lensSel.size===3;
+  return`<span style="display:inline-flex;gap:6px;flex-wrap:wrap;align-items:center">${["D","I","T"].map(chip).join("")}<button onclick="lensAll()" style="border:1px solid ${all?T.accentOrange:T.cardBorder};border-radius:7px;padding:5px 11px;font-size:11.5px;font-weight:800;cursor:pointer;background:${all?T.accentOrange+"22":"transparent"};color:${all?T.accentOrange:T.textSecondary}">All 3</button></span>`;
 }
+function lensSummaryHTML(){const T=DARK_THEME;
+  if(curPage==="dinein"||curPage==="dindisc")return`<span style="font-size:11px;font-weight:700;color:${T.textMuted}">🍽️ Dine-in &amp; takeaway</span>`;
+  if(curPage==="channels")return`<span style="font-size:11px;font-weight:700;color:${T.textMuted}">All channels</span>`;
+  if(!LENS_PAGES.has(curPage))return`<span style="font-size:11px;font-weight:700;color:${T.textMuted}">🛵 Delivery only</span>`;
+  return`<span style="font-size:11px;font-weight:700;color:${T.textSecondary}">Showing: <span style="color:${T.textPrimary}">${lensSel.size===3?"All channels":lensChannelsShown().join(" + ")}</span></span>`;}
 // Header switch (top bar, next to Refresh) — visible on every page.
 function lensHeaderPaint(){
   let el=document.getElementById("lens-hdr");
   const ts=document.getElementById("ts-label");if(!ts)return;
   if(!el){el=document.createElement("span");el.id="lens-hdr";el.style.cssText="margin-right:10px;display:inline-flex;align-items:center";ts.parentNode.insertBefore(el,ts);}
-  el.innerHTML=lensControlHTML();
+  el.innerHTML=lensSummaryHTML();
 }
 (function lensHook(){
   if(typeof renderPage!=="function"||typeof makeFilterBar!=="function")return setTimeout(lensHook,200);
   const _rp=renderPage;renderPage=function(p){try{if(typeof allData!=="undefined"&&allData.length)lensSync(p);}catch(e){}_rp(p);lensHeaderPaint();};window.renderPage=renderPage;
-  const _mf=makeFilterBar;makeFilterBar=function(o){const h=_mf(o);if(!LENS_PAGES.has(curPage))return h;
-    return h.replace('<div class="fbar">',`<div class="fbar"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid ${DARK_THEME.cardBorder}"><span style="font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:${DARK_THEME.textSecondary}">Sales shown</span>${lensControlHTML()}${lensMode==="all"?`<span style="font-size:11px;color:${DARK_THEME.textMuted}">Dine-In &amp; Takeaway appear as two extra channels next to the delivery platforms</span>`:""}</div>`);};window.makeFilterBar=makeFilterBar;
+  makeFilterBar=rdFilterBar;window.makeFilterBar=makeFilterBar; // v557: one tidy, ordered filter bar everywhere
   if(typeof commissionRateFor==="function"){const _cr=commissionRateFor;commissionRateFor=function(a,b,d){return LENS_CH.includes(a)?0:_cr(a,b,d);};window.commissionRateFor=commissionRateFor;}
   if(typeof AC!=="undefined"){AC["Dine-In"]="#FF8A3D";AC["Takeaway"]="#A78BFA";}
 })();
-window.lensSet=lensSet;window.lensReset=lensReset;
+window.lensSet=lensSet;window.lensReset=lensReset;window.lensToggle=lensToggle;window.lensOnly=lensOnly;window.lensAll=lensAll;
 
 // ── OPTION B: "Group sales" hero at the top of Overview when All sales is on ──
 var lensHero=true;
@@ -25629,50 +25686,180 @@ function lensHeroHTML(){
   const sumBy=(a,b,fn)=>allData.filter(r=>r.branch!=="(brand-level)"&&r.date>=a&&r.date<=b&&fn(r)).reduce((x,r)=>({s:x.s+r.sales,o:x.o+r.orders,d:x.d+(r.disc||0)}),{s:0,o:0,d:0});
   const isDel=r=>!LENS_CH.includes(r.aggregator);
   const ch=[["Delivery","#4E9BFF",isDel],["Dine-In","#FF8A3D",r=>r.aggregator==="Dine-In"],["Takeaway","#A78BFA",r=>r.aggregator==="Takeaway"]];
-  const cur=ch.map(([n,c,fn])=>({n,c,v:sumBy(s,e,fn),p:sumBy(cmp.s,cmp.e,fn)}));
+  const shown=lensChannelsShown();const cur=ch.filter(([n])=>shown.includes(n)).map(([n,c,fn])=>({n,c,v:sumBy(s,e,fn),p:sumBy(cmp.s,cmp.e,fn)}));
   const tot=cur.reduce((a,x)=>a+x.v.s,0),totP=cur.reduce((a,x)=>a+x.p.s,0);
   const phys=new Set(["Oregano","Fyoozhen"]);
   const sb=rdSiteBrand(s,e);let physV=0,allV=0;for(const site of Object.keys(sb)){const h=instoreBrandOf(site);for(const[b,v]of Object.entries(sb[site])){allV+=v;if(b===h)physV+=v;}}
   if(chState.vat==="excl"){physV*=1.05;allV*=1.05;} // hero is always incl. VAT
   const virtV=Math.max(0,allV-physV);
   const chg=v=>v==null||isNaN(v)?"":`<span style="color:${pctClr(v)};font-weight:800">${fmtPct(v)}</span>`;
-  return`<div class="card" id="lens-hero" style="background:linear-gradient(135deg,${T.card} 0%,#1E2A44 100%)!important">
+  return`<div class="card rd-in" id="lens-hero" style="background:linear-gradient(135deg,${T.card} 0%,#1E2A44 100%)!important">
     <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-end;justify-content:space-between">
-      <div><div style="font-size:11px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:${T.textSecondary}">Group sales · all channels · ${getPeriodLabel()}</div>
-        <div style="font-size:40px;font-weight:900;letter-spacing:-1px;font-variant-numeric:tabular-nums;margin-top:4px">${fmtAEDExact(tot)}</div>
+      <div><div style="font-size:11px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:${T.textSecondary}">Group sales · ${lensSel.size===3?"all channels":shown.join(" + ")} · ${getPeriodLabel()}</div>
+        <div class="kpi-value-num" style="font-size:40px;font-weight:900;letter-spacing:-1px;font-variant-numeric:tabular-nums;margin-top:4px">${fmtAEDExact(tot)}</div>
         <div style="font-size:13px;color:${T.textMuted};margin-top:2px">${chg(pctOf(tot,totP))} ${cs}</div></div>
-      <div style="display:flex;gap:22px;flex-wrap:wrap">${cur.map(x=>`<div><div style="font-size:11px;font-weight:800;color:${x.c}">● ${x.n}</div><div style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(x.v.s)}</div><div style="font-size:12px;color:${T.textMuted}">${tot>0?(x.v.s/tot*100).toFixed(1):"0.0"}% · ${chg(pctOf(x.v.s,x.p.s))}</div></div>`).join("")}</div>
+      <div style="display:flex;gap:22px;flex-wrap:wrap">${cur.map(x=>`<div><div style="font-size:11px;font-weight:800;color:${x.c}">● ${x.n}</div><div class="kpi-value-num" style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(x.v.s)}</div><div style="font-size:12px;color:${T.textMuted}">${tot>0?(x.v.s/tot*100).toFixed(1):"0.0"}% · ${chg(pctOf(x.v.s,x.p.s))}</div></div>`).join("")}</div>
     </div>
-    <div style="display:flex;height:12px;border-radius:6px;overflow:hidden;margin:16px 0 10px;background:${T.bg}">${cur.map(x=>`<div title="${x.n}" style="width:${tot>0?x.v.s/tot*100:0}%;background:${x.c}"></div>`).join("")}</div>
-    <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:${T.textSecondary}">
+    <div class="rd-grow" style="display:flex;height:12px;border-radius:6px;overflow:hidden;margin:16px 0 10px;background:${T.bg}">${cur.map(x=>`<div title="${x.n}" style="width:${tot>0?x.v.s/tot*100:0}%;background:${x.c}"></div>`).join("")}</div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:${T.textSecondary}">${lensSel.has("D")&&lensSel.size>1?`
       <span><b style="color:${T.textPrimary}">Front-of-house brand</b> at each site, incl. its dine-in &amp; takeaway ${fmtAED(physV)} · ${allV>0?(physV/allV*100).toFixed(0):0}%</span>
-      <span><b style="color:${T.textPrimary}">Delivery-only brands</b> in the same kitchens ${fmtAED(virtV)} · ${allV>0?(virtV/allV*100).toFixed(0):0}%</span>
-      <span style="margin-left:auto;cursor:pointer;color:${T.accentOrange};font-weight:800" onclick="gp('channels')">Open All Channels →</span></div>
+      <span><b style="color:${T.textPrimary}">Delivery-only brands</b> in the same kitchens ${fmtAED(virtV)} · ${allV>0?(virtV/allV*100).toFixed(0):0}%</span>`:""}
+</div>
   </div>`;
 }
 (function lensHeroHook(){
   if(typeof renderPage!=="function"||!window.lensSet)return setTimeout(lensHeroHook,250);
-  const _rp=renderPage;renderPage=function(p){_rp(p);if(p!=="overview"||!lensHero||lensMode!=="all")return;
+  const _rp=renderPage;renderPage=function(p){_rp(p);
+    if(p==="compare"){const pg=document.getElementById("page-compare");if(pg&&!document.getElementById("cmp-ch-row")){const d=document.createElement("div");d.id="cmp-ch-row";d.style.marginBottom="12px";
+      d.innerHTML=`<div class="fbar fbar2" style="background:${DARK_THEME.card};border:1px solid ${DARK_THEME.cardBorder};border-radius:10px"><div class="fb-row"><div class="fb-lbl">Channels</div><div class="fb-body"><div class="fb-line">${lensControlHTML()}<span class="fb-note">applies to Group A, B and C</span></div></div></div></div>`;pg.insertBefore(d,pg.firstChild);}return;}
+    if(p==="overview")rdPruneOverview();
+    if(p==="brands"||p==="platforms")rdDeliveryTables(p);
+    if(p!=="overview"||!lensHero||lensMode!=="all")return;
     const pg=document.getElementById("page-overview");const fb=pg&&pg.querySelector(".fbar");if(!fb||document.getElementById("lens-hero"))return;
-    fb.insertAdjacentHTML("afterend",lensHeroHTML()+lensRankHTML());};window.renderPage=renderPage;
+    const f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),cmp=getCompRange();
+    fb.insertAdjacentHTML("afterend",lensHeroHTML()+lensRankHTML()+lensMixHTML()+(lensSel.has("D")&&lensSel.size>1?chVirtualCardHTML(s,e,cmp):""));lensMixChart();};window.renderPage=renderPage;
 })();
 
 // ── Idea 2: outlet-first ranking on Overview (All sales) — every physical outlet ranked by total sales, all channels
 function lensRankHTML(){
   const T=DARK_THEME,f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),cmp=getCompRange(),cs=getCompShort();
   const cur=chAggregate(s,e,true),prev=chAggregate(cmp.s,cmp.e,true);
-  const list=Object.keys(cur.by).map(o=>({o,t:cur.sum(cur.by[o]),p:prev.by[o]?prev.sum(prev.by[o]):0,c:cur.by[o]})).filter(x=>x.t>0).sort((a,b)=>b.t-a.t);
+  const shown=lensChannelsShown(),sm=o=>shown.reduce((a,c)=>a+(o?o[c].sales:0),0);
+  const list=Object.keys(cur.by).map(o=>({o,t:sm(cur.by[o]),p:sm(prev.by[o]),c:cur.by[o]})).filter(x=>x.t>0).sort((a,b)=>b.t-a.t);
   if(!list.length)return"";const max=list[0].t;
-  const row=(x,i)=>`<div onclick="chState.outlet='${esc(x.o)}';gp('channels')" title="Open ${esc(x.o)} on All Channels" style="display:grid;grid-template-columns:26px minmax(90px,150px) 1fr 92px 64px;gap:10px;align-items:center;padding:6px 4px;border-bottom:1px solid ${T.cardBorder}55;cursor:pointer;font-size:12.5px">
+  const row=(x,i)=>`<div class="rd-in" title="${esc(x.o)}: ${shown.map(c=>c+" "+fmtAED(x.c[c].sales)).join(" · ")}" style="display:grid;grid-template-columns:26px minmax(90px,150px) 1fr 92px 64px;gap:10px;align-items:center;padding:6px 4px;border-bottom:1px solid ${T.cardBorder}55;font-size:12.5px;animation-delay:${(.1+i*.035).toFixed(3)}s">
     <span style="font-weight:800;color:${i<3?T.accentOrange:T.textMuted};font-variant-numeric:tabular-nums">${i+1}</span>
     <span style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(x.o)}</span>
-    <span style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:${T.bg};width:${(x.t/max*100).toFixed(1)}%">${CH_LIST.map(c=>`<span title="${c} ${fmtAED(x.c[c].sales)}" style="width:${x.t>0?x.c[c].sales/x.t*100:0}%;background:${CH_CLR[c]}"></span>`).join("")}</span>
+    <span class="rd-grow" style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:${T.bg};width:${(x.t/max*100).toFixed(1)}%;animation-delay:${(.15+i*.035).toFixed(3)}s">${shown.map(c=>`<span title="${c} ${fmtAED(x.c[c].sales)}" style="width:${x.t>0?x.c[c].sales/x.t*100:0}%;background:${CH_CLR[c]}"></span>`).join("")}</span>
     <span style="text-align:right;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(x.t)}</span>
     <span style="text-align:right;font-size:11.5px;font-weight:700;color:${pctClr(pctOf(x.t,x.p))}">${x.p?fmtPct(pctOf(x.t,x.p)):"—"}</span></div>`;
-  return`<div class="card" id="lens-rank"><div class="ct" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">📍 Outlets ranked by total sales <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· all channels · Δ ${cs} · click an outlet for its detail</span>
-    <span style="margin-left:auto;display:flex;gap:12px;font-size:11px;font-weight:700;text-transform:none;letter-spacing:0">${CH_LIST.map(c=>`<span style="color:${T.textSecondary}"><span style="color:${CH_CLR[c]}">●</span> ${c}</span>`).join("")}</span></div>
+  return`<div class="card rd-in" id="lens-rank" style="animation-delay:.08s"><div class="ct" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">📍 Outlets ranked by total sales <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· ${lensSel.size===3?"all channels":shown.join(" + ")} · Δ ${cs} · hover an outlet for its channel split</span>
+    <span style="margin-left:auto;display:flex;gap:12px;font-size:11px;font-weight:700;text-transform:none;letter-spacing:0">${shown.map(c=>`<span style="color:${T.textSecondary}"><span style="color:${CH_CLR[c]}">●</span> ${c}</span>`).join("")}</span></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(420px,100%),1fr));column-gap:28px">${[list.slice(0,Math.ceil(list.length/2)),list.slice(Math.ceil(list.length/2))].map((half,k)=>`<div>${half.map((x,i)=>row(x,i+k*Math.ceil(list.length/2))).join("")}</div>`).join("")}</div></div>`;
 }
+
+// ── v557 FILTER BAR — same order on every page, each row labelled:
+//   Channels (pages that can mix channels) → Period (+ the page's own extra, e.g. VAT or Export) → Compare → Filter (brand · platform · outlet)
+let fbStyle="toolbar",fbOpen=null; // v559: Nikhil chose the Toolbar layout
+function rdFbStyle(k){fbStyle=k;fbOpen=null;renderPage(curPage);}
+function rdFbOpen(k){fbOpen=fbOpen===k?null:k;renderPage(curPage);}
+window.rdFbStyle=rdFbStyle;window.rdFbOpen=rdFbOpen;
+function rdFilterBar(opts){
+  const{hideBrand=false,hidePlatform=false,hideOutlet=false,dateExtra=''}=opts||{};
+  const f=curFilters(),dark=typeof _darkPage!=="undefined"&&_darkPage;
+  const C=dark?{bd:DARK_THEME.cardBorder,lb:DARK_THEME.textMuted,tx:DARK_THEME.textSecondary,bg:DARK_THEME.bg,inp:DARK_THEME.textPrimary,ac:DARK_THEME.accentOrange}:{bd:"#E2E8F0",lb:"#94A3B8",tx:"#475569",bg:"#F1F5F9",inp:"#0F172A",ac:"#f59e0b"};
+  const presets=[["yesterday","Yesterday"],["7d","Last 7 Days"],["30d","Last 30 Days"],["month","This Month"],["lmonth","Last Month"],["custom","Custom"]];
+  const pH=presets.map(([k,l])=>`<button class="preset ${f.preset===k?"act":""}" data-act="preset" data-v1="${k}">${l}</button>`).join("");
+  const di=`background:${C.bg};border:1px solid ${C.bd};border-radius:6px;color:${C.inp};padding:6px 10px;font-size:12.5px;font-weight:600;color-scheme:${dark?"dark":"light"};min-width:130px`;
+  const custH=f.preset==="custom"?`<div class="fb-line"><input type="date" id="f-s" value="${f.start||""}" style="${di}"><span style="color:${C.lb}">→</span><input type="date" id="f-e" value="${f.end||""}" style="${di}"><button data-act="apply" style="background:#f59e0b;border:none;border-radius:5px;color:#000;font-weight:700;padding:6px 14px;font-size:12px;cursor:pointer">Apply</button></div>`:"";
+  const allBr=[...new Set(allData.map(r=>r.branch))].filter(b=>b!=="(brand-level)").sort();
+  const brDD=hideBrand?"":ddHTML("fdd-br","Brand",f.brands,BR.map(b=>({val:b.n,lbl:b.n,clr:b.c})),"brand");
+  const plDD=hidePlatform?"":ddHTML("fdd-pl","Platform",f.platforms,AGGS.map(a=>({val:a,lbl:a,clr:AC[a]||"#888"})),"platform");
+  const ouDD=hideOutlet?"":ddHTML("fdd-ou","Outlet",f.branches,allBr.map(b=>({val:b,lbl:b+(AUH.has(b)?" (AUH)":""),clr:"#94a3b8"})),"branch");
+  const chip=(type,val,clr)=>`<span class="fchip" style="background:${clr}22;color:${clr};border:1px solid ${clr}55" data-act="ftoggle" data-v1="${type}" data-v2="${esc(val)}">✕ ${val}</span>`;
+  const chips=[...[...f.brands].map(b=>chip("brand",b,BMAP[b]?.c||"#888")),...[...f.platforms].map(p=>chip("platform",p,AC[p]||"#888")),...[...f.branches].map(b=>chip("branch",b,"#94a3b8"))].join("");
+  const clearBtn=(f.brands.size||f.platforms.size||f.branches.size)?`<button class="fpill" data-act="clear" style="color:#ef4444;border-color:#ef444444">✕ Clear</button>`:"";
+  const hasCh=LENS_PAGES.has(curPage),hasCmp=typeof GROWTH_LENS_PAGES!=="undefined"&&GROWTH_LENS_PAGES.has(curPage),hasF=!!(brDD||plDD||ouDD);
+  const chHTML=lensControlHTML(),cmpHTML=hasCmp?growthLensSwitchHTML().replace(/<span style="font-size:10px;font-weight:800;letter-spacing:\.6px;text-transform:uppercase;color:[^"]*">Compare<\/span>/,""):"";
+  const fHTML=brDD+plDD+ouDD+clearBtn,chipsLine=chips?`<div class="fb-line" style="margin-top:6px">${chips}</div>`:"";
+  const period=getPeriodLabel(),extra=dateExtra?`<span class="fb-extra">${dateExtra}</span>`:"";
+  const row=(label,body,ext)=>`<div class="fb-row"><div class="fb-lbl">${label}</div><div class="fb-body"><div class="fb-line">${body}</div>${ext||""}</div></div>`;
+  let h="",cls="fbar fbar2";
+  if(fbStyle==="toolbar"){ // ── one line of labelled groups
+    const g=(cap,body)=>`<div class="fb-g"><div class="fb-cap">${cap}</div><div class="fb-line">${body}</div></div>`;
+    const top=[];if(hasCh)top.push(g("Channels",chHTML));if(hasCmp)top.push(g("Compare",cmpHTML));if(hasF)top.push(g("Filter",fHTML));
+    h=(top.length?`<div class="fb-tb">${top.join('<div class="fb-sep"></div>')}</div><div class="fb-tb-div"></div>`:"")+
+      `<div class="fb-tb">${g(`Period <span style="text-transform:none;letter-spacing:0;font-weight:600;font-style:italic">· ${period}</span>`,pH)}${extra?`<div class="fb-g fb-tb-x"><div class="fb-cap">&nbsp;</div>${extra}</div>`:""}</div>${custH}${chipsLine}`;cls+=" fbar-tb";
+  }else if(fbStyle==="summary"){ // ── one sentence; click a part to change it
+    const preLbl=(presets.find(p=>p[0]===f.preset)||[,"Custom"])[1];
+    const cmpLbl={prior:"the prior period",mom:"the same days last month",yoy:"the same days last year"}[typeof growthLens!=="undefined"?growthLens:"prior"]||"the prior period";
+    const nF=f.brands.size+f.platforms.size+f.branches.size;
+    const fLbl=nF?[f.brands.size?`${f.brands.size===1?[...f.brands][0]:f.brands.size+" brands"}`:"",f.platforms.size?`${f.platforms.size===1?[...f.platforms][0]:f.platforms.size+" platforms"}`:"",f.branches.size?`${f.branches.size===1?[...f.branches][0]:f.branches.size+" outlets"}`:""].filter(Boolean).join(" · "):"all brands, platforms & outlets";
+    const pill=(k,txt)=>`<button class="fb-pill ${fbOpen===k?"on":""}" onclick="rdFbOpen('${k}')">${txt} <span style="opacity:.6">▾</span></button>`;
+    h=`<div class="fb-sum"><span class="fb-sum-t">Showing</span>${hasCh?pill("ch",lensSel.size===3?"all channels":lensChannelsShown().join(" + "))+`<span class="fb-sum-t">for</span>`:""}${pill("per",`${preLbl} <span style="font-weight:600;opacity:.75">(${period})</span>`)}${hasCmp?`<span class="fb-sum-t">vs</span>`+pill("cmp",cmpLbl):""}${hasF?`<span class="fb-sum-t">·</span>`+pill("flt",fLbl):""}${extra?`<span style="margin-left:auto">${extra}</span>`:""}</div>`;
+    const open=fbOpen==="ch"&&hasCh?row("Channels",chHTML):fbOpen==="per"?row("Period",pH,custH):fbOpen==="cmp"&&hasCmp?row("Compare",cmpHTML):fbOpen==="flt"&&hasF?row("Filter",fHTML,chipsLine):"";
+    if(open)h+=`<div class="fb-drop">${open}</div>`;else if(f.preset==="custom")h+=custH;
+    cls+=" fbar-sum";
+  }else{ // ── "rows": one labelled row per kind of filter
+    if(hasCh)h+=row("Channels",chHTML+`<span class="fb-note">${lensSelKey()==="D"?"tick Dine-in / Takeaway to add them":"double-click a channel to show only that one"}</span>`);
+    h+=row("Period",pH+`<span class="fb-note fb-right">${period}</span>${extra}`,custH);
+    if(hasCmp)h+=row("Compare",cmpHTML);
+    if(hasF)h+=row("Filter",fHTML,chipsLine);
+  }
+  if(!document.getElementById("fb2-css")){const s=document.createElement("style");s.id="fb2-css";document.head.appendChild(s);}
+  document.getElementById("fb2-css").textContent=`.fbar.fbar2{padding:6px 16px!important}
+.fbar2 .fb-row{display:grid;grid-template-columns:84px 1fr;gap:12px;align-items:center;padding:8px 0;border-top:1px solid ${C.bd}}
+.fbar2 .fb-row:first-child{border-top:none}
+.fbar2 .fb-lbl,.fbar2 .fb-cap{font-size:10px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;color:${C.lb}}
+.fbar2 .fb-cap{margin-bottom:6px;white-space:nowrap}
+.fbar2 .fb-line{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.fbar2 .fb-body>.fb-line+.fb-line{margin-top:8px}
+.fbar2 .fb-note{font-size:11px;color:${C.lb};font-style:italic}
+.fbar2 .fb-right{margin-left:auto}
+.fbar2 .fb-extra{display:inline-flex;align-items:center;gap:8px}
+.fbar-tb{padding:12px 16px!important}
+.fbar2 .fb-tb{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap}
+.fbar2 .fb-sep{width:1px;align-self:stretch;background:${C.bd}}
+.fbar2 .fb-tb-x{margin-left:auto}
+.fbar2 .fb-tb-div{height:1px;background:${C.bd};margin:10px 0}
+.fbar2 .fb-tb .preset{padding:5px 9px!important}
+.fbar-sum{padding:12px 16px!important}
+.fbar2 .fb-sum{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px}
+.fbar2 .fb-sum-t{color:${C.lb};font-weight:600}
+.fbar2 .fb-pill{background:${C.bg};border:1px solid ${C.bd};border-radius:18px;color:${C.inp};padding:6px 13px;font:inherit;font-size:13.5px;font-weight:800;cursor:pointer}
+.fbar2 .fb-pill:hover,.fbar2 .fb-pill.on{border-color:${C.ac};color:${C.ac}}
+.fbar2 .fb-drop{margin-top:10px;padding-top:4px;border-top:1px dashed ${C.bd};animation:rdIn .25s ease both}
+@media (max-width:700px){.fbar2 .fb-row{grid-template-columns:1fr;gap:6px}.fbar2 .fb-right{margin-left:0;width:100%}.fbar2 .fb-sep{display:none}.fbar2 .fb-tb-x{margin-left:0}}`;
+  return`<div class="${cls}">${h}</div>`;
+}
+// v557: channel mix over time on Overview (was on the separate All channels page)
+let lensMixMetric="sales";
+function lensMixHTML(){const T=DARK_THEME,shown=lensChannelsShown();if(shown.length<2)return"";
+  const seg=[["sales","Sales"],["orders","Orders"],["disc","Discounts"]].map(([v,l])=>`<button onclick="lensMixMetric='${v}';renderPage('overview')" style="border:none;padding:5px 11px;font-size:11px;font-weight:700;cursor:pointer;background:${lensMixMetric===v?T.accentOrange+"22":T.bg};color:${lensMixMetric===v?T.accentOrange:T.textSecondary}">${l}</button>`).join("");
+  return`<div class="card rd-in" id="lens-mix" style="animation-delay:.16s"><div class="ct" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">📊 Channel mix over time<span style="margin-left:auto;display:inline-flex;border:1px solid ${T.cardBorder};border-radius:7px;overflow:hidden">${seg}</span></div><div style="height:260px"><canvas id="lens-mix-c"></canvas></div></div>`;}
+function lensMixChart(){const el=document.getElementById("lens-mix-c");if(!el)return;const T=DARK_THEME,f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),shown=lensChannelsShown();
+  const cur=chAggregate(s,e,true),nDays=Math.round((new Date(e+"T12:00:00")-new Date(s+"T12:00:00"))/86400000)+1,gran=nDays<=45?"day":nDays<=200?"week":"month";
+  const bucket=d=>{if(gran==="day")return d;if(gran==="month")return d.slice(0,7)+"-01";const x=new Date(d+"T12:00:00");x.setDate(x.getDate()-((x.getDay()+6)%7));return dk(x);};
+  const b={};Object.keys(cur.days).sort().forEach(d=>{const k=bucket(d);b[k]=b[k]||{};shown.forEach(c=>b[k][c]=(b[k][c]||0)+cur.days[d][c][lensMixMetric]);});
+  const labels=Object.keys(b).sort(),money=lensMixMetric!=="orders";destroyChart("lens-mix-c");
+  charts["lens-mix-c"]=new Chart(el.getContext("2d"),{type:"bar",data:{labels:labels.map(l=>gran==="month"?new Date(l+"T12:00:00").toLocaleDateString("en-AE",{month:"short",year:"2-digit"}):gran==="week"?"w/c "+fmtShort(l):fmtShort(l)),
+    datasets:shown.map(c=>({label:c,data:labels.map(l=>b[l][c]||0),backgroundColor:CH_CLR[c],borderRadius:3,stack:"s"}))},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{labels:{color:T.textSecondary,boxWidth:10,font:{size:11}}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label}: ${money?"AED ":""}${Math.round(c.raw).toLocaleString()}`}}},
+      scales:{x:{stacked:true,ticks:{color:T.textSecondary,font:{size:10}},grid:{display:false},border:{display:false}},y:{stacked:true,ticks:{color:T.textMuted,font:{size:10},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#2A3450"},border:{display:false}}}}});}
+
+// v558: entrance animations for the new cards, bars and numbers (charts animate through Chart.js; KPI numbers count up)
+(function rdAnimCss(){if(document.getElementById("rd-anim-css"))return;const s=document.createElement("style");s.id="rd-anim-css";
+  s.textContent=`@keyframes rdIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes rdGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+.rd-in{animation:rdIn .5s cubic-bezier(.2,.8,.2,1) both}
+.rd-grow{transform-origin:left center;animation:rdGrow .9s cubic-bezier(.2,.8,.2,1) both}
+.fbar2 .preset,.fbar2 .fpill,.fbar2 .fb-pill,.fbar2 button{transition:background .18s,border-color .18s,color .18s}
+#hub-bar button{transition:background .18s,color .18s}
+@media (prefers-reduced-motion:reduce){.rd-in,.rd-grow{animation:none!important}}`;document.head.appendChild(s);})();
+
+// v559: Overview keeps the whole-business view; the delivery-only tables move to the Delivery pages.
+function rdPruneOverview(){const pg=document.getElementById("page-overview");if(!pg)return;
+  pg.querySelectorAll(".card").forEach(c=>{const t=((c.querySelector(".ct")||{}).textContent||"").trim();
+    if(/^All Brands —|^All Platforms —|^AOV by Brand/i.test(t)||c.id==="growthGridCard_overview"||/^Growth grid/i.test(t))c.style.display="none";});}
+// "All brands" table on Brands, "All platforms" table on Platforms — same columns Overview had (delivery only)
+function rdDeliveryTables(p){const pg=document.getElementById("page-"+p);if(!pg||pg.querySelector("#rd-dtab"))return;const fb=pg.querySelector(".fbar");if(!fb)return;
+  const f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),cmp=getCompRange(),cs=getCompShort(),T=DARK_THEME,dref=f.end||dk(new Date());
+  const base=allData.filter(r=>r.channel!=="instore"&&r.branch!=="(brand-level)");
+  const inF=r=>(!f.brands.size||f.brands.has(r.brand))&&(!f.platforms.size||f.platforms.has(r.aggregator))&&(!f.branches.size||f.branches.has(r.branch));
+  const cur=base.filter(r=>r.date>=s&&r.date<=e&&inF(r)),prv=base.filter(r=>r.date>=cmp.s&&r.date<=cmp.e&&inF(r));
+  const keys=p==="brands"?BR.map(b=>b.n):AGGS.filter(a=>!LENS_CH.includes(a));const kf=p==="brands"?(r=>r.brand):(r=>r.aggregator);
+  const heads=["","Orders","Net sales","AOV","Discount burn","Depth %","💵 Profitability",`Δ Orders<br><span style="font-weight:400;font-size:9px;color:#8393AB">${cs}</span>`,`Δ Net sales<br><span style="font-weight:400;font-size:9px;color:#8393AB">${cs}</span>`,`Δ Contribution<br><span style="font-weight:400;font-size:9px;color:#8393AB">${cs}</span>`];
+  const rows=keys.map(k=>{const c=cur.filter(r=>kf(r)===k),q=prv.filter(r=>kf(r)===k),a=sumR(c),b=sumR(q);if(!a.orders&&!a.sales)return null;
+    const prof=computeProfitability(c,dref).contribution,profP=computeProfitability(q,dref).contribution,aov=a.orders?a.sales/a.orders:0,gross=a.sales+(a.disc||0),dep=gross>0?(a.disc||0)/gross*100:0;
+    const clr=p==="brands"?(BMAP[k]?.c||"#ccc"):(AC[k]||"#ccc"),name=p==="brands"?`<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(k,22)}<strong style="color:${clr}">${k}</strong></span>`:`<strong style="color:${clr}">${k}</strong>`;
+    return{cells:[name,a.orders.toLocaleString(),fmtAEDTip(a.sales),a.orders?`AED ${aov.toFixed(1)}`:"—",a.disc>0?`<span style="color:#FF6B6B;font-weight:700">${fmtAEDTip(a.disc)}</span>`:"—",
+      a.disc>0?`<span style="color:${dep>=20?'#FF6B6B':dep>=10?'#F59E0B':'#2ECC71'};font-weight:700">${dep.toFixed(1)}%</span>`:"—",
+      `<span style="color:${profitClr(prof,"#2ECC71")};font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.7;font-size:10px">${a.sales>0?(prof/a.sales*100).toFixed(1):"0.0"}%</span></span>`,
+      fmtChgCell(a.orders,b.orders,false),fmtChgCell(a.sales,b.sales,true),fmtChgCell(prof,profP,true)],sortVals:[k,a.orders,a.sales,aov,a.disc,dep,prof,pctOf(a.orders,b.orders),pctOf(a.sales,b.sales),pctOf(prof,profP)]};}).filter(Boolean);
+  const d=document.createElement("div");d.id="rd-dtab";d.className="card rd-in";
+  d.innerHTML=`<div class="ct">${p==="brands"?"All brands":"All platforms"} — ${getPeriodLabel()} <span style="color:#8393AB;font-weight:400;text-transform:none;letter-spacing:0">· delivery · click any header to sort</span></div>${sortableTable("rd-dtab-"+p,heads,rows,2)}`;
+  fb.insertAdjacentElement("afterend",d);
+  if(typeof animateKpiCountUp==="function")setTimeout(()=>animateKpiCountUp(d),60);}
 
 // ════════════════════════════════════════════════════════════════════════════
 // v551 REDESIGN — Idea 4 (virtual-brand contribution per site), Idea 3 (Dine-In & Takeaway page),
@@ -25703,11 +25890,11 @@ function chVirtualCardHTML(s,e,cmp){
   const heads=["Site",...RD_BRANDS.map(b=>`<span style="color:${rdBrandClr(b)}">${b}</span>`),"Site total","Delivery-only brands","Their share",`Δ delivery-only <span style="font-weight:400;color:${T.textMuted}">${cs}</span>`];
   const m=v=>v>0?fmtAEDTip(v):`<span style="color:${T.textMuted}">—</span>`;
   const rows=sites.map(x=>{const c=cur[x],p=prev[x]||{},h=instoreBrandOf(x),t=tot(c),v=virt(c,x),sh=t>0?v/t*100:0;
-    const bar=`<div style="display:flex;height:8px;width:120px;border-radius:4px;overflow:hidden;background:${T.bg}">${[h,...RD_BRANDS.filter(b=>b!==h)].map(b=>`<span title="${b} ${t>0?((c[b]||0)/t*100).toFixed(0):0}%" style="width:${t>0?(c[b]||0)/t*100:0}%;background:${b===h?"#475569":rdBrandClr(b)}"></span>`).join("")}</div>`;
-    return{cells:[`<span style="font-weight:800">${esc(x)}</span>`,...RD_BRANDS.map(b=>b===h?`<span title="Front-of-house brand here — includes its dine-in &amp; takeaway">🍽️ ${m(c[b]||0)}</span>`:m(c[b]||0)),`<strong>${fmtAEDTip(t)}</strong>`,m(v),
+    const bar=`<div class="rd-grow" style="display:flex;height:8px;width:120px;border-radius:4px;overflow:hidden;background:${T.bg}">${[h,...RD_BRANDS.filter(b=>b!==h)].map(b=>`<span title="${b} ${t>0?((c[b]||0)/t*100).toFixed(0):0}%" style="width:${t>0?(c[b]||0)/t*100:0}%;background:${b===h?"#475569":rdBrandClr(b)}"></span>`).join("")}</div>`;
+    return{cells:[`<span style="font-weight:800">${esc(x)}</span>`,...RD_BRANDS.map(b=>b===h?`<span style="white-space:nowrap" title="Front-of-house brand here — includes its dine-in &amp; takeaway">🍽️ ${m(c[b]||0)}</span>`:m(c[b]||0)),`<strong>${fmtAEDTip(t)}</strong>`,m(v),
       `<div style="display:flex;align-items:center;gap:8px">${bar}<b style="font-variant-numeric:tabular-nums">${sh.toFixed(0)}%</b></div>`,fmtChgCell(v,p?virt(p,x):0,true)],
       sortVals:[x,...RD_BRANDS.map(b=>c[b]||0),t,v,sh,pctOf(v,virt(p,x))]};});
-  return`<div class="card"><div class="ct">🏭 What the delivery-only brands add to each kitchen <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· 🍽️ = the site's front-of-house brand, incl. its dine-in &amp; takeaway</span></div>
+  return`<div class="card rd-in" style="animation-delay:.24s"><div class="ct">🏭 What the delivery-only brands add to each kitchen <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· 🍽️ = the site's front-of-house brand, incl. its dine-in &amp; takeaway</span></div>
     <div style="font-size:12.5px;color:${T.textSecondary};margin:-2px 0 12px;line-height:1.55">Across these sites, brands that only deliver from a kitchen (e.g. Lollorosso everywhere, Oregano at Al Reef, Fyoozhen at Al Forsan) brought <b style="color:${T.textPrimary}">${fmtAEDExact(gv)}</b> — <b style="color:${T.accentOrange}">${gt>0?(gv/gt*100).toFixed(1):"0.0"}%</b> of everything those kitchens sold, with no extra rent or front-of-house.</div>
     ${sortableTable("ch-virtual",heads,rows,7)}</div>`;
 }
@@ -25763,7 +25950,7 @@ function renderDineIn(){
   `</div>`;
   // trend + weekday
   const nDays=Math.round((new Date(e+"T12:00:00")-new Date(s+"T12:00:00"))/86400000)+1,gran=nDays<=45?"day":nDays<=200?"week":"month";
-  h+=`<div class="dn-two"><div class="card"><div class="ct">📈 Dine-in &amp; takeaway trend <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· by ${gran} · line = guests</span></div><div style="height:280px"><canvas id="dn-trend"></canvas></div></div>
+  h+=`<div class="dn-two rd-in"><div class="card"><div class="ct">📈 Dine-in &amp; takeaway trend <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· by ${gran} · line = guests</span></div><div style="height:280px"><canvas id="dn-trend"></canvas></div></div>
     <div class="card"><div class="ct">🗓️ Average day of the week <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· for staffing</span></div><div style="height:280px"><canvas id="dn-dow"></canvas></div></div></div>`;
   // outlet table
   const curA=dnState.outlet?dnAgg(s,e,true):cur,prevA=dnState.outlet?dnAgg(cmp.s,cmp.e,true):prev;
@@ -25805,26 +25992,259 @@ function renderDineIn(){
 }
 window.renderDineIn=renderDineIn;window.dnSet=dnSet;
 
-// ── Idea 1: menu sections (Group / Delivery / Dine-in / Tools) — labels inserted around the existing tabs
-const NAV_SECTIONS=[["Group",["overview","channels","outlets","compare"]],["Delivery",["brands","platforms","cpc","campaigns","kpi","cancellations","feedback"]],["Dine-in",["dinein"]],["Tools",["possync"]]];
-function navSectionize(){
-  const sb=document.getElementById("app-sidebar");if(!sb||sb.dataset.sections)return;
-  const tabs=[...sb.querySelectorAll(".tab")].filter(t=>t.dataset.pg!=="admin");if(!tabs.length)return;
-  const wrap=tabs[0].parentNode,byPg={};tabs.forEach(t=>byPg[t.dataset.pg]=t);
-  const placed=new Set();
-  for(const[label,ids]of NAV_SECTIONS){const items=ids.map(id=>byPg[id]).filter(Boolean);if(!items.length)continue;
-    const h=document.createElement("div");h.className="nav-sec";h.innerHTML=`<span class="nav-sec-txt">${label}</span>`;wrap.appendChild(h);
-    items.forEach(t=>{wrap.appendChild(t);placed.add(t);});}
-  tabs.filter(t=>!placed.has(t)).forEach(t=>wrap.appendChild(t)); // anything new still shows, at the end
-  if(!document.getElementById("nav-sec-css")){const css=document.createElement("style");css.id="nav-sec-css";
-    css.textContent=`#app-sidebar .nav-sec{font-size:10px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;color:${DARK_THEME.textMuted};padding:12px 10px 4px}
-#app-sidebar .nav-sec:first-child{padding-top:2px}
+// ── v556 MENU = HUBS (Option A, chosen by Nikhil). Pages that answer the same kind of question share one menu item;
+// a tab strip at the top of the page switches between them. Every page still exists — nothing is removed.
+const NAV_LAYOUTS={
+  // v559: split by channel — Business (all channels) · Delivery · Dine-in · Tools
+  A:[{sec:"Business"},
+    {id:"home",icon:"📊",label:"Overview",subs:[["overview","Overview"]]},
+    {id:"cmp",icon:"⚖️",label:"Compare",subs:[["compare","Compare"]]},
+    {sec:"Delivery"},
+    {id:"sales",icon:"🛵",label:"Delivery",subs:[["brands","Brands"],["outlets","Outlets"],["platforms","Platforms"]]},
+    {id:"mkt",icon:"🎯",label:"Marketing",subs:[["campaigns","Promotions"],["cpc","Advertising"]]},
+    {id:"svc",icon:"⭐",label:"Service quality",subs:[["kpi","KPI tracker"],["cancellations","Cancellations"],["feedback","Feedback"]]},
+    {sec:"Dine-in"},
+    {id:"dine",icon:"🍽️",label:"Dine-In & Takeaway",subs:[["dinein","Guests & spend"],["dindisc","Discounts & ROI"]]},
+    {sec:"Tools"},
+    {id:"tools",icon:"🛠️",label:"Data & admin",subs:[["possync","POS Sync"],["admin","Admin"]]}],
+  B:[{id:"home",icon:"🏠",label:"Home",subs:[["overview","Summary"]]},
+    {id:"sales",icon:"💰",label:"Sales",subs:[["dinein","Dine-in guests"],["dindisc","Dine-in discounts"],["brands","Brands"],["outlets","Outlets"],["platforms","Platforms"],["compare","Compare"]]},
+    {id:"mkt",icon:"🎯",label:"Marketing",subs:[["campaigns","Campaigns & discounts"],["cpc","Ads (CPC)"]]},
+    {id:"svc",icon:"⭐",label:"Service",subs:[["kpi","KPI tracker"],["cancellations","Cancellations"],["feedback","Feedback"]]},
+    {id:"tools",icon:"🛠️",label:"Tools",subs:[["possync","POS Sync"],["admin","Admin"]]}],
+  C:[{sec:"Every morning"},
+    {id:"home",icon:"☀️",label:"Today",subs:[["overview","Overview"],["dinein","Dine-in"],["dindisc","Dine-in discounts"]]},
+    {id:"svc",icon:"🚦",label:"Health & service",subs:[["kpi","KPI tracker"],["cancellations","Cancellations"],["feedback","Feedback"]]},
+    {sec:"Analysis"},
+    {id:"sales",icon:"🧭",label:"Deep dive",subs:[["brands","Brands"],["outlets","Outlets"],["platforms","Platforms"]]},
+    {id:"cmp",icon:"⚖️",label:"Compare",subs:[["compare","Compare"]]},
+    {sec:"Planning"},
+    {id:"mkt",icon:"🎯",label:"Marketing",subs:[["campaigns","Campaigns & discounts"],["cpc","Ads (CPC)"]]},
+    {sec:"Tools"},
+    {id:"tools",icon:"🛠️",label:"Data & admin",subs:[["possync","POS Sync"],["admin","Admin"]]}],
+  current:null};
+let navLayout="A";const navLastSub={};
+// v558: Marketing tab names — "campaigns" and "discounts" were the same thing, and ads are more than CPC (keywords, banners…)
+const MKT_NAMES={1:["Promotions","Advertising"],2:["Offers","Paid visibility"],3:["Deals & discounts","Ads & placements"],4:["Promotions","Ad spend"]};
+let mktNameSet=1; // v559: Nikhil chose Promotions · Advertising
+function mktSetNames(k){mktNameSet=k;navPaint();mktRetitle();}
+function mktRetitle(){const[n1,n2]=MKT_NAMES[mktNameSet]||MKT_NAMES[1];
+  const ren=(pg,olds,nw)=>{const el=document.getElementById("page-"+pg);if(!el)return;el.querySelectorAll("div,span,h1,h2,h3").forEach(x=>{if(x.children.length===0&&olds.includes(x.textContent.trim()))x.textContent=nw;});};
+  ren("campaigns",["Campaign Manager",...Object.values(MKT_NAMES).map(v=>v[0])],n1);ren("cpc",["Ads Performance",...Object.values(MKT_NAMES).map(v=>v[1])],n2);}
+window.mktSetNames=mktSetNames;
+function navItems(){const L=NAV_LAYOUTS[navLayout];if(!L)return null;const[n1,n2]=MKT_NAMES[mktNameSet]||MKT_NAMES[1];
+  // only pages that exist for this user (POS Sync / Admin are restricted)
+  return L.map(n=>n.sec?n:Object.assign({},n,{subs:n.subs.filter(([p])=>document.getElementById("page-"+p)).map(([p,l])=>[p,p==="campaigns"?n1:p==="cpc"?n2:l])})).filter(n=>n.sec||n.subs.length);}
+function navHubOf(pg){const L=navItems();return L?L.find(n=>n.subs&&n.subs.some(s=>s[0]===pg))||null:null;}
+// ── v560 SIDEBAR DESIGNS — consistent line icons (instead of mixed emoji), sub-pages listed under their item,
+// a sliding highlight, live badges that mean something (open alerts / POS flags), and entrance + hover animation.
+const NV_ICON={
+  overview:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  compare:'<path d="M12 3v18M6 21h12M5 7h14"/><path d="M5 7l-3 6a3 3 0 0 0 6 0z"/><path d="M19 7l-3 6a3 3 0 0 0 6 0z"/>',
+  delivery:'<circle cx="6" cy="17" r="3"/><circle cx="18" cy="17" r="3"/><path d="M9 17h5l-2.5-7H8M14 17l3-9h3M11.5 10l1.5-4"/>',
+  marketing:'<path d="M3 10.5v3a1 1 0 0 0 1 1h2.5L12 19V5L6.5 9.5H4a1 1 0 0 0-1 1z"/><path d="M16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12"/>',
+  service:'<path d="M12 3l2.7 5.6 6.2.9-4.5 4.4 1.1 6.1L12 17.1 6.5 20l1.1-6.1L3.1 9.5l6.2-.9z"/>',
+  dine:'<path d="M5 3v6a2 2 0 0 0 4 0V3M7 11v10M17 21V3c-2.5 1.5-3.5 5-3.5 8.5H17"/>',
+  guests:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17.5" cy="9" r="2.5"/><path d="M16.5 14.6A5 5 0 0 1 22 19.5"/>',
+  discount:'<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/>',
+  tools:'<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  sync:'<path d="M20 11a8 8 0 0 0-14.6-4.5M4 3.5v3.5h3.5M4 13a8 8 0 0 0 14.6 4.5M20 20.5V17h-3.5"/>',
+  admin:'<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>'};
+function nvSvg(k){return`<svg class="nv-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${NV_ICON[k]||NV_ICON.overview}</svg>`;}
+// Designs: S1 Refined · S2 Channel colours · S3 Tree (everything visible). "A" = the v559 menu.
+const NV_SEC_CLR={Business:"#FF8A3D",Today:"#FF8A3D",Group:"#FF8A3D",Delivery:"#4E9BFF",Analyse:"#A78BFA","In-store":"#F5B544",Tools:"#94A3B8"};
+NAV_LAYOUTS.S1=[{sec:"Group"},
+  {id:"home",ico:"overview",label:"Overview",subs:[["overview","Overview"]]},
+  {id:"cmp",ico:"compare",label:"Compare",subs:[["compare","Compare"]]},
+  {sec:"Delivery"},
+  {id:"sales",ico:"delivery",label:"Performance",subs:[["brands","Brands"],["outlets","Outlets"],["platforms","Platforms"]]},
+  {id:"mkt",ico:"marketing",label:"Marketing",subs:[["campaigns","Promotions"],["cpc","Advertising"]]},
+  {id:"svc",ico:"service",label:"Service",subs:[["kpi","KPI tracker"],["cancellations","Cancellations"],["feedback","Feedback"]]},
+  {sec:"In-store"},
+  {id:"dine",ico:"dine",label:"Dine-in",subs:[["dinein","Guests & spend"],["dindisc","Discounts & ROI"]]},
+  {sec:"Tools"},
+  {id:"tools",ico:"tools",label:"Data & admin",subs:[["possync","POS Sync"],["admin","Admin"]]}];
+NAV_LAYOUTS.S2=[{sec:"Today"},
+  {id:"home",ico:"overview",label:"Overview",subs:[["overview","Overview"]]},
+  {sec:"Delivery"},
+  {id:"sales",ico:"delivery",label:"Performance",subs:[["brands","Brands"],["outlets","Outlets"],["platforms","Platforms"]]},
+  {id:"mkt",ico:"marketing",label:"Marketing",subs:[["campaigns","Promotions"],["cpc","Advertising"]]},
+  {id:"svc",ico:"service",label:"Service",subs:[["kpi","KPI tracker"],["cancellations","Cancellations"],["feedback","Feedback"]]},
+  {sec:"In-store"},
+  {id:"dine1",ico:"guests",label:"Guests & spend",subs:[["dinein","Guests & spend"]]},
+  {id:"dine2",ico:"discount",label:"Discounts & ROI",subs:[["dindisc","Discounts & ROI"]]},
+  {sec:"Analyse"},
+  {id:"cmp",ico:"compare",label:"Compare",subs:[["compare","Compare"]]},
+  {sec:"Tools"},
+  {id:"pos",ico:"sync",label:"POS Sync",subs:[["possync","POS Sync"]]},
+  {id:"adm",ico:"admin",label:"Admin",subs:[["admin","Admin"]]}];
+NAV_LAYOUTS.S3=NAV_LAYOUTS.S1;
+NAV_LAYOUTS.S4=NAV_LAYOUTS.S2;NAV_LAYOUTS.S5=NAV_LAYOUTS.S2;NAV_LAYOUTS.S6=NAV_LAYOUTS.S2;
+const NV_SHORT={"Guests & spend":"Guests","Discounts & ROI":"Discounts","Performance":"Delivery","Data & admin":"Tools"};
+const NV_STYLE={S1:"refined",S2:"colour",S3:"tree",S4:"live",S5:"rail",S6:"top"};
+// v561: shell — rail (narrow icon+label column) and top (no sidebar; menu across the top) change the page width
+function nvShell(st){const sb=document.getElementById("app-sidebar");if(!sb)return;const col=sb.dataset.collapsed==="1";
+  const w=st==="top"?0:st==="rail"?84:(col?60:208);
+  sb.style.display=st==="top"?"none":"";if(st==="rail")sb.dataset.rail="1";else delete sb.dataset.rail;sb.style.width=w+"px";document.documentElement.style.setProperty("--sidebar-w",w+"px");
+  document.querySelectorAll("[data-sidebar-synced='1']").forEach(el=>el.style.left=w+"px");
+  const tog=document.getElementById("sidebar-toggle");if(tog)tog.style.display=st==="rail"?"none":"";
+  const top=document.getElementById("nv-top");if(st!=="top"&&top)top.remove();}
+// v561: live numbers in the menu — latest day vs the same weekday a week earlier, plus a 14-day sparkline
+let nvStatCache=null;
+function nvStats(){try{if(typeof latest==="undefined"||!latest)return null;const key=latest+"|"+(lensBase||allData).length+"|"+instoreData.length;if(nvStatCache&&nvStatCache.key===key)return nvStatCache;
+  const del=(lensBase||allData).filter(r=>r.channel!=="instore"&&r.branch!=="(brand-level)"),days=[];for(let i=13;i>=0;i--)days.push(subDays(latest,i));const ix={};days.forEach((d,i)=>ix[d]=i);
+  const z=()=>days.map(()=>0),dS=z(),dD=z(),iS=z(),iG=z();
+  for(const r of del){const i=ix[r.date];if(i!=null){dS[i]+=r.sales;dD[i]+=r.disc||0;}}
+  for(const r of instoreData){const i=ix[r.date];if(i!=null){iS[i]+=r.di.sales+r.to.sales;iG[i]+=r.di.guests||0;}}
+  const all=dS.map((v,i)=>v+iS[i]);
+  nvStatCache={key,day:latest,all,dS,dD,iS,iG};return nvStatCache;}catch(e){return null;}}
+function nvSpark(arr,clr){const w=40,h=14,mx=Math.max(1,...arr),mn=Math.min(...arr),rg=Math.max(1,mx-mn);const pts=arr.map((v,i)=>`${(i/(arr.length-1)*w).toFixed(1)},${(h-2-(v-mn)/rg*(h-4)).toFixed(1)}`).join(" ");
+  return`<svg class="nv-spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" fill="none" stroke="${clr}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="stroke-dasharray:200;stroke-dashoffset:200;animation:nvDraw 1.2s .2s ease forwards"/></svg>`;}
+function nvLive(n){const s=nvStats();if(!s)return"";let L=s.dS.length-1;while(L>7&&!s.dS[L])L--; // last day with delivery data in
+  const chg=(a)=>a[L-7]?((a[L]/a[L-7]-1)*100):null,fmt=v=>v==null?"":`<span style="color:${v>=0?"#22C55E":"#EF4444"}">${v>=0?"▲":"▼"}${Math.abs(v).toFixed(0)}%</span>`;
+  const id=n.subs[0][0];let v=null,arr=null,c="#94A3B8",lbl="";
+  if(id==="overview"){arr=s.all;v=fmtAED(s.all[L]);c="#FF8A3D";lbl="all channels";}
+  else if(id==="brands"){arr=s.dS;v=fmtAED(s.dS[L]);c="#4E9BFF";lbl="delivery";}
+  else if(id==="campaigns"){arr=s.dD;v=fmtAED(s.dD[L]);c="#F59E0B";lbl="discounts";}
+  else if(id==="dinein"){arr=s.iG;v=Math.round(s.iG[L]).toLocaleString()+" guests";c="#F5B544";}
+  else if(id==="dindisc"){arr=s.iS;v=fmtAED(s.iS[L]);c="#F5B544";lbl="in-store";}
+  if(!arr)return"";return`<div class="nv-live" title="${lbl||"in-store"} · latest day vs the same weekday a week earlier · last 14 days"><span>${v} ${fmt(chg(arr))}</span>${nvSpark(arr,c)}</div>`;}
+// v561: top navigation (no sidebar) — sections across the top, sub-pages in a dropdown
+function nvTopPaint(L){let bar=document.getElementById("nv-top");const T=DARK_THEME,cur=navHubOf(curPage);
+  const anyPage=document.querySelector(".pg");if(!anyPage)return;
+  if(!bar){bar=document.createElement("div");bar.id="nv-top";}if(bar.nextSibling!==anyPage)anyPage.parentNode.insertBefore(bar,anyPage);
+  let sec="";const items=L.filter(n=>{if(n.sec){sec=n.sec;return false;}n._sec=sec;return true;});
+  bar.innerHTML=`<div class="nvt-in">${items.map(n=>{const act=cur&&cur.id===n.id,sc=NV_SEC_CLR[n._sec]||T.accentOrange,bd=nvBadge(n),multi=n.subs.length>1;
+    return`<div class="nvt-item ${act?"act":""}" style="--sc:${sc}"><button onclick="navGo('${n.id}')">${n.ico?nvSvg(n.ico):""}<span>${n.label}</span>${bd?`<span class="nv-badge" style="background:${bd.c}">${bd.n}</span>`:""}${multi?`<svg class="nvt-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>`:""}</button>${multi?`<div class="nvt-dd"><div class="nvt-dd-sec" style="color:${sc}">${n._sec}</div>${n.subs.map(([p,l])=>`<div class="nvt-sub ${p===curPage?"act":""}" onclick="gp('${p}')">${l}</div>`).join("")}</div>`:""}</div>`;}).join("")}<span id="nvt-ind"></span></div>`;
+  const ind=document.getElementById("nvt-ind"),a=bar.querySelector(".nvt-item.act");if(ind&&a){const sc=getComputedStyle(a).getPropertyValue("--sc").trim();ind.style.background=sc;const pl=bar.dataset.l;if(pl){ind.style.transition="none";ind.style.left=pl+"px";ind.style.width=bar.dataset.w+"px";void ind.offsetWidth;ind.style.transition="";}
+    requestAnimationFrame(()=>{ind.style.left=a.offsetLeft+"px";ind.style.width=a.offsetWidth+"px";bar.dataset.l=a.offsetLeft;bar.dataset.w=a.offsetWidth;});}}
+if(NAV_LAYOUTS.S2&&typeof navLayout!=="undefined")navLayout="S2"; // v562: Nikhil chose design 2 · Channel colours
+let nvAnimated=false;
+function nvBadge(n){ // live counts that mean "look here", not page counts
+  try{if(n.subs.some(s=>s[0]==="overview")){const hi=(typeof _dhVisible!=="undefined"?_dhVisible:[]).filter(i=>i.sev==="high").length;return hi?{n:hi,c:"#EF4444",t:hi+" high-priority data checks"}:null;}
+    if(n.subs.some(s=>s[0]==="possync")&&typeof posOpenFlags==="function"){const k=posOpenFlags().length;return k?{n:k,c:"#EF4444",t:k+" outlet-day(s) with unusually low POS sales"}:null;}}catch(e){}return null;}
+function navPaint(){
+  const sb=document.getElementById("app-sidebar");if(!sb)return;
+  const orig=[...sb.querySelectorAll(".tab:not([data-nv]),.nav-sec:not([data-nv-sec])")];let box=document.getElementById("nv-box");const L=navItems();
+  if(!L){nvShell("plain");orig.forEach(e=>e.style.removeProperty("display"));if(box)box.remove();navHubPaint();return;}
+  orig.forEach(e=>e.style.setProperty("display","none","important"));
+  const first=sb.querySelector(".tab");const wrap=first&&first.closest("#app-sidebar > div:nth-child(2)")||(first||{}).parentNode;if(!wrap)return;
+  if(!box){box=document.createElement("div");box.id="nv-box";wrap.insertBefore(box,wrap.firstChild);}
+  const st=NV_STYLE[navLayout]||"plain",T=DARK_THEME,cur=navHubOf(curPage);nvShell(st);const col=sb.dataset.collapsed==="1"&&st!=="rail";
+  if(st==="top"){nvTopPaint(L);nvCss(T);navHubPaint();return;}
+  box.className="nv-"+st+(col?" nv-col":"");let sec="",i=0;
+  box.innerHTML=`<div id="nv-ind"></div>`+L.map(n=>{
+    if(n.sec){sec=n.sec;return`<div class="nav-sec" data-nv-sec="1" style="--sc:${NV_SEC_CLR[n.sec]||T.textMuted}"><span class="nav-sec-txt">${n.sec}</span></div>`;}
+    const act=cur&&cur.id===n.id,sc=(st==="colour"||st==="live"||st==="rail")?(NV_SEC_CLR[sec]||T.accentOrange):T.accentOrange,bd=nvBadge(n),multi=n.subs.length>1,open=multi&&!col&&st!=="rail"&&(st==="tree"||act);
+    const ic=n.ico?nvSvg(n.ico):`<span class="tab-icon">${n.icon||"•"}</span>`;
+    return`<div class="tab nv-item ${act?"act":""} ${nvAnimated?"":"nv-enter"}" style="--sc:${sc};animation-delay:${(i++*.04).toFixed(2)}s" data-nv="${n.id}" onclick="navGo('${n.id}')" title="${n.label}${multi?": "+n.subs.map(s=>s[1]).join(" · "):""}">${ic}<span class="tab-label">${st==="rail"?(NV_SHORT[n.label]||n.label):n.label}${st==="live"?nvLive(n):""}</span>${bd?`<span class="nv-badge" title="${bd.t}" style="background:${bd.c}">${bd.n}</span>`:multi&&!col&&st!=="tree"&&st!=="plain"&&st!=="rail"?`<svg class="nv-chev ${open?"open":""}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>`:multi&&!col&&st==="plain"?`<span class="tab-label" style="margin-left:auto;font-size:10px;font-weight:800;color:${T.textMuted}">${n.subs.length}</span>`:""}</div>`+
+      (multi&&st!=="plain"&&st!=="rail"?`<div class="nv-subs ${open?"open":""}" style="--sc:${sc}"><div>${n.subs.map(([p,l])=>`<div class="nv-sub ${p===curPage?"act":""}" onclick="event.stopPropagation();gp('${p}')">${l}</div>`).join("")}</div></div>`:"");}).join("");
+  nvAnimated=true;nvCss(T);
+  // sliding highlight under the active item
+  nvSlide(box,T);navHubPaint();
+}
+function nvCss(T){
+  if(!document.getElementById("nav-sec-css"))document.head.appendChild(Object.assign(document.createElement("style"),{id:"nav-sec-css"}));
+  document.getElementById("nav-sec-css").textContent=`#app-sidebar .nav-sec{font-size:10px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;color:${T.textMuted};padding:12px 10px 4px}
+#app-sidebar .nav-sec:first-of-type{padding-top:2px}
 #app-sidebar[data-collapsed="1"] .nav-sec{padding:6px 8px}
 #app-sidebar[data-collapsed="1"] .nav-sec-txt{display:none}
-#app-sidebar[data-collapsed="1"] .nav-sec::after{content:"";display:block;border-top:1px solid ${DARK_THEME.cardBorder}}`;document.head.appendChild(css);}
-  sb.dataset.sections="1";
+#app-sidebar[data-collapsed="1"] .nav-sec::after{content:"";display:block;border-top:1px solid ${T.cardBorder}}
+#nv-box{position:relative;display:flex;flex-direction:column;gap:2px}
+#nv-box .nv-ico{width:19px;height:19px;flex-shrink:0;transition:transform .25s cubic-bezier(.2,.8,.2,1),color .2s}
+#nv-box .nv-item{position:relative;z-index:1;transition:color .2s,background .2s;padding:9px 10px!important}
+#nv-box .nv-item:hover .nv-ico{transform:scale(1.15) rotate(-4deg)}
+#nv-box .nv-item.act{background:transparent!important}
+#nv-ind{position:absolute;left:0;right:0;top:0;height:0;border-radius:8px;background:${T.accentOrange}22;z-index:0;transition:top .35s cubic-bezier(.2,.8,.2,1),height .35s cubic-bezier(.2,.8,.2,1),background .3s;pointer-events:none}
+#nv-ind::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;border-radius:3px;background:var(--ic,${T.accentOrange})}
+#nv-box .nv-enter{animation:nvIn .45s cubic-bezier(.2,.8,.2,1) both}
+@keyframes nvIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:none}}
+#nv-box .nv-badge{margin-left:auto;min-width:18px;height:18px;border-radius:9px;color:#fff;font-size:10px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;animation:nvPulse 2.4s ease-in-out infinite}
+@keyframes nvPulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.55)}50%{box-shadow:0 0 0 5px rgba(239,68,68,0)}}
+#nv-box .nv-chev{margin-left:auto;width:14px;height:14px;color:${T.textMuted};transition:transform .25s}
+#nv-box .nv-chev.open{transform:rotate(90deg)}
+#nv-box .nv-subs{display:grid;grid-template-rows:0fr;transition:grid-template-rows .3s cubic-bezier(.2,.8,.2,1)}
+#nv-box .nv-subs.open{grid-template-rows:1fr}
+#nv-box .nv-subs>div{overflow:hidden;margin-left:19px;border-left:1px solid ${T.cardBorder}}
+#nv-box .nv-sub{position:relative;padding:6px 10px 6px 14px;font-size:12.5px;font-weight:600;color:${T.textSecondary};cursor:pointer;border-radius:0 6px 6px 0;transition:color .2s,background .2s}
+#nv-box .nv-sub:hover{color:${T.textPrimary};background:${T.cardBorder}44}
+#nv-box .nv-sub.act{color:var(--sc);font-weight:800}
+#nv-box .nv-sub.act::before{content:"";position:absolute;left:-1px;top:6px;bottom:6px;width:2px;background:var(--sc);border-radius:2px}
+#nv-box.nv-colour .nav-sec{color:var(--sc);display:flex;align-items:center;gap:6px}
+#nv-box.nv-colour .nav-sec::before{content:"";width:6px;height:6px;border-radius:2px;background:var(--sc)}
+#nv-box.nv-colour .nv-item .nv-ico{color:var(--sc)}
+#nv-box.nv-colour .nv-item.act{color:${T.textPrimary}!important}
+#nv-box.nv-tree .nv-item{padding-top:8px!important;padding-bottom:8px!important}
+#nv-box.nv-tree .nv-sub{padding-top:4px;padding-bottom:4px}
+#nv-box.nv-col .nv-subs{display:none}
+#nv-box.nv-live .nv-ico{color:var(--sc)}
+#nv-box.nv-live .nv-item{align-items:flex-start!important}
+#nv-box.nv-live .nv-item .nv-ico{margin-top:1px}
+#nv-box.nv-live .tab-label{display:flex;flex-direction:column;gap:2px;min-width:0}
+#nv-box .nv-live{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:10.5px;font-weight:700;color:${T.textSecondary};white-space:nowrap}
+#nv-box .nv-spark{flex-shrink:0}
+@keyframes nvDraw{to{stroke-dashoffset:0}}
+#nv-box.nv-rail{gap:4px;padding:0}
+#app-sidebar[data-rail] .sidebar-brand-txt{display:none}
+#nv-box.nv-rail .nav-sec{padding:4px 10px!important}
+#nv-box.nv-rail .nav-sec-txt{display:none}
+#nv-box.nv-rail .nav-sec::after{content:"";display:block;border-top:1px solid ${T.cardBorder}}
+#nv-box.nv-rail .nv-item{flex-direction:column!important;justify-content:center;gap:5px!important;padding:9px 2px!important;text-align:center}
+#nv-box.nv-rail .nv-item .tab-label{display:block!important;font-size:10px!important;font-weight:700;white-space:normal;line-height:1.15;max-width:76px}
+#nv-box.nv-rail .nv-ico{width:22px;height:22px;color:var(--sc)}
+#nv-box.nv-rail .nv-item.act .nv-ico{background:var(--sc);color:#0B1220;border-radius:9px;padding:5px;width:32px;height:32px;box-sizing:border-box}
+#nv-box.nv-rail .nv-badge{position:absolute;top:4px;right:12px;margin:0;min-width:16px;height:16px;font-size:9px}
+#nv-box.nv-rail #nv-ind{display:none}
+#nv-box.nv-rail .nv-item.act .tab-label{color:var(--sc)!important;display:block!important}
+#nv-box.nv-rail .nv-item.act{background:transparent!important}
+#nv-top{position:sticky;top:0;z-index:30;margin:0 0 12px;background:${T.card};border:1px solid ${T.cardBorder};border-radius:12px}
+#nv-top .nvt-in{position:relative;display:flex;gap:2px;flex-wrap:wrap;padding:6px}
+#nv-top .nvt-item{position:relative}
+#nv-top .nvt-item>button{display:flex;align-items:center;gap:7px;border:none;background:transparent;color:${T.textSecondary};font:inherit;font-size:13px;font-weight:800;padding:9px 12px;border-radius:8px;cursor:pointer;transition:color .2s,background .2s}
+#nv-top .nvt-item>button:hover{background:${T.cardBorder}55;color:${T.textPrimary}}
+#nv-top .nvt-item.act>button{color:${T.textPrimary}}
+#nv-top .nvt-item .nv-ico{width:17px;height:17px;color:var(--sc)}
+#nv-top .nvt-chev{width:13px;height:13px;transition:transform .2s}
+#nv-top .nvt-item:hover .nvt-chev{transform:rotate(180deg)}
+#nv-top .nv-badge{min-width:16px;height:16px;border-radius:8px;color:#fff;font-size:9.5px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;padding:0 4px}
+#nv-top .nvt-dd{position:absolute;top:100%;left:0;min-width:190px;padding:8px;background:${T.card};border:1px solid ${T.cardBorder};border-radius:10px;box-shadow:0 14px 30px rgba(0,0,0,.45);opacity:0;visibility:hidden;transform:translateY(-6px);transition:opacity .18s,transform .18s,visibility .18s;z-index:40}
+#nv-top .nvt-item:hover .nvt-dd{opacity:1;visibility:visible;transform:none}
+#nv-top .nvt-dd-sec{font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;padding:2px 8px 6px}
+#nv-top .nvt-sub{padding:8px 10px;border-radius:7px;font-size:13px;font-weight:700;color:${T.textSecondary};cursor:pointer}
+#nv-top .nvt-sub:hover{background:${T.cardBorder}55;color:${T.textPrimary}}
+#nv-top .nvt-sub.act{color:${T.accentOrange}}
+#nvt-ind{position:absolute;bottom:2px;height:3px;border-radius:3px;transition:left .35s cubic-bezier(.2,.8,.2,1),width .35s cubic-bezier(.2,.8,.2,1)}`;}
+function nvSlide(box,T){
+  const ind=document.getElementById("nv-ind"),actEl=box.querySelector(".nv-item.act");
+  if(ind&&actEl){const sc=getComputedStyle(actEl).getPropertyValue("--sc").trim();const _cl=["colour","live"].includes(NV_STYLE[navLayout]);ind.style.setProperty("--ic",_cl?sc:T.accentOrange);ind.style.background=(_cl?sc:T.accentOrange)+"22";
+    const prev=box.dataset.indTop;if(prev){ind.style.transition="none";ind.style.top=prev+"px";ind.style.height=box.dataset.indH+"px";void ind.offsetWidth;ind.style.transition="";}
+    requestAnimationFrame(()=>{ind.style.top=actEl.offsetTop+"px";ind.style.height=actEl.offsetHeight+"px";box.dataset.indTop=actEl.offsetTop;box.dataset.indH=actEl.offsetHeight;});}
+  else if(ind)ind.style.height="0";
+}
+function navHubPaint(){
+  let bar=document.getElementById("hub-bar");const h=navHubOf(curPage),pg=document.getElementById("page-"+curPage);
+  const sbCol=(document.getElementById("app-sidebar")||{dataset:{}}).dataset.collapsed==="1";
+  if(!h||h.subs.length<2||!pg||(NV_STYLE[navLayout]==="tree"&&!sbCol)){if(bar)bar.style.display="none";return;}
+  if(!bar){bar=document.createElement("div");bar.id="hub-bar";}
+  if(bar.nextSibling!==pg)pg.parentNode.insertBefore(bar,pg);
+  const T=DARK_THEME;bar.style.cssText=`display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin:0 0 10px;padding:6px;background:${T.card};border:1px solid ${T.cardBorder};border-radius:10px`;
+  bar.innerHTML=`<span style="font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:${T.textMuted};padding:0 8px">${h.label}</span>`+h.subs.map(([id,l])=>`<button onclick="gp('${id}')" style="border:none;border-radius:7px;padding:7px 14px;font:inherit;font-size:12.5px;font-weight:800;cursor:pointer;background:${id===curPage?T.accentOrange+"26":"transparent"};color:${id===curPage?T.accentOrange:T.textSecondary}">${l}</button>`).join("");
+}
+function navGo(id){const n=navItems().find(x=>x.id===id);if(n)gp(navLastSub[id]&&n.subs.some(s=>s[0]===navLastSub[id])?navLastSub[id]:n.subs[0][0]);}
+function navSetLayout(k){navLayout=k;for(const x in navLastSub)delete navLastSub[x];navPaint();if(NAV_LAYOUTS[k]&&!navHubOf(curPage))gp("overview");}
+function navSectionize(){ // called by buildSidebarNav once the sidebar exists
+  const sb=document.getElementById("app-sidebar");if(!sb||sb.dataset.navHooked)return;sb.dataset.navHooked="1";
+  const _gp=gp;gp=function(p){_gp(p);const h=navHubOf(p);if(h)navLastSub[h.id]=p;navPaint();if(p==="campaigns"||p==="cpc"){mktRetitle();setTimeout(mktRetitle,400);setTimeout(mktRetitle,1500);}};window.gp=gp;
+  new MutationObserver(()=>navPaint()).observe(sb,{attributes:true,attributeFilter:["data-collapsed"]});
+  navPaint();navDrawerSync();
 }
 window.navSectionize=navSectionize;
+// v562: the phone's ☰ drawer lists the same menu (sections → pages) instead of the old page list
+function navDrawerSync(){try{const first=document.querySelector("#mobile-nav-drawer .mnav");if(!first)return;const list=first.parentNode;if(list.dataset.nvDone)return;const L=navItems();if(!L)return;
+  const T=DARK_THEME;let sec="";const parts=[];
+  for(const n of L){if(n.sec){sec=n.sec;parts.push(`<div style="font-size:10px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;color:${NV_SEC_CLR[sec]||T.textMuted};padding:12px 12px 4px">${sec}</div>`);continue;}
+    for(const[p,l]of n.subs)parts.push(`<button class="mnav" data-pg="${p}" onclick="mNavGo('${p}')" style="display:flex;align-items:center;gap:10px;color:${T.textSecondary}"><span style="color:${NV_SEC_CLR[sec]||T.accentOrange};display:inline-flex">${n.ico?nvSvg(n.ico):""}</span><span>${n.subs.length>1?`${n.label} · ${l}`:l}</span></button>`);}
+  list.querySelectorAll(".mnav").forEach(b=>b.remove());list.insertAdjacentHTML("beforeend",parts.join(""));list.dataset.nvDone="1";}catch(e){}}window.navGo=navGo;window.navSetLayout=navSetLayout;
 
 // ── Guards: delivery-only maths stays delivery-only when "All sales" is on
 (function rdGuards(){
@@ -25880,3 +26300,112 @@ function rdDigestSectionHTML(){
     <table><thead><tr><th style="text-align:left">Day</th><th style="text-align:left">Outlet</th><th>POS net</th><th>Usual</th><th>Gap</th></tr></thead><tbody>${fl.map(f=>`<tr><td>${esc(fmtDisp(f.date))}</td><td>${esc(f.loc)}</td><td style="text-align:right">${fmtAEDExact(f.net)}</td><td style="text-align:right">${fmtAEDExact(f.base)}</td><td style="text-align:right"><span class="down">${f.pct}%</span></td></tr>`).join("")}</tbody></table>`;
   return h;
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// v556 DINE-IN DISCOUNTS & ROI — every in-store discount (Entertainer, Esaad, Z Pro, Careem Dine Out, BOD, staff…)
+// from Microsys "Sales Discount Details": per day × outlet × discount → checks, discount, net & gross sales of the
+// checks that used it. ROI = net sales on those checks ÷ discount given (same POS basis, excl. VAT).
+// Source: the "Dine-In Discounts" tab that POS Sync fills (one row per day × outlet × discount).
+// ════════════════════════════════════════════════════════════════════════════
+let ddData=[],ddLoaded=false,ddErr=null,ddState={prog:null};
+const DD_TAB_GID=(typeof window!=="undefined"&&window.DD_TAB_GID_OVERRIDE)||null; // set once the LIVE tab exists
+if(typeof pageFilters!=="undefined"&&!pageFilters.dindisc){pageFilters.dindisc=newFilterState();pageFilters.dindisc.preset="30d";} // discounts read better over a month
+const DD_PROGS=[[/entertainer/i,"Entertainer","Partner programme"],[/esaad/i,"Esaad","Partner programme"],[/z ?pro/i,"Z Pro","Partner programme"],
+  [/careem dine/i,"Careem Dine Out","Partner programme"],[/noon/i,"Noon Dine Out","Partner programme"],[/mall/i,"Mall discount","Partner programme"],
+  [/gems/i,"GEMS","Partner programme"],[/kingspan/i,"Kingspan","Partner programme"],[/palma/i,"Palma","Partner programme"],
+  [/happy tuesday/i,"Happy Tuesday","Promotion"],[/bogo|buy ?1/i,null,"Promotion"],[/training/i,"Training","Team & owners"],[/sales promo/i,"Sales promo","Promotion"],[/catering/i,"Catering discount","Catering"],
+  [/customer disc/i,"Customer discount","Guest recovery"],[/comp meal/i,"Comp meal voucher","Guest recovery"],
+  [/\bbod\b/i,"BOD (owners)","Team & owners"],[/head office/i,"Head office","Team & owners"],[/staff/i,"Staff meals","Team & owners"],[/food trial/i,"Food trial","Team & owners"],
+  [/manager|supervisor|asst ops|ar mgr|business dev|chef|security/i,"Management & team","Team & owners"]];
+const DD_TYPE_CLR={"Partner programme":"#22C55E","Promotion":"#4E9BFF","Catering":"#A78BFA","Guest recovery":"#F59E0B","Team & owners":"#94A3B8","Other":"#64748B"};
+function ddProg(name){const nm=String(name||"").replace(/\s+(DI|TO)$/i,"").trim();for(const[re,p,t]of DD_PROGS)if(re.test(name))return{p:p||nm,t};return{p:String(name||"Other").trim(),t:"Other"};}
+async function loadDinDiscData(){
+  let gid=DD_TAB_GID;
+  if(!gid){try{const sid=(JSON.parse(localStorage.getItem("oregano_session")||"{}")||{}).sessionId;
+    const j=await (await fetch("/api/sheet/gid?name="+encodeURIComponent("Dine-In Discounts"),{headers:{"X-Session-Id":sid||""}})).json();gid=j&&j.gid;}catch(e){}}
+  if(!gid){ddLoaded=true;ddErr="setup";if(typeof curPage!=="undefined"&&curPage==="dindisc")renderPage("dindisc");return;}
+  try{const r=await fetchWithTimeout(`${PUB}?gid=${gid}&single=true&output=csv&_cb=${Date.now()}`,15000);if(!r.ok)throw new Error("HTTP "+r.status);
+    const rows=parseCSV(await r.text());const hi=rows.findIndex(x=>(x[0]||"").trim().toLowerCase()==="date");if(hi<0)throw new Error("Dine-In Discounts header not found");
+    const h=rows[hi].map(x=>String(x).trim().toLowerCase()),ix=k=>h.findIndex(x=>x.startsWith(k));const iD=ix("date"),iO=ix("outlet"),iN=ix("discount name"),iC=ix("checks"),iA=ix("discount aed"),iNet=ix("net"),iG=ix("gross");
+    const num=v=>{const n=parseFloat(String(v||"").replace(/,/g,""));return isNaN(n)?0:n;};
+    ddData=rows.slice(hi+1).map(x=>{const d=parseDate(x[iD]);if(!d)return null;const g=ddProg(x[iN]);return{date:dk(d),outlet:chNormOutlet(x[iO]),name:String(x[iN]||"").trim(),prog:g.p,type:g.t,checks:num(x[iC]),disc:num(x[iA]),net:num(x[iNet]),gross:num(x[iG])};}).filter(Boolean);
+    ddLoaded=true;ddErr=null;}catch(e){ddLoaded=true;ddErr=e.message;}
+  if(typeof curPage!=="undefined"&&curPage==="dindisc"){Object.values(charts).forEach(c=>c.destroy());charts={};renderPage("dindisc");}
+}
+function ddSet(k,v){ddState[k]=ddState[k]===v?null:v;Object.values(charts).forEach(c=>c.destroy());charts={};renderPage("dindisc");}
+function ddAgg(s,e){const by={},out={},days={};const z=()=>({checks:0,disc:0,net:0,gross:0});
+  for(const r of ddData){if(r.date<s||r.date>e)continue;
+    const p=(by[r.prog]=by[r.prog]||Object.assign(z(),{type:r.type,names:new Set(),outlets:{}}));p.names.add(r.name);
+    for(const o of[p,(p.outlets[r.outlet]=p.outlets[r.outlet]||z())]){o.checks+=r.checks;o.disc+=r.disc;o.net+=r.net;o.gross+=r.gross;}
+    if(!ddState.prog||ddState.prog===r.prog){const d=(days[r.date]=days[r.date]||{});d[r.prog]=(d[r.prog]||0)+r.disc;const oo=(out[r.outlet]=out[r.outlet]||{});oo[r.prog]=(oo[r.prog]||0)+r.disc;}}
+  return{by,out,days};}
+function renderDinDisc(){
+  const pg=document.getElementById("page-dindisc");if(!pg)return;
+  if(!ddState.init){ddState.init=1;const t=dk(new Date()),F=pageFilters.dindisc;if(F&&(!F.start||F.preset==="yesterday")){F.preset="30d";F.start=subDays(t,29);F.end=t;}} // first open: last 30 days
+  const T=DARK_THEME,f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),cmp=getCompRange(),cs=getCompShort(),vf=chState.vat==="excl"?1:1.05;
+  const style=`<style>
+    #page-dindisc{background:${T.bg};border-radius:12px;padding:16px 20px}
+    #page-dindisc .card,#page-dindisc .sm,#page-dindisc .fbar{background:${T.card}!important;border:1px solid ${T.cardBorder}!important;box-shadow:${T.shadow}!important;color:${T.textPrimary}}
+    #page-dindisc .ct{color:${T.textPrimary}!important}
+    #page-dindisc .fbar .preset{background:${T.bg}!important;border:1px solid ${T.cardBorder}!important;color:${T.textSecondary}!important}
+    #page-dindisc .fbar .preset.act{background:${T.accentOrange}22!important;border-color:${T.accentOrange}!important;color:${T.accentOrange}!important}
+    #page-dindisc .tbl th{color:${T.textSecondary};border-bottom-color:${T.cardBorder}}
+    #page-dindisc .tbl td{border-bottom-color:${T.cardBorder}55;color:${T.textPrimary};white-space:nowrap}
+    #page-dindisc .tbl tr:hover td{background:${T.cardBorder}33}
+    #page-dindisc .ch-seg{display:inline-flex;border:1px solid ${T.cardBorder};border-radius:7px;overflow:hidden}
+    #page-dindisc .ch-seg button{border:none;background:${T.bg};color:${T.textSecondary};padding:5px 11px;font-size:11px;font-weight:700;cursor:pointer}
+    #page-dindisc .ch-seg button.on{background:${T.accentOrange}22;color:${T.accentOrange}}
+    @media (max-width:900px){#page-dindisc{padding:12px}}
+  </style>`;
+  const vatSeg=`<span class="ch-seg">${[["incl","Incl. VAT"],["excl","Excl. VAT"]].map(([v,l])=>`<button class="${chState.vat===v?"on":""}" onclick="chState.vat='${v}';renderPage('dindisc')">${l}</button>`).join("")}</span>`;
+  let h=style+makeFilterBar({hideBrand:true,hidePlatform:true,hideOutlet:true,dateExtra:vatSeg});
+  if(ddErr==="setup"){pg.innerHTML=h+`<div class="card" style="color:${T.textSecondary};line-height:1.6">The <b>Dine-In Discounts</b> tab isn't set up yet. The next POS Sync pull creates it in the Google Sheet and fills it every day; use the Backfill card to add past months.</div>`;return;}
+  if(ddErr){pg.innerHTML=h+`<div class="card" style="color:${T.accentRed}">⚠ Couldn't load the Dine-In Discounts tab: ${esc(ddErr)}</div>`;return;}
+  if(!ddLoaded){pg.innerHTML=h+`<div class="card" style="color:${T.textSecondary}">Loading…</div>`;return;}
+  const cur=ddAgg(s,e),prev=ddAgg(cmp.s,cmp.e);
+  const progs=Object.keys(cur.by).sort((a,b)=>cur.by[b].disc-cur.by[a].disc);
+  const sumT=(A,fn)=>Object.values(A.by).filter(fn).reduce((a,x)=>({checks:a.checks+x.checks,disc:a.disc+x.disc,net:a.net+x.net,gross:a.gross+x.gross}),{checks:0,disc:0,net:0,gross:0});
+  const all=sumT(cur,()=>true),allP=sumT(prev,()=>true),mk=x=>x.type==="Partner programme"||x.type==="Promotion",pp=sumT(cur,mk),ppP=sumT(prev,mk),team=sumT(cur,x=>x.type==="Team & owners"),teamP=sumT(prev,x=>x.type==="Team & owners");
+  // in-store base for context: dine-in + takeaway checks and avg check per outlet (Dine-In & Takeaway tab)
+  const base=dnAgg(s,e,true),baseChecks=base.tot.di.orders+base.tot.to.orders,baseGross=(base.tot.di.sales+base.tot.to.sales)/1.05+base.tot.di.disc+base.tot.to.disc;
+  const roi=x=>x.disc>0?x.net/x.disc:null,roiTxt=x=>{const r=roi(x);return r==null?"—":`AED ${r.toFixed(1)}`;};
+  h+=`<div class="g4 ov-kpi-row">`+
+    kpiCard("In-store discounts",fmtAEDTip(all.disc),`${baseGross>0?(all.disc/baseGross*100).toFixed(1):"—"}% of in-store gross · ${cs}`,pctOf(all.disc,allP.disc),null,null,true)+
+    kpiCard(`<span style="color:${DD_TYPE_CLR["Partner programme"]}">●</span> Programmes & promotions`,fmtAEDTip(pp.disc),`brought ${fmtAED(pp.net*vf)} sales on ${Math.round(pp.checks).toLocaleString()} checks`,pctOf(pp.disc,ppP.disc),null,null,true)+
+    kpiCard("Return per AED 1 discount",roiTxt(pp),`net sales per AED 1 given · ${cs}: ${roiTxt(ppP)}`,pctOf(roi(pp),roi(ppP)))+
+    kpiCard("Checks with a discount",Math.round(all.checks).toLocaleString(),`${baseChecks>0?(all.checks/baseChecks*100).toFixed(1):"—"}% of dine-in + takeaway checks`,pctOf(all.checks,allP.checks))+
+    kpiCard(`<span style="color:${DD_TYPE_CLR["Team & owners"]}">●</span> Team & owners meals`,fmtAEDTip(team.disc),`staff, management & BOD · ${cs}`,pctOf(team.disc,teamP.disc),null,null,true)+
+  `</div>`;
+  if(ddState.prog)h+=`<div style="margin:-4px 0 12px"><span onclick="ddSet('prog','${esc(ddState.prog)}')" style="cursor:pointer;background:${T.accentOrange}22;color:${T.accentOrange};border:1px solid ${T.accentOrange}55;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:700">✕ ${esc(ddState.prog)}</span></div>`;
+  // programme table
+  const avgCheckAll=base.tot.di.orders?base.tot.di.sales/base.tot.di.orders:0;
+  const heads=["Discount","Type","Checks","Discount given","Net sales on those checks","Avg check","vs dine-in avg","Depth %","Return per AED 1",`Δ discount <span style="font-weight:400;color:${T.textMuted}">${cs}</span>`];
+  const rows=progs.map(p=>{const x=cur.by[p],q=prev.by[p]||{disc:0},avg=x.checks?x.net*vf/x.checks:0,dep=x.gross>0?x.disc/x.gross*100:0,r=roi(x),showR=x.type!=="Team & owners";
+    const vs=avgCheckAll&&avg&&x.type!=="Catering"?(avg/avgCheckAll-1)*100:null; // catering orders aren't comparable to a table check
+    return{cells:[`<span onclick="ddSet('prog','${esc(p)}')" title="${esc([...x.names].join(" · "))}" style="cursor:pointer;font-weight:800;${ddState.prog===p?`color:${T.accentOrange}`:""}">${esc(p)}</span>`,
+      `<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:${T.textSecondary}"><span style="width:8px;height:8px;border-radius:2px;background:${DD_TYPE_CLR[x.type]}"></span>${x.type}</span>`,
+      Math.round(x.checks).toLocaleString(),`<span style="color:#FF6B6B;font-weight:700">${fmtAEDTip(x.disc)}</span>`,fmtAEDTip(x.net*vf),avg?`AED ${avg.toFixed(0)}`:"—",
+      vs==null?"—":`<span style="color:${vs>=0?"#22C55E":"#FBBF24"};font-weight:700">${vs>=0?"+":""}${vs.toFixed(0)}%</span>`,
+      `<span style="color:${dep>=45?T.accentRed:dep>=25?"#F59E0B":"#22C55E"};font-weight:700">${dep.toFixed(0)}%</span>`,
+      showR&&r!=null?`<b style="color:${r>=4?"#22C55E":r>=2?"#FBBF24":"#FF6B6B"}">AED ${r.toFixed(1)}</b>`:`<span style="color:${T.textMuted}" title="Internal cost — no sales return expected">cost</span>`,fmtChgCell(x.disc,q.disc,true)],
+      sortVals:[p,x.type,x.checks,x.disc,x.net,avg,vs,dep,showR?r:null,pctOf(x.disc,q.disc)]};});
+  h+=`<div class="card rd-in"><div class="ct">🎟️ Every in-store discount <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· click one to focus the charts below · hover for the POS names it groups</span></div>${sortableTable("dd-progs",heads,rows,3)}
+    <div style="font-size:11.5px;color:${T.textMuted};margin-top:8px;line-height:1.55"><b style="color:${T.textSecondary}">Return per AED 1</b> = net sales of the checks that used the discount ÷ the discount given (both from the POS, before VAT). It shows what each dirham of discount came with — not whether the guest would have visited anyway. <b style="color:${T.textSecondary}">vs dine-in avg</b> compares the average check with the discount to the average dine-in check over the same days.</div></div>`;
+  // chart + outlet matrix
+  const nDays=Math.round((new Date(e+"T12:00:00")-new Date(s+"T12:00:00"))/86400000)+1,gran=nDays<=45?"day":nDays<=200?"week":"month";
+  h+=`<div class="card"><div class="ct">📈 Discount given over time${ddState.prog?" · "+esc(ddState.prog):""} <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· by ${gran}</span></div><div style="height:280px"><canvas id="dd-trend"></canvas></div></div>`;
+  const topP=(ddState.prog?[ddState.prog]:progs.slice(0,7)),outs=Object.keys(cur.out).sort((a,b)=>Object.values(cur.out[b]).reduce((x,y)=>x+y,0)-Object.values(cur.out[a]).reduce((x,y)=>x+y,0));
+  const mx=Math.max(1,...outs.flatMap(o=>topP.map(p=>cur.out[o][p]||0)));
+  h+=`<div class="card"><div class="ct">📍 Where each discount is used <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· discount given per outlet</span></div><div style="overflow-x:auto"><table class="tbl" style="width:100%"><thead><tr><th style="text-align:left">Outlet</th>${topP.map(p=>`<th>${esc(p)}</th>`).join("")}<th>Total</th></tr></thead><tbody>${outs.map(o=>{const tt=Object.values(cur.out[o]).reduce((x,y)=>x+y,0);return`<tr><td style="font-weight:800">${esc(o)}</td>${topP.map(p=>{const v=cur.out[o][p]||0;return`<td class="rd-in" style="text-align:right;animation-delay:${(Math.random()*.4).toFixed(2)}s;background:${v?`rgba(255,107,107,${(0.08+0.5*v/mx).toFixed(2)})`:"transparent"}">${v?fmtAED(v):`<span style="color:${T.textMuted}">—</span>`}</td>`;}).join("")}<td style="text-align:right;font-weight:800">${fmtAED(tt)}</td></tr>`;}).join("")}</tbody></table></div></div>`;
+  pg.innerHTML=h;
+  const bucket=d=>{if(gran==="day")return d;if(gran==="month")return d.slice(0,7)+"-01";const x=new Date(d+"T12:00:00");x.setDate(x.getDate()-((x.getDay()+6)%7));return dk(x);};
+  const b={};Object.keys(cur.days).sort().forEach(d=>{const k=bucket(d);b[k]=b[k]||{};for(const[p,v]of Object.entries(cur.days[d]))b[k][p]=(b[k][p]||0)+v;});
+  const labels=Object.keys(b).sort(),series=ddState.prog?[ddState.prog]:[...progs.slice(0,6),"Other"];
+  const pal=["#22C55E","#4E9BFF","#FF8A3D","#A78BFA","#F59E0B","#EC4899","#64748B"];
+  const c1=document.getElementById("dd-trend")?.getContext("2d");if(!c1)return;destroyChart("dd-trend");
+  charts["dd-trend"]=new Chart(c1,{type:"bar",data:{labels:labels.map(l=>gran==="month"?new Date(l+"T12:00:00").toLocaleDateString("en-AE",{month:"short",year:"2-digit"}):gran==="week"?"w/c "+fmtShort(l):fmtShort(l)),
+    datasets:series.map((p,i)=>({label:p,data:labels.map(l=>p==="Other"?Object.entries(b[l]).filter(([k])=>!series.includes(k)).reduce((a,[,v])=>a+v,0):(b[l][p]||0)),backgroundColor:pal[i%pal.length],borderRadius:2,stack:"s"}))},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{labels:{color:T.textSecondary,boxWidth:10,font:{size:11}}},tooltip:{backgroundColor:'#0F172A',titleColor:'#FFFFFF',bodyColor:'#FFFFFF',padding:12,cornerRadius:8,callbacks:{label:c=>`${c.dataset.label}: AED ${Math.round(c.raw).toLocaleString()}`}}},
+      scales:{x:{stacked:true,ticks:{color:T.textSecondary,font:{size:10}},grid:{display:false},border:{display:false}},y:{stacked:true,ticks:{color:T.textMuted,font:{size:10},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#2A3450"},border:{display:false}}}}});
+}
+window.renderDinDisc=renderDinDisc;window.ddSet=ddSet;window.loadDinDiscData=loadDinDiscData;
