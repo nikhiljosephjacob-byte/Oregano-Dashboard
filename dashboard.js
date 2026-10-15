@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-15-552";
+const BUILD_VERSION="2026-10-15-553";
 const BUILD_NOTES=[
+  "🎨 POS SYNC: LIVE DINE-IN TAB NOT FORMATTED — the formatting step copied its look from rows of the Oregano tab, and Google refuses to copy from rows that a filter on that tab is hiding (the LIVE Oregano tab has a filter; TEST doesn't). The Dine-In & Takeaway tab is now formatted directly — white rows, black cell lines, thick frames around Dine-In / Takeaway / Total, green Branch·Date·Day on Total rows, the delivery tabs' number formats — so filters on any tab can't break it.",
   "🔧 ALL CHANNELS / DINE-IN SHOWED AED 0 — the dashboard asked Google for the Dine-In & Takeaway tab by NAME, which the published link ignores (it silently returned the Oregano tab, which has no dine-in columns). It now asks by the tab's ID, so dine-in and takeaway appear. If the link ever returns the wrong tab again, the page shows a clear warning instead of zeros.",
   "🍽️ DASHBOARD REDESIGN — ALL SALES, NOT JUST DELIVERY. (1) Menu now in sections: Group (Overview, All Channels, Outlets, Compare) · Delivery (Brands, Platforms, Ads, Campaigns, KPI, Cancellations, Feedback) · Dine-in · Tools. (2) A 🛵 Delivery / 🍽️ All sales switch in the top bar and on Overview, Brands, Outlets, Platforms and Compare — All sales adds Dine-In and Takeaway as two more channels (from the Dine-In & Takeaway tab, incl. VAT like delivery). Overview gets a Group-sales headline (delivery / dine-in / takeaway split, physical vs virtual brands) and every outlet ranked by total sales. (3) New All Channels page: KPIs per channel, channel-mix chart, outlet ranking, and (4) what the virtual brands add to each kitchen. (5) New Dine-In & Takeaway page: guests, spend per guest, check average, takeaway, discounts, trend, average day of the week and an outlet table. (6) Daily Digest gains an all-channels section, outlets yesterday and POS low-sales alerts; the health banner warns when the dine-in data falls behind or a POS flag is open. Profitability stays delivery-only (marked 'delivery only') until site costs are added. POS Sync: a backfill on an old-layout tab no longer re-pulls days before your range; a day that hits a Microsys session error retries once.",
   "🗂 POS SYNC: BACKFILL IN ANY ORDER + ⏹ STOP + FASTER + SHEET LOOK FIXED — tested on the TEST sheet: 1 Jan → 13 Oct 2026 (286 days) written with no failures, in date order with no gaps. Earlier days are now inserted above later ones, so history can be filled 2026 first and then 2025 month by month backwards. New ⏹ Stop button on Pull and Backfill (finishes the current day, saves, formats). Backfill fetches the next 2 days while writing the current one. Dine-In & Takeaway formatting now matches the delivery tabs: green only on the Total row (Branch/Date/Day), black lines on every cell, thick dividers around Dine-In, Takeaway and Total, wider Branch column. Backfill defaults to 1 Jan 2026; the coverage card is hidden.",
@@ -24890,26 +24891,26 @@ function psInstoreFormatRequests(src,dst){
   const cp=(sr,sc,dr0,dr1,dc)=>R.push({copyPaste:{source:{sheetId:S,startRowIndex:sr,endRowIndex:sr+1,startColumnIndex:sc,endColumnIndex:sc+1},destination:{sheetId:D,startRowIndex:dr0,endRowIndex:dr1,startColumnIndex:dc,endColumnIndex:dc+1},pasteType:"PASTE_FORMAT"}});
   // header rows 1-2 and the blank row 3, column by column
   map.forEach((sc,dc)=>{for(const r of[0,1])cp(r,sc,r,r+1,dc);});
-  // first block: outlet rows, Total row, gap row
-  map.forEach((sc,dc)=>{cp(st,sc,first,first+1,dc);if(n>2)cp(Math.min(st+1,tot-1),sc,first+1,first+n-1,dc);cp(tot-1,sc,first+n-1,first+n,dc);
-    cp(tot,sc,first+n,first+n+1,dc);});
-  // v550: explicit look on top of the copied fonts/number formats (the Oregano rows used as templates can carry
-  // highlight colours someone added by hand): outlet rows white, Total row green in Branch/Date/Day only,
-  // light grid on every cell, and a dark frame around each sales type (Branch·Date·Day | Dine-In | Takeaway | Total).
-  const W=map.length,blk0=first,blk1=first+period,totR=first+n;
+  // v553: data rows are formatted DIRECTLY (no copying from Oregano's rows): copyPaste fails whenever a filter on the
+  // Oregano tab hides the template rows ("not supported on a range with a filtered out row"), which is what broke the
+  // LIVE sheet. Every request below works over the whole range regardless of filters. Look = the delivery tabs:
+  // white rows, black cell lines, thick black frame around Branch·Date·Day | Dine-In | Takeaway | Total, Total row in
+  // 11pt with Branch/Date/Day in green, same number formats as the delivery columns.
+  const W=map.length,r0=first,r1=last+1;
   const rgb=h=>({red:parseInt(h.slice(1,3),16)/255,green:parseInt(h.slice(3,5),16)/255,blue:parseInt(h.slice(5,7),16)/255});
-  const rng=(r0,r1,c0,c1)=>({sheetId:D,startRowIndex:r0,endRowIndex:r1,startColumnIndex:c0,endColumnIndex:c1});
-  const fill=(r0,r1,c0,c1,hex)=>R.push({repeatCell:{range:rng(r0,r1,c0,c1),cell:{userEnteredFormat:{backgroundColor:rgb(hex)}},fields:"userEnteredFormat.backgroundColor"}});
-  fill(blk0,blk1,0,W,"#FFFFFF");fill(totR,totR+1,0,3,"#00FF00");
-  const thin={style:"SOLID",color:rgb("#000000")},dark={style:"SOLID_THICK",color:rgb("#000000")};
-  R.push({updateBorders:{range:rng(blk0,blk1,0,W),top:thin,bottom:thin,left:thin,right:thin,innerHorizontal:thin,innerVertical:thin}});
+  const rng=(a,b,c0,c1)=>({sheetId:D,startRowIndex:a,endRowIndex:b,startColumnIndex:c0,endColumnIndex:c1});
+  R.push({repeatCell:{range:rng(r0,r1,0,W),cell:{userEnteredFormat:{backgroundColor:rgb("#FFFFFF"),horizontalAlignment:"LEFT",textFormat:{bold:false,fontSize:10}}},
+    fields:"userEnteredFormat(backgroundColor,horizontalAlignment,textFormat.bold,textFormat.fontSize)"}});
+  const nf={0:null,1:null,2:null,3:"0.00",4:"0.00",5:"0",6:"0.0",7:"0",8:"0.0",9:"0.00",10:"0.00",11:"0",12:"0.0",13:"0.00",14:"0.00",15:"0",16:"0.0"};
+  for(const[c,pat]of Object.entries(nf))if(pat)R.push({repeatCell:{range:rng(r0,r1,+c,+c+1),cell:{userEnteredFormat:{numberFormat:{type:"NUMBER",pattern:pat}}},fields:"userEnteredFormat.numberFormat"}});
+  for(let i=r0;i<=last;i++)if(String((dab[i]||[])[0]||"").trim().toLowerCase()==="total"){
+    R.push({repeatCell:{range:rng(i,i+1,0,3),cell:{userEnteredFormat:{backgroundColor:rgb("#00FF00"),textFormat:{fontSize:11}}},fields:"userEnteredFormat(backgroundColor,textFormat.fontSize)"}});
+    R.push({repeatCell:{range:rng(i,i+1,3,W),cell:{userEnteredFormat:{textFormat:{fontSize:11}}},fields:"userEnteredFormat.textFormat.fontSize"}});}
+  const thin={style:"SOLID",color:rgb("#000000")},thick={style:"SOLID_THICK",color:rgb("#000000")};
+  R.push({updateBorders:{range:rng(r0,r1,0,W),top:thin,bottom:thin,left:thin,right:thin,innerHorizontal:thin,innerVertical:thin}});
   const groups=[[0,3],[3,9],[9,13],[13,17]];
-  for(const[a,b]of groups)R.push({updateBorders:{range:rng(blk0,blk1,a,b),left:dark,right:dark}});
-  // header: frame each group across rows 1-2 as well
-  for(const[a,b]of groups)R.push({updateBorders:{range:rng(0,2,a,b),top:dark,bottom:dark,left:dark,right:dark}});
-  // tile the first block down over every later block
-  if(last>=first+period)R.push({copyPaste:{source:{sheetId:D,startRowIndex:first,endRowIndex:first+period,startColumnIndex:0,endColumnIndex:map.length},
-    destination:{sheetId:D,startRowIndex:first+period,endRowIndex:first+period*Math.ceil((last-first+1)/period),startColumnIndex:0,endColumnIndex:map.length},pasteType:"PASTE_FORMAT"}});
+  for(const[a2,b2]of groups)R.push({updateBorders:{range:rng(r0,r1,a2,b2),left:thick,right:thick}});
+  for(const[a2,b2]of groups)R.push({updateBorders:{range:rng(0,2,a2,b2),top:thick,bottom:thick,left:thick,right:thick}});
   // group headers merged across their columns, like the aggregator headers
   R.push({unmergeCells:{range:{sheetId:D,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:map.length}}});
   for(const[a,b]of[[3,9],[9,13],[13,17]])R.push({mergeCells:{range:{sheetId:D,startRowIndex:0,endRowIndex:1,startColumnIndex:a,endColumnIndex:b},mergeType:"MERGE_ALL"}});
