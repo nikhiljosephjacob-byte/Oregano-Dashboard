@@ -812,6 +812,24 @@ async function handlePosSheetMeta(request, env) {
   const m = await posSheetMeta(env, sheet);
   return json({ ok: true, sheets: m.sheets });
 }
+// v554: read the cell FORMATS (font, size, bold, alignment, number format) of a few rows of a POS tab, so the
+// Dine-In & Takeaway tab can be given exactly the delivery tabs' look. Reading works even when a filter hides
+// those rows (copying formats from hidden rows does not). Read-only; at most 10 rows.
+async function handlePosSheetRowFmt(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { sheet, tab, rows } = await readBody(request);
+  if (!POS_TABS.includes(tab) || !Array.isArray(rows) || !rows.length || rows.length > 10 || !rows.every(r => Number.isInteger(r) && r >= 0 && r < 200000)) return json({ error: "bad_request" }, 400);
+  const { token } = await googleTokenCached(env);
+  const n = "'" + tab.replace(/'/g, "''") + "'";
+  const q = rows.map(r => "ranges=" + encodeURIComponent(`${n}!A${r + 1}:BZ${r + 1}`)).join("&");
+  const fields = "sheets.data(startRow,rowData.values.userEnteredFormat(textFormat(fontFamily,fontSize,bold),horizontalAlignment,verticalAlignment,numberFormat))";
+  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${posSheetId(sheet)}?includeGridData=true&${q}&fields=${encodeURIComponent(fields)}`, { headers: { Authorization: "Bearer " + token } });
+  const j = await r.json();
+  if (!r.ok) return json({ error: (j.error && j.error.message) || ("HTTP " + r.status) }, 502);
+  const data = (((j.sheets || [])[0] || {}).data || []).map((d, i) => ({ row: rows[i], cells: (((d.rowData || [])[0] || {}).values || []).map(v => v.userEnteredFormat || null) }));
+  return json({ ok: true, rows: data });
+}
 async function handlePosSheetBatch(request, env) {
   const s = await requirePosUser(request, env);
   if (!s) return json({ error: "forbidden" }, 403);
@@ -943,6 +961,7 @@ export default {
       if (path === "/api/pos/sheet/addtab"&& method === "POST") return await handlePosAddTab(request, env);
       if (path === "/api/pos/flags"       && method === "POST") return await handlePosFlags(request, env);
       if (path === "/api/pos/sheet/meta"  && method === "POST") return await handlePosSheetMeta(request, env);
+      if (path === "/api/pos/sheet/rowfmt" && method === "POST") return await handlePosSheetRowFmt(request, env);
       if (path === "/api/pos/sheet/clear-instore" && method === "POST") return await handlePosClearInstore(request, env);
       if (path === "/api/pos/sheet/batch" && method === "POST") return await handlePosSheetBatch(request, env);
       if (path === "/api/pos/flag/ok"     && method === "POST") return await handlePosFlagOk(request, env);
