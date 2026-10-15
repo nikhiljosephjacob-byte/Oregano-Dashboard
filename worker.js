@@ -921,7 +921,7 @@ async function handlePosSheetBatch(request, env) {
   const dst = (m.sheets.find(x => x.title === "Dine-In & Takeaway") || {}).sheetId;
   const ddId = (m.sheets.find(x => x.title === "Dine-In Discounts") || {}).sheetId; // v564: the discounts tab can be formatted too
   if (dst == null && ddId == null) return json({ error: "Dine-In & Takeaway tab not found" }, 400);
-  const allowed = ["copyPaste", "mergeCells", "unmergeCells", "updateDimensionProperties", "updateSheetProperties", "repeatCell", "updateBorders", "insertDimension", "setBasicFilter"];
+  const allowed = ["copyPaste", "mergeCells", "unmergeCells", "updateDimensionProperties", "updateSheetProperties", "repeatCell", "updateBorders", "insertDimension", "setBasicFilter", "sortRange"];
   for (const q of requests) {
     const k = Object.keys(q); if (k.length !== 1 || !allowed.includes(k[0])) return json({ error: "request_not_allowed: " + k.join(",") }, 400);
     const v = q[k[0]];
@@ -929,6 +929,7 @@ async function handlePosSheetBatch(request, env) {
     if (!target || (target.sheetId !== dst && !(ddId != null && target.sheetId === ddId))) return json({ error: "only the Dine-In & Takeaway and Dine-In Discounts tabs can be formatted" }, 400);
     if (k[0] === "insertDimension" && target.sheetId !== dst) return json({ error: "rows can only be inserted in Dine-In & Takeaway" }, 400);
     if (k[0] === "setBasicFilter" && target.sheetId !== ddId) return json({ error: "a filter can only be set on Dine-In Discounts" }, 400);
+    if (k[0] === "sortRange" && (target.sheetId !== ddId || !(target.startRowIndex >= 1))) return json({ error: "only the Dine-In Discounts rows below the header can be sorted" }, 400);
     // v549: backfill may insert empty ROWS below the 2 header rows (to slot earlier days above later ones)
     if (k[0] === "insertDimension" && (v.range.dimension !== "ROWS" || !(v.range.startIndex >= 2) || !(v.range.endIndex - v.range.startIndex <= 400))) return json({ error: "only rows below the header may be inserted" }, 400);
     if (k[0] === "updateSheetProperties" && v.fields !== "gridProperties.frozenRowCount,gridProperties.frozenColumnCount") return json({ error: "only frozen rows/cols may change" }, 400);
