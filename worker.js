@@ -803,6 +803,46 @@ async function handlePosFlagOk(request, env) {
   await env.SESSIONS.put(key, JSON.stringify(list), { expirationTtl: 60 * 60 * 24 * 120 });
   return json({ ok: true });
 }
+// v564: daily reconciliation — POS till (revenue centres) vs what POS Sync writes to the sheet.
+// One KV key per day (pos:recon:<date>) holding {date,pos,agg,rows,mis,by,at,ack}; "ack" keeps the
+// "explained" marks people add (they survive a re-pull of the same day).
+async function handlePosReconSave(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { date, rec } = await readBody(request);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "") || !rec || typeof rec !== "object") return json({ error: "bad_request" }, 400);
+  const key = `pos:recon:${date}`;
+  const prev = JSON.parse((await env.SESSIONS.get(key)) || "null");
+  const num = v => Math.round((+v || 0) * 100) / 100, str = (v, n) => String(v == null ? "" : v).slice(0, n);
+  const out = { date, pos: num(rec.pos), agg: num(rec.agg), by: s.user, at: new Date().toISOString(), ack: (prev && prev.ack) || {},
+    rows: (Array.isArray(rec.rows) ? rec.rows : []).slice(0, 80).map(r => ({ loc: str(r.loc, 80), out: str(r.out, 40), rc: str(r.rc, 20), brand: str(r.brand, 20),
+      pos: num(r.pos), agg: num(r.agg), gap: num(r.gap), unexpl: num(r.unexpl), other: (Array.isArray(r.other) ? r.other : []).slice(0, 8).map(o => [str(o[0], 60), num(o[1])]) })),
+    mis: (Array.isArray(rec.mis) ? rec.mis : []).slice(0, 40).map(m => ({ loc: str(m.loc, 80), out: str(m.out, 40), rc: str(m.rc, 20), till: str(m.till, 20), brand: str(m.brand, 20), amt: num(m.amt) })) };
+  await env.SESSIONS.put(key, JSON.stringify(out), { expirationTtl: 60 * 60 * 24 * 400 });
+  return json({ ok: true, rec: out });
+}
+async function handlePosReconList(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const u = new URL(request.url), from = u.searchParams.get("from") || "", to = u.searchParams.get("to") || "9999";
+  const keys = [];let cursor;
+  do { const l = await env.SESSIONS.list({ prefix: "pos:recon:", limit: 1000, cursor }); keys.push(...l.keys); cursor = l.list_complete ? null : l.cursor; } while (cursor);
+  const want = keys.map(k => k.name).filter(n => { const d = n.slice(10); return d >= from && d <= to; }).sort().slice(-120);
+  const recs = (await Promise.all(want.map(k => env.SESSIONS.get(k)))).filter(Boolean).map(r => JSON.parse(r));
+  return json({ ok: true, recs });
+}
+async function handlePosReconAck(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { date, id, note, clear } = await readBody(request);
+  const key = `pos:recon:${date}`;
+  const rec = JSON.parse((await env.SESSIONS.get(key)) || "null");
+  if (!rec) return json({ error: "not_found" }, 404);
+  rec.ack = rec.ack || {};
+  if (clear) delete rec.ack[String(id).slice(0, 120)]; else rec.ack[String(id).slice(0, 120)] = { by: s.user, at: new Date().toISOString(), note: String(note || "").slice(0, 200) };
+  await env.SESSIONS.put(key, JSON.stringify(rec), { expirationTtl: 60 * 60 * 24 * 400 });
+  return json({ ok: true, ack: rec.ack });
+}
 // v544: formatting for the Dine-In & Takeaway tab, copied from the Oregano tab so it looks like the
 // delivery tabs. /meta returns sheet ids, frozen rows/cols and Oregano's column widths; /batch runs
 // formatting-only requests whose DESTINATION must be the Dine-In & Takeaway tab (nothing else is
@@ -855,13 +895,16 @@ async function handlePosSheetBatch(request, env) {
   if (!Array.isArray(requests) || !requests.length || requests.length > 400) return json({ error: "bad_requests" }, 400);
   const m = await posSheetMeta(env, sheet);
   const dst = (m.sheets.find(x => x.title === "Dine-In & Takeaway") || {}).sheetId;
-  if (dst == null) return json({ error: "Dine-In & Takeaway tab not found" }, 400);
-  const allowed = ["copyPaste", "mergeCells", "unmergeCells", "updateDimensionProperties", "updateSheetProperties", "repeatCell", "updateBorders", "insertDimension"];
+  const ddId = (m.sheets.find(x => x.title === "Dine-In Discounts") || {}).sheetId; // v564: the discounts tab can be formatted too
+  if (dst == null && ddId == null) return json({ error: "Dine-In & Takeaway tab not found" }, 400);
+  const allowed = ["copyPaste", "mergeCells", "unmergeCells", "updateDimensionProperties", "updateSheetProperties", "repeatCell", "updateBorders", "insertDimension", "setBasicFilter"];
   for (const q of requests) {
     const k = Object.keys(q); if (k.length !== 1 || !allowed.includes(k[0])) return json({ error: "request_not_allowed: " + k.join(",") }, 400);
     const v = q[k[0]];
-    const target = k[0] === "copyPaste" ? v.destination : k[0] === "updateSheetProperties" ? v.properties : v.range;
-    if (!target || target.sheetId !== dst) return json({ error: "only the Dine-In & Takeaway tab can be formatted" }, 400);
+    const target = k[0] === "copyPaste" ? v.destination : k[0] === "updateSheetProperties" ? v.properties : k[0] === "setBasicFilter" ? (v.filter || {}).range : v.range;
+    if (!target || (target.sheetId !== dst && !(ddId != null && target.sheetId === ddId))) return json({ error: "only the Dine-In & Takeaway and Dine-In Discounts tabs can be formatted" }, 400);
+    if (k[0] === "insertDimension" && target.sheetId !== dst) return json({ error: "rows can only be inserted in Dine-In & Takeaway" }, 400);
+    if (k[0] === "setBasicFilter" && target.sheetId !== ddId) return json({ error: "a filter can only be set on Dine-In Discounts" }, 400);
     // v549: backfill may insert empty ROWS below the 2 header rows (to slot earlier days above later ones)
     if (k[0] === "insertDimension" && (v.range.dimension !== "ROWS" || !(v.range.startIndex >= 2) || !(v.range.endIndex - v.range.startIndex <= 400))) return json({ error: "only rows below the header may be inserted" }, 400);
     if (k[0] === "updateSheetProperties" && v.fields !== "gridProperties.frozenRowCount,gridProperties.frozenColumnCount") return json({ error: "only frozen rows/cols may change" }, 400);
@@ -984,6 +1027,9 @@ export default {
       if (path === "/api/pos/sheet/clear-instore" && method === "POST") return await handlePosClearInstore(request, env);
       if (path === "/api/pos/sheet/batch" && method === "POST") return await handlePosSheetBatch(request, env);
       if (path === "/api/pos/flag/ok"     && method === "POST") return await handlePosFlagOk(request, env);
+      if (path === "/api/pos/recon"       && method === "POST") return await handlePosReconSave(request, env);
+      if (path === "/api/pos/recon"       && method === "GET")  return await handlePosReconList(request, env);
+      if (path === "/api/pos/recon/ack"   && method === "POST") return await handlePosReconAck(request, env);
     } catch (e) {
       return json({ error: "server_error", detail: String(e.message || e) }, 500);
     }
