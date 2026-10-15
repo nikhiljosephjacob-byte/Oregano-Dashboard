@@ -814,10 +814,11 @@ async function handlePosReconSave(request, env) {
   const key = `pos:recon:${date}`;
   const prev = JSON.parse((await env.SESSIONS.get(key)) || "null");
   const num = v => Math.round((+v || 0) * 100) / 100, str = (v, n) => String(v == null ? "" : v).slice(0, n);
+  const ordl = (l, n) => (Array.isArray(l) ? l : []).slice(0, n).map(o => ({ cust: str(o.cust, 60), ord: str(o.ord, 20), inv: str(o.inv, 20), ref: str(o.ref, 30), amt: num(o.amt) })); // v565: order numbers
   const out = { date, pos: num(rec.pos), agg: num(rec.agg), by: s.user, at: new Date().toISOString(), ack: (prev && prev.ack) || {},
     rows: (Array.isArray(rec.rows) ? rec.rows : []).slice(0, 80).map(r => ({ loc: str(r.loc, 80), out: str(r.out, 40), rc: str(r.rc, 20), brand: str(r.brand, 20),
-      pos: num(r.pos), agg: num(r.agg), gap: num(r.gap), unexpl: num(r.unexpl), other: (Array.isArray(r.other) ? r.other : []).slice(0, 8).map(o => [str(o[0], 60), num(o[1])]) })),
-    mis: (Array.isArray(rec.mis) ? rec.mis : []).slice(0, 40).map(m => ({ loc: str(m.loc, 80), out: str(m.out, 40), rc: str(m.rc, 20), till: str(m.till, 20), brand: str(m.brand, 20), amt: num(m.amt) })) };
+      pos: num(r.pos), agg: num(r.agg), gap: num(r.gap), unexpl: num(r.unexpl), other: (Array.isArray(r.other) ? r.other : []).slice(0, 8).map(o => [str(o[0], 60), num(o[1])]), orders: ordl(r.orders, 30) })),
+    mis: (Array.isArray(rec.mis) ? rec.mis : []).slice(0, 40).map(m => ({ loc: str(m.loc, 80), out: str(m.out, 40), rc: str(m.rc, 20), till: str(m.till, 20), brand: str(m.brand, 20), amt: num(m.amt), orders: ordl(m.orders, 40) })) };
   await env.SESSIONS.put(key, JSON.stringify(out), { expirationTtl: 60 * 60 * 24 * 400 });
   return json({ ok: true, rec: out });
 }
@@ -842,6 +843,29 @@ async function handlePosReconAck(request, env) {
   if (clear) delete rec.ack[String(id).slice(0, 120)]; else rec.ack[String(id).slice(0, 120)] = { by: s.user, at: new Date().toISOString(), note: String(note || "").slice(0, 200) };
   await env.SESSIONS.put(key, JSON.stringify(rec), { expirationTtl: 60 * 60 * 24 * 400 });
   return json({ ok: true, ack: rec.ack });
+}
+// v565: read-only discovery of the Microsys report menu — lists the report MenuIDs this login can open, so
+// a bill-by-bill report can be wired in (to name the cash / card / phone bills behind a reconciliation gap).
+async function handlePosMsysMenu(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const jar = await msysLogin(env, false);
+  const found = new Map(), seen = [], scripts = new Set();
+  const scan = (txt, src) => {
+    const re = /(RPT[A-Z0-9_\-]{4,})/g; let m;
+    while ((m = re.exec(txt))) { const id = m[1]; if (found.has(id)) continue;
+      const ctx = txt.slice(Math.max(0, m.index - 300), m.index + 300).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+      const lbl = (ctx.match(new RegExp(id + "[^>]{0,160}?>\\s*([^<]{3,80})<")) || [])[1] || "";
+      found.set(id, { id, label: lbl.trim(), src, ctx: ctx.slice(200, 420) }); }
+  };
+  for (const path of ["/Home/Index", "/Home/Dashboard", "/Dashboard/Index", "/AnalysisEMReportView/Index"]) {
+    try { const r = await msysFetch(jar, path); const t = await r.text(); seen.push(path + " " + r.status + " " + t.length); scan(t, path);
+      for (const m of t.matchAll(/<script[^>]+src="([^"]+)"/g)) if (!/^https?:/.test(m[1]) || m[1].startsWith(MSYS)) scripts.add(m[1].replace(MSYS, "")); } catch (e) { seen.push(path + " ERR " + e.message); }
+  }
+  for (const src of [...scripts].filter(x => !/jquery|bootstrap|kendo|stimulsoft|\.min\.js/i.test(x)).slice(0, 12)) {
+    try { const r = await msysFetch(jar, src.startsWith("/") ? src : "/" + src); const t = await r.text(); seen.push(src + " " + r.status + " " + t.length); scan(t, src); } catch (e) { seen.push(src + " ERR"); }
+  }
+  return json({ ok: true, seen, reports: [...found.values()].slice(0, 400) });
 }
 // v544: formatting for the Dine-In & Takeaway tab, copied from the Oregano tab so it looks like the
 // delivery tabs. /meta returns sheet ids, frozen rows/cols and Oregano's column widths; /batch runs
@@ -1028,6 +1052,7 @@ export default {
       if (path === "/api/pos/sheet/batch" && method === "POST") return await handlePosSheetBatch(request, env);
       if (path === "/api/pos/flag/ok"     && method === "POST") return await handlePosFlagOk(request, env);
       if (path === "/api/pos/recon"       && method === "POST") return await handlePosReconSave(request, env);
+      if (path === "/api/pos/msys/menu"   && method === "POST") return await handlePosMsysMenu(request, env);
       if (path === "/api/pos/recon"       && method === "GET")  return await handlePosReconList(request, env);
       if (path === "/api/pos/recon/ack"   && method === "POST") return await handlePosReconAck(request, env);
     } catch (e) {
