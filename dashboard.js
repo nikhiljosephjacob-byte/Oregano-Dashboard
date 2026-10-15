@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-15-566";
+const BUILD_VERSION="2026-10-15-567";
 const BUILD_NOTES=[
+  "📅 DINE-IN DISCOUNTS IN DATE ORDER. A backfill wrote older days below newer ones in the Dine-In Discounts tab (e.g. 1 Aug–13 Oct under 14 Oct). The tab is now sorted oldest-first (then by discount name and outlet) every time it is formatted — after each Pull and Backfill, and when you press '🎨 Re-apply sheet formatting'.",
   "🧾 TALABAT UPLOAD FIX. Talabat renamed some stores in its order export, so 220 orders (1–14 Oct) were skipped and their discounts not counted: 'FYOOZHEN, Al Forsan' (brand not recognised — 86 orders), and 'Lollorosso, Forsan', 'Lollorosso, Media City', 'Wicked Wings, Khalifa City', 'Smokeys, Sports Society Mirdif' (outlet not recognised — 134 orders). All are mapped now, and if Talabat renames a store again the dashboard falls back to keywords (Forsan/Khalifa → Al Forsan, Media City → DMC, Mirdif → Mirdiff …) instead of dropping the orders. Upload the same orderDetails file again.",
   "🔢 ORDER NUMBERS IN THE RECONCILIATION. POS Sync → Daily reconciliation now names the orders behind each gap: order no., tax invoice, platform reference and amount for catering and unknown-platform orders, and for every order rung on another brand's till button (e.g. Wicked Wings on Smokeys) — click 'n orders' under a row, or '⬇ Export orders (CSV)' for the whole range. Bills of AED 5 or less are highlighted. New '🔍 List Microsys reports' (read-only) finds the bill-by-bill report needed to also name cash / card / phone bills. Re-run 'Check these days now' once to add order numbers to days already checked.",
   "🧾 DAILY RECONCILIATION + NOTHING LOST. (1) POS Sync → new 'Daily reconciliation — till vs dashboard' card: every Pull compares each outlet's delivery till buttons (Sales Summary by Outlet — the figures Finance's Daily Sales Report uses) with the aggregator orders the dashboard counts, per outlet and day, and says why they differ: 🍱 catering (left out on purpose), ❓ a platform POS Sync doesn't know (e.g. Deliverect), 💵 not on Credit Sales (cash / card / phone order or a void). It also lists orders rung on another brand's till button (Wicked Wings on Smokeys). 'Check these days now' fills any range (read-only); 'Mark explained' records a note; open gaps show as a red badge on POS Sync. (2) Restored from before the redesign: 'Discount variance' is back in the menu (Marketing → Discount variance opens Discount Burn Analysis at the Discount Discrepancy table); Overview gets back AOV by Brand, the 'at a glance' strip (guests, spend per guest, checks, AOV, discount depth) and the full outlet table (Bars / Table switch on the outlet ranking). (3) The Dine-In Discounts tab is now formatted (header, AED number formats, borders, widths, frozen header, filter) — automatically after each Pull/Backfill, and by '🎨 Re-apply sheet formatting'.",
@@ -25052,6 +25053,8 @@ function psDDFormatRequests(ddId,nRows,diId){
   R.push({updateDimensionProperties:{range:{sheetId:ddId,dimension:"ROWS",startIndex:0,endIndex:1},properties:{pixelSize:32},fields:"pixelSize"}});
   R.push({updateSheetProperties:{properties:{sheetId:ddId,gridProperties:{frozenRowCount:1,frozenColumnCount:0}},fields:"gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}});
   R.push({setBasicFilter:{filter:{range:G(0,n,0,7)}}});
+  // v567: keep the tab in date order (oldest on top) — a backfill appends older days after newer ones
+  if(n>2)R.push({sortRange:{range:G(1,n,0,7),sortSpecs:[{dimensionIndex:0,sortOrder:"ASCENDING"},{dimensionIndex:2,sortOrder:"ASCENDING"},{dimensionIndex:1,sortOrder:"ASCENDING"}]}});
   return R;
 }
 
