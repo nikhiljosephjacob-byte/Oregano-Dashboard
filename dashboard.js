@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-15-562";
+const BUILD_VERSION="2026-10-15-563";
 const BUILD_NOTES=[
+  "💱 VAT TOGGLE BACK + DISCOUNT HISTORY. (1) Overview and Compare have the Incl. VAT / Excl. VAT switch again (next to the Period) — every sales figure on those pages follows it; Excl. VAT is the Finance Daily Sales Report basis. Your choice is remembered. (2) POS Sync → Backfill now also fills the Dine-In Discounts tab for days whose totals are already in Dine-In & Takeaway — run a backfill over Aug 1 → today and only the missing discount detail is fetched.",
   "🧭 DASHBOARD REDESIGN, PART 2 — NEW MENU, CLEARER PAGES, DINE-IN DISCOUNTS. (1) New menu (design 2 · Channel colours): Today (Overview) → Delivery (Performance: Brands · Outlets · Platforms; Marketing: Promotions · Advertising; Service: KPI tracker · Cancellations · Feedback) → In-store (Guests & spend; Discounts & ROI) → Analyse (Compare) → Tools (POS Sync; Admin). Line icons, a colour per section, sub-pages open under the active item, a sliding highlight, red badges only when something needs attention (high-priority data checks, POS low-sales flags), and entrance/hover animations; the phone menu lists the same. (2) Pages by channel: Overview and Compare show any mix of Delivery / Dine-in / Takeaway (channel chips); the Delivery pages are delivery-only; the In-store pages are in-store only. Overview = Group sales headline (animated count-up), outlets ranked across all channels, channel mix over time and what the delivery-only brands add to each kitchen; the All Brands / All Platforms tables moved to Brands and Platforms. (3) Filters in one tidy toolbar on every page: Channels · Compare · Filter on top, Period below. (4) Marketing tabs renamed Promotions and Advertising. (5) New In-store → Discounts & ROI: every in-store discount (Entertainer, Esaad, Z Pro, Careem Dine Out, Happy Tuesday, BOD, staff…) with checks, discount given, sales on those checks, average check vs the normal dine-in check, depth and return per AED 1; trend and outlet × discount matrix. POS Sync now also fills a new 'Dine-In Discounts' tab (daily Pull and Backfill) from Microsys Sales Discount Details. (6) Charts, bars and headline numbers animate in.",
   "🍔 AL REEF DINE-IN & TAKEAWAY = SMOKEYS — per Nikhil: at Al Reef (AUH) the dine-in and takeaway sales belong to Smokeys; Oregano, Lollorosso and Wicked Wings only deliver from there. With All sales on, Al Reef's dine-in/takeaway now count under Smokeys (Brands, Platforms, Compare). Each site now has a front-of-house brand (Oregano by default, Fyoozhen at DIP Fyoozhen/NAS/WTC, Smokeys at Al Reef); the All Channels card is now 'What the delivery-only brands add to each kitchen' — every brand that only delivers from a site counts there (e.g. Oregano at Al Reef, Fyoozhen at Al Forsan) — and the Overview headline splits front-of-house vs delivery-only brands the same way.",
   "🔤 POS SYNC: SAME FONT ON EVERY DAY OF THE DINE-IN TAB — days formatted at different times had different fonts and sizes (older days had copied the Oregano font, newer ones only the size). Formatting now reads the exact font, size, bold, alignment and number format of a real Oregano day (outlet row and Total row) and applies it to EVERY day of the Dine-In & Takeaway tab, so all days look the same and match the delivery tabs. Needs the new worker.js (read-only route that reads cell formats).",
@@ -25047,11 +25048,13 @@ async function posDDWriter(sheet){
   let ab=await rd();const W={created:false};
   if(!ab){await posApi("/api/pos/sheet/addtab",{sheet,tab:PS_DD_TAB});ab=[];W.created=true;}
   let next=ab.length+1;if(next<2)next=2;
+  const days=new Set();ab.forEach((r,i)=>{if(i>0&&r&&r[0])days.add(String(r[0]).trim());});
+  W.hasDay=iso=>days.has(psDateLabels(iso).label); // v563: lets the backfill fill discount days missing from this tab
   W.queue=(iso,rows)=>{const lbl=psDateLabels(iso).label,out=[];if(W.created&&!W.head){out.push({range:`'${PS_DD_TAB}'!A1:G1`,values:[PS_DD_HEAD]});W.head=true;}
     for(let i=1;i<ab.length;i++){if(String((ab[i]||[])[0]||"").trim()===lbl){out.push({range:`'${PS_DD_TAB}'!A${i+1}:G${i+1}`,values:[["","","","","","",""]]});ab[i]=["",""];}}
     if(rows.length){out.push({range:`'${PS_DD_TAB}'!A${next}:G${next+rows.length-1}`,values:rows.map(x=>[lbl,x.outlet,x.name,x.checks,x.disc,x.net,x.gross])});
       rows.forEach((x,k)=>{ab[next-1+k]=[lbl,x.outlet];});next+=rows.length;}
-    return out;};
+    days.add(lbl);return out;};
   return W;
 }
 // v544: copy the Oregano tab's look (borders, fills, fonts, number formats, widths, frozen panes) onto the Dine-In & Takeaway tab
@@ -25322,7 +25325,7 @@ async function posStartBackfill(){
   P.pulling=true;P.progress=[];P.results={sheet:P.sheet,days:[]};window.addEventListener("beforeunload",posBeforeUnload);
   const step=(t,st)=>{P.progress.push({t,st:st||"run"});renderPosSync();return P.progress.length-1;};
   const done=(i,st,t)=>{if(P.progress[i].st==="run"&&P.bar)P.bar.done=Math.min(P.bar.total,P.bar.done+1);P.progress[i].st=st;if(t)P.progress[i].t=t;renderPosSync();};
-  let ok=0,skipped=0,failed=0,written=0,nodata=0,nosplit=0;const unknown=new Set();
+  let ok=0,skipped=0,failed=0,written=0,nodata=0,nosplit=0,ddFilled=0;const unknown=new Set();
   try{
     let i=step("Reading the Dine-In & Takeaway tab");
     const rd=async()=>{const sr=await posApi("/api/pos/sheet/read",{sheet:P.sheet,tabs:[PS_INSTORE_TAB]});const vr=(sr.google&&sr.google.valueRanges)||[];
@@ -25359,7 +25362,14 @@ async function posStartBackfill(){
     for(const iso of dates){
       if(P.stop){P.bar.stopped=true;P.bar.stoppedAt=P.bar.day;step(`⏹ Stopped by you after ${P.bar.day} of ${dates.length} day(s) — everything done so far is being saved; run the same range again later to continue (done days are skipped)`,"err");break;}
       P.bar.day++;
-      if(have.has(iso)){skipped++;P.bar.done++;renderPosSync();continue;}
+      if(have.has(iso)){
+        // v563: the day is already in Dine-In & Takeaway — but if its discount detail is missing, fetch just the discounts report for it
+        if(ddW&&ddW.hasDay&&!ddW.hasDay(iso)){const di=step(`${posFmtDate(iso)} ${iso.slice(0,4)} — totals already there, adding discount detail`);
+          try{let disc;try{disc=await posApi("/api/pos/report",{kind:"disc",date:iso});}catch(e1){await new Promise(r=>setTimeout(r,2500));disc=await posApi("/api/pos/report",{kind:"disc",date:iso});}
+            const dd=psDiscInstoreRows(disc.csv);pending.push(...ddW.queue(iso,dd));ddFilled++;done(di,"ok",`${posFmtDate(iso)} ${iso.slice(0,4)} — ${dd.length} discount line(s) added`);}
+          catch(e){failed++;done(di,"err",`${posFmtDate(iso)} ${iso.slice(0,4)} — discounts ❌ ${e.message}`);}
+          P.bar.done++;renderPosSync();if(++sinceFlush>=PS_BF_FLUSH){sinceFlush=0;await flush();written++;}continue;}
+        skipped++;P.bar.done++;renderPosSync();continue;}
       const di=step(`${posFmtDate(iso)} ${iso.slice(0,4)} — Sales Summary + discounts`);
       try{
         let sum,disc;try{[sum,disc]=await fetchDay(iso);}catch(e1){ // v551: one retry after a short pause (Microsys sometimes drops a session mid-run)
@@ -25382,7 +25392,7 @@ async function posStartBackfill(){
     await flush();
     const fi=step("Formatting the Dine-In & Takeaway tab like the delivery tabs");
     try{await posFormatInstore(P.sheet);done(fi,"ok");}catch(e){done(fi,"err","Formatting failed: "+e.message+" — use 🎨 Re-apply sheet formatting");}
-    step(`Done — ${ok} day(s) written, ${skipped} already there and skipped${nosplit?`, ${nosplit} without a dine-in/takeaway split in Microsys`:""}${nodata?`, ${nodata} with no POS data`:""}${failed?`, ${failed} failed (run the same range again to retry them)`:""}`,failed||nosplit||nodata?"err":"ok");
+    step(`Done — ${ok} day(s) written, ${skipped} already there and skipped${ddFilled?`, ${ddFilled} older day(s) given their discount detail`:""}${nosplit?`, ${nosplit} without a dine-in/takeaway split in Microsys`:""}${nodata?`, ${nodata} with no POS data`:""}${failed?`, ${failed} failed (run the same range again to retry them)`:""}`,failed||nosplit||nodata?"err":"ok");
     if(unknown.size)step(`⚠ Not written — POS locations with no row in the tab: ${[...unknown].join(", ")}. Tell Claude which row they belong to.`,"err");
   }catch(e){step("❌ Backfill stopped: "+e.message,"err");failed++;}
   P.pulling=false;P.stop=false;if(P.bar){P.bar.done=P.bar.total;P.bar.finished=true;P.bar.failed=failed;P.bar.end=Date.now();}
@@ -25486,6 +25496,8 @@ function injectChannelsTab(){
       const last=tabs[tabs.length-1];last.parentNode.insertBefore(btn,last.nextSibling);}};
   add("channels","🍽️ All Channels");add("dinein","🪑 Dine-In & Takeaway");add("dindisc","🎟️ Dine-in discounts");
 }
+// v563: delivery records before any VAT scaling (the lens may hold an excl.-VAT copy in allData; vf below does the scaling once)
+function chDelivSrc(){return(typeof lensBase!=="undefined"&&lensBase)||allData;}
 // One period's numbers, per outlet and in total. vat factor applied to sales only.
 function chAggregate(s,e,allOutlets){
   const vf=chState.vat==="excl"?1/1.05:1,sel=allOutlets?null:chState.outlet;
@@ -25493,7 +25505,7 @@ function chAggregate(s,e,allOutlets){
   const by={},tot=blank(),days={};
   const add=(o,ch,x,date)=>{if(sel&&o!==sel)return;(by[o]=by[o]||blank());for(const T of[by[o][ch],tot[ch]]){T.sales+=x.sales*vf;T.orders+=x.orders;T.disc+=x.disc||0;if(x.guests!=null&&T.guests!=null)T.guests+=x.guests;}
     const dd=(days[date]=days[date]||blank());dd[ch].sales+=x.sales*vf;dd[ch].orders+=x.orders;dd[ch].disc+=x.disc||0;};
-  for(const r of allData){if(r.channel==="instore"||r.branch==="(brand-level)"||r.date<s||r.date>e)continue;add(chOutletOfDelivery(r),"Delivery",{sales:r.sales,orders:r.orders,disc:r.disc||0},r.date);}
+  for(const r of chDelivSrc()){if(r.channel==="instore"||r.branch==="(brand-level)"||r.date<s||r.date>e)continue;add(chOutletOfDelivery(r),"Delivery",{sales:r.sales,orders:r.orders,disc:r.disc||0},r.date);}
   for(const r of instoreData){if(r.date<s||r.date>e)continue;add(r.outlet,"Dine-In",r.di,r.date);add(r.outlet,"Takeaway",{sales:r.to.sales,orders:r.to.orders,disc:r.to.disc},r.date);}
   const sum=o=>CH_LIST.reduce((a,c)=>a+o[c].sales,0);
   return{by,tot,days,total:sum(tot),sum};
@@ -25630,10 +25642,13 @@ function lensInstoreRecords(){
 function lensSync(page){
   if(!lensBase)lensBase=allData.filter(r=>r.channel!=="instore");
   const sel=LENS_PAGES.has(page)?lensSelKey():"D";
-  const key=sel==="D"?"delivery":sel+":"+lensVer; // re-applies when the Dine-In & Takeaway tab (re)loads
+  const ex=LENS_PAGES.has(page)&&chState.vat==="excl"; // v563: Overview & Compare can show sales excl. VAT (÷1.05)
+  const key=(sel==="D"&&!ex)?"delivery":sel+":"+lensVer+(ex?":ex":""); // re-applies when the Dine-In & Takeaway tab (re)loads
   if(key===lensApplied)return;
   const ins=sel==="D"?[]:lensInstoreRecords().filter(r=>(r.aggregator==="Dine-In"&&sel.includes("I"))||(r.aggregator==="Takeaway"&&sel.includes("T")));
-  allData=sel.includes("D")?(ins.length?lensBase.concat(ins):lensBase):ins;
+  let out=sel.includes("D")?(ins.length?lensBase.concat(ins):lensBase):ins;
+  if(ex)out=out.map(r=>Object.assign({},r,{sales:(r.sales||0)/1.05}));
+  allData=out;
   const want={"Dine-In":sel.includes("I"),"Takeaway":sel.includes("T")};
   LENS_CH.forEach(c=>{const i=AGGS.indexOf(c);if(want[c]&&i<0)AGGS.push(c);if(!want[c]&&i>=0)AGGS.splice(i,1);});
   buildDataIndex();lensApplied=key;
@@ -25690,7 +25705,6 @@ function lensHeroHTML(){
   const tot=cur.reduce((a,x)=>a+x.v.s,0),totP=cur.reduce((a,x)=>a+x.p.s,0);
   const phys=new Set(["Oregano","Fyoozhen"]);
   const sb=rdSiteBrand(s,e);let physV=0,allV=0;for(const site of Object.keys(sb)){const h=instoreBrandOf(site);for(const[b,v]of Object.entries(sb[site])){allV+=v;if(b===h)physV+=v;}}
-  if(chState.vat==="excl"){physV*=1.05;allV*=1.05;} // hero is always incl. VAT
   const virtV=Math.max(0,allV-physV);
   const chg=v=>v==null||isNaN(v)?"":`<span style="color:${pctClr(v)};font-weight:800">${fmtPct(v)}</span>`;
   return`<div class="card rd-in" id="lens-hero" style="background:linear-gradient(135deg,${T.card} 0%,#1E2A44 100%)!important">
@@ -25711,7 +25725,7 @@ function lensHeroHTML(){
   if(typeof renderPage!=="function"||!window.lensSet)return setTimeout(lensHeroHook,250);
   const _rp=renderPage;renderPage=function(p){_rp(p);
     if(p==="compare"){const pg=document.getElementById("page-compare");if(pg&&!document.getElementById("cmp-ch-row")){const d=document.createElement("div");d.id="cmp-ch-row";d.style.marginBottom="12px";
-      d.innerHTML=`<div class="fbar fbar2" style="background:${DARK_THEME.card};border:1px solid ${DARK_THEME.cardBorder};border-radius:10px"><div class="fb-row"><div class="fb-lbl">Channels</div><div class="fb-body"><div class="fb-line">${lensControlHTML()}<span class="fb-note">applies to Group A, B and C</span></div></div></div></div>`;pg.insertBefore(d,pg.firstChild);}return;}
+      d.innerHTML=`<div class="fbar fbar2" style="background:${DARK_THEME.card};border:1px solid ${DARK_THEME.cardBorder};border-radius:10px"><div class="fb-row"><div class="fb-lbl">Channels</div><div class="fb-body"><div class="fb-line">${lensControlHTML()}<span class="fb-note">applies to Group A, B and C</span><span style="margin-left:auto">${lensVatSegHTML()}</span></div></div></div></div>`;pg.insertBefore(d,pg.firstChild);}return;}
     if(p==="overview")rdPruneOverview();
     if(p==="brands"||p==="platforms")rdDeliveryTables(p);
     if(p!=="overview"||!lensHero||lensMode!=="all")return;
@@ -25745,7 +25759,7 @@ function rdFbStyle(k){fbStyle=k;fbOpen=null;renderPage(curPage);}
 function rdFbOpen(k){fbOpen=fbOpen===k?null:k;renderPage(curPage);}
 window.rdFbStyle=rdFbStyle;window.rdFbOpen=rdFbOpen;
 function rdFilterBar(opts){
-  const{hideBrand=false,hidePlatform=false,hideOutlet=false,dateExtra=''}=opts||{};
+  let{hideBrand=false,hidePlatform=false,hideOutlet=false,dateExtra=''}=opts||{};
   const f=curFilters(),dark=typeof _darkPage!=="undefined"&&_darkPage;
   const C=dark?{bd:DARK_THEME.cardBorder,lb:DARK_THEME.textMuted,tx:DARK_THEME.textSecondary,bg:DARK_THEME.bg,inp:DARK_THEME.textPrimary,ac:DARK_THEME.accentOrange}:{bd:"#E2E8F0",lb:"#94A3B8",tx:"#475569",bg:"#F1F5F9",inp:"#0F172A",ac:"#f59e0b"};
   const presets=[["yesterday","Yesterday"],["7d","Last 7 Days"],["30d","Last 30 Days"],["month","This Month"],["lmonth","Last Month"],["custom","Custom"]];
@@ -25762,6 +25776,7 @@ function rdFilterBar(opts){
   const hasCh=LENS_PAGES.has(curPage),hasCmp=typeof GROWTH_LENS_PAGES!=="undefined"&&GROWTH_LENS_PAGES.has(curPage),hasF=!!(brDD||plDD||ouDD);
   const chHTML=lensControlHTML(),cmpHTML=hasCmp?growthLensSwitchHTML().replace(/<span style="font-size:10px;font-weight:800;letter-spacing:\.6px;text-transform:uppercase;color:[^"]*">Compare<\/span>/,""):"";
   const fHTML=brDD+plDD+ouDD+clearBtn,chipsLine=chips?`<div class="fb-line" style="margin-top:6px">${chips}</div>`:"";
+  if(hasCh&&!/lensVat\(/.test(dateExtra))dateExtra=lensVatSegHTML()+(dateExtra?" "+dateExtra:""); // v563: VAT toggle back on Overview & Compare (it lived on the old All channels page)
   const period=getPeriodLabel(),extra=dateExtra?`<span class="fb-extra">${dateExtra}</span>`:"";
   const row=(label,body,ext)=>`<div class="fb-row"><div class="fb-lbl">${label}</div><div class="fb-body"><div class="fb-line">${body}</div>${ext||""}</div></div>`;
   let h="",cls="fbar fbar2";
@@ -25797,6 +25812,9 @@ function rdFilterBar(opts){
 .fbar2 .fb-note{font-size:11px;color:${C.lb};font-style:italic}
 .fbar2 .fb-right{margin-left:auto}
 .fbar2 .fb-extra{display:inline-flex;align-items:center;gap:8px}
+.fbar2 .ch-seg{display:inline-flex;border:1px solid ${C.bd};border-radius:7px;overflow:hidden}
+.fbar2 .ch-seg button{border:none;background:${C.bg};color:${C.tx};padding:5px 11px;font-size:11px;font-weight:700;cursor:pointer}
+.fbar2 .ch-seg button.on{background:${C.ac}22;color:${C.ac}}
 .fbar-tb{padding:12px 16px!important}
 .fbar2 .fb-tb{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap}
 .fbar2 .fb-sep{width:1px;align-self:stretch;background:${C.bd}}
@@ -25861,6 +25879,12 @@ function rdDeliveryTables(p){const pg=document.getElementById("page-"+p);if(!pg|
   fb.insertAdjacentElement("afterend",d);
   if(typeof animateKpiCountUp==="function")setTimeout(()=>animateKpiCountUp(d),60);}
 
+// v563: Incl./Excl. VAT on Overview & Compare — every sales figure there (hero, ranking, mix, KPIs, charts, Compare groups) follows it
+function lensVatSegHTML(){return`<span class="ch-seg" title="Delivery = Credit Sales incl. VAT; dine-in & takeaway = POS × 1.05. Excl. VAT divides all sales by 1.05 — the Finance Daily Sales Report basis">${[["incl","Incl. VAT"],["excl","Excl. VAT"]].map(([v,l])=>`<button class="${chState.vat===v?"on":""}" onclick="lensVat('${v}')">${l}</button>`).join("")}</span>`;}
+function lensVat(v){if(chState.vat===v)return;chState.vat=v;try{localStorage.setItem("oregano_vat",v);}catch(e){}lensApplied=null;lensSync(curPage);Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
+window.lensVat=lensVat;
+try{const v=localStorage.getItem("oregano_vat");if(v==="excl"||v==="incl")chState.vat=v;}catch(e){}
+
 // ════════════════════════════════════════════════════════════════════════════
 // v551 REDESIGN — Idea 4 (virtual-brand contribution per site), Idea 3 (Dine-In & Takeaway page),
 // Idea 1 (menu sections), Idea 7 (Daily Digest section + health alerts), and the guards that keep
@@ -25874,7 +25898,7 @@ function rdBrandClr(b){const x=(typeof BR!=="undefined"?BR:[]).find(z=>z.n===b);
 function rdSiteBrand(s,e){
   const vf=chState.vat==="excl"?1/1.05:1,by={};
   const add=(site,brand,v)=>{const o=(by[site]=by[site]||{});o[brand]=(o[brand]||0)+v*vf;};
-  for(const r of allData){if(r.channel==="instore"||r.branch==="(brand-level)"||r.date<s||r.date>e)continue;add(chOutletOfDelivery(r),r.brand,r.sales);}
+  for(const r of chDelivSrc()){if(r.channel==="instore"||r.branch==="(brand-level)"||r.date<s||r.date>e)continue;add(chOutletOfDelivery(r),r.brand,r.sales);}
   for(const r of instoreData){if(r.date<s||r.date>e)continue;add(r.outlet,instoreBrandOf(r.outlet),(r.di.sales||0)+(r.to.sales||0));}
   return by;
 }
