@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-15-565";
+const BUILD_VERSION="2026-10-15-566";
 const BUILD_NOTES=[
+  "🧾 TALABAT UPLOAD FIX. Talabat renamed some stores in its order export, so 220 orders (1–14 Oct) were skipped and their discounts not counted: 'FYOOZHEN, Al Forsan' (brand not recognised — 86 orders), and 'Lollorosso, Forsan', 'Lollorosso, Media City', 'Wicked Wings, Khalifa City', 'Smokeys, Sports Society Mirdif' (outlet not recognised — 134 orders). All are mapped now, and if Talabat renames a store again the dashboard falls back to keywords (Forsan/Khalifa → Al Forsan, Media City → DMC, Mirdif → Mirdiff …) instead of dropping the orders. Upload the same orderDetails file again.",
   "🔢 ORDER NUMBERS IN THE RECONCILIATION. POS Sync → Daily reconciliation now names the orders behind each gap: order no., tax invoice, platform reference and amount for catering and unknown-platform orders, and for every order rung on another brand's till button (e.g. Wicked Wings on Smokeys) — click 'n orders' under a row, or '⬇ Export orders (CSV)' for the whole range. Bills of AED 5 or less are highlighted. New '🔍 List Microsys reports' (read-only) finds the bill-by-bill report needed to also name cash / card / phone bills. Re-run 'Check these days now' once to add order numbers to days already checked.",
   "🧾 DAILY RECONCILIATION + NOTHING LOST. (1) POS Sync → new 'Daily reconciliation — till vs dashboard' card: every Pull compares each outlet's delivery till buttons (Sales Summary by Outlet — the figures Finance's Daily Sales Report uses) with the aggregator orders the dashboard counts, per outlet and day, and says why they differ: 🍱 catering (left out on purpose), ❓ a platform POS Sync doesn't know (e.g. Deliverect), 💵 not on Credit Sales (cash / card / phone order or a void). It also lists orders rung on another brand's till button (Wicked Wings on Smokeys). 'Check these days now' fills any range (read-only); 'Mark explained' records a note; open gaps show as a red badge on POS Sync. (2) Restored from before the redesign: 'Discount variance' is back in the menu (Marketing → Discount variance opens Discount Burn Analysis at the Discount Discrepancy table); Overview gets back AOV by Brand, the 'at a glance' strip (guests, spend per guest, checks, AOV, discount depth) and the full outlet table (Bars / Table switch on the outlet ranking). (3) The Dine-In Discounts tab is now formatted (header, AED number formats, borders, widths, frozen header, filter) — automatically after each Pull/Backfill, and by '🎨 Re-apply sheet formatting'.",
   "💱 VAT TOGGLE BACK + DISCOUNT HISTORY. (1) Overview and Compare have the Incl. VAT / Excl. VAT switch again (next to the Period) — every sales figure on those pages follows it; Excl. VAT is the Finance Daily Sales Report basis. Your choice is remembered. (2) POS Sync → Backfill now also fills the Dine-In Discounts tab for days whose totals are already in Dine-In & Takeaway — run a backfill over Aug 1 → today and only the missing discount detail is fetched.",
@@ -3647,6 +3648,8 @@ async function parseCareemCSV(file){
 // "Fyoozhen Asian" matches before any future bare "Fyoozhen" prefix would.
 const TALABAT_BRAND_PREFIXES=[
   ["fyoozhen asian","Fyoozhen"],
+  ["fyoozhen","Fyoozhen"], // v566: "FYOOZHEN, Al Forsan"
+  ["fyoo zhen","Fyoozhen"],["wckd wings","Wicked Wings"],
   ["wicked wings","Wicked Wings"],
   ["lollorosso","Lollorosso"],
   ["smokeys","Smokeys"],
@@ -3672,8 +3675,13 @@ const TALABAT_OUTLET_MAP={
   "nad al sheba 1":"NAS","nad al sheba 4":"NAS",
   "reem island":"Al Reem",
   "the villa":"Villa",
-  "town square":"Town Square"
+  "town square":"Town Square",
+  // v566: names in the Oct 2026 export
+  "al forsan":"Al Forsan","forsan":"Al Forsan","khalifa city":"Al Forsan","khalifa city a":"Al Forsan",
+  "media city":"DMC","sports society mirdif":"Mirdiff","mirdif sports society":"Mirdiff","mirdiff":"Mirdiff"
 };
+// v566: if Talabat renames a store again, fall back to keywords before giving up (so its discount still counts)
+const TALABAT_OUTLET_KEYWORDS=[[/forsan|khalifa/,"Al Forsan"],[/media city|internet city/,"DMC"],[/mirdi/,"Mirdiff"],[/furjan/,"Furjan"],[/quoz/,"Al Quoz"],[/reef/,"Al Reef"],[/reem/,"Al Reem"],[/marina/,"Marina"],[/motor ?city/,"Motorcity"],[/silicon|\bdso\b/,"DSO"],[/villa/,"Villa"],[/town square/,"Town Square"],[/jumeirah|jumierah|wasl/,"Jumeirah"],[/nad al sheba/,"NAS"],[/investments? park|\bdip\b/,"DIP"],[/khalidiyah|trade cent/,"WTC"]];
 const TALABAT_STORAGE_KEY="talabat_orders_data_v1";
 
 let talabatOrdersData=null;
@@ -3709,7 +3717,8 @@ function parseTalabatBrandOutlet(rn){
   rest=rest.replace(/^[\s,]+/,"").trim();
   const parts=rest.split(",").map(p=>p.trim().replace(/,+$/,"")).filter(Boolean);
   const rawOutlet=parts.length?parts[parts.length-1].trim():"";
-  const outlet=TALABAT_OUTLET_MAP[rawOutlet.toLowerCase()]||null;
+  let outlet=TALABAT_OUTLET_MAP[rawOutlet.toLowerCase()]||null;
+  if(!outlet){const lr=rest.toLowerCase();const k=TALABAT_OUTLET_KEYWORDS.find(([re])=>re.test(lr));if(k)outlet=k[1];} // v566
   return{brand,outlet,rawOutlet};
 }
 
