@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-15-554";
+const BUILD_VERSION="2026-10-15-555";
 const BUILD_NOTES=[
+  "🍔 AL REEF DINE-IN & TAKEAWAY = SMOKEYS — per Nikhil: at Al Reef (AUH) the dine-in and takeaway sales belong to Smokeys; Oregano, Lollorosso and Wicked Wings only deliver from there. With All sales on, Al Reef's dine-in/takeaway now count under Smokeys (Brands, Platforms, Compare). Each site now has a front-of-house brand (Oregano by default, Fyoozhen at DIP Fyoozhen/NAS/WTC, Smokeys at Al Reef); the All Channels card is now 'What the delivery-only brands add to each kitchen' — every brand that only delivers from a site counts there (e.g. Oregano at Al Reef, Fyoozhen at Al Forsan) — and the Overview headline splits front-of-house vs delivery-only brands the same way.",
   "🔤 POS SYNC: SAME FONT ON EVERY DAY OF THE DINE-IN TAB — days formatted at different times had different fonts and sizes (older days had copied the Oregano font, newer ones only the size). Formatting now reads the exact font, size, bold, alignment and number format of a real Oregano day (outlet row and Total row) and applies it to EVERY day of the Dine-In & Takeaway tab, so all days look the same and match the delivery tabs. Needs the new worker.js (read-only route that reads cell formats).",
   "🎨 POS SYNC: LIVE DINE-IN TAB NOT FORMATTED — the formatting step copied its look from rows of the Oregano tab, and Google refuses to copy from rows that a filter on that tab is hiding (the LIVE Oregano tab has a filter; TEST doesn't). The Dine-In & Takeaway tab is now formatted directly — white rows, black cell lines, thick frames around Dine-In / Takeaway / Total, green Branch·Date·Day on Total rows, the delivery tabs' number formats — so filters on any tab can't break it.",
   "🔧 ALL CHANNELS / DINE-IN SHOWED AED 0 — the dashboard asked Google for the Dine-In & Takeaway tab by NAME, which the published link ignores (it silently returned the Oregano tab, which has no dine-in columns). It now asks by the tab's ID, so dine-in and takeaway appear. If the link ever returns the wrong tab again, the page shows a clear warning instead of zeros.",
@@ -25565,12 +25566,16 @@ window.renderChannels=renderChannels;window.chSet=chSet;window.injectChannelsTab
 const LENS_PAGES=new Set(["overview","brands","outlets","platforms","compare"]);
 const LENS_CH=["Dine-In","Takeaway"];
 const LENS_FYZ_SITES=new Set(["DIP (Fyoozhen)","NAS","WTC"]);
+// v555: which brand a site's dine-in & takeaway belongs to (its front-of-house brand). Default Oregano.
+// Al Reef (AUH): dine-in & takeaway are Smokeys — Oregano, Lollorosso and Wicked Wings are delivery-only there (per Nikhil).
+const INSTORE_SITE_BRAND={"DIP (Fyoozhen)":"Fyoozhen","NAS":"Fyoozhen","WTC":"Fyoozhen","Al Reef":"Smokeys"};
+function instoreBrandOf(site){return INSTORE_SITE_BRAND[site]||"Oregano";}
 let lensMode="delivery",lensBase=null,lensApplied="delivery",lensVer=0;
 try{lensMode=localStorage.getItem("oregano_channel_lens")||"delivery";}catch(e){}
 function lensInstoreRecords(){
   const out=[];
   for(const r of (typeof instoreData!=="undefined"?instoreData:[])){
-    const brand=LENS_FYZ_SITES.has(r.outlet)?"Fyoozhen":"Oregano";
+    const brand=instoreBrandOf(r.outlet);
     const branch=/^DIP \(/.test(r.outlet)?"DIP":r.outlet;
     if(r.di.sales||r.di.orders)out.push({brand,branch,aggregator:"Dine-In",date:r.date,sales:r.di.sales,orders:r.di.orders,disc:r.di.disc||0,guests:r.di.guests||0,channel:"instore"});
     if(r.to.sales||r.to.orders)out.push({brand,branch,aggregator:"Takeaway",date:r.date,sales:r.to.sales,orders:r.to.orders,disc:r.to.disc||0,channel:"instore"});
@@ -25627,7 +25632,9 @@ function lensHeroHTML(){
   const cur=ch.map(([n,c,fn])=>({n,c,v:sumBy(s,e,fn),p:sumBy(cmp.s,cmp.e,fn)}));
   const tot=cur.reduce((a,x)=>a+x.v.s,0),totP=cur.reduce((a,x)=>a+x.p.s,0);
   const phys=new Set(["Oregano","Fyoozhen"]);
-  const physV=sumBy(s,e,r=>phys.has(r.brand)).s,virtV=tot-physV;
+  const sb=rdSiteBrand(s,e);let physV=0,allV=0;for(const site of Object.keys(sb)){const h=instoreBrandOf(site);for(const[b,v]of Object.entries(sb[site])){allV+=v;if(b===h)physV+=v;}}
+  if(chState.vat==="excl"){physV*=1.05;allV*=1.05;} // hero is always incl. VAT
+  const virtV=Math.max(0,allV-physV);
   const chg=v=>v==null||isNaN(v)?"":`<span style="color:${pctClr(v)};font-weight:800">${fmtPct(v)}</span>`;
   return`<div class="card" id="lens-hero" style="background:linear-gradient(135deg,${T.card} 0%,#1E2A44 100%)!important">
     <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-end;justify-content:space-between">
@@ -25638,8 +25645,8 @@ function lensHeroHTML(){
     </div>
     <div style="display:flex;height:12px;border-radius:6px;overflow:hidden;margin:16px 0 10px;background:${T.bg}">${cur.map(x=>`<div title="${x.n}" style="width:${tot>0?x.v.s/tot*100:0}%;background:${x.c}"></div>`).join("")}</div>
     <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:${T.textSecondary}">
-      <span><b style="color:${T.textPrimary}">Physical brands</b> (Oregano + Fyoozhen, incl. dine-in) ${fmtAED(physV)} · ${tot>0?(physV/tot*100).toFixed(0):0}%</span>
-      <span><b style="color:${T.textPrimary}">Virtual brands</b> (Lollorosso, Smokeys, Wicked Wings) ${fmtAED(virtV)} · ${tot>0?(virtV/tot*100).toFixed(0):0}%</span>
+      <span><b style="color:${T.textPrimary}">Front-of-house brand</b> at each site, incl. its dine-in &amp; takeaway ${fmtAED(physV)} · ${allV>0?(physV/allV*100).toFixed(0):0}%</span>
+      <span><b style="color:${T.textPrimary}">Delivery-only brands</b> in the same kitchens ${fmtAED(virtV)} · ${allV>0?(virtV/allV*100).toFixed(0):0}%</span>
       <span style="margin-left:auto;cursor:pointer;color:${T.accentOrange};font-weight:800" onclick="gp('channels')">Open All Channels →</span></div>
   </div>`;
 }
@@ -25676,31 +25683,32 @@ if(typeof pageFilters!=="undefined"&&!pageFilters.dinein)pageFilters.dinein=newF
 const RD_PHYS=new Set(["Oregano","Fyoozhen"]),RD_VIRT=["Lollorosso","Smokeys","Wicked Wings"];
 const RD_BRANDS=["Oregano","Fyoozhen","Lollorosso","Smokeys","Wicked Wings"];
 function rdBrandClr(b){const x=(typeof BR!=="undefined"?BR:[]).find(z=>z.n===b);return x?x.c:"#94A3B8";}
-// sales per physical site × brand (delivery by brand; dine-in & takeaway to the site's own physical brand)
+// sales per physical site × brand (delivery by brand; dine-in & takeaway to the site's front-of-house brand — instoreBrandOf)
 function rdSiteBrand(s,e){
   const vf=chState.vat==="excl"?1/1.05:1,by={};
   const add=(site,brand,v)=>{const o=(by[site]=by[site]||{});o[brand]=(o[brand]||0)+v*vf;};
   for(const r of allData){if(r.channel==="instore"||r.branch==="(brand-level)"||r.date<s||r.date>e)continue;add(chOutletOfDelivery(r),r.brand,r.sales);}
-  for(const r of instoreData){if(r.date<s||r.date>e)continue;const b=LENS_FYZ_SITES.has(r.outlet)?"Fyoozhen":"Oregano";add(r.outlet,b,(r.di.sales||0)+(r.to.sales||0));}
+  for(const r of instoreData){if(r.date<s||r.date>e)continue;add(r.outlet,instoreBrandOf(r.outlet),(r.di.sales||0)+(r.to.sales||0));}
   return by;
 }
-// ── Idea 4: what the virtual brands add to each kitchen
+// ── Idea 4 (v555): what the delivery-only brands add to each kitchen. Each site has a front-of-house brand (the one
+// with dine-in: Oregano by default, Fyoozhen at DIP Fyoozhen/NAS/WTC, Smokeys at Al Reef); every other brand cooked
+// in that kitchen is delivery-only THERE — e.g. Oregano at Al Reef, Fyoozhen at Al Forsan.
 function chVirtualCardHTML(s,e,cmp){
   const T=DARK_THEME,cur=rdSiteBrand(s,e),prev=rdSiteBrand(cmp.s,cmp.e),cs=getCompShort();
-  const tot=o=>RD_BRANDS.reduce((a,b)=>a+(o[b]||0),0),virt=o=>RD_VIRT.reduce((a,b)=>a+(o[b]||0),0);
+  const tot=o=>RD_BRANDS.reduce((a,b)=>a+(o[b]||0),0),virt=(o,site)=>tot(o)-(o[instoreBrandOf(site)]||0);
   const sites=Object.keys(cur).filter(x=>tot(cur[x])>0).sort((a,b)=>tot(cur[b])-tot(cur[a]));
   if(!sites.length)return"";
-  const G=sites.reduce((a,x)=>{RD_BRANDS.forEach(b=>a[b]=(a[b]||0)+(cur[x][b]||0));return a;},{});
-  const gv=virt(G),gt=tot(G);
-  const heads=["Site",...RD_BRANDS.map(b=>`<span style="color:${rdBrandClr(b)}">${b}</span>`),"Site total","Virtual brands",`Virtual share`,`Δ virtual <span style="font-weight:400;color:${T.textMuted}">${cs}</span>`];
+  let gv=0,gt=0;sites.forEach(x=>{gv+=virt(cur[x],x);gt+=tot(cur[x]);});
+  const heads=["Site",...RD_BRANDS.map(b=>`<span style="color:${rdBrandClr(b)}">${b}</span>`),"Site total","Delivery-only brands","Their share",`Δ delivery-only <span style="font-weight:400;color:${T.textMuted}">${cs}</span>`];
   const m=v=>v>0?fmtAEDTip(v):`<span style="color:${T.textMuted}">—</span>`;
-  const rows=sites.map(x=>{const c=cur[x],p=prev[x]||{},t=tot(c),v=virt(c),sh=t>0?v/t*100:0;
-    const bar=`<div style="display:flex;height:8px;width:120px;border-radius:4px;overflow:hidden;background:${T.bg}">${RD_BRANDS.map(b=>`<span title="${b} ${t>0?((c[b]||0)/t*100).toFixed(0):0}%" style="width:${t>0?(c[b]||0)/t*100:0}%;background:${RD_PHYS.has(b)?"#475569":rdBrandClr(b)}"></span>`).join("")}</div>`;
-    return{cells:[`<span style="font-weight:800">${esc(x)}</span>`,...RD_BRANDS.map(b=>m(c[b]||0)),`<strong>${fmtAEDTip(t)}</strong>`,m(v),
-      `<div style="display:flex;align-items:center;gap:8px">${bar}<b style="font-variant-numeric:tabular-nums">${sh.toFixed(0)}%</b></div>`,fmtChgCell(v,virt(p),true)],
-      sortVals:[x,...RD_BRANDS.map(b=>c[b]||0),t,v,sh,pctOf(v,virt(p))]};});
-  return`<div class="card"><div class="ct">🏭 What the virtual brands add to each kitchen <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· Oregano &amp; Fyoozhen include their dine-in &amp; takeaway</span></div>
-    <div style="font-size:12.5px;color:${T.textSecondary};margin:-2px 0 12px;line-height:1.55">Across these sites the virtual brands (Lollorosso, Smokeys, Wicked Wings) brought <b style="color:${T.textPrimary}">${fmtAEDExact(gv)}</b> — <b style="color:${T.accentOrange}">${gt>0?(gv/gt*100).toFixed(1):"0.0"}%</b> of everything those kitchens sold, with no extra rent or front-of-house.</div>
+  const rows=sites.map(x=>{const c=cur[x],p=prev[x]||{},h=instoreBrandOf(x),t=tot(c),v=virt(c,x),sh=t>0?v/t*100:0;
+    const bar=`<div style="display:flex;height:8px;width:120px;border-radius:4px;overflow:hidden;background:${T.bg}">${[h,...RD_BRANDS.filter(b=>b!==h)].map(b=>`<span title="${b} ${t>0?((c[b]||0)/t*100).toFixed(0):0}%" style="width:${t>0?(c[b]||0)/t*100:0}%;background:${b===h?"#475569":rdBrandClr(b)}"></span>`).join("")}</div>`;
+    return{cells:[`<span style="font-weight:800">${esc(x)}</span>`,...RD_BRANDS.map(b=>b===h?`<span title="Front-of-house brand here — includes its dine-in &amp; takeaway">🍽️ ${m(c[b]||0)}</span>`:m(c[b]||0)),`<strong>${fmtAEDTip(t)}</strong>`,m(v),
+      `<div style="display:flex;align-items:center;gap:8px">${bar}<b style="font-variant-numeric:tabular-nums">${sh.toFixed(0)}%</b></div>`,fmtChgCell(v,p?virt(p,x):0,true)],
+      sortVals:[x,...RD_BRANDS.map(b=>c[b]||0),t,v,sh,pctOf(v,virt(p,x))]};});
+  return`<div class="card"><div class="ct">🏭 What the delivery-only brands add to each kitchen <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· 🍽️ = the site's front-of-house brand, incl. its dine-in &amp; takeaway</span></div>
+    <div style="font-size:12.5px;color:${T.textSecondary};margin:-2px 0 12px;line-height:1.55">Across these sites, brands that only deliver from a kitchen (e.g. Lollorosso everywhere, Oregano at Al Reef, Fyoozhen at Al Forsan) brought <b style="color:${T.textPrimary}">${fmtAEDExact(gv)}</b> — <b style="color:${T.accentOrange}">${gt>0?(gv/gt*100).toFixed(1):"0.0"}%</b> of everything those kitchens sold, with no extra rent or front-of-house.</div>
     ${sortableTable("ch-virtual",heads,rows,7)}</div>`;
 }
 
