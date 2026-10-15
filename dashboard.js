@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-15-553";
+const BUILD_VERSION="2026-10-15-554";
 const BUILD_NOTES=[
+  "🔤 POS SYNC: SAME FONT ON EVERY DAY OF THE DINE-IN TAB — days formatted at different times had different fonts and sizes (older days had copied the Oregano font, newer ones only the size). Formatting now reads the exact font, size, bold, alignment and number format of a real Oregano day (outlet row and Total row) and applies it to EVERY day of the Dine-In & Takeaway tab, so all days look the same and match the delivery tabs. Needs the new worker.js (read-only route that reads cell formats).",
   "🎨 POS SYNC: LIVE DINE-IN TAB NOT FORMATTED — the formatting step copied its look from rows of the Oregano tab, and Google refuses to copy from rows that a filter on that tab is hiding (the LIVE Oregano tab has a filter; TEST doesn't). The Dine-In & Takeaway tab is now formatted directly — white rows, black cell lines, thick frames around Dine-In / Takeaway / Total, green Branch·Date·Day on Total rows, the delivery tabs' number formats — so filters on any tab can't break it.",
   "🔧 ALL CHANNELS / DINE-IN SHOWED AED 0 — the dashboard asked Google for the Dine-In & Takeaway tab by NAME, which the published link ignores (it silently returned the Oregano tab, which has no dine-in columns). It now asks by the tab's ID, so dine-in and takeaway appear. If the link ever returns the wrong tab again, the page shows a clear warning instead of zeros.",
   "🍽️ DASHBOARD REDESIGN — ALL SALES, NOT JUST DELIVERY. (1) Menu now in sections: Group (Overview, All Channels, Outlets, Compare) · Delivery (Brands, Platforms, Ads, Campaigns, KPI, Cancellations, Feedback) · Dine-in · Tools. (2) A 🛵 Delivery / 🍽️ All sales switch in the top bar and on Overview, Brands, Outlets, Platforms and Compare — All sales adds Dine-In and Takeaway as two more channels (from the Dine-In & Takeaway tab, incl. VAT like delivery). Overview gets a Group-sales headline (delivery / dine-in / takeaway split, physical vs virtual brands) and every outlet ranked by total sales. (3) New All Channels page: KPIs per channel, channel-mix chart, outlet ranking, and (4) what the virtual brands add to each kitchen. (5) New Dine-In & Takeaway page: guests, spend per guest, check average, takeaway, discounts, trend, average day of the week and an outlet table. (6) Daily Digest gains an all-channels section, outlets yesterday and POS low-sales alerts; the health banner warns when the dine-in data falls behind or a POS flag is open. Profitability stays delivery-only (marked 'delivery only') until site costs are added. POS Sync: a backfill on an old-layout tab no longer re-pulls days before your range; a day that hits a Microsys session error retries once.",
@@ -24899,13 +24900,26 @@ function psInstoreFormatRequests(src,dst){
   const W=map.length,r0=first,r1=last+1;
   const rgb=h=>({red:parseInt(h.slice(1,3),16)/255,green:parseInt(h.slice(3,5),16)/255,blue:parseInt(h.slice(5,7),16)/255});
   const rng=(a,b,c0,c1)=>({sheetId:D,startRowIndex:a,endRowIndex:b,startColumnIndex:c0,endColumnIndex:c1});
-  R.push({repeatCell:{range:rng(r0,r1,0,W),cell:{userEnteredFormat:{backgroundColor:rgb("#FFFFFF"),horizontalAlignment:"LEFT",textFormat:{bold:false,fontSize:10}}},
-    fields:"userEnteredFormat(backgroundColor,horizontalAlignment,textFormat.bold,textFormat.fontSize)"}});
-  const nf={0:null,1:null,2:null,3:"0.00",4:"0.00",5:"0",6:"0.0",7:"0",8:"0.0",9:"0.00",10:"0.00",11:"0",12:"0.0",13:"0.00",14:"0.00",15:"0",16:"0.0"};
-  for(const[c,pat]of Object.entries(nf))if(pat)R.push({repeatCell:{range:rng(r0,r1,+c,+c+1),cell:{userEnteredFormat:{numberFormat:{type:"NUMBER",pattern:pat}}},fields:"userEnteredFormat.numberFormat"}});
+  // v554: font / size / bold / alignment / number format are taken from the Oregano tab's own rows when the caller
+  // could read them (src.rowFmt = {outlet:[fmt per source column], total:[…]}), so every day matches the delivery tabs
+  // exactly; otherwise a fixed fallback (Arial 10, Total 11) is used for ALL rows, so at least every day matches.
+  const RF=src.rowFmt||null;
+  const pick=(f,withNum)=>{const o={},fl=[];if(!f)return null;
+    if(f.textFormat){const t={};const tf=[];for(const k of["fontFamily","fontSize","bold"])if(f.textFormat[k]!=null){t[k]=f.textFormat[k];tf.push("textFormat."+k);}if(tf.length){o.textFormat=t;fl.push(...tf);}}
+    for(const k of["horizontalAlignment","verticalAlignment"])if(f[k]){o[k]=f[k];fl.push(k);}
+    if(withNum&&f.numberFormat){o.numberFormat=f.numberFormat;fl.push("numberFormat");}
+    return fl.length?{fmt:o,fields:"userEnteredFormat("+fl.join(",")+")"}:null;};
+  R.push({repeatCell:{range:rng(r0,r1,0,W),cell:{userEnteredFormat:{backgroundColor:rgb("#FFFFFF"),horizontalAlignment:"LEFT",verticalAlignment:"BOTTOM",textFormat:{fontFamily:"Arial",bold:false,fontSize:10}}},
+    fields:"userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat.fontFamily,textFormat.bold,textFormat.fontSize)"}});
+  const nf={3:"0.00",4:"0.00",5:"0",6:"0.0",7:"0",8:"0.0",9:"0.00",10:"0.00",11:"0",12:"0.0",13:"0.00",14:"0.00",15:"0",16:"0.0"};
+  map.forEach((sc,dc)=>{const p=RF&&pick((RF.outlet||[])[sc],dc>=3);
+    if(p)R.push({repeatCell:{range:rng(r0,r1,dc,dc+1),cell:{userEnteredFormat:p.fmt},fields:p.fields}});
+    if(nf[dc]&&!(p&&p.fmt.numberFormat))R.push({repeatCell:{range:rng(r0,r1,dc,dc+1),cell:{userEnteredFormat:{numberFormat:{type:"NUMBER",pattern:nf[dc]}}},fields:"userEnteredFormat.numberFormat"}});});
+  const tA=RF&&pick((RF.total||[])[map[0]],false),tD=RF&&pick((RF.total||[])[map[4]],false);
   for(let i=r0;i<=last;i++)if(String((dab[i]||[])[0]||"").trim().toLowerCase()==="total"){
-    R.push({repeatCell:{range:rng(i,i+1,0,3),cell:{userEnteredFormat:{backgroundColor:rgb("#00FF00"),textFormat:{fontSize:11}}},fields:"userEnteredFormat(backgroundColor,textFormat.fontSize)"}});
-    R.push({repeatCell:{range:rng(i,i+1,3,W),cell:{userEnteredFormat:{textFormat:{fontSize:11}}},fields:"userEnteredFormat.textFormat.fontSize"}});}
+    const fa=Object.assign({backgroundColor:rgb("#00FF00")},tA?tA.fmt:{textFormat:{fontSize:11}});
+    R.push({repeatCell:{range:rng(i,i+1,0,3),cell:{userEnteredFormat:fa},fields:tA?tA.fields.replace("userEnteredFormat(","userEnteredFormat(backgroundColor,"):"userEnteredFormat(backgroundColor,textFormat.fontSize)"}});
+    R.push({repeatCell:{range:rng(i,i+1,3,W),cell:{userEnteredFormat:tD?tD.fmt:{textFormat:{fontSize:11}}},fields:tD?tD.fields:"userEnteredFormat.textFormat.fontSize"}});}
   const thin={style:"SOLID",color:rgb("#000000")},thick={style:"SOLID_THICK",color:rgb("#000000")};
   R.push({updateBorders:{range:rng(r0,r1,0,W),top:thin,bottom:thin,left:thin,right:thin,innerHorizontal:thin,innerVertical:thin}});
   const groups=[[0,3],[3,9],[9,13],[13,17]];
@@ -25013,7 +25027,13 @@ async function posFormatInstore(sheet){
   (sr.present||[]).forEach((t,k)=>{const vr=(sr.google&&sr.google.valueRanges)||[];sr.tabs[t]={header:(vr[2*k]&&vr[2*k].values)||[],ab:(vr[2*k+1]&&vr[2*k+1].values)||[]};});
   const o=meta.sheets.find(x=>x.title==="Oregano"),d=meta.sheets.find(x=>x.title===PS_INSTORE_TAB);
   if(!o||!sr.tabs.Oregano||sr.tabs.Oregano.missing)throw new Error("Oregano tab not found");if(!d||!sr.tabs[PS_INSTORE_TAB]||sr.tabs[PS_INSTORE_TAB].missing)throw new Error("Dine-In & Takeaway tab not found — pull a day first");
-  const reqs=psInstoreFormatRequests({sheetId:o.sheetId,header:sr.tabs.Oregano.header,ab:sr.tabs.Oregano.ab,widths:o.widths,frozenRows:o.frozenRows,frozenCols:o.frozenCols},{sheetId:d.sheetId,ab:sr.tabs[PS_INSTORE_TAB].ab});
+  // v554: read the font/size/alignment/number formats of a real (dated, not future) Oregano day — an outlet row and its Total row
+  let rowFmt=null;try{const oab=sr.tabs.Oregano.ab||[],today=posDubaiToday();let tot=-1;
+    for(let i=oab.length-1;i>=2;i--){const r=oab[i]||[];if(String(r[0]||"").trim().toLowerCase()==="total"){const d=psParseLabel(r[1]);if(d&&d<=today){tot=i;break;}}}
+    if(tot>3){const lbl=String(oab[tot][1]).trim();let st=tot;while(st-1>=2&&String((oab[st-1]||[])[1]||"").trim()===lbl)st--;
+      const mid=Math.min(st+1,tot-1);const rf=await posApi("/api/pos/sheet/rowfmt",{sheet,tab:"Oregano",rows:[mid,tot]});
+      rowFmt={outlet:(rf.rows[0]||{}).cells||[],total:(rf.rows[1]||{}).cells||[]};}}catch(e){rowFmt=null;} // older worker → fixed fallback look
+  const reqs=psInstoreFormatRequests({sheetId:o.sheetId,header:sr.tabs.Oregano.header,ab:sr.tabs.Oregano.ab,widths:o.widths,frozenRows:o.frozenRows,frozenCols:o.frozenCols,rowFmt},{sheetId:d.sheetId,ab:sr.tabs[PS_INSTORE_TAB].ab});
   if(!reqs.length)return 0;for(let i=0;i<reqs.length;i+=350)await posApi("/api/pos/sheet/batch",{sheet,requests:reqs.slice(i,i+350)});return reqs.length;
 }
 async function posFormatNow(){const P=posSyncState;if(P.pulling||P.formatting)return;P.formatting="⏳ Formatting…";renderPosSync();
