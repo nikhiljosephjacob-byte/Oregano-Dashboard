@@ -634,7 +634,8 @@ async function googleTokenCached(env) {
   await env.SESSIONS.put("pos:gtoken", JSON.stringify(t), { expirationTtl: 3000 });
   return t;
 }
-const POS_TABS = ["Oregano", "Lollorosso", "Smokeys", "Wicked Wings", "Fyoozhen", "Dine-In & Takeaway"];
+const POS_TABS = ["Oregano", "Lollorosso", "Smokeys", "Wicked Wings", "Fyoozhen", "Dine-In & Takeaway", "Dine-In Discounts"];
+const POS_INSTORE_TABS = ["Dine-In & Takeaway", "Dine-In Discounts"]; // v562: tabs POS Sync may create / grow
 function posSheetId(sheet) { return POS_SHEETS[sheet === "live" ? "live" : "test"]; }
 function posTabOfRange(range) { const m = String(range).match(/^'((?:[^']|'')+)'!/) || String(range).match(/^([^!]+)!/); return m ? m[1].replace(/''/g, "'") : null; }
 
@@ -714,19 +715,21 @@ async function handlePosSheetWrite(request, env) {
   // v546: a new tab has only 1,000 rows and Google refuses writes beyond the grid — grow the
   // Dine-In & Takeaway tab first when a write goes past its last row (history backfill, or simply
   // a few months of daily pulls at 20 rows a day).
-  const instoreMax = data.filter(d => posTabOfRange(d.range) === "Dine-In & Takeaway")
+  for (const tabName of POS_INSTORE_TABS) {
+  const instoreMax = data.filter(d => posTabOfRange(d.range) === tabName)
     .reduce((m, d) => { const x = String(d.range).match(/!\$?[A-Z]+\$?(\d+)(?::\$?[A-Z]+\$?(\d+))?$/); return x ? Math.max(m, +(x[2] || x[1])) : m; }, 0);
   if (instoreMax) {
     const mr = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${posSheetId(sheet)}?fields=sheets(properties(sheetId,title,gridProperties(rowCount)))`, { headers: { Authorization: "Bearer " + token } });
     const mj = await mr.json();
-    const t = ((mj && mj.sheets) || []).map(x => x.properties).find(p => p.title === "Dine-In & Takeaway");
+    const t = ((mj && mj.sheets) || []).map(x => x.properties).find(p => p.title === tabName);
     if (t && instoreMax > (t.gridProperties.rowCount || 0)) {
       const add = instoreMax - t.gridProperties.rowCount + 500;
       const ar = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${posSheetId(sheet)}:batchUpdate`, { method: "POST",
         headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
         body: JSON.stringify({ requests: [{ appendDimension: { sheetId: t.sheetId, dimension: "ROWS", length: add } }] }) });
-      if (!ar.ok) { const aj = await ar.json(); return json({ error: "Couldn't add rows to the Dine-In & Takeaway tab: " + ((aj.error && aj.error.message) || ar.status) }, 502); }
+      if (!ar.ok) { const aj = await ar.json(); return json({ error: "Couldn't add rows to the " + tabName + " tab: " + ((aj.error && aj.error.message) || ar.status) }, 502); }
     }
+  }
   }
   const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${posSheetId(sheet)}/values:batchUpdate`, {
     method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
@@ -735,19 +738,34 @@ async function handlePosSheetWrite(request, env) {
   if (!r.ok) return json({ error: (j.error && j.error.message) || ("HTTP " + r.status) }, 502);
   return json({ ok: true, updatedCells: j.totalUpdatedCells || 0, updatedRanges: (j.responses || []).length });
 }
+// v562: gid of a POS Sync tab in the LIVE sheet, for any logged-in dashboard user (the published link reads tabs by gid).
+async function handleSheetGid(request, env) {
+  const session = await getSession(env, request.headers.get("X-Session-Id"));
+  if (!session) return json({ error: "unauthorized" }, 401);
+  const name = new URL(request.url).searchParams.get("name") || "";
+  if (!POS_INSTORE_TABS.includes(name)) return json({ error: "bad_request" }, 400);
+  const ck = "pos:gid:" + name, hit = await env.SESSIONS.get(ck);
+  if (hit) return json({ ok: true, gid: hit });
+  const { token } = await googleTokenCached(env);
+  const mj = await (await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${posSheetId("live")}?fields=sheets.properties(sheetId,title)`, { headers: { Authorization: "Bearer " + token } })).json();
+  const t = ((mj && mj.sheets) || []).map(x => x.properties).find(p => p.title === name);
+  if (!t) return json({ ok: true, gid: null });
+  await env.SESSIONS.put(ck, String(t.sheetId), { expirationTtl: 86400 * 30 });
+  return json({ ok: true, gid: String(t.sheetId) });
+}
 // v539: create the "Dine-In & Takeaway" tab on first use (only that exact tab — nothing else).
 async function handlePosAddTab(request, env) {
   const s = await requirePosUser(request, env);
   if (!s) return json({ error: "forbidden" }, 403);
-  const { sheet } = await readBody(request);
-  const title = "Dine-In & Takeaway";
+  const { sheet, tab } = await readBody(request);
+  const title = POS_INSTORE_TABS.includes(tab) ? tab : "Dine-In & Takeaway"; // v562: also the Dine-In Discounts tab
   const { token } = await googleTokenCached(env);
   const id = posSheetId(sheet);
   const meta = await (await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=sheets.properties.title`, { headers: { Authorization: "Bearer " + token } })).json();
   if (((meta && meta.sheets) || []).some(x => x.properties.title === title)) return json({ ok: true, created: false });
   const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}:batchUpdate`, { method: "POST",
     headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-    body: JSON.stringify({ requests: [{ addSheet: { properties: { title, gridProperties: { rowCount: 2000, columnCount: 20, frozenRowCount: 2, frozenColumnCount: 3 } } } }] }) });
+    body: JSON.stringify({ requests: [{ addSheet: { properties: { title, gridProperties: title === "Dine-In Discounts" ? { rowCount: 3000, columnCount: 8, frozenRowCount: 1 } : { rowCount: 2000, columnCount: 20, frozenRowCount: 2, frozenColumnCount: 3 } } } }] }) });
   const j = await r.json();
   if (!r.ok) return json({ error: (j.error && j.error.message) || ("HTTP " + r.status) }, 502);
   return json({ ok: true, created: true });
@@ -952,6 +970,7 @@ export default {
       if (path === "/api/admin/ban"       && method === "POST") return await handleAdminBan(request, env);
       if (path === "/api/admin/unban"     && method === "POST") return await handleAdminUnban(request, env);
       if (path === "/api/pos/status"      && method === "GET")  return await handlePosStatus(request, env);
+      if (path === "/api/sheet/gid"       && method === "GET")  return await handleSheetGid(request, env);
       if (path === "/api/pos/creds"       && method === "POST") return await handlePosCreds(request, env);
       if (path === "/api/pos/test"        && method === "POST") return await handlePosTest(request, env);
       if (path === "/api/pos/report"      && method === "POST") return await handlePosReport(request, env);
