@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-15-563";
+const BUILD_VERSION="2026-10-15-564";
 const BUILD_NOTES=[
+  "🧾 DAILY RECONCILIATION + NOTHING LOST. (1) POS Sync → new 'Daily reconciliation — till vs dashboard' card: every Pull compares each outlet's delivery till buttons (Sales Summary by Outlet — the figures Finance's Daily Sales Report uses) with the aggregator orders the dashboard counts, per outlet and day, and says why they differ: 🍱 catering (left out on purpose), ❓ a platform POS Sync doesn't know (e.g. Deliverect), 💵 not on Credit Sales (cash / card / phone order or a void). It also lists orders rung on another brand's till button (Wicked Wings on Smokeys). 'Check these days now' fills any range (read-only); 'Mark explained' records a note; open gaps show as a red badge on POS Sync. (2) Restored from before the redesign: 'Discount variance' is back in the menu (Marketing → Discount variance opens Discount Burn Analysis at the Discount Discrepancy table); Overview gets back AOV by Brand, the 'at a glance' strip (guests, spend per guest, checks, AOV, discount depth) and the full outlet table (Bars / Table switch on the outlet ranking). (3) The Dine-In Discounts tab is now formatted (header, AED number formats, borders, widths, frozen header, filter) — automatically after each Pull/Backfill, and by '🎨 Re-apply sheet formatting'.",
   "💱 VAT TOGGLE BACK + DISCOUNT HISTORY. (1) Overview and Compare have the Incl. VAT / Excl. VAT switch again (next to the Period) — every sales figure on those pages follows it; Excl. VAT is the Finance Daily Sales Report basis. Your choice is remembered. (2) POS Sync → Backfill now also fills the Dine-In Discounts tab for days whose totals are already in Dine-In & Takeaway — run a backfill over Aug 1 → today and only the missing discount detail is fetched.",
   "🧭 DASHBOARD REDESIGN, PART 2 — NEW MENU, CLEARER PAGES, DINE-IN DISCOUNTS. (1) New menu (design 2 · Channel colours): Today (Overview) → Delivery (Performance: Brands · Outlets · Platforms; Marketing: Promotions · Advertising; Service: KPI tracker · Cancellations · Feedback) → In-store (Guests & spend; Discounts & ROI) → Analyse (Compare) → Tools (POS Sync; Admin). Line icons, a colour per section, sub-pages open under the active item, a sliding highlight, red badges only when something needs attention (high-priority data checks, POS low-sales flags), and entrance/hover animations; the phone menu lists the same. (2) Pages by channel: Overview and Compare show any mix of Delivery / Dine-in / Takeaway (channel chips); the Delivery pages are delivery-only; the In-store pages are in-store only. Overview = Group sales headline (animated count-up), outlets ranked across all channels, channel mix over time and what the delivery-only brands add to each kitchen; the All Brands / All Platforms tables moved to Brands and Platforms. (3) Filters in one tidy toolbar on every page: Channels · Compare · Filter on top, Period below. (4) Marketing tabs renamed Promotions and Advertising. (5) New In-store → Discounts & ROI: every in-store discount (Entertainer, Esaad, Z Pro, Careem Dine Out, Happy Tuesday, BOD, staff…) with checks, discount given, sales on those checks, average check vs the normal dine-in check, depth and return per AED 1; trend and outlet × discount matrix. POS Sync now also fills a new 'Dine-In Discounts' tab (daily Pull and Backfill) from Microsys Sales Discount Details. (6) Charts, bars and headline numbers animate in.",
   "🍔 AL REEF DINE-IN & TAKEAWAY = SMOKEYS — per Nikhil: at Al Reef (AUH) the dine-in and takeaway sales belong to Smokeys; Oregano, Lollorosso and Wicked Wings only deliver from there. With All sales on, Al Reef's dine-in/takeaway now count under Smokeys (Brands, Platforms, Compare). Each site now has a front-of-house brand (Oregano by default, Fyoozhen at DIP Fyoozhen/NAS/WTC, Smokeys at Al Reef); the All Channels card is now 'What the delivery-only brands add to each kitchen' — every brand that only delivers from a site counts there (e.g. Oregano at Al Reef, Fyoozhen at Al Forsan) — and the Overview headline splits front-of-house vs delivery-only brands the same way.",
@@ -24981,6 +24982,68 @@ function psDiscInstoreRows(csv){
 }
 if(typeof module!=="undefined")Object.assign(module.exports,{psDiscInstoreRows,PS_DD_TAB,PS_DD_HEAD});
 
+// ── v564: DAILY RECONCILIATION — POS till (revenue centres in Sales Summary by Outlet, excl. VAT)
+// vs the aggregator orders POS Sync writes to the sheet (Credit Sales, incl. VAT → ÷1.05).
+// Compared per outlet × revenue centre (DL = Delivery, DT = Lollorosso, PO = Smokeys), so a gap means
+// money rang up on that till button that is NOT in the dashboard. Explains what it can:
+//  • credit lines on that button POS Sync doesn't count (catering, unknown platforms such as Deliverect)
+//  • the rest = not on Credit Sales at all (cash / card / phone orders, or a void after billing)
+// and lists orders whose brand differs from the till button (e.g. Wicked Wings rung on Smokeys) —
+// sales totals agree, but Finance's brand split will not.
+const PS_RC_NAME={DL:"Delivery",DT:"Lollorosso",PO:"Smokeys"},PS_RC_COL={DL:"Delivery",DT:"Lollorosso",PO:"Smokeys"};
+function psRcBrand(suf,loc){return(PS_FYZ_LOCS.has(loc)?{DL:"Fyoozhen",DT:"Lollorosso",PO:"Wicked Wings"}:{DL:"Oregano",DT:"Lollorosso",PO:"Smokeys"})[suf]||null;}
+function psReconOut(loc){return loc==="MSS - Mirdif Sports Society"?"Mirdiff Sports Society":loc==="ALF - Khalifa City (Fyoozhen)"?"Al Forsan (Fyoozhen kitchen)":(PS_INSTORE_MAP[loc]||loc);}
+function psCustLabel(cn){return String(cn||"").replace(/#\w+$/,"").replace(/^\s*\d+\s*-\s*/,"").trim()||"(blank)";}
+function psRecon(creditCsv,summaryCsv,iso){
+  const pos={},cr={},mis={};
+  const t=psParseCSV(summaryCsv||"");
+  if(t.length){const h=t[0].map(x=>x.trim()),iL=h.indexOf("Location");
+    for(const r of t.slice(1)){const loc=(r[iL]||"").trim();if(!loc||/^total/i.test(loc))continue;const o=pos[loc]=pos[loc]||{};
+      for(const s of Object.keys(PS_RC_COL)){const i=h.indexOf(PS_RC_COL[s]);if(i>=0)o[s]=(o[s]||0)+psNum(r[i]);}}}
+  const c=psParseCSV(creditCsv||"");
+  if(c.length){const h=c[0].map(x=>x.trim()),iC=h.indexOf("CustomerName"),iD=h.indexOf("Date"),iL=h.indexOf("Location"),iA=h.indexOf("Amount");
+    for(const r of c.slice(1)){const cn=r[iC]||"",loc=(r[iL]||"").trim(),m=cn.match(/#(\w+)$/),suf=m?m[1].toUpperCase():null;
+      if(!PS_RC_NAME[suf])continue;
+      if(iD>=0&&iso){const d=(r[iD]||"").split("/");if(d.length===3&&`${d[2]}-${d[1].padStart(2,"0")}-${d[0].padStart(2,"0")}`!==iso)continue;}
+      const amt=psNum(r[iA]),b=psGetBrand(cn,suf,loc),a=psGetAgg(cn),br=PS_LOCATION_MAP[loc];
+      const L=((cr[loc]=cr[loc]||{})[suf]=cr[loc][suf]||{agg:0,other:{}});
+      if(b&&a&&br){L.agg+=amt;const home=psRcBrand(suf,loc);if(home&&b!==home){const k=loc+"|"+suf+"|"+b;mis[k]=(mis[k]||0)+amt;}}
+      else{const k=psCustLabel(cn);L.other[k]=(L.other[k]||0)+amt;}}}
+  const rows=[];let tp=0,ta=0;
+  for(const loc of new Set([...Object.keys(pos),...Object.keys(cr)])){
+    if(!PS_LOCATION_MAP[loc])continue; // e.g. Safari Park, Cheekydog — no delivery
+    for(const s of Object.keys(PS_RC_NAME)){
+      const p=(pos[loc]||{})[s]||0,L=(cr[loc]||{})[s]||{agg:0,other:{}},a=L.agg/1.05;
+      const other=Object.entries(L.other).map(([k,v])=>[k,psRound(v/1.05,2)]).sort((x,y)=>y[1]-x[1]),ov=other.reduce((z,x)=>z+x[1],0);
+      tp+=p;ta+=a;const gap=p-a;
+      if(Math.abs(gap)>=5)rows.push({loc,out:psReconOut(loc),rc:PS_RC_NAME[s],brand:psRcBrand(s,loc),pos:psRound(p,2),agg:psRound(a,2),gap:psRound(gap,2),other,unexpl:psRound(gap-ov,2)});}}
+  const misp=Object.entries(mis).map(([k,v])=>{const[loc,s,b]=k.split("|");return{loc,out:psReconOut(loc),rc:PS_RC_NAME[s],till:psRcBrand(s,loc),brand:b,amt:psRound(v/1.05,2)};});
+  rows.sort((x,y)=>Math.abs(y.gap)-Math.abs(x.gap));
+  return{date:iso,pos:psRound(tp,2),agg:psRound(ta,2),rows,mis:misp};
+}
+
+// v564: formatting for the Dine-In Discounts tab (it was written as plain values). Header takes the look of
+// the Dine-In & Takeaway tab's column-name row (itself copied from Oregano); data rows: Arial 10, date centred,
+// whole-number checks, AED with 2 decimals, thin grid, thick frame, readable column widths, frozen header, filter.
+function psDDFormatRequests(ddId,nRows,diId){
+  const R=[],n=Math.max(2,nRows),G=(r0,r1,c0,c1)=>({sheetId:ddId,startRowIndex:r0,endRowIndex:r1,startColumnIndex:c0,endColumnIndex:c1});
+  const thin={style:"SOLID",width:1,color:{red:0,green:0,blue:0}},thick={style:"SOLID_MEDIUM",width:2,color:{red:0,green:0,blue:0}};
+  if(diId!=null)R.push({copyPaste:{source:{sheetId:diId,startRowIndex:1,endRowIndex:2,startColumnIndex:2,endColumnIndex:3},destination:G(0,1,0,7),pasteType:"PASTE_FORMAT"}});
+  R.push({repeatCell:{range:G(0,1,0,7),cell:{userEnteredFormat:Object.assign({textFormat:{fontFamily:"Arial",fontSize:10,bold:true},horizontalAlignment:"CENTER",verticalAlignment:"MIDDLE",wrapStrategy:"WRAP"},diId==null?{backgroundColor:{red:0.85,green:0.92,blue:0.83}}:{})},fields:diId==null?"userEnteredFormat(textFormat,horizontalAlignment,verticalAlignment,wrapStrategy,backgroundColor)":"userEnteredFormat(textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)"}});
+  const fmt=(c0,c1,f,al)=>R.push({repeatCell:{range:G(1,n,c0,c1),cell:{userEnteredFormat:{textFormat:{fontFamily:"Arial",fontSize:10,bold:false},horizontalAlignment:al,verticalAlignment:"MIDDLE",numberFormat:f}},fields:"userEnteredFormat(textFormat,horizontalAlignment,verticalAlignment,numberFormat)"}});
+  fmt(0,1,{type:"DATE",pattern:"d-mmm-yy"},"CENTER");
+  R.push({repeatCell:{range:G(1,n,1,3),cell:{userEnteredFormat:{textFormat:{fontFamily:"Arial",fontSize:10,bold:false},horizontalAlignment:"LEFT",verticalAlignment:"MIDDLE",wrapStrategy:"CLIP"}},fields:"userEnteredFormat(textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)"}});
+  fmt(3,4,{type:"NUMBER",pattern:"#,##0"},"RIGHT");
+  fmt(4,7,{type:"NUMBER",pattern:"#,##0.00"},"RIGHT");
+  R.push({updateBorders:{range:G(0,n,0,7),top:thick,bottom:thick,left:thick,right:thick,innerHorizontal:thin,innerVertical:thin}});
+  R.push({updateBorders:{range:G(0,1,0,7),bottom:thick}});
+  [[0,95],[1,140],[2,250],[3,70],[4,110],[5,110],[6,110]].forEach(([c,w])=>R.push({updateDimensionProperties:{range:{sheetId:ddId,dimension:"COLUMNS",startIndex:c,endIndex:c+1},properties:{pixelSize:w},fields:"pixelSize"}}));
+  R.push({updateDimensionProperties:{range:{sheetId:ddId,dimension:"ROWS",startIndex:0,endIndex:1},properties:{pixelSize:32},fields:"pixelSize"}});
+  R.push({updateSheetProperties:{properties:{sheetId:ddId,gridProperties:{frozenRowCount:1,frozenColumnCount:0}},fields:"gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}});
+  R.push({setBasicFilter:{filter:{range:G(0,n,0,7)}}});
+  return R;
+}
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // v535 POS SYNC — STEP 1 OF 4 (connection test). Replaces the desktop POS Uploader: the
@@ -25006,6 +25069,7 @@ function injectPosSyncTab(){
     const last=tabs[tabs.length-1];last.parentNode.insertBefore(btn,last.nextSibling);
   }
   setTimeout(()=>{posLoadStatus();},2500); // v542: red badge on the tab when there are open low-sales flags
+  setTimeout(()=>{try{posReconLoad();}catch(e){}},4000); // v564: and for till-vs-dashboard gaps to check
 }
 async function posApi(path,body){
   const sess=getActiveSession();
@@ -25057,6 +25121,13 @@ async function posDDWriter(sheet){
     days.add(lbl);return out;};
   return W;
 }
+// v564: Dine-In Discounts tab formatting
+async function posFormatDD(sheet){
+  const meta=await posApi("/api/pos/sheet/meta",{sheet});const dd=meta.sheets.find(x=>x.title===PS_DD_TAB);if(!dd)return 0;const di=meta.sheets.find(x=>x.title===PS_INSTORE_TAB);
+  const sr=await posApi("/api/pos/sheet/read",{sheet,tabs:[PS_DD_TAB]});const vr=(sr.google&&sr.google.valueRanges)||[];const ab=(vr[1]&&vr[1].values)||[];
+  let n=ab.length;while(n>1&&!String((ab[n-1]||[])[0]||"").trim())n--;
+  const reqs=psDDFormatRequests(dd.sheetId,n,di?di.sheetId:null);await posApi("/api/pos/sheet/batch",{sheet,requests:reqs});return reqs.length;
+}
 // v544: copy the Oregano tab's look (borders, fills, fonts, number formats, widths, frozen panes) onto the Dine-In & Takeaway tab
 async function posFormatInstore(sheet){
   const meta=await posApi("/api/pos/sheet/meta",{sheet});const sr=await posApi("/api/pos/sheet/read",{sheet,tabs:["Oregano",PS_INSTORE_TAB]});
@@ -25073,7 +25144,7 @@ async function posFormatInstore(sheet){
   if(!reqs.length)return 0;for(let i=0;i<reqs.length;i+=350)await posApi("/api/pos/sheet/batch",{sheet,requests:reqs.slice(i,i+350)});return reqs.length;
 }
 async function posFormatNow(){const P=posSyncState;if(P.pulling||P.formatting)return;P.formatting="⏳ Formatting…";renderPosSync();
-  try{const n=await posFormatInstore(P.sheet);P.formatting=`✅ Dine-In & Takeaway tab formatted (${n} steps)`;}catch(e){P.formatting="❌ "+e.message;}renderPosSync();setTimeout(()=>{if(!String(P.formatting).startsWith("⏳")){P.formatting=null;renderPosSync();}},8000);}
+  try{const n=await posFormatInstore(P.sheet);let m="";try{if(await posFormatDD(P.sheet))m=" + Dine-In Discounts";}catch(e2){m=" (Dine-In Discounts: "+e2.message+")";}P.formatting=`✅ Dine-In & Takeaway${m} formatted (${n} steps)`;}catch(e){P.formatting="❌ "+e.message;}renderPosSync();setTimeout(()=>{if(!String(P.formatting).startsWith("⏳")){P.formatting=null;renderPosSync();}},8000);}
 async function posFlagOk(date,loc){try{await posApi("/api/pos/flag/ok",{date,loc});}catch(e){alert(e.message);}await posLoadStatus();}
 function posRepull(date){posSyncState.preset="c";posSyncState.from=date;posSyncState.to=date;renderPosSync();posStartPull();}
 function posFmtTs(iso){try{const d=new Date(iso);return d.toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Asia/Dubai"});}catch(e){return iso||"";}}
@@ -25143,6 +25214,7 @@ function renderPosSync(){
   h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${btn(posSyncState.testing?"⏳ Testing…":"🧪 Test connection","posRunTest()",true,posSyncState.testing)}${btn("🔑 Microsys login","posOpenCreds()",false,false)}</div>`;
   h+=`<div style="font-size:12px;color:${T.textSecondary};margin-top:10px;line-height:1.5">Test connection is read-only: it signs in to Microsys, pulls yesterday's Sales Summary by Outlet, and reads the tab list of the chosen Google Sheet.</div></div>`;
   h+=posFlagsCardHTML(T,card,ct,btn);
+  h+=posReconCardHTML(T,card,ct,btn);
   h+=posPullCardHTML(T,card,ct,btn);
   h+=posBackfillCardHTML(T,card,ct,btn);
   h+=posInspectCardHTML(T,card,ct,btn);
@@ -25225,6 +25297,7 @@ async function posStartPull(){
       if(!C.kept)day.warn.push("No delivery orders found in Credit Sales for this day");
       i=step(`${posFmtDate(iso)} — Sales Summary by Outlet (dine-in & takeaway)`);
       const sumCsv=await getSummary(iso);if(!sumCsv)throw new Error("Sales Summary by Outlet couldn't be pulled");sumCache[iso]=sumCsv;const I=psProcessInstore(sumCsv,D.instore);
+      try{day.recon=psRecon(cr.csv,sumCsv,iso);posApi("/api/pos/recon",{date:iso,rec:day.recon}).then(()=>{posRecon.recs=null;}).catch(e=>day.warn.push("Reconciliation not saved: "+e.message));}catch(e){day.warn.push("Reconciliation failed: "+e.message);} // v564
       const SP=psSummaryHasSplit(sumCsv);if(!SP.split){I.skip=true;day.warn.push("Microsys has no dine-in/takeaway split for this day — Dine-In & Takeaway tab not written");}
       I.warn.forEach(w=>day.warn.push(w));
       const it=Object.values(I.rows).reduce((a,o)=>({di:a.di+o.di.sales,to:a.to+o.to.sales,dd:a.dd+o.di.disc,td:a.td+o.to.disc,g:a.g+o.di.guests}),{di:0,to:0,dd:0,td:0,g:0});
@@ -25260,6 +25333,7 @@ async function posStartPull(){
     P.results.days.push(day);renderPosSync();
   }
   if(okDays){const fi=step("Formatting the Dine-In & Takeaway tab like the delivery tabs");try{const n=await posFormatInstore(P.sheet);done(fi,"ok",`Dine-In & Takeaway tab formatted like the delivery tabs (${n} format steps)`);}catch(e){done(fi,"err","Formatting failed: "+e.message);}}
+  if(okDays){const fi=step("Formatting the Dine-In Discounts tab");try{await posFormatDD(P.sheet);done(fi,"ok","Dine-In Discounts tab formatted");}catch(e){done(fi,"err","Dine-In Discounts formatting failed: "+e.message);}}
   try{await posApi("/api/pos/log",{sheet:P.sheet,dates:dates.length===1?dates[0]:dates[0]+" → "+dates[dates.length-1],result:`${okDays} ok${failDays?", "+failDays+" failed":""}`});}catch(e){}
   P.pulling=false;P.stop=false;P.bar.done=P.bar.total;P.bar.finished=true;P.bar.failed=failDays;P.bar.end=Date.now();
   window.removeEventListener("beforeunload",posBeforeUnload);await posLoadStatus();
@@ -25392,6 +25466,7 @@ async function posStartBackfill(){
     await flush();
     const fi=step("Formatting the Dine-In & Takeaway tab like the delivery tabs");
     try{await posFormatInstore(P.sheet);done(fi,"ok");}catch(e){done(fi,"err","Formatting failed: "+e.message+" — use 🎨 Re-apply sheet formatting");}
+    if(ddW){const fd=step("Formatting the Dine-In Discounts tab");try{await posFormatDD(P.sheet);done(fd,"ok");}catch(e){done(fd,"err","Dine-In Discounts formatting failed: "+e.message);}}
     step(`Done — ${ok} day(s) written, ${skipped} already there and skipped${ddFilled?`, ${ddFilled} older day(s) given their discount detail`:""}${nosplit?`, ${nosplit} without a dine-in/takeaway split in Microsys`:""}${nodata?`, ${nodata} with no POS data`:""}${failed?`, ${failed} failed (run the same range again to retry them)`:""}`,failed||nosplit||nodata?"err":"ok");
     if(unknown.size)step(`⚠ Not written — POS locations with no row in the tab: ${[...unknown].join(", ")}. Tell Claude which row they belong to.`,"err");
   }catch(e){step("❌ Backfill stopped: "+e.message,"err");failed++;}
@@ -25448,6 +25523,63 @@ async function posCoverageScan(){
   }
   P.cov.running=false;renderPosSync();
 }
+
+// ── v564: DAILY RECONCILIATION CARD — till (POS revenue centres) vs dashboard (aggregator orders), per outlet × day
+const posRecon={days:14,recs:null,loading:false,err:null,checking:null,open:{}};
+async function posReconLoad(){if(posRecon.loading)return;posRecon.loading=true;posRecon.err=null;
+  const to=posAddDays(posDubaiToday(),-1),from=posAddDays(to,-(posRecon.days-1));
+  try{const j=await posApi(`/api/pos/recon?from=${from}&to=${to}`);posRecon.recs=j.recs||[];}catch(e){posRecon.err=e.message;posRecon.recs=[];}
+  posRecon.loading=false;if(typeof curPage!=="undefined"&&curPage==="possync")renderPosSync();try{navPaint();}catch(e){}}
+function posReconSetDays(n){posRecon.days=n;posRecon.recs=null;renderPosSync();}
+function posReconWhy(o){return/catering/i.test(o[0])?"catering":"platform";}
+// an item needs a look when money on the till is not explained, or sits with a platform POS Sync doesn't know
+function posReconItems(recs){const out=[];for(const r of recs||[])for(const x of r.rows||[]){const id=x.loc+"|"+x.rc,ack=(r.ack||{})[id];
+  const unk=(x.other||[]).filter(o=>posReconWhy(o)==="platform").reduce((a,o)=>a+o[1],0);
+  const open=!ack&&(Math.abs(x.unexpl)>=50||unk>=50);out.push(Object.assign({date:r.date,id,ack,unk,open},x));}
+  return out.sort((a,b)=>b.date.localeCompare(a.date)||Math.abs(b.gap)-Math.abs(a.gap));}
+function posReconOpenCount(){return posReconItems(posRecon.recs).filter(i=>i.open).length;}
+async function posReconAck(date,id){const note=prompt("What explains this gap? (e.g. 'catering order — fine', 'phone order paid cash')","");if(note===null)return;
+  try{await posApi("/api/pos/recon/ack",{date,id,note});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
+async function posReconUnack(date,id){try{await posApi("/api/pos/recon/ack",{date,id,clear:true});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
+async function posReconCheck(){const P=posSyncState;if(posRecon.checking||P.pulling)return;if(P.status&&!P.status.hasCreds){posOpenCreds();return;}
+  const to=posAddDays(posDubaiToday(),-1),dates=[];for(let i=posRecon.days-1;i>=0;i--)dates.push(posAddDays(to,-i));
+  posRecon.checking={n:0,of:dates.length,fail:0};renderPosSync();
+  for(const d of dates){try{const[c,su]=await Promise.all([posApi("/api/pos/report",{kind:"credit",date:d}),posApi("/api/pos/report",{kind:"summary",date:d})]);
+      await posApi("/api/pos/recon",{date:d,rec:psRecon(c.csv,su.csv,d)});}catch(e){posRecon.checking.fail++;}
+    posRecon.checking.n++;renderPosSync();}
+  posRecon.checking=null;posRecon.recs=null;renderPosSync();}
+function posReconCardHTML(T,card,ct,btn){
+  if(posRecon.recs==null&&!posRecon.loading)setTimeout(posReconLoad,0);
+  const R=posRecon.recs||[],items=posReconItems(R),open=items.filter(i=>i.open);
+  const f=v=>"AED "+Math.round(v).toLocaleString(),f2=v=>(v<0?"−":"")+"AED "+Math.abs(Math.round(v)).toLocaleString();
+  const tp=R.reduce((a,r)=>a+r.pos,0),ta=R.reduce((a,r)=>a+r.agg,0);
+  const seg=[7,14,30,60].map(n=>`<button onclick="posReconSetDays(${n})" style="border:none;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer;background:${posRecon.days===n?T.accentOrange+"22":"transparent"};color:${posRecon.days===n?T.accentOrange:T.textSecondary}">${n} days</button>`).join("");
+  let h=`<div style="${card}" id="pos-recon"><div style="${ct};display:flex;align-items:center;gap:10px;flex-wrap:wrap">🧾 Daily reconciliation — till vs dashboard <span style="text-transform:none;letter-spacing:0;font-weight:600">· delivery, excl. VAT</span>${open.length?`<span style="background:${T.accentRed};color:#fff;border-radius:10px;padding:2px 9px;font-size:11px;letter-spacing:0">${open.length} to check</span>`:""}</div>`;
+  h+=`<div style="font-size:12.5px;color:${T.textSecondary};line-height:1.55;margin-bottom:12px">Every pull compares what each outlet rang up on its delivery till buttons (Microsys Sales Summary by Outlet: Delivery, Lollorosso, Smokeys — the same figures Finance's Daily Sales Report uses) with the aggregator orders the dashboard counts (Credit Sales ÷ 1.05). A gap means money on the till that the dashboard doesn't have — this card says where it went.</div>`;
+  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px"><span style="display:inline-flex;border:1px solid ${T.cardBorder};border-radius:8px;overflow:hidden">${seg}</span>${btn(posRecon.checking?`⏳ Checking ${posRecon.checking.n} of ${posRecon.checking.of}…`:"🔎 Check these days now","posReconCheck()",false,!!posRecon.checking||posSyncState.pulling)}<span style="font-size:11.5px;color:${T.textMuted}">Read-only: pulls Credit Sales + Sales Summary from Microsys; nothing is written to the sheet.</span></div>`;
+  if(posRecon.loading&&!posRecon.recs)return h+`<div style="color:${T.textSecondary};font-size:12px">Loading…</div></div>`;
+  if(posRecon.err)h+=`<div style="color:${T.accentRed};font-size:12px;margin-bottom:8px">${esc(posRecon.err)} — upload the new worker.js (build 564) to enable this card.</div>`;
+  if(!R.length)return h+`<div style="color:${T.textSecondary};font-size:12.5px">No days checked yet in this range — click <b>Check these days now</b>, or it fills itself from the next Pull.</div></div>`;
+  const stat=(l,v,sub,c)=>`<div style="background:${T.bg};border:1px solid ${T.cardBorder};border-radius:10px;padding:10px 12px;min-width:140px"><div style="font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:${T.textMuted}">${l}</div><div style="font-size:18px;font-weight:800;color:${c||T.textPrimary};font-variant-numeric:tabular-nums">${v}</div><div style="font-size:11px;color:${T.textMuted}">${sub||""}</div></div>`;
+  const unex=items.reduce((a,i)=>a+(i.ack?0:i.unexpl),0),cat=items.reduce((a,i)=>a+(i.other||[]).filter(o=>posReconWhy(o)==="catering").reduce((z,o)=>z+o[1],0),0),unk=items.reduce((a,i)=>a+i.unk,0);
+  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${stat("Days checked",`${R.length} / ${posRecon.days}`)}${stat("Till (POS)",f(tp),"delivery buttons")}${stat("Dashboard",f(ta),"aggregator orders")}${stat("Difference",f2(tp-ta),tp>0?((tp-ta)/tp*100).toFixed(2)+"% of till":"",Math.abs(tp-ta)>=100?T.accentOrange:T.accentGreen)}${stat("Not on Credit Sales",f2(unex),"cash / card / phone / voids",Math.abs(unex)>=50?T.accentRed:T.textPrimary)}${stat("Catering",f(cat),"by design — not a platform")}${stat("Unknown platform",f(unk),"POS Sync doesn't map it",unk>=1?T.accentRed:T.textPrimary)}</div>`;
+  if(items.length){
+    h+=`<div style="font-size:12px;font-weight:800;color:${T.textSecondary};margin:4px 0 6px">Gaps by outlet and day</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="color:${T.textMuted};font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;text-align:left">${["Date","Outlet","Till button","Till","Dashboard","Gap","Why",""].map((x,i)=>`<th style="padding:6px 8px;border-bottom:1px solid ${T.cardBorder};${i>=3&&i<=5?"text-align:right":""}">${x}</th>`).join("")}</tr></thead><tbody>`;
+    for(const i of items){
+      const why=[...(i.other||[]).map(o=>posReconWhy(o)==="catering"?`<span title="Catering is not an aggregator — the dashboard leaves it out on purpose">🍱 ${esc(o[0])} ${f(o[1])}</span>`:`<span style="color:${T.accentRed}" title="A platform POS Sync doesn't recognise — tell Claude which aggregator it is and it will be counted">❓ ${esc(o[0])} ${f(o[1])} — unknown platform</span>`),
+        Math.abs(i.unexpl)>=5?(i.unexpl>0?`<span title="Rung on the delivery till but not on Credit Sales: a cash / card / phone order, or an aggregator order voided after billing">💵 ${f(i.unexpl)} not on Credit Sales</span>`:`<span>${f(-i.unexpl)} more on Credit Sales than on the till (void / date)</span>`):""].filter(Boolean).join("<br>");
+      const act=i.ack?`<span style="color:${T.accentGreen};font-size:11.5px" title="${esc(i.ack.note||"")}">✓ ${esc(i.ack.note||"explained")} · ${esc(i.ack.by||"")}</span> <a href="#" onclick="posReconUnack('${i.date}','${esc(i.id)}');return false" style="color:${T.textMuted};font-size:11px">undo</a>`:i.open?`<button onclick="posReconAck('${i.date}','${esc(i.id)}')" style="padding:4px 10px;border-radius:6px;border:1px solid ${T.cardBorder};background:transparent;color:${T.textSecondary};font-size:11.5px;font-weight:700;cursor:pointer">Mark explained</button>`:`<span style="color:${T.textMuted};font-size:11.5px">small</span>`;
+      h+=`<tr style="border-bottom:1px solid ${T.cardBorder}55;${i.open?`background:${T.accentRed}10`:""}"><td style="padding:6px 8px;white-space:nowrap">${posFmtDate(i.date)}</td><td style="padding:6px 8px;font-weight:700">${esc(i.out)}</td><td style="padding:6px 8px">${esc(i.rc)} <span style="color:${T.textMuted}">→ ${esc(i.brand||"")}</span></td><td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${f(i.pos)}</td><td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${f(i.agg)}</td><td style="padding:6px 8px;text-align:right;font-weight:800;color:${Math.abs(i.gap)>=50?T.accentOrange:T.textSecondary};font-variant-numeric:tabular-nums">${f2(i.gap)}</td><td style="padding:6px 8px;line-height:1.5">${why}</td><td style="padding:6px 8px;white-space:nowrap">${act}</td></tr>`;}
+    h+=`</tbody></table></div>`;
+  }else h+=`<div style="color:${T.accentGreen};font-size:12.5px;font-weight:700">✅ Till and dashboard agree for every outlet on every checked day.</div>`;
+  // brand rung on another brand's till button — totals match, Finance's brand split doesn't
+  const mb={};for(const r of R)for(const m of r.mis||[]){const k=m.out+"|"+m.brand+"|"+m.till;const o=mb[k]=mb[k]||{out:m.out,brand:m.brand,till:m.till,rc:m.rc,amt:0,days:new Set()};o.amt+=m.amt;o.days.add(r.date);}
+  const ml=Object.values(mb).sort((a,b)=>b.amt-a.amt);
+  if(ml.length){h+=`<div style="font-size:12px;font-weight:800;color:${T.textSecondary};margin:16px 0 6px">Orders rung on another brand's till button</div><div style="font-size:12px;color:${T.textMuted};margin-bottom:6px;line-height:1.5">The order came in on the platform as one brand but was rung on another brand's button. The dashboard follows the platform (right brand); Finance's report follows the till button, so its brand columns are off by these amounts unless Finance moves them by hand.</div>`;
+    h+=ml.map(m=>`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:12.5px;padding:6px 8px;border-radius:8px;background:${T.bg};margin-bottom:4px"><b>${esc(m.out)}</b><span><span style="color:${typeof BMAP!=="undefined"&&BMAP[m.brand]?BMAP[m.brand].c:T.textPrimary};font-weight:700">${esc(m.brand)}</span> orders on the <b>${esc(m.till)}</b> button</span><span style="margin-left:auto;font-variant-numeric:tabular-nums;font-weight:800">${f(m.amt)}</span><span style="color:${T.textMuted}">${m.days.size} day${m.days.size>1?"s":""}</span></div>`).join("");}
+  return h+`</div>`;
+}
+window.posReconSetDays=posReconSetDays;window.posReconCheck=posReconCheck;window.posReconAck=posReconAck;window.posReconUnack=posReconUnack;window.posReconOpenCount=posReconOpenCount;window.posReconLoad=posReconLoad;
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -25731,13 +25863,16 @@ function lensHeroHTML(){
     if(p!=="overview"||!lensHero||lensMode!=="all")return;
     const pg=document.getElementById("page-overview");const fb=pg&&pg.querySelector(".fbar");if(!fb||document.getElementById("lens-hero"))return;
     const f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),cmp=getCompRange();
-    fb.insertAdjacentHTML("afterend",lensHeroHTML()+lensRankHTML()+lensMixHTML()+(lensSel.has("D")&&lensSel.size>1?chVirtualCardHTML(s,e,cmp):""));lensMixChart();};window.renderPage=renderPage;
+    fb.insertAdjacentHTML("afterend",lensHeroHTML()+lensGlanceHTML()+lensRankHTML()+lensMixHTML()+(lensSel.has("D")&&lensSel.size>1?chVirtualCardHTML(s,e,cmp):""));lensMixChart();};window.renderPage=renderPage;
 })();
 
 // ── Idea 2: outlet-first ranking on Overview (All sales) — every physical outlet ranked by total sales, all channels
+let lensRankView="bars"; // v564: "table" brings back the old All channels outlet table (every channel, guests, spend/guest, disc. %)
+function lensRankViewSet(v){lensRankView=v;renderPage("overview");}window.lensRankViewSet=lensRankViewSet;
 function lensRankHTML(){
   const T=DARK_THEME,f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),cmp=getCompRange(),cs=getCompShort();
   const cur=chAggregate(s,e,true),prev=chAggregate(cmp.s,cmp.e,true);
+  if(lensRankView==="table")return lensRankTableHTML(cur,prev,cs);
   const shown=lensChannelsShown(),sm=o=>shown.reduce((a,c)=>a+(o?o[c].sales:0),0);
   const list=Object.keys(cur.by).map(o=>({o,t:sm(cur.by[o]),p:sm(prev.by[o]),c:cur.by[o]})).filter(x=>x.t>0).sort((a,b)=>b.t-a.t);
   if(!list.length)return"";const max=list[0].t;
@@ -25748,7 +25883,7 @@ function lensRankHTML(){
     <span style="text-align:right;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(x.t)}</span>
     <span style="text-align:right;font-size:11.5px;font-weight:700;color:${pctClr(pctOf(x.t,x.p))}">${x.p?fmtPct(pctOf(x.t,x.p)):"—"}</span></div>`;
   return`<div class="card rd-in" id="lens-rank" style="animation-delay:.08s"><div class="ct" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">📍 Outlets ranked by total sales <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· ${lensSel.size===3?"all channels":shown.join(" + ")} · Δ ${cs} · hover an outlet for its channel split</span>
-    <span style="margin-left:auto;display:flex;gap:12px;font-size:11px;font-weight:700;text-transform:none;letter-spacing:0">${shown.map(c=>`<span style="color:${T.textSecondary}"><span style="color:${CH_CLR[c]}">●</span> ${c}</span>`).join("")}</span></div>
+    <span style="margin-left:auto;display:flex;gap:12px;align-items:center;font-size:11px;font-weight:700;text-transform:none;letter-spacing:0">${shown.map(c=>`<span style="color:${T.textSecondary}"><span style="color:${CH_CLR[c]}">●</span> ${c}</span>`).join("")}${lensRankViewSeg()}</span></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(420px,100%),1fr));column-gap:28px">${[list.slice(0,Math.ceil(list.length/2)),list.slice(Math.ceil(list.length/2))].map((half,k)=>`<div>${half.map((x,i)=>row(x,i+k*Math.ceil(list.length/2))).join("")}</div>`).join("")}</div></div>`;
 }
 
@@ -25858,7 +25993,7 @@ function lensMixChart(){const el=document.getElementById("lens-mix-c");if(!el)re
 // v559: Overview keeps the whole-business view; the delivery-only tables move to the Delivery pages.
 function rdPruneOverview(){const pg=document.getElementById("page-overview");if(!pg)return;
   pg.querySelectorAll(".card").forEach(c=>{const t=((c.querySelector(".ct")||{}).textContent||"").trim();
-    if(/^All Brands —|^All Platforms —|^AOV by Brand/i.test(t)||c.id==="growthGridCard_overview"||/^Growth grid/i.test(t))c.style.display="none";});}
+    if(/^All Brands —|^All Platforms —/i.test(t)||c.id==="growthGridCard_overview"||/^Growth grid/i.test(t))c.style.display="none";});}
 // "All brands" table on Brands, "All platforms" table on Platforms — same columns Overview had (delivery only)
 function rdDeliveryTables(p){const pg=document.getElementById("page-"+p);if(!pg||pg.querySelector("#rd-dtab"))return;const fb=pg.querySelector(".fbar");if(!fb)return;
   const f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),cmp=getCompRange(),cs=getCompShort(),T=DARK_THEME,dref=f.end||dk(new Date());
@@ -25884,6 +26019,40 @@ function lensVatSegHTML(){return`<span class="ch-seg" title="Delivery = Credit S
 function lensVat(v){if(chState.vat===v)return;chState.vat=v;try{localStorage.setItem("oregano_vat",v);}catch(e){}lensApplied=null;lensSync(curPage);Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
 window.lensVat=lensVat;
 try{const v=localStorage.getItem("oregano_vat");if(v==="excl"||v==="incl")chState.vat=v;}catch(e){}
+
+// v564: restored from the old All channels page — the "at a glance" strip and the full outlet table
+function lensRankViewSeg(){const T=DARK_THEME;return`<span style="display:inline-flex;border:1px solid ${T.cardBorder};border-radius:7px;overflow:hidden;margin-left:6px">${[["bars","Bars"],["table","Table"]].map(([v,l])=>`<button onclick="lensRankViewSet('${v}')" style="border:none;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;background:${lensRankView===v?T.accentOrange+"22":T.bg};color:${lensRankView===v?T.accentOrange:T.textSecondary}">${l}</button>`).join("")}</span>`;}
+function lensRankTableHTML(cur,prev,cs){
+  const T=DARK_THEME,shown=lensChannelsShown(),sm=o=>shown.reduce((a,c)=>a+(o?o[c].sales:0),0);
+  const spg=x=>x.guests>0?x.sales/x.guests:0;
+  const outlets=Object.keys(cur.by).filter(o=>sm(cur.by[o])>0);
+  const rankOf={};outlets.slice().sort((a,b)=>sm(cur.by[b])-sm(cur.by[a])).forEach((o,i)=>rankOf[o]=i+1);
+  const hasI=shown.includes("Dine-In");
+  const heads=["Outlet",...shown.map(c=>`<span style="color:${CH_CLR[c]}">${c}</span>`),"Total","Mix",...(hasI?["Guests","Spend / guest"]:[]),"Disc. %",`Δ Total <span style="font-weight:400;color:${T.textMuted}">${cs}</span>`];
+  const rows=outlets.map(o=>{const c=cur.by[o],p=prev.by[o],t=sm(c),pt=sm(p),disc=shown.reduce((a,x)=>a+c[x].disc,0),dsc=(t+disc)>0?disc/(t+disc)*100:0;
+    const mix=`<div class="ch-share rd-grow" style="width:110px;height:8px;display:flex;border-radius:4px;overflow:hidden;background:${T.bg}">${shown.map(x=>`<div title="${x} ${t>0?(c[x].sales/t*100).toFixed(0):0}%" style="width:${t>0?c[x].sales/t*100:0}%;background:${CH_CLR[x]}"></div>`).join("")}</div>`;
+    const m=v=>v>0?fmtAEDTip(v):`<span style="color:${T.textMuted}">—</span>`;
+    return{cells:[`<span style="font-weight:800"><span style="display:inline-block;min-width:22px;color:${rankOf[o]<=3?T.accentOrange:T.textMuted};font-variant-numeric:tabular-nums">${rankOf[o]}</span>${esc(o)}${AUH.has(o)?` <span style="font-size:10px;color:${T.textMuted}">AUH</span>`:""}</span>`,
+      ...shown.map(x=>m(c[x].sales)),`<strong>${fmtAEDTip(t)}</strong>`,mix,
+      ...(hasI?[c["Dine-In"].guests?Math.round(c["Dine-In"].guests).toLocaleString():"—",c["Dine-In"].guests?`AED ${spg(c["Dine-In"]).toFixed(1)}`:"—"]:[]),
+      `<span style="color:${dsc>=20?T.accentRed:dsc>=10?"#F59E0B":"#22C55E"};font-weight:700">${dsc.toFixed(1)}%</span>`,fmtChgCell(t,pt,true)],
+      sortVals:[o,...shown.map(x=>c[x].sales),t,t>0?c[shown[0]].sales/t:0,...(hasI?[c["Dine-In"].guests,spg(c["Dine-In"])]:[]),dsc,pctOf(t,pt)]};});
+  return`<div class="card rd-in" id="lens-rank" style="animation-delay:.08s"><div class="ct" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">📍 Outlets ranked by total sales <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· ${lensSel.size===3?"all channels":shown.join(" + ")} · click any header to sort</span><span style="margin-left:auto">${lensRankViewSeg()}</span></div>${sortableTable("lens-outlets",heads,rows,1+shown.length)}</div>`;
+}
+function lensGlanceHTML(){
+  const shown=lensChannelsShown();if(!shown.includes("Dine-In")&&!shown.includes("Takeaway"))return"";
+  const T=DARK_THEME,f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),cmp=getCompRange(),cs=getCompShort();
+  const cur=chAggregate(s,e,true),prev=chAggregate(cmp.s,cmp.e,true);
+  const di=cur.tot["Dine-In"],dip=prev.tot["Dine-In"],to=cur.tot.Takeaway,top=prev.tot.Takeaway,del=cur.tot.Delivery,delp=prev.tot.Delivery;
+  const spg=x=>x.guests>0?x.sales/x.guests:0,aov=x=>x.orders>0?x.sales/x.orders:0,depth=x=>(x.sales+x.disc)>0?x.disc/(x.sales+x.disc)*100:0;
+  const stat=(lbl,val,chg,sub,clr)=>`<div style="background:${T.bg};border:1px solid ${T.cardBorder};border-radius:10px;padding:10px 12px"><div style="font-size:10px;color:${clr||T.textSecondary};font-weight:800;text-transform:uppercase;letter-spacing:.8px">${lbl}</div><div class="kpi-value-num" style="font-size:19px;font-weight:800;margin-top:3px;font-variant-numeric:tabular-nums">${val}</div><div style="font-size:11px;color:${T.textMuted}">${chg==null||isNaN(chg)?"":`<span style="color:${pctClr(chg)};font-weight:800">${fmtPct(chg)}</span> `}${sub}</div></div>`;
+  const st=[];
+  if(shown.includes("Dine-In")){st.push(stat("Guests",Math.round(di.guests).toLocaleString(),pctOf(di.guests,dip.guests),cs,CH_CLR["Dine-In"]));st.push(stat("Spend / guest",`AED ${spg(di).toFixed(1)}`,pctOf(spg(di),spg(dip)),cs,CH_CLR["Dine-In"]));st.push(stat("Dine-in check",`AED ${aov(di).toFixed(1)}`,pctOf(aov(di),aov(dip)),"per check",CH_CLR["Dine-In"]));}
+  if(shown.includes("Takeaway"))st.push(stat("Takeaway AOV",`AED ${aov(to).toFixed(1)}`,pctOf(aov(to),aov(top)),"per order",CH_CLR.Takeaway));
+  if(shown.includes("Delivery"))st.push(stat("Delivery AOV",`AED ${aov(del).toFixed(1)}`,pctOf(aov(del),aov(delp)),"per order",CH_CLR.Delivery));
+  st.push(stat("Discount depth",`<span style="font-size:${shown.length>1?15:19}px">${shown.map(c=>depth(cur.tot[c]).toFixed(1)+"%").join(" · ")}</span>`,null,shown.map(c=>c.toLowerCase()).join(" · ")));
+  return`<div class="card rd-in" id="lens-glance" style="animation-delay:.04s"><div class="ct">🍽️ At a glance <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· guests, checks and discount depth by channel</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">${st.join("")}</div></div>`;
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // v551 REDESIGN — Idea 4 (virtual-brand contribution per site), Idea 3 (Dine-In & Takeaway page),
@@ -26025,7 +26194,7 @@ const NAV_LAYOUTS={
     {id:"cmp",icon:"⚖️",label:"Compare",subs:[["compare","Compare"]]},
     {sec:"Delivery"},
     {id:"sales",icon:"🛵",label:"Delivery",subs:[["brands","Brands"],["outlets","Outlets"],["platforms","Platforms"]]},
-    {id:"mkt",icon:"🎯",label:"Marketing",subs:[["campaigns","Promotions"],["cpc","Advertising"]]},
+    {id:"mkt",icon:"🎯",label:"Marketing",subs:[["campaigns","Promotions"],["discvar","Discount variance"],["cpc","Advertising"]]},
     {id:"svc",icon:"⭐",label:"Service quality",subs:[["kpi","KPI tracker"],["cancellations","Cancellations"],["feedback","Feedback"]]},
     {sec:"Dine-in"},
     {id:"dine",icon:"🍽️",label:"Dine-In & Takeaway",subs:[["dinein","Guests & spend"],["dindisc","Discounts & ROI"]]},
@@ -26082,7 +26251,7 @@ NAV_LAYOUTS.S1=[{sec:"Group"},
   {id:"cmp",ico:"compare",label:"Compare",subs:[["compare","Compare"]]},
   {sec:"Delivery"},
   {id:"sales",ico:"delivery",label:"Performance",subs:[["brands","Brands"],["outlets","Outlets"],["platforms","Platforms"]]},
-  {id:"mkt",ico:"marketing",label:"Marketing",subs:[["campaigns","Promotions"],["cpc","Advertising"]]},
+  {id:"mkt",ico:"marketing",label:"Marketing",subs:[["campaigns","Promotions"],["discvar","Discount variance"],["cpc","Advertising"]]},
   {id:"svc",ico:"service",label:"Service",subs:[["kpi","KPI tracker"],["cancellations","Cancellations"],["feedback","Feedback"]]},
   {sec:"In-store"},
   {id:"dine",ico:"dine",label:"Dine-in",subs:[["dinein","Guests & spend"],["dindisc","Discounts & ROI"]]},
@@ -26092,7 +26261,7 @@ NAV_LAYOUTS.S2=[{sec:"Today"},
   {id:"home",ico:"overview",label:"Overview",subs:[["overview","Overview"]]},
   {sec:"Delivery"},
   {id:"sales",ico:"delivery",label:"Performance",subs:[["brands","Brands"],["outlets","Outlets"],["platforms","Platforms"]]},
-  {id:"mkt",ico:"marketing",label:"Marketing",subs:[["campaigns","Promotions"],["cpc","Advertising"]]},
+  {id:"mkt",ico:"marketing",label:"Marketing",subs:[["campaigns","Promotions"],["discvar","Discount variance"],["cpc","Advertising"]]},
   {id:"svc",ico:"service",label:"Service",subs:[["kpi","KPI tracker"],["cancellations","Cancellations"],["feedback","Feedback"]]},
   {sec:"In-store"},
   {id:"dine1",ico:"guests",label:"Guests & spend",subs:[["dinein","Guests & spend"]]},
@@ -26134,7 +26303,7 @@ function nvLive(n){const s=nvStats();if(!s)return"";let L=s.dS.length-1;while(L>
   else if(id==="dindisc"){arr=s.iS;v=fmtAED(s.iS[L]);c="#F5B544";lbl="in-store";}
   if(!arr)return"";return`<div class="nv-live" title="${lbl||"in-store"} · latest day vs the same weekday a week earlier · last 14 days"><span>${v} ${fmt(chg(arr))}</span>${nvSpark(arr,c)}</div>`;}
 // v561: top navigation (no sidebar) — sections across the top, sub-pages in a dropdown
-function nvTopPaint(L){let bar=document.getElementById("nv-top");const T=DARK_THEME,cur=navHubOf(curPage);
+function nvTopPaint(L){let bar=document.getElementById("nv-top");const T=DARK_THEME,cur=navHubOf(navCur());
   const anyPage=document.querySelector(".pg");if(!anyPage)return;
   if(!bar){bar=document.createElement("div");bar.id="nv-top";}if(bar.nextSibling!==anyPage)anyPage.parentNode.insertBefore(bar,anyPage);
   let sec="";const items=L.filter(n=>{if(n.sec){sec=n.sec;return false;}n._sec=sec;return true;});
@@ -26146,7 +26315,7 @@ if(NAV_LAYOUTS.S2&&typeof navLayout!=="undefined")navLayout="S2"; // v562: Nikhi
 let nvAnimated=false;
 function nvBadge(n){ // live counts that mean "look here", not page counts
   try{if(n.subs.some(s=>s[0]==="overview")){const hi=(typeof _dhVisible!=="undefined"?_dhVisible:[]).filter(i=>i.sev==="high").length;return hi?{n:hi,c:"#EF4444",t:hi+" high-priority data checks"}:null;}
-    if(n.subs.some(s=>s[0]==="possync")&&typeof posOpenFlags==="function"){const k=posOpenFlags().length;return k?{n:k,c:"#EF4444",t:k+" outlet-day(s) with unusually low POS sales"}:null;}}catch(e){}return null;}
+    if(n.subs.some(s=>s[0]==="possync")&&typeof posOpenFlags==="function"){const k=posOpenFlags().length,r=typeof posReconOpenCount==="function"?posReconOpenCount():0;return k+r?{n:k+r,c:"#EF4444",t:[k?k+" outlet-day(s) with unusually low POS sales":"",r?r+" till-vs-dashboard gap(s) to check":""].filter(Boolean).join(" · ")}:null;}}catch(e){}return null;}
 function navPaint(){
   const sb=document.getElementById("app-sidebar");if(!sb)return;
   const orig=[...sb.querySelectorAll(".tab:not([data-nv]),.nav-sec:not([data-nv-sec])")];let box=document.getElementById("nv-box");const L=navItems();
@@ -26154,7 +26323,7 @@ function navPaint(){
   orig.forEach(e=>e.style.setProperty("display","none","important"));
   const first=sb.querySelector(".tab");const wrap=first&&first.closest("#app-sidebar > div:nth-child(2)")||(first||{}).parentNode;if(!wrap)return;
   if(!box){box=document.createElement("div");box.id="nv-box";wrap.insertBefore(box,wrap.firstChild);}
-  const st=NV_STYLE[navLayout]||"plain",T=DARK_THEME,cur=navHubOf(curPage);nvShell(st);const col=sb.dataset.collapsed==="1"&&st!=="rail";
+  const st=NV_STYLE[navLayout]||"plain",T=DARK_THEME,cur=navHubOf(navCur());nvShell(st);const col=sb.dataset.collapsed==="1"&&st!=="rail";
   if(st==="top"){nvTopPaint(L);nvCss(T);navHubPaint();return;}
   box.className="nv-"+st+(col?" nv-col":"");let sec="",i=0;
   box.innerHTML=`<div id="nv-ind"></div>`+L.map(n=>{
@@ -26162,7 +26331,7 @@ function navPaint(){
     const act=cur&&cur.id===n.id,sc=(st==="colour"||st==="live"||st==="rail")?(NV_SEC_CLR[sec]||T.accentOrange):T.accentOrange,bd=nvBadge(n),multi=n.subs.length>1,open=multi&&!col&&st!=="rail"&&(st==="tree"||act);
     const ic=n.ico?nvSvg(n.ico):`<span class="tab-icon">${n.icon||"•"}</span>`;
     return`<div class="tab nv-item ${act?"act":""} ${nvAnimated?"":"nv-enter"}" style="--sc:${sc};animation-delay:${(i++*.04).toFixed(2)}s" data-nv="${n.id}" onclick="navGo('${n.id}')" title="${n.label}${multi?": "+n.subs.map(s=>s[1]).join(" · "):""}">${ic}<span class="tab-label">${st==="rail"?(NV_SHORT[n.label]||n.label):n.label}${st==="live"?nvLive(n):""}</span>${bd?`<span class="nv-badge" title="${bd.t}" style="background:${bd.c}">${bd.n}</span>`:multi&&!col&&st!=="tree"&&st!=="plain"&&st!=="rail"?`<svg class="nv-chev ${open?"open":""}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>`:multi&&!col&&st==="plain"?`<span class="tab-label" style="margin-left:auto;font-size:10px;font-weight:800;color:${T.textMuted}">${n.subs.length}</span>`:""}</div>`+
-      (multi&&st!=="plain"&&st!=="rail"?`<div class="nv-subs ${open?"open":""}" style="--sc:${sc}"><div>${n.subs.map(([p,l])=>`<div class="nv-sub ${p===curPage?"act":""}" onclick="event.stopPropagation();gp('${p}')">${l}</div>`).join("")}</div></div>`:"");}).join("");
+      (multi&&st!=="plain"&&st!=="rail"?`<div class="nv-subs ${open?"open":""}" style="--sc:${sc}"><div>${n.subs.map(([p,l])=>`<div class="nv-sub ${p===navCur()?"act":""}" onclick="event.stopPropagation();gp('${p}','nav')">${l}</div>`).join("")}</div></div>`:"");}).join("");
   nvAnimated=true;nvCss(T);
   // sliding highlight under the active item
   nvSlide(box,T);navHubPaint();
@@ -26254,11 +26423,17 @@ function navHubPaint(){
   const T=DARK_THEME;bar.style.cssText=`display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin:0 0 10px;padding:6px;background:${T.card};border:1px solid ${T.cardBorder};border-radius:10px`;
   bar.innerHTML=`<span style="font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:${T.textMuted};padding:0 8px">${h.label}</span>`+h.subs.map(([id,l])=>`<button onclick="gp('${id}')" style="border:none;border-radius:7px;padding:7px 14px;font:inherit;font-size:12.5px;font-weight:800;cursor:pointer;background:${id===curPage?T.accentOrange+"26":"transparent"};color:${id===curPage?T.accentOrange:T.textSecondary}">${l}</button>`).join("");
 }
-function navGo(id){const n=navItems().find(x=>x.id===id);if(n)gp(navLastSub[id]&&n.subs.some(s=>s[0]===navLastSub[id])?navLastSub[id]:n.subs[0][0]);}
+function navGo(id){const n=navItems().find(x=>x.id===id);if(n)gp(navLastSub[id]&&n.subs.some(s=>s[0]===navLastSub[id])?navLastSub[id]:n.subs[0][0],"nav");}
+function navCur(){return(typeof curPage!=="undefined"&&curPage==="campaigns"&&typeof campTab!=="undefined"&&campTab==="discounts")?"discvar":(typeof curPage!=="undefined"?curPage:"");}window.navCur=navCur;
 function navSetLayout(k){navLayout=k;for(const x in navLastSub)delete navLastSub[x];navPaint();if(NAV_LAYOUTS[k]&&!navHubOf(curPage))gp("overview");}
 function navSectionize(){ // called by buildSidebarNav once the sidebar exists
   const sb=document.getElementById("app-sidebar");if(!sb||sb.dataset.navHooked)return;sb.dataset.navHooked="1";
-  const _gp=gp;gp=function(p){_gp(p);const h=navHubOf(p);if(h)navLastSub[h.id]=p;navPaint();if(p==="campaigns"||p==="cpc"){mktRetitle();setTimeout(mktRetitle,400);setTimeout(mktRetitle,1500);}};window.gp=gp;
+  // v564: "Discount variance" = Promotions → Discount Burn Analysis (Discount Discrepancy — sheet vs statement files), one click from the menu
+  if(!document.getElementById("page-discvar")){const d=document.createElement("div");d.id="page-discvar";d.style.display="none";(document.getElementById("page-campaigns")||document.body).insertAdjacentElement("afterend",d);}
+  const _gp=gp;gp=function(p,via){
+    if(p==="discvar"){campTab="discounts";_gp("campaigns");navLastSub.mkt="discvar";navPaint();mktRetitle();setTimeout(()=>{const c=[...document.querySelectorAll("#page-campaigns .ct")].find(x=>/Discount Discrepancy/.test(x.textContent));if(c)c.closest(".card").scrollIntoView({behavior:"smooth",block:"start"});},900);return;}
+    if(p==="campaigns"&&via==="nav"&&typeof campTab!=="undefined"&&campTab==="discounts")campTab="browse";
+    _gp(p);const h=navHubOf(navCur());if(h)navLastSub[h.id]=navCur();navPaint();if(p==="campaigns"||p==="cpc"){mktRetitle();setTimeout(mktRetitle,400);setTimeout(mktRetitle,1500);}};window.gp=gp;
   new MutationObserver(()=>navPaint()).observe(sb,{attributes:true,attributeFilter:["data-collapsed"]});
   navPaint();navDrawerSync();
 }
