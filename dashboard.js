@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-15-567";
+const BUILD_VERSION="2026-10-15-568";
 const BUILD_NOTES=[
+  "⏳ LOADING STATUS BACK IN THE MENU. The hourglass and green 5-segment loading bar that Campaigns and Ads Performance showed in the old sidebar were lost in the new menu. They're back: on Marketing (while it's collapsed — shows the slower of the two), and on Promotions and Advertising themselves, with the % on hover. As before, each item opens once its data has finished loading.",
   "📅 DINE-IN DISCOUNTS IN DATE ORDER. A backfill wrote older days below newer ones in the Dine-In Discounts tab (e.g. 1 Aug–13 Oct under 14 Oct). The tab is now sorted oldest-first (then by discount name and outlet) every time it is formatted — after each Pull and Backfill, and when you press '🎨 Re-apply sheet formatting'.",
   "🧾 TALABAT UPLOAD FIX. Talabat renamed some stores in its order export, so 220 orders (1–14 Oct) were skipped and their discounts not counted: 'FYOOZHEN, Al Forsan' (brand not recognised — 86 orders), and 'Lollorosso, Forsan', 'Lollorosso, Media City', 'Wicked Wings, Khalifa City', 'Smokeys, Sports Society Mirdif' (outlet not recognised — 134 orders). All are mapped now, and if Talabat renames a store again the dashboard falls back to keywords (Forsan/Khalifa → Al Forsan, Media City → DMC, Mirdif → Mirdiff …) instead of dropping the orders. Upload the same orderDetails file again.",
   "🔢 ORDER NUMBERS IN THE RECONCILIATION. POS Sync → Daily reconciliation now names the orders behind each gap: order no., tax invoice, platform reference and amount for catering and unknown-platform orders, and for every order rung on another brand's till button (e.g. Wicked Wings on Smokeys) — click 'n orders' under a row, or '⬇ Export orders (CSV)' for the whole range. Bills of AED 5 or less are highlighted. New '🔍 List Microsys reports' (read-only) finds the bill-by-bill report needed to also name cash / card / phone bills. Re-run 'Check these days now' once to add order numbers to days already checked.",
@@ -26370,11 +26371,38 @@ function navPaint(){
     const act=cur&&cur.id===n.id,sc=(st==="colour"||st==="live"||st==="rail")?(NV_SEC_CLR[sec]||T.accentOrange):T.accentOrange,bd=nvBadge(n),multi=n.subs.length>1,open=multi&&!col&&st!=="rail"&&(st==="tree"||act);
     const ic=n.ico?nvSvg(n.ico):`<span class="tab-icon">${n.icon||"•"}</span>`;
     return`<div class="tab nv-item ${act?"act":""} ${nvAnimated?"":"nv-enter"}" style="--sc:${sc};animation-delay:${(i++*.04).toFixed(2)}s" data-nv="${n.id}" onclick="navGo('${n.id}')" title="${n.label}${multi?": "+n.subs.map(s=>s[1]).join(" · "):""}">${ic}<span class="tab-label">${st==="rail"?(NV_SHORT[n.label]||n.label):n.label}${st==="live"?nvLive(n):""}</span>${bd?`<span class="nv-badge" title="${bd.t}" style="background:${bd.c}">${bd.n}</span>`:multi&&!col&&st!=="tree"&&st!=="plain"&&st!=="rail"?`<svg class="nv-chev ${open?"open":""}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>`:multi&&!col&&st==="plain"?`<span class="tab-label" style="margin-left:auto;font-size:10px;font-weight:800;color:${T.textMuted}">${n.subs.length}</span>`:""}</div>`+
-      (multi&&st!=="plain"&&st!=="rail"?`<div class="nv-subs ${open?"open":""}" style="--sc:${sc}"><div>${n.subs.map(([p,l])=>`<div class="nv-sub ${p===navCur()?"act":""}" onclick="event.stopPropagation();gp('${p}','nav')">${l}</div>`).join("")}</div></div>`:"");}).join("");
+      (multi&&st!=="plain"&&st!=="rail"?`<div class="nv-subs ${open?"open":""}" style="--sc:${sc}"><div>${n.subs.map(([p,l])=>`<div class="nv-sub ${p===navCur()?"act":""}" data-p="${p}" onclick="event.stopPropagation();gp('${p}','nav')">${l}</div>`).join("")}</div></div>`:"");}).join("");
   nvAnimated=true;nvCss(T);
   // sliding highlight under the active item
-  nvSlide(box,T);navHubPaint();
+  nvSlide(box,T);navHubPaint();nvLoadPaint();
 }
+// v568: the "data loading" battery (hourglass + 5 green segments) that Campaigns and Ads Performance showed in the
+// old sidebar. The old tabs are hidden in the new menu, so their progress is mirrored onto the new items:
+// the sub-item (Promotions / Advertising) and its parent (Marketing), which shows the slowest one while it's collapsed.
+const NV_LOAD={};
+function nvSegs(pct){let h="";for(let i=0;i<5;i++){const lo=i*20,hi=(i+1)*20,lit=pct>=hi,on=lit||pct>lo;h+=`<span style="flex:1;height:4px;border-radius:2px;background:${on?"#3EE07F":"rgba(148,163,184,.4)"};${on?"box-shadow:0 0 7px 1px #22C55Ecc;":""}${on&&!lit?"animation:navSegPulse 1s ease-in-out infinite;":""}"></span>`;}return h;}
+function nvLoadPaint(){const box=document.getElementById("nv-box");if(!box)return;
+  if(typeof ensureNavBatteryCSS==="function")ensureNavBatteryCSS();
+  const put=(el,pct,title)=>{if(!el)return;let hg=el.querySelector(":scope > .nv-hg, :scope > .tab-label > .nv-hg"),bar=el.querySelector(":scope > .nv-segs");
+    if(pct==null||pct>=100){if(hg)hg.remove();if(bar)bar.remove();if(el.dataset.nvLoading){el.style.pointerEvents="";el.style.opacity="";el.removeAttribute("data-nv-loading");el.title=el.dataset.nvTitle||el.title;}return;}
+    if(!el.dataset.nvLoading){el.dataset.nvLoading="1";el.dataset.nvTitle=el.title||"";}
+    if(getComputedStyle(el).position==="static")el.style.position="relative";
+    if(!hg){hg=document.createElement("span");hg.className="nv-hg";hg.textContent="⏳";hg.style.cssText="display:inline-block;font-size:14px;line-height:1;margin-left:6px;vertical-align:middle;animation:navHourglassFlip 1.6s ease-in-out infinite";const lbl=el.querySelector(":scope > .tab-label");lbl?lbl.appendChild(hg):el.appendChild(hg);}
+    if(!bar){bar=document.createElement("div");bar.className="nv-segs";bar.style.cssText="position:absolute;left:8px;right:8px;bottom:1px;display:flex;gap:3px;pointer-events:none";el.appendChild(bar);}
+    bar.innerHTML=nvSegs(pct);el.title=title;};
+  for(const el of box.querySelectorAll(".nv-sub[data-p]")){const L=NV_LOAD[el.dataset.p];put(el,L?L.pct:null,L?`${L.label}… ${L.pct}%`:"");if(L&&L.pct<100)el.style.pointerEvents="none",el.style.opacity="0.9";}
+  for(const n of navItems()||[]){if(!n.subs)continue;const el=box.querySelector(`.nv-item[data-nv="${n.id}"]`);if(!el)continue;
+    const ld=n.subs.map(s=>NV_LOAD[s[0]]).filter(x=>x&&x.pct<100);
+    if(!ld.length){put(el,null);continue;}const mn=ld.reduce((a,x)=>x.pct<a.pct?x:a);put(el,mn.pct,ld.map(x=>`${x.label}… ${x.pct}%`).join(" · "));}
+}
+(function hookNavBattery(){
+  if(typeof paintNavBattery!=="function")return setTimeout(hookNavBattery,300);
+  if(paintNavBattery.__nv)return;
+  const _p=paintNavBattery;paintNavBattery=function(tab,pct,readyTitle,loadingLabel,label){_p(tab,pct,readyTitle,loadingLabel,label);
+    const pg=tab&&tab.dataset&&tab.dataset.pg;if(pg){NV_LOAD[pg]={pct:Math.max(0,Math.min(100,Math.round(pct))),label:({campaigns:"Loading Promotions",cpc:"Computing Advertising"})[pg]||loadingLabel||label||pg};try{nvLoadPaint();}catch(e){}}};
+  paintNavBattery.__nv=true;window.paintNavBattery=paintNavBattery;
+})();
+window.nvLoadPaint=nvLoadPaint;
 function nvCss(T){
   if(!document.getElementById("nav-sec-css"))document.head.appendChild(Object.assign(document.createElement("style"),{id:"nav-sec-css"}));
   document.getElementById("nav-sec-css").textContent=`#app-sidebar .nav-sec{font-size:10px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;color:${T.textMuted};padding:12px 10px 4px}
