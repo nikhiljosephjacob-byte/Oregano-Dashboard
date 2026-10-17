@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-17-578";
+const BUILD_VERSION="2026-10-18-579";
 const BUILD_NOTES=[
+  "⚡ FASTER, AND NO HALF-LOADED NUMBERS. (1) Overview / Compare with dine-in & takeaway on now wait for the Dine-In & Takeaway tab and show a short 'Loading…' card instead of delivery-only totals that jump a second later. (2) Campaign analyses no longer re-read every campaign's comment and outlet list thousands of times — that work ran after every statement upload and froze the page; now each campaign is read once per data load. (3) Switching between pages no longer rebuilds the whole data index each time (each channel view is built once and reused). (4) 'Discount variance' no longer scrolls down the page — the Discount Discrepancy table is placed first. (5) Reconciliation: days explained as direct deliveries now show green.",
   "🏠 DIRECT DELIVERIES ARE EXPECTED, NOT ERRORS. Per Nikhil, bills on the Delivery button that no aggregator paid for (e.g. DIP, Town Square, Jumeirah) are catering / bulk orders from the catering team, or regular customers we delivered to who paid us directly. Rare but legitimate. After every Pull, the reconciliation card now reads the Journal Tape bills behind each 💵 gap; when they add up to the gap and were rung by staff (not a Deliverect order), the day is marked explained automatically ('🏠 Direct delivery paid to us', with the voucher numbers) and drops off the red badge. Bills that don't add up, or Deliverect orders paid by an unknown method, stay open.",
   "🏷️ MARK-UP CAMPAIGNS NO LONGER SHOW AS A DISCOUNT GAP. Oregano × Careem '20% OFF Combos' (8–13 Oct, combo prices raised then discounted): the Discount Discrepancy table compared the statement's 20% against the sheet AFTER the mark-up was taken out (≈ AED 0), so it showed about −AED 6,255 of gap that wasn't real. It now compares the discount as listed on both sides, tags those days 🏷️ and shows the real cost after the mark-up (what profitability uses) alongside.",
   "🎯 UNATTRIBUTED DISCOUNT — CONFIRMED ORDERS, NOT CANDIDATES. For Deliveroo, Careem, Noon and Talabat the gap-day order list used to show every discounted order of that day as a 'candidate' (no item list in those statements). With Journal Tape read for those days, each statement order is now paired with its POS bill (same outlet, total and discount) and only the POS bills left over are listed — the actual discount the statement doesn't have — with voucher no., outlet and items. Applies to the gap-day lists and the 'Unattributed deep dive' CSV.",
@@ -165,11 +166,18 @@ if(typeof Chart!=="undefined"){
 // the exact figure in its title attribute, which a plain textContent landing would have silently
 // stripped every time the animation ran.
 function animateKpiCountUp(root){
+  // v579: (a) an element already counting up is snapped to its real figure instead of being re-read mid-animation (a second
+  // render 20 ms later used to capture a half-way — even negative — number and leave it on screen); (b) the first frame can no
+  // longer start below zero; (c) a figure that is the same as the last time this spot was shown is not replayed from 0.
   if(!root)return;
   const els=root.querySelectorAll(".kpi .v, .kpi-value-num");
-  els.forEach(el=>{
+  const seen=window.__kpiSeen||(window.__kpiSeen=new Map());
+  els.forEach((el,idx)=>{
+    if(el.__kpiFinal!=null){el.__kpiTok=(el.__kpiTok||0)+1;el.innerHTML=el.__kpiFinal;el.__kpiFinal=null;return;}
     const rawHTML=el.innerHTML;
     const raw=el.textContent.trim();
+    const sk=(root.id||"")+"|"+(typeof curPage!=="undefined"?curPage:"")+"|"+idx;
+    if(seen.get(sk)===raw)return;seen.set(sk,raw);
     const m=raw.match(/^(−|-)?([^\d]*)([\d,]+(?:\.\d+)?)(.*)$/);
     if(!m)return;
     const neg=m[1]==="−"||m[1]==="-";
@@ -179,13 +187,14 @@ function animateKpiCountUp(root){
     if(isNaN(target))return;
     const decimals=numStr.includes(".")?numStr.split(".")[1].length:0;
     const signedTarget=neg?-target:target;
-    const dur=1100,start=performance.now();
+    const dur=1100,start=performance.now(),tok=(el.__kpiTok||0)+1;el.__kpiTok=tok;el.__kpiFinal=rawHTML;
     function step(ts){
-      const t=Math.min(1,(ts-start)/dur);
+      if(el.__kpiTok!==tok)return;
+      const t=Math.max(0,Math.min(1,(ts-start)/dur));
       const eased=1-Math.pow(1-t,3);
       const val=signedTarget*eased;
       el.textContent=(val<0?"−":"")+prefix+Math.abs(val).toLocaleString(undefined,{minimumFractionDigits:decimals,maximumFractionDigits:decimals})+suffix;
-      if(t<1)requestAnimationFrame(step);else el.innerHTML=rawHTML;
+      if(t<1)requestAnimationFrame(step);else{el.innerHTML=rawHTML;el.__kpiFinal=null;}
     }
     requestAnimationFrame(step);
   });
@@ -25667,7 +25676,7 @@ function posReconCardHTML(T,card,ct,btn){
   if(!R.length)return h+`<div style="color:${T.textSecondary};font-size:12.5px">No days checked yet in this range — click <b>Check these days now</b>, or it fills itself from the next Pull.</div></div>`;
   const stat=(l,v,sub,c)=>`<div style="background:${T.bg};border:1px solid ${T.cardBorder};border-radius:10px;padding:10px 12px;min-width:140px"><div style="font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:${T.textMuted}">${l}</div><div style="font-size:18px;font-weight:800;color:${c||T.textPrimary};font-variant-numeric:tabular-nums">${v}</div><div style="font-size:11px;color:${T.textMuted}">${sub||""}</div></div>`;
   const unex=items.reduce((a,i)=>a+(i.ack?0:i.unexpl),0),cat=items.reduce((a,i)=>a+(i.other||[]).filter(o=>posReconWhy(o)==="catering").reduce((z,o)=>z+o[1],0),0),unk=items.reduce((a,i)=>a+i.unk,0);
-  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${stat("Days checked",`${R.length} / ${posRecon.days}`)}${stat("Till (POS)",f(tp),"delivery buttons")}${stat("Dashboard",f(ta),"aggregator orders")}${stat("Difference",f2(tp-ta),tp>0?((tp-ta)/tp*100).toFixed(2)+"% of till":"",Math.abs(tp-ta)>=100?T.accentOrange:T.accentGreen)}${stat("Not on Credit Sales",f2(unex),"direct deliveries (catering / regulars) or voids",Math.abs(unex)>=50?T.accentRed:T.textPrimary)}${stat("Catering",f(cat),"by design — not a platform")}${stat("Unknown platform",f(unk),"POS Sync doesn't map it",unk>=1?T.accentRed:T.textPrimary)}</div>`;
+  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${stat("Days checked",`${R.length} / ${posRecon.days}`)}${stat("Till (POS)",f(tp),"delivery buttons")}${stat("Dashboard",f(ta),"aggregator orders")}${stat("Difference",f2(tp-ta),tp>0?((tp-ta)/tp*100).toFixed(2)+"% of till":"",Math.abs(tp-ta)>=100?T.accentOrange:T.accentGreen)}${stat("Paid directly / voids · open",f2(unex),"direct deliveries (catering / regulars) or voids",Math.abs(unex)>=50?T.accentRed:T.textPrimary)}${stat("Catering",f(cat),"by design — not a platform")}${stat("Unknown platform",f(unk),"POS Sync doesn't map it",unk>=1?T.accentRed:T.textPrimary)}</div>`;
   if(items.length){
     h+=`<div style="font-size:12px;font-weight:800;color:${T.textSecondary};margin:4px 0 6px">Gaps by outlet and day</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="color:${T.textMuted};font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;text-align:left">${["Date","Outlet","Till button","Till","Dashboard","Gap","Why",""].map((x,i)=>`<th style="padding:6px 8px;border-bottom:1px solid ${T.cardBorder};${i>=3&&i<=5?"text-align:right":""}">${x}</th>`).join("")}</tr></thead><tbody>`;
     for(const i of items){
@@ -25676,7 +25685,7 @@ function posReconCardHTML(T,card,ct,btn){
       const act=i.ack?`<span style="color:${T.accentGreen};font-size:11.5px" title="${esc(i.ack.note||"")}">✓ ${esc(i.ack.note||"explained")} · ${esc(i.ack.by||"")}</span> <a href="#" onclick="posReconUnack('${i.date}','${esc(i.id)}');return false" style="color:${T.textMuted};font-size:11px">undo</a>`:i.open?`<button onclick="posReconAck('${i.date}','${esc(i.id)}')" style="padding:4px 10px;border-radius:6px;border:1px solid ${T.cardBorder};background:transparent;color:${T.textSecondary};font-size:11.5px;font-weight:700;cursor:pointer">Mark explained</button>`:`<span style="color:${T.textMuted};font-size:11.5px">small</span>`;
       const ordH=(i.orders||[]).length?`<details style="margin-top:3px"><summary style="cursor:pointer;color:${T.textMuted};font-size:11.5px">${i.orders.length} order${i.orders.length>1?"s":""} — order no. / tax invoice</summary>${posReconOrdersHTML(T,i.orders)}</details>`:"";
       const tillOnly=Math.abs(i.unexpl)>=5&&i.unexpl>0?posReconBillsHTML(T,i):"";
-      h+=`<tr style="border-bottom:1px solid ${T.cardBorder}55;${i.open?`background:${T.accentRed}10`:""}"><td style="padding:6px 8px;white-space:nowrap">${posFmtDate(i.date)}</td><td style="padding:6px 8px;font-weight:700">${esc(i.out)}</td><td style="padding:6px 8px">${esc(i.rc)} <span style="color:${T.textMuted}">→ ${esc(i.brand||"")}</span></td><td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${f(i.pos)}</td><td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${f(i.agg)}</td><td style="padding:6px 8px;text-align:right;font-weight:800;color:${Math.abs(i.gap)>=50?T.accentOrange:T.textSecondary};font-variant-numeric:tabular-nums">${f2(i.gap)}</td><td style="padding:6px 8px;line-height:1.5">${why}${ordH}${tillOnly}</td><td style="padding:6px 8px;white-space:nowrap">${act}</td></tr>`;}
+      h+=`<tr style="border-bottom:1px solid ${T.cardBorder}55;${i.open?`background:${T.accentRed}10`:i.ack?`background:${T.accentGreen}14;box-shadow:inset 3px 0 0 ${T.accentGreen}`:""}"><td style="padding:6px 8px;white-space:nowrap">${posFmtDate(i.date)}</td><td style="padding:6px 8px;font-weight:700">${esc(i.out)}</td><td style="padding:6px 8px">${esc(i.rc)} <span style="color:${T.textMuted}">→ ${esc(i.brand||"")}</span></td><td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${f(i.pos)}</td><td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${f(i.agg)}</td><td style="padding:6px 8px;text-align:right;font-weight:800;color:${Math.abs(i.gap)>=50?T.accentOrange:T.textSecondary};font-variant-numeric:tabular-nums">${f2(i.gap)}</td><td style="padding:6px 8px;line-height:1.5">${why}${ordH}${tillOnly}</td><td style="padding:6px 8px;white-space:nowrap">${act}</td></tr>`;}
     h+=`</tbody></table></div>`;
   }else h+=`<div style="color:${T.accentGreen};font-size:12.5px;font-weight:700">✅ Till and dashboard agree for every outlet on every checked day.</div>`;
   // brand rung on another brand's till button — totals match, Finance's brand split doesn't
@@ -25998,14 +26007,19 @@ function lensSync(page){
   const ex=LENS_PAGES.has(page)&&chState.vat==="excl"; // v563: Overview & Compare can show sales excl. VAT (÷1.05)
   const key=(sel==="D"&&!ex)?"delivery":sel+":"+lensVer+(ex?":ex":""); // re-applies when the Dine-In & Takeaway tab (re)loads
   if(key===lensApplied)return;
+  const hit=_lensIdx.get(key); // v579: switching pages no longer rebuilds the whole index every time
+  if(hit&&hit.gen===_diGen){allData=hit.data;Object.assign(dataIndex,hit.idx);lensAggsFor(sel);lensApplied=key;return;}
   const ins=sel==="D"?[]:lensInstoreRecords().filter(r=>(r.aggregator==="Dine-In"&&sel.includes("I"))||(r.aggregator==="Takeaway"&&sel.includes("T")));
   let out=sel.includes("D")?(ins.length?lensBase.concat(ins):lensBase):ins;
   if(ex)out=out.map(r=>Object.assign({},r,{sales:(r.sales||0)/1.05}));
-  allData=out;
-  const want={"Dine-In":sel.includes("I"),"Takeaway":sel.includes("T")};
-  LENS_CH.forEach(c=>{const i=AGGS.indexOf(c);if(want[c]&&i<0)AGGS.push(c);if(!want[c]&&i>=0)AGGS.splice(i,1);});
-  buildDataIndex();lensApplied=key;
+  allData=out;lensAggsFor(sel);
+  for(const k of["byBrandAgg","byBrandAggBranch","brandBranches","brandDailyDisc","brandDailySalesByBranch"])dataIndex[k]=new Map(); // fresh maps so cached views stay intact
+  _diInLens=true;try{buildDataIndex();}finally{_diInLens=false;}
+  _lensIdx.set(key,{gen:_diGen,data:allData,idx:{byBrandAgg:dataIndex.byBrandAgg,byBrandAggBranch:dataIndex.byBrandAggBranch,brandBranches:dataIndex.brandBranches,brandDailyDisc:dataIndex.brandDailyDisc,brandDailySalesByBranch:dataIndex.brandDailySalesByBranch,built:true}});
+  lensApplied=key;
 }
+function lensAggsFor(sel){const want={"Dine-In":sel.includes("I"),"Takeaway":sel.includes("T")};
+  LENS_CH.forEach(c=>{const i=AGGS.indexOf(c);if(want[c]&&i<0)AGGS.push(c);if(!want[c]&&i>=0)AGGS.splice(i,1);});}
 // Called right after the dashboard (re)loads delivery data: forget the old copy so the next page render re-applies the lens.
 function lensReset(){lensBase=null;lensApplied="delivery";LENS_CH.forEach(c=>{const i=AGGS.indexOf(c);if(i>=0)AGGS.splice(i,1);});}
 // Run fn on delivery-only data (digest export, health checks), then put the page's view back.
@@ -26669,7 +26683,7 @@ function navHubPaint(){
   if(!bar){bar=document.createElement("div");bar.id="hub-bar";}
   if(bar.nextSibling!==pg)pg.parentNode.insertBefore(bar,pg);
   const T=DARK_THEME;bar.style.cssText=`display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin:0 0 10px;padding:6px;background:${T.card};border:1px solid ${T.cardBorder};border-radius:10px`;
-  bar.innerHTML=`<span style="font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:${T.textMuted};padding:0 8px">${h.label}</span>`+h.subs.map(([id,l])=>`<button onclick="gp('${id}')" style="border:none;border-radius:7px;padding:7px 14px;font:inherit;font-size:12.5px;font-weight:800;cursor:pointer;background:${id===curPage?T.accentOrange+"26":"transparent"};color:${id===curPage?T.accentOrange:T.textSecondary}">${l}</button>`).join("");
+  bar.innerHTML=`<span style="font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:${T.textMuted};padding:0 8px">${h.label}</span>`+h.subs.map(([id,l])=>`<button onclick="gp('${id}')" style="border:none;border-radius:7px;padding:7px 14px;font:inherit;font-size:12.5px;font-weight:800;cursor:pointer;background:${id===navCur()?T.accentOrange+"26":"transparent"};color:${id===navCur()?T.accentOrange:T.textSecondary}">${l}</button>`).join("");
 }
 function navGo(id){const n=navItems().find(x=>x.id===id);if(n)gp(navLastSub[id]&&n.subs.some(s=>s[0]===navLastSub[id])?navLastSub[id]:n.subs[0][0],"nav");}
 function navCur(){return(typeof curPage!=="undefined"&&curPage==="campaigns"&&typeof campTab!=="undefined"&&campTab==="discounts")?"discvar":(typeof curPage!=="undefined"?curPage:"");}window.navCur=navCur;
@@ -26679,7 +26693,7 @@ function navSectionize(){ // called by buildSidebarNav once the sidebar exists
   // v564: "Discount variance" = Promotions → Discount Burn Analysis (Discount Discrepancy — sheet vs statement files), one click from the menu
   if(!document.getElementById("page-discvar")){const d=document.createElement("div");d.id="page-discvar";d.style.display="none";(document.getElementById("page-campaigns")||document.body).insertAdjacentElement("afterend",d);}
   const _gp=gp;gp=function(p,via){
-    if(p==="discvar"){campTab="discounts";_gp("campaigns");navLastSub.mkt="discvar";navPaint();mktRetitle();setTimeout(()=>{const c=[...document.querySelectorAll("#page-campaigns .ct")].find(x=>/Discount Discrepancy/.test(x.textContent));if(c)c.closest(".card").scrollIntoView({behavior:"smooth",block:"start"});},900);return;}
+    if(p==="discvar"){campTab="discounts";_gp("campaigns");navLastSub.mkt="discvar";navPaint();mktRetitle();try{window.scrollTo({top:0});}catch(e){}return;} // v579: no auto-scroll — the table is placed first instead (rdDiscvarTop)
     if(p==="campaigns"&&via==="nav"&&typeof campTab!=="undefined"&&campTab==="discounts")campTab="browse";
     _gp(p);const h=navHubOf(navCur());if(h)navLastSub[h.id]=navCur();navPaint();if(p==="campaigns"||p==="cpc"){mktRetitle();setTimeout(mktRetitle,400);setTimeout(mktRetitle,1500);}};window.gp=gp;
   new MutationObserver(()=>navPaint()).observe(sb,{attributes:true,attributeFilter:["data-collapsed"]});
@@ -26943,3 +26957,38 @@ function jtGapBills(brand,agg,date){const days=(posJTData.days||[]).filter(d=>d.
     return left.length?left.map(p=>({o:"V"+p.v,orderRef:"voucher "+p.v,ou:p.ou,i:p.items||"—",g:p.tot,n:p.tot-p.disc,disc:p.disc,_jt:1,_n:(st||[]).length,_p:pos.length})):[];};
   _normalizeGapOrderRow=function(o,agg){const r=_n(o,agg);if(o&&o._jt)r.basis=`POS Journal Tape — a discounted ${agg} bill on the till with no matching order in the ${agg} statement (paired ${o._p} POS bills with ${o._n} statement orders by outlet, total and discount)`;return r;};
   discGapUnattributedOrders.__jt=true;window.discGapUnattributedOrders=discGapUnattributedOrders;window._normalizeGapOrderRow=_normalizeGapOrderRow;})();
+
+// ── v579: SPEED + STEADY NUMBERS ─────────────────────────────────────────────────────────────────────
+// (1) Any index rebuild outside the lens (new sheet data, campaigns, retries) bumps a generation so cached lens views are dropped.
+var _lensIdx=new Map(),_diGen=0,_diInLens=false;
+(function(){const _b=buildDataIndex;buildDataIndex=function(){if(!_diInLens){_diGen++;_lensIdx.clear();}return _b.apply(this,arguments);};window.buildDataIndex=buildDataIndex;})();
+// (2) parseCampComment / campOutlets were re-run thousands of times while campaign analyses warm up (≈ 0.8 s per pass on the
+// test data, several seconds on the live sheet, after every statement upload). Same campaign + same comment + same data → same answer.
+(function(){
+  const cl=v=>{if(v instanceof Set)return new Set(v);if(Array.isArray(v))return v.slice();if(v&&typeof v==="object"){const o={};for(const k in v){const x=v[k];o[k]=x instanceof Set?new Set(x):Array.isArray(x)?x.slice():x;}return o;}return v;};
+  const memo=fn=>{const W=new WeakMap();return function(c){if(!c||typeof c!=="object")return fn.apply(this,arguments);
+    const sig=(c.comments||"")+"\u0001"+(c.outlet||"")+"\u0001"+(c.brand||"")+"\u0001"+(c.aggregator||"")+"\u0001"+(c.name||"");
+    const h=W.get(c);if(h&&h.ad===allData&&h.gen===_diGen&&h.sig===sig&&arguments.length===1)return cl(h.v);
+    const v=fn.apply(this,arguments);if(arguments.length===1)W.set(c,{ad:allData,gen:_diGen,sig,v:cl(v)});return v;};};
+  if(typeof parseCampComment==="function"){parseCampComment=memo(parseCampComment);window.parseCampComment=parseCampComment;}
+  if(typeof campOutlets==="function"){campOutlets=memo(campOutlets);window.campOutlets=campOutlets;}
+})();
+// (3) Overview/Compare with dine-in & takeaway switched on: until the Dine-In & Takeaway tab has loaded, show a short
+// "loading" card instead of delivery-only totals that then jump. The page paints itself once the tab arrives.
+function lensWaitingInstore(p){return typeof LENS_PAGES!=="undefined"&&LENS_PAGES.has(p)&&lensMode==="all"&&!(lensSel.size===1&&lensSel.has("D"))&&!instoreLoaded;}
+(function lensWaitHook(){
+  if(typeof renderPage!=="function"||!window.lensSet)return setTimeout(lensWaitHook,250);
+  const _rp=renderPage;renderPage=function(p){
+    if(lensWaitingInstore(p)){const pg=document.getElementById("page-"+p);if(pg){const T=DARK_THEME;
+      pg.innerHTML=`<div class="card" style="padding:28px 22px;text-align:center;color:${T.textSecondary}"><div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:6px">⏳ Loading dine-in &amp; takeaway…</div><div style="font-size:12.5px">Numbers appear once delivery, dine-in and takeaway are all in — so you never see a half total.</div><div style="margin:14px auto 0;max-width:260px;height:6px;border-radius:3px;background:${T.bg};overflow:hidden"><div style="height:100%;width:40%;background:${T.accentOrange};border-radius:3px;animation:rdLoadBar 1.2s ease-in-out infinite"></div></div></div>`;
+      if(!document.getElementById("rd-loadbar-css")){const st=document.createElement("style");st.id="rd-loadbar-css";st.textContent="@keyframes rdLoadBar{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}";document.head.appendChild(st);}}
+      return;}
+    return _rp.apply(this,arguments);};window.renderPage=renderPage;
+})();
+// (4) Discount variance: the Discount Discrepancy table goes first on the tab (no auto-scrolling down to it).
+function rdDiscvarTop(){try{if(campTab!=="discounts")return;const pg=document.getElementById("page-campaigns");if(!pg)return;
+  const ct=[...pg.querySelectorAll(".ct")].find(x=>/Discount Discrepancy/.test(x.textContent));const card=ct&&ct.closest(".card");if(!card)return;
+  // right under the Discount Burn filters (aggregator / brand / period) — the table follows those filters
+  const fl=[...pg.querySelectorAll(".card")].find(c=>c!==card&&!c.contains(card)&&/AGGREGATOR/i.test(c.innerText||"")&&/PERIOD/i.test(c.innerText||""));
+  if(fl&&fl.nextElementSibling!==card)fl.parentNode.insertBefore(card,fl.nextSibling);}catch(e){}}
+(function(){const go=()=>{if(typeof renderCampaigns!=="function")return setTimeout(go,300);const _r=renderCampaigns;renderCampaigns=async function(){const r=await _r.apply(this,arguments);rdDiscvarTop();return r;};window.renderCampaigns=renderCampaigns;};go();})();
