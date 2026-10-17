@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-17-574";
+const BUILD_VERSION="2026-10-17-575";
 const BUILD_NOTES=[
+  "🧾 JOURNAL TAPE, BILL BY BILL. (1) Every POS Sync Pull now also reads Microsys Journal Tape for each outlet (the days it pulls) and keeps the delivery bills with a discount plus the Smokeys-button bills at the Wicked Wings outlets; POS Sync → 'Journal Tape history' reads earlier days. (2) Promotions → Discount Burn → new 'Item-level discount check': each select-items / BOGO campaign gets the POS discount on bills that contain its items (item names read from the campaign's Comments and matched to the POS names, with the matches and any not-found items shown), next to today's allocation; plus the discounted bills that match no select-items campaign, by brand and platform with their most common items. (3) POS Sync → Daily reconciliation → 'Wicked Wings vs Smokeys by items': per outlet, how much to move from the Smokeys column to Wicked Wings, and bills where the items and the platform account disagree.",
   "🥢 JOURNAL TAPE FOR FYOOZHEN TOO. 'Show the bills' now also works for the Fyoozhen-chain outlets — DIP Fyoozhen, Nad Al Sheba, WTC and Al Forsan (Fyoozhen kitchen) — so every outlet's till-only bills can be named.",
   "🧾 JOURNAL TAPE IN THE RECONCILIATION. Every 💵 'not on Credit Sales' gap now has '🔍 Show the bills' — it reads Microsys Journal Tape for that outlet and day and lists the bills on that till button that no platform paid for: voucher, order no., time, employee, how it was paid (cash / Visa / Mastercard…) and the items, with a ✓ when they add up to the gap. '🔍 Show the bills for every 💵 gap' does them all; the CSV export includes them. (Fyoozhen-chain outlets — DIP Fyoozhen, NAS, WTC, Al Forsan Fyoozhen — still need their Microsys id.)",
   "🧹 PLATFORMS PAGE — NO DOUBLE DATA. The 'All platforms' table repeated what the platform cards already show, so it's gone. The three figures only the table had are now on the cards: net-sales change % next to sales, discount depth % under Disc. Burn, and contribution change % under the prior contribution. (The Brands page keeps its 'All brands' table — there the cards show one brand at a time, so the table is the only side-by-side view.)",
@@ -25090,6 +25091,36 @@ function psParseJT(csv){
 const PS_JT_PLATFORM=/DELIVEROO|TALABAT|CAREEM|NOON|KEETA|MEITUAN|INSTASHOP|SLIDER|SMILES|EAT_EASY|CREDIT CUSTOMER/i;
 function psJTTillOnly(bills,suf){return bills.filter(b=>b.type===suf&&!b.pays.some(p=>PS_JT_PLATFORM.test(p.type)||PS_JT_PLATFORM.test(p.customer)));}
 
+// v575: Journal Tape → compact delivery bills for one outlet-day.
+// Brand by till button (DL Oregano/Fyoozhen, DT Lollorosso, PO Smokeys/Wicked Wings) and, on the Smokeys button,
+// by the items themselves (WW… item codes / "WW", "Wicked" in the name = Wicked Wings — it isn't on Deliverect and
+// is rung by hand on that button). Platform from how the bill was paid (card/online settlement or the platform's
+// credit account). Discount = the "… DISCOUNT" settlement lines.
+const PS_JT_WW=/^(WW|WCKD)|\bWW\b|WICKED|WCKD/i;
+function psJTPlatform(b){for(const p of b.pays){const a=psGetAgg(p.type)||psGetAgg(p.customer||"");if(a)return a;}return null;}
+function psJTItemBrand(it){return PS_JT_WW.test(it.name)?"Wicked Wings":/^(SK|SMK)|\bSMK\b|SMOKEY/i.test(it.name)?"Smokeys":null;}
+function psJTBrand(b,loc){
+  const fyz=PS_FYZ_LOCS.has(loc);
+  if(b.type==="DL")return fyz?"Fyoozhen":"Oregano";
+  if(b.type==="DT")return"Lollorosso";
+  if(b.type==="PO"){if(fyz)return"Wicked Wings";const n={};b.items.forEach(i=>{const x=psJTItemBrand(i);if(x)n[x]=(n[x]||0)+Math.abs(i.amount||1);});
+    return(n["Wicked Wings"]||0)>(n["Smokeys"]||0)?"Wicked Wings":"Smokeys";}
+  return null; // DI / TO = in-store
+}
+function psJTCustBrand(b){for(const p of b.pays){const c=p.customer||"";if(/wicked|wckd/i.test(c))return"Wicked Wings";if(/smokey/i.test(c))return"Smokeys";}return null;}
+const PS_JT_BCODE={Oregano:"O",Lollorosso:"L",Smokeys:"S","Wicked Wings":"W",Fyoozhen:"F"};
+function psJTCompact(bills,loc){
+  const items=[],ix={},out=[],wwLoc=/^(REM|REF|NAD|ALF)/.test(loc);
+  const it=n=>{n=n.replace(/^[A-Z0-9]+\s*-\s*/,"").trim();if(ix[n]==null){ix[n]=items.length;items.push(n);}return ix[n];};
+  for(const b of bills){const brand=psJTBrand(b,loc);if(!brand)continue;
+    const disc=psRound(b.pays.filter(p=>/DISCOUNT/i.test(p.type)).reduce((a,p)=>a+p.amount,0),2);
+    const keep=disc>0||(b.type==="PO"&&wwLoc);if(!keep)continue;
+    const plat=psJTPlatform(b)||"?",cb=psJTCustBrand(b);
+    const real=b.items.filter(i=>!/discount|unpaid order/i.test(i.name)&&i.amount>0);
+    out.push([b.voucher,PS_JT_BCODE[brand],plat,disc,psRound(b.total,2),real.map(i=>[it(i.name),psRound(i.amount,2)]),cb?PS_JT_BCODE[cb]:"",b.type]);}
+  return{v:1,items,bills:out};
+}
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // v535 POS SYNC — STEP 1 OF 4 (connection test). Replaces the desktop POS Uploader: the
@@ -25261,6 +25292,7 @@ function renderPosSync(){
   h+=`<div style="font-size:12px;color:${T.textSecondary};margin-top:10px;line-height:1.5">Test connection is read-only: it signs in to Microsys, pulls yesterday's Sales Summary by Outlet, and reads the tab list of the chosen Google Sheet.</div></div>`;
   h+=posFlagsCardHTML(T,card,ct,btn);
   h+=posReconCardHTML(T,card,ct,btn);
+  h+=posJTCardHTML(T,card,ct,btn);
   h+=posPullCardHTML(T,card,ct,btn);
   h+=posBackfillCardHTML(T,card,ct,btn);
   h+=posInspectCardHTML(T,card,ct,btn);
@@ -25387,6 +25419,7 @@ async function posStartPull(){
   // (a day pulled before Microsys split dine-in/takeaway, a day nobody pulled, a day without discount detail).
   // Only missing days are fetched, so when everything is there it's just one quick read of the tab.
   if(!P.bar.stopped){const last=dates[dates.length-1];try{const r=await posStartBackfill({auto:true,from:posAddDays(last,-13),to:last});P.results.catchup=r;}catch(e){step("Catch-up failed: "+e.message,"err");}}
+  if(!P.bar.stopped&&okDays){try{await posJTAfterPull(dates);}catch(e){step("Journal Tape failed: "+e.message,"err");}} // v575
   posInstoreReloadSoon();
 }
 function posBeforeUnload(e){if(posSyncState.pulling){e.preventDefault();e.returnValue="A POS pull is still running. Leaving now stops it.";return e.returnValue;}}
@@ -25637,6 +25670,7 @@ function posReconCardHTML(T,card,ct,btn){
   const ml=Object.values(mb).sort((a,b)=>b.amt-a.amt);
   if(ml.length){h+=`<div style="font-size:12px;font-weight:800;color:${T.textSecondary};margin:16px 0 6px">Orders rung on another brand's till button</div><div style="font-size:12px;color:${T.textMuted};margin-bottom:6px;line-height:1.5">The order came in on the platform as one brand but was rung on another brand's button. The dashboard follows the platform (right brand); Finance's report follows the till button, so its brand columns are off by these amounts unless Finance moves them by hand.</div>`;
     h+=ml.map(m=>`<div style="font-size:12.5px;padding:6px 8px;border-radius:8px;background:${T.bg};margin-bottom:4px"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center"><b>${esc(m.out)}</b><span><span style="color:${typeof BMAP!=="undefined"&&BMAP[m.brand]?BMAP[m.brand].c:T.textPrimary};font-weight:700">${esc(m.brand)}</span> orders on the <b>${esc(m.till)}</b> button</span><span style="margin-left:auto;font-variant-numeric:tabular-nums;font-weight:800">${f(m.amt)}</span><span style="color:${T.textMuted}">${m.days.size} day${m.days.size>1?"s":""}</span></div>${m.orders.length?`<details style="margin-top:4px"><summary style="cursor:pointer;color:${T.textMuted};font-size:11.5px">${m.orders.length} order${m.orders.length>1?"s":""} — order no. / tax invoice</summary>${posReconOrdersHTML(T,m.orders,true)}</details>`:""}</div>`).join("");}
+  h+=posReconWWHTML(T);
   h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px">${btn("🔍 Show the bills for every 💵 gap","posReconBillsAll()",false,false)}${btn("⬇ Export orders (CSV)","posReconExport()",false,false)}<span style="font-size:11.5px;color:${T.textMuted}">Every order behind a gap or a wrong till button in this range: date, outlet, till button, customer, order no., tax invoice, platform reference, AED incl. VAT — to send to the outlet or Finance.</span></div>`;
   return h+`</div>`;
 }
@@ -25681,6 +25715,59 @@ async function posReconBills(k){const[date,loc,rc]=k.split("|");posRecon.bills[k
 async function posReconBillsAll(){const items=posReconItems(posRecon.recs).filter(i=>i.unexpl>=5&&!posRecon.bills[posReconBillKey(i)]);
   for(const i of items){await posReconBills(posReconBillKey(i));}}
 window.posReconBills=posReconBills;window.posReconBillsAll=posReconBillsAll;
+
+// ── v575: JOURNAL TAPE COLLECTION — per outlet-day, compact delivery bills → KV (for item-level discount attribution
+// and the Wicked Wings / Smokeys split). Runs after every Pull for the pulled days; history via the card below.
+function posJTLocKey(loc){return loc.slice(0,3)+(PS_FYZ_LOCS.has(loc)?"-F":"");}
+const PS_JT_LOCS=Object.keys(PS_LOCATION_MAP);
+async function posJTCollectDay(iso,locs,onLoc){let ok=0,fail=0,bills=0;
+  for(const loc of locs){if(posSyncState.stop)break;
+    try{let r;try{r=await posApi("/api/pos/report",{kind:"jt",date:iso,loc});}catch(e1){await new Promise(z=>setTimeout(z,2000));r=await posApi("/api/pos/report",{kind:"jt",date:iso,loc});}
+      const c=psJTCompact(psParseJT(r.csv),loc);await posApi("/api/pos/jt",{date:iso,loc:posJTLocKey(loc),data:c});ok++;bills+=c.bills.length;}
+    catch(e){fail++;}
+    if(onLoc)onLoc(loc);}
+  return{ok,fail,bills};}
+// after a Pull: the pulled days (≤ 7, to keep the Pull quick)
+async function posJTAfterPull(dates){const P=posSyncState;const ds=dates.slice(-7);if(!ds.length)return;
+  P.pulling=true;
+  for(const iso of ds){const i=P.progress.push({t:`${posFmtDate(iso)} — Journal Tape (bill by bill, ${PS_JT_LOCS.length} outlets)…`,st:"run"})-1;renderPosSync();
+    const r=await posJTCollectDay(iso,PS_JT_LOCS);P.progress[i]={t:`${posFmtDate(iso)} — Journal Tape: ${r.ok} outlet(s), ${r.bills} delivery bills kept${r.fail?` · ${r.fail} failed`:""}`,st:r.fail?"err":"ok"};renderPosSync();}
+  P.pulling=false;renderPosSync();posJT.cache=null;}
+// history card
+const posJT={from:null,to:null,run:null,cache:null};
+function posJTCardHTML(T,card,ct,btn){const y=posAddDays(posDubaiToday(),-1),f=posJT.from||posAddDays(y,-13),t=posJT.to||y,R=posJT.run;
+  const inp=(w,v)=>`<input type="date" max="${y}" value="${v}" onchange="posJT['${w}']=this.value;renderPosSync()" style="padding:6px 8px;border-radius:6px;border:1px solid ${T.cardBorder};background:${T.bg};color:${T.textPrimary};font:inherit;font-size:12px;color-scheme:dark">`;
+  let h=`<div style="${card}"><div style="${ct}">🧾 Journal Tape history — bill by bill</div><div style="font-size:12.5px;color:${T.textSecondary};line-height:1.55;margin-bottom:10px">Reads Microsys Journal Tape for every outlet and day and keeps the delivery bills that carry a discount, plus the Smokeys-button bills at the Wicked Wings outlets. The dashboard uses it to (1) give each <b>select-items</b> campaign the discount on bills that contain its items and (2) split <b>Wicked Wings</b> from Smokeys by items. Every Pull does this for the days it pulls; use this for earlier days. Read-only in Microsys. About 1–2 minutes per day.</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">${inp("from",f)}<span style="color:${T.textSecondary}">→</span>${inp("to",t)}${btn(R&&R.running?`⏳ Day ${R.day} of ${R.days} · ${R.loc}…`:"🧾 Read Journal Tape","posJTHistory()",true,!!(R&&R.running)||posSyncState.pulling)}${R&&R.running?btn("⏹ Stop","posSyncState.stop=true",false,false):""}</div>`;
+  if(R&&!R.running)h+=`<div style="margin-top:10px;font-size:12.5px;color:${R.fail?T.accentOrange:T.accentGreen};font-weight:700">${R.stopped?"⏹ Stopped — ":"✅ "}${R.done} day(s) read, ${R.skipped} already there, ${R.bills} delivery bills kept${R.fail?` · ${R.fail} outlet-day(s) failed (run again to retry)`:""}</div>`;
+  return h+`</div>`;}
+async function posJTHistory(){const P=posSyncState;if(P.pulling||(posJT.run&&posJT.run.running))return;if(P.status&&!P.status.hasCreds){posOpenCreds();return;}
+  const y=posAddDays(posDubaiToday(),-1);let f=posJT.from||posAddDays(y,-13),t=posJT.to||y;if(f>t)[f,t]=[t,f];if(t>y)t=y;
+  const dates=[];for(let d=f;d<=t;d=posAddDays(d,1))dates.push(d);
+  let have=new Set();try{const j=await posApi(`/api/pos/jt?from=${f}&to=${t}&keys=1`);have=new Set(j.keys||[]);}catch(e){}
+  const R=posJT.run={running:true,day:0,days:dates.length,loc:"",done:0,skipped:0,fail:0,bills:0};P.stop=false;renderPosSync();
+  for(const iso of dates){if(P.stop){R.stopped=true;break;}R.day++;
+    const locs=PS_JT_LOCS.filter(l=>!have.has(iso+":"+posJTLocKey(l)));if(!locs.length){R.skipped++;continue;}
+    const r=await posJTCollectDay(iso,locs,l=>{R.loc=(PS_INSTORE_MAP[l]||l);renderPosSync();});R.done++;R.fail+=r.fail;R.bills+=r.bills;}
+  R.running=false;P.stop=false;posJT.cache=null;renderPosSync();}
+window.posJTHistory=posJTHistory;window.posJT=posJT;
+
+// v575: Wicked Wings vs Smokeys by ITEMS (Journal Tape) at the outlets where Wicked Wings is rung by hand on the Smokeys button
+posRecon.ww={key:null,data:null,loading:false};
+function posReconWWHTML(T){const to=posAddDays(posDubaiToday(),-1),from=posAddDays(to,-(posRecon.days-1)),k=from+"|"+to,W=posRecon.ww;
+  if(W.key!==k&&!W.loading){W.key=k;W.loading=true;W.data=null;posApi(`/api/pos/jt?from=${from}&to=${to}`).then(j=>{W.data=j.days||[];}).catch(e=>{W.data=[];W.err=e.message;}).finally(()=>{W.loading=false;if(curPage==="possync")renderPosSync();});}
+  const head=`<div style="font-size:12px;font-weight:800;color:${T.textSecondary};margin:16px 0 6px">Wicked Wings vs Smokeys — by the items in each bill (Journal Tape)</div>`;
+  if(W.loading||!W.data)return head+`<div style="font-size:12px;color:${T.textMuted}">Loading Journal Tape…</div>`;
+  const by={};let n=0;
+  for(const d of W.data){if(!/^(REM|REF|NAD|ALF)/.test(d.loc))continue;const br=(PS_JT_LOCS.find(l=>posJTLocKey(l)===d.loc));const out=br?psReconOut(br):d.loc;
+    for(const b of d.data.bills||[]){if(b[7]!=="PO")continue;n++;const o=by[out]=by[out]||{ww:0,smk:0,acctWW:0,dis:[],days:new Set()};const amt=b[4]/1.05,items=b[1],acct=b[6];
+      if(items==="W")o.ww+=amt;else o.smk+=amt;if(acct==="W")o.acctWW+=amt;o.days.add(d.date);
+      if(acct&&acct!==items)o.dis.push({date:d.date,v:b[0],items:items==="W"?"Wicked Wings":"Smokeys",acct:acct==="W"?"Wicked Wings":"Smokeys",amt:b[4],names:(b[5]||[]).map(([ii])=>(d.data.items||[])[ii]).slice(0,4).join(", ")});}}
+  const outs=Object.keys(by);
+  if(!outs.length)return head+`<div style="font-size:12px;color:${T.textMuted}">No Journal Tape for these days yet — POS Sync → Journal Tape history reads it (each Pull reads the days it pulls).</div>`;
+  const f=v=>"AED "+Math.round(v).toLocaleString();
+  return head+`<div style="font-size:12px;color:${T.textMuted};margin-bottom:6px;line-height:1.5">Every Smokeys-button bill at these outlets, sorted by what was actually in it. <b>Move to Wicked Wings</b> is the amount Finance takes out of the Smokeys column; bills where the items and the platform account disagree are listed so they can be fixed at the till.</div>
+  <table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="color:${T.textMuted};font-size:10.5px;text-transform:uppercase;letter-spacing:.6px"><th style="text-align:left;padding:5px 8px">Outlet</th><th style="text-align:right;padding:5px 8px">Move to Wicked Wings</th><th style="text-align:right;padding:5px 8px">Stays Smokeys</th><th style="text-align:right;padding:5px 8px">Wicked Wings by account</th><th style="text-align:left;padding:5px 8px">Items ≠ account</th></tr></thead><tbody>${outs.map(o=>{const x=by[o];return`<tr style="border-top:1px solid ${T.cardBorder}55;vertical-align:top"><td style="padding:6px 8px;font-weight:700">${esc(o)} <span style="color:${T.textMuted};font-weight:400">${x.days.size}d</span></td><td style="padding:6px 8px;text-align:right;font-weight:800">${f(x.ww)}</td><td style="padding:6px 8px;text-align:right">${f(x.smk)}</td><td style="padding:6px 8px;text-align:right;color:${Math.abs(x.acctWW-x.ww)>20?T.accentOrange:T.textSecondary}">${f(x.acctWW)}</td><td style="padding:6px 8px">${x.dis.length?`<details><summary style="cursor:pointer;color:${T.accentOrange}">${x.dis.length} bill(s)</summary>${x.dis.slice(0,40).map(d=>`<div style="font-size:11.5px">${posFmtDate(d.date)} · voucher <b>${esc(d.v)}</b> · items ${esc(d.items)}, account ${esc(d.acct)} · AED ${d.amt.toFixed(2)} <span style="color:${T.textMuted}">${esc(d.names)}</span></div>`).join("")}</details>`:`<span style="color:${T.accentGreen}">✓ none</span>`}</td></tr>`;}).join("")}</tbody></table>`;}
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -26736,3 +26823,71 @@ function renderDinDisc(){
       scales:{x:{stacked:true,ticks:{color:T.textSecondary,font:{size:10}},grid:{display:false},border:{display:false}},y:{stacked:true,ticks:{color:T.textMuted,font:{size:10},callback:v=>v>=1000?`${(v/1000).toFixed(0)}K`:v},grid:{color:"#2A3450"},border:{display:false}}}}});
 }
 window.renderDinDisc=renderDinDisc;window.ddSet=ddSet;window.loadDinDiscData=loadDinDiscData;
+
+// ── v575: ITEM-LEVEL DISCOUNT CHECK (Microsys Journal Tape) ──────────────────────────────────────────────
+// Every delivery bill that carried a discount, with its items and platform, from POS Sync's Journal Tape store.
+// Select-items / BOGO campaigns get the discount on bills that contain their items (item names come from the
+// campaign's Comments — "…: Item A, Item B, …" — matched to the POS item names, ~90% the same wording).
+const posJTData={key:null,loading:false,days:null,err:null};
+const PS_JT_BRAND={O:"Oregano",L:"Lollorosso",S:"Smokeys",W:"Wicked Wings",F:"Fyoozhen"};
+function jtBranchOf(locKey){const loc=(typeof PS_JT_LOCS!=="undefined"?PS_JT_LOCS:[]).find(l=>posJTLocKey(l)===locKey);return loc?PS_LOCATION_MAP[loc]:null;}
+async function jtLoad(from,to){const k=from+"|"+to;if(posJTData.key===k&&(posJTData.days||posJTData.loading))return;
+  posJTData.key=k;posJTData.loading=true;posJTData.err=null;
+  try{const j=await posApi(`/api/pos/jt?from=${from}&to=${to}`);posJTData.days=j.days||[];}catch(e){posJTData.err=e.message;posJTData.days=[];}
+  posJTData.loading=false;if(typeof campTab!=="undefined"&&campTab==="discounts"&&curPage==="campaigns")jtPaint();}
+// item names in a campaign's comments
+const JT_STOP=new Set(["the","and","with","of","on","a","in","off","for","best","sellers","seller","select","items","item","new","combo","combos","names","name","exclusive","keeta","marked","up","discounted","pcs","pc","piece","pieces"]);
+function jtTokens(s){return String(s||"").toLowerCase().replace(/&/g," and ").replace(/[^a-z0-9 ]+/g," ").split(/\s+/).filter(w=>w&&!JT_STOP.has(w)&&!/^\d+%?$/.test(w)).map(w=>w.replace(/(ies)$/,"y").replace(/([^s])s$/,"$1"));}
+function jtCampItems(c){let t=(c.comments||"");const i=t.lastIndexOf(":");if(i<0)return[];t=t.slice(i+1);
+  return t.split(/,|\/|\+|;/).map(x=>x.replace(/-\s*(keeta|talabat|deliveroo|careem|noon)\s*$/i,"").trim()).filter(x=>jtTokens(x).length);}
+function jtMatchItem(campItem,posName){const a=jtTokens(campItem),b=jtTokens(posName);if(!a.length||!b.length)return false;
+  if(/\b(dip|sauce|drink|water|cola|pepsi|juice|extra)\b/i.test(posName)&&!/\b(dip|sauce|drink|water|cola|pepsi|juice|extra)\b/i.test(campItem))return false;
+  const core=a.filter(t=>!JT_GENERIC.has(t)),need=core.length?core:a; // "Veg Panini Sandwich" matches POS "Veg Panini"
+  return need.every(t=>b.some(u=>u===t||(t.length>=4&&(u.startsWith(t)||t.startsWith(u)))));}
+const JT_GENERIC=new Set(["sandwich","wing","pizza","burger","meal","bowl","salad","pasta","box","wrap","roll","platter","combo","dish","plate","rice","noodle"]);
+// per campaign: discount on bills that contain its items
+function jtAnalyse(from,to){const days=posJTData.days||[];if(!days.length)return null;
+  const F=discountFilters,aggSet=new Set(F.aggregators||[]),brSet=new Set(F.brands||[]);
+  const camps=campaignData.filter(c=>c.startDate&&c.endDate&&!(c.endDate<from||c.startDate>to)&&campStatus(c)!=="Cancelled"&&!isRewardsCampaign(c)&&(!aggSet.size||aggSet.has(c.aggregator))&&(!brSet.size||c.brand==="All Brands"||brSet.has(c.brand)));
+  const itemCamps=camps.filter(c=>(c.discountStructure==="selectItems"||c.discountStructure==="bogo")&&jtCampItems(c).length);
+  const res=new Map(itemCamps.map(c=>[c,{c,items:jtCampItems(c),matched:new Map(),disc:0,bills:0,daily:{},notFound:[]}]));
+  const covered=new Set(),unc={},scopeCache=new Map(),scope=c=>{if(!scopeCache.has(c))scopeCache.set(c,campOutlets(c));return scopeCache.get(c);};
+  let totalDisc=0;
+  for(const d of days){if(d.date<from||d.date>to)continue;covered.add(d.date);const br=jtBranchOf(d.loc);if(!br)continue;
+    if(F.branch==="DXB"&&AUH_OUTLETS.has(br))continue;if(F.branch==="AUH"&&!AUH_OUTLETS.has(br))continue;if(F.branch&&!["All","DXB","AUH"].includes(F.branch)&&br!==F.branch)continue;
+    const items=d.data.items||[];
+    for(const b of d.data.bills||[]){const[vch,bc,plat,disc,tot,its]=b;if(!(disc>0))continue;const brand=PS_JT_BRAND[bc];
+      if(aggSet.size&&!aggSet.has(plat))continue;if(brSet.size&&!brSet.has(brand))continue;totalDisc+=disc;
+      const live=itemCamps.filter(c=>c.aggregator===plat&&(c.brand===brand||c.brand==="All Brands")&&c.startDate<=d.date&&c.endDate>=d.date&&(!scope(c)||scope(c).has(br)));
+      const hits=[];for(const c of live){const R=res.get(c);let amt=0;for(const[ii,a]of its){const nm=items[ii];if(R.items.some(ci=>jtMatchItem(ci,nm))){amt+=a;R.matched.set(nm,(R.matched.get(nm)||0)+1);}}if(amt>0)hits.push([c,amt]);}
+      if(hits.length){const tot2=hits.reduce((a,x)=>a+x[1],0);for(const[c,amt]of hits){const R=res.get(c),sh=disc*amt/tot2;R.disc+=sh;R.bills++;R.daily[d.date]=(R.daily[d.date]||0)+sh;}}
+      else{const k=brand+"|"+plat;const u=unc[k]=unc[k]||{brand,plat,disc:0,bills:0,items:{},entire:0};u.disc+=disc;u.bills++;its.forEach(([ii,a])=>{u.items[items[ii]]=(u.items[items[ii]]||0)+1;});
+        if(camps.some(c=>c.aggregator===plat&&(c.brand===brand||c.brand==="All Brands")&&c.startDate<=d.date&&c.endDate>=d.date&&c.discountStructure!=="selectItems"&&(!scope(c)||scope(c).has(br))))u.entire+=disc;}}}
+  res.forEach(R=>{R.notFound=R.items.filter(ci=>![...R.matched.keys()].some(nm=>jtMatchItem(ci,nm)));});
+  return{covered,totalDays:Math.round((new Date(to+"T12:00:00")-new Date(from+"T12:00:00"))/864e5)+1,camps:[...res.values()],unc:Object.values(unc).sort((a,b)=>b.disc-a.disc),totalDisc};}
+function jtCardHTML(){const T=DARK_THEME,F=discountFilters,from=F.dateStart,to=F.dateEnd;
+  const head=`<div class="ct" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">🧾 Item-level discount check <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· POS Journal Tape — which items each discounted bill had</span></div>`;
+  if(!from||!to)return"";jtLoad(from,to);
+  if(posJTData.loading||posJTData.days==null)return`<div class="card" id="jt-card">${head}<div style="color:${T.textMuted};font-size:12px">Loading Journal Tape…</div></div>`;
+  const A=jtAnalyse(from,to);
+  if(!A||!A.covered.size)return`<div class="card" id="jt-card">${head}<div style="font-size:12.5px;color:${T.textSecondary};line-height:1.55">No Journal Tape for ${fmtShort(from)} – ${fmtShort(to)} yet. POS Sync → <b>Journal Tape history</b> reads it (every Pull also reads the days it pulls).${posJTData.err?` <span style="color:${T.accentRed}">${esc(posJTData.err)}</span>`:""}</div></div>`;
+  const f=v=>"AED "+Math.round(v).toLocaleString();
+  const rows=A.camps.sort((a,b)=>b.disc-a.disc).map(R=>{const c=R.c;let cur=null;try{const al=allocateCampaignDiscount(c,c.startDate>from?c.startDate:from,c.endDate<to?c.endDate:to);cur=0;for(const[dd,v]of Object.entries(al.dailyAlloc||{}))if(A.covered.has(dd))cur+=v;}catch(e){} // same days only
+    const covDays=Object.keys(R.daily).length,diff=cur!=null?R.disc/1.05-cur:null;
+    const matched=[...R.matched.entries()].sort((a,b)=>b[1]-a[1]);
+    return`<tr style="border-bottom:1px solid ${T.cardBorder}55;vertical-align:top"><td style="padding:7px 8px"><b style="color:${(BMAP[c.brand]||{}).c||T.textPrimary}">${esc(c.brand)}</b> · <span style="color:${AC[c.aggregator]||T.textSecondary};font-weight:700">${esc(c.aggregator)}</span><div style="font-size:11.5px;color:${T.textSecondary}">${esc(c.name||"")} · ${fmtShort(c.startDate)}–${fmtShort(c.endDate)}</div></td>
+      <td style="padding:7px 8px;font-size:11.5px;max-width:340px">${matched.length?matched.slice(0,8).map(([n,k])=>`${esc(n)} <span style="color:${T.textMuted}">×${k}</span>`).join(", "):`<span style="color:${T.accentOrange}">no POS item matched</span>`}${R.notFound.length?`<div style="color:${T.accentOrange};margin-top:2px">not seen on a discounted bill: ${esc(R.notFound.join(", "))}</div>`:""}</td>
+      <td style="padding:7px 8px;text-align:right;font-variant-numeric:tabular-nums">${R.bills}</td><td style="padding:7px 8px;text-align:right;font-weight:800;font-variant-numeric:tabular-nums">${f(R.disc/1.05)}</td>
+      <td style="padding:7px 8px;text-align:right;font-variant-numeric:tabular-nums">${cur!=null?f(cur):"—"}</td><td style="padding:7px 8px;text-align:right;font-weight:700;color:${diff==null?T.textMuted:Math.abs(diff)<50?T.accentGreen:T.accentOrange}">${diff==null?"—":(diff>=0?"+":"−")+f(Math.abs(diff))}</td></tr>`;}).join("");
+  const uncTot=A.unc.reduce((a,u)=>a+u.disc,0),uncNo=A.unc.reduce((a,u)=>a+(u.disc-u.entire),0);
+  const uncRows=A.unc.slice(0,12).map(u=>{const top=Object.entries(u.items).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([n,k])=>`${esc(n)} ×${k}`).join(", ");
+    return`<tr style="border-bottom:1px solid ${T.cardBorder}55"><td style="padding:5px 8px"><b>${esc(u.brand)}</b> · ${esc(u.plat)}</td><td style="padding:5px 8px;text-align:right">${u.bills}</td><td style="padding:5px 8px;text-align:right">${f(u.disc/1.05)}</td><td style="padding:5px 8px;text-align:right;color:${u.disc-u.entire>50?T.accentOrange:T.textSecondary}">${f((u.disc-u.entire)/1.05)}</td><td style="padding:5px 8px;font-size:11.5px;color:${T.textSecondary}">${top}</td></tr>`;}).join("");
+  const th=(x,r)=>`<th style="padding:6px 8px;font-size:10px;color:${T.textMuted};text-transform:uppercase;letter-spacing:.6px;text-align:${r?"right":"left"}">${x}</th>`;
+  return`<div class="card" id="jt-card">${head}<div style="font-size:12px;color:${T.textSecondary};margin-bottom:10px;line-height:1.55">Journal Tape covers <b>${A.covered.size} of ${A.totalDays}</b> day(s) in this range. Amounts excl. VAT. <b>On bills with its items</b> = the POS discount on delivery bills (same brand, platform and outlets, while the campaign ran) that contain the campaign's items — a bill matching two campaigns is split by the items' value. <b>Dashboard now</b> = today's allocation for the same days (estimated where no platform file covers it).</div>
+    ${A.camps.length?`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr>${th("Select-items / BOGO campaign")}${th("POS items matched (bills)")}${th("Bills",1)}${th("On bills with its items",1)}${th("Dashboard now",1)}${th("Difference",1)}</tr></thead><tbody>${rows}</tbody></table></div>`:`<div style="font-size:12.5px;color:${T.textMuted}">No select-items or BOGO campaigns with item names in this range.</div>`}
+    <div style="font-size:12px;font-weight:800;color:${T.textSecondary};margin:16px 0 6px">Discounted bills that match no select-items campaign — ${f(uncTot/1.05)} · of which ${f(uncNo/1.05)} with no campaign of any kind live</div>
+    ${uncRows?`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr>${th("Brand · platform")}${th("Bills",1)}${th("Discount",1)}${th("No campaign live",1)}${th("Most common items")}</tr></thead><tbody>${uncRows}</tbody></table></div>`:""}</div>`;}
+function jtPaint(){const el=document.getElementById("jt-card");if(el)el.outerHTML=jtCardHTML();}
+(function hookJT(){if(typeof renderCampaigns!=="function")return setTimeout(hookJT,300);if(renderCampaigns.__jt)return;
+  const _r=renderCampaigns;renderCampaigns=async function(){const r=await _r.apply(this,arguments);try{if(campTab==="discounts"){const pg=document.getElementById("page-campaigns");if(pg&&!document.getElementById("jt-card")){const anchor=[...pg.querySelectorAll(".ct")].find(x=>/Discount Discrepancy|Uncategori/i.test(x.textContent));const card=anchor?anchor.closest(".card"):null;const html=jtCardHTML();if(card)card.insertAdjacentHTML("beforebegin",html);else pg.insertAdjacentHTML("beforeend",html);}}}catch(e){console.log("[jt]",e);}return r;};
+  renderCampaigns.__jt=true;window.renderCampaigns=renderCampaigns;})();
