@@ -579,6 +579,24 @@ function reportQuery(kind, isoDate) {
 }
 function b64utf8(s) { const b = new TextEncoder().encode(s); let o = ""; b.forEach(x => o += String.fromCharCode(x)); return btoa(o); }
 
+// v571: same viewer flow for any report query (used by the Journal Tape probe)
+async function msysReportCSVQuery(env, query) {
+  const q = query.replace(/\//g, "%2f");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const jar = await msysLogin(env, attempt > 0);
+    const r = await msysFetch(jar, "/AnalysisEMReportView/Reports?" + q);
+    const html = await r.text();
+    const g = (html.match(/"clientGuid"\s*:\s*"([^"]+)"/) || [])[1];
+    if (!g) { if (attempt === 0) continue; return { error: "MSYS_NO_VIEWER", page: html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 600) }; }
+    const post = (action, act, extra) => msysFetch(jar, `/AnalysisEMReportView/${action}?` + q, { method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ stiweb_component: "Viewer", stiweb_action: act,
+        stiweb_parameters: b64utf8(JSON.stringify(Object.assign({}, STI_PARAMS, { clientGuid: g }, extra || {}))) }).toString() });
+    const rb = await post("GetReportFromLocal", "GetReport", { action: "GetReport" }); await rb.text();
+    const re = await post("ExportReport", "ExportReport");
+    return { csv: await re.text() };
+  }
+}
 // Pull one report for one day as CSV text. Retries once with a fresh Microsys login if the
 // cached session has expired (the portal answers with its login page instead of the viewer).
 async function msysReportCSV(env, kind, isoDate) {
@@ -867,6 +885,53 @@ async function handlePosMsysMenu(request, env) {
   }
   return json({ ok: true, seen, reports: [...found.values()].slice(0, 400) });
 }
+// v571: Journal Tape probe (read-only) — finds the report's MenuID and filter names on the Microsys menu/filter
+// pages, runs it for one day, and returns the columns + first lines, so it can be wired into the reconciliation.
+async function handlePosMsysProbe(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { menuId: mid0, date, match } = await readBody(request);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "")) return json({ error: "bad_request" }, 400);
+  const jar = await msysLogin(env, false);
+  const log = [], want = new RegExp(match || "journal", "i");
+  // a) candidate MenuIDs + the links that open them
+  const cands = new Map(), pages = ["/Home/Index", "/Home/Dashboard", "/AnalysisEMReportView/Index"];
+  const scan = (t, src) => {
+    for (const m of t.matchAll(/(RPT[A-Z0-9_\-]{4,})/g)) {
+      const id = m[1], ctx = t.slice(Math.max(0, m.index - 400), m.index + 400);
+      const plain = ctx.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+      if (!want.test(id) && !want.test(plain)) continue;
+      const href = (ctx.match(/(?:href|data-url|url)\s*[=:]\s*["']([^"']*MenuID=[^"']*)["']/i) || [])[1] || "";
+      if (!cands.has(id)) cands.set(id, { id, href, src, text: plain.slice(300, 520) });
+    }
+  };
+  const scripts = new Set();
+  for (const p of pages) { try { const r = await msysFetch(jar, p); const t = await r.text(); log.push(p + " " + r.status + " " + t.length); scan(t, p);
+    for (const m of t.matchAll(/<script[^>]+src="([^"]+)"/g)) if (!/^https?:/.test(m[1])) scripts.add(m[1]); } catch (e) { log.push(p + " ERR " + e.message); } }
+  for (const src of [...scripts].filter(x => !/jquery|bootstrap|kendo|stimulsoft|\.min\.js/i.test(x)).slice(0, 12)) {
+    try { const r = await msysFetch(jar, src.startsWith("/") ? src : "/" + src); const t = await r.text(); scan(t, src); } catch (e) {} }
+  const ids = mid0 ? [String(mid0).toUpperCase()] : [...cands.keys()];
+  if (!ids.length) return json({ ok: false, error: "no report matching '" + (match || "journal") + "' found on the Microsys menu", log });
+  // b) for each candidate: open its filter page, collect filter names, run it for the date
+  const d = toDMY(date), out = [];
+  for (const id of ids.slice(0, 4)) {
+    const c = cands.get(id) || { id, href: "" }, names = new Set(), arrays = new Set(), tried = [];
+    const paths = [c.href, `/AnalysisEM/Index?MenuID=${id}`, `/AnalysisEM/Reports?MenuID=${id}`, `/AnalysisEMReport/Index?MenuID=${id}`, `/Analysis/Index?MenuID=${id}`, `/Home/Report?MenuID=${id}`].filter(Boolean);
+    for (const p of paths) { try { const r = await msysFetch(jar, p.startsWith("/") ? p : "/" + p); const t = await r.text(); tried.push(p + " " + r.status + " " + t.length);
+      for (const m of t.matchAll(/\b(EM[A-Za-z0-9]*?(?:From|To)Date)\b/g)) names.add(m[1]);
+      for (const m of t.matchAll(/\b(ArrayValueFor[A-Za-z0-9]+)\b/g)) arrays.add(m[1]);
+      if (names.size) break; } catch (e) { tried.push(p + " ERR"); } }
+    let from = [...names].find(n => /FromDate$/.test(n)), to = [...names].find(n => /ToDate$/.test(n));
+    const guess = !from;
+    if (!from) { const nm = "EM" + (c.text.match(/journal\s*tape/i) ? "JournalTape" : id.replace(/^RPTEMANALYSIS/, "")); from = nm + "FromDate"; to = nm + "ToDate"; }
+    const q = [`MenuID=${id}`, ...(arrays.size ? [...arrays] : ["ArrayValueForChain", "ArrayValueForlocation"]).map(a => `${a}=all`), `${from}=${d}`, `${to}=${d}`].join("&");
+    let res; try { res = await msysReportCSVQuery(env, q); } catch (e) { res = { error: e.message }; }
+    const csv = res.csv || "", lines = csv.split(/\r?\n/).filter(Boolean);
+    out.push({ id, href: c.href, text: c.text, filterPages: tried, filterNames: [...names], arrays: [...arrays], guessedDates: guess, query: q,
+      error: res.error || (/^ServerError/.test(csv) ? csv.slice(0, 200) : null), page: res.page || null, lines: lines.length, head: lines.slice(0, 12).join("\n").slice(0, 4000) });
+  }
+  return json({ ok: true, log, candidates: [...cands.values()].slice(0, 20), results: out });
+}
 // v544: formatting for the Dine-In & Takeaway tab, copied from the Oregano tab so it looks like the
 // delivery tabs. /meta returns sheet ids, frozen rows/cols and Oregano's column widths; /batch runs
 // formatting-only requests whose DESTINATION must be the Dine-In & Takeaway tab (nothing else is
@@ -1054,6 +1119,7 @@ export default {
       if (path === "/api/pos/flag/ok"     && method === "POST") return await handlePosFlagOk(request, env);
       if (path === "/api/pos/recon"       && method === "POST") return await handlePosReconSave(request, env);
       if (path === "/api/pos/msys/menu"   && method === "POST") return await handlePosMsysMenu(request, env);
+      if (path === "/api/pos/msys/probe"  && method === "POST") return await handlePosMsysProbe(request, env);
       if (path === "/api/pos/recon"       && method === "GET")  return await handlePosReconList(request, env);
       if (path === "/api/pos/recon/ack"   && method === "POST") return await handlePosReconAck(request, env);
     } catch (e) {
