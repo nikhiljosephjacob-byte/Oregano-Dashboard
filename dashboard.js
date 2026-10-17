@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-17-570";
+const BUILD_VERSION="2026-10-17-571";
 const BUILD_NOTES=[
+  "🧾 JOURNAL TAPE TEST. POS Sync → Daily reconciliation → '🧾 Test Journal Tape' (read-only) finds Analysis → Journal Tape in Microsys, runs it for 6 Oct and shows its columns and first lines — the step before wiring it in so cash / card / phone bills behind a gap are named one by one.",
   "📝 CLEARER PULL MESSAGE. The confirmation before a POS Sync Pull now lists everything it writes — delivery tabs, Dine-In & Takeaway, Dine-In Discounts and the till-vs-dashboard check — plus the 14-day catch-up. (It always did all of this; the message only mentioned delivery.)",
   "🔄 PULL NOW FILLS DINE-IN BY ITSELF. Every POS Sync Pull now finishes with an automatic catch-up over the last 14 days: any day still missing from the Dine-In & Takeaway tab (e.g. pulled before Microsys had split dine-in from takeaway, or never pulled) and any day missing its discount detail is fetched and written — no Backfill needed. Only missing days are fetched, so it adds a few seconds when everything is already there. A day Microsys still hasn't split is tried again on the next Pull. The dashboard re-reads the dine-in data after a Pull (Google's published copy can take up to ~5 minutes to show new rows).",
   "⏳ LOADING STATUS BACK IN THE MENU. The hourglass and green 5-segment loading bar that Campaigns and Ads Performance showed in the old sidebar were lost in the new menu. They're back: on Marketing (while it's collapsed — shows the slower of the two), and on Promotions and Advertising themselves, with the % on hover. As before, each item opens once its data has finished loading.",
@@ -25611,6 +25612,11 @@ function posReconCardHTML(T,card,ct,btn){
   // till-only bills: need a bill-by-bill Microsys report — step 1 lists what this login can open
   const M=posRecon.menu;
   h+=`<div style="margin-top:16px;padding:12px;border:1px dashed ${T.cardBorder};border-radius:10px"><div style="font-size:12px;font-weight:800;color:${T.textSecondary};margin-bottom:4px">Find till-only bills (cash / card / phone)</div><div style="font-size:12px;color:${T.textMuted};line-height:1.5;margin-bottom:8px">“💵 not on Credit Sales” gaps have no platform order behind them, so Credit Sales can't name them. A Microsys bill-by-bill report can: this lists the reports this login can open (read-only) so the right one can be wired in — then each gap shows its bill numbers, time, payment type and cashier.</div>${btn(M&&M.loading?"⏳ Reading the Microsys menu…":"🔍 List Microsys reports","posReconMenu()",false,!!(M&&M.loading))}`;
+  // v571: Journal Tape (Analysis → Journal Tape in Microsys) — bill-by-bill; probe it for one day
+  const J=posRecon.jt||{};
+  h+=` ${btn(J.loading?"⏳ Testing Journal Tape…":"🧾 Test Journal Tape","posReconJT()",true,!!J.loading)}<span style="font-size:11.5px;color:${T.textMuted};margin-left:8px">Read-only: finds Analysis → Journal Tape in Microsys and runs it for 6 Oct (the DIP gap) so it can be wired in.</span>`;
+  if(J.err)h+=`<div style="color:${T.accentRed};font-size:12px;margin-top:6px">${esc(J.err)}</div>`;
+  if(J.res){const txt=JSON.stringify(J.res,null,1);h+=`<div style="margin-top:8px"><button onclick="posReconJTCopy()" style="padding:5px 12px;border-radius:6px;border:1px solid ${T.cardBorder};background:transparent;color:${T.textSecondary};font-size:12px;font-weight:700;cursor:pointer">📋 Copy result</button> <span style="font-size:11.5px;color:${T.textMuted}">${J.copied?"Copied — paste it to Claude":"Copy and paste this to Claude (or screenshot it)"}</span><pre style="max-height:320px;overflow:auto;background:${T.bg};border:1px solid ${T.cardBorder};border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;color:${T.textSecondary};margin-top:6px">${esc(txt.slice(0,12000))}</pre></div>`;}
   if(M&&M.err)h+=`<div style="color:${T.accentRed};font-size:12px;margin-top:6px">${esc(M.err)}</div>`;
   if(M&&M.reports)h+=`<details open style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:${T.textSecondary}">${M.reports.length} report(s) found</summary><div style="max-height:260px;overflow:auto;font-size:11.5px;margin-top:4px">${M.reports.map(r=>`<div style="padding:3px 0;border-bottom:1px solid ${T.cardBorder}55"><b>${esc(r.label||"(no label)")}</b> <span style="color:${T.textMuted}">${esc(r.id)}</span></div>`).join("")||`<div style="color:${T.textMuted}">None found — pages read: ${esc((M.seen||[]).join(" · "))}</div>`}</div></details>`;
   h+=`</div>`;
@@ -25634,6 +25640,10 @@ window.posReconExport=posReconExport;
 
 async function posReconMenu(){posRecon.menu={loading:true};renderPosSync();try{const j=await posApi("/api/pos/msys/menu",{});posRecon.menu={reports:j.reports||[],seen:j.seen||[]};}catch(e){posRecon.menu={err:e.message};}renderPosSync();}
 window.posReconMenu=posReconMenu;
+
+async function posReconJT(){posRecon.jt={loading:true};renderPosSync();try{const j=await posApi("/api/pos/msys/probe",{date:"2026-10-06",match:"journal"});posRecon.jt={res:j};}catch(e){posRecon.jt={err:e.message};}renderPosSync();}
+function posReconJTCopy(){try{navigator.clipboard.writeText(JSON.stringify(posRecon.jt.res,null,1));posRecon.jt.copied=true;}catch(e){}renderPosSync();}
+window.posReconJT=posReconJT;window.posReconJTCopy=posReconJTCopy;
 
 
 // ════════════════════════════════════════════════════════════════════════════
