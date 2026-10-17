@@ -956,6 +956,30 @@ async function handlePosMsysProbe(request, env) {
   }
   return json({ ok: true, log, candidates: [...cands.values()].slice(0, 20), results: out });
 }
+// v575: Journal Tape store — one KV key per outlet-day (pos:jt:<date>:<loc code>) with the compact delivery bills
+// POS Sync collected: discounted bills (for item-level campaign attribution) and Smokeys-button bills at the
+// Wicked Wings outlets (to split Wicked Wings from Smokeys by items). Written by POS users, read by any session.
+async function handlePosJTSave(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const { date, loc, data } = await readBody(request);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "") || !/^[A-Z]{3}[A-Z0-9-]{0,8}$/.test(loc || "") || !data || typeof data !== "object") return json({ error: "bad_request" }, 400);
+  const raw = JSON.stringify(data);
+  if (raw.length > 900000) return json({ error: "too_large" }, 400);
+  await env.SESSIONS.put(`pos:jt:${date}:${loc}`, raw, { expirationTtl: 60 * 60 * 24 * 450 });
+  return json({ ok: true, bytes: raw.length });
+}
+async function handlePosJTList(request, env) {
+  const session = await getSession(env, request.headers.get("X-Session-Id"));
+  if (!session) return json({ error: "unauthorized" }, 401);
+  const u = new URL(request.url), from = u.searchParams.get("from") || "", to = u.searchParams.get("to") || "9999", keysOnly = u.searchParams.get("keys") === "1";
+  const keys = []; let cursor;
+  do { const l = await env.SESSIONS.list({ prefix: "pos:jt:", limit: 1000, cursor }); keys.push(...l.keys.map(k => k.name)); cursor = l.list_complete ? null : l.cursor; } while (cursor);
+  const want = keys.filter(n => { const d = n.slice(7, 17); return d >= from && d <= to; }).sort().slice(0, 900);
+  if (keysOnly) return json({ ok: true, keys: want.map(n => n.slice(7)) });
+  const vals = await Promise.all(want.map(k => env.SESSIONS.get(k)));
+  return json({ ok: true, days: want.map((k, i) => ({ date: k.slice(7, 17), loc: k.slice(18), data: vals[i] ? JSON.parse(vals[i]) : null })).filter(x => x.data) });
+}
 // v544: formatting for the Dine-In & Takeaway tab, copied from the Oregano tab so it looks like the
 // delivery tabs. /meta returns sheet ids, frozen rows/cols and Oregano's column widths; /batch runs
 // formatting-only requests whose DESTINATION must be the Dine-In & Takeaway tab (nothing else is
@@ -1142,6 +1166,8 @@ export default {
       if (path === "/api/pos/sheet/batch" && method === "POST") return await handlePosSheetBatch(request, env);
       if (path === "/api/pos/flag/ok"     && method === "POST") return await handlePosFlagOk(request, env);
       if (path === "/api/pos/recon"       && method === "POST") return await handlePosReconSave(request, env);
+      if (path === "/api/pos/jt"          && method === "POST") return await handlePosJTSave(request, env);
+      if (path === "/api/pos/jt"          && method === "GET")  return await handlePosJTList(request, env);
       if (path === "/api/pos/msys/menu"   && method === "POST") return await handlePosMsysMenu(request, env);
       if (path === "/api/pos/msys/probe"  && method === "POST") return await handlePosMsysProbe(request, env);
       if (path === "/api/pos/recon"       && method === "GET")  return await handlePosReconList(request, env);
