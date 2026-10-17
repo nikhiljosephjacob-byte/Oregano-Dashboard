@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-17-572";
+const BUILD_VERSION="2026-10-17-573";
 const BUILD_NOTES=[
+  "🧾 JOURNAL TAPE IN THE RECONCILIATION. Every 💵 'not on Credit Sales' gap now has '🔍 Show the bills' — it reads Microsys Journal Tape for that outlet and day and lists the bills on that till button that no platform paid for: voucher, order no., time, employee, how it was paid (cash / Visa / Mastercard…) and the items, with a ✓ when they add up to the gap. '🔍 Show the bills for every 💵 gap' does them all; the CSV export includes them. (Fyoozhen-chain outlets — DIP Fyoozhen, NAS, WTC, Al Forsan Fyoozhen — still need their Microsys id.)",
   "🧹 PLATFORMS PAGE — NO DOUBLE DATA. The 'All platforms' table repeated what the platform cards already show, so it's gone. The three figures only the table had are now on the cards: net-sales change % next to sales, discount depth % under Disc. Burn, and contribution change % under the prior contribution. (The Brands page keeps its 'All brands' table — there the cards show one brand at a time, so the table is the only side-by-side view.)",
   "🧾 JOURNAL TAPE TEST. POS Sync → Daily reconciliation → '🧾 Test Journal Tape' (read-only) finds Analysis → Journal Tape in Microsys, runs it for 6 Oct and shows its columns and first lines — the step before wiring it in so cash / card / phone bills behind a gap are named one by one.",
   "📝 CLEARER PULL MESSAGE. The confirmation before a POS Sync Pull now lists everything it writes — delivery tabs, Dine-In & Takeaway, Dine-In Discounts and the till-vs-dashboard check — plus the 14-day catch-up. (It always did all of this; the message only mentioned delivery.)",
@@ -25063,6 +25064,31 @@ function psDDFormatRequests(ddId,nRows,diId){
   return R;
 }
 
+// v573: Microsys Journal Tape (detail listing) → bills [{order,voucher,type,date,employee,guests,time,ref,items,pays,total}]
+function psParseJT(csv){
+  const t=psParseCSV(csv||""),bills=[];let b=null,mode="",loc="";
+  const nz=r=>r.map(x=>String(x==null?"":x).trim()).filter(x=>x!=="");
+  const after=(f,label)=>{const i=f.findIndex(x=>x.toLowerCase().startsWith(label.toLowerCase()));if(i<0)return"";let j=i+1;if(f[j]===":")j++;return f[j]||"";};
+  for(const row of t.slice(1)){const f=nz(row),first=String(row[0]==null?"":row[0]).trim();
+    if(!f.length){mode=mode==="pay"?"":mode;continue;}
+    if(first==="Chain"){loc=after(f,"Location");continue;}
+    if(first==="Order Number"){b={loc,order:after(f,"Order Number"),voucher:after(f,"Voucher No"),type:after(f,"Type").toUpperCase(),date:after(f,"Date"),employee:"",guests:0,time:"",ref:"",items:[],pays:[]};bills.push(b);mode="items";continue;}
+    if(!b)continue;
+    if(first==="Employee"){b.employee=after(f,"Employee");b.guests=+after(f,"Guests")||0;b.time=after(f,"Time");continue;}
+    if(first==="TRN"){b.ref=after(f,"Online Order Ref No");continue;}
+    if(/^Settlement/i.test(first)){mode="pay";continue;}
+    if(first==="Payment Type")continue;
+    if(mode==="pay"){if(first){const nums=f.filter(x=>/^-?[\d,]+\.\d+$/.test(x));b.pays.push({type:first,customer:"",amount:nums.length?psNum(nums[nums.length-1]):0});}
+      else if(b.pays.length&&f.length===1)b.pays[b.pays.length-1].customer=f[0];continue;}
+    if(!first&&f.length>=2){const nums=f.filter(x=>/^-?[\d,]+(\.\d+)?$/.test(x));const name=f.find(x=>!/^-?[\d,]+(\.\d+)?$/.test(x))||"";
+      if(name)b.items.push({name,price:nums.length>=3?psNum(nums[0]):0,qty:nums.length>=2?psNum(nums[nums.length-2]):1,amount:nums.length?psNum(nums[nums.length-1]):0});}
+  }
+  bills.forEach(x=>{x.total=psRound(x.pays.reduce((a,p)=>a+p.amount,0)||x.items.reduce((a,i)=>a+i.amount,0),2);});
+  return bills;
+}
+const PS_JT_PLATFORM=/DELIVEROO|TALABAT|CAREEM|NOON|KEETA|MEITUAN|INSTASHOP|SLIDER|SMILES|EAT_EASY|CREDIT CUSTOMER/i;
+function psJTTillOnly(bills,suf){return bills.filter(b=>b.type===suf&&!b.pays.some(p=>PS_JT_PLATFORM.test(p.type)||PS_JT_PLATFORM.test(p.customer)));}
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // v535 POS SYNC — STEP 1 OF 4 (connection test). Replaces the desktop POS Uploader: the
@@ -25601,7 +25627,7 @@ function posReconCardHTML(T,card,ct,btn){
         Math.abs(i.unexpl)>=5?(i.unexpl>0?`<span title="Rung on the delivery till but not on Credit Sales: a cash / card / phone order, or an aggregator order voided after billing">💵 ${f(i.unexpl)} not on Credit Sales</span>`:`<span>${f(-i.unexpl)} more on Credit Sales than on the till (void / date)</span>`):""].filter(Boolean).join("<br>");
       const act=i.ack?`<span style="color:${T.accentGreen};font-size:11.5px" title="${esc(i.ack.note||"")}">✓ ${esc(i.ack.note||"explained")} · ${esc(i.ack.by||"")}</span> <a href="#" onclick="posReconUnack('${i.date}','${esc(i.id)}');return false" style="color:${T.textMuted};font-size:11px">undo</a>`:i.open?`<button onclick="posReconAck('${i.date}','${esc(i.id)}')" style="padding:4px 10px;border-radius:6px;border:1px solid ${T.cardBorder};background:transparent;color:${T.textSecondary};font-size:11.5px;font-weight:700;cursor:pointer">Mark explained</button>`:`<span style="color:${T.textMuted};font-size:11.5px">small</span>`;
       const ordH=(i.orders||[]).length?`<details style="margin-top:3px"><summary style="cursor:pointer;color:${T.textMuted};font-size:11.5px">${i.orders.length} order${i.orders.length>1?"s":""} — order no. / tax invoice</summary>${posReconOrdersHTML(T,i.orders)}</details>`:"";
-      const tillOnly=Math.abs(i.unexpl)>=5&&i.unexpl>0?`<div style="font-size:11px;color:${T.textMuted}">Till-only bills (cash / card / phone) need the Microsys bill-level report — see “Find till-only bills” below.</div>`:"";
+      const tillOnly=Math.abs(i.unexpl)>=5&&i.unexpl>0?posReconBillsHTML(T,i):"";
       h+=`<tr style="border-bottom:1px solid ${T.cardBorder}55;${i.open?`background:${T.accentRed}10`:""}"><td style="padding:6px 8px;white-space:nowrap">${posFmtDate(i.date)}</td><td style="padding:6px 8px;font-weight:700">${esc(i.out)}</td><td style="padding:6px 8px">${esc(i.rc)} <span style="color:${T.textMuted}">→ ${esc(i.brand||"")}</span></td><td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${f(i.pos)}</td><td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${f(i.agg)}</td><td style="padding:6px 8px;text-align:right;font-weight:800;color:${Math.abs(i.gap)>=50?T.accentOrange:T.textSecondary};font-variant-numeric:tabular-nums">${f2(i.gap)}</td><td style="padding:6px 8px;line-height:1.5">${why}${ordH}${tillOnly}</td><td style="padding:6px 8px;white-space:nowrap">${act}</td></tr>`;}
     h+=`</tbody></table></div>`;
   }else h+=`<div style="color:${T.accentGreen};font-size:12.5px;font-weight:700">✅ Till and dashboard agree for every outlet on every checked day.</div>`;
@@ -25610,18 +25636,7 @@ function posReconCardHTML(T,card,ct,btn){
   const ml=Object.values(mb).sort((a,b)=>b.amt-a.amt);
   if(ml.length){h+=`<div style="font-size:12px;font-weight:800;color:${T.textSecondary};margin:16px 0 6px">Orders rung on another brand's till button</div><div style="font-size:12px;color:${T.textMuted};margin-bottom:6px;line-height:1.5">The order came in on the platform as one brand but was rung on another brand's button. The dashboard follows the platform (right brand); Finance's report follows the till button, so its brand columns are off by these amounts unless Finance moves them by hand.</div>`;
     h+=ml.map(m=>`<div style="font-size:12.5px;padding:6px 8px;border-radius:8px;background:${T.bg};margin-bottom:4px"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center"><b>${esc(m.out)}</b><span><span style="color:${typeof BMAP!=="undefined"&&BMAP[m.brand]?BMAP[m.brand].c:T.textPrimary};font-weight:700">${esc(m.brand)}</span> orders on the <b>${esc(m.till)}</b> button</span><span style="margin-left:auto;font-variant-numeric:tabular-nums;font-weight:800">${f(m.amt)}</span><span style="color:${T.textMuted}">${m.days.size} day${m.days.size>1?"s":""}</span></div>${m.orders.length?`<details style="margin-top:4px"><summary style="cursor:pointer;color:${T.textMuted};font-size:11.5px">${m.orders.length} order${m.orders.length>1?"s":""} — order no. / tax invoice</summary>${posReconOrdersHTML(T,m.orders,true)}</details>`:""}</div>`).join("");}
-  // till-only bills: need a bill-by-bill Microsys report — step 1 lists what this login can open
-  const M=posRecon.menu;
-  h+=`<div style="margin-top:16px;padding:12px;border:1px dashed ${T.cardBorder};border-radius:10px"><div style="font-size:12px;font-weight:800;color:${T.textSecondary};margin-bottom:4px">Find till-only bills (cash / card / phone)</div><div style="font-size:12px;color:${T.textMuted};line-height:1.5;margin-bottom:8px">“💵 not on Credit Sales” gaps have no platform order behind them, so Credit Sales can't name them. A Microsys bill-by-bill report can: this lists the reports this login can open (read-only) so the right one can be wired in — then each gap shows its bill numbers, time, payment type and cashier.</div>${btn(M&&M.loading?"⏳ Reading the Microsys menu…":"🔍 List Microsys reports","posReconMenu()",false,!!(M&&M.loading))}`;
-  // v571: Journal Tape (Analysis → Journal Tape in Microsys) — bill-by-bill; probe it for one day
-  const J=posRecon.jt||{};
-  h+=` ${btn(J.loading?"⏳ Testing Journal Tape…":"🧾 Test Journal Tape","posReconJT()",true,!!J.loading)}<span style="font-size:11.5px;color:${T.textMuted};margin-left:8px">Read-only: finds Analysis → Journal Tape in Microsys and runs it for 6 Oct (the DIP gap) so it can be wired in.</span>`;
-  if(J.err)h+=`<div style="color:${T.accentRed};font-size:12px;margin-top:6px">${esc(J.err)}</div>`;
-  if(J.res){const txt=JSON.stringify(J.res,null,1);h+=`<div style="margin-top:8px"><button onclick="posReconJTCopy()" style="padding:5px 12px;border-radius:6px;border:1px solid ${T.cardBorder};background:transparent;color:${T.textSecondary};font-size:12px;font-weight:700;cursor:pointer">📋 Copy result</button> <span style="font-size:11.5px;color:${T.textMuted}">${J.copied?"Copied — paste it to Claude":"Copy and paste this to Claude (or screenshot it)"}</span><pre style="max-height:320px;overflow:auto;background:${T.bg};border:1px solid ${T.cardBorder};border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;color:${T.textSecondary};margin-top:6px">${esc(txt.slice(0,12000))}</pre></div>`;}
-  if(M&&M.err)h+=`<div style="color:${T.accentRed};font-size:12px;margin-top:6px">${esc(M.err)}</div>`;
-  if(M&&M.reports)h+=`<details open style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:${T.textSecondary}">${M.reports.length} report(s) found</summary><div style="max-height:260px;overflow:auto;font-size:11.5px;margin-top:4px">${M.reports.map(r=>`<div style="padding:3px 0;border-bottom:1px solid ${T.cardBorder}55"><b>${esc(r.label||"(no label)")}</b> <span style="color:${T.textMuted}">${esc(r.id)}</span></div>`).join("")||`<div style="color:${T.textMuted}">None found — pages read: ${esc((M.seen||[]).join(" · "))}</div>`}</div></details>`;
-  h+=`</div>`;
-  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px">${btn("⬇ Export orders (CSV)","posReconExport()",false,false)}<span style="font-size:11.5px;color:${T.textMuted}">Every order behind a gap or a wrong till button in this range: date, outlet, till button, customer, order no., tax invoice, platform reference, AED incl. VAT — to send to the outlet or Finance.</span></div>`;
+  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px">${btn("🔍 Show the bills for every 💵 gap","posReconBillsAll()",false,false)}${btn("⬇ Export orders (CSV)","posReconExport()",false,false)}<span style="font-size:11.5px;color:${T.textMuted}">Every order behind a gap or a wrong till button in this range: date, outlet, till button, customer, order no., tax invoice, platform reference, AED incl. VAT — to send to the outlet or Finance.</span></div>`;
   return h+`</div>`;
 }
 window.posReconSetDays=posReconSetDays;window.posReconCheck=posReconCheck;window.posReconAck=posReconAck;window.posReconUnack=posReconUnack;window.posReconOpenCount=posReconOpenCount;window.posReconLoad=posReconLoad;
@@ -25633,7 +25648,8 @@ function posReconOrdersHTML(T,orders,withDate){
   return`<table style="border-collapse:collapse;font-size:11.5px;margin-top:4px"><thead><tr>${withDate?th("Date"):""}${th("Customer")}${th("Order no.")}${th("Tax invoice")}${th("Platform ref.")}${th("AED incl. VAT")}</tr></thead><tbody>${orders.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")||b.amt-a.amt).map(o=>`<tr>${withDate?`<td style="padding:2px 6px">${posFmtDate(o.date)}</td>`:""}<td style="padding:2px 6px">${esc(o.cust)}</td><td style="padding:2px 6px;font-weight:700">${esc(o.ord||"—")}</td><td style="padding:2px 6px">${esc(o.inv||"—")}</td><td style="padding:2px 6px">${esc(o.ref||"—")}</td><td style="padding:2px 6px;text-align:right;font-variant-numeric:tabular-nums${o.amt<=5?`;color:${T.accentOrange}`:""}">${o.amt.toFixed(2)}</td></tr>`).join("")}</tbody></table>${small?`<div style="font-size:11px;color:${T.accentOrange};margin-top:3px">${small} order(s) of AED 5 or less — check whether these are real orders or test / adjustment bills.</div>`:""}`;}
 function posReconExport(){const R=posRecon.recs||[],rows=[["Date","Outlet","Till button","Issue","Customer","Order no.","Tax invoice","Platform reference","AED incl. VAT"]];
   for(const r of R){for(const x of r.rows||[])for(const o of x.orders||[])rows.push([r.date,x.out,x.rc,/catering/i.test(o.cust)?"Catering (not in dashboard)":"Unknown platform (not in dashboard)",o.cust,o.ord,o.inv,o.ref,o.amt]);
-    for(const m of r.mis||[])for(const o of m.orders||[])rows.push([r.date,m.out,m.till,`${m.brand} order on the ${m.till} button`,o.cust,o.ord,o.inv,o.ref,o.amt]);}
+    for(const m of r.mis||[])for(const o of m.orders||[])rows.push([r.date,m.out,m.till,`${m.brand} order on the ${m.till} button`,o.cust,o.ord,o.inv,o.ref,o.amt]);
+    for(const x of r.rows||[]){const B=posRecon.bills[r.date+"|"+x.loc+"|"+x.rc];if(B&&B.list)for(const b of B.list)rows.push([r.date,x.out,x.rc,"Till-only bill (not paid by a platform) — "+b.employee+" at "+b.time,b.pays.map(p=>p.type+(p.customer?" ("+p.customer+")":"")).join(" + "),b.order,"voucher "+b.voucher,b.items.map(i=>i.name).join("; "),b.total]);}}
   if(rows.length<2){alert("No order-level items in this range (re-run 'Check these days now' after uploading build 565 to collect order numbers).");return;}
   const csv=rows.map(r=>r.map(v=>{v=String(v==null?"":v);return/[",\n]/.test(v)?`"${v.replace(/"/g,'""')}"`:v;}).join(",")).join("\n");
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`reconciliation-orders-${posRecon.days}d.csv`;document.body.appendChild(a);a.click();a.remove();}
@@ -25645,6 +25661,25 @@ window.posReconMenu=posReconMenu;
 async function posReconJT(){posRecon.jt={loading:true};renderPosSync();try{const j=await posApi("/api/pos/msys/probe",{date:"2026-10-06",match:"journal"});posRecon.jt={res:j};}catch(e){posRecon.jt={err:e.message};}renderPosSync();}
 function posReconJTCopy(){try{navigator.clipboard.writeText(JSON.stringify(posRecon.jt.res,null,1));posRecon.jt.copied=true;}catch(e){}renderPosSync();}
 window.posReconJT=posReconJT;window.posReconJTCopy=posReconJTCopy;
+
+// v573: till-only bills from Microsys Journal Tape — the bills on that till button not paid by a platform
+const PS_RC_SUF={Delivery:"DL",Lollorosso:"DT",Smokeys:"PO"};
+posRecon.bills=posRecon.bills||{};
+function posReconBillKey(i){return i.date+"|"+i.loc+"|"+i.rc;}
+function posReconBillsHTML(T,i){const k=posReconBillKey(i),B=posRecon.bills[k];const kk=esc(k).replace(/'/g,"&#39;");
+  if(!B)return`<div style="margin-top:3px"><button onclick="posReconBills('${kk}')" style="padding:3px 10px;border-radius:6px;border:1px solid ${T.cardBorder};background:transparent;color:${T.textSecondary};font-size:11.5px;font-weight:700;cursor:pointer">🔍 Show the bills (Journal Tape)</button></div>`;
+  if(B.loading)return`<div style="font-size:11.5px;color:${T.textMuted};margin-top:3px">⏳ Reading Journal Tape…</div>`;
+  if(B.err)return`<div style="font-size:11.5px;color:${T.accentRed};margin-top:3px">${esc(B.err)} <a href="#" onclick="posReconBills('${kk}');return false" style="color:${T.textMuted}">retry</a></div>`;
+  const sum=B.list.reduce((a,b)=>a+b.total,0),gapIncl=i.unexpl*1.05,match=Math.abs(sum-gapIncl)<=2;
+  const th=x=>`<th style="text-align:left;padding:3px 6px;font-size:10px;color:${T.textMuted};text-transform:uppercase;letter-spacing:.5px">${x}</th>`;
+  return`<details open style="margin-top:4px"><summary style="cursor:pointer;color:${match?T.accentGreen:T.accentOrange};font-size:11.5px;font-weight:700">${B.list.length} bill${B.list.length===1?"":"s"} on the ${esc(i.rc)} button not paid by a platform — AED ${sum.toFixed(2)} incl. VAT ${match?"✓ matches the gap":`(gap AED ${gapIncl.toFixed(2)})`}</summary>
+    ${B.list.length?`<table style="border-collapse:collapse;font-size:11.5px;margin-top:4px"><thead><tr>${th("Voucher")}${th("Order")}${th("Time")}${th("Employee")}${th("Paid by")}${th("Items")}${th("AED")}</tr></thead><tbody>${B.list.map(b=>`<tr><td style="padding:2px 6px;font-weight:700">${esc(b.voucher)}</td><td style="padding:2px 6px">#${esc(b.order)}</td><td style="padding:2px 6px">${esc(b.time)}</td><td style="padding:2px 6px">${esc(b.employee)}</td><td style="padding:2px 6px">${esc(b.pays.map(p=>p.type+(p.customer?" ("+p.customer+")":"")).join(" + ")||"—")}</td><td style="padding:2px 6px;max-width:320px">${esc(b.items.map(x=>x.name.replace(/^[A-Z0-9]+ - /,"")).join(", "))}</td><td style="padding:2px 6px;text-align:right;font-variant-numeric:tabular-nums">${b.total.toFixed(2)}</td></tr>`).join("")}</tbody></table>`:`<div style="font-size:11.5px;color:${T.textMuted}">No such bills — the gap may be a void or a bill dated another day.</div>`}</details>`;}
+async function posReconBills(k){const[date,loc,rc]=k.split("|");posRecon.bills[k]={loading:true};renderPosSync();
+  try{const r=await posApi("/api/pos/report",{kind:"jt",date,loc});const B=psParseJT(r.csv);posRecon.bills[k]={list:psJTTillOnly(B,PS_RC_SUF[rc]||"DL")};}
+  catch(e){posRecon.bills[k]={err:e.message};}renderPosSync();}
+async function posReconBillsAll(){const items=posReconItems(posRecon.recs).filter(i=>i.unexpl>=5&&!posRecon.bills[posReconBillKey(i)]);
+  for(const i of items){await posReconBills(posReconBillKey(i));}}
+window.posReconBills=posReconBills;window.posReconBillsAll=posReconBillsAll;
 
 
 // ════════════════════════════════════════════════════════════════════════════
