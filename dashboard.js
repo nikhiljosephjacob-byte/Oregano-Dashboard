@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-17-571";
+const BUILD_VERSION="2026-10-17-572";
 const BUILD_NOTES=[
+  "🧹 PLATFORMS PAGE — NO DOUBLE DATA. The 'All platforms' table repeated what the platform cards already show, so it's gone. The three figures only the table had are now on the cards: net-sales change % next to sales, discount depth % under Disc. Burn, and contribution change % under the prior contribution. (The Brands page keeps its 'All brands' table — there the cards show one brand at a time, so the table is the only side-by-side view.)",
   "🧾 JOURNAL TAPE TEST. POS Sync → Daily reconciliation → '🧾 Test Journal Tape' (read-only) finds Analysis → Journal Tape in Microsys, runs it for 6 Oct and shows its columns and first lines — the step before wiring it in so cash / card / phone bills behind a gap are named one by one.",
   "📝 CLEARER PULL MESSAGE. The confirmation before a POS Sync Pull now lists everything it writes — delivery tabs, Dine-In & Takeaway, Dine-In Discounts and the till-vs-dashboard check — plus the 14-day catch-up. (It always did all of this; the message only mentioned delivery.)",
   "🔄 PULL NOW FILLS DINE-IN BY ITSELF. Every POS Sync Pull now finishes with an automatic catch-up over the last 14 days: any day still missing from the Dine-In & Takeaway tab (e.g. pulled before Microsys had split dine-in from takeaway, or never pulled) and any day missing its discount detail is fetched and written — no Backfill needed. Only missing days are fetched, so it adds a few seconds when everything is already there. A day Microsys still hasn't split is tried again on the next Pull. The dashboard re-reads the dine-in data after a Pull (Google's published copy can take up to ~5 minutes to show new rows).",
@@ -7442,7 +7443,7 @@ function renderPlatforms(){
         <div>
           <div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Orders</div>
           <div style="font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;color:${T.valuePrimary}">${a.orders.toLocaleString()}</div>
-          <div style="font-size:19px;color:${T.valueSecondary};font-weight:800;margin-top:4px">${fmtExact(a.sales)}</div>
+          <div style="font-size:19px;color:${T.valueSecondary};font-weight:800;margin-top:4px">${fmtExact(a.sales)}${a.salesP>0?` <span style="font-size:13px;color:${pctClr(a.sc)}">${fmtPct(a.sc)}</span>`:""}</div>
         </div>
         <div>
           <div style="font-size:12.5px;color:${T.muted};font-weight:700">${compShort}</div>
@@ -7452,7 +7453,7 @@ function renderPlatforms(){
       </div>
       <div style="margin-top:11px;padding-top:10px;border-top:1px solid ${T.border};display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">AOV</div><div style="font-size:17px;font-weight:800;color:${T.valuePrimary};margin-top:2px">${a.orders>0?'AED '+a.aov.toFixed(1):'—'}</div></div>
-        <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Disc. Burn</div><div style="font-size:17px;font-weight:800;color:${burnClr};margin-top:2px">${a.disc>0?fmtExact(a.disc):'—'}</div></div>
+        <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Disc. Burn</div><div style="font-size:17px;font-weight:800;color:${burnClr};margin-top:2px">${a.disc>0?fmtExact(a.disc):'—'}</div>${a.disc>0?`<div style="font-size:10.5px;font-weight:700;color:${a.depth>=20?'#FF6B6B':a.depth>=10?'#F59E0B':'#2ECC71'};margin-top:1px">${a.depth.toFixed(1)}% depth</div>`:""}</div>
         <div><div style="font-size:10px;color:${T.muted};font-weight:700;text-transform:uppercase;letter-spacing:.4px">Outlets</div><div style="font-size:17px;font-weight:800;color:${T.valuePrimary};margin-top:2px">${a.outlets}</div></div>
         <div data-ctip="${profitabilityTipId(a.ldA,a.pdA,profDateRefPlat,"this period","prior period",profDateRanges().cur,profDateRanges().prior,"brand")}" style="cursor:help;background:${a.prof>=0?'rgba(46,204,113,.1)':'rgba(255,107,107,.1)'};border-radius:6px;margin:-4px -10px -4px -4px;padding:4px 10px 4px 4px"><div style="font-size:9px;color:${a.prof>=0?'#2ECC71':'#FF6B6B'};font-weight:700;text-transform:uppercase;letter-spacing:.1px;white-space:nowrap">💵 Contribution</div><div style="font-size:17px;font-weight:800;color:${a.prof>=0?'#2ECC71':'#FF6B6B'};margin-top:2px">${a.orders>0?fmtExact(a.prof):'—'}</div>${a.orders>0&&contribMarginPct(a.prof,a.sales)!=null?`<div style="font-size:10.5px;font-weight:700;color:${a.prof>=0?'#2ECC71':'#FF6B6B'};opacity:.85;margin-top:1px">${fmtMarginPct(contribMarginPct(a.prof,a.sales))} margin</div>`:''}</div>
       </div>
@@ -7460,7 +7461,7 @@ function renderPlatforms(){
         <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${T.priorValue};margin-top:2px">${a.orders_prev>0?'AED '+a.aovP.toFixed(1):'—'}</div></div>
         <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${a.discP>0?T.priorDiscClr:T.priorValue};margin-top:2px">${a.discP>0?fmtExact(a.discP):'—'}</div></div>
         <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${T.priorValue};margin-top:2px">${a.outletsP}</div></div>
-        <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${T.priorValue};margin-top:2px">${a.orders_prev>0?fmtExact(a.profP):'—'}</div>${a.orders_prev>0&&contribMarginPct(a.profP,a.salesP)!=null?`<div style="font-size:10.5px;font-weight:700;color:${T.priorLabel};margin-top:1px">${fmtMarginPct(contribMarginPct(a.profP,a.salesP))} margin</div>`:''}</div>
+        <div><div style="font-size:11px;color:${T.priorLabel};font-weight:700">vs prior</div><div style="font-size:17px;font-weight:800;color:${T.priorValue};margin-top:2px">${a.orders_prev>0?fmtExact(a.profP):'—'}</div>${a.orders_prev>0&&contribMarginPct(a.profP,a.salesP)!=null?`<div style="font-size:10.5px;font-weight:700;color:${T.priorLabel};margin-top:1px">${fmtMarginPct(contribMarginPct(a.profP,a.salesP))} margin</div>`:''}${a.orders_prev>0&&a.profP?`<div style="font-size:11px;font-weight:800;color:${pctClr(pctOf(a.prof,a.profP))};margin-top:1px">Δ ${fmtPct(pctOf(a.prof,a.profP))}</div>`:''}</div>
       </div>
     </div>`;
   }).join("");
@@ -25923,7 +25924,7 @@ function lensHeroHTML(){
     if(p==="compare"){const pg=document.getElementById("page-compare");if(pg&&!document.getElementById("cmp-ch-row")){const d=document.createElement("div");d.id="cmp-ch-row";d.style.marginBottom="12px";
       d.innerHTML=`<div class="fbar fbar2" style="background:${DARK_THEME.card};border:1px solid ${DARK_THEME.cardBorder};border-radius:10px"><div class="fb-row"><div class="fb-lbl">Channels</div><div class="fb-body"><div class="fb-line">${lensControlHTML()}<span class="fb-note">applies to Group A, B and C</span><span style="margin-left:auto">${lensVatSegHTML()}</span></div></div></div></div>`;pg.insertBefore(d,pg.firstChild);}return;}
     if(p==="overview")rdPruneOverview();
-    if(p==="brands"||p==="platforms")rdDeliveryTables(p);
+    if(p==="brands")rdDeliveryTables(p); // v572: not on Platforms — its cards already show every platform
     if(p!=="overview"||!lensHero||lensMode!=="all")return;
     const pg=document.getElementById("page-overview");const fb=pg&&pg.querySelector(".fbar");if(!fb||document.getElementById("lens-hero"))return;
     const f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),cmp=getCompRange();
