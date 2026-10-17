@@ -694,7 +694,10 @@ const MSYS_JT_LOC = {
   "FUR - Al Furjan": "53d2d4c2-eaaf-4aa0-b984-ff1968bf6e40", "MIR - Mirdif": "5c77bc79-695a-4340-95ef-bdfd7801a51b",
   "MSS - Mirdif Sports Society": "afcfe8b1-a1f6-443b-8122-d463c3de77b0", "MTC - Motor City": "525b1f88-a049-4633-b4c9-0ccb66b7aeeb",
   "REF - AL Reef": "4a4f1198-258f-4c5b-a0b1-55d407a32168", "REM - Al Reem Island": "72599bf4-b1d8-4544-9d9e-403ee0c957d6",
-  "TSQ - Town Square": "390de334-3044-4aaf-8291-c66dee1ed583", "VLA - The Villa": "da56f5da-0ddf-4cfa-bbb7-ab7732424c15" };
+  "TSQ - Town Square": "390de334-3044-4aaf-8291-c66dee1ed583", "VLA - The Villa": "da56f5da-0ddf-4cfa-bbb7-ab7732424c15",
+  // v574: Fyoozhen chain (FYZ)
+  "ALF - Khalifa City (Fyoozhen)": "cffae1ba-7af2-4c5e-b0c5-d324522ee09d", "DIP - Dubai Investment Park-FYZ": "36a41a58-7c6c-42c3-ae9d-991e20db3114",
+  "NAD - Nad Al Sheba": "80f309a8-6046-41ab-8a32-20ff5163d471", "WTC - World Trade Center": "19f710fa-2feb-4c6f-8a20-4d5366af7744" };
 async function handlePosReport(request, env) {
   const s = await requirePosUser(request, env);
   if (!s) return json({ error: "forbidden" }, 403);
@@ -702,7 +705,7 @@ async function handlePosReport(request, env) {
   if (kind === "jt") {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "")) return json({ error: "bad_request" }, 400);
     const gid = MSYS_JT_LOC[loc];
-    if (!gid) return json({ error: "Journal Tape isn't mapped for '" + loc + "' yet (Fyoozhen chain outlets need their Microsys id)" }, 400);
+    if (!gid) return json({ error: "Journal Tape isn't mapped for '" + loc + "' yet — tell Claude its Microsys location id" }, 400);
     const d = toDMY(date);
     const q = ["MenuID=RPTEMANALYSISJOURNALTAPE-L", "ArrayValueForChain=all", "ArrayValueForlocation=ms," + gid, "chkDetailListingForJournalTape=Y",
       "JournalTapeFromDate=" + d, "JournalTapeToDate=" + d, "ArrayValueForOrderNo=all", "ArrayValueForVoucherNo=all"].join("&");
