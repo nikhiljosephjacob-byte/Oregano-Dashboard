@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-17-573";
+const BUILD_VERSION="2026-10-17-574";
 const BUILD_NOTES=[
+  "🥢 JOURNAL TAPE FOR FYOOZHEN TOO. 'Show the bills' now also works for the Fyoozhen-chain outlets — DIP Fyoozhen, Nad Al Sheba, WTC and Al Forsan (Fyoozhen kitchen) — so every outlet's till-only bills can be named.",
   "🧾 JOURNAL TAPE IN THE RECONCILIATION. Every 💵 'not on Credit Sales' gap now has '🔍 Show the bills' — it reads Microsys Journal Tape for that outlet and day and lists the bills on that till button that no platform paid for: voucher, order no., time, employee, how it was paid (cash / Visa / Mastercard…) and the items, with a ✓ when they add up to the gap. '🔍 Show the bills for every 💵 gap' does them all; the CSV export includes them. (Fyoozhen-chain outlets — DIP Fyoozhen, NAS, WTC, Al Forsan Fyoozhen — still need their Microsys id.)",
   "🧹 PLATFORMS PAGE — NO DOUBLE DATA. The 'All platforms' table repeated what the platform cards already show, so it's gone. The three figures only the table had are now on the cards: net-sales change % next to sales, discount depth % under Disc. Burn, and contribution change % under the prior contribution. (The Brands page keeps its 'All brands' table — there the cards show one brand at a time, so the table is the only side-by-side view.)",
   "🧾 JOURNAL TAPE TEST. POS Sync → Daily reconciliation → '🧾 Test Journal Tape' (read-only) finds Analysis → Journal Tape in Microsys, runs it for 6 Oct and shows its columns and first lines — the step before wiring it in so cash / card / phone bills behind a gap are named one by one.",
