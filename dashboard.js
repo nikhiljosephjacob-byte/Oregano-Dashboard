@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-15-568";
+const BUILD_VERSION="2026-10-17-569";
 const BUILD_NOTES=[
+  "🔄 PULL NOW FILLS DINE-IN BY ITSELF. Every POS Sync Pull now finishes with an automatic catch-up over the last 14 days: any day still missing from the Dine-In & Takeaway tab (e.g. pulled before Microsys had split dine-in from takeaway, or never pulled) and any day missing its discount detail is fetched and written — no Backfill needed. Only missing days are fetched, so it adds a few seconds when everything is already there. A day Microsys still hasn't split is tried again on the next Pull. The dashboard re-reads the dine-in data after a Pull (Google's published copy can take up to ~5 minutes to show new rows).",
   "⏳ LOADING STATUS BACK IN THE MENU. The hourglass and green 5-segment loading bar that Campaigns and Ads Performance showed in the old sidebar were lost in the new menu. They're back: on Marketing (while it's collapsed — shows the slower of the two), and on Promotions and Advertising themselves, with the % on hover. As before, each item opens once its data has finished loading.",
   "📅 DINE-IN DISCOUNTS IN DATE ORDER. A backfill wrote older days below newer ones in the Dine-In Discounts tab (e.g. 1 Aug–13 Oct under 14 Oct). The tab is now sorted oldest-first (then by discount name and outlet) every time it is formatted — after each Pull and Backfill, and when you press '🎨 Re-apply sheet formatting'.",
   "🧾 TALABAT UPLOAD FIX. Talabat renamed some stores in its order export, so 220 orders (1–14 Oct) were skipped and their discounts not counted: 'FYOOZHEN, Al Forsan' (brand not recognised — 86 orders), and 'Lollorosso, Forsan', 'Lollorosso, Media City', 'Wicked Wings, Khalifa City', 'Smokeys, Sports Society Mirdif' (outlet not recognised — 134 orders). All are mapped now, and if Talabat renames a store again the dashboard falls back to keywords (Forsan/Khalifa → Al Forsan, Media City → DMC, Mirdif → Mirdiff …) instead of dropping the orders. Upload the same orderDetails file again.",
@@ -25313,7 +25314,7 @@ async function posStartPull(){
       i=step(`${posFmtDate(iso)} — Sales Summary by Outlet (dine-in & takeaway)`);
       const sumCsv=await getSummary(iso);if(!sumCsv)throw new Error("Sales Summary by Outlet couldn't be pulled");sumCache[iso]=sumCsv;const I=psProcessInstore(sumCsv,D.instore);
       try{day.recon=psRecon(cr.csv,sumCsv,iso);posApi("/api/pos/recon",{date:iso,rec:day.recon}).then(()=>{posRecon.recs=null;}).catch(e=>day.warn.push("Reconciliation not saved: "+e.message));}catch(e){day.warn.push("Reconciliation failed: "+e.message);} // v564
-      const SP=psSummaryHasSplit(sumCsv);if(!SP.split){I.skip=true;day.warn.push("Microsys has no dine-in/takeaway split for this day — Dine-In & Takeaway tab not written");}
+      const SP=psSummaryHasSplit(sumCsv);if(!SP.split){I.skip=true;day.warn.push("Microsys hasn't split dine-in/takeaway for this day yet — Dine-In & Takeaway not written now; the next Pull adds it automatically");}
       I.warn.forEach(w=>day.warn.push(w));
       const it=Object.values(I.rows).reduce((a,o)=>({di:a.di+o.di.sales,to:a.to+o.to.sales,dd:a.dd+o.di.disc,td:a.td+o.to.disc,g:a.g+o.di.guests}),{di:0,to:0,dd:0,td:0,g:0});
       day.instore={di:psRound(it.di,2),to:psRound(it.to,2),dd:psRound(it.dd,2),td:psRound(it.td,2),guests:it.g};
@@ -25352,6 +25353,11 @@ async function posStartPull(){
   try{await posApi("/api/pos/log",{sheet:P.sheet,dates:dates.length===1?dates[0]:dates[0]+" → "+dates[dates.length-1],result:`${okDays} ok${failDays?", "+failDays+" failed":""}`});}catch(e){}
   P.pulling=false;P.stop=false;P.bar.done=P.bar.total;P.bar.finished=true;P.bar.failed=failDays;P.bar.end=Date.now();
   window.removeEventListener("beforeunload",posBeforeUnload);await posLoadStatus();
+  // v569: catch-up — fill dine-in & takeaway and discount detail for any of the last 14 days that are still missing
+  // (a day pulled before Microsys split dine-in/takeaway, a day nobody pulled, a day without discount detail).
+  // Only missing days are fetched, so when everything is there it's just one quick read of the tab.
+  if(!P.bar.stopped){const last=dates[dates.length-1];try{const r=await posStartBackfill({auto:true,from:posAddDays(last,-13),to:last});P.results.catchup=r;}catch(e){step("Catch-up failed: "+e.message,"err");}}
+  posInstoreReloadSoon();
 }
 function posBeforeUnload(e){if(posSyncState.pulling){e.preventDefault();e.returnValue="A POS pull is still running. Leaving now stops it.";return e.returnValue;}}
 // v549: Stop — finishes the day in progress, saves everything done so far, formats the tab, then stops
@@ -25405,13 +25411,15 @@ function posBackfillCardHTML(T,card,ct,btn){
   h+=`${btn(P.pulling?"⏳ Working…":"🗂 Start backfill","posStartBackfill()",false,P.pulling||n<1)}</div>`;
   return h;
 }
-async function posStartBackfill(){
+// v569: opt={auto:true,from,to} = the catch-up a Pull runs by itself (no confirm, progress appended to the Pull's)
+async function posStartBackfill(opt){
+  const auto=!!(opt&&opt.auto);
   const P=posSyncState;if(P.pulling)return;const y=posAddDays(posDubaiToday(),-1);
-  let from=P.bf_from||"2026-01-01",to=P.bf_to||y;if(from>to)[from,to]=[to,from];if(to>y)to=y;
-  if(P.status&&!P.status.hasCreds){posOpenCreds();return;}
+  let from=auto?opt.from:(P.bf_from||"2026-01-01"),to=auto?opt.to:(P.bf_to||y);if(from>to)[from,to]=[to,from];if(to>y)to=y;
+  if(P.status&&!P.status.hasCreds){if(!auto)posOpenCreds();return;}
   const where=P.sheet==="live"?"LIVE":"TEST";
-  if(!confirm(`Backfill dine-in & takeaway for ${posFmtDate(from)} ${from.slice(0,4)} → ${posFmtDate(to)} ${to.slice(0,4)} into the ${where} sheet's Dine-In & Takeaway tab?\n\nDelivery tabs are not touched.`))return;
-  P.pulling=true;P.progress=[];P.results={sheet:P.sheet,days:[]};window.addEventListener("beforeunload",posBeforeUnload);
+  if(!auto&&!confirm(`Backfill dine-in & takeaway for ${posFmtDate(from)} ${from.slice(0,4)} → ${posFmtDate(to)} ${to.slice(0,4)} into the ${where} sheet's Dine-In & Takeaway tab?\n\nDelivery tabs are not touched.`))return;
+  P.pulling=true;if(!auto){P.progress=[];P.results={sheet:P.sheet,days:[]};}window.addEventListener("beforeunload",posBeforeUnload);
   const step=(t,st)=>{P.progress.push({t,st:st||"run"});renderPosSync();return P.progress.length-1;};
   const done=(i,st,t)=>{if(P.progress[i].st==="run"&&P.bar)P.bar.done=Math.min(P.bar.total,P.bar.done+1);P.progress[i].st=st;if(t)P.progress[i].t=t;renderPosSync();};
   let ok=0,skipped=0,failed=0,written=0,nodata=0,nosplit=0,ddFilled=0;const unknown=new Set();
@@ -25428,6 +25436,7 @@ async function posStartBackfill(){
     // clear the rows (formatting stays) and re-pull the days that were there, so all stays in date order.
     let extra=[];
     // v549: earlier days are now INSERTED above later ones, so only the old (pre-v547) layout needs a re-lay.
+    if(legacy&&auto){done(i,"err","Dine-In & Takeaway tab is in the old layout — catch-up skipped; run a Backfill once to re-lay it");P.pulling=false;window.removeEventListener("beforeunload",posBeforeUnload);return{ok:0,skipped:0,failed:0,nosplit:0,ddFilled:0};}
     if(legacy){
       // v551: only days AFTER the chosen range are re-pulled (e.g. the latest daily pulls) — never days before it,
       // so a run for Jan 2026 doesn't first go back over old Jan 2025 attempts. Earlier days can be backfilled separately.
@@ -25482,15 +25491,19 @@ async function posStartBackfill(){
     const fi=step("Formatting the Dine-In & Takeaway tab like the delivery tabs");
     try{await posFormatInstore(P.sheet);done(fi,"ok");}catch(e){done(fi,"err","Formatting failed: "+e.message+" — use 🎨 Re-apply sheet formatting");}
     if(ddW){const fd=step("Formatting the Dine-In Discounts tab");try{await posFormatDD(P.sheet);done(fd,"ok");}catch(e){done(fd,"err","Dine-In Discounts formatting failed: "+e.message);}}
-    step(`Done — ${ok} day(s) written, ${skipped} already there and skipped${ddFilled?`, ${ddFilled} older day(s) given their discount detail`:""}${nosplit?`, ${nosplit} without a dine-in/takeaway split in Microsys`:""}${nodata?`, ${nodata} with no POS data`:""}${failed?`, ${failed} failed (run the same range again to retry them)`:""}`,failed||nosplit||nodata?"err":"ok");
+    if(auto)step(ok||ddFilled||nosplit?`Catch-up done — ${ok} missing day(s) of dine-in & takeaway added${ddFilled?`, ${ddFilled} day(s) given their discount detail`:""}${nosplit?` · ⚠ ${nosplit} day(s) still have no dine-in/takeaway split in Microsys — the next Pull will try them again`:""}`:`Catch-up: dine-in, takeaway and discounts are complete for ${posFmtDate(from)} → ${posFmtDate(to)}`,nosplit?"err":"ok");
+    else step(`Done — ${ok} day(s) written, ${skipped} already there and skipped${ddFilled?`, ${ddFilled} older day(s) given their discount detail`:""}${nosplit?`, ${nosplit} without a dine-in/takeaway split in Microsys`:""}${nodata?`, ${nodata} with no POS data`:""}${failed?`, ${failed} failed (run the same range again to retry them)`:""}`,failed||nosplit||nodata?"err":"ok");
     if(unknown.size)step(`⚠ Not written — POS locations with no row in the tab: ${[...unknown].join(", ")}. Tell Claude which row they belong to.`,"err");
   }catch(e){step("❌ Backfill stopped: "+e.message,"err");failed++;}
   P.pulling=false;P.stop=false;if(P.bar){P.bar.done=P.bar.total;P.bar.finished=true;P.bar.failed=failed;P.bar.end=Date.now();}
   P.results.backfill={ok,skipped,failed};
   window.removeEventListener("beforeunload",posBeforeUnload);
-  try{await posApi("/api/pos/log",{kind:"backfill",sheet:P.sheet,dates:from+" → "+to,result:`${ok} written, ${skipped} skipped${failed?", "+failed+" failed":""}`});}catch(e){}
-  await posLoadStatus();
+  if(!auto||ok||ddFilled)try{await posApi("/api/pos/log",{kind:"backfill",sheet:P.sheet,dates:from+" → "+to,result:`${auto?"auto catch-up after Pull: ":""}${ok} written, ${skipped} skipped${ddFilled?", "+ddFilled+" discount days":""}${failed?", "+failed+" failed":""}`});}catch(e){}
+  await posLoadStatus();posInstoreReloadSoon();
+  return{ok,skipped,failed,nosplit,ddFilled};
 }
+// v569: after writing dine-in data, re-read it in the dashboard (Google's published copy can take a few minutes to update)
+function posInstoreReloadSoon(){if(posSyncState.sheet!=="live")return;const go=()=>{try{if(typeof loadInstoreData==="function")loadInstoreData();if(typeof loadDinDiscData==="function")loadDinDiscData();}catch(e){}};setTimeout(go,20000);setTimeout(go,6*60000);}
 
 // ── v547 RAW REPORT CHECK — shows exactly what Microsys returns for one report on one day (read-only),
 // so a day that comes out empty can be diagnosed without opening the portal.
