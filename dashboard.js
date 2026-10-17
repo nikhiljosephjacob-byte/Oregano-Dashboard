@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-17-577";
+const BUILD_VERSION="2026-10-17-578";
 const BUILD_NOTES=[
+  "🏠 DIRECT DELIVERIES ARE EXPECTED, NOT ERRORS. Per Nikhil, bills on the Delivery button that no aggregator paid for (e.g. DIP, Town Square, Jumeirah) are catering / bulk orders from the catering team, or regular customers we delivered to who paid us directly. Rare but legitimate. After every Pull, the reconciliation card now reads the Journal Tape bills behind each 💵 gap; when they add up to the gap and were rung by staff (not a Deliverect order), the day is marked explained automatically ('🏠 Direct delivery paid to us', with the voucher numbers) and drops off the red badge. Bills that don't add up, or Deliverect orders paid by an unknown method, stay open.",
   "🏷️ MARK-UP CAMPAIGNS NO LONGER SHOW AS A DISCOUNT GAP. Oregano × Careem '20% OFF Combos' (8–13 Oct, combo prices raised then discounted): the Discount Discrepancy table compared the statement's 20% against the sheet AFTER the mark-up was taken out (≈ AED 0), so it showed about −AED 6,255 of gap that wasn't real. It now compares the discount as listed on both sides, tags those days 🏷️ and shows the real cost after the mark-up (what profitability uses) alongside.",
   "🎯 UNATTRIBUTED DISCOUNT — CONFIRMED ORDERS, NOT CANDIDATES. For Deliveroo, Careem, Noon and Talabat the gap-day order list used to show every discounted order of that day as a 'candidate' (no item list in those statements). With Journal Tape read for those days, each statement order is now paired with its POS bill (same outlet, total and discount) and only the POS bills left over are listed — the actual discount the statement doesn't have — with voucher no., outlet and items. Applies to the gap-day lists and the 'Unattributed deep dive' CSV.",
   "🧾 JOURNAL TAPE, BILL BY BILL. (1) Every POS Sync Pull now also reads Microsys Journal Tape for each outlet (the days it pulls) and keeps the delivery bills with a discount plus the Smokeys-button bills at the Wicked Wings outlets; POS Sync → 'Journal Tape history' reads earlier days. (2) Promotions → Discount Burn → new 'Item-level discount check': each select-items / BOGO campaign gets the POS discount on bills that contain its items (item names read from the campaign's Comments and matched to the POS names, with the matches and any not-found items shown), next to today's allocation; plus the discounted bills that match no select-items campaign, by brand and platform with their most common items. (3) POS Sync → Daily reconciliation → 'Wicked Wings vs Smokeys by items': per outlet, how much to move from the Smokeys column to Wicked Wings, and bills where the items and the platform account disagree.",
@@ -25642,7 +25643,7 @@ function posReconItems(recs){const out=[];for(const r of recs||[])for(const x of
   const open=!ack&&(Math.abs(x.unexpl)>=50||unk>=50);out.push(Object.assign({date:r.date,id,ack,unk,open},x));}
   return out.sort((a,b)=>b.date.localeCompare(a.date)||Math.abs(b.gap)-Math.abs(a.gap));}
 function posReconOpenCount(){return posReconItems(posRecon.recs).filter(i=>i.open).length;}
-async function posReconAck(date,id){const note=prompt("What explains this gap? (e.g. 'catering order — fine', 'phone order paid cash')","");if(note===null)return;
+async function posReconAck(date,id){const note=prompt("What explains this gap? (e.g. 'catering / bulk order — paid directly', 'regular customer, paid cash')","");if(note===null)return;
   try{await posApi("/api/pos/recon/ack",{date,id,note});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
 async function posReconUnack(date,id){try{await posApi("/api/pos/recon/ack",{date,id,clear:true});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
 async function posReconCheck(){const P=posSyncState;if(posRecon.checking||P.pulling)return;if(P.status&&!P.status.hasCreds){posOpenCreds();return;}
@@ -25666,12 +25667,12 @@ function posReconCardHTML(T,card,ct,btn){
   if(!R.length)return h+`<div style="color:${T.textSecondary};font-size:12.5px">No days checked yet in this range — click <b>Check these days now</b>, or it fills itself from the next Pull.</div></div>`;
   const stat=(l,v,sub,c)=>`<div style="background:${T.bg};border:1px solid ${T.cardBorder};border-radius:10px;padding:10px 12px;min-width:140px"><div style="font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:${T.textMuted}">${l}</div><div style="font-size:18px;font-weight:800;color:${c||T.textPrimary};font-variant-numeric:tabular-nums">${v}</div><div style="font-size:11px;color:${T.textMuted}">${sub||""}</div></div>`;
   const unex=items.reduce((a,i)=>a+(i.ack?0:i.unexpl),0),cat=items.reduce((a,i)=>a+(i.other||[]).filter(o=>posReconWhy(o)==="catering").reduce((z,o)=>z+o[1],0),0),unk=items.reduce((a,i)=>a+i.unk,0);
-  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${stat("Days checked",`${R.length} / ${posRecon.days}`)}${stat("Till (POS)",f(tp),"delivery buttons")}${stat("Dashboard",f(ta),"aggregator orders")}${stat("Difference",f2(tp-ta),tp>0?((tp-ta)/tp*100).toFixed(2)+"% of till":"",Math.abs(tp-ta)>=100?T.accentOrange:T.accentGreen)}${stat("Not on Credit Sales",f2(unex),"cash / card / phone / voids",Math.abs(unex)>=50?T.accentRed:T.textPrimary)}${stat("Catering",f(cat),"by design — not a platform")}${stat("Unknown platform",f(unk),"POS Sync doesn't map it",unk>=1?T.accentRed:T.textPrimary)}</div>`;
+  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${stat("Days checked",`${R.length} / ${posRecon.days}`)}${stat("Till (POS)",f(tp),"delivery buttons")}${stat("Dashboard",f(ta),"aggregator orders")}${stat("Difference",f2(tp-ta),tp>0?((tp-ta)/tp*100).toFixed(2)+"% of till":"",Math.abs(tp-ta)>=100?T.accentOrange:T.accentGreen)}${stat("Not on Credit Sales",f2(unex),"direct deliveries (catering / regulars) or voids",Math.abs(unex)>=50?T.accentRed:T.textPrimary)}${stat("Catering",f(cat),"by design — not a platform")}${stat("Unknown platform",f(unk),"POS Sync doesn't map it",unk>=1?T.accentRed:T.textPrimary)}</div>`;
   if(items.length){
     h+=`<div style="font-size:12px;font-weight:800;color:${T.textSecondary};margin:4px 0 6px">Gaps by outlet and day</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="color:${T.textMuted};font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;text-align:left">${["Date","Outlet","Till button","Till","Dashboard","Gap","Why",""].map((x,i)=>`<th style="padding:6px 8px;border-bottom:1px solid ${T.cardBorder};${i>=3&&i<=5?"text-align:right":""}">${x}</th>`).join("")}</tr></thead><tbody>`;
     for(const i of items){
       const why=[...(i.other||[]).map(o=>posReconWhy(o)==="catering"?`<span title="Catering is not an aggregator — the dashboard leaves it out on purpose">🍱 ${esc(o[0])} ${f(o[1])}</span>`:`<span style="color:${T.accentRed}" title="A platform POS Sync doesn't recognise — tell Claude which aggregator it is and it will be counted">❓ ${esc(o[0])} ${f(o[1])} — unknown platform</span>`),
-        Math.abs(i.unexpl)>=5?(i.unexpl>0?`<span title="Rung on the delivery till but not on Credit Sales: a cash / card / phone order, or an aggregator order voided after billing">💵 ${f(i.unexpl)} not on Credit Sales</span>`:`<span>${f(-i.unexpl)} more on Credit Sales than on the till (void / date)</span>`):""].filter(Boolean).join("<br>");
+        Math.abs(i.unexpl)>=5?(i.unexpl>0?`<span title="Rung on the delivery till but not paid by an aggregator: usually a catering / bulk order or a regular customer we delivered to who paid us directly (cash / card / phone). Journal Tape confirms it and marks it explained; otherwise a void after billing">💵 ${f(i.unexpl)} paid to us directly (catering / regulars) or void</span>`:`<span>${f(-i.unexpl)} more on Credit Sales than on the till (void / date)</span>`):""].filter(Boolean).join("<br>");
       const act=i.ack?`<span style="color:${T.accentGreen};font-size:11.5px" title="${esc(i.ack.note||"")}">✓ ${esc(i.ack.note||"explained")} · ${esc(i.ack.by||"")}</span> <a href="#" onclick="posReconUnack('${i.date}','${esc(i.id)}');return false" style="color:${T.textMuted};font-size:11px">undo</a>`:i.open?`<button onclick="posReconAck('${i.date}','${esc(i.id)}')" style="padding:4px 10px;border-radius:6px;border:1px solid ${T.cardBorder};background:transparent;color:${T.textSecondary};font-size:11.5px;font-weight:700;cursor:pointer">Mark explained</button>`:`<span style="color:${T.textMuted};font-size:11.5px">small</span>`;
       const ordH=(i.orders||[]).length?`<details style="margin-top:3px"><summary style="cursor:pointer;color:${T.textMuted};font-size:11.5px">${i.orders.length} order${i.orders.length>1?"s":""} — order no. / tax invoice</summary>${posReconOrdersHTML(T,i.orders)}</details>`:"";
       const tillOnly=Math.abs(i.unexpl)>=5&&i.unexpl>0?posReconBillsHTML(T,i):"";
@@ -25720,11 +25721,30 @@ function posReconBillsHTML(T,i){const k=posReconBillKey(i),B=posRecon.bills[k];c
   if(B.err)return`<div style="font-size:11.5px;color:${T.accentRed};margin-top:3px">${esc(B.err)} <a href="#" onclick="posReconBills('${kk}');return false" style="color:${T.textMuted}">retry</a></div>`;
   const sum=B.list.reduce((a,b)=>a+b.total,0),gapIncl=i.unexpl*1.05,match=Math.abs(sum-gapIncl)<=2;
   const th=x=>`<th style="text-align:left;padding:3px 6px;font-size:10px;color:${T.textMuted};text-transform:uppercase;letter-spacing:.5px">${x}</th>`;
-  return`<details open style="margin-top:4px"><summary style="cursor:pointer;color:${match?T.accentGreen:T.accentOrange};font-size:11.5px;font-weight:700">${B.list.length} bill${B.list.length===1?"":"s"} on the ${esc(i.rc)} button not paid by a platform — AED ${sum.toFixed(2)} incl. VAT ${match?"✓ matches the gap":`(gap AED ${gapIncl.toFixed(2)})`}</summary>
+  return`<details open style="margin-top:4px"><summary style="cursor:pointer;color:${match?T.accentGreen:T.accentOrange};font-size:11.5px;font-weight:700">${B.list.length} bill${B.list.length===1?"":"s"} on the ${esc(i.rc)} button paid to us directly — AED ${sum.toFixed(2)} incl. VAT ${match?"✓ matches the gap — direct delivery (catering / regular customer)":`(gap AED ${gapIncl.toFixed(2)})`}</summary>
     ${B.list.length?`<table style="border-collapse:collapse;font-size:11.5px;margin-top:4px"><thead><tr>${th("Voucher")}${th("Order")}${th("Time")}${th("Employee")}${th("Paid by")}${th("Items")}${th("AED")}</tr></thead><tbody>${B.list.map(b=>`<tr><td style="padding:2px 6px;font-weight:700">${esc(b.voucher)}</td><td style="padding:2px 6px">#${esc(b.order)}</td><td style="padding:2px 6px">${esc(b.time)}</td><td style="padding:2px 6px">${esc(b.employee)}</td><td style="padding:2px 6px">${esc(b.pays.map(p=>p.type+(p.customer?" ("+p.customer+")":"")).join(" + ")||"—")}</td><td style="padding:2px 6px;max-width:320px">${esc(b.items.map(x=>x.name.replace(/^[A-Z0-9]+ - /,"")).join(", "))}</td><td style="padding:2px 6px;text-align:right;font-variant-numeric:tabular-nums">${b.total.toFixed(2)}</td></tr>`).join("")}</tbody></table>`:`<div style="font-size:11.5px;color:${T.textMuted}">No such bills — the gap may be a void or a bill dated another day.</div>`}</details>`;}
 async function posReconBills(k){const[date,loc,rc]=k.split("|");posRecon.bills[k]={loading:true};renderPosSync();
-  try{const r=await posApi("/api/pos/report",{kind:"jt",date,loc});const B=psParseJT(r.csv);posRecon.bills[k]={list:psJTTillOnly(B,PS_RC_SUF[rc]||"DL")};}
+  try{const r=await posApi("/api/pos/report",{kind:"jt",date,loc});const B=psParseJT(r.csv);posRecon.bills[k]={list:psJTTillOnly(B,PS_RC_SUF[rc]||"DL")};await posReconAutoDirect(k);}
   catch(e){posRecon.bills[k]={err:e.message};}renderPosSync();}
+// v578: Nikhil — the 💵 bills are catering / bulk orders taken by the catering team, or regular customers who asked us to
+// deliver and paid us directly; rare but legitimate, and punched on the Delivery button. When Journal Tape shows the gap is
+// exactly such bills (rung by staff, not injected by Deliverect, not paid by a platform), the day is marked explained
+// automatically. Anything else (bills don't add up to the gap, or a Deliverect order paid by an unknown method) stays open.
+function posReconIsDirect(i,B){if(!B||!B.list||!B.list.length||!(i.unexpl>0))return false;
+  const sum=B.list.reduce((a,b)=>a+b.total,0),gapIncl=i.unexpl*1.05;
+  if(Math.abs(sum-gapIncl)>Math.max(2,gapIncl*0.01))return false;
+  return B.list.every(b=>!/deliverect|bot/i.test(b.employee||""));}
+async function posReconAutoDirect(k){const B=posRecon.bills[k];const[date,loc,rc]=k.split("|");
+  const i=posReconItems(posRecon.recs).find(x=>x.date===date&&x.loc===loc&&x.rc===rc);
+  if(!i||i.ack||!posReconIsDirect(i,B))return;
+  const v=B.list.map(b=>b.voucher).join(", ");
+  const note=`🏠 Direct delivery paid to us (catering / bulk or regular customer) — ${B.list.length} bill${B.list.length>1?"s":""}: ${v}`.slice(0,200);
+  try{await posApi("/api/pos/recon/ack",{date,id:i.id,note});
+    const rec=(posRecon.recs||[]).find(r=>r.date===date);if(rec){rec.ack=rec.ack||{};rec.ack[i.id]={by:"auto · Journal Tape",note};}}catch(e){}}
+// after a Pull: read the bills behind every new 💵 gap on the pulled days (this also auto-explains direct deliveries)
+async function posReconDirectAfterPull(dates){try{posRecon.recs=null;await posReconLoad();const ds=new Set(dates);
+  const items=posReconItems(posRecon.recs).filter(i=>ds.has(i.date)&&!i.ack&&i.unexpl>=5&&!posRecon.bills[posReconBillKey(i)]);
+  for(const i of items)await posReconBills(posReconBillKey(i));}catch(e){console.log("[recon direct]",e);}}
 async function posReconBillsAll(){const items=posReconItems(posRecon.recs).filter(i=>i.unexpl>=5&&!posRecon.bills[posReconBillKey(i)]);
   for(const i of items){await posReconBills(posReconBillKey(i));}}
 window.posReconBills=posReconBills;window.posReconBillsAll=posReconBillsAll;
@@ -25745,7 +25765,7 @@ async function posJTAfterPull(dates){const P=posSyncState;const ds=dates.slice(-
   P.pulling=true;
   for(const iso of ds){const i=P.progress.push({t:`${posFmtDate(iso)} — Journal Tape (bill by bill, ${PS_JT_LOCS.length} outlets)…`,st:"run"})-1;renderPosSync();
     const r=await posJTCollectDay(iso,PS_JT_LOCS);P.progress[i]={t:`${posFmtDate(iso)} — Journal Tape: ${r.ok} outlet(s), ${r.bills} delivery bills kept${r.fail?` · ${r.fail} failed`:""}`,st:r.fail?"err":"ok"};renderPosSync();}
-  P.pulling=false;renderPosSync();posJT.cache=null;}
+  P.pulling=false;renderPosSync();posJT.cache=null;await posReconDirectAfterPull(ds);}
 // history card
 const posJT={from:null,to:null,run:null,cache:null};
 function posJTCardHTML(T,card,ct,btn){const y=posAddDays(posDubaiToday(),-1),f=posJT.from||posAddDays(y,-13),t=posJT.to||y,R=posJT.run;
