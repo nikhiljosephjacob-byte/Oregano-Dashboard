@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-17-575";
+const BUILD_VERSION="2026-10-17-576";
 const BUILD_NOTES=[
+  "🎯 UNATTRIBUTED DISCOUNT — CONFIRMED ORDERS, NOT CANDIDATES. For Deliveroo, Careem, Noon and Talabat the gap-day order list used to show every discounted order of that day as a 'candidate' (no item list in those statements). With Journal Tape read for those days, each statement order is now paired with its POS bill (same outlet, total and discount) and only the POS bills left over are listed — the actual discount the statement doesn't have — with voucher no., outlet and items. Applies to the gap-day lists and the 'Unattributed deep dive' CSV.",
   "🧾 JOURNAL TAPE, BILL BY BILL. (1) Every POS Sync Pull now also reads Microsys Journal Tape for each outlet (the days it pulls) and keeps the delivery bills with a discount plus the Smokeys-button bills at the Wicked Wings outlets; POS Sync → 'Journal Tape history' reads earlier days. (2) Promotions → Discount Burn → new 'Item-level discount check': each select-items / BOGO campaign gets the POS discount on bills that contain its items (item names read from the campaign's Comments and matched to the POS names, with the matches and any not-found items shown), next to today's allocation; plus the discounted bills that match no select-items campaign, by brand and platform with their most common items. (3) POS Sync → Daily reconciliation → 'Wicked Wings vs Smokeys by items': per outlet, how much to move from the Smokeys column to Wicked Wings, and bills where the items and the platform account disagree.",
   "🥢 JOURNAL TAPE FOR FYOOZHEN TOO. 'Show the bills' now also works for the Fyoozhen-chain outlets — DIP Fyoozhen, Nad Al Sheba, WTC and Al Forsan (Fyoozhen kitchen) — so every outlet's till-only bills can be named.",
   "🧾 JOURNAL TAPE IN THE RECONCILIATION. Every 💵 'not on Credit Sales' gap now has '🔍 Show the bills' — it reads Microsys Journal Tape for that outlet and day and lists the bills on that till button that no platform paid for: voucher, order no., time, employee, how it was paid (cash / Visa / Mastercard…) and the items, with a ✓ when they add up to the gap. '🔍 Show the bills for every 💵 gap' does them all; the CSV export includes them. (Fyoozhen-chain outlets — DIP Fyoozhen, NAS, WTC, Al Forsan Fyoozhen — still need their Microsys id.)",
@@ -17932,8 +17933,11 @@ function exportUnattributedDeepDive(){
             rows.push(['—','—',date,x.brand,x.aggregator,'—',esc('(see per-date detail on page)'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),'—','—'].join(','));
           }
         }else{
-          const orders=(otherByBrandDate[x.aggregator]&&otherByBrandDate[x.aggregator][x.brand+'|'+date])||null;
-          if(orders&&orders.length){
+          const _jtOn=typeof jtGapBills==="function"&&!!jtGapBills(x.brand,x.aggregator,date);
+          const orders=_jtOn?discGapUnattributedOrders(x.brand,x.aggregator,date):((otherByBrandDate[x.aggregator]&&otherByBrandDate[x.aggregator][x.brand+'|'+date])||null);
+          if(_jtOn&&orders&&!orders.length){
+            rows.push(['—','—',date,x.brand,x.aggregator,'—',esc('(POS Journal Tape: every discounted bill on the till matches an order in the statement — the gap is not a missing order; check rounding or a discount booked on another day)'),'—','—','—',sheetTotal.toFixed(2),allocated.toFixed(2),gap.toFixed(2),esc(coveringNames),'—','—'].join(','));
+          }else if(orders&&orders.length){
             const sc=_statementCover(x.aggregator,x.brand,date);
             const stmtDiscStr=sc.covered?(sc.disc||0).toFixed(2):'—';
             for(const o of orders){
@@ -26834,7 +26838,7 @@ function jtBranchOf(locKey){const loc=(typeof PS_JT_LOCS!=="undefined"?PS_JT_LOC
 async function jtLoad(from,to){const k=from+"|"+to;if(posJTData.key===k&&(posJTData.days||posJTData.loading))return;
   posJTData.key=k;posJTData.loading=true;posJTData.err=null;
   try{const j=await posApi(`/api/pos/jt?from=${from}&to=${to}`);posJTData.days=j.days||[];}catch(e){posJTData.err=e.message;posJTData.days=[];}
-  posJTData.loading=false;if(typeof campTab!=="undefined"&&campTab==="discounts"&&curPage==="campaigns")jtPaint();}
+  posJTData.loading=false;if(typeof campTab!=="undefined"&&campTab==="discounts"&&curPage==="campaigns"){if((posJTData.days||[]).length)renderCampaigns();else jtPaint();}}
 // item names in a campaign's comments
 const JT_STOP=new Set(["the","and","with","of","on","a","in","off","for","best","sellers","seller","select","items","item","new","combo","combos","names","name","exclusive","keeta","marked","up","discounted","pcs","pc","piece","pieces"]);
 function jtTokens(s){return String(s||"").toLowerCase().replace(/&/g," and ").replace(/[^a-z0-9 ]+/g," ").split(/\s+/).filter(w=>w&&!JT_STOP.has(w)&&!/^\d+%?$/.test(w)).map(w=>w.replace(/(ies)$/,"y").replace(/([^s])s$/,"$1"));}
@@ -26891,3 +26895,22 @@ function jtPaint(){const el=document.getElementById("jt-card");if(el)el.outerHTM
 (function hookJT(){if(typeof renderCampaigns!=="function")return setTimeout(hookJT,300);if(renderCampaigns.__jt)return;
   const _r=renderCampaigns;renderCampaigns=async function(){const r=await _r.apply(this,arguments);try{if(campTab==="discounts"){const pg=document.getElementById("page-campaigns");if(pg&&!document.getElementById("jt-card")){const anchor=[...pg.querySelectorAll(".ct")].find(x=>/Discount Discrepancy|Uncategori/i.test(x.textContent));const card=anchor?anchor.closest(".card"):null;const html=jtCardHTML();if(card)card.insertAdjacentHTML("beforebegin",html);else pg.insertAdjacentHTML("beforeend",html);}}}catch(e){console.log("[jt]",e);}return r;};
   renderCampaigns.__jt=true;window.renderCampaigns=renderCampaigns;})();
+
+// v576: the "unattributed" gap days (POS discount > platform statement discount) — with Journal Tape the gap orders are
+// confirmed instead of listing every discounted order: each statement order is paired with a POS bill at the same
+// outlet with the same total and discount; the POS bills left over are the discount the statement doesn't have.
+function jtGapBills(brand,agg,date){const days=(posJTData.days||[]).filter(d=>d.date===date);if(!days.length)return null;
+  const out=[];for(const d of days){const br=jtBranchOf(d.loc),items=d.data.items||[];
+    for(const b of d.data.bills||[]){const[v,bc,plat,disc,tot,its]=b;if(!(disc>0)||plat!==agg||PS_JT_BRAND[bc]!==brand)continue;
+      out.push({v,ou:br,disc,tot,items:its.map(([ii])=>items[ii]).join(", ")});}}
+  return out;}
+(function hookGap(){if(typeof discGapUnattributedOrders!=="function"||typeof _normalizeGapOrderRow!=="function")return setTimeout(hookGap,400);if(discGapUnattributedOrders.__jt)return;
+  const _g=discGapUnattributedOrders,_n=_normalizeGapOrderRow;
+  discGapUnattributedOrders=function(brand,agg,date){const st=_g(brand,agg,date);if(agg==="Keeta")return st;
+    const pos=jtGapBills(brand,agg,date);if(!pos)return st;
+    const used=new Set(),norm=(st||[]).map(o=>_n(o,agg));
+    for(const s of norm){let best=-1,bd=1e9;pos.forEach((p,i)=>{if(used.has(i))return;const dd=Math.abs(p.disc-s.disc)+Math.abs(p.tot-s.gross)*0.5+(p.ou&&s.outlet&&p.ou!==s.outlet?5:0);if(dd<bd){bd=dd;best=i;}});if(best>=0&&bd<=6)used.add(best);}
+    const left=pos.filter((p,i)=>!used.has(i));
+    return left.length?left.map(p=>({o:"V"+p.v,orderRef:"voucher "+p.v,ou:p.ou,i:p.items||"—",g:p.tot,n:p.tot-p.disc,disc:p.disc,_jt:1,_n:(st||[]).length,_p:pos.length})):[];};
+  _normalizeGapOrderRow=function(o,agg){const r=_n(o,agg);if(o&&o._jt)r.basis=`POS Journal Tape — a discounted ${agg} bill on the till with no matching order in the ${agg} statement (paired ${o._p} POS bills with ${o._n} statement orders by outlet, total and discount)`;return r;};
+  discGapUnattributedOrders.__jt=true;window.discGapUnattributedOrders=discGapUnattributedOrders;window._normalizeGapOrderRow=_normalizeGapOrderRow;})();
