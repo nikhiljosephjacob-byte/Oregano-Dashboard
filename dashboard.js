@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-17-576";
+const BUILD_VERSION="2026-10-17-577";
 const BUILD_NOTES=[
+  "🏷️ MARK-UP CAMPAIGNS NO LONGER SHOW AS A DISCOUNT GAP. Oregano × Careem '20% OFF Combos' (8–13 Oct, combo prices raised then discounted): the Discount Discrepancy table compared the statement's 20% against the sheet AFTER the mark-up was taken out (≈ AED 0), so it showed about −AED 6,255 of gap that wasn't real. It now compares the discount as listed on both sides, tags those days 🏷️ and shows the real cost after the mark-up (what profitability uses) alongside.",
   "🎯 UNATTRIBUTED DISCOUNT — CONFIRMED ORDERS, NOT CANDIDATES. For Deliveroo, Careem, Noon and Talabat the gap-day order list used to show every discounted order of that day as a 'candidate' (no item list in those statements). With Journal Tape read for those days, each statement order is now paired with its POS bill (same outlet, total and discount) and only the POS bills left over are listed — the actual discount the statement doesn't have — with voucher no., outlet and items. Applies to the gap-day lists and the 'Unattributed deep dive' CSV.",
   "🧾 JOURNAL TAPE, BILL BY BILL. (1) Every POS Sync Pull now also reads Microsys Journal Tape for each outlet (the days it pulls) and keeps the delivery bills with a discount plus the Smokeys-button bills at the Wicked Wings outlets; POS Sync → 'Journal Tape history' reads earlier days. (2) Promotions → Discount Burn → new 'Item-level discount check': each select-items / BOGO campaign gets the POS discount on bills that contain its items (item names read from the campaign's Comments and matched to the POS names, with the matches and any not-found items shown), next to today's allocation; plus the discounted bills that match no select-items campaign, by brand and platform with their most common items. (3) POS Sync → Daily reconciliation → 'Wicked Wings vs Smokeys by items': per outlet, how much to move from the Smokeys column to Wicked Wings, and bills where the items and the platform account disagree.",
   "🥢 JOURNAL TAPE FOR FYOOZHEN TOO. 'Show the bills' now also works for the Fyoozhen-chain outlets — DIP Fyoozhen, Nad Al Sheba, WTC and Al Forsan (Fyoozhen kitchen) — so every outlet's till-only bills can be named.",
@@ -18382,7 +18383,7 @@ function discRecComputeRows(){
   };
   // v260: Deliveract POS integration adjustment — see deliveractFdAdjustment() definition for
   // full context. Confirmed directly by Nikhil.
-  const sheetByKey={};
+  const sheetByKey={};discRecUplift={}; // v577
   allData.forEach(r=>{
     if(!aggDataSet.has(r.aggregator))return;
     if(!aggsWithData.includes(r.aggregator))return; // only compare aggs that HAVE exact data to compare against
@@ -18393,7 +18394,9 @@ function discRecComputeRows(){
     if(discRecFilterOutlet!=='all'&&branchNorm!==discRecFilterOutlet)return;
     const k=`${r.brand}|${r.aggregator}|${branchNorm}|${r.date}`;
     const adj=deliveractFdAdjustment(r.brand,r.date,r.orders);
-    sheetByKey[k]=(sheetByKey[k]||0)+(r.disc||0)-adj;
+    const _listed=(r.discSheet!=null)?r.discSheet:(r.disc||0); // v577: as listed (statement also shows the headline discount)
+    if(r.discSheet!=null){discRecUplift[k]=discRecUplift[k]||{listed:0,real:0};discRecUplift[k].listed+=r.discSheet;discRecUplift[k].real+=(r.disc||0);}
+    sheetByKey[k]=(sheetByKey[k]||0)+_listed-adj;
   });
   const fileByKey={};
   aggsWithData.forEach(agg=>{
@@ -18420,7 +18423,8 @@ function discRecComputeRows(){
     const fileTotal=fileByKey[k]||0;
     const gap=sheetTotal-fileTotal;
     const gapPct=sheetTotal>0?(gap/sheetTotal*100):0;
-    return{brand,aggregator,outlet,date,sheetTotal,fileTotal,gap,gapPct};
+    const up=discRecUplift[k]||null;
+    return{brand,aggregator,outlet,date,sheetTotal,fileTotal,gap,gapPct,uplift:up};
   });
   return rows;
 }
@@ -18438,6 +18442,8 @@ function discRecSetSort(col){
   else{discRecSortCol=col;discRecSortDir='desc';}
   renderDiscounts();
 }
+let discRecUplift={};
+function discRecUpliftSummary(rows){const u=rows.filter(r=>r.uplift);if(!u.length)return null;return{days:new Set(u.map(r=>r.brand+'|'+r.aggregator+'|'+r.date)).size,listed:u.reduce((s,r)=>s+r.uplift.listed,0),real:u.reduce((s,r)=>s+r.uplift.real,0),names:[...new Set(u.map(r=>r.brand+' × '+r.aggregator))]};}
 function discRecSetOutlet(v){discRecFilterOutlet=v;renderDiscounts();}
 function discRecExportCSV(){
   const{dateStart,dateEnd}=discountFilters;
@@ -18458,9 +18464,11 @@ function discRecExportCSV(){
   out.push(["Note: \"Sheet total\" = the Google Sheet's own daily discount figure for that brand+aggregator+outlet+date (sourced from your POS export via the Uploader tool — food/menu discount only, no FD). \"Statement file total\" = the actual merchant-funded discount from that aggregator's own order-level export for the same combination, also menu discount only. A gap here means the two sources genuinely disagree — not a dashboard attribution issue, since both numbers are read directly from their respective sources with no estimation involved. Each aggregator is only compared for dates its OWN uploaded statement file actually covers, not the full page date range — a date with no statement data yet is excluded entirely rather than showing a false gap. Only aggregators with an exact statement file loaded are included."]);
   out.push(["Note: Sheet totals for Lollorosso, Oregano, and Smokeys before 10 Aug 2026 have AED 2/order subtracted — confirmed the Grubtech-to-Deliveract POS integration switch was incorrectly including the FD in POS discount reports for these brands until fixed mid-day on the 10th. Not applied to Wicked Wings (not integrated) or Fyoozhen (confirmed unaffected)."]);
   out.push([]);
-  out.push(["Brand","Aggregator","Outlet","Date","Sheet Total (AED)","Statement File Total (AED)","Gap (AED)","Gap (%)"]);
+  {const us=discRecUpliftSummary(rows);if(us)out.push(["Note: "+us.names.join(", ")+" ran a mark-up-then-discount campaign on "+us.days+" day(s). The sheet total here is the discount AS LISTED (AED "+Math.round(us.listed)+"), which is what the statement shows; the real discount cost after removing the mark-up is AED "+Math.round(us.real)+" and that is what profitability uses."]);}
+  out.push([]);
+  out.push(["Brand","Aggregator","Outlet","Date","Sheet Total (AED)","Statement File Total (AED)","Gap (AED)","Gap (%)","Real discount cost after mark-up (AED)"]);
   rows.forEach(r=>{
-    out.push([r.brand,r.aggregator,r.outlet,r.date,Math.round(r.sheetTotal),Math.round(r.fileTotal),Math.round(r.gap),r.gapPct.toFixed(1)]);
+    out.push([r.brand,r.aggregator,r.outlet,r.date,Math.round(r.sheetTotal),Math.round(r.fileTotal),Math.round(r.gap),r.gapPct.toFixed(1),r.uplift?Math.round(r.uplift.real):'']);
   });
   const totalSheet=rows.reduce((s,r)=>s+r.sheetTotal,0);
   const totalFile=rows.reduce((s,r)=>s+r.fileTotal,0);
@@ -18757,6 +18765,7 @@ function discRecTableHTML(){
   }
   const rawRows=discRecComputeRows();
   const rows=discRecSortRows(rawRows).filter(r=>Math.abs(r.gap)>1); // hide rounding-noise rows
+  const _us=discRecUpliftSummary(rawRows);
   const allOutlets=[...new Set(rawRows.map(r=>r.outlet))].filter(Boolean).sort();
   const outletOptions=`<option value="all">All outlets</option>${allOutlets.map(o=>`<option value="${o.replace(/"/g,'&quot;')}" ${discRecFilterOutlet===o?'selected':''}>${o}</option>`).join('')}`;
   const sortArrow=col=>discRecSortCol===col?(discRecSortDir==='asc'?' ▲':' ▼'):'';
@@ -18764,7 +18773,7 @@ function discRecTableHTML(){
   const bodyRows=rows.slice(0,200).map(r=>{
     const gapColor=Math.abs(r.gapPct)>15?'#DE4A42':Math.abs(r.gapPct)>5?'#F0C239':T.muted;
     return`<tr style="border-bottom:1px solid ${T.rowBg}">
-      <td style="padding:6px 8px;font-size:12px;color:${T.text}">${r.brand}</td>
+      <td style="padding:6px 8px;font-size:12px;color:${T.text}">${r.brand}${r.uplift?' <span title="Mark-up-then-discount campaign: sheet shows the discount as listed (AED '+Math.round(r.uplift.listed)+'); real cost after mark-up AED '+Math.round(r.uplift.real)+'">🏷️</span>':''}</td>
       <td style="padding:6px 8px;font-size:12px;color:${T.text}">${r.aggregator}</td>
       <td style="padding:6px 8px;font-size:12px;color:${T.text}">${r.outlet}</td>
       <td style="padding:6px 8px;font-size:12px;color:${T.text};white-space:nowrap">${r.date}</td>
@@ -18783,7 +18792,7 @@ function discRecTableHTML(){
       </div>
     </div>
     <div style="font-size:11px;color:${T.muted};line-height:1.5;margin-bottom:10px">
-      Compares the Google Sheet's own daily discount figure (from your POS export via the Uploader tool, food/menu discount only) against each aggregator's exact statement file, per brand × aggregator × outlet × date. A gap here means the two sources genuinely disagree for that specific day — both numbers are read directly, no estimation. Each aggregator is only compared for dates its own uploaded statement file actually covers — a day with no statement uploaded yet is excluded entirely, not shown as a false gap. Sheet totals for Lollorosso/Oregano/Smokeys before 10 Aug have AED 2/order subtracted (confirmed Deliveract POS integration issue, fixed mid-day on the 10th). Click a column header to sort. Rows under AED 1 gap are hidden.
+      ${_us?`<div style="background:rgba(16,185,129,.08);border-left:3px solid #10B981;padding:6px 10px;margin-bottom:8px;color:${T.text}">🏷️ <b>${_us.names.join(', ')}</b>: mark-up-then-discount campaign on ${_us.days} day(s). Compared here at the discount <b>as listed</b> (AED ${Math.round(_us.listed).toLocaleString()}), which is what the statement shows. Real discount cost after the mark-up: <b>AED ${Math.round(_us.real).toLocaleString()}</b> — that is what profitability and Discount Burn use.</div>`:''}Compares the Google Sheet's own daily discount figure (from your POS export via the Uploader tool, food/menu discount only) against each aggregator's exact statement file, per brand × aggregator × outlet × date. A gap here means the two sources genuinely disagree for that specific day — both numbers are read directly, no estimation. Each aggregator is only compared for dates its own uploaded statement file actually covers — a day with no statement uploaded yet is excluded entirely, not shown as a false gap. Sheet totals for Lollorosso/Oregano/Smokeys before 10 Aug have AED 2/order subtracted (confirmed Deliveract POS integration issue, fixed mid-day on the 10th). Click a column header to sort. Rows under AED 1 gap are hidden.
     </div>
     ${rows.length?`<div style="overflow-x:auto;max-height:500px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
       <thead><tr style="background:${T.rowBg};border-bottom:2px solid ${T.border}">
