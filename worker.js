@@ -684,10 +684,31 @@ async function handlePosCreds(request, env) {
 }
 
 // v538: one report, one day → raw CSV (the browser does the Uploader-identical processing).
+// v573: Microsys Journal Tape (Analysis → Journal Tape) — bill by bill, with employee, items and how each bill was paid.
+// Its export has no outlet column, so it is run per outlet; Microsys identifies outlets here by an internal id.
+const MSYS_JT_LOC = {
+  "ALF - Khalifa City": "6e093555-1b6b-4e0b-85c6-ff28e1a8da32", "ALQ - Al Quoz": "11d7c5ed-f826-47d3-987a-9d849a3e0f45",
+  "ALW - Jumeirah-Al Wasl": "6c382379-79c9-47d2-ba54-a9ca546fdf94", "DIP - Dubai Investment Park-ORE": "88cf792e-d068-44a0-84a3-e02a554a06fd",
+  "DMC - Dubai Media City": "044a039e-2058-4f89-b0ee-01d3f8b02fee", "DMR - Dubai Marina": "027bd001-b4b3-448a-ac2a-9db9c245c4aa",
+  "DSO - Dubai Silicon Oasis": "7a97eb87-c3d5-47d7-9a68-0c2fe514f606", "DSP - Dubai Safari Park": "7a306559-1f80-4111-b9c9-5630f8a2f0d1",
+  "FUR - Al Furjan": "53d2d4c2-eaaf-4aa0-b984-ff1968bf6e40", "MIR - Mirdif": "5c77bc79-695a-4340-95ef-bdfd7801a51b",
+  "MSS - Mirdif Sports Society": "afcfe8b1-a1f6-443b-8122-d463c3de77b0", "MTC - Motor City": "525b1f88-a049-4633-b4c9-0ccb66b7aeeb",
+  "REF - AL Reef": "4a4f1198-258f-4c5b-a0b1-55d407a32168", "REM - Al Reem Island": "72599bf4-b1d8-4544-9d9e-403ee0c957d6",
+  "TSQ - Town Square": "390de334-3044-4aaf-8291-c66dee1ed583", "VLA - The Villa": "da56f5da-0ddf-4cfa-bbb7-ab7732424c15" };
 async function handlePosReport(request, env) {
   const s = await requirePosUser(request, env);
   if (!s) return json({ error: "forbidden" }, 403);
-  const { kind, date } = await readBody(request);
+  const { kind, date, loc } = await readBody(request);
+  if (kind === "jt") {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "")) return json({ error: "bad_request" }, 400);
+    const gid = MSYS_JT_LOC[loc];
+    if (!gid) return json({ error: "Journal Tape isn't mapped for '" + loc + "' yet (Fyoozhen chain outlets need their Microsys id)" }, 400);
+    const d = toDMY(date);
+    const q = ["MenuID=RPTEMANALYSISJOURNALTAPE-L", "ArrayValueForChain=all", "ArrayValueForlocation=ms," + gid, "chkDetailListingForJournalTape=Y",
+      "JournalTapeFromDate=" + d, "JournalTapeToDate=" + d, "ArrayValueForOrderNo=all", "ArrayValueForVoucherNo=all"].join("&");
+    try { const r = await msysReportCSVQuery(env, q); if (r.error) return json({ error: r.error }, 502); return json({ ok: true, kind, date, loc, csv: r.csv }); }
+    catch (e) { return json({ error: String(e.message || e) }, 502); }
+  }
   if (!["credit", "disc", "summary"].includes(kind) || !/^\d{4}-\d{2}-\d{2}$/.test(date || "")) return json({ error: "bad_request" }, 400);
   try {
     const csv = await msysReportCSV(env, kind, date);
