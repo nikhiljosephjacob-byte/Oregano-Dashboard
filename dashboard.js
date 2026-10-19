@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-20-585";
+const BUILD_VERSION="2026-10-20-586";
 const BUILD_NOTES=[
+  "🎯 GROUP SALES NOW EQUAL THE TILL EXACTLY ON RECONCILED DAYS. 585 added the reconciliation's outlet gaps (AED 5 and over), which left 1–18 Oct AED 110 above Finance: gaps under AED 5 per outlet, platform sales not tied to an outlet and ÷1.05 rounding weren't netted. Now each reconciled day's delivery is set to that day's till total (Microsys Sales Summary, the DSR's source): outlet gaps of AED 5+ still show on their outlet, and the small remainder goes into the group total only. NEEDS the new worker.js.",
   "🧾 GROUP SALES = FINANCE'S DSR. Finance counts every bill on the delivery buttons; the dashboard counted platform orders only, so e.g. 1–18 Oct was AED 4,923 lower (catering on credit accounts, direct deliveries paid to us, the Deliverect test order). The daily reconciliation already finds these per outlet × button × day — they are now added to Delivery as 'catering & direct' in group, channel and outlet totals (Overview, All Channels, Daily Digest), shown as 'incl. AED … catering & direct' under Delivery. Brands, Platforms, Campaigns, Compare and discount pages stay platform-only. Only days the reconciliation has checked are included (every Pull checks its days; POS Sync → 'Check these days now' fills older ones). NEEDS the new worker.js.",
   "🍗 WICKED WINGS / SMOKEYS SPLIT — AL REEM AND AL REEF ONLY. Per Nikhil, Wicked Wings is rung together with Smokeys only at Al Reem and Al Reef, so the Journal Tape discount split now runs only for those two outlets (583 also looked at Nad Al Sheba and Al Forsan).",
   "📰 DAILY DIGEST — OPTION A + RECONCILIATION. (1) The Daily Digest PDF is now Nikhil's Option A: 6 pages, all channels, every sales figure excl. VAT — Summary (group sales with channel split, delivery/dine-in/takeaway tiles, week by channel, 'Needs a decision today', 'What moved yesterday') · Outlets (all channels) · Delivery · Platforms, campaigns & ads · Dine-in & takeaway (guests, spend/guest, customer discount depth, till discounts by programme, internal separately) · Actions. The digest day is the last day with delivery sales, so a day not yet filled never prints as zero. (2) Reverse check: the Discount Discrepancy table has a new column naming the orders behind each gap from Journal Tape — statement orders with no discount on the till, and till discounts with no statement order — and the CSV lists them. Platform statements carry only our (partner-funded) share, so on co-funded campaigns a till discount also pairs on our share. Keeta is now paired too. (3) Wicked Wings vs Smokeys: discount rung on the Smokeys button is moved to Wicked Wings where the bill's items are Wicked Wings (Journal Tape, Al Reem / Al Reef / Nad Al Sheba / Al Forsan, last 90 days). (4) Outlets and Compare open 3–5× faster. (5) 'bd' and 'admin' logins removed (open sessions end within a minute). (6) DELIVERECT MP CARD = test account, ignored in reconciliation. (7) Signing in on a new system now tells you which system was signed out. NEEDS the new worker.js.",
@@ -25901,7 +25902,13 @@ function chAggregate(s,e,allOutlets){
     const dd=(days[date]=days[date]||blank());dd[ch].sales+=x.sales*vf;dd[ch].orders+=x.orders;dd[ch].disc+=x.disc||0;};
   for(const r of chDelivSrc()){if(r.channel==="instore"||r.branch==="(brand-level)"||r.date<s||r.date>e)continue;add(chOutletOfDelivery(r),"Delivery",{sales:r.sales,orders:r.orders,disc:r.disc||0},r.date);}
   // v585: delivery-button sales no platform accounts for (catering, direct deliveries, test orders) — Finance's DSR counts them
-  let till=0;for(const t of tillOnlyRows(s,e)){if(sel&&t.o!==sel)continue;add(t.o,"Delivery",{sales:t.g*1.05,orders:0,disc:0},t.d);till+=t.g*1.05*vf;}
+  let till=0;const rowGap={};for(const t of tillOnlyRows(s,e)){rowGap[t.d]=(rowGap[t.d]||0)+t.g;if(sel&&t.o!==sel)continue;add(t.o,"Delivery",{sales:t.g*1.05,orders:0,disc:0},t.d);till+=t.g*1.05*vf;}
+  // v586: make each reconciled day's delivery equal the till exactly. The outlet rows above carry the gaps of AED 5+;
+  // the rest of the day's difference (small gaps under AED 5, platform sales not tied to an outlet, ÷1.05 rounding)
+  // goes into the group total only, not to any outlet.
+  if(!sel&&tillOnly.dayPos){for(const d of Object.keys(tillOnly.dayPos)){if(d<s||d>e)continue;const dd=days[d];const dashEx=dd?(dd.Delivery.sales/vf)/1.05:0;
+    const rem=(+tillOnly.dayPos[d]||0)-(dashEx)-0; // dashEx already includes this day's outlet gaps added above
+    if(Math.abs(rem)<0.005)continue;const x=rem*1.05*vf;tot.Delivery.sales+=x;(days[d]=days[d]||blank()).Delivery.sales+=x;till+=x;}}
   for(const r of instoreData){if(r.date<s||r.date>e)continue;add(r.outlet,"Dine-In",r.di,r.date);add(r.outlet,"Takeaway",{sales:r.to.sales,orders:r.to.orders,disc:r.to.disc},r.date);}
   const sum=o=>CH_LIST.reduce((a,c)=>a+o[c].sales,0);
   return{by,tot,days,total:sum(tot),sum,till};
@@ -26103,7 +26110,7 @@ function lensHeroHTML(){
   const isDel=r=>!LENS_CH.includes(r.aggregator);
   const ch=[["Delivery","#4E9BFF",isDel],["Dine-In","#FF8A3D",r=>r.aggregator==="Dine-In"],["Takeaway","#A78BFA",r=>r.aggregator==="Takeaway"]];
   const shown=lensChannelsShown();const cur=ch.filter(([n])=>shown.includes(n)).map(([n,c,fn])=>({n,c,v:sumBy(s,e,fn),p:sumBy(cmp.s,cmp.e,fn)}));
-  const _vx=chState.vat==="excl"?1:1.05,_tc=tillOnlyTotal(s,e)*_vx,_tp=tillOnlyTotal(cmp.s,cmp.e)*_vx; // v585
+  const _tc=chAggregate(s,e,true).till||0,_tp=chAggregate(cmp.s,cmp.e,true).till||0; // v586: same figure as the outlet/channel totals
   cur.forEach(x=>{if(x.n==="Delivery"){x.v=Object.assign({},x.v,{s:x.v.s+_tc});x.p=Object.assign({},x.p,{s:x.p.s+_tp});x.till=_tc;}});
   const tot=cur.reduce((a,x)=>a+x.v.s,0),totP=cur.reduce((a,x)=>a+x.p.s,0);
   const phys=new Set(["Oregano","Fyoozhen"]);
@@ -27155,7 +27162,7 @@ async function tillOnlyLoad(){if(tillOnly.loading||tillOnly.rows||typeof latest=
     const j=await (await fetch(`/api/pos/tillonly?from=${subDays(latest,400)}&to=${latest}`,{headers:{"X-Session-Id":sid||""}})).json();
     const map=typeof PS_INSTORE_MAP!=="undefined"?PS_INSTORE_MAP:{};
     tillOnly.rows=((j&&j.rows)||[]).map(x=>({d:x.d,o:chNormOutlet(map[x.loc]||x.out),rc:x.rc,b:x.b,g:+x.g||0,cat:+x.cat||0,test:+x.test||0,ack:x.ack}));
-    tillOnly.days=new Set((j&&j.days)||[]);}catch(e){tillOnly.rows=[];tillOnly.failed=true;}
+    tillOnly.days=new Set((j&&j.days)||[]);tillOnly.dayPos=(j&&j.dayPos)||null;}catch(e){tillOnly.rows=[];tillOnly.failed=true;}
   tillOnly.loading=false;lensVer++;try{_dhCache=null;}catch(e){}
   if(tillOnly.rows.length&&typeof curPage!=="undefined"&&(curPage==="channels"||(lensMode==="all"&&LENS_PAGES.has(curPage)))){Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}}
 setTimeout(function first(){if(typeof allData!=="undefined"&&allData.length&&typeof latest!=="undefined"&&latest)tillOnlyLoad();else setTimeout(first,500);},300);
