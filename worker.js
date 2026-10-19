@@ -78,6 +78,48 @@ async function isBanned(env, user) {
   return v != null;
 }
 
+// v580: which system a login comes from (Windows / macOS / iPhone / iPad / Android …) and which browser
+function deviceOf(ua) {
+  ua = String(ua || "");
+  const os = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android"
+    : /Windows NT/.test(ua) ? "Windows" : /CrOS/.test(ua) ? "ChromeOS" : /Mac OS X|Macintosh/.test(ua) ? "macOS"
+    : /Linux/.test(ua) ? "Linux" : "Unknown";
+  const browser = /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera" : /Firefox\//.test(ua) ? "Firefox"
+    : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "Other";
+  return { os, browser };
+}
+// v580: one system per login — the newest sign-in wins and the older system is signed out within a minute.
+// Nikhil may stay signed in on his phone and laptop at the same time.
+const MULTI_DEVICE_USERS = new Set(["nikhil"]);
+async function replaceOtherSessions(env, userKey, newSession, request) {
+  let ids = [];
+  const known = await env.SESSIONS.get(`usersess:${userKey}`);
+  if (known) ids = [known];
+  else { // first login since this went live, or the pointer expired: look the user's sessions up once
+    const list = await env.SESSIONS.list({ prefix: "session:", limit: 1000 });
+    const raws = await Promise.all(list.keys.map(k => env.SESSIONS.get(k.name)));
+    raws.forEach((raw, i) => { if (raw) { try { if (JSON.parse(raw).user === userKey) ids.push(list.keys[i].name.slice(8)); } catch {} } });
+  }
+  for (const id of ids) {
+    if (!id || id === newSession.sessionId) continue;
+    const raw = await env.SESSIONS.get(`session:${id}`);
+    if (!raw) continue;
+    const old = JSON.parse(raw);
+    await env.SESSIONS.delete(`session:${id}`);
+    const by = { os: newSession.os, browser: newSession.browser, ip: newSession.ip, ts: newSession.loginTs };
+    await env.SESSIONS.put(`replaced:${id}`, JSON.stringify(by), { expirationTtl: 60 * 60 * 48 });
+    const sameSystem = old.ua === newSession.ua && old.ip === newSession.ip;
+    const info = { user: userKey, event: "session_replaced", ip: newSession.ip, ua: newSession.ua,
+      oldIp: old.ip, oldOs: old.os || deviceOf(old.ua).os, oldBrowser: old.browser || deviceOf(old.ua).browser,
+      newOs: newSession.os, newBrowser: newSession.browser, sameSystem };
+    await logEvent(env, info);
+    if (!sameSystem) {
+      const ts = new Date().toISOString();
+      await env.SESSIONS.put(`alert:${ts}:${crypto.randomUUID().slice(0, 6)}`, JSON.stringify(Object.assign({ ts }, info)), { expirationTtl: 60 * 60 * 24 * 90 });
+    }
+  }
+}
+
 async function getSession(env, sessionId) {
   if (!sessionId) return null;
   const raw = await env.SESSIONS.get(`session:${sessionId}`);
@@ -118,14 +160,19 @@ async function handleLogin(request, env) {
     sessionId, user: userKey,
     displayName: u.displayName, initials: u.initials,
     admin: !!u.admin,
-    ip, ua, loginTs: ts, lastSeen: ts
+    ip, ua, loginTs: ts, lastSeen: ts,
+    ...deviceOf(ua)
   };
 
   await env.SESSIONS.put(`session:${sessionId}`, JSON.stringify(session), {
     expirationTtl: SESSION_TTL_SECONDS
   });
 
-  await logEvent(env, { user: userKey, event: "login_success", ip, ua, sessionId });
+  if (!MULTI_DEVICE_USERS.has(userKey)) {
+    await replaceOtherSessions(env, userKey, session, request);
+    await env.SESSIONS.put(`usersess:${userKey}`, sessionId, { expirationTtl: SESSION_TTL_SECONDS });
+  }
+  await logEvent(env, { user: userKey, event: "login_success", ip, ua, sessionId, ...deviceOf(ua) });
 
   return json({
     sessionId,
@@ -139,7 +186,11 @@ async function handleLogin(request, env) {
 async function handleHeartbeat(request, env) {
   const sessionId = request.headers.get("X-Session-Id");
   const session = await getSession(env, sessionId);
-  if (!session) return json({ error: "no_session" }, 401);
+  if (!session) {
+    const rep = sessionId ? await env.SESSIONS.get(`replaced:${sessionId}`) : null;
+    if (rep) return json({ error: "replaced", by: JSON.parse(rep) }, 401);
+    return json({ error: "no_session" }, 401);
+  }
 
   if (await isBanned(env, session.user)) {
     await env.SESSIONS.delete(`session:${sessionId}`);
@@ -176,10 +227,13 @@ async function handleHeartbeat(request, env) {
   // IP may have changed during the session (mobile networks etc.); refresh it too
   const newIp = clientIP(request);
   if (newIp !== session.ip) session.ip = newIp;
+  if (!session.os) Object.assign(session, deviceOf(session.ua));
 
   await env.SESSIONS.put(`session:${sessionId}`, JSON.stringify(session), {
     expirationTtl: SESSION_TTL_SECONDS
   });
+  // keep the one-system pointer alive as long as the session (rewritten at most every 5 min, like the session)
+  if (!MULTI_DEVICE_USERS.has(session.user)) await env.SESSIONS.put(`usersess:${session.user}`, sessionId, { expirationTtl: SESSION_TTL_SECONDS });
   return json({ ok: true, lastSeen: session.lastSeen });
 }
 
@@ -368,7 +422,12 @@ async function handleAdminSessions(request, env) {
     meta: bansRaw[i] ? JSON.parse(bansRaw[i]) : null
   }));
 
-  return json({ active, events, bans, serverTime: new Date().toISOString() });
+  // v580: logins used on a second system (newest sign-in won, older system signed out)
+  const aList = await env.SESSIONS.list({ prefix: "alert:", limit: 200 });
+  const aSorted = aList.keys.sort((a, b) => b.name.localeCompare(a.name)).slice(0, 100);
+  const alerts = (await Promise.all(aSorted.map(k => env.SESSIONS.get(k.name)))).filter(Boolean).map(r => JSON.parse(r));
+  active.forEach(a => { if (!a.os) Object.assign(a, deviceOf(a.ua)); });
+  return json({ active, events, bans, alerts, multiDevice: [...MULTI_DEVICE_USERS], serverTime: new Date().toISOString() });
 }
 
 async function handleAdminKick(request, env) {
