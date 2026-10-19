@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-20-583";
+const BUILD_VERSION="2026-10-20-585";
 const BUILD_NOTES=[
+  "🧾 GROUP SALES = FINANCE'S DSR. Finance counts every bill on the delivery buttons; the dashboard counted platform orders only, so e.g. 1–18 Oct was AED 4,923 lower (catering on credit accounts, direct deliveries paid to us, the Deliverect test order). The daily reconciliation already finds these per outlet × button × day — they are now added to Delivery as 'catering & direct' in group, channel and outlet totals (Overview, All Channels, Daily Digest), shown as 'incl. AED … catering & direct' under Delivery. Brands, Platforms, Campaigns, Compare and discount pages stay platform-only. Only days the reconciliation has checked are included (every Pull checks its days; POS Sync → 'Check these days now' fills older ones). NEEDS the new worker.js.",
+  "🍗 WICKED WINGS / SMOKEYS SPLIT — AL REEM AND AL REEF ONLY. Per Nikhil, Wicked Wings is rung together with Smokeys only at Al Reem and Al Reef, so the Journal Tape discount split now runs only for those two outlets (583 also looked at Nad Al Sheba and Al Forsan).",
   "📰 DAILY DIGEST — OPTION A + RECONCILIATION. (1) The Daily Digest PDF is now Nikhil's Option A: 6 pages, all channels, every sales figure excl. VAT — Summary (group sales with channel split, delivery/dine-in/takeaway tiles, week by channel, 'Needs a decision today', 'What moved yesterday') · Outlets (all channels) · Delivery · Platforms, campaigns & ads · Dine-in & takeaway (guests, spend/guest, customer discount depth, till discounts by programme, internal separately) · Actions. The digest day is the last day with delivery sales, so a day not yet filled never prints as zero. (2) Reverse check: the Discount Discrepancy table has a new column naming the orders behind each gap from Journal Tape — statement orders with no discount on the till, and till discounts with no statement order — and the CSV lists them. Platform statements carry only our (partner-funded) share, so on co-funded campaigns a till discount also pairs on our share. Keeta is now paired too. (3) Wicked Wings vs Smokeys: discount rung on the Smokeys button is moved to Wicked Wings where the bill's items are Wicked Wings (Journal Tape, Al Reem / Al Reef / Nad Al Sheba / Al Forsan, last 90 days). (4) Outlets and Compare open 3–5× faster. (5) 'bd' and 'admin' logins removed (open sessions end within a minute). (6) DELIVERECT MP CARD = test account, ignored in reconciliation. (7) Signing in on a new system now tells you which system was signed out. NEEDS the new worker.js.",
   "✅ DISCOUNT CLASSIFICATION CONFIRMED BY NIKHIL. All 93 dine-in/takeaway discount names from his review sheet are now fixed: 39 customer, 54 internal. Changes from the review: Mall, Palma, Kingspan, catering, comp meal voucher, gift voucher, Neighbourhood and Talabat MP prepaid are grouped as Promotions; discounts rung on delivery till buttons are classified too (Sales Promo DT/PO = customer; BOD DL, Security PO, Head Office PO = internal) — they stay out of dine-in/takeaway depth because they belong to delivery. NEW: any discount name that isn't on the confirmed list shows at the top of Dine-in discounts as '🆕 New discount names' with Customer / Internal buttons (admins); the choice is saved for everyone and applies to all days. NEEDS the new worker.js.",
   "🎟️ DISCOUNT DEPTH = CUSTOMER DISCOUNTS ONLY. Per Nikhil, in-store discount depth now counts only discounts given to customers — partner programmes (Entertainer, Esaad, Z Pro, Careem/Noon Dine Out, Mall, GEMS, Palma, Kingspan), promotions (Happy Tuesday, BOGO, sales promo), customer discount, comp meal voucher, catering and gift vouchers. Internal discounts — staff, managers / supervisors / GM, BOD, chef, training, security, business dev, ops, head office, food trials, employee errors — are left out of the % and shown beside it as 'internal AED … excl.'. Depth = customer discount ÷ (gross − internal). Applies to Overview 'At a glance' and All Channels; delivery depth unchanged. Classification comes from the discount name on the Dine-In Discounts tab (DI = dine-in, TO = takeaway).",
@@ -25898,9 +25900,11 @@ function chAggregate(s,e,allOutlets){
   const add=(o,ch,x,date)=>{if(sel&&o!==sel)return;(by[o]=by[o]||blank());for(const T of[by[o][ch],tot[ch]]){T.sales+=x.sales*vf;T.orders+=x.orders;T.disc+=x.disc||0;if(x.guests!=null&&T.guests!=null)T.guests+=x.guests;}
     const dd=(days[date]=days[date]||blank());dd[ch].sales+=x.sales*vf;dd[ch].orders+=x.orders;dd[ch].disc+=x.disc||0;};
   for(const r of chDelivSrc()){if(r.channel==="instore"||r.branch==="(brand-level)"||r.date<s||r.date>e)continue;add(chOutletOfDelivery(r),"Delivery",{sales:r.sales,orders:r.orders,disc:r.disc||0},r.date);}
+  // v585: delivery-button sales no platform accounts for (catering, direct deliveries, test orders) — Finance's DSR counts them
+  let till=0;for(const t of tillOnlyRows(s,e)){if(sel&&t.o!==sel)continue;add(t.o,"Delivery",{sales:t.g*1.05,orders:0,disc:0},t.d);till+=t.g*1.05*vf;}
   for(const r of instoreData){if(r.date<s||r.date>e)continue;add(r.outlet,"Dine-In",r.di,r.date);add(r.outlet,"Takeaway",{sales:r.to.sales,orders:r.to.orders,disc:r.to.disc},r.date);}
   const sum=o=>CH_LIST.reduce((a,c)=>a+o[c].sales,0);
-  return{by,tot,days,total:sum(tot),sum};
+  return{by,tot,days,total:sum(tot),sum,till};
 }
 function chSet(k,v){chState[k]=(k==="outlet"&&chState.outlet===v)?null:v;Object.values(charts).forEach(c=>c.destroy());charts={};renderPage("channels");}
 function renderChannels(){
@@ -26099,6 +26103,8 @@ function lensHeroHTML(){
   const isDel=r=>!LENS_CH.includes(r.aggregator);
   const ch=[["Delivery","#4E9BFF",isDel],["Dine-In","#FF8A3D",r=>r.aggregator==="Dine-In"],["Takeaway","#A78BFA",r=>r.aggregator==="Takeaway"]];
   const shown=lensChannelsShown();const cur=ch.filter(([n])=>shown.includes(n)).map(([n,c,fn])=>({n,c,v:sumBy(s,e,fn),p:sumBy(cmp.s,cmp.e,fn)}));
+  const _vx=chState.vat==="excl"?1:1.05,_tc=tillOnlyTotal(s,e)*_vx,_tp=tillOnlyTotal(cmp.s,cmp.e)*_vx; // v585
+  cur.forEach(x=>{if(x.n==="Delivery"){x.v=Object.assign({},x.v,{s:x.v.s+_tc});x.p=Object.assign({},x.p,{s:x.p.s+_tp});x.till=_tc;}});
   const tot=cur.reduce((a,x)=>a+x.v.s,0),totP=cur.reduce((a,x)=>a+x.p.s,0);
   const phys=new Set(["Oregano","Fyoozhen"]);
   const chg=v=>v==null||isNaN(v)?"":`<span style="color:${pctClr(v)};font-weight:800">${fmtPct(v)}</span>`;
@@ -26107,7 +26113,7 @@ function lensHeroHTML(){
       <div><div style="font-size:11px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:${T.textSecondary}">Group sales · ${lensSel.size===3?"all channels":shown.join(" + ")} · ${getPeriodLabel()}</div>
         <div class="kpi-value-num" style="font-size:40px;font-weight:900;letter-spacing:-1px;font-variant-numeric:tabular-nums;margin-top:4px">${fmtAEDExact(tot)}</div>
         <div style="font-size:13px;color:${T.textMuted};margin-top:2px">${chg(pctOf(tot,totP))} ${cs}</div></div>
-      <div style="display:flex;gap:22px;flex-wrap:wrap">${cur.map(x=>`<div><div style="font-size:11px;font-weight:800;color:${x.c}">● ${x.n}</div><div class="kpi-value-num" style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(x.v.s)}</div><div style="font-size:12px;color:${T.textMuted}">${tot>0?(x.v.s/tot*100).toFixed(1):"0.0"}% · ${chg(pctOf(x.v.s,x.p.s))}</div></div>`).join("")}</div>
+      <div style="display:flex;gap:22px;flex-wrap:wrap">${cur.map(x=>`<div><div style="font-size:11px;font-weight:800;color:${x.c}">● ${x.n}</div><div class="kpi-value-num" style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(x.v.s)}</div><div style="font-size:12px;color:${T.textMuted}">${tot>0?(x.v.s/tot*100).toFixed(1):"0.0"}% · ${chg(pctOf(x.v.s,x.p.s))}</div>${x.till?`<div style="font-size:10.5px;color:${T.textMuted}" title="Delivery-button sales no platform accounts for — catering, direct deliveries paid to us, test orders. Finance's DSR counts them; Brands, Platforms and Campaigns stay platform-only.">incl. ${fmtAED(x.till)} catering &amp; direct</div>`:""}</div>`).join("")}</div>
     </div>
     <div class="rd-grow" style="display:flex;height:12px;border-radius:6px;overflow:hidden;margin:16px 0 10px;background:${T.bg}">${cur.map(x=>`<div title="${x.n}" style="width:${tot>0?x.v.s/tot*100:0}%;background:${x.c}"></div>`).join("")}</div>
     
@@ -27060,7 +27066,7 @@ var _lensIdx=new Map(),_diGen=0,_diInLens=false;
 })();
 // (3) Overview/Compare with dine-in & takeaway switched on: until the Dine-In & Takeaway tab has loaded, show a short
 // "loading" card instead of delivery-only totals that then jump. The page paints itself once the tab arrives.
-function lensWaitingInstore(p){return typeof LENS_PAGES!=="undefined"&&LENS_PAGES.has(p)&&lensMode==="all"&&!(lensSel.size===1&&lensSel.has("D"))&&(!instoreLoaded||(typeof ddLoaded!=="undefined"&&!ddLoaded));}
+function lensWaitingInstore(p){return typeof LENS_PAGES!=="undefined"&&LENS_PAGES.has(p)&&lensMode==="all"&&!(lensSel.size===1&&lensSel.has("D"))&&(!instoreLoaded||(typeof ddLoaded!=="undefined"&&!ddLoaded)||(typeof tillOnly!=="undefined"&&tillOnly.rows===null&&lensSel.has("D")&&!tillOnly.failed));}
 (function lensWaitHook(){
   if(typeof renderPage!=="function"||!window.lensSet)return setTimeout(lensWaitHook,250);
   const _rp=renderPage;renderPage=function(p){
@@ -27101,7 +27107,7 @@ function rdDiscvarTop(){try{if(campTab!=="discounts")return;const pg=document.ge
 // discount on the till is moved from the Smokeys row to the Wicked Wings row (never more than Smokeys carries beyond its
 // own Smokeys-item discount). The original POS figure is kept on the record (discPOS); re-applied on every data load.
 const wwJT={days:null,loading:false,report:null};
-const WW_JT_LOCS="REM,REF,NAD,ALF";
+const WW_JT_LOCS="REM,REF"; // v584: Nikhil — Wicked Wings is rung together with Smokeys only at Al Reem and Al Reef
 async function wwJTLoad(){if(wwJT.days!==null||wwJT.loading||typeof latest==="undefined"||!latest)return;wwJT.loading=true;
   try{const from=subDays(latest,90);const sid=(JSON.parse(localStorage.getItem("oregano_session")||"{}")||{}).sessionId;
     const j=await (await fetch(`/api/pos/jt?from=${from}&to=${latest}&locs=${WW_JT_LOCS}`,{headers:{"X-Session-Id":sid||""}})).json();
@@ -27133,6 +27139,27 @@ function _bxaMemo(k,v){const st=(typeof _diGen!=="undefined"?_diGen:0)+"|"+(type
   if(_bxaM.stamp!==st||_bxaM.ad!==allData){_bxaM.stamp=st;_bxaM.ad=allData;_bxaM.map.clear();}
   if(v===undefined)return _bxaM.map.get(k);_bxaM.map.set(k,v);return v;}
 (function(){const _b=buildDataIndex;buildDataIndex=function(){const r=_b.apply(this,arguments);dataIndex._ad=allData;return r;};window.buildDataIndex=buildDataIndex;})();
+
+// ── v585: CATERING & DIRECT DELIVERY (till only) — so group sales equal Finance's DSR ──────────────────────
+// The daily reconciliation (POS Sync) stores, per outlet × delivery button × day, the till amount no platform order
+// accounts for: catering on credit accounts, direct deliveries paid to us (cash/card/phone), Deliverect test orders,
+// and small timing/void differences. Group / channel / outlet totals (Overview, All Channels, Daily Digest; Compare keeps platform orders only)
+// add it to Delivery as "catering & direct", so they equal the DSR. Brands, Platforms, Campaigns and discount pages
+// stay platform-only — these orders have no platform commission or campaign. Only reconciled days are included.
+const tillOnly={rows:null,days:new Set(),loading:false};
+function tillOnlyRows(s,e){if(!tillOnly.rows)return[];return tillOnly.rows.filter(t=>t.d>=s&&t.d<=e);}
+function tillOnlyTotal(s,e){let t=0;for(const x of tillOnlyRows(s,e))t+=x.g;return t;}
+function tillOnlyDays(s,e){let n=0;for(const d of tillOnly.days)if(d>=s&&d<=e)n++;return n;}
+async function tillOnlyLoad(){if(tillOnly.loading||tillOnly.rows||typeof latest==="undefined"||!latest)return;tillOnly.loading=true;
+  try{const sid=(JSON.parse(localStorage.getItem("oregano_session")||"{}")||{}).sessionId;
+    const j=await (await fetch(`/api/pos/tillonly?from=${subDays(latest,400)}&to=${latest}`,{headers:{"X-Session-Id":sid||""}})).json();
+    const map=typeof PS_INSTORE_MAP!=="undefined"?PS_INSTORE_MAP:{};
+    tillOnly.rows=((j&&j.rows)||[]).map(x=>({d:x.d,o:chNormOutlet(map[x.loc]||x.out),rc:x.rc,b:x.b,g:+x.g||0,cat:+x.cat||0,test:+x.test||0,ack:x.ack}));
+    tillOnly.days=new Set((j&&j.days)||[]);}catch(e){tillOnly.rows=[];tillOnly.failed=true;}
+  tillOnly.loading=false;lensVer++;try{_dhCache=null;}catch(e){}
+  if(tillOnly.rows.length&&typeof curPage!=="undefined"&&(curPage==="channels"||(lensMode==="all"&&LENS_PAGES.has(curPage)))){Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}}
+setTimeout(function first(){if(typeof allData!=="undefined"&&allData.length&&typeof latest!=="undefined"&&latest)tillOnlyLoad();else setTimeout(first,500);},300);
+setTimeout(()=>{if(tillOnly.rows===null){tillOnly.failed=true;if(typeof curPage!=="undefined"&&LENS_PAGES.has(curPage))renderPage(curPage);}},20000); // never hold the page more than 20 s
 
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -27262,7 +27289,7 @@ function dgaBuild(){
    <div class="lg">${CH.map(c=>`<span><i style="background:${CHC[c]}"></i>${chLbl(c)} ${sh(Cy.tot[c].sales).toFixed(0)}%</span>`).join("")}</div>
    <div class="c" style="margin-top:11px;color:#C9CED8">Week to date <b style="color:#fff">AED ${n0(gTW)}</b><br>${chg(gTW,gLW)} vs last week · ${chg(gTW,gFW)} vs 4 weeks ago</div></div>
    <div class="ch">
-   <div class="tile" style="--c:var(--del)"><div class="l">Delivery</div><div class="v">AED ${kf(de.sales)}</div>${chg(de.sales,des.sales)}
+   <div class="tile" style="--c:var(--del)"><div class="l">Delivery</div><div class="v">AED ${kf(de.sales)}</div>${chg(de.sales,des.sales)}${Cy.till>0.5?`<div class="x" style="font-size:9px;color:var(--mut)">incl. AED ${n0(Cy.till)} catering &amp; direct</div>`:""}
     <div class="k"><span>Orders</span><b>${n0(D.y.orders)} ${chg(D.y.orders,D.ys.orders,false,true)}</b></div><div class="k"><span>AOV</span><b>${D.y.aov.toFixed(1)} ${chg(D.y.aov,D.ys.aov,false,true)}</b></div>
     <div class="k"><span>Contribution</span><b>${kf(D.y.contribution)} ${chg(D.y.contribution,D.ys.contribution,false,true)}</b></div><div class="k"><span>Discount burn</span><b>${D.y.sales?(D.y.disc/D.y.sales*100).toFixed(1):0}% ${chg(D.y.disc,D.ys.disc,true,true)}</b></div></div>
    <div class="tile" style="--c:var(--din)"><div class="l">Dine-in</div><div class="v">AED ${kf(di.sales)}</div>${chg(di.sales,dis.sales)}
@@ -27353,7 +27380,7 @@ function dgaBuild(){
   const p6=`<div class="page">${head("ACTIONS","Auto-generated from this week's numbers")}
    <h2>Action list</h2><div class="sub">Tick when done · the top four are on page 1</div>
    ${acts.length?acts.map(a=>`<div class="ex"><span>☐</span><div><span class="pill" style="background:${a[1]}">${a[0]}</span><b>${E(a[2])}</b> — ${E(a[3])}</div><span class="mut">Owner: ______</span></div>`).join(""):'<div class="mut">No actions today.</div>'}
-   <h2>Data notes</h2><div class="note" style="font-size:9.5px">All sales excl. VAT. Delivery = aggregator orders from the brand tabs (discount burn, ad spend and contribution as on the dashboard). Dine-in &amp; takeaway = Microsys POS (Dine-In &amp; Takeaway tab). Till discounts from the Dine-In Discounts tab, classified per the confirmed list (customer vs internal); internal discounts are excluded from discount depth. Last-year comparisons are delivery only — POS data starts in 2026.</div>${foot(6)}</div>`;
+   <h2>Data notes</h2><div class="note" style="font-size:9.5px">All sales excl. VAT. Delivery = aggregator orders from the brand tabs (discount burn, ad spend and contribution as on the dashboard)${Ctw.till>0.5?`, plus catering &amp; direct deliveries rung on the delivery buttons (AED ${n0(Ctw.till)} this week) so group totals equal Finance's DSR — delivery KPIs on page 3 are platform orders only`:""}. Dine-in &amp; takeaway = Microsys POS (Dine-In &amp; Takeaway tab). Till discounts from the Dine-In Discounts tab, classified per the confirmed list (customer vs internal); internal discounts are excluded from discount depth. Last-year comparisons are delivery only — POS data starts in 2026.</div>${foot(6)}</div>`;
 
   const filename=`OreganoGroup_DailyDigest_${Y}`;
   const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${E(filename)}</title><style>${DGA_CSS}</style></head><body>${p1}${p2}${p3}${p4}${p5}${p6}</body></html>`;
