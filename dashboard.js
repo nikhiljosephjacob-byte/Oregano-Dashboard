@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-19-581";
+const BUILD_VERSION="2026-10-20-583";
 const BUILD_NOTES=[
+  "📰 DAILY DIGEST — OPTION A + RECONCILIATION. (1) The Daily Digest PDF is now Nikhil's Option A: 6 pages, all channels, every sales figure excl. VAT — Summary (group sales with channel split, delivery/dine-in/takeaway tiles, week by channel, 'Needs a decision today', 'What moved yesterday') · Outlets (all channels) · Delivery · Platforms, campaigns & ads · Dine-in & takeaway (guests, spend/guest, customer discount depth, till discounts by programme, internal separately) · Actions. The digest day is the last day with delivery sales, so a day not yet filled never prints as zero. (2) Reverse check: the Discount Discrepancy table has a new column naming the orders behind each gap from Journal Tape — statement orders with no discount on the till, and till discounts with no statement order — and the CSV lists them. Platform statements carry only our (partner-funded) share, so on co-funded campaigns a till discount also pairs on our share. Keeta is now paired too. (3) Wicked Wings vs Smokeys: discount rung on the Smokeys button is moved to Wicked Wings where the bill's items are Wicked Wings (Journal Tape, Al Reem / Al Reef / Nad Al Sheba / Al Forsan, last 90 days). (4) Outlets and Compare open 3–5× faster. (5) 'bd' and 'admin' logins removed (open sessions end within a minute). (6) DELIVERECT MP CARD = test account, ignored in reconciliation. (7) Signing in on a new system now tells you which system was signed out. NEEDS the new worker.js.",
+  "✅ DISCOUNT CLASSIFICATION CONFIRMED BY NIKHIL. All 93 dine-in/takeaway discount names from his review sheet are now fixed: 39 customer, 54 internal. Changes from the review: Mall, Palma, Kingspan, catering, comp meal voucher, gift voucher, Neighbourhood and Talabat MP prepaid are grouped as Promotions; discounts rung on delivery till buttons are classified too (Sales Promo DT/PO = customer; BOD DL, Security PO, Head Office PO = internal) — they stay out of dine-in/takeaway depth because they belong to delivery. NEW: any discount name that isn't on the confirmed list shows at the top of Dine-in discounts as '🆕 New discount names' with Customer / Internal buttons (admins); the choice is saved for everyone and applies to all days. NEEDS the new worker.js.",
   "🎟️ DISCOUNT DEPTH = CUSTOMER DISCOUNTS ONLY. Per Nikhil, in-store discount depth now counts only discounts given to customers — partner programmes (Entertainer, Esaad, Z Pro, Careem/Noon Dine Out, Mall, GEMS, Palma, Kingspan), promotions (Happy Tuesday, BOGO, sales promo), customer discount, comp meal voucher, catering and gift vouchers. Internal discounts — staff, managers / supervisors / GM, BOD, chef, training, security, business dev, ops, head office, food trials, employee errors — are left out of the % and shown beside it as 'internal AED … excl.'. Depth = customer discount ÷ (gross − internal). Applies to Overview 'At a glance' and All Channels; delivery depth unchanged. Classification comes from the discount name on the Dine-In Discounts tab (DI = dine-in, TO = takeaway).",
   "🔐 ONE SYSTEM PER LOGIN + WHICH SYSTEM. (1) Every login can be signed in on one system at a time (Nikhil exempt — phone + laptop). Signing in on a second system signs the first one out within a minute, with a message saying which system took over; the admin is alerted. (2) Admin shows each session's system — 🪟 Windows, 🍎 Apple Mac, 📱 Apple iPhone/iPad, 🤖 Android — and browser, plus a new 'One system per login' card listing every sign-in on a second system (older vs newer system, IPs, time). Signing in again on the same system isn't flagged. (3) Overview / All Channels: 'What the delivery-only brands add to each kitchen' removed — not a metric the company tracks. NEEDS the new worker.js.",
   "⚡ FASTER, AND NO HALF-LOADED NUMBERS. (1) Overview / Compare with dine-in & takeaway on now wait for the Dine-In & Takeaway tab and show a short 'Loading…' card instead of delivery-only totals that jump a second later. (2) Campaign analyses no longer re-read every campaign's comment and outlet list thousands of times — that work ran after every statement upload and froze the page; now each campaign is read once per data load. (3) Switching between pages no longer rebuilds the whole data index each time (each channel view is built once and reused). (4) 'Discount variance' no longer scrolls down the page — the Discount Discrepancy table is placed first. (5) Reconciliation: days explained as direct deliveries now show green.",
@@ -469,6 +471,15 @@ async function sessionHeartbeat(){
       try{localStorage.removeItem("oregano_session");}catch(e){}
       alert(msg);
       location.reload();
+    }else if(res.ok){
+      // v583: this sign-in signed another system out — tell the person once
+      const body=await res.json().catch(()=>({}));
+      if(body&&Array.isArray(body.notice)&&body.notice.length){
+        const t=body.notice.map(x=>`${x.os||"another device"}${x.browser?" · "+x.browser:""}${x.ip?" ("+x.ip+")":""}`).join(", ");
+        const d=document.createElement("div");d.style.cssText="position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:99999;max-width:520px;background:#1B2233;color:#F1F5F9;border:1px solid #FB923C;border-radius:10px;padding:12px 16px;font:13px/1.45 Arial,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.4)";
+        d.innerHTML=`<b style="color:#FB923C">🔐 Signed out on your other system</b><br>This login was also open on ${t.replace(/</g,"&lt;")}. Only one system can be signed in at a time, so that one has been signed out. If that wasn't you, tell Nikhil. <a href="#" style="color:#93C5FD;margin-left:6px">OK</a>`;
+        d.querySelector("a").onclick=e=>{e.preventDefault();d.remove();};document.body.appendChild(d);setTimeout(()=>d.remove(),20000);
+      }
     }
   }catch(e){
     // Network blip — silent fail, retry next tick
@@ -679,7 +690,7 @@ function isNoonCommissionWaived(brand,dateStr){
 function cpcOutletScope(brand,agg,lo,hi,viewBranches,viewNet){
   if(!lo||!hi||typeof allData==='undefined'||!(viewBranches instanceof Set)||viewBranches.size===0)return null;
   const allBranches=new Set();
-  for(const r of allData){
+  for(const r of _bxa(brand,agg)){
     if(r.brand!==brand||r.aggregator!==agg)continue;
     if(r.branch==='(brand-level)')continue;
     if(r.date<lo||r.date>hi)continue;
@@ -783,16 +794,17 @@ function cpcAdCostForRange(brand,agg,startDate,endDate,viewBranches){
   const salesByOutlet=(lo,hi)=>{
     const key=lo+'|'+hi;
     if(salesCache[key])return salesCache[key];
+    const gk=brand+'|'+agg+'|'+key,gm=_bxaMemo(gk);if(gm){salesCache[key]=gm;return gm;}
     const m={};
     if(typeof allData!=='undefined'){
-      for(const r of allData){
+      for(const r of _bxa(brand,agg)){
         if(r.brand!==brand||r.aggregator!==agg)continue;
         if(!r.branch||r.branch==='(brand-level)')continue;
         if(r.date<lo||r.date>hi)continue;
         m[r.branch]=(m[r.branch]||0)+(r.sales||0);
       }
     }
-    salesCache[key]=m;return m;
+    salesCache[key]=m;_bxaMemo(gk,m);return m;
   };
   // Fraction of a pooled row that belongs to the outlets in view, by same-platform sales share over
   // the row's period, restricted to the eligible emirate set. Unscoped view → 1 (whole row).
@@ -18487,6 +18499,13 @@ function discRecExportCSV(){
   const totalFile=rows.reduce((s,r)=>s+r.fileTotal,0);
   out.push([]);
   out.push(["TOTAL",'','','',Math.round(totalSheet),Math.round(totalFile),Math.round(totalSheet-totalFile),totalSheet>0?((totalSheet-totalFile)/totalSheet*100).toFixed(1):"0"]);
+  if(typeof jtPair==="function"){const seen=new Set(),L=[];
+    rows.filter(r=>Math.abs(r.gap)>1).forEach(r=>{const P=jtPair(r.brand,r.aggregator,r.date);if(!P)return;
+      P.stmtOnly.filter(s=>jtOutletEq(s.outlet,r.outlet)).forEach(s=>{const k="S"+r.aggregator+s.ref;if(seen.has(k))return;seen.add(k);L.push([r.brand,r.aggregator,r.outlet,r.date,"In statement, no discount on the till",s.ref,(+s.gross).toFixed(2),s.disc.toFixed(2),String(s.items||"").slice(0,120),P.f<1?"co-funded, our share "+Math.round(P.f*100)+"%":""]);});
+      P.tillOnly.filter(p=>jtOutletEq(p.ou,r.outlet)).forEach(p=>{const k="T"+r.aggregator+p.v;if(seen.has(k))return;seen.add(k);L.push([r.brand,r.aggregator,r.outlet,r.date,"Discount on the till, not in statement","voucher "+p.v,(+p.tot).toFixed(2),p.disc.toFixed(2),String(p.items||"").slice(0,120),P.f<1?"co-funded, our share "+Math.round(P.f*100)+"%":""]);});});
+    out.push([]);out.push(["Orders behind the gaps — paired with POS Journal Tape (only days whose Journal Tape has been read)"]);
+    out.push(["Brand","Aggregator","Outlet","Date","Side","Order / voucher","Bill (AED)","Discount (AED)","Items","Note"]);
+    L.forEach(x=>out.push(x));if(!L.length)out.push(["(no Journal Tape for these days yet, or every order pairs)"]);}
   const csv=out.map(r=>r.map(esc).join(",")).join("\n");
   const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
   const url=URL.createObjectURL(blob);
@@ -18794,6 +18813,7 @@ function discRecTableHTML(){
       <td style="padding:6px 8px;font-size:12px;color:${T.text};text-align:right">${fmt(r.fileTotal)}</td>
       <td style="padding:6px 8px;font-size:12px;font-weight:700;color:${gapColor};text-align:right">${fmt(r.gap)}</td>
       <td style="padding:6px 8px;font-size:12px;font-weight:700;color:${gapColor};text-align:right">${r.gapPct.toFixed(1)}%</td>
+      <td style="padding:6px 8px;font-size:12px;color:${T.text};max-width:420px">${typeof discRecWhyHTML==="function"?discRecWhyHTML(r):""}</td>
     </tr>`;
   }).join('');
   return`<div class="card" style="padding:14px 16px;margin-bottom:14px">
@@ -18810,7 +18830,7 @@ function discRecTableHTML(){
     ${rows.length?`<div style="overflow-x:auto;max-height:500px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
       <thead><tr style="background:${T.rowBg};border-bottom:2px solid ${T.border}">
         ${th('Brand','brand')}${th('Aggregator','aggregator')}${th('Outlet','outlet')}${th('Date','date')}${th('Sheet Total','sheetTotal','right')}${th('Statement Total','fileTotal','right')}${th('Gap','gap','right')}${th('Gap %','gapPct','right')}
-      </tr></thead>
+      <th style="text-align:left;padding:8px;font-size:10px;color:${T.muted};font-weight:800;text-transform:uppercase;letter-spacing:.6px">Orders behind the gap (Journal Tape)</th></tr></thead>
       <tbody>${bodyRows}</tbody>
     </table></div>
     ${rows.length>200?`<div style="text-align:center;color:${T.muted};font-size:11px;padding-top:8px">Showing top 200 of ${rows.length} rows — download the CSV for the full list.</div>`:''}`
@@ -21682,7 +21702,7 @@ function cmpComputeDisc(cfg){
     // brand-level pseudo-records). Each day's discount is attached to exactly one record by
     // the parser, so summing all of them gives the brand total once, not duplicated.
     if(!cfg.branches.size){
-      for(const r of allData){
+      for(const r of _bxa(brand,agg)){
         if(r.brand!==brand||r.aggregator!==agg)continue;
         if(!inWindow(r.date))continue;
         total+=r.disc||0;
@@ -22138,7 +22158,7 @@ function cmpComputeContribution(cfg){
     // already does (g.branches/g.lo/g.hi) — needed below to scope and cap the ad-cost call
     // correctly, the same established pattern used everywhere else ad spend is subtracted.
     const branches=new Set();let lo=null,hi=null;
-    for(const r of allData){
+    for(const r of _bxa(brand,agg)){
       if(r.brand!==brand||r.aggregator!==agg)continue;
       if(!inWindow(r.date))continue;
       if(r.branch!=="(brand-level)"){
@@ -25655,7 +25675,7 @@ async function posReconLoad(){if(posRecon.loading)return;posRecon.loading=true;p
   try{const j=await posApi(`/api/pos/recon?from=${from}&to=${to}`);posRecon.recs=j.recs||[];}catch(e){posRecon.err=e.message;posRecon.recs=[];}
   posRecon.loading=false;if(typeof curPage!=="undefined"&&curPage==="possync")renderPosSync();try{navPaint();}catch(e){}}
 function posReconSetDays(n){posRecon.days=n;posRecon.recs=null;renderPosSync();}
-function posReconWhy(o){return/catering/i.test(o[0])?"catering":"platform";}
+function posReconWhy(o){return/catering/i.test(o[0])?"catering":/deliverect mp card/i.test(o[0])?"test":"platform";} // v583: DELIVERECT MP CARD = test account (Nikhil) — ignored
 // an item needs a look when money on the till is not explained, or sits with a platform POS Sync doesn't know
 function posReconItems(recs){const out=[];for(const r of recs||[])for(const x of r.rows||[]){const id=x.loc+"|"+x.rc,ack=(r.ack||{})[id];
   const unk=(x.other||[]).filter(o=>posReconWhy(o)==="platform").reduce((a,o)=>a+o[1],0);
@@ -25690,7 +25710,7 @@ function posReconCardHTML(T,card,ct,btn){
   if(items.length){
     h+=`<div style="font-size:12px;font-weight:800;color:${T.textSecondary};margin:4px 0 6px">Gaps by outlet and day</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="color:${T.textMuted};font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;text-align:left">${["Date","Outlet","Till button","Till","Dashboard","Gap","Why",""].map((x,i)=>`<th style="padding:6px 8px;border-bottom:1px solid ${T.cardBorder};${i>=3&&i<=5?"text-align:right":""}">${x}</th>`).join("")}</tr></thead><tbody>`;
     for(const i of items){
-      const why=[...(i.other||[]).map(o=>posReconWhy(o)==="catering"?`<span title="Catering is not an aggregator — the dashboard leaves it out on purpose">🍱 ${esc(o[0])} ${f(o[1])}</span>`:`<span style="color:${T.accentRed}" title="A platform POS Sync doesn't recognise — tell Claude which aggregator it is and it will be counted">❓ ${esc(o[0])} ${f(o[1])} — unknown platform</span>`),
+      const why=[...(i.other||[]).map(o=>posReconWhy(o)==="test"?`<span style="color:${T.textMuted}" title="Deliverect test account — ignored">🧪 ${esc(o[0])} ${f(o[1])} — test account, ignored</span>`:posReconWhy(o)==="catering"?`<span title="Catering is not an aggregator — the dashboard leaves it out on purpose">🍱 ${esc(o[0])} ${f(o[1])}</span>`:`<span style="color:${T.accentRed}" title="A platform POS Sync doesn't recognise — tell Claude which aggregator it is and it will be counted">❓ ${esc(o[0])} ${f(o[1])} — unknown platform</span>`),
         Math.abs(i.unexpl)>=5?(i.unexpl>0?`<span title="Rung on the delivery till but not paid by an aggregator: usually a catering / bulk order or a regular customer we delivered to who paid us directly (cash / card / phone). Journal Tape confirms it and marks it explained; otherwise a void after billing">💵 ${f(i.unexpl)} paid to us directly (catering / regulars) or void</span>`:`<span>${f(-i.unexpl)} more on Credit Sales than on the till (void / date)</span>`):""].filter(Boolean).join("<br>");
       const act=i.ack?`<span style="color:${T.accentGreen};font-size:11.5px" title="${esc(i.ack.note||"")}">✓ ${esc(i.ack.note||"explained")} · ${esc(i.ack.by||"")}</span> <a href="#" onclick="posReconUnack('${i.date}','${esc(i.id)}');return false" style="color:${T.textMuted};font-size:11px">undo</a>`:i.open?`<button onclick="posReconAck('${i.date}','${esc(i.id)}')" style="padding:4px 10px;border-radius:6px;border:1px solid ${T.cardBorder};background:transparent;color:${T.textSecondary};font-size:11.5px;font-weight:700;cursor:pointer">Mark explained</button>`:`<span style="color:${T.textMuted};font-size:11.5px">small</span>`;
       const ordH=(i.orders||[]).length?`<details style="margin-top:3px"><summary style="cursor:pointer;color:${T.textMuted};font-size:11.5px">${i.orders.length} order${i.orders.length>1?"s":""} — order no. / tax invoice</summary>${posReconOrdersHTML(T,i.orders)}</details>`:"";
@@ -26018,7 +26038,7 @@ function lensSync(page){
   const key=(sel==="D"&&!ex)?"delivery":sel+":"+lensVer+(ex?":ex":""); // re-applies when the Dine-In & Takeaway tab (re)loads
   if(key===lensApplied)return;
   const hit=_lensIdx.get(key); // v579: switching pages no longer rebuilds the whole index every time
-  if(hit&&hit.gen===_diGen){allData=hit.data;Object.assign(dataIndex,hit.idx);lensAggsFor(sel);lensApplied=key;return;}
+  if(hit&&hit.gen===_diGen){allData=hit.data;Object.assign(dataIndex,hit.idx,{_ad:hit.data});lensAggsFor(sel);lensApplied=key;return;}
   const ins=sel==="D"?[]:lensInstoreRecords().filter(r=>(r.aggregator==="Dine-In"&&sel.includes("I"))||(r.aggregator==="Takeaway"&&sel.includes("T")));
   let out=sel.includes("D")?(ins.length?lensBase.concat(ins):lensBase):ins;
   if(ex)out=out.map(r=>Object.assign({},r,{sales:(r.sales||0)/1.05}));
@@ -26778,17 +26798,32 @@ let ddData=[],ddLoaded=false,ddErr=null,ddState={prog:null};
 const DD_TAB_GID=(typeof window!=="undefined"&&window.DD_TAB_GID_OVERRIDE)||null; // set once the LIVE tab exists
 if(typeof pageFilters!=="undefined"&&!pageFilters.dindisc){pageFilters.dindisc=newFilterState();pageFilters.dindisc.preset="30d";} // discounts read better over a month
 const DD_PROGS=[[/entertainer/i,"Entertainer","Partner programme"],[/esaad/i,"Esaad","Partner programme"],[/z ?pro/i,"Z Pro","Partner programme"],
-  [/careem dine/i,"Careem Dine Out","Partner programme"],[/noon/i,"Noon Dine Out","Partner programme"],[/mall/i,"Mall discount","Partner programme"],
-  [/gems/i,"GEMS","Partner programme"],[/kingspan/i,"Kingspan","Partner programme"],[/palma/i,"Palma","Partner programme"],
-  [/happy tuesday/i,"Happy Tuesday","Promotion"],[/bogo|buy ?1/i,null,"Promotion"],[/training/i,"Training","Team & owners"],[/sales promo/i,"Sales promo","Promotion"],[/catering/i,"Catering discount","Catering"],
-  [/customer disc/i,"Customer discount","Guest recovery"],[/comp meal/i,"Comp meal voucher","Guest recovery"],
+  [/careem dine/i,"Careem Dine Out","Partner programme"],[/noon/i,"Noon Dine Out","Partner programme"],[/mall/i,"Mall discount","Promotion"],
+  [/gems/i,"GEMS","Partner programme"],[/kingspan/i,"Kingspan","Promotion"],[/palma/i,"Palma","Promotion"],[/neighbo/i,"Neighbourhood","Promotion"],[/talabat mp/i,"Talabat MP prepaid","Promotion"],
+  [/happy tuesday/i,"Happy Tuesday","Promotion"],[/bogo|buy ?1/i,null,"Promotion"],[/training/i,"Training","Team & owners"],[/sales promo/i,"Sales promo","Promotion"],[/catering/i,"Catering discount","Promotion"],
+  [/customer disc/i,"Customer discount","Guest recovery"],[/comp meal/i,"Comp meal voucher","Promotion"],
   [/\bbod\b/i,"BOD (owners)","Team & owners"],[/head office/i,"Head office","Team & owners"],[/staff/i,"Staff meals","Team & owners"],[/food trial/i,"Food trial","Team & owners"],
-  [/manager|supervisor|asst ops|ar mgr|business dev|chef|security/i,"Management & team","Team & owners"],[/emp(loyee)?\s*error/i,"Employee error","Team & owners"],[/gift voucher/i,"Gift voucher","Guest recovery"]];
+  [/manager|supervisor|asst ops|ar mgr|business dev|chef|security/i,"Management & team","Team & owners"],[/emp(loyee)?\s*error/i,"Employee error","Team & owners"],[/gift voucher/i,"Gift voucher","Promotion"]];
 const DD_TYPE_CLR={"Partner programme":"#22C55E","Promotion":"#4E9BFF","Catering":"#A78BFA","Guest recovery":"#F59E0B","Team & owners":"#94A3B8","Other":"#64748B"};
 // v581: Nikhil — discount depth shows CUSTOMER discounts only. Internal = staff, managers/supervisors, BOD, chef, training,
 // security, business dev, ops, head office, food trials, employee errors ("Team & owners"). Everything else — partner programmes,
 // promotions, guest recovery (customer discount, comp meal voucher), catering, sales promo, gift vouchers — is a customer discount.
-function ddIsInternal(r){return r.type==="Team & owners";}
+// v582: Nikhil's confirmed list (Discount_Classification_Review, 19 Oct 2026) — exact names, upper-cased
+const DD_CONFIRMED={"CATERING DISCOUNT TO": "Customer", "COMP MEAL VOUCHER": "Customer", "CUSTOMER DISCOUNT": "Customer", "GIFT VOUCHER DI": "Customer", "CUSTOMER DISCOUNT DI": "Customer", "CUSTOMER DISCOUNT TO": "Customer", "CUSTOMER DISC 20 DI": "Customer", "CUSTOMER DISCOUNT 100": "Customer", "CUSTOMER DISCOUNT 10% TO": "Customer", "ENTERTAINER MOBILE": "Customer", "ESAAD 20% DISCOUNT DI": "Customer", "Z PRO 20% DI": "Customer", "CAREEM DINE OUT 20% DI": "Customer", "FZ ENTERTAINER 100%": "Customer", "FZ CAREEM DINE OUT 20% DI": "Customer", "Z PRO FZ 20% DISC DI": "Customer", "MALL DISCOUNT 20% DI": "Customer", "FZ ESAAD 20% DI": "Customer", "MALL 20 TO": "Customer", "GEMS 20% DISC DI": "Customer", "PALMA25% DI": "Customer", "MALL DISCOUNT 20% TO": "Customer", "NOON - OUT 20% DI": "Customer", "MALL 20 DI": "Customer", "Z PRO FZ 20% DISC TO": "Customer", "FZ CAREEM DINE OUT 20% TO": "Customer", "KINGSPAN 20% DI": "Customer", "FZ ESAAD 20% TO": "Customer", "FZ MALL 20% DISC TO": "Customer", "Z PRO 20% TO": "Customer", "HAPPY TUESDAY": "Customer", "SUMMER BOGO DISCOUNT": "Customer", "SALES PROMO": "Customer", "SALES PROMO TO": "Customer", "SALES PROMO DI": "Customer", "SALES PROMO DT": "Customer", "SALES PROMO PO": "Customer", "SUPERVISOR DISCOUNT": "Internal", "MANAGERS DISCOUNT": "Internal", "STAFF DISCOUNT": "Internal", "MANAGER 100% DISC": "Internal", "TRAINING DISCOUNT": "Internal", "BUSINESS DEV MANAGER 100%": "Internal", "BOD DIS 30 TO": "Internal", "ASST OPS 100": "Internal", "CHEF 100%": "Internal", "GEN MANAGER 100% DISC": "Internal", "BOD 100 DI": "Internal", "STAFF 50 TO": "Internal", "STAFF FOOD 50 DI": "Internal", "GEN MANAGER 100% DISC TO": "Internal", "BOD DIS 50 TO": "Internal", "BOD DIS 50 DI": "Internal", "BOD DIS 30 DI": "Internal", "MANAGER 100 TO": "Internal", "BOD DIS 100 TO": "Internal", "ASST OPS 100% DISC TO": "Internal", "SECURITY DISC 100": "Internal", "FOOD TRIAL DISCOUNT DI": "Internal", "STAFF FOOD 50 TO": "Internal", "BOD DIS 100 DI": "Internal", "GEN MANAGER 50% DISC TO": "Internal", "BUSINESS DEV MANAGER 100% DISC TO": "Internal", "MANAGERS 50 DI": "Internal", "CHEF 100 TO": "Internal", "BOD 50 DI": "Internal", "STAFF DISCOUNT 100 TO": "Internal", "EMP ERROR 50": "Internal", "GEN MANAGER 50% DISC DI": "Internal", "GEN MANAGER 100% DISC DI": "Internal", "SECURITY DIS 100 TO": "Internal", "STAFF FRIEND DISCOUNT 35 DI": "Internal", "STAFF 50% DISC": "Internal", "CHEF 50 DI": "Internal", "BOD 100": "Internal", "OFFICE STAFF DISCOUNT 100": "Internal", "BUSINESS DEV MANAGER 100% DISC DI": "Internal", "STAFF 50 DI": "Internal", "GEN MANAGER 30% DISC TO": "Internal", "SUPERVISOR 100% DISC": "Internal", "GEN MANAGER 50% DISC": "Internal", "STAFF DISCOUNT TO": "Internal", "GEN MANAGER 30% DISC": "Internal", "AR MGR100% TO": "Internal", "EMP ERROR 50% DISC": "Internal", "BOD 100 TO": "Internal", "MANAGERS 50 TO": "Internal", "STAFF FRIEND DISCOUNT 35 TO": "Internal", "BOD DIS 50 DL": "Internal", "SECURITY DISC 100 PO": "Internal", "HEAD OFFICE 50% PO": "Internal", "NEIGHBORHOOD DISCOUNT 30": "Customer", "TALABAT MP PREPAID DISCOUNT TO": "Customer"};
+let ddOverrides={}; // set from Admin/Dine-in discounts page, stored in the worker (applies for everyone)
+function ddClassify(name,type){const k=String(name||"").trim().toUpperCase();
+  if(ddOverrides[k])return{cls:ddOverrides[k],known:true,src:"override"};
+  if(DD_CONFIRMED[k])return{cls:DD_CONFIRMED[k],known:true,src:"confirmed"};
+  return{cls:type==="Team & owners"?"Internal":"Customer",known:false,src:"rule"};}
+function ddReclass(){for(const r of ddData){const c=ddClassify(r.name,r.type);r.cls=c.cls;r.known=c.known;}}
+async function ddLoadOverrides(){try{const sid=(JSON.parse(localStorage.getItem("oregano_session")||"{}")||{}).sessionId;
+  const j=await (await fetch("/api/ddclass",{headers:{"X-Session-Id":sid||""}})).json();ddOverrides=(j&&j.map)||{};ddReclass();}catch(e){}}
+async function ddSetClass(name,cls){const sid=(JSON.parse(localStorage.getItem("oregano_session")||"{}")||{}).sessionId;
+  try{const j=await (await fetch("/api/ddclass",{method:"POST",headers:{"Content-Type":"application/json","X-Session-Id":sid||""},body:JSON.stringify({name,cls})})).json();
+    if(j.error)throw new Error(j.error);ddOverrides=j.map||ddOverrides;ddReclass();}catch(e){alert("Couldn't save: "+e.message);}
+  Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
+window.ddSetClass=ddSetClass;
+function ddIsInternal(r){return(r.cls||ddClassify(r.name,r.type).cls)==="Internal";}
 function ddChannelOf(name){const n=String(name||"").trim();if(/\s(DL|DT|PO)$/i.test(n))return null;return/\sTO$/i.test(n)?"Takeaway":"Dine-In";}
 function ddInternal(s,e,outlet){const o={"Dine-In":0,Takeaway:0};if(!ddLoaded||ddErr)return o;
   for(const r of ddData){if(r.date<s||r.date>e||(outlet&&r.outlet!==outlet)||!ddIsInternal(r))continue;const c=ddChannelOf(r.name);if(c)o[c]+=r.disc;}return o;}
@@ -26805,7 +26840,7 @@ async function loadDinDiscData(){
     const h=rows[hi].map(x=>String(x).trim().toLowerCase()),ix=k=>h.findIndex(x=>x.startsWith(k));const iD=ix("date"),iO=ix("outlet"),iN=ix("discount name"),iC=ix("checks"),iA=ix("discount aed"),iNet=ix("net"),iG=ix("gross");
     const num=v=>{const n=parseFloat(String(v||"").replace(/,/g,""));return isNaN(n)?0:n;};
     ddData=rows.slice(hi+1).map(x=>{const d=parseDate(x[iD]);if(!d)return null;const g=ddProg(x[iN]);return{date:dk(d),outlet:chNormOutlet(x[iO]),name:String(x[iN]||"").trim(),prog:g.p,type:g.t,checks:num(x[iC]),disc:num(x[iA]),net:num(x[iNet]),gross:num(x[iG])};}).filter(Boolean);
-    ddLoaded=true;ddErr=null;}catch(e){ddLoaded=true;ddErr=e.message;}
+    await ddLoadOverrides();ddReclass();ddLoaded=true;ddErr=null;}catch(e){ddLoaded=true;ddErr=e.message;}
   if(typeof curPage!=="undefined"&&(curPage==="dindisc"||curPage==="channels"||(typeof lensMode!=="undefined"&&lensMode==="all"&&LENS_PAGES.has(curPage)))){Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
 }
 function ddSet(k,v){ddState[k]=ddState[k]===v?null:v;Object.values(charts).forEach(c=>c.destroy());charts={};renderPage("dindisc");}
@@ -26962,17 +26997,52 @@ function jtGapBills(brand,agg,date){const days=(posJTData.days||[]).filter(d=>d.
     for(const b of d.data.bills||[]){const[v,bc,plat,disc,tot,its]=b;if(!(disc>0)||plat!==agg||PS_JT_BRAND[bc]!==brand)continue;
       out.push({v,ou:br,disc,tot,items:its.map(([ii])=>items[ii]).join(", ")});}}
   return out;}
+// v583: ONE PAIRING ENGINE for all five platforms (Keeta included) — every discounted statement order is paired with a
+// discounted bill on the till (same day, outlet, bill total and discount). What's left on each side is the discrepancy:
+//   tillOnly  = a discount on the till with no matching statement order   (sheet > statement)
+//   stmtOnly  = a statement discount with no matching discount on the till (statement > sheet) — the reverse check
+// Co-funded campaigns: the platforms' statements carry the PARTNER-funded part only (our share — e.g. Careem's
+// PARTNER_FUNDED_* columns), so on a co-funded day a till discount also pairs when it equals the statement ÷ our share
+// (till booked the full discount) or × our share.
+function jtCoShare(brand,agg,date){if(typeof campaignData==="undefined"||!campaignData)return 1;let f=1;
+  for(const c of campaignData){if(c.aggregator!==agg||(c.brand!==brand&&c.brand!=="All Brands")||!(c.startDate<=date&&c.endDate>=date))continue;
+    try{const pc=parseCampComment(c).coFundedPctOfDiscount;if(pc>0&&pc<100)f=Math.min(f,1-pc/100);}catch(e){}}return f;}
+function jtStmtOrders(brand,agg,date){
+  if(agg==="Keeta"){if(typeof keetaOrdersData==="undefined"||!keetaOrdersData||!keetaOrdersData.orderDetail)return null;
+    return keetaOrdersData.orderDetail.filter(o=>o.br===brand&&o.d===date).map(o=>({ref:o.orderRef||o.o,long:o.o,outlet:o.ou,items:o.i||"",gross:o.g||0,net:o.n||0,disc:(o.a||[]).reduce((a,x)=>a+(+x[1]||0),0)})).filter(o=>o.disc>0.01);}
+  const src=_orderDetailSource(agg);if(!src)return null;
+  return src.filter(o=>o.br===brand&&o.d===date&&(o.disc||0)>0.01).map(o=>({ref:o.orderRef||o.o,long:o.o,outlet:o.ou,items:o.i||"",gross:o.g||0,net:o.n||0,disc:o.disc||0}));}
+const _jtPairCache=new Map();
+function jtOutletEq(a,b){const n=x=>String(x||"").toLowerCase().replace(/\(.*?\)/g,"").replace(/[^a-z]/g,"");const A=n(a),B=n(b);if(!A||!B)return true;return A===B||A.startsWith(B.slice(0,5))||B.startsWith(A.slice(0,5));}
+function jtPair(brand,agg,date){const k=brand+"|"+agg+"|"+date+"|"+(posJTData.key||"")+"|"+((posJTData.days||[]).length);if(_jtPairCache.has(k))return _jtPairCache.get(k);
+  const pos=jtGapBills(brand,agg,date),st=jtStmtOrders(brand,agg,date);let res=null;
+  if(pos&&st){const f=jtCoShare(brand,agg,date),used=new Set(),pairs=[],stmtOnly=[];
+    for(const s of st){let best=-1,bd=1e9,how="";pos.forEach((p,i)=>{if(used.has(i))return;
+        const cand=[[Math.abs(p.disc-s.disc),"same"]];if(f<1){cand.push([Math.abs(p.disc*f-s.disc),"till full, statement our share"]);cand.push([Math.abs(p.disc-s.disc*f),"till our share"]);}
+        cand.sort((a,b)=>a[0]-b[0]);const dd=cand[0][0]+Math.abs(p.tot-s.gross)*0.5+(jtOutletEq(p.ou,s.outlet)?0:5);if(dd<bd){bd=dd;best=i;how=cand[0][1];}});
+      if(best>=0&&bd<=6){used.add(best);pairs.push({s,p:pos[best],how});}else stmtOnly.push(s);}
+    res={f,pairs,stmtOnly,tillOnly:pos.filter((p,i)=>!used.has(i)),nSt:st.length,nPos:pos.length,cofundPairs:pairs.filter(x=>x.how!=="same").length};}
+  _jtPairCache.set(k,res);return res;}
 (function hookGap(){if(typeof discGapUnattributedOrders!=="function"||typeof _normalizeGapOrderRow!=="function")return setTimeout(hookGap,400);if(discGapUnattributedOrders.__jt)return;
   const _g=discGapUnattributedOrders,_n=_normalizeGapOrderRow;
-  discGapUnattributedOrders=function(brand,agg,date){const st=_g(brand,agg,date);if(agg==="Keeta")return st;
-    const pos=jtGapBills(brand,agg,date);if(!pos)return st;
-    const used=new Set(),norm=(st||[]).map(o=>_n(o,agg));
-    for(const s of norm){let best=-1,bd=1e9;pos.forEach((p,i)=>{if(used.has(i))return;const dd=Math.abs(p.disc-s.disc)+Math.abs(p.tot-s.gross)*0.5+(p.ou&&s.outlet&&p.ou!==s.outlet?5:0);if(dd<bd){bd=dd;best=i;}});if(best>=0&&bd<=6)used.add(best);}
-    const left=pos.filter((p,i)=>!used.has(i));
-    return left.length?left.map(p=>({o:"V"+p.v,orderRef:"voucher "+p.v,ou:p.ou,i:p.items||"—",g:p.tot,n:p.tot-p.disc,disc:p.disc,_jt:1,_n:(st||[]).length,_p:pos.length})):[];};
-  _normalizeGapOrderRow=function(o,agg){const r=_n(o,agg);if(o&&o._jt)r.basis=`POS Journal Tape — a discounted ${agg} bill on the till with no matching order in the ${agg} statement (paired ${o._p} POS bills with ${o._n} statement orders by outlet, total and discount)`;return r;};
+  discGapUnattributedOrders=function(brand,agg,date){const st=_g(brand,agg,date);const P=jtPair(brand,agg,date);if(!P)return st;
+    return P.tillOnly.map(p=>({o:"V"+p.v,orderRef:"voucher "+p.v,ou:p.ou,i:p.items||"—",g:p.tot,n:p.tot-p.disc,disc:p.disc,_jt:1,_n:P.nSt,_p:P.nPos,a:[["(Unattributed)",p.disc]]}));};
+  _normalizeGapOrderRow=function(o,agg){if(o&&o._jt){return{orderLong:o.o,orderShort:o.orderRef,outlet:o.ou,items:o.i,gross:o.g,net:o.n,disc:o.disc,basis:`POS Journal Tape — a discounted ${agg} bill on the till with no matching order in the ${agg} statement (paired ${o._p} POS bills with ${o._n} statement orders by outlet, total and discount)`};}return _n(o,agg);};
   discGapUnattributedOrders.__jt=true;window.discGapUnattributedOrders=discGapUnattributedOrders;window._normalizeGapOrderRow=_normalizeGapOrderRow;})();
-
+// Reverse check in the Discount Discrepancy table: a "🔍 orders" button on every row with a gap, listing the orders behind it.
+const discRecOpen={};
+function discRecWhyHTML(r){const P=jtPair(r.brand,r.aggregator,r.date);if(!P)return"";
+  const so=P.stmtOnly.filter(s=>jtOutletEq(s.outlet,r.outlet)),to=P.tillOnly.filter(p=>jtOutletEq(p.ou,r.outlet));
+  const T=discTheme(),k=[r.brand,r.aggregator,r.outlet,r.date].join("|").replace(/'/g,"");
+  const sum=a=>a.reduce((x,y)=>x+y.disc,0),cf=P.f<1?` · co-funded (our share ${Math.round(P.f*100)}%)`:"";
+  const lbl=(so.length?`${so.length} statement order${so.length>1?"s":""} with no till discount (AED ${Math.round(sum(so))})`:"")+(so.length&&to.length?" · ":"")+(to.length?`${to.length} till bill${to.length>1?"s":""} with no statement order (AED ${Math.round(sum(to))})`:"");
+  const btn=`<a href="#" onclick="discRecOpen['${k}']=!discRecOpen['${k}'];renderCampaigns();return false" style="color:${T.accentBlue||"#4E9BFF"};font-size:11px;white-space:nowrap">🔍 ${lbl||"every order pairs — rounding / other day"}${cf}</a>`;
+  if(!discRecOpen[k]||(!so.length&&!to.length))return btn;
+  const li=(t,arr,f)=>arr.length?`<div style="margin-top:4px;font-size:11px;font-weight:700;color:${T.text}">${t}</div>`+arr.slice(0,20).map(f).join(""):"";
+  return btn+`<div style="margin-top:4px;padding:6px 8px;border-radius:6px;background:${T.rowBg}">`
+   +li("In the statement, not discounted on the till:",so,s=>`<div style="font-size:11px;color:${T.muted}">#${esc(s.ref)} · ${esc(s.outlet||"")} · bill AED ${(+s.gross).toFixed(2)} · discount <b style="color:${T.text}">AED ${s.disc.toFixed(2)}</b>${s.items?` · ${esc(String(s.items).slice(0,80))}`:""}</div>`)
+   +li("On the till, not in the statement:",to,p=>`<div style="font-size:11px;color:${T.muted}">voucher ${esc(p.v)} · ${esc(p.ou||"")} · bill AED ${(+p.tot).toFixed(2)} · discount <b style="color:${T.text}">AED ${p.disc.toFixed(2)}</b> · ${esc(String(p.items||"").slice(0,80))}</div>`)
+   +(P.cofundPairs?`<div style="font-size:10.5px;color:${T.muted};margin-top:4px">${P.cofundPairs} order(s) paired on our share of a co-funded discount.</div>`:"")+`</div>`;}
 // ── v579: SPEED + STEADY NUMBERS ─────────────────────────────────────────────────────────────────────
 // (1) Any index rebuild outside the lens (new sheet data, campaigns, retries) bumps a generation so cached lens views are dropped.
 var _lensIdx=new Map(),_diGen=0,_diInLens=false;
@@ -27005,5 +27075,289 @@ function rdDiscvarTop(){try{if(campTab!=="discounts")return;const pg=document.ge
   const ct=[...pg.querySelectorAll(".ct")].find(x=>/Discount Discrepancy/.test(x.textContent));const card=ct&&ct.closest(".card");if(!card)return;
   // right under the Discount Burn filters (aggregator / brand / period) — the table follows those filters
   const fl=[...pg.querySelectorAll(".card")].find(c=>c!==card&&!c.contains(card)&&/AGGREGATOR/i.test(c.innerText||"")&&/PERIOD/i.test(c.innerText||""));
-  if(fl&&fl.nextElementSibling!==card)fl.parentNode.insertBefore(card,fl.nextSibling);}catch(e){}}
+  if(fl&&fl.nextElementSibling!==card)fl.parentNode.insertBefore(card,fl.nextSibling);
+  const R=typeof wwJT!=="undefined"&&wwJT.report;if(R&&R.moved>0&&!card.querySelector(".ww-split-note")){const T=DARK_THEME,ct=card.querySelector(".ct");
+    ct&&ct.insertAdjacentHTML("afterend",`<div class="ww-split-note" style="background:rgba(232,93,4,.08);border-left:3px solid #E85D04;padding:6px 10px;margin:6px 0 8px;font-size:11.5px;color:${T.textPrimary}">🍗 <b>Wicked Wings vs Smokeys:</b> AED ${Math.round(R.moved).toLocaleString()} of discount rung on the Smokeys button was Wicked Wings by the items on the bills (Journal Tape, ${R.cells} outlet-platform-days: ${Object.entries(R.byOutlet).map(([o,v])=>esc(o)+" "+Math.round(v)).join(", ")}) — moved to Wicked Wings here and everywhere else in the dashboard.</div>`);}
+  }catch(e){}}
 (function(){const go=()=>{if(typeof renderCampaigns!=="function")return setTimeout(go,300);const _r=renderCampaigns;renderCampaigns=async function(){const r=await _r.apply(this,arguments);rdDiscvarTop();return r;};window.renderCampaigns=renderCampaigns;};go();})();
+
+// v582: new discount names (not on the confirmed list) — flagged on the Dine-in discounts page with Customer / Internal buttons
+(function(){const go=()=>{if(typeof renderDinDisc!=="function")return setTimeout(go,300);const _r=renderDinDisc;renderDinDisc=function(){const res=_r.apply(this,arguments);try{
+  const pg=document.getElementById("page-dindisc");if(!pg||!ddLoaded||ddErr)return res;const T=DARK_THEME;
+  const nw={};for(const r of ddData){if(r.known)continue;const k=r.name.trim();(nw[k]=nw[k]||{n:k,cls:r.cls,disc:0,checks:0,last:""});nw[k].disc+=r.disc;nw[k].checks+=r.checks;if(r.date>nw[k].last)nw[k].last=r.date;}
+  const L=Object.values(nw).sort((a,b)=>b.disc-a.disc);const adm=(typeof getActiveSession==="function"&&(getActiveSession()||{}).admin);
+  const ovr=Object.entries(ddOverrides);
+  const btn=(n,c,on)=>`<button onclick='ddSetClass(${JSON.stringify(n).replace(/'/g,"&#39;")},"${c}")' style="padding:3px 10px;border-radius:6px;font-size:11px;font-weight:800;cursor:pointer;border:1px solid ${on?(c==="Internal"?T.accentRed:T.accentGreen):T.cardBorder};background:${on?(c==="Internal"?T.accentRed:T.accentGreen)+"22":"transparent"};color:${on?(c==="Internal"?T.accentRed:T.accentGreen):T.textSecondary}">${c}</button>`;
+  const card=`<div class="card" id="dd-new" style="border-left:3px solid ${L.length?T.accentOrange:T.accentGreen}!important"><div class="ct">${L.length?"🆕 New discount names — check the classification":"✅ Every discount name is classified"}</div>
+   <div style="font-size:12px;color:${T.textSecondary};margin-bottom:${L.length?8:0}px;line-height:1.5">Customer discounts count in discount depth; internal ones (staff, managers, BOD…) are shown separately. ${L.length?`These ${L.length} name(s) aren't on the confirmed list, so they were classified by keyword${adm?" — click to confirm or change (saved for everyone)":" — ask an admin to confirm"}.`:`93 names confirmed by Nikhil on 19 Oct 2026${ovr.length?` · ${ovr.length} changed since`:""}.`}</div>
+   ${L.length?`<table class="tbl" style="width:100%"><thead><tr><th style="text-align:left">Discount name</th><th>Checks</th><th>Discount</th><th>Last used</th><th style="text-align:left">Classified as</th></tr></thead><tbody>${L.map(x=>`<tr><td><b>${esc(x.n)}</b></td><td style="text-align:right">${x.checks}</td><td style="text-align:right">${fmtAEDExact(x.disc)}</td><td style="text-align:right">${esc(fmtDisp?fmtDisp(x.last):x.last)}</td><td>${adm?btn(x.n,"Customer",x.cls==="Customer")+" "+btn(x.n,"Internal",x.cls==="Internal"):`<b style="color:${x.cls==="Internal"?T.accentRed:T.accentGreen}">${x.cls}</b> <span style="color:${T.textMuted}">(by keyword)</span>`}</td></tr>`).join("")}</tbody></table>`:""}</div>`;
+  const old=document.getElementById("dd-new");if(old)old.remove();const fb=pg.querySelector(".fbar");if(fb)fb.insertAdjacentHTML("afterend",card);else pg.insertAdjacentHTML("afterbegin",card);
+  }catch(e){console.log("[dd-new]",e);}return res;};window.renderDinDisc=renderDinDisc;};go();})();
+
+// ── v583: WICKED WINGS vs SMOKEYS DISCOUNT SPLIT FROM JOURNAL TAPE ITEMS ───────────────────────────────
+// Microsys has no Wicked Wings revenue centre, so at the outlets that cook both brands the staff ring Wicked Wings on
+// the Smokeys button: sales reach the right brand (by the platform's credit account) but the DISCOUNT lands on Smokeys.
+// Journal Tape tells the brands apart by the items on each bill, so for every outlet × platform × day the Wicked Wings
+// discount on the till is moved from the Smokeys row to the Wicked Wings row (never more than Smokeys carries beyond its
+// own Smokeys-item discount). The original POS figure is kept on the record (discPOS); re-applied on every data load.
+const wwJT={days:null,loading:false,report:null};
+const WW_JT_LOCS="REM,REF,NAD,ALF";
+async function wwJTLoad(){if(wwJT.days!==null||wwJT.loading||typeof latest==="undefined"||!latest)return;wwJT.loading=true;
+  try{const from=subDays(latest,90);const sid=(JSON.parse(localStorage.getItem("oregano_session")||"{}")||{}).sessionId;
+    const j=await (await fetch(`/api/pos/jt?from=${from}&to=${latest}&locs=${WW_JT_LOCS}`,{headers:{"X-Session-Id":sid||""}})).json();
+    wwJT.days=(j&&j.days)||[];}catch(e){wwJT.days=[];}
+  wwJT.loading=false;if(wwJT.days.length){wwApplySplit();buildDataIndex();lensApplied=null;try{lensSync(curPage);}catch(e){}
+    if(typeof campAnalysisCache!=="undefined"&&campAnalysisCache.clear)campAnalysisCache.clear();
+    if(typeof curPage!=="undefined"&&(curPage==="campaigns"||curPage==="brands"||curPage==="platforms")){Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}}}
+function wwApplySplit(){const src=(typeof lensBase!=="undefined"&&lensBase)||allData;if(!wwJT.days||!wwJT.days.length)return;
+  for(const r of src){if(r.discPOS!=null){r.disc=r.discPOS;delete r.discPOS;delete r.wwMoved;}}
+  const idx=new Map();for(const r of src){if(r.channel==="instore"||(r.brand!=="Smokeys"&&r.brand!=="Wicked Wings")||r.discSheet!=null)continue;const k=r.brand+"|"+r.aggregator+"|"+r.date;(idx.get(k)||idx.set(k,[]).get(k)).push(r);}
+  const rep={moved:0,cells:0,missingWW:0,byOutlet:{}};
+  for(const d of wwJT.days){const br=jtBranchOf(d.loc);if(!br)continue;const sums={};
+    for(const b of d.data.bills||[]){const[v,bc,plat,disc]=b;if(!(disc>0)||!plat||(bc!=="W"&&bc!=="S"))continue;const x=(sums[plat]=sums[plat]||{W:0,S:0});x[bc]+=disc;}
+    for(const[plat,x]of Object.entries(sums)){if(!(x.W>0.5))continue;
+      const sm=(idx.get("Smokeys|"+plat+"|"+d.date)||[]).find(r=>jtOutletEq(r.branch,br)),ww=(idx.get("Wicked Wings|"+plat+"|"+d.date)||[]).find(r=>jtOutletEq(r.branch,br));
+      if(!sm||!(sm.disc>0))continue;if(!ww){rep.missingWW+=Math.min(x.W,sm.disc);continue;}
+      const mv=Math.max(0,Math.min(x.W-(ww.disc||0),(sm.disc||0)-x.S));if(mv<0.5)continue;
+      sm.discPOS=sm.disc;ww.discPOS=ww.disc||0;sm.disc=+(sm.disc-mv).toFixed(2);ww.disc=+((ww.disc||0)+mv).toFixed(2);sm.wwMoved=-mv;ww.wwMoved=mv;
+      rep.moved+=mv;rep.cells++;rep.byOutlet[br]=(rep.byOutlet[br]||0)+mv;}}
+  wwJT.report=rep;console.log("[ww split]",rep);}
+// keep the split after every full data load (new delivery data replaces allData)
+(function(){const go=()=>{if(typeof lensReset!=="function")return setTimeout(go,300);const _lr=lensReset;lensReset=function(){const r=_lr.apply(this,arguments);if(wwJT.days&&wwJT.days.length){wwApplySplit();buildDataIndex();}else setTimeout(wwJTLoad,4000);return r;};window.lensReset=lensReset;};go();
+  setTimeout(function first(){if(typeof allData!=="undefined"&&allData.length&&typeof latest!=="undefined"&&latest)wwJTLoad();else setTimeout(first,1500);},6000);})();
+// v583: Outlets / Compare speed — per brand×platform scans use the data index (one brand×platform's rows instead of
+// every row, every time), and the CPC same-platform sales split is memoised until the data changes.
+function _bxa(brand,agg){return(typeof dataIndex!=="undefined"&&dataIndex.built&&dataIndex._ad===allData)?(dataIndex.byBrandAgg.get(brand+"|"+agg)||[]):allData;}
+const _bxaM={stamp:null,map:new Map()};
+function _bxaMemo(k,v){const st=(typeof _diGen!=="undefined"?_diGen:0)+"|"+(typeof lensApplied!=="undefined"?lensApplied:"");
+  if(_bxaM.stamp!==st||_bxaM.ad!==allData){_bxaM.stamp=st;_bxaM.ad=allData;_bxaM.map.clear();}
+  if(v===undefined)return _bxaM.map.get(k);_bxaM.map.set(k,v);return v;}
+(function(){const _b=buildDataIndex;buildDataIndex=function(){const r=_b.apply(this,arguments);dataIndex._ad=allData;return r;};window.buildDataIndex=buildDataIndex;})();
+
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// v583 DAILY DIGEST — OPTION A (chosen by Nikhil, 20 Oct 2026). Six pages, all channels, every sales
+// figure EXCL. VAT: 1 Summary · 2 Outlets (all channels) · 3 Delivery · 4 Platforms, campaigns & ads ·
+// 5 Dine-in & takeaway · 6 Actions. Delivery figures are built on a delivery-only, VAT-excluded copy of
+// the data (sales ÷ 1.05, exactly what the dashboard's "excl. VAT" switch does), dine-in & takeaway from
+// the Dine-In & Takeaway tab, till discounts from the Dine-In Discounts tab (customer vs internal).
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+function dgaWithDeliveryExcl(fn){
+  const prevVat=chState.vat;chState.vat="excl";
+  if(!lensBase)lensBase=allData.filter(r=>r.channel!=="instore");
+  const prevAGGS=AGGS.slice();
+  allData=lensBase.map(r=>Object.assign({},r,{sales:(r.sales||0)/1.05}));
+  LENS_CH.forEach(c=>{const i=AGGS.indexOf(c);if(i>=0)AGGS.splice(i,1);});
+  for(const k of["byBrandAgg","byBrandAggBranch","brandBranches","brandDailyDisc","brandDailySalesByBranch"])dataIndex[k]=new Map();
+  _diInLens=true;try{buildDataIndex();}finally{_diInLens=false;}
+  if(typeof campAnalysisCache!=="undefined"&&campAnalysisCache.clear)campAnalysisCache.clear();
+  try{return fn();}
+  finally{chState.vat=prevVat;AGGS.length=0;prevAGGS.forEach(a=>AGGS.push(a));lensApplied=null;try{lensSync(curPage);}catch(e){}
+    if(typeof campAnalysisCache!=="undefined"&&campAnalysisCache.clear)campAnalysisCache.clear();}
+}
+const DGA_CSS=`
+@page{size:A4;margin:0}
+:root{--gold:#B8862F;--ink:#1B2233;--mut:#6B7385;--line:#E3E6EC;--soft:#F6F7F9;--del:#3F6FD1;--din:#E07B2E;--ta:#8460C9;--up:#1E8E4E;--dn:#C0392B}
+*{box-sizing:border-box}html,body{margin:0;padding:0}body{font-family:Arial,Helvetica,sans-serif;color:var(--ink);font-size:11px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.page{width:210mm;height:297mm;padding:13mm 15mm 16mm;position:relative;overflow:hidden;page-break-after:always;background:#fff}
+.hd{display:flex;align-items:center;gap:11px;border-bottom:2px solid var(--gold);padding-bottom:8px}
+.hd img{width:34px;height:34px;border-radius:7px}.hd .t{font-weight:800;letter-spacing:1.4px;font-size:13px}.hd .s{font-size:10px;color:var(--mut);margin-top:1px}
+.hd .d{margin-left:auto;text-align:right}.hd .d b{display:block;color:var(--gold);font-size:13px}.hd .d span{font-size:9.5px;color:var(--mut)}
+h2{font-family:Georgia,'Times New Roman',serif;font-weight:400;font-size:18px;margin:14px 0 1px}.sub{font-size:9.5px;color:var(--mut);margin-bottom:7px}
+.up{color:var(--up);font-weight:700}.dn{color:var(--dn);font-weight:700}.mut{color:var(--mut)}
+table{width:100%;border-collapse:collapse;font-size:10.5px}th{font-size:8.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--mut);text-align:left;padding:4px 5px;border-bottom:1.5px solid var(--ink);font-weight:700}
+td{padding:4px 5px;border-bottom:1px solid var(--line);vertical-align:middle}.r{text-align:right}th.r{text-align:right}.c{text-align:center}th.c{text-align:center}
+tr.tot td{font-weight:800;border-top:1.5px solid var(--ink);border-bottom:none}
+.bl{border-radius:4px;vertical-align:middle;margin-right:5px}
+.ft{position:absolute;bottom:7mm;left:15mm;right:15mm;border-top:1px solid var(--line);padding-top:4px;font-size:8.5px;color:var(--mut);display:flex;justify-content:space-between}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.box{border:1px solid var(--line);border-radius:10px;padding:9px 11px}.box h3{margin:0 0 6px;font-size:9.5px;letter-spacing:1px;text-transform:uppercase}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.kpi{border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+.kpi .l{font-size:8.5px;letter-spacing:1px;text-transform:uppercase;color:var(--mut);font-weight:700}.kpi .v{font-size:19px;font-weight:800;margin:3px 0 1px}.kpi .x{font-size:9.5px;color:var(--mut)}
+.hero{display:grid;grid-template-columns:1.05fr 2fr;gap:12px;margin-top:12px}
+.big{background:#1B2233;color:#fff;border-radius:12px;padding:14px 16px}.big .l{font-size:9px;letter-spacing:1.4px;text-transform:uppercase;color:#C9CED8;font-weight:700}
+.big .v{font-size:29px;font-weight:800;margin:5px 0 2px}.big .c{font-size:11px}.big .up{color:#5BD08C}.big .dn{color:#FF8A80}
+.split{display:flex;height:8px;border-radius:5px;overflow:hidden;margin:10px 0 5px}.lg{font-size:9.5px;color:#C9CED8;display:flex;gap:9px;flex-wrap:wrap}.lg i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px}
+.ch{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.tile{border:1px solid var(--line);border-radius:12px;padding:10px 11px;border-top:4px solid var(--c)}
+.tile .l{font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--c)}.tile .v{font-size:18px;font-weight:800;margin:3px 0 0;white-space:nowrap}
+.tile .k{font-size:9.5px;color:var(--mut);display:flex;justify-content:space-between;gap:6px;white-space:nowrap;border-top:1px dashed var(--line);margin-top:5px;padding-top:4px}.tile .k b{color:var(--ink)}
+.act{padding-left:15px;margin:0}.act li{font-size:10.5px;margin:0 0 5px;line-height:1.35}
+.pill{display:inline-block;font-size:8px;font-weight:800;padding:1px 6px;border-radius:8px;margin-right:4px;color:#fff;vertical-align:1px}
+.sb{display:flex;height:8px;border-radius:4px;overflow:hidden;background:#EEF0F3}.sb i{display:block;height:100%}
+.cell{display:inline-block;min-width:52px;padding:2px 6px;border-radius:7px;font-weight:700;font-size:10px}
+.note{font-size:8.5px;color:var(--mut);margin-top:5px;line-height:1.4}
+.chip{display:inline-block;font-size:8.5px;padding:1px 6px;border-radius:7px;background:var(--soft);color:var(--mut);margin-left:6px;font-weight:700}
+.ex{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:start;padding:7px 0;border-bottom:1px solid var(--line);font-size:10.5px;line-height:1.35}
+`;
+function digestBuildOptionA(){
+  // the digest day = the last day that has delivery sales (never ahead of `latest`), so a day whose delivery tabs
+  // aren't filled yet doesn't print as AED 0
+  const _lat=latest;let lastDel="";for(const r of(lensBase||allData)){if(r.channel!=="instore"&&(r.sales||0)>0&&r.date>lastDel&&r.date<=_lat)lastDel=r.date;}
+  if(lastDel&&lastDel<_lat)latest=lastDel;
+  try{return dgaBuild();}finally{latest=_lat;}
+}
+function dgaBuild(){
+  const dr=digestDateRanges(),Y=dr.yesterday.start,SD=dr.sameDayLastWeek.start;
+  const E=x=>esc(String(x==null?"":x)),n0=v=>Math.round(v||0).toLocaleString("en-US"),aed=v=>"AED "+n0(v),kf=v=>Math.abs(v)>=1000?(v/1000).toFixed(1)+"K":n0(v);
+  const chg=(cur,base,inv,short)=>{const p=pctOf(cur,base);if(p==null)return'<span class="mut">—</span>';const good=(p>=0)!==!!inv;const t=(short||Math.abs(p)>=100)?Math.abs(p).toFixed(0)+"%":Math.abs(p).toFixed(1)+"%";return`<span class="${good?"up":"dn"}">${p>=0?"▲":"▼"}${t}</span>`;};
+  const lg=(nm,s)=>{const src=(typeof LOGOS!=="undefined"&&LOGOS[nm])||(typeof LOGO_FALLBACK!=="undefined"&&LOGO_FALLBACK[nm])||"";return src?`<img class="bl" style="width:${s||16}px;height:${s||16}px" src="${src}">`:"";};
+  const CHC={Delivery:"var(--del)","Dine-In":"var(--din)",Takeaway:"var(--ta)"};
+  const LOGO=(typeof LOGOS!=="undefined"&&LOGOS["Oregano"])||"";
+  const vsLbl=`vs ${fmtDisp(SD)} · week ${fmtShort(dr.thisWeek.start)}–${fmtShort(dr.thisWeek.end)} · all sales excl. VAT`;
+  const head=(t,s)=>`<div class="hd">${LOGO?`<img src="${LOGO}">`:""}<div><div class="t">${t}</div><div class="s">${s}</div></div><div class="d"><b>${E(fmtDisp(Y))}</b><span>${E(vsLbl)}</span></div></div>`;
+  const TOT=6,foot=p=>`<div class="ft"><span>Oregano Group — Daily Digest · Confidential — internal use only · generated ${E(fmtDisp(dk(new Date())))}</span><span>Page ${p} of ${TOT}</span></div>`;
+
+  // ---------- delivery (excl. VAT) ----------
+  const D=dgaWithDeliveryExcl(()=>{
+    const P=(s,e,b,a)=>digestPeriodTotals(s,e,b,a);
+    const o={y:P(Y,Y),ys:P(SD,SD),tw:P(dr.thisWeek.start,dr.thisWeek.end),lw:P(dr.lastWeek.start,dr.lastWeek.end),fw:P(dr.fourWeeksBack.start,dr.fourWeeksBack.end),ly:P(dr.lastYear.start,dr.lastYear.end),brands:{},grid:{},moves:[],hl:{}};
+    BR.forEach(b=>{o.brands[b.n]={y:P(Y,Y,b.n),ys:P(SD,SD,b.n),tw:P(dr.thisWeek.start,dr.thisWeek.end,b.n),lw:P(dr.lastWeek.start,dr.lastWeek.end,b.n),fw:P(dr.fourWeeksBack.start,dr.fourWeeksBack.end,b.n),ly:P(dr.lastYear.start,dr.lastYear.end,b.n)};
+      o.grid[b.n]=AGGS.map(a=>pctOf(P(dr.thisWeek.start,dr.thisWeek.end,b.n,a).contribution,P(dr.lastWeek.start,dr.lastWeek.end,b.n,a).contribution));
+      const tw=digestOutletTotals(b.n,dr.thisWeek.start,dr.thisWeek.end),lw=digestOutletTotals(b.n,dr.lastWeek.start,dr.lastWeek.end),mv=[];
+      new Set([...Object.keys(tw),...Object.keys(lw)]).forEach(x=>{const c=(tw[x]&&tw[x].sales)||0,bs=(lw[x]&&lw[x].sales)||0;if(bs<=0||outletIsRetired(b.n,x))return;const p=pctOf(c,bs);if(p==null)return;const m={brand:b.n,outlet:x,cur:c,pct:p};mv.push(m);o.moves.push(m);});
+      mv.sort((a,z)=>z.pct-a.pct);if(mv.length)o.hl[b.n]={g:mv[0],d:mv[mv.length-1]};});
+    o.spot=digestCampaignSpotlight();o.ads=digestAdSnapshot();o.aggs=AGGS.slice();
+    return o;});
+  // ---------- channels / outlets (chAggregate, excl. VAT) ----------
+  const prevVat=chState.vat;chState.vat="excl";
+  let Cy,Cs,Ctw,Clw,Cfw,Cly;
+  try{Cy=chAggregate(Y,Y,true);Cs=chAggregate(SD,SD,true);Ctw=chAggregate(dr.thisWeek.start,dr.thisWeek.end,true);Clw=chAggregate(dr.lastWeek.start,dr.lastWeek.end,true);Cfw=chAggregate(dr.fourWeeksBack.start,dr.fourWeeksBack.end,true);Cly=chAggregate(dr.lastYear.start,dr.lastYear.end,true);}
+  finally{chState.vat=prevVat;}
+  const CH=["Delivery","Dine-In","Takeaway"],chLbl=c=>c==="Dine-In"?"Dine-in":c;
+  const gY=Cy.total,gS=Cs.total,gTW=Ctw.total,gLW=Clw.total,gFW=Cfw.total;
+  const di=Cy.tot["Dine-In"],dis=Cs.tot["Dine-In"],ta=Cy.tot.Takeaway,tas=Cs.tot.Takeaway,de=Cy.tot.Delivery,des=Cs.tot.Delivery;
+  const intY=ddInternal(Y,Y,null),intYt=intY["Dine-In"]+intY.Takeaway;
+  const spg=x=>x.guests>0?x.sales/x.guests:0,aov=x=>x.orders>0?x.sales/x.orders:0;
+  // top takeaway outlet
+  let topTA=null;for(const[o,v]of Object.entries(Cy.by))if(!topTA||v.Takeaway.sales>Cy.by[topTA].Takeaway.sales)topTA=o;
+
+  // ---------- actions (same rules as before) ----------
+  const acts=[];
+  if(D.spot&&D.spot.worst&&D.spot.worst.a.incrContribPerDay<0){const c=D.spot.worst.c;acts.push(["PAUSE?","#C0392B",`${c.brand} · ${c.aggregator} "${c.name||c.comments||"Campaign"}"`,`running negative (${aed(D.spot.worst.a.incrContribPerDay)}/day incremental contribution). Consider pausing or reducing the discount.`]);}
+  if(D.spot&&D.spot.best&&D.spot.best.a.incrContribPerDay>0){const c=D.spot.best.c;acts.push(["KEEP","#1E8E4E",`${c.brand} · ${c.aggregator} "${c.name||c.comments||"Campaign"}"`,`strongest performer this week (+${aed(D.spot.best.a.incrContribPerDay)}/day) — candidate to replicate.`]);}
+  if(D.ads){D.ads.critical.forEach(r=>acts.push(["BUDGET","#B7791F",`${r.brand} · ${r.branch||""} · ${r.aggregator}`,`nearly out of ad budget${r.daysUntilExhausted!=null?` (~${r.daysUntilExhausted}d left)`:""}. Top up or let it lapse.`]));
+    D.ads.underspending.forEach(r=>acts.push(["BID","#B7791F",`${r.brand} · ${r.branch||""} · ${r.aggregator}`,"under 15% of budget used past the halfway mark. Check bid/cap."]));}
+  D.moves.sort((a,z)=>Math.abs(z.pct)-Math.abs(a.pct));const watch=D.moves.slice(0,5);
+  watch.filter(m=>m.pct<0).slice(0,2).forEach(m=>acts.push(["CHECK","#4E7FD8",`${m.brand} · ${m.outlet}`,`sales down ${Math.abs(m.pct).toFixed(0)}% vs last week. Worth investigating.`]));
+  // outlets below their usual (POS flags)
+  const fl=((typeof posSyncState!=="undefined"&&posSyncState.status&&posSyncState.status.flags)||[]).filter(x=>x.status==="open"&&x.date===Y);
+  fl.forEach(f=>acts.push(["POS","#C0392B",f.loc,`POS sales under half the usual for a ${new Date(Y+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long"})} — check the till synced.`]));
+  const topActs=[...acts.filter(a=>a[0]!=="KEEP")].slice(0,4);
+
+  // ---------- what moved (auto) ----------
+  const mv=[];
+  const bm=BR.map(b=>({b:b.n,p:pctOf(D.brands[b.n].y.sales,D.brands[b.n].ys.sales),y:D.brands[b.n].y})).filter(x=>x.p!=null&&x.y.sales>1000).sort((a,z)=>Math.abs(z.p)-Math.abs(a.p));
+  if(bm[0])mv.push(`<b>${E(bm[0].b)} delivery ${bm[0].p>=0?"▲":"▼"}${Math.abs(bm[0].p).toFixed(0)}%</b> vs last ${new Date(SD+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long"})} — ${aed(bm[0].y.sales)}, ${n0(bm[0].y.orders)} orders.`);
+  const om=Object.keys(Cy.by).map(o=>({o,t:Cy.sum(Cy.by[o]),p:Cs.by[o]?pctOf(Cy.sum(Cy.by[o]),Cs.sum(Cs.by[o])):null})).filter(x=>x.p!=null&&x.t>500);
+  const up=om.slice().sort((a,z)=>z.p-a.p).slice(0,3),dn=om.slice().sort((a,z)=>a.p-z.p).filter(x=>x.p<0).slice(0,2);
+  if(up.length)mv.push(`<b>${up.map(x=>`${E(x.o)} ▲${x.p.toFixed(0)}%`).join(", ")}</b> — strongest outlets, all channels.`);
+  if(dn.length)mv.push(`<b>${dn.map(x=>`${E(x.o)} ▼${Math.abs(x.p).toFixed(0)}%`).join(", ")}</b> — weakest outlets vs the same day last week.`);
+  const dp=pctOf(D.y.disc,D.ys.disc);if(dp!=null)mv.push(`<b>Delivery discount burn ${dp>=0?"▲":"▼"}${Math.abs(dp).toFixed(0)}%</b> to ${D.y.sales?(D.y.disc/D.y.sales*100).toFixed(1):0}% of delivery sales.`);
+  if(spg(di))mv.push(`<b>Dine-in:</b> ${n0(di.guests)} guests (${chg(di.guests,dis.guests,false,true)}), AED ${spg(di).toFixed(1)} per guest (${chg(spg(di),spg(dis),false,true)}).`);
+
+  // ================= PAGE 1 — SUMMARY =================
+  const sh=x=>gY>0?x/gY*100:0;
+  const hero=`<div class="hero"><div class="big"><div class="l">Group sales yesterday</div><div class="v">AED ${n0(gY)}</div><div class="c">${chg(gY,gS)} vs same day last week</div>
+   <div class="split">${CH.map(c=>`<div style="width:${sh(Cy.tot[c].sales).toFixed(1)}%;background:${CHC[c]}"></div>`).join("")}</div>
+   <div class="lg">${CH.map(c=>`<span><i style="background:${CHC[c]}"></i>${chLbl(c)} ${sh(Cy.tot[c].sales).toFixed(0)}%</span>`).join("")}</div>
+   <div class="c" style="margin-top:11px;color:#C9CED8">Week to date <b style="color:#fff">AED ${n0(gTW)}</b><br>${chg(gTW,gLW)} vs last week · ${chg(gTW,gFW)} vs 4 weeks ago</div></div>
+   <div class="ch">
+   <div class="tile" style="--c:var(--del)"><div class="l">Delivery</div><div class="v">AED ${kf(de.sales)}</div>${chg(de.sales,des.sales)}
+    <div class="k"><span>Orders</span><b>${n0(D.y.orders)} ${chg(D.y.orders,D.ys.orders,false,true)}</b></div><div class="k"><span>AOV</span><b>${D.y.aov.toFixed(1)} ${chg(D.y.aov,D.ys.aov,false,true)}</b></div>
+    <div class="k"><span>Contribution</span><b>${kf(D.y.contribution)} ${chg(D.y.contribution,D.ys.contribution,false,true)}</b></div><div class="k"><span>Discount burn</span><b>${D.y.sales?(D.y.disc/D.y.sales*100).toFixed(1):0}% ${chg(D.y.disc,D.ys.disc,true,true)}</b></div></div>
+   <div class="tile" style="--c:var(--din)"><div class="l">Dine-in</div><div class="v">AED ${kf(di.sales)}</div>${chg(di.sales,dis.sales)}
+    <div class="k"><span>Guests</span><b>${n0(di.guests)} ${chg(di.guests,dis.guests,false,true)}</b></div><div class="k"><span>Spend / guest</span><b>${spg(di).toFixed(1)} ${chg(spg(di),spg(dis),false,true)}</b></div>
+    <div class="k"><span>Customer disc.</span><b>${ddCustDepth(di,intY["Dine-In"]).toFixed(1)}%</b></div><div class="k"><span>Internal disc.</span><b>AED ${kf(intY["Dine-In"])}</b></div></div>
+   <div class="tile" style="--c:var(--ta)"><div class="l">Takeaway</div><div class="v">AED ${kf(ta.sales)}</div>${chg(ta.sales,tas.sales)}
+    <div class="k"><span>Orders</span><b>${n0(ta.orders)} ${chg(ta.orders,tas.orders,false,true)}</b></div><div class="k"><span>AOV</span><b>${aov(ta).toFixed(1)}</b></div>
+    <div class="k"><span>Top outlet</span><b>${E(topTA||"—")}</b></div><div class="k"><span>Customer disc.</span><b>${ddCustDepth(ta,intY.Takeaway).toFixed(1)}%</b></div></div></div></div>`;
+  const lyHas=c=>Cly.tot[c].sales>0;
+  const wkRows=CH.map(c=>`<tr><td><b style="color:${CHC[c]}">● ${chLbl(c)}</b></td><td class="r">${aed(Ctw.tot[c].sales)}</td><td class="r">${chg(Ctw.tot[c].sales,Clw.tot[c].sales)}</td><td class="r">${chg(Ctw.tot[c].sales,Cfw.tot[c].sales)}</td><td class="r">${lyHas(c)?chg(Ctw.tot[c].sales,Cly.tot[c].sales):'<span class="mut">—</span>'}</td><td class="r">${gTW?(Ctw.tot[c].sales/gTW*100).toFixed(1):0}%</td></tr>`).join("")
+    +`<tr class="tot"><td>Group</td><td class="r">${aed(gTW)}</td><td class="r">${chg(gTW,gLW)}</td><td class="r">${chg(gTW,gFW)}</td><td class="r">${CH.every(lyHas)?chg(gTW,Cly.total):'<span class="mut">n/a*</span>'}</td><td class="r">100%</td></tr>`
+    +`<tr><td class="mut">Dine-in guests</td><td class="r">${n0(Ctw.tot["Dine-In"].guests)}</td><td class="r">${chg(Ctw.tot["Dine-In"].guests,Clw.tot["Dine-In"].guests)}</td><td class="r">${chg(Ctw.tot["Dine-In"].guests,Cfw.tot["Dine-In"].guests)}</td><td class="r mut">—</td><td></td></tr>`
+    +`<tr><td class="mut">Spend / guest</td><td class="r">AED ${spg(Ctw.tot["Dine-In"]).toFixed(1)}</td><td class="r">${chg(spg(Ctw.tot["Dine-In"]),spg(Clw.tot["Dine-In"]))}</td><td class="r">${chg(spg(Ctw.tot["Dine-In"]),spg(Cfw.tot["Dine-In"]))}</td><td class="r mut">—</td><td></td></tr>`;
+  const p1=`<div class="page">${head("OREGANO GROUP · DAILY DIGEST","All channels · all brands · all platforms")}${hero}
+   <h2>This week so far — by channel</h2><div class="sub">${E(fmtShort(dr.thisWeek.start))}–${E(fmtShort(dr.thisWeek.end))} vs last week (${E(fmtShort(dr.lastWeek.start))}–${E(fmtShort(dr.lastWeek.end))}), 4 weeks ago (${E(fmtShort(dr.fourWeeksBack.start))}–${E(fmtShort(dr.fourWeeksBack.end))}) and the same week last year</div>
+   <table><tr><th>Channel</th><th class="r">This week</th><th class="r">vs last week</th><th class="r">vs 4 weeks ago</th><th class="r">vs last year</th><th class="r">Share</th></tr>${wkRows}</table>
+   ${CH.every(lyHas)?"":'<div class="note">* No POS dine-in/takeaway data for last year, so the group comparison is left out rather than overstating growth.</div>'}
+   <div class="two" style="margin-top:12px"><div class="box"><h3>⚡ Needs a decision today</h3>${topActs.length?`<ol class="act">${topActs.map(a=>`<li><span class="pill" style="background:${a[1]}">${a[0]}</span><b>${E(a[2])}</b> — ${E(a[3])}</li>`).join("")}</ol>`:'<div class="mut">Nothing urgent today.</div>'}${acts.length>topActs.length?`<div class="note">Full list on page 6.</div>`:""}</div>
+   <div class="box"><h3>📈 What moved yesterday</h3><ol class="act">${mv.slice(0,4).map(t=>`<li>${t}</li>`).join("")}</ol></div></div>${foot(1)}</div>`;
+
+  // ================= PAGE 2 — OUTLETS =================
+  const outs=Object.keys(Cy.by).filter(o=>Cy.sum(Cy.by[o])>0||(Cs.by[o]&&Cs.sum(Cs.by[o])>0)).sort((a,z)=>Cy.sum(Cy.by[z])-Cy.sum(Cy.by[a]));
+  const mx=Math.max(1,...outs.map(o=>Cy.sum(Cy.by[o])));
+  const flagged=new Set(fl.map(f=>String(f.loc).toLowerCase()));
+  const oRows=outs.map((o,i)=>{const c=Cy.by[o],t=Cy.sum(c),pv=Cs.by[o]?Cs.sum(Cs.by[o]):0;const w=x=>t?x/t*100:0;
+    return`<tr><td class="mut">${i+1}</td><td><b>${E(o)}</b>${[...flagged].some(f=>f.includes(o.toLowerCase().slice(0,4)))?" ⚠":""}</td><td style="width:130px"><div class="sb" style="width:${(t/mx*100).toFixed(1)}%"><i style="width:${w(c.Delivery.sales).toFixed(1)}%;background:var(--del)"></i><i style="width:${w(c["Dine-In"].sales).toFixed(1)}%;background:var(--din)"></i><i style="width:${w(c.Takeaway.sales).toFixed(1)}%;background:var(--ta)"></i></div></td>
+     <td class="r">${n0(c.Delivery.sales)}</td><td class="r">${c["Dine-In"].sales?n0(c["Dine-In"].sales):'<span class="mut">–</span>'}</td><td class="r">${c.Takeaway.sales?n0(c.Takeaway.sales):'<span class="mut">–</span>'}</td><td class="r"><b>${n0(t)}</b></td><td class="r">${pv?chg(t,pv):'<span class="mut">—</span>'}</td></tr>`;}).join("")
+    +`<tr class="tot"><td></td><td>Group</td><td></td><td class="r">${n0(de.sales)}</td><td class="r">${n0(di.sales)}</td><td class="r">${n0(ta.sales)}</td><td class="r">${n0(gY)}</td><td class="r">${chg(gY,gS)}</td></tr>`;
+  const wRows=watch.map(m=>`<tr><td>${lg(m.brand,15)}${E(m.brand)} · ${E(m.outlet)}</td><td class="r">${aed(m.cur)}</td><td class="r">${m.pct>=0?`<span class="up">▲${m.pct.toFixed(0)}%</span>`:`<span class="dn">▼${Math.abs(m.pct).toFixed(0)}%</span>`}</td></tr>`).join("");
+  const hRows=BR.filter(b=>D.hl[b.n]).map(b=>{const m=D.hl[b.n];return`<tr><td>${lg(b.n,16)}<b>${E(b.n)}</b></td><td class="r"><span class="up">▲ ${E(m.g.outlet)}</span><br><span class="mut">${aed(m.g.cur)} (${m.g.pct>=0?"+":""}${m.g.pct.toFixed(0)}%)</span></td><td class="r"><span class="${m.d.pct<0?"dn":"up"}">${m.d.pct<0?"▼":"▲"} ${E(m.d.outlet)}</span><br><span class="mut">${aed(m.d.cur)} (${m.d.pct>=0?"+":""}${m.d.pct.toFixed(0)}%)</span></td></tr>`;}).join("");
+  const p2=`<div class="page">${head("OUTLETS · ALL CHANNELS","Every site ranked by total sales yesterday")}
+   <div class="sub" style="margin-top:9px"><b style="color:var(--del)">■ Delivery</b> &nbsp;<b style="color:var(--din)">■ Dine-in</b> &nbsp;<b style="color:var(--ta)">■ Takeaway</b> · AED excl. VAT · change vs ${E(fmtDisp(SD))}${fl.length?" · ⚠ = POS sales under half the usual":""}</div>
+   <table><tr><th>#</th><th>Outlet</th><th>Channel mix</th><th class="r">Delivery</th><th class="r">Dine-in</th><th class="r">Takeaway</th><th class="r">Total</th><th class="r">vs LW</th></tr>${oRows}</table>
+   <div class="two" style="margin-top:12px"><div class="box"><h3>🔎 Watch list — biggest swings this week</h3><table><tr><th>Brand · outlet</th><th class="r">Week to date</th><th class="r">vs LW</th></tr>${wRows}</table></div>
+   <div class="box"><h3>📍 Top gainer &amp; decliner by brand</h3><table><tr><th>Brand</th><th class="r">Gainer (week)</th><th class="r">Decliner (week)</th></tr>${hRows}</table></div></div>${foot(2)}</div>`;
+
+  // ================= PAGE 3 — DELIVERY =================
+  const kp=(l,v,sub,c)=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${sub?`<span class="x">${sub} · </span>`:""}${c}</div>`;
+  const pcs=v=>D.y.sales?(v/D.y.sales*100).toFixed(1)+"% of sales":"";
+  const wk=(l,key,fmt,inv)=>`<tr><td><b>${l}</b></td><td class="r">${fmt(D.tw[key])}</td><td class="r">${chg(D.tw[key],D.lw[key],inv)}</td><td class="r">${chg(D.tw[key],D.fw[key],inv)}</td><td class="r">${chg(D.tw[key],D.ly[key],inv)}</td></tr>`;
+  const bRows=BR.map(b=>{const x=D.brands[b.n];return`<tr><td>${lg(b.n,18)}<b>${E(b.n)}</b></td>
+    <td class="r">${n0(x.y.sales)}<br>${chg(x.y.sales,x.ys.sales)}</td><td class="r">${n0(x.y.orders)}<br>${chg(x.y.orders,x.ys.orders)}</td><td class="r">${n0(x.y.contribution)}<br>${chg(x.y.contribution,x.ys.contribution)}</td>
+    <td class="r" style="border-left:2px solid var(--line)">${n0(x.tw.sales)}<br>${chg(x.tw.sales,x.lw.sales)}</td><td class="r">${n0(x.tw.orders)}<br>${chg(x.tw.orders,x.lw.orders)}</td><td class="r">${x.tw.aov.toFixed(1)}<br>${chg(x.tw.aov,x.lw.aov)}</td>
+    <td class="r">${n0(x.tw.disc)}<br>${chg(x.tw.disc,x.lw.disc,true)}</td><td class="r">${n0(x.tw.adCost)}<br>${chg(x.tw.adCost,x.lw.adCost,true)}</td><td class="r"><b>${n0(x.tw.contribution)}</b><br>${chg(x.tw.contribution,x.lw.contribution)}</td></tr>`;}).join("");
+  const p3=`<div class="page">${head("DELIVERY","Aggregator orders · brands · platforms")}
+   <h2>Yesterday — delivery</h2><div class="sub">vs ${E(fmtDisp(SD))} (same weekday last week)</div>
+   <div class="kpis">${kp("Net sales",aed(D.y.sales),"",chg(D.y.sales,D.ys.sales))}${kp("Orders",n0(D.y.orders),"",chg(D.y.orders,D.ys.orders))}${kp("AOV","AED "+D.y.aov.toFixed(1),"",chg(D.y.aov,D.ys.aov))}
+    ${kp("Discount burn",aed(D.y.disc),pcs(D.y.disc),chg(D.y.disc,D.ys.disc,true))}${kp("Ad spend",aed(D.y.adCost),pcs(D.y.adCost),chg(D.y.adCost,D.ys.adCost,true))}${kp("Net contribution",aed(D.y.contribution),pcs(D.y.contribution),chg(D.y.contribution,D.ys.contribution))}</div>
+   <h2>This week — delivery</h2><div class="sub">${E(fmtShort(dr.thisWeek.start))}–${E(fmtShort(dr.thisWeek.end))} vs last week · 4 weeks ago · last year</div>
+   <table><tr><th>Metric</th><th class="r">This week</th><th class="r">vs last week</th><th class="r">vs 4 weeks ago</th><th class="r">vs last year</th></tr>
+   ${wk("Orders","orders",n0)}${wk("Net sales","sales",aed)}${wk("AOV","aov",v=>"AED "+(v||0).toFixed(1))}${wk("Discount burn","disc",aed,true)}${wk("Ad spend","adCost",aed,true)}${wk("Net contribution","contribution",aed)}</table>
+   <h2>Brands — yesterday and this week</h2><div class="sub">Yesterday on the left, the week on the right · AED excl. VAT</div>
+   <table><tr><th rowspan="2">Brand</th><th colspan="3" class="c" style="border-bottom:1px solid var(--line)">Yesterday vs ${E(fmtShort(SD))}</th><th colspan="6" class="c" style="border-bottom:1px solid var(--line);border-left:2px solid var(--line)">Week vs last week</th></tr>
+   <tr><th class="r">Sales</th><th class="r">Orders</th><th class="r">Contrib.</th><th class="r" style="border-left:2px solid var(--line)">Sales</th><th class="r">Orders</th><th class="r">AOV</th><th class="r">Discount</th><th class="r">Ad spend</th><th class="r">Contribution</th></tr>${bRows}</table>${foot(3)}</div>`;
+
+  // ================= PAGE 4 — PLATFORMS, CAMPAIGNS, ADS =================
+  const cell=p=>{if(p==null)return'<span class="mut">—</span>';const g=p>=0;return`<span class="cell" style="background:${g?"#DDF3E5":"#FBE0DD"};color:${g?"#1E7A44":"#B03024"}">${g?"▲":"▼"}${Math.abs(p)>=100?Math.abs(p).toFixed(0):Math.abs(p).toFixed(1)}%</span>`;};
+  const gRows=BR.map(b=>`<tr><td>${lg(b.n,18)}<b>${E(b.n)}</b></td>${D.grid[b.n].map(p=>`<td class="c">${cell(p)}</td>`).join("")}</tr>`).join("");
+  const camp=(x,good)=>{if(!x)return"";const c=x.a?x.c:null;if(!c)return"";const v=x.a.incrContribPerDay;return`<div class="box" style="background:${good?"#F0FAF4":"#FDF2F1"};border-color:${good?"#BFE6CD":"#F2C7C2"}"><h3 style="color:${good?"var(--up)":"var(--dn)"}">${good?"Performing well — keep running":"Underperforming — consider pausing"}</h3>
+    <div style="font-size:12px;font-weight:800">${lg(c.brand,16)}${lg(c.aggregator,16)}${E(c.brand)} · ${E(c.aggregator)} — "${E(c.name||c.comments||"Campaign")}"</div><div class="mut" style="margin:3px 0">${E(fmtShort(c.startDate))} – ${E(fmtShort(c.endDate))}</div>Incremental contribution/day <b class="${v>=0?"up":"dn"}">${v>=0?"+":""}${aed(v)}</b></div>`;};
+  const adRows=D.ads?Object.entries(D.ads.byAgg).map(([a,v])=>{const pc=v.alloc>0?v.spent/v.alloc*100:0;return`<tr><td>${lg(a,16)}<b>${E(a)}</b></td><td class="r">${aed(v.spent)}</td><td class="r">${aed(v.alloc)}</td><td style="width:140px"><div class="sb"><i style="width:${Math.min(100,pc).toFixed(0)}%;background:${pc>85?"#C0392B":"var(--gold)"}"></i></div></td><td class="r"><b>${pc.toFixed(0)}%</b></td></tr>`;}).join(""):"";
+  const adNotes=D.ads?[...D.ads.critical.map(r=>`${E(r.brand)} · ${E(r.branch||"")} · ${E(r.aggregator)} is nearly out of budget${r.daysUntilExhausted!=null?` (~${r.daysUntilExhausted}d left)`:""}.`),...D.ads.underspending.map(r=>`${E(r.brand)} · ${E(r.branch||"")} · ${E(r.aggregator)} has used under 15% of budget past halfway — bid or cap may be too low.`)]:[];
+  const p4=`<div class="page">${head("DELIVERY · PLATFORMS &amp; CAMPAIGNS","Where the week's contribution moved")}
+   <h2>Platform × brand</h2><div class="sub">Contribution change, this week vs last week, every combination</div>
+   <table><tr><th>Brand</th>${D.aggs.map(a=>`<th class="c">${lg(a,16)}<br>${E(a)}</th>`).join("")}</tr>${gRows}</table>
+   ${D.spot?`<h2>Campaign spotlight</h2><div class="sub">Best and worst incremental performers this week, currently running</div><div class="two">${camp(D.spot.best,true)}${camp(D.spot.worst,false)}</div>`:""}
+   ${D.ads?`<h2>Ad investment snapshot</h2><div class="sub">Spent vs allocated by platform, active budgets</div><table><tr><th>Platform</th><th class="r">Spent</th><th class="r">Allocated</th><th>Used</th><th class="r"></th></tr>${adRows}</table>${adNotes.length?`<ul style="margin:7px 0 0;padding-left:16px;font-size:10px;line-height:1.5">${adNotes.map(x=>`<li>${x}</li>`).join("")}</ul>`:""}`:""}${foot(4)}</div>`;
+
+  // ================= PAGE 5 — DINE-IN & TAKEAWAY =================
+  const inst=Object.keys(Cy.by).filter(o=>Cy.by[o]["Dine-In"].sales>0||Cy.by[o].Takeaway.sales>0).sort((a,z)=>Cy.by[z]["Dine-In"].sales-Cy.by[a]["Dine-In"].sales||Cy.by[z].Takeaway.sales-Cy.by[a].Takeaway.sales);
+  const iRows=inst.map(o=>{const c=Cy.by[o],d=c["Dine-In"],t=c.Takeaway,io=ddInternal(Y,Y,o);return`<tr><td><b>${E(o)}</b></td><td class="r">${d.sales?n0(d.sales):"–"}</td><td class="r">${d.guests?n0(d.guests):"–"}</td><td class="r">${d.guests?(d.sales/d.guests).toFixed(1):"–"}</td><td class="r">${d.orders?n0(d.orders):"–"}</td><td class="r">${d.sales?ddCustDepth(d,io["Dine-In"]).toFixed(0)+"%":"–"}</td><td class="r" style="border-left:2px solid var(--line)">${t.sales?n0(t.sales):"–"}</td><td class="r">${t.orders?n0(t.orders):"–"}</td></tr>`;}).join("");
+  // till discounts yesterday, by programme
+  const pg={},ig={};for(const r of(typeof ddData!=="undefined"?ddData:[])){if(r.date!==Y||!ddChannelOf(r.name))continue;if(ddIsInternal(r)){ig[r.prog]=(ig[r.prog]||0)+r.disc;}else{const x=(pg[r.prog]=pg[r.prog]||{c:0,d:0,n:0});x.c+=r.checks;x.d+=r.disc;x.n+=r.net;}}
+  const pR=Object.entries(pg).sort((a,z)=>z[1].d-a[1].d).slice(0,9).map(([p,v])=>`<tr><td>${E(p)}</td><td class="r">${n0(v.c)}</td><td class="r">${n0(v.d)}</td><td class="r">${v.d?(v.n/v.d).toFixed(1)+"x":"–"}</td></tr>`).join("");
+  const iR=Object.entries(ig).sort((a,z)=>z[1]-a[1]).slice(0,6).map(([p,v])=>`<tr><td>${E(p)}</td><td class="r">${n0(v)}</td></tr>`).join(""),iT=Object.values(ig).reduce((a,v)=>a+v,0);
+  const p5=`<div class="page">${head("DINE-IN &amp; TAKEAWAY","Guests, spend and discounts at the physical outlets")}
+   <div class="kpis" style="margin-top:12px"><div class="kpi" style="border-top:4px solid var(--din)"><div class="l">Dine-in sales</div><div class="v">${aed(di.sales)}</div>${chg(di.sales,dis.sales)} <span class="x">· week ${aed(Ctw.tot["Dine-In"].sales)} ${chg(Ctw.tot["Dine-In"].sales,Clw.tot["Dine-In"].sales)}</span></div>
+   <div class="kpi" style="border-top:4px solid var(--din)"><div class="l">Guests · spend / guest</div><div class="v">${n0(di.guests)} · AED ${spg(di).toFixed(1)}</div>${chg(di.guests,dis.guests)} · ${chg(spg(di),spg(dis))}</div>
+   <div class="kpi" style="border-top:4px solid var(--ta)"><div class="l">Takeaway sales</div><div class="v">${aed(ta.sales)}</div>${chg(ta.sales,tas.sales)} <span class="x">· week ${aed(Ctw.tot.Takeaway.sales)}</span></div></div>
+   ${!di.sales&&!ta.sales?'<div class="note" style="color:var(--dn)">⚠ The Dine-In &amp; Takeaway tab has no figures for this day yet — run a POS Sync Pull and export again.</div>':""}
+   <h2>By outlet — yesterday</h2><div class="sub">Customer discount depth = customer discounts ÷ (gross − internal discounts)</div>
+   <table><tr><th>Outlet</th><th class="r">Dine-in sales</th><th class="r">Guests</th><th class="r">Spend/guest</th><th class="r">Checks</th><th class="r">Cust. disc.</th><th class="r" style="border-left:2px solid var(--line)">Takeaway</th><th class="r">TA orders</th></tr>${iRows||'<tr><td colspan="8" class="mut">No dine-in or takeaway data for this day yet.</td></tr>'}</table>
+   <h2>Discounts at the till — yesterday</h2><div class="sub">Customer discounts count in depth; internal discounts (staff, managers, BOD…) are shown separately</div>
+   <div class="two"><div class="box"><h3>Customer discounts — by programme</h3>${pR?`<table><tr><th>Programme</th><th class="r">Checks</th><th class="r">Discount</th><th class="r">Return / AED 1</th></tr>${pR}</table>`:'<div class="mut">No discount data for this day yet.</div>'}</div>
+   <div class="box"><h3>Internal discounts <span class="chip">not in depth</span></h3>${iR?`<table><tr><th>Type</th><th class="r">Discount</th></tr>${iR}<tr class="tot"><td>Total internal</td><td class="r">${n0(iT)}</td></tr></table>`:'<div class="mut">None.</div>'}</div></div>${foot(5)}</div>`;
+
+  // ================= PAGE 6 — ACTIONS =================
+  const p6=`<div class="page">${head("ACTIONS","Auto-generated from this week's numbers")}
+   <h2>Action list</h2><div class="sub">Tick when done · the top four are on page 1</div>
+   ${acts.length?acts.map(a=>`<div class="ex"><span>☐</span><div><span class="pill" style="background:${a[1]}">${a[0]}</span><b>${E(a[2])}</b> — ${E(a[3])}</div><span class="mut">Owner: ______</span></div>`).join(""):'<div class="mut">No actions today.</div>'}
+   <h2>Data notes</h2><div class="note" style="font-size:9.5px">All sales excl. VAT. Delivery = aggregator orders from the brand tabs (discount burn, ad spend and contribution as on the dashboard). Dine-in &amp; takeaway = Microsys POS (Dine-In &amp; Takeaway tab). Till discounts from the Dine-In Discounts tab, classified per the confirmed list (customer vs internal); internal discounts are excluded from discount depth. Last-year comparisons are delivery only — POS data starts in 2026.</div>${foot(6)}</div>`;
+
+  const filename=`OreganoGroup_DailyDigest_${Y}`;
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${E(filename)}</title><style>${DGA_CSS}</style></head><body>${p1}${p2}${p3}${p4}${p5}${p6}</body></html>`;
+  return{html,filename};
+}
+(function(){const go=()=>{if(typeof digestBuildReportHTML!=="function"||typeof rdDigestSectionHTML==="undefined"&&false)return setTimeout(go,300);
+  if(!digestBuildReportHTML.__optA){digestBuildReportHTML=function(){return digestBuildOptionA();};digestBuildReportHTML.__optA=1;window.digestBuildReportHTML=digestBuildReportHTML;}};[0,1500,5000,15000].forEach(t=>setTimeout(go,t));})();
