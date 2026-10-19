@@ -703,7 +703,7 @@ async function msysReportCSV(env, kind, isoDate) {
 function b64url(bytes) { let s = ""; new Uint8Array(bytes).forEach(b => s += String.fromCharCode(b)); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
 async function googleToken(env) {
   if (!env.GOOGLE_SA_JSON) throw new Error("NO_GOOGLE_SECRET — add GOOGLE_SA_JSON in Cloudflare");
-  const sa = JSON.parse(env.GOOGLE_SA_JSON);
+  const sa = typeof env.GOOGLE_SA_JSON === "string" ? JSON.parse(env.GOOGLE_SA_JSON) : env.GOOGLE_SA_JSON; // works whether stored as Secret (text) or JSON variable
   const now = Math.floor(Date.now() / 1000);
   const head = b64url(new TextEncoder().encode(JSON.stringify({ alg: "RS256", typ: "JWT" })));
   const claim = b64url(new TextEncoder().encode(JSON.stringify({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/spreadsheets",
