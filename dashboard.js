@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-20-589";
+const BUILD_VERSION="2026-10-20-590";
 const BUILD_NOTES=[
+  "📊 SITE P&L REDESIGN + CLEANER POS SYNC. Site P&L: filters for month / year to date / current-month estimate, outlet and brand; tiles with trends; charts — revenue & net profit by month vs budget and last year, where every AED 100 of sales went (donut), net profit by outlet with budget markers (click to filter), why profit differs from budget, discounts % of gross vs last year; problems & proposed actions per outlet (structure, sales, discounts, costs over budget) with the group discount trend on top; outlet table folded. POS Sync: one header row (status, TEST/LIVE, test, login), Pull first, the new Till vs dashboard card (verdict, day strip, open items with one-click answers), and the less-used tools folded under More tools.",
   "🏪 SITE P&L (NIKHIL ONLY). New page under Analyse: upload Finance's monthly 'PL report' workbook and see each outlet's month — revenue, food / staff / rent / commission %, repairs, Finance's confidential fixed line, net profit vs budget and last year, daily sales vs break-even — a 'where the money went' breakdown per outlet, a brand view, year to date, and the current month as an estimate from live sales (food & commission at recent ratios, fixed costs pro rata, repairs & utilities at the 3-month average with a range). Shown exactly as Finance reports it. The file is read in the browser and stored on the server; only Nikhil's login can read or upload it.",
   "⏳ NEW LOADING SCREEN. While dine-in, takeaway, catering and discounts load, Overview / All Channels / Compare show all five brand logos rising in a wave with 'One moment — pulling in today's sales' and a live step line (Delivery ✓ · Dine-in & Takeaway… · Catering · Discounts). Replaces the old faint 'Loading dine-in & takeaway…' card.",
   "🍱 CATERING IS NOW ITS OWN CHANNEL. A fourth channel button — Delivery · Dine-in · Takeaway · Catering ('All 4') — on Overview, All Channels, Compare's channel row and the Daily Digest. Catering = bills on the delivery buttons charged to a credit catering account (e.g. DSO 7 Oct, AED 2,324), from the daily reconciliation. Direct deliveries paid to us, the Deliverect test order and small till differences stay in Delivery ('incl. AED … direct & other till'), so the group total still equals Finance's DSR. Catering rung on the takeaway or dine-in buttons stays there (Microsys has no catering revenue centre). Anyone who had 'All 3' selected is moved to 'All 4' once.",
@@ -25340,23 +25341,27 @@ function renderPosSync(){
   const btn=(label,fn,primary,dis)=>`<button ${dis?"disabled":""} onclick="${fn}" style="padding:${primary?"11px 20px":"8px 14px"};border-radius:${primary?10:8}px;border:${primary?"none":"1px solid "+T.cardBorder};background:${primary?T.accentOrange:"transparent"};color:${primary?"#fff":T.textSecondary};font-weight:800;font-size:${primary?14:12}px;cursor:${dis?"default":"pointer"};opacity:${dis?.55:1}">${label}</button>`;
   const modeBtn=(v,label,col)=>`<button onclick="posSetSheet('${v}')" style="border:none;padding:7px 14px;font-weight:800;font-size:12px;cursor:pointer;background:${posSyncState.sheet===v?col+"33":"transparent"};color:${posSyncState.sheet===v?col:T.textSecondary}">${label}</button>`;
   let h=`<div style="background:${T.bg};border-radius:12px;padding:16px 20px">`;
-  h+=`<div style="${card}"><div style="${ct}">🔄 POS Sync <span style="text-transform:none;letter-spacing:0;font-weight:600">— pulls straight from Microsys, replaces the desktop POS Uploader</span></div>`;
-  if(posSyncState.err)h+=`<div style="color:${T.accentRed};font-size:13px;margin-bottom:10px">Couldn't load status: ${esc(posSyncState.err)}</div>`;
-  h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">`;
-  h+=st?pill(st.hasCreds,st.hasCreds?`Microsys login saved (${esc(st.credsUser||"")} · by ${esc(st.credsSetBy||"")} · ${posFmtTs(st.credsSetAt)})`:"Microsys login not set"):`<span style="color:${T.textSecondary};font-size:12px">Loading…</span>`;
-  if(st)h+=pill(st.hasGoogle,st.hasGoogle?"Google key added in Cloudflare":"Google key missing in Cloudflare");
-  h+=`</div>`;
-  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px"><span style="font-size:12px;color:${T.textSecondary};font-weight:700">Sheet:</span><span style="display:inline-flex;border:1px solid ${T.cardBorder};border-radius:8px;overflow:hidden">${modeBtn("test","🟢 TEST",T.accentGreen)}${modeBtn("live","🔴 LIVE",T.accentRed)}</span></div>`;
-  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${btn(posSyncState.testing?"⏳ Testing…":"🧪 Test connection","posRunTest()",true,posSyncState.testing)}${btn("🔑 Microsys login","posOpenCreds()",false,false)}</div>`;
-  h+=`<div style="font-size:12px;color:${T.textSecondary};margin-top:10px;line-height:1.5">Test connection is read-only: it signs in to Microsys, pulls yesterday's Sales Summary by Outlet, and reads the tab list of the chosen Google Sheet.</div></div>`;
+  // v590: one clean header row — status, sheet, test & login
+  const dot=(on,lbl,tip)=>`<span title="${esc(tip||"")}" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:${on?T.textPrimary:T.accentRed}"><span style="width:8px;height:8px;border-radius:50%;background:${on?T.accentGreen:T.accentRed};box-shadow:0 0 0 3px ${on?T.accentGreen:T.accentRed}22"></span>${lbl}</span>`;
+  const sbtn=(lbl,fn,dis)=>`<button ${dis?"disabled":""} onclick="${fn}" style="padding:6px 12px;border-radius:7px;border:1px solid ${T.cardBorder};background:transparent;color:${T.textSecondary};font-size:12px;font-weight:700;cursor:pointer">${lbl}</button>`;
+  h+=`<div style="${card};display:flex;align-items:center;gap:18px;flex-wrap:wrap"><div><div style="font-size:17px;font-weight:800">🔄 POS Sync</div><div style="font-size:12px;color:${T.textSecondary}">Microsys → Google Sheet → dashboard</div></div><div style="flex:1"></div>`;
+  if(posSyncState.err)h+=`<span style="color:${T.accentRed};font-size:12px">Couldn't load status: ${esc(posSyncState.err)}</span>`;
+  h+=st?dot(st.hasCreds,"Microsys",st.hasCreds?`Login ${st.credsUser||""} · saved by ${st.credsSetBy||""} · ${posFmtTs(st.credsSetAt)}`:"Microsys login not set")+dot(st.hasGoogle,"Google Sheet",st.hasGoogle?"Google key set in Cloudflare":"Google key missing in Cloudflare"):`<span style="color:${T.textSecondary};font-size:12px">Loading…</span>`;
+  h+=`<span style="display:inline-flex;border:1px solid ${T.cardBorder};border-radius:8px;overflow:hidden" title="Which Google Sheet a Pull writes to">${modeBtn("test","TEST",T.accentGreen)}${modeBtn("live","LIVE",T.accentRed)}</span>${sbtn(posSyncState.testing?"⏳ Testing…":"Test connection","posRunTest()",posSyncState.testing)}${sbtn("Microsys login","posOpenCreds()")}</div>`;
   h+=posFlagsCardHTML(T,card,ct,btn);
-  h+=posReconCardHTML(T,card,ct,btn);
-  h+=posJTCardHTML(T,card,ct,btn);
   h+=posPullCardHTML(T,card,ct,btn);
-  h+=posBackfillCardHTML(T,card,ct,btn);
-  h+=posInspectCardHTML(T,card,ct,btn);
-  // v549: coverage card hidden (backfill runs month by month instead)
   if(posSyncState.progress.length||posSyncState.results)h+=posResultsHTML(T,card,ct);
+  h+=posReconCardHTML(T,card,ct,btn);
+  // less-used tools fold into one card
+  const inner=`padding:4px 2px 2px;color:${T.textPrimary}`;
+  const fold=(icon,title,sub,body,open)=>`<details ${open||(posSyncState.folds||{})[title]?"open":""} ontoggle="(posSyncState.folds=posSyncState.folds||{})['${title}']=this.open" style="border-top:1px solid ${T.cardBorder}88"><summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;padding:12px 4px"><span style="font-size:15px">${icon}</span><span style="font-weight:700;font-size:13.5px">${title}</span><span style="font-size:12px;color:${T.textMuted}">${sub}</span><span style="margin-left:auto;color:${T.textMuted};font-size:12px">▾</span></summary><div style="padding:0 4px 12px">${body}</div></details>`;
+  const hist=(st&&st.history)||[];
+  const histH=!hist.length?`<div style="font-size:13px;color:${T.textSecondary}">No tests or pulls yet.</div>`:`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;color:${T.textPrimary}"><tr>${["When","Who","What","Sheet","Result"].map(x=>`<th style="text-align:left;padding:6px 8px;color:${T.textSecondary};font-size:11px;text-transform:uppercase;border-bottom:1px solid ${T.cardBorder}">${x}</th>`).join("")}</tr>${hist.map(r=>`<tr><td style="padding:6px 8px;white-space:nowrap">${posFmtTs(r.ts)}</td><td style="padding:6px 8px">${esc(r.user||"")}</td><td style="padding:6px 8px">${r.kind==="test"?"Connection test":r.kind==="pull"?"Pull "+esc(r.dates||""):esc(r.kind||"")}</td><td style="padding:6px 8px">${esc(r.sheet||"")}</td><td style="padding:6px 8px">${r.kind==="test"?`Microsys ${r.microsysOk?"✅":"❌"} · Google ${r.googleOk?"✅":"❌"}`:esc(r.result||"")}</td></tr>`).join("")}</table></div>`;
+  h+=`<div style="${card};padding:6px 16px 4px"><div style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:${T.textMuted};padding:8px 4px 6px">More tools</div>
+    ${fold("🧾","Journal Tape history","bill-by-bill reads for earlier days",posJTCardHTML(T,inner,"display:none",btn),!!(posJT&&posJT.run&&posJT.run.active))}
+    ${fold("🗂","Backfill dine-in & takeaway","fill past months into the Dine-In tab",posBackfillCardHTML(T,inner,"display:none",btn),false)}
+    ${fold("🔍","Raw Microsys report","look at any report for any day",posInspectCardHTML(T,inner,"display:none",btn),false)}
+    ${fold("🕘","History","tests and pulls",histH,false)}</div>`;
   if(ts){
     const row=(ok,title,body)=>`<div style="display:flex;gap:12px;align-items:flex-start;padding:12px;border-radius:10px;background:${ok?T.accentGreen+"14":T.accentRed+"14"};margin-bottom:8px"><div style="font-size:18px">${ok?"✅":"❌"}</div><div style="flex:1;min-width:0"><div style="font-weight:800">${title}</div><div style="font-size:12px;color:${T.textSecondary};margin-top:3px;word-break:break-word;line-height:1.5">${body}</div></div></div>`;
     const m=ts.microsys||{},g=ts.google||{};
@@ -25365,13 +25370,7 @@ function renderPosSync(){
     h+=row(!!g.ok,"Google Sheet ("+esc(g.sheet||posSyncState.sheet.toUpperCase())+")",g.ok?`Opened “${esc(g.title)}” — tabs: ${g.tabs.map(esc).join(", ")}.`:`${esc(posExplain(g.error))} <span style="opacity:.75">(${esc(g.error)})</span>`);
     h+=`</div>`;
   }
-  const hist=(st&&st.history)||[];
-  h+=`<div style="${card}"><div style="${ct}">History</div>`;
-  if(!hist.length)h+=`<div style="font-size:13px;color:${T.textSecondary}">No tests or pulls yet.</div>`;
-  else{h+=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;color:${T.textPrimary}">`+
-    `<tr>${["When","Who","What","Sheet","Result"].map(x=>`<th style="text-align:left;padding:7px 8px;color:${T.textSecondary};font-size:11px;text-transform:uppercase;border-bottom:1px solid ${T.cardBorder}">${x}</th>`).join("")}</tr>`+
-    hist.map(r=>`<tr><td style="padding:7px 8px;white-space:nowrap">${posFmtTs(r.ts)}</td><td style="padding:7px 8px">${esc(r.user||"")}</td><td style="padding:7px 8px">${r.kind==="test"?"Connection test":r.kind==="pull"?"Pull "+esc(r.dates||""):esc(r.kind||"")}</td><td style="padding:7px 8px">${esc(r.sheet||"")}</td><td style="padding:7px 8px">${r.kind==="test"?`Microsys ${r.microsysOk?"✅":"❌"} · Google ${r.googleOk?"✅":"❌"}`:esc(r.result||"")}</td></tr>`).join("")+`</table></div>`;}
-  h+=`</div></div>`;
+  h+=`</div>`;
   pg.innerHTML=h;
 }
 window.injectPosSyncTab=injectPosSyncTab;window.renderPosSync=renderPosSync;window.posRunTest=posRunTest;window.posOpenCreds=posOpenCreds;window.posSaveCreds=posSaveCreds;window.posSetSheet=posSetSheet;
@@ -25393,14 +25392,14 @@ function posPullCardHTML(T,card,ct,btn){
   const P=posSyncState,dates=posSelectedDates(),y=posAddDays(posDubaiToday(),-1);
   const pre=(k,l)=>`<button onclick="posSetPreset('${k}')" style="padding:6px 12px;border-radius:6px;border:1px solid ${P.preset===k?T.accentOrange:T.cardBorder};background:${P.preset===k?T.accentOrange+"22":"transparent"};color:${P.preset===k?T.accentOrange:T.textSecondary};font-size:12px;font-weight:700;cursor:pointer">${l}</button>`;
   const inp=(w,v)=>`<input type="date" max="${y}" value="${v}" onchange="posSetCustom('${w}',this.value)" style="padding:6px 8px;border-radius:6px;border:1px solid ${T.cardBorder};background:${T.bg};color:${T.textPrimary};font:inherit;font-size:12px;color-scheme:dark">`;
-  let h=`<div style="${card}"><div style="${ct}">⬇ Pull POS data → Google Sheet</div>`;
+  let h=`<div style="${card}"><div style="display:flex;align-items:baseline;gap:10px;margin-bottom:12px"><div style="font-size:15px;font-weight:800">⬇ Pull POS data</div><span title="For each day: delivery sales &amp; discounts → the 5 brand tabs · dine-in &amp; takeaway sales, guests &amp; discounts → Dine-In &amp; Takeaway tab · each in-store discount → Dine-In Discounts tab · the till-vs-dashboard check → Daily reconciliation. Also fills any of the last 14 days still missing dine-in data. Existing dates are overwritten, as the Uploader did." style="font-size:12px;color:${T.textMuted};cursor:help">writes delivery, dine-in, takeaway &amp; discounts to the sheet ⓘ</span></div>`;
   h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">${pre("y","Yesterday")}${pre("2","Last 2 days")}${pre("7","Last 7 days")}${pre("c","Custom")}`;
   if(P.preset==="c")h+=`<span style="display:inline-flex;gap:6px;align-items:center">${inp("from",P.from||y)}<span style="color:${T.textSecondary}">→</span>${inp("to",P.to||P.from||y)}</span>`;
   h+=`</div><div style="font-size:12px;color:${T.textSecondary};margin-bottom:12px">${dates.length} day${dates.length===1?"":"s"}: ${dates.length?posFmtDate(dates[0])+(dates.length>1?" → "+posFmtDate(dates[dates.length-1]):""):"—"} · writes to the <b style="color:${P.sheet==="live"?T.accentRed:T.accentGreen}">${P.sheet==="live"?"LIVE":"TEST"}</b> sheet</div>`;
-  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${btn(P.pulling?"⏳ Pulling…":"⬇ Pull POS Data","posStartPull()",true,P.pulling||!dates.length)}</div>`;
+  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${btn(P.pulling?"⏳ Pulling…":"⬇ Pull POS Data","posStartPull()",true,P.pulling||!dates.length)}<button onclick="posFormatNow()" ${P.pulling||String(P.formatting||"").startsWith("⏳")?"disabled":""} title="Formats the Dine-In tabs like the delivery tabs and sorts Dine-In Discounts by date (runs automatically after every pull)" style="border:none;background:none;color:${T.textMuted};font-size:12px;cursor:pointer;text-decoration:underline">Re-apply sheet formatting</button></div>`;
   if(P.bar)h+=`<div style="margin-top:14px">${posProgressHTML(T)}</div>`;
-  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">${btn("🎨 Re-apply sheet formatting","posFormatNow()",false,P.pulling||String(P.formatting||"").startsWith("⏳"))}${P.formatting?`<span style="font-size:12px;font-weight:700;color:${String(P.formatting).startsWith("❌")?T.accentRed:T.textSecondary}">${esc(P.formatting)}</span>`:`<span style="font-size:12px;color:${T.textSecondary}">Formats the Dine-In &amp; Takeaway and Dine-In Discounts tabs like the delivery tabs, and puts Dine-In Discounts in date order (runs automatically after each pull)</span>`}</div>`;
-  h+=`<div style="font-size:12px;color:${T.textSecondary};margin-top:10px;line-height:1.5">For each day it writes: <b>delivery</b> sales &amp; discounts (Credit Sales + Sales Discount Details, same rules as POS Uploader v4.9) → Oregano, Lollorosso, Smokeys, Wicked Wings and Fyoozhen tabs · <b>dine-in &amp; takeaway</b> sales, guests &amp; discounts (Sales Summary by Outlet) → Dine-In &amp; Takeaway tab · <b>each in-store discount</b> (Entertainer, Esaad…) → Dine-In Discounts tab · the <b>till-vs-dashboard check</b> → Daily reconciliation. Then it fills any of the last 14 days still missing dine-in, takeaway or discount detail. New date rows are added if missing; existing ones are overwritten, as the Uploader does.</div></div>`;
+  if(P.formatting)h+=`<div style="font-size:12px;font-weight:700;margin-top:10px;color:${String(P.formatting).startsWith("❌")?T.accentRed:T.textSecondary}">${esc(P.formatting)}</div>`;
+  h+=`</div>`;
   return h;
 }
 async function posStartPull(){
@@ -25698,41 +25697,65 @@ async function posReconCheck(){const P=posSyncState;if(posRecon.checking||P.pull
       await posApi("/api/pos/recon",{date:d,rec:psRecon(c.csv,su.csv,d)});}catch(e){posRecon.checking.fail++;}
     posRecon.checking.n++;renderPosSync();}
   posRecon.checking=null;posRecon.recs=null;renderPosSync();}
+// v590: redesigned — verdict first, a strip of days, only the open items with one-click answers; the detail folds away.
+async function posReconAckAs(date,id,note){try{await posApi("/api/pos/recon/ack",{date,id,note});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
 function posReconCardHTML(T,card,ct,btn){
   if(posRecon.recs==null&&!posRecon.loading)setTimeout(posReconLoad,0);
   const R=posRecon.recs||[],items=posReconItems(R),open=items.filter(i=>i.open);
   const f=v=>"AED "+Math.round(v).toLocaleString(),f2=v=>(v<0?"−":"")+"AED "+Math.abs(Math.round(v)).toLocaleString();
   const tp=R.reduce((a,r)=>a+r.pos,0),ta=R.reduce((a,r)=>a+r.agg,0);
   const seg=[7,14,30,60].map(n=>`<button onclick="posReconSetDays(${n})" style="border:none;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer;background:${posRecon.days===n?T.accentOrange+"22":"transparent"};color:${posRecon.days===n?T.accentOrange:T.textSecondary}">${n} days</button>`).join("");
-  let h=`<div style="${card}" id="pos-recon"><div style="${ct};display:flex;align-items:center;gap:10px;flex-wrap:wrap">🧾 Daily reconciliation — till vs dashboard <span style="text-transform:none;letter-spacing:0;font-weight:600">· delivery, excl. VAT</span>${open.length?`<span style="background:${T.accentRed};color:#fff;border-radius:10px;padding:2px 9px;font-size:11px;letter-spacing:0">${open.length} to check</span>`:""}</div>`;
-  h+=`<div style="font-size:12.5px;color:${T.textSecondary};line-height:1.55;margin-bottom:12px">Every pull compares what each outlet rang up on its delivery till buttons (Microsys Sales Summary by Outlet: Delivery, Lollorosso, Smokeys — the same figures Finance's Daily Sales Report uses) with the aggregator orders the dashboard counts (Credit Sales ÷ 1.05). A gap means money on the till that the dashboard doesn't have — this card says where it went.</div>`;
-  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px"><span style="display:inline-flex;border:1px solid ${T.cardBorder};border-radius:8px;overflow:hidden">${seg}</span>${btn(posRecon.checking?`⏳ Checking ${posRecon.checking.n} of ${posRecon.checking.of}…`:"🔎 Check these days now","posReconCheck()",false,!!posRecon.checking||posSyncState.pulling)}<span style="font-size:11.5px;color:${T.textMuted}">Read-only: pulls Credit Sales + Sales Summary from Microsys; nothing is written to the sheet.</span></div>`;
+  const sBtn=(lbl,on,c)=>`<button onclick="${on}" style="padding:5px 11px;border-radius:7px;border:1px solid ${c||T.cardBorder};background:transparent;color:${c||T.textSecondary};font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">${lbl}</button>`;
+  let h=`<div style="${card}" id="pos-recon"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px"><div style="display:flex;align-items:baseline;gap:10px"><div style="font-size:15px;font-weight:800;color:${T.textPrimary}">🧾 Till vs dashboard</div><span style="font-size:12px;color:${T.textMuted}">daily check · delivery, excl. VAT</span></div>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="display:inline-flex;border:1px solid ${T.cardBorder};border-radius:8px;overflow:hidden">${seg}</span>${btn(posRecon.checking?`⏳ Checking ${posRecon.checking.n} of ${posRecon.checking.of}…`:"↻ Check these days again","posReconCheck()",false,!!posRecon.checking||posSyncState.pulling)}</div></div>`;
   if(posRecon.loading&&!posRecon.recs)return h+`<div style="color:${T.textSecondary};font-size:12px">Loading…</div></div>`;
-  if(posRecon.err)h+=`<div style="color:${T.accentRed};font-size:12px;margin-bottom:8px">${esc(posRecon.err)} — upload the new worker.js (build 564) to enable this card.</div>`;
-  if(!R.length)return h+`<div style="color:${T.textSecondary};font-size:12.5px">No days checked yet in this range — click <b>Check these days now</b>, or it fills itself from the next Pull.</div></div>`;
-  const stat=(l,v,sub,c)=>`<div style="background:${T.bg};border:1px solid ${T.cardBorder};border-radius:10px;padding:10px 12px;min-width:140px"><div style="font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:${T.textMuted}">${l}</div><div style="font-size:18px;font-weight:800;color:${c||T.textPrimary};font-variant-numeric:tabular-nums">${v}</div><div style="font-size:11px;color:${T.textMuted}">${sub||""}</div></div>`;
-  const unex=items.reduce((a,i)=>a+(i.ack?0:i.unexpl),0),cat=items.reduce((a,i)=>a+(i.other||[]).filter(o=>posReconWhy(o)==="catering").reduce((z,o)=>z+o[1],0),0),unk=items.reduce((a,i)=>a+i.unk,0);
-  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${stat("Days checked",`${R.length} / ${posRecon.days}`)}${stat("Till (POS)",f(tp),"delivery buttons")}${stat("Dashboard",f(ta),"aggregator orders")}${stat("Difference",f2(tp-ta),tp>0?((tp-ta)/tp*100).toFixed(2)+"% of till":"",Math.abs(tp-ta)>=100?T.accentOrange:T.accentGreen)}${stat("Paid directly / voids · open",f2(unex),"direct deliveries (catering / regulars) or voids",Math.abs(unex)>=50?T.accentRed:T.textPrimary)}${stat("Catering",f(cat),"by design — not a platform")}${stat("Unknown platform",f(unk),"POS Sync doesn't map it",unk>=1?T.accentRed:T.textPrimary)}</div>`;
-  if(items.length){
-    h+=`<div style="font-size:12px;font-weight:800;color:${T.textSecondary};margin:4px 0 6px">Gaps by outlet and day</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="color:${T.textMuted};font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;text-align:left">${["Date","Outlet","Till button","Till","Dashboard","Gap","Why",""].map((x,i)=>`<th style="padding:6px 8px;border-bottom:1px solid ${T.cardBorder};${i>=3&&i<=5?"text-align:right":""}">${x}</th>`).join("")}</tr></thead><tbody>`;
+  if(posRecon.err)h+=`<div style="color:${T.accentRed};font-size:12px;margin-bottom:8px">${esc(posRecon.err)}</div>`;
+  if(!R.length)return h+`<div style="color:${T.textSecondary};font-size:12.5px">No days checked yet in this range — click <b>Check these days again</b>, or it fills itself from the next Pull.</div></div>`;
+  // ── money buckets
+  const sumO=w=>items.reduce((a,i)=>a+(i.other||[]).filter(o=>posReconWhy(o)===w).reduce((z,o)=>z+o[1],0),0);
+  const cat=sumO("catering"),test=sumO("test"),unk=items.reduce((a,i)=>a+(i.open?i.unk:0),0);
+  const acked=items.reduce((a,i)=>a+(i.ack?i.unexpl:0),0),small=items.reduce((a,i)=>a+(!i.ack&&!i.open?i.unexpl:0),0);
+  const openAmt=open.reduce((a,i)=>a+Math.max(i.unexpl,0)+i.unk,0);
+  const ok=!open.length;
+  // ── verdict
+  h+=`<div style="display:flex;gap:14px;align-items:center;margin-bottom:12px"><div style="font-size:30px;line-height:1">${ok?"✅":"⚠️"}</div><div>
+    <div style="font-size:19px;font-weight:800;color:${T.textPrimary}">${ok?`Till and dashboard agree for the last ${R.length} day${R.length>1?"s":""}.`:`${open.length} thing${open.length>1?"s":""} to check — ${f(openAmt)} on the till isn't explained yet.`}</div>
+    <div style="font-size:12.5px;color:${T.textSecondary};margin-top:3px">Till <b style="color:${T.textPrimary}">${f(tp)}</b> · dashboard <b style="color:${T.textPrimary}">${f(tp-openAmt)}</b> incl. catering &amp; direct deliveries${openAmt>=1?` · <b style="color:#FBBF24">${f(openAmt)} left to check</b>`:""}${R.length<posRecon.days?` · <span style="color:${T.textMuted}">${posRecon.days-R.length} day(s) not checked yet</span>`:""}</div></div></div>`;
+  // ── day strip
+  const to=posAddDays(posDubaiToday(),-1),byD={};R.forEach(r=>byD[r.date]=r);const openD={};open.forEach(i=>openD[i.date]=(openD[i.date]||0)+Math.max(i.unexpl,0)+i.unk);
+  let strip="";for(let k=posRecon.days-1;k>=0;k--){const d=posAddDays(to,-k),r=byD[d],st=!r?"none":openD[d]?"open":"ok";
+    const c=st==="open"?"#F59E0B":st==="ok"?T.accentGreen+"77":T.cardBorder+"66";
+    strip+=`<span title="${posFmtDate(d)} — ${st==="none"?"not checked":st==="open"?f(openD[d])+" to check":"all explained · till "+f(r.pos)}" style="display:inline-block;width:${posRecon.days>30?13:20}px;height:20px;border-radius:5px;margin:0 3px 3px 0;background:${c}"></span>`;}
+  h+=`<div style="margin-bottom:16px">${strip}<div style="font-size:11px;color:${T.textMuted};margin-top:2px">each square = a day (oldest left) · green = explained · amber = something to check · grey = not checked</div></div>`;
+  // ── things to check
+  h+=`<div style="background:${T.bg};border:1px solid ${T.cardBorder};border-radius:10px;padding:12px 14px;margin-bottom:12px"><div style="font-size:13.5px;font-weight:800;color:${T.textPrimary};margin-bottom:4px">${ok?"Nothing to check":"Things to check"}</div>`;
+  if(ok)h+=`<div style="font-size:12.5px;color:${T.textSecondary}">Every gap in this range is explained. 👍</div>`;
+  for(const i of open){const id=esc(i.id),u=Math.max(i.unexpl,0);
+    const what=i.unk>=50?`${f(i.unk)} with a platform POS Sync doesn't recognise (${(i.other||[]).filter(o=>posReconWhy(o)==="platform").map(o=>esc(o[0])).join(", ")}) — tell Claude which aggregator it is`:i.unexpl>0?`till ${f(u)} more than the platforms paid`:`${f(-i.unexpl)} more on Credit Sales than on the till (void or date)`;
+    h+=`<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;padding:10px 0;border-top:1px solid ${T.cardBorder}66"><div style="width:96px;font-size:12.5px;color:${T.textSecondary}">${posFmtDate(i.date)}</div>
+      <div style="flex:1;min-width:260px;font-size:13px"><b>${esc(i.out)}</b> · ${esc(i.rc)} button <span style="color:${T.textMuted}">→ ${esc(i.brand||"")}</span> · ${what}${i.unexpl>0?posReconBillsHTML(T,i):""}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${i.unexpl>0?sBtn("✓ Paid to us directly",`posReconAckAs('${i.date}','${id}','🏠 Direct delivery paid to us (catering / bulk or regular customer)')`,T.accentGreen)+sBtn("Void",`posReconAckAs('${i.date}','${id}','Void after billing')`):""}${sBtn("Other…",`posReconAck('${i.date}','${id}')`)}</div></div>`;}
+  h+=`</div>`;
+  // ── already explained (one line) + full detail folded
+  const parts=[cat>=1?`catering ${f(cat)}`:"",acked>=1?`direct deliveries &amp; voids you confirmed ${f(acked)}`:"",test>=1?`Deliverect test ${f(test)}`:"",Math.abs(small)>=1?`small differences under AED 50 ${f2(small)}`:""].filter(Boolean);
+  if(parts.length)h+=`<div style="font-size:12.5px;color:${T.textSecondary};margin-bottom:8px">Already explained: ${parts.join(" · ")}</div>`;
+  const det=(sum,body)=>`<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12.5px;font-weight:700;color:${T.textSecondary}">${sum}</summary><div style="margin-top:8px">${body}</div></details>`;
+  if(items.length){let t=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="color:${T.textMuted};font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;text-align:left">${["Date","Outlet","Till button","Till","Dashboard","Gap","Why",""].map((x,i)=>`<th style="padding:6px 8px;border-bottom:1px solid ${T.cardBorder};${i>=3&&i<=5?"text-align:right":""}">${x}</th>`).join("")}</tr></thead><tbody>`;
     for(const i of items){
-      const why=[...(i.other||[]).map(o=>posReconWhy(o)==="test"?`<span style="color:${T.textMuted}" title="Deliverect test account — ignored">🧪 ${esc(o[0])} ${f(o[1])} — test account, ignored</span>`:posReconWhy(o)==="catering"?`<span title="Catering is not an aggregator — the dashboard leaves it out on purpose">🍱 ${esc(o[0])} ${f(o[1])}</span>`:`<span style="color:${T.accentRed}" title="A platform POS Sync doesn't recognise — tell Claude which aggregator it is and it will be counted">❓ ${esc(o[0])} ${f(o[1])} — unknown platform</span>`),
-        Math.abs(i.unexpl)>=5?(i.unexpl>0?`<span title="Rung on the delivery till but not paid by an aggregator: usually a catering / bulk order or a regular customer we delivered to who paid us directly (cash / card / phone). Journal Tape confirms it and marks it explained; otherwise a void after billing">💵 ${f(i.unexpl)} paid to us directly (catering / regulars) or void</span>`:`<span>${f(-i.unexpl)} more on Credit Sales than on the till (void / date)</span>`):""].filter(Boolean).join("<br>");
-      const act=i.ack?`<span style="color:${T.accentGreen};font-size:11.5px" title="${esc(i.ack.note||"")}">✓ ${esc(i.ack.note||"explained")} · ${esc(i.ack.by||"")}</span> <a href="#" onclick="posReconUnack('${i.date}','${esc(i.id)}');return false" style="color:${T.textMuted};font-size:11px">undo</a>`:i.open?`<button onclick="posReconAck('${i.date}','${esc(i.id)}')" style="padding:4px 10px;border-radius:6px;border:1px solid ${T.cardBorder};background:transparent;color:${T.textSecondary};font-size:11.5px;font-weight:700;cursor:pointer">Mark explained</button>`:`<span style="color:${T.textMuted};font-size:11.5px">small</span>`;
-      const ordH=(i.orders||[]).length?`<details style="margin-top:3px"><summary style="cursor:pointer;color:${T.textMuted};font-size:11.5px">${i.orders.length} order${i.orders.length>1?"s":""} — order no. / tax invoice</summary>${posReconOrdersHTML(T,i.orders)}</details>`:"";
-      const tillOnly=Math.abs(i.unexpl)>=5&&i.unexpl>0?posReconBillsHTML(T,i):"";
-      h+=`<tr style="border-bottom:1px solid ${T.cardBorder}55;${i.open?`background:${T.accentRed}10`:i.ack?`background:${T.accentGreen}14;box-shadow:inset 3px 0 0 ${T.accentGreen}`:""}"><td style="padding:6px 8px;white-space:nowrap">${posFmtDate(i.date)}</td><td style="padding:6px 8px;font-weight:700">${esc(i.out)}</td><td style="padding:6px 8px">${esc(i.rc)} <span style="color:${T.textMuted}">→ ${esc(i.brand||"")}</span></td><td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${f(i.pos)}</td><td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums">${f(i.agg)}</td><td style="padding:6px 8px;text-align:right;font-weight:800;color:${Math.abs(i.gap)>=50?T.accentOrange:T.textSecondary};font-variant-numeric:tabular-nums">${f2(i.gap)}</td><td style="padding:6px 8px;line-height:1.5">${why}${ordH}${tillOnly}</td><td style="padding:6px 8px;white-space:nowrap">${act}</td></tr>`;}
-    h+=`</tbody></table></div>`;
-  }else h+=`<div style="color:${T.accentGreen};font-size:12.5px;font-weight:700">✅ Till and dashboard agree for every outlet on every checked day.</div>`;
-  // brand rung on another brand's till button — totals match, Finance's brand split doesn't
-  const mb={};for(const r of R)for(const m of r.mis||[]){const k=m.out+"|"+m.brand+"|"+m.till;const o=mb[k]=mb[k]||{out:m.out,brand:m.brand,till:m.till,rc:m.rc,amt:0,days:new Set(),orders:[]};o.amt+=m.amt;o.days.add(r.date);(m.orders||[]).forEach(x=>o.orders.push(Object.assign({date:r.date},x)));}
+      const why=[...(i.other||[]).map(o=>posReconWhy(o)==="test"?`<span style="color:${T.textMuted}">🧪 ${esc(o[0])} ${f(o[1])} — test account, ignored</span>`:posReconWhy(o)==="catering"?`<span>🍱 ${esc(o[0])} ${f(o[1])}</span>`:`<span style="color:${T.accentRed}">❓ ${esc(o[0])} ${f(o[1])} — unknown platform</span>`),
+        Math.abs(i.unexpl)>=5?(i.unexpl>0?`<span>💵 ${f(i.unexpl)} paid to us directly or void</span>`:`<span>${f(-i.unexpl)} more on Credit Sales than on the till</span>`):""].filter(Boolean).join("<br>");
+      const act=i.ack?`<span style="color:${T.accentGreen};font-size:11.5px">✓ ${esc(i.ack.note||"explained")} · ${esc(i.ack.by||"")}</span> <a href="#" onclick="posReconUnack('${i.date}','${esc(i.id)}');return false" style="color:${T.textMuted};font-size:11px">undo</a>`:i.open?`<span style="color:#FBBF24;font-size:11.5px">to check ↑</span>`:`<span style="color:${T.textMuted};font-size:11.5px">small</span>`;
+      const ordH=(i.orders||[]).length?`<details style="margin-top:3px"><summary style="cursor:pointer;color:${T.textMuted};font-size:11.5px">${i.orders.length} order${i.orders.length>1?"s":""}</summary>${posReconOrdersHTML(T,i.orders)}</details>`:"";
+      t+=`<tr style="border-bottom:1px solid ${T.cardBorder}55"><td style="padding:6px 8px;white-space:nowrap">${posFmtDate(i.date)}</td><td style="padding:6px 8px;font-weight:700">${esc(i.out)}</td><td style="padding:6px 8px">${esc(i.rc)} <span style="color:${T.textMuted}">→ ${esc(i.brand||"")}</span></td><td style="padding:6px 8px;text-align:right">${f(i.pos)}</td><td style="padding:6px 8px;text-align:right">${f(i.agg)}</td><td style="padding:6px 8px;text-align:right;font-weight:800">${f2(i.gap)}</td><td style="padding:6px 8px;line-height:1.5">${why}${ordH}</td><td style="padding:6px 8px;white-space:nowrap">${act}</td></tr>`;}
+    h+=det(`Show every gap, day by day (${items.length})`,t+`</tbody></table></div>`);}
+  const mb={};for(const r of R)for(const m of r.mis||[]){const k=m.out+"|"+m.brand+"|"+m.till;const o=mb[k]=mb[k]||{out:m.out,brand:m.brand,till:m.till,amt:0,days:new Set(),orders:[]};o.amt+=m.amt;o.days.add(r.date);(m.orders||[]).forEach(x=>o.orders.push(Object.assign({date:r.date},x)));}
   const ml=Object.values(mb).sort((a,b)=>b.amt-a.amt);
-  if(ml.length){h+=`<div style="font-size:12px;font-weight:800;color:${T.textSecondary};margin:16px 0 6px">Orders rung on another brand's till button</div><div style="font-size:12px;color:${T.textMuted};margin-bottom:6px;line-height:1.5">The order came in on the platform as one brand but was rung on another brand's button. The dashboard follows the platform (right brand); Finance's report follows the till button, so its brand columns are off by these amounts unless Finance moves them by hand.</div>`;
-    h+=ml.map(m=>`<div style="font-size:12.5px;padding:6px 8px;border-radius:8px;background:${T.bg};margin-bottom:4px"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center"><b>${esc(m.out)}</b><span><span style="color:${typeof BMAP!=="undefined"&&BMAP[m.brand]?BMAP[m.brand].c:T.textPrimary};font-weight:700">${esc(m.brand)}</span> orders on the <b>${esc(m.till)}</b> button</span><span style="margin-left:auto;font-variant-numeric:tabular-nums;font-weight:800">${f(m.amt)}</span><span style="color:${T.textMuted}">${m.days.size} day${m.days.size>1?"s":""}</span></div>${m.orders.length?`<details style="margin-top:4px"><summary style="cursor:pointer;color:${T.textMuted};font-size:11.5px">${m.orders.length} order${m.orders.length>1?"s":""} — order no. / tax invoice</summary>${posReconOrdersHTML(T,m.orders,true)}</details>`:""}</div>`).join("");}
-  h+=posReconWWHTML(T);
-  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px">${btn("🔍 Show the bills for every 💵 gap","posReconBillsAll()",false,false)}${btn("⬇ Export orders (CSV)","posReconExport()",false,false)}<span style="font-size:11.5px;color:${T.textMuted}">Every order behind a gap or a wrong till button in this range: date, outlet, till button, customer, order no., tax invoice, platform reference, AED incl. VAT — to send to the outlet or Finance.</span></div>`;
+  if(ml.length)h+=det(`Orders rung on another brand's till button — ${f(ml.reduce((a,m)=>a+m.amt,0))} (totals still match; Finance's brand split is off by this)`,ml.map(m=>`<div style="font-size:12.5px;padding:6px 8px;border-radius:8px;background:${T.bg};margin-bottom:4px"><div style="display:flex;gap:10px;flex-wrap:wrap"><b>${esc(m.out)}</b><span>${esc(m.brand)} orders on the <b>${esc(m.till)}</b> button</span><span style="margin-left:auto;font-weight:800">${f(m.amt)}</span><span style="color:${T.textMuted}">${m.days.size} day${m.days.size>1?"s":""}</span></div>${m.orders.length?`<details style="margin-top:4px"><summary style="cursor:pointer;color:${T.textMuted};font-size:11.5px">${m.orders.length} orders</summary>${posReconOrdersHTML(T,m.orders,true)}</details>`:""}</div>`).join(""));
+  const ww=posReconWWHTML(T);if(ww)h+=det("Wicked Wings / Smokeys split (Al Reem, Al Reef)",ww);
+  h+=det("Export &amp; how this works",`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px">${btn("🔍 Show the bills for every 💵 gap","posReconBillsAll()",false,false)}${btn("⬇ Export orders (CSV)","posReconExport()",false,false)}</div><div style="font-size:12px;color:${T.textMuted};line-height:1.55">Every pull compares what each outlet rang up on its delivery till buttons (Microsys Sales Summary by Outlet — the figures Finance's Daily Sales Report uses) with the aggregator orders the dashboard counts (Credit Sales ÷ 1.05). Catering on credit accounts and direct deliveries are counted in the dashboard's group totals, so they match Finance. Read-only in Microsys; nothing is written to the sheet.</div>`);
   return h+`</div>`;
 }
+window.posReconAckAs=posReconAckAs;
 window.posReconSetDays=posReconSetDays;window.posReconCheck=posReconCheck;window.posReconAck=posReconAck;window.posReconUnack=posReconUnack;window.posReconOpenCount=posReconOpenCount;window.posReconLoad=posReconLoad;
 
 // v565: order-level detail (from Credit Sales) for the reconciliation card
@@ -27437,7 +27460,7 @@ const PL_SKIP=/^(summary|sheet\d*|.*pre)$/i;
 const PL_OUTLET={"Mirdiff":"Mirdiff","DMC":"DMC","Motor City":"Motorcity","DSO":"DSO","Villa":"Villa","DIP":"DIP (Oregano)","Furjan":"Furjan","Al Forsan":"Al Forsan",
   "Al Quoz":"Al Quoz","Safari":"Safari Park","Town Square":"Town Square","Marina":"Marina","WTC Mall":"WTC","Wasl":"Jumeirah","Al Reem":"Al Reem","Nad Al Shiba":"NAS",
   "DIP-Fyoozhen":"DIP (Fyoozhen)","Al Reef":"Al Reef"};
-let plData=null,plErr=null,plLoading=false,plBusy=false,plMsg=null;const plUI={per:null,view:"outlets",sel:null};
+let plData=null,plErr=null,plLoading=false,plBusy=false,plMsg=null;const plUI={per:null,outlet:"",brand:"",more:false,tbl:false};
 function plNum(v){return typeof v==="number"&&isFinite(v)?v:0;}
 function plParse(wb){
   const out={outlets:{},combined:null,ho:null,months:[]};let n=0;
@@ -27530,95 +27553,155 @@ function plEstimate(){
 // ── page ──
 function plFmt(v){return Math.round(v||0).toLocaleString("en-US");}
 function plK(v){const a=Math.abs(v||0);return(v<0?"−":"")+(a>=1e6?(a/1e6).toFixed(2)+"M":a>=1e4?Math.round(a/1e3)+"K":a>=1e3?(a/1e3).toFixed(1)+"K":Math.round(a));}
+// ── v590 page: interactive — filters (period · outlet · brand), charts, problems & proposed actions ──
+const PL_CLR=["#3987e5","#d95926","#199e70","#c98500","#d55181","#008300","#9085e9","#e66767"]; // categorical, fixed order (validated dark steps)
+let plCharts={};
+function plKill(){for(const k in plCharts){try{plCharts[k].destroy();}catch(e){}}plCharts={};}
+function plRows(per){ // per-outlet {name,A,B,LY,br} for a period
+  const D=plData;if(per==="est"){const E=plEstimate();return E?E.rows:[];}
+  const ms=per==="ytd"?D.months:[+per];
+  return Object.keys(D.outlets).map(n=>{const src=D.outlets[n],g=w=>plSum(ms.map(m=>((src[m]||{})[w])||{}));
+    const br={};ms.forEach(m=>{const x=(src[m]||{}).br||{};for(const b in x){br[b]=br[b]||{A:[],B:[]};br[b].A.push(x[b].A);br[b].B.push(x[b].B);}});for(const b in br)br[b]={A:plSum(br[b].A),B:plSum(br[b].B)};
+    return{name:n,A:g("A"),B:g("B"),LY:g("LY"),br};});}
+function plSel(per,outlet,brand){ // {A,B,LY} for the current filters
+  const D=plData;
+  if(per==="est"){const E=plEstimate();if(!E)return{A:{},B:{},LY:{}};if(outlet){const r=E.rows.find(x=>x.name===outlet);return r?{A:r.A,B:r.B,LY:r.LY}:{A:{},B:{},LY:{}};}return E.group;}
+  const ms=per==="ytd"?D.months:[+per],src=outlet?D.outlets[outlet]:D.combined;
+  const pick=(m,w)=>{const x=(src||{})[m]||{};if(brand){const b=(x.br||{})[brand];return b?(b[w]||{}):{};}return x[w]||{};};
+  return{A:plSum(ms.map(m=>pick(m,"A"))),B:plSum(ms.map(m=>pick(m,"B"))),LY:brand?{}:plSum(ms.map(m=>pick(m,"LY")))};}
+function plOther(A){return(A.mkt||0)-(A.comm||0)+(A.rest||0)-plRM(A)+(A.veh||0)+(A.office||0)+(A.lic||0)+(A.oth||0)+(A.bank||0);}
+// ── problems & proposed actions (rules on Finance's numbers; suggestions, not instructions)
+const PL_ACT={food:"Food cost: theoretical-vs-actual variance and a 2-week wastage log; portion check on the top 10 sellers; check supplier price changes",
+  staff:"Staff: match the rota to hourly sales (cut slow-afternoon hours); overtime only by exception; share staff with the nearest outlet at peaks",
+  rm:"Repairs: get the job list behind the bill — replacements (capex) or warranty/AMC items come out; agree a monthly R&M cap with approval above it",
+  util:"Utilities: compare the DEWA/ADDC bill with the last 3 months (rate or meter change?); closing-shift switch-off checklist",
+  odir:"Packaging/gas: packaging cost per order vs other outlets — supplier price and container sizes; gas usage vs last 3 months"};
+function plProblems(per,rows,gA){
+  const D=plData,ms=D.months,live=rows.filter(r=>(r.A.rev||0)>20000);
+  const dpg=x=>x&&x.gross?(x.disc||0)/x.gross:0,gd=dpg(gA);
+  const med=k=>{const v=live.map(r=>(r.A[k]||0)/r.A.rev).sort((a,b)=>a-b);return v.length?v[Math.floor(v.length/2)]:0;};
+  const months=per==="ytd"?1:1,ndays=per==="ytd"?ms.reduce((a,m)=>a+plDim(D.year,m),0):per==="est"?+(latest||"").slice(8,10):plDim(D.year,+per);
+  const out=[];
+  for(const r of live){const a=r.A,b=r.B,l=r.LY,P=[],act=[];const src=D.outlets[r.name];
+    const loss=ms.filter(m=>((src[m]||{}).A||{}).np<0).length,day=a.rev/ndays,be=a.be&&per!=="ytd"?a.be:0,vc=((a.food||0)+(a.comm||0)+(a.odir||0))/a.rev;
+    if((a.np||0)<0&&loss>=Math.ceil(ms.length*2/3)){P.push(["STRUCTURE","#e66767",`Loss in ${loss} of ${ms.length} months`+(be>day?` — AED ${plFmt(day)}/day vs break-even ${plFmt(be)}/day`:` — costs too high for its sales`),-a.np]);
+      act.push(`90-day plan: AED ${plFmt(Math.max(be-day,0))}/day more sales or AED ${plFmt(-a.np)} lower cost per month — then decide: delivery-only, shorter hours, merge or exit at lease end`);act.push("Rent: open the conversation with the landlord before renewal");}
+    const gap=(a.rev||0)-(b.rev||0);
+    if(b.rev&&gap/b.rev<-0.1&&gap<-15000){const yoy=l.rev?(a.rev-l.rev)/l.rev:null;
+      if(yoy!=null&&yoy>=-0.02){P.push(["SALES","#3987e5",`Sales ${Math.round(-gap/b.rev*100)}% below budget — but ${yoy>=0?"up":"flat"} ${Math.abs(Math.round(yoy*100))}% on last year (budget assumed +${Math.round((b.rev/l.rev-1)*100)}%)`,-gap*(1-vc)]);act.push("Budget: check with Finance whether the sales budget is realistic — sales are holding vs last year");}
+      else{P.push(["SALES","#3987e5",`Sales ${Math.round(-gap/b.rev*100)}% below budget (AED ${plFmt(-gap/ndays)}/day short)`+(yoy!=null?`, ${Math.abs(Math.round(yoy*100))}% ${yoy<0?"down":"up"} on last year`:" — new outlet"),-gap*(1-vc)]);act.push("Sales: find the channel and platform that fell (Overview → this outlet); CPC behind the platform with the best ROAS here; local dine-in push (offices, residences, Entertainer)");}}
+    const da=dpg(a),dl=dpg(l);
+    if(a.gross&&(da>gd+0.015||(dl&&da>dl*1.6&&a.disc-l.disc>10000))){P.push(["DISCOUNT","#c98500",`Discounts ${(da*100).toFixed(1)}% of gross sales`+(dl?` (was ${(dl*100).toFixed(1)}% last year)`:` (group ${(gd*100).toFixed(1)}%)`),Math.max(dl?a.disc-l.disc:a.disc-a.gross*gd,0)]);
+      act.push("Discounts: stop campaigns with negative incremental profit (Promotions page)"+(a.np<0?"; while it loses money, keep only co-funded offers":"")+"; check staff/manager discounts (Discounts & ROI)");}
+    for(const [n,k] of [["Food cost","food"],["Staff","staff"],["Repairs & maintenance","rm"],["Utilities","util"],["Packaging, gas, cleaning","odir"]]){
+      const av=k==="rm"?plRM(a):(a[k]||0),bv=k==="rm"?plRM(b):(b[k]||0),ov=av-bv;
+      if(bv>0&&ov>Math.max(4000*(per==="ytd"?ms.length:1),0.15*bv)){P.push(["COST","#d95926",`${n} AED ${plFmt(ov)} over budget (${Math.round(av/a.rev*100)}% of sales${k==="rm"?"":`, group median ${Math.round(med(k)*100)}%`})`,ov]);act.push(PL_ACT[k]);}}
+    if(P.length){P.sort((x,y)=>y[3]-x[3]);out.push({name:r.name,A:a,B:b,P,act,tot:P.reduce((s,p)=>s+p[3],0)});}}
+  return out.sort((x,y)=>y.tot-x.tot);}
+function plSpark(vals,T,col){if(!vals.length)return"";const mx=Math.max(...vals.map(v=>Math.abs(v)),1),w=6,g=3,h=26;
+  return`<svg width="${vals.length*(w+g)}" height="${h}" style="display:block;margin-top:6px">${vals.map((v,i)=>{const bh=Math.max(2,Math.abs(v)/mx*(h/2-1));return`<rect x="${i*(w+g)}" y="${v>=0?h/2-bh:h/2}" width="${w}" height="${bh}" rx="1.5" fill="${col||(v>=0?T.accentGreen:T.accentRed)}" opacity="${i===vals.length-1?1:.55}"><title>${PL_MONTHS[plData.months[i]-1]}: ${plFmt(v)}</title></rect>`;}).join("")}</svg>`;}
+function plSet(k,v){plUI[k]=v;if(k==="per"||k==="outlet"||k==="brand")plUI.page=0;renderSitePL();}
 function renderSitePL(){
   const pg=document.getElementById("page-sitepl");if(!pg)return;const T=DARK_THEME;
   if(!plData&&!plErr&&!plLoading){plLoad();}
+  plKill();
   const css=`<style>#page-sitepl{background:${T.bg};border-radius:12px;padding:16px 20px;color:${T.textPrimary}}
-   #page-sitepl .card{background:${T.card}!important;border:1px solid ${T.cardBorder}!important;border-radius:12px;padding:16px 18px;margin-bottom:14px}
+   #page-sitepl .cd{background:${T.card};border:1px solid ${T.cardBorder};border-radius:14px;padding:16px 18px}
    #page-sitepl .sub{color:${T.textSecondary};font-size:12.5px}#page-sitepl .up{color:${T.accentGreen}}#page-sitepl .dn{color:${T.accentRed}}#page-sitepl .mut{color:${T.textMuted}}
-   #page-sitepl .chip{display:inline-block;padding:5px 11px;border:1px solid ${T.cardBorder};border-radius:8px;font-size:12px;font-weight:700;margin:0 6px 6px 0;background:${T.bg};color:${T.textSecondary};cursor:pointer}
-   #page-sitepl .chip.on{background:${T.accentOrange}22;border-color:${T.accentOrange};color:${T.accentOrange}}
-   #page-sitepl .kp{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:14px}#page-sitepl .kp .card{margin:0}
-   #page-sitepl .kl{font-size:11px;font-weight:800;color:${T.textSecondary};text-transform:uppercase;letter-spacing:.05em}#page-sitepl .kv{font-size:26px;font-weight:800;margin:5px 0 3px}
-   #page-sitepl table{width:100%;border-collapse:collapse;font-size:12.5px}#page-sitepl th{text-align:right;font-size:11px;color:${T.textSecondary};padding:7px 6px;border-bottom:2px solid ${T.cardBorder};white-space:nowrap}
-   #page-sitepl td{text-align:right;padding:6px;border-bottom:1px solid ${T.cardBorder}55;white-space:nowrap}#page-sitepl th:first-child,#page-sitepl td:first-child{text-align:left}
-   #page-sitepl tr.rw{cursor:pointer}#page-sitepl tr.rw:hover td{background:${T.cardBorder}33}#page-sitepl tr.sel td{background:${T.accentOrange}18}
-   #page-sitepl .tag{font-size:10px;background:#F59E0B26;color:#F59E0B;border-radius:4px;padding:1px 5px;font-weight:700;margin-left:4px}
-   #page-sitepl .bt{position:relative;display:inline-block;width:80px;height:7px;background:${T.cardBorder}66;border-radius:4px;vertical-align:middle;margin-right:6px}#page-sitepl .bt i{position:absolute;left:0;top:0;bottom:0;border-radius:4px}#page-sitepl .bt b{position:absolute;top:-3px;bottom:-3px;width:2px;left:66.7%;background:${T.textPrimary}}
-   #page-sitepl .wr{display:flex;align-items:center;gap:10px;font-size:12.5px;margin:5px 0}#page-sitepl .wr>span{width:210px}#page-sitepl .wb{flex:1;position:relative;height:15px;background:${T.cardBorder}44;border-radius:4px}#page-sitepl .wb i{position:absolute;top:0;bottom:0;border-radius:3px}#page-sitepl .wr>b{width:150px;text-align:right}
-   #page-sitepl .scroll{overflow-x:auto}</style>`;
-  const head=(inner)=>`<div class="card" style="display:flex;flex-wrap:wrap;align-items:center;gap:14px"><div><div style="font-size:20px;font-weight:800">🏪 Site P&amp;L <span class="tag" style="font-size:10.5px">only you can see this</span></div>
-    <div class="sub">${plData?`Finance P&amp;L · ${esc(plData.file)} · uploaded ${esc(new Date(plData.uploadedAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"}))} · AED · as Finance reports it`:"Finance's monthly P&amp;L by outlet"}</div></div>
-    <div style="flex:1"></div><label class="chip" style="margin:0;${plBusy?"opacity:.6":""}">${plBusy?"⏳ Reading…":"📤 Upload Finance P&amp;L (.xlsx)"}<input type="file" accept=".xlsx,.xlsm,.xls" style="display:none" ${plBusy?"disabled":""} onchange="plUpload(this.files[0])"></label>${inner||""}</div>
-    ${plMsg?`<div class="card" style="padding:10px 14px;border-color:${plMsg.ok?T.accentGreen:T.accentRed}!important;color:${plMsg.ok?T.accentGreen:T.accentRed}">${plMsg.ok?"✅":"⚠"} ${esc(plMsg.t)}</div>`:""}`;
-  if(plLoading&&!plData){pg.innerHTML=css+head()+`<div class="card sub">Loading…</div>`;return;}
-  if(plErr&&!plData){pg.innerHTML=css+head()+`<div class="card dn">Couldn't load the P&amp;L: ${esc(plErr)}</div>`;return;}
-  if(!plData){pg.innerHTML=css+head()+`<div class="card"><div style="font-weight:800;margin-bottom:6px">No P&amp;L uploaded yet</div><div class="sub">Upload Finance's "PL report" workbook (the one with a tab per outlet and a Combined tab). Each month, upload the new file — it replaces the old one and the months it contains.</div></div>`;return;}
-  const D=plData;const estOK=!!plEstimate();
+   #page-sitepl .seg{display:inline-flex;border:1px solid ${T.cardBorder};border-radius:9px;overflow:hidden}#page-sitepl .seg button{border:none;background:transparent;color:${T.textSecondary};padding:7px 13px;font-size:12.5px;font-weight:700;cursor:pointer}#page-sitepl .seg button.on{background:${T.accentOrange}22;color:${T.accentOrange}}
+   #page-sitepl select{background:${T.bg};color:${T.textPrimary};border:1px solid ${T.cardBorder};border-radius:9px;padding:7px 10px;font:inherit;font-size:12.5px;font-weight:600}
+   #page-sitepl .kp{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}#page-sitepl .kl{font-size:11px;font-weight:800;color:${T.textSecondary};text-transform:uppercase;letter-spacing:.06em}#page-sitepl .kv{font-size:27px;font-weight:800;margin:4px 0 2px;font-variant-numeric:tabular-nums}
+   #page-sitepl .pill{display:inline-block;font-size:11.5px;font-weight:700;padding:1px 7px;border-radius:6px;margin-right:4px}
+   #page-sitepl .g2{display:grid;grid-template-columns:1.5fr 1fr;gap:12px}#page-sitepl .g2b{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+   #page-sitepl .ttl{font-size:14.5px;font-weight:800}#page-sitepl .tag{font-size:10px;font-weight:800;padding:2px 7px;border-radius:5px;letter-spacing:.04em;white-space:nowrap}
+   #page-sitepl table{width:100%;border-collapse:collapse;font-size:12.5px}#page-sitepl th{text-align:right;font-size:10.5px;color:${T.textSecondary};padding:7px 6px;border-bottom:1px solid ${T.cardBorder};text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}#page-sitepl td{text-align:right;padding:6px;border-bottom:1px solid ${T.cardBorder}55;white-space:nowrap}#page-sitepl th:first-child,#page-sitepl td:first-child{text-align:left}
+   #page-sitepl .pc{background:${T.bg};border:1px solid ${T.cardBorder};border-radius:12px;padding:14px 16px}#page-sitepl .pr{display:flex;gap:8px;align-items:baseline;font-size:12.5px;padding:3px 0}#page-sitepl ol{margin:4px 0 0 18px;padding:0;font-size:12.5px;line-height:1.55;color:${T.textSecondary}}
+   @media(max-width:900px){#page-sitepl .g2,#page-sitepl .g2b{grid-template-columns:1fr}}</style>`;
+  const up=`<label style="cursor:pointer;font-size:12px;font-weight:700;color:${T.textSecondary};border:1px solid ${T.cardBorder};border-radius:9px;padding:7px 12px;${plBusy?"opacity:.6":""}">${plBusy?"⏳ Reading…":"📤 Upload Finance P&amp;L"}<input type="file" accept=".xlsx,.xlsm,.xls" style="display:none" ${plBusy?"disabled":""} onchange="plUpload(this.files[0])"></label>`;
+  const msg=plMsg?`<div class="cd" style="padding:10px 14px;margin-bottom:12px;border-color:${plMsg.ok?T.accentGreen:T.accentRed};color:${plMsg.ok?T.accentGreen:T.accentRed}">${plMsg.ok?"✅":"⚠"} ${esc(plMsg.t)}</div>`:"";
+  const shell=(inner)=>`${css}<div class="cd" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:12px"><div><div style="font-size:19px;font-weight:800">🏪 Site P&amp;L</div><div class="sub">${plData?`Finance P&amp;L · ${esc(plData.file)} · uploaded ${esc(new Date(plData.uploadedAt).toLocaleDateString("en-GB",{day:"numeric",month:"short"}))} · only you can see this page`:"Finance's monthly P&amp;L by outlet · only you can see this page"}</div></div><div style="flex:1"></div>${up}</div>${msg}${inner}`;
+  if(plLoading&&!plData){pg.innerHTML=shell(`<div class="cd sub">Loading…</div>`);return;}
+  if(plErr&&!plData){pg.innerHTML=shell(`<div class="cd dn">Couldn't load the P&amp;L: ${esc(plErr)}</div>`);return;}
+  if(!plData){pg.innerHTML=shell(`<div class="cd"><div class="ttl" style="margin-bottom:6px">No P&amp;L uploaded yet</div><div class="sub">Upload Finance's "PL report" workbook (a tab per outlet + a Combined tab). Each month, upload the new file — it replaces the old one.</div></div>`);return;}
+  const D=plData,estOK=!!plEstimate();
   if(plUI.per==null||(plUI.per==="est"&&!estOK))plUI.per=String(D.months[D.months.length-1]);
-  const P=plPeriod(plUI.per);const G=P.group.A,GB=P.group.B||{},GL=P.group.LY||{};
-  const chips=D.months.map(m=>`<span class="chip ${plUI.per===String(m)?"on":""}" onclick="plUI.per='${m}';plUI.sel=null;renderSitePL()">${PL_MONTHS[m-1].slice(0,3)}</span>`).join("")+
-    (estOK?`<span class="chip ${plUI.per==="est"?"on":""}" onclick="plUI.per='est';plUI.sel=null;renderSitePL()">${PL_MONTHS[(+latest.slice(5,7))-1].slice(0,3)} so far · estimate</span>`:"")+
-    `<span class="chip ${plUI.per==="ytd"?"on":""}" onclick="plUI.per='ytd';plUI.sel=null;renderSitePL()">Year to date</span>`;
-  const views=`<span class="chip ${plUI.view==="outlets"?"on":""}" onclick="plUI.view='outlets';renderSitePL()">Outlets</span><span class="chip ${plUI.view==="brands"?"on":""}" onclick="plUI.view='brands';renderSitePL()">Brands</span>`;
-  const chg=(a,b)=>{if(!b)return'<span class="mut">—</span>';const p=(a-b)/Math.abs(b)*100;return`<span class="${p>=0?"up":"dn"}">${p>=0?"▲":"▼"}${Math.abs(p).toFixed(0)}%</span>`;};
-  const dlt=(a,b,has)=>has?`<span class="${a-b>=0?"up":"dn"}">${a-b>=0?"+":"−"}${plK(Math.abs(a-b))}</span>`:'<span class="mut">—</span>';
-  const live=P.rows.filter(r=>(r.A.rev||0)>0||(r.A.np||0)!==0);
-  const outRev=live.reduce((a,r)=>a+(r.A.rev||0),0),sumK=k=>live.reduce((a,r)=>a+(r.A[k]||0),0);
-  const inProfit=live.filter(r=>(r.A.rev||0)>0&&(r.A.np||0)>0).length,nRev=live.filter(r=>(r.A.rev||0)>0).length;
-  const worst=live.filter(r=>(r.A.np||0)<0).sort((a,b)=>a.A.np-b.A.np).slice(0,4).map(r=>r.name);
-  const E=P.est?' <span class="tag">estimate</span>':"";
-  const kp=`<div class="kp">
-   <div class="card"><div class="kl">Net revenue${E}</div><div class="kv">${plK(G.rev)}</div><div class="sub">vs budget ${plK(GB.rev)} ${chg(G.rev,GB.rev)} · vs ${P.ytd?"2025":"last year"} ${chg(G.rev,GL.rev)}</div></div>
-   <div class="card"><div class="kl">Net profit${E}</div><div class="kv ${G.np>=0?"up":"dn"}">${plK(G.np)} <span style="font-size:14px;color:${T.textSecondary}">${G.rev?(G.np/G.rev*100).toFixed(1):0}%</span></div><div class="sub">budget ${plK(GB.np)} · ${P.ytd?"2025":"last year"} ${plK(GL.np)}</div></div>
-   <div class="card"><div class="kl">Prime cost (food + staff)${E}</div><div class="kv">${outRev?((sumK("food")+sumK("staff"))/outRev*100).toFixed(0):0}%</div><div class="sub">food ${outRev?(sumK("food")/outRev*100).toFixed(1):0}% · staff ${outRev?(sumK("staff")/outRev*100).toFixed(1):0}%</div></div>
-   <div class="card"><div class="kl">Aggregator commission${E}</div><div class="kv">${outRev?(sumK("comm")/outRev*100).toFixed(1):0}%</div><div class="sub">AED ${plK(sumK("comm"))} of outlet revenue</div></div>
-   <div class="card"><div class="kl">Outlets in profit${E}</div><div class="kv">${inProfit} <span style="font-size:14px;color:${T.textSecondary}">of ${nRev}</span></div><div class="sub">${worst.length?"Biggest losses: "+worst.map(esc).join(", "):"No outlet made a loss"}</div></div></div>`;
-  let body="";
-  if(plUI.view==="brands")body=plBrandsHTML(P,T);
-  else{
-    const dash=!P.est&&!P.ytd&&P.m?plMonthDash(D.year,P.m):null,showDash=dash&&dash.full;
-    const rows=live.slice().sort((a,b)=>(b.A.np||0)-(a.A.np||0));
-    const pct=(r,k)=>r.A.rev?((r.A[k]||0)/r.A.rev*100).toFixed(0)+"%":"—";
-    const tr=rows.map(r=>{const A=r.A,npp=A.rev?A.np/A.rev*100:0,act=A.rev/P.days,be=P.ytd?0:(A.be||0),bar=be?act/be:0;
-      const dn=PL_OUTLET[r.name],dv=showDash&&dn?dash.by[dn]||0:null,dd=dv!=null&&A.rs?(dv-A.rs)/A.rs*100:null;
-      return`<tr class="rw ${plUI.sel===r.name?"sel":""}" onclick="plUI.sel='${esc(r.name).replace(/'/g,"\\'")}';renderSitePL()"><td>${esc(r.name)}${!P.ytd&&!(A.ho)&&A.rev?'<span class="tag" title="Finance allocated no head-office cost to this outlet">no HO alloc.</span>':""}</td>
-       <td>${plFmt(A.rev)}</td><td>${pct(r,"food")}</td><td>${pct(r,"staff")}</td><td>${pct(r,"rent")}</td><td>${pct(r,"comm")}</td><td>${P.est?plFmt(A.rmE):plFmt(plRM(A))}</td><td>${plFmt(A.ofi)}</td>
-       <td style="font-weight:800" class="${A.np>=0?"up":"dn"}">${plFmt(A.np)}</td><td class="${npp>=0?"up":"dn"}">${A.rev?npp.toFixed(0)+"%":"—"}</td>
-       <td>${dlt(A.np||0,r.B.np||0,Object.keys(r.B).length)}</td><td>${dlt(A.np||0,(r.LY||{}).np||0,(r.LY||{}).rev)}</td>
-       <td>${be?`<span class="bt"><i style="width:${Math.min(bar,1.5)/1.5*100}%;background:${bar>=1?T.accentGreen:T.accentRed}"></i><b></b></span><span class="sub">${plFmt(act)} / ${plFmt(be)}</span>`:'<span class="mut">—</span>'}</td>
-       ${showDash?`<td class="sub">${dv!=null?plFmt(dv)+(dd!=null?` <span class="${Math.abs(dd)<=3?"up":"dn"}">${dd>=0?"+":""}${dd.toFixed(1)}%</span>`:""):"—"}</td>`:""}</tr>`;}).join("");
-    const bal=(G.np||0)-live.reduce((a,r)=>a+(r.A.np||0),0);
-    body=`<div class="card"><div style="font-weight:800;font-size:15px">Outlets — ${esc(P.label)} <span class="sub" style="font-weight:500">· sorted by net profit · click an outlet for its breakdown</span></div>
-      <div class="sub" style="margin:3px 0 8px">% = share of net revenue. R&amp;M = repairs &amp; maintenance. Other fixed = Finance's confidential fixed-cost line (row 119). ${P.ytd?"":"Daily sales / break-even: bar = average daily sales vs Finance's daily break-even (line)."}${P.est?"<br>"+esc(P.note):""}</div>
-      <div class="scroll"><table><tr><th>Outlet</th><th>Net revenue</th><th>Food</th><th>Staff</th><th>Rent</th><th>Agg. comm.</th><th>R&amp;M</th><th>Other fixed</th><th>Net profit</th><th>NP %</th><th>vs budget</th><th>vs last yr</th><th>Daily sales / break-even</th>${showDash?'<th title="Dashboard sales, excl. VAT, all channels, vs Finance\'s restaurant sales">Dashboard sales</th>':""}</tr>${tr}
-      ${Math.abs(bal)>=1?`<tr><td class="sub" title="Combined net profit minus the outlets above: head office after its costs are allocated to outlets">Head office (after allocation to outlets)</td><td colspan="7"></td><td class="${bal>=0?"up":"dn"}" style="font-weight:800">${plFmt(bal)}</td><td colspan="${showDash?5:4}"></td></tr>`:""}
-      <tr><td style="font-weight:800">${P.est?"Group (estimate)":"Group (Combined tab)"}</td><td style="font-weight:800">${plFmt(G.rev)}</td><td colspan="6"></td><td style="font-weight:800" class="${G.np>=0?"up":"dn"}">${plFmt(G.np)}</td><td>${G.rev?(G.np/G.rev*100).toFixed(1)+"%":""}</td><td>${dlt(G.np||0,GB.np||0,Object.keys(GB).length)}</td><td>${dlt(G.np||0,GL.np||0,GL.rev)}</td><td colspan="${showDash?2:1}"></td></tr></table></div></div>`;
-    const sel=rows.find(r=>r.name===plUI.sel)||rows.slice().sort((a,b)=>(a.A.np||0)-(b.A.np||0))[0];
-    if(sel)body+=plWaterfallHTML(sel,P,T);
-  }
-  pg.innerHTML=css+head(`<div style="width:100%"></div><div>${chips}</div><div style="margin-left:auto">${views}</div>`)+kp+body;
+  const per=plUI.per,O=plUI.outlet||"",Br=per==="est"?"":(plUI.brand||"");
+  const S=plSel(per,O,Br),A=S.A,B=S.B,L=S.LY,rows=plRows(per),live=rows.filter(r=>(r.A.rev||0)>0||(r.A.np||0)!==0);
+  const lbl=per==="ytd"?`Jan–${PL_MONTHS[D.months[D.months.length-1]-1].slice(0,3)} ${D.year}`:per==="est"?`${PL_MONTHS[+latest.slice(5,7)-1]} 1–${+latest.slice(8,10)} (estimate)`:`${PL_MONTHS[+per-1]} ${D.year}`;
+  const who=(O||"All outlets")+(Br?" · "+Br:"");
+  // filters
+  const segB=(v,l)=>`<button class="${per===v?"on":""}" onclick="plSet('per','${v}')">${l}</button>`;
+  const flt=`<div class="cd" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;padding:12px 16px"><span class="seg">${D.months.slice(-4).map(m=>segB(String(m),PL_MONTHS[m-1].slice(0,3))).join("")}${estOK?segB("est",PL_MONTHS[+latest.slice(5,7)-1].slice(0,3)+" so far"):""}${segB("ytd","Year to date")}</span>
+    ${D.months.length>4?`<select onchange="plSet('per',this.value)"><option value="">Earlier month…</option>${D.months.slice(0,-4).map(m=>`<option value="${m}" ${per===String(m)?"selected":""}>${PL_MONTHS[m-1]}</option>`).join("")}</select>`:""}
+    <div style="flex:1"></div><select onchange="plSet('outlet',this.value)"><option value="">All outlets</option>${Object.keys(D.outlets).sort().map(n=>`<option ${O===n?"selected":""}>${esc(n)}</option>`).join("")}</select>
+    <select onchange="plSet('brand',this.value)" ${per==="est"?"disabled title='Brand split is for Finance months only'":""}><option value="">All brands</option>${["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"].map(b=>`<option ${Br===b?"selected":""}>${b}</option>`).join("")}</select>
+    ${O||Br?`<button onclick="plUI.outlet='';plUI.brand='';renderSitePL()" style="border:none;background:none;color:${T.accentOrange};font-weight:700;cursor:pointer;font-size:12.5px">✕ Clear</button>`:""}</div>`;
+  // KPIs
+  const pill=(a,b,inv,lab)=>{if(!b)return"";const p=(a-b)/Math.abs(b)*100,good=(p>=0)!==!!inv;return`<span class="pill" style="background:${good?T.accentGreen:T.accentRed}22;color:${good?T.accentGreen:T.accentRed}">${p>=0?"▲":"▼"}${Math.abs(p).toFixed(0)}% ${lab}</span>`;};
+  const trend=k=>D.months.map(m=>(plSel(String(m),O,Br).A[k]||0));
+  const dpg=x=>x&&x.gross?(x.disc||0)/x.gross*100:0;
+  const E=per==="est"?` <span class="tag" style="background:#c9850026;color:#c98500">ESTIMATE</span>`:"";
+  const npP=A.rev?A.np/A.rev*100:0,prime=A.rev?((A.food||0)+(A.staff||0))/A.rev*100:0,primeB=B.rev?((B.food||0)+(B.staff||0))/B.rev*100:0;
+  const nP=live.filter(r=>(r.A.rev||0)>20000),inP=nP.filter(r=>(r.A.np||0)>0).length;
+  const kp=`<div class="kp" style="margin-bottom:12px">
+   <div class="cd"><div class="kl">Net revenue${E}</div><div class="kv">${plK(A.rev)}</div>${pill(A.rev,B.rev,0,"vs budget")}${pill(A.rev,L.rev,0,"vs last yr")}${plSpark(trend("rev"),T,PL_CLR[0])}</div>
+   <div class="cd"><div class="kl">Net profit${E}</div><div class="kv ${A.np>=0?"up":"dn"}">${plK(A.np)} <span style="font-size:14px;color:${T.textSecondary}">${npP.toFixed(1)}%</span></div><span class="sub">budget ${plK(B.np)}${L.rev?" · last yr "+plK(L.np):""}</span>${plSpark(trend("np"),T)}</div>
+   <div class="cd"><div class="kl">Discounts</div><div class="kv">${A.gross?dpg(A).toFixed(1)+"%":"—"}</div><span class="sub">${A.gross?`of gross sales · AED ${plK(A.disc)}`:"not in the estimate"}</span>${L.gross?(()=>{const d=dpg(A)-dpg(L),bad=d>0;return`<div style="margin-top:4px"><span class="pill" style="background:${bad?T.accentRed:T.accentGreen}22;color:${bad?T.accentRed:T.accentGreen}">${d>=0?"▲ +":"▼ "}${d.toFixed(1)} pts vs last yr (${dpg(L).toFixed(1)}%)</span></div>`;})():""}</div>
+   <div class="cd"><div class="kl">Prime cost${E}</div><div class="kv">${prime.toFixed(0)}%</div><span class="sub">food ${A.rev?((A.food||0)/A.rev*100).toFixed(1):0}% + staff ${A.rev?((A.staff||0)/A.rev*100).toFixed(1):0}% · budget ${primeB.toFixed(0)}%</span></div>
+   <div class="cd"><div class="kl">${O?"Daily sales vs break-even":"Outlets in profit"}${E}</div>${O?(()=>{const nd=per==="ytd"?D.months.reduce((a,m)=>a+plDim(D.year,m),0):per==="est"?+latest.slice(8,10):plDim(D.year,+per),d=A.rev/nd,be=A.be||0;return`<div class="kv">${plFmt(d)}</div><span class="sub">${per==="ytd"?"average per day":be?`break-even ${plFmt(be)}/day · <b class="${d>=be?"up":"dn"}">${d>=be?"+":"−"}${plFmt(Math.abs(d-be))}</b>`:""}</span>`;})():`<div class="kv">${inP} <span style="font-size:14px;color:${T.textSecondary}">of ${nP.length}</span></div><span class="sub">click a bar below to filter</span>`}</div></div>`;
+  // charts row 1
+  const r1=`<div class="g2" style="margin-bottom:12px"><div class="cd"><div class="ttl">Revenue &amp; net profit by month <span class="sub" style="font-weight:500">· ${esc(who)}</span></div><div class="sub" style="margin-bottom:6px">bars = actual · line = budget · dashed = last year · click a month to open it</div><div style="height:250px"><canvas id="pl-c-trend"></canvas></div></div>
+    <div class="cd"><div class="ttl">Where every AED 100 of sales went</div><div class="sub" style="margin-bottom:6px">${esc(who)} · ${esc(lbl)}</div><div style="height:250px"><canvas id="pl-c-mix"></canvas></div></div></div>`;
+  const r2=`<div class="g2b" style="margin-bottom:12px"><div class="cd"><div class="ttl">Net profit by outlet</div><div class="sub" style="margin-bottom:6px">${esc(lbl)}${Br?" · "+esc(Br):""} · line = budget · click an outlet to filter</div><div style="height:${Math.max(260,nP.length*22+40)}px"><canvas id="pl-c-out"></canvas></div></div>
+    <div class="cd"><div class="ttl">Why profit differs from budget</div><div class="sub" style="margin-bottom:6px">${esc(who)} · ${esc(lbl)} · AED, green = helped, red = hurt</div><div style="height:${Math.max(260,nP.length*22+40)}px"><canvas id="pl-c-bridge"></canvas></div></div></div>`;
+  const r3=per==="est"||Br?"":`<div class="cd" style="margin-bottom:12px"><div class="ttl">Discounts as % of gross sales — this year vs last year</div><div class="sub" style="margin-bottom:6px">${esc(lbl)} · group ${dpg(plSel(per,"","").A).toFixed(1)}% vs ${dpg(plSel(per,"","").LY).toFixed(1)}% last year</div><div style="height:230px"><canvas id="pl-c-disc"></canvas></div></div>`;
+  // problems
+  const probs=plProblems(per,rows,plSel(per,"","").A).filter(p=>!O||p.name===O);
+  const gA=plSel(per,"","").A,gL=plSel(per,"","").LY;
+  let pH="";
+  if(!O&&per!=="est"&&gL.gross&&dpg(gA)>dpg(gL)*1.4)pH+=`<div class="pc" style="border-color:#c9850066;margin-bottom:10px"><div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap"><span class="tag" style="background:#c9850026;color:#c98500">GROUP</span><b>Discounts up from ${dpg(gL).toFixed(1)}% to ${dpg(gA).toFixed(1)}% of gross sales</b><span class="dn" style="margin-left:auto;font-weight:800">≈ AED ${plK(gA.disc-gL.disc)} more than last year</span></div><ol><li>Set a group discount ceiling (e.g. 12% of gross) and a lower one for loss-making outlets</li><li>Monthly review on Promotions: keep campaigns with positive incremental profit, stop the rest</li><li>Prefer co-funded platform offers (50-50) over self-funded ones</li></ol></div>`;
+  const show=O?probs:probs.slice(0,plUI.more?99:4);
+  pH+=`<div class="g2b">${show.map(p=>`<div class="pc"><div style="display:flex;gap:10px;align-items:baseline;margin-bottom:6px"><b style="font-size:14.5px;cursor:pointer" onclick="plSet('outlet','${esc(p.name).replace(/'/g,"\\'")}')">${esc(p.name)}</b><span class="sub">net profit <b class="${p.A.np>=0?"up":"dn"}">${plFmt(p.A.np)}</b> · budget ${plFmt(p.B.np)}</span><span class="dn" style="margin-left:auto;font-weight:800;font-size:12.5px">≈ AED ${plK(p.tot)} at stake</span></div>
+    ${p.P.map(x=>`<div class="pr"><span class="tag" style="background:${x[1]}26;color:${x[1]}">${x[0]}</span><span style="flex:1">${x[2]}</span><b class="dn">${plK(x[3])}</b></div>`).join("")}<div class="kl" style="margin-top:8px;font-size:10px">Proposed actions</div><ol>${p.act.map(a=>`<li>${a}</li>`).join("")}</ol></div>`).join("")}</div>`;
+  if(!O&&probs.length>4)pH+=`<div style="text-align:center;margin-top:10px"><button onclick="plUI.more=!plUI.more;renderSitePL()" style="border:1px solid ${T.cardBorder};background:transparent;color:${T.textSecondary};border-radius:8px;padding:6px 14px;font-weight:700;cursor:pointer">${plUI.more?"Show fewer":`Show all ${probs.length} outlets with problems`}</button></div>`;
+  if(!probs.length&&!pH)pH=`<div class="sub">No problems flagged for ${esc(who)} in ${esc(lbl)}. 👍</div>`;
+  const r4=`<div class="cd" style="margin-bottom:12px"><div class="ttl" style="margin-bottom:2px">Problems &amp; proposed actions</div><div class="sub" style="margin-bottom:10px">${esc(who)} · ${esc(lbl)} · ranked by AED at stake · suggestions from Finance's numbers</div>${pH}</div>`;
+  // table (folded)
+  const tr=nP.slice().sort((a,b)=>(b.A.np||0)-(a.A.np||0)).map(r=>{const a=r.A,pc=k=>a.rev?Math.round((a[k]||0)/a.rev*100)+"%":"—";return`<tr style="cursor:pointer" onclick="plSet('outlet','${esc(r.name).replace(/'/g,"\\'")}')"><td>${esc(r.name)}${!a.ho&&per!=="ytd"?' <span class="tag" style="background:#c9850026;color:#c98500">no HO alloc.</span>':""}</td><td>${plFmt(a.rev)}</td><td>${pc("food")}</td><td>${pc("staff")}</td><td>${pc("rent")}</td><td>${pc("comm")}</td><td>${a.gross?dpg(a).toFixed(1)+"%":"—"}</td><td>${plFmt(per==="est"?a.rmE:plRM(a))}</td><td>${plFmt(a.ofi)}</td><td class="${a.np>=0?"up":"dn"}" style="font-weight:800">${plFmt(a.np)}</td><td>${r.B.np!=null?`<span class="${a.np-r.B.np>=0?"up":"dn"}">${a.np-r.B.np>=0?"+":"−"}${plK(Math.abs(a.np-r.B.np))}</span>`:""}</td></tr>`;}).join("");
+  const r5=`<details class="cd" ${plUI.tbl?"open":""} ontoggle="plUI.tbl=this.open"><summary style="cursor:pointer;font-weight:800;font-size:14px">Outlet table <span class="sub" style="font-weight:500">· ${esc(lbl)} · Finance's figures, as reported</span></summary><div style="overflow-x:auto;margin-top:10px"><table><tr><th>Outlet</th><th>Net revenue</th><th>Food</th><th>Staff</th><th>Rent</th><th>Agg. comm.</th><th>Discount</th><th>R&amp;M</th><th>Other fixed</th><th>Net profit</th><th>vs budget</th></tr>${tr}</table></div></details>`;
+  pg.innerHTML=shell(flt+kp+r1+r2+r3+r4+r5);
+  if(typeof Chart==="undefined")return;
+  // ── charts
+  const tick={color:T.textSecondary,font:{size:11}},grid={color:T.cardBorder+"44"},af=v=>plK(v);
+  const tip={backgroundColor:T.card,borderColor:T.cardBorder,borderWidth:1,titleColor:T.textPrimary,bodyColor:T.textSecondary,padding:10};
+  const mL=D.months.map(m=>PL_MONTHS[m-1].slice(0,3)),rv=trend("rev"),np=trend("np"),bv=D.months.map(m=>plSel(String(m),O,Br).B.rev||0),lv=Br?null:D.months.map(m=>plSel(String(m),O,Br).LY.rev||0);
+  const curI=per==="ytd"||per==="est"?-1:D.months.indexOf(+per);
+  plCharts.trend=new Chart(document.getElementById("pl-c-trend"),{type:"bar",data:{labels:mL,datasets:[
+    {type:"bar",label:"Revenue",data:rv,backgroundColor:rv.map((v,i)=>i===curI||curI<0?PL_CLR[0]:PL_CLR[0]+"88"),borderRadius:4,maxBarThickness:26,order:2},
+    {type:"bar",label:"Net profit",data:np,backgroundColor:np.map(v=>v>=0?T.accentGreen+"cc":T.accentRed+"cc"),borderRadius:4,maxBarThickness:26,order:2},
+    {type:"line",label:"Budget revenue",data:bv,borderColor:"#c98500",borderWidth:2,pointRadius:3,pointBackgroundColor:"#c98500",tension:.25,order:1},
+    ...(lv?[{type:"line",label:"Last year revenue",data:lv,borderColor:T.textMuted,borderWidth:2,borderDash:[5,4],pointRadius:0,tension:.25,order:1}]:[])]},
+    options:{maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{labels:{color:T.textSecondary,boxWidth:10,font:{size:11}}},tooltip:Object.assign({callbacks:{label:c=>` ${c.dataset.label}: AED ${plFmt(c.raw)}`}},tip)},
+      scales:{x:{ticks:tick,grid:{display:false}},y:{ticks:Object.assign({callback:af},tick),grid}},onClick:(e,els)=>{if(els.length)plSet("per",String(D.months[els[0].index]));}}});
+  const rev=A.rev||0;const mix=[["Food",A.food],["Staff",A.staff],["Aggregator commission",A.comm],["Rent",A.rent],["Packaging, gas, cleaning",A.odir],["Repairs & utilities",(per==="est"?A.rmE:plRM(A))+(A.util||0)],["Other fixed (confidential)",A.ofi],["Other costs",plOther(A)]].map(([n,v])=>[n,Math.max(v||0,0)]);
+  plCharts.mix=new Chart(document.getElementById("pl-c-mix"),{type:"doughnut",data:{labels:mix.map(x=>x[0]),datasets:[{data:mix.map(x=>x[1]),backgroundColor:PL_CLR,borderColor:T.card,borderWidth:2,hoverOffset:6}]},
+    options:{maintainAspectRatio:false,cutout:"62%",plugins:{legend:{position:"right",labels:{color:T.textSecondary,boxWidth:10,font:{size:11},generateLabels:ch=>ch.data.labels.map((l,i)=>({text:`${l}  ${rev?(ch.data.datasets[0].data[i]/rev*100).toFixed(0):0}`,fillStyle:PL_CLR[i],strokeStyle:PL_CLR[i],fontColor:T.textSecondary,index:i}))}},tooltip:Object.assign({callbacks:{label:c=>` ${c.label}: AED ${plFmt(c.raw)} · ${rev?(c.raw/rev*100).toFixed(1):0} of every 100`}},tip)}},
+    plugins:[{id:"ctr",afterDraw(ch){const{ctx,chartArea:a}=ch,x=(a.left+a.right)/2,y=(a.top+a.bottom)/2;ctx.save();ctx.textAlign="center";ctx.fillStyle=A.np>=0?T.accentGreen:T.accentRed;ctx.font="800 22px Inter,Segoe UI,sans-serif";ctx.fillText((A.np>=0?"":"−")+Math.abs(npP).toFixed(1),x,y+2);ctx.fillStyle=T.textSecondary;ctx.font="600 11px Inter,Segoe UI,sans-serif";ctx.fillText(A.np>=0?"profit per 100":"loss per 100",x,y+18);ctx.restore();}}]});
+  const oR=nP.slice().sort((a,b)=>(b.A.np||0)-(a.A.np||0)).map(r=>Br?Object.assign({},r,{A:(r.br[Br]||{}).A||{},B:(r.br[Br]||{}).B||{}}):r).filter(r=>r.A.rev||r.A.np);
+  plCharts.out=new Chart(document.getElementById("pl-c-out"),{type:"bar",data:{labels:oR.map(r=>r.name),datasets:[
+    {label:"Net profit",data:oR.map(r=>r.A.np||0),backgroundColor:oR.map(r=>(r.A.np||0)>=0?(O&&O!==r.name?T.accentGreen+"55":T.accentGreen):(O&&O!==r.name?T.accentRed+"55":T.accentRed)),borderRadius:4,barThickness:13,order:2},
+    {type:"line",label:"Budget",order:0,data:oR.map(r=>r.B.np||0),showLine:false,pointStyle:"line",rotation:90,pointRadius:9,pointBorderWidth:3,borderColor:"#c98500",backgroundColor:"#c98500"}]},
+    options:{indexAxis:"y",maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:Object.assign({callbacks:{label:c=>` ${c.dataset.label}: AED ${plFmt(c.raw)}`}},tip)},scales:{x:{ticks:Object.assign({callback:af},tick),grid},y:{ticks:Object.assign({},tick,{color:c=>O&&oR[c.index]&&oR[c.index].name===O?T.accentOrange:T.textSecondary}),grid:{display:false}}},
+      onClick:(e,els)=>{if(els.length){const n=oR[els[0].index].name;plSet("outlet",plUI.outlet===n?"":n);}}}});
+  const bl=[["Sales",(A.rev||0)-(B.rev||0)],["Food",-((A.food||0)-(B.food||0))],["Staff",-((A.staff||0)-(B.staff||0))],["Aggregator commission",-((A.comm||0)-(B.comm||0))],["Rent",-((A.rent||0)-(B.rent||0))],["Packaging, gas, cleaning",-((A.odir||0)-(B.odir||0))],["Repairs & maintenance",-((per==="est"?A.rmE:plRM(A))-plRM(B))],["Utilities",-((A.util||0)-(B.util||0))],["Other fixed",-((A.ofi||0)-(B.ofi||0))]];
+  const rest=((A.np||0)-(B.np||0))-bl.reduce((s,x)=>s+x[1],0);bl.push(["Everything else",rest]);bl.push(["Net profit vs budget",(A.np||0)-(B.np||0)]);
+  plCharts.bridge=new Chart(document.getElementById("pl-c-bridge"),{type:"bar",data:{labels:bl.map(x=>x[0]),datasets:[{data:bl.map(x=>x[1]),backgroundColor:bl.map((x,i)=>i===bl.length-1?(x[1]>=0?T.accentGreen:T.accentRed):(x[1]>=0?T.accentGreen+"aa":T.accentRed+"aa")),borderRadius:4,barThickness:15}]},
+    options:{indexAxis:"y",maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:Object.assign({callbacks:{label:c=>` ${c.raw>=0?"+":"−"}AED ${plFmt(Math.abs(c.raw))} ${c.raw>=0?"better":"worse"} than budget`}},tip)},scales:{x:{ticks:Object.assign({callback:af},tick),grid},y:{ticks:Object.assign({},tick,{font:c=>({size:11,weight:c.index===bl.length-1?"800":"500"})}),grid:{display:false}}}}});
+  if(r3){const dR=nP.filter(r=>r.A.gross).sort((a,b)=>dpg(b.A)-dpg(a.A));
+    plCharts.disc=new Chart(document.getElementById("pl-c-disc"),{type:"bar",data:{labels:dR.map(r=>r.name),datasets:[{label:lbl,data:dR.map(r=>+dpg(r.A).toFixed(1)),backgroundColor:dR.map(r=>O&&O!==r.name?PL_CLR[0]+"55":PL_CLR[0]),borderRadius:4,maxBarThickness:18},{label:"Last year",data:dR.map(r=>r.LY.gross?+dpg(r.LY).toFixed(1):null),backgroundColor:T.textMuted+"99",borderRadius:4,maxBarThickness:18}]},
+      options:{maintainAspectRatio:false,plugins:{legend:{labels:{color:T.textSecondary,boxWidth:10,font:{size:11}}},tooltip:Object.assign({callbacks:{label:c=>` ${c.dataset.label}: ${c.raw==null?"—":c.raw+"% of gross"}`}},tip)},scales:{x:{ticks:Object.assign({},tick,{maxRotation:45,minRotation:30}),grid:{display:false}},y:{ticks:Object.assign({callback:v=>v+"%"},tick),grid}},
+        onClick:(e,els)=>{if(els.length){const n=dR[els[0].index].name;plSet("outlet",plUI.outlet===n?"":n);}}}});}
 }
-function plWaterfallHTML(r,P,T){const A=r.A,rev=A.rev||0;if(!rev)return"";
-  const rm=P.est?A.rmE:plRM(A),veh=(A.rest||0)-rm+(A.veh||0)+(A.office||0)+(A.lic||0)+(A.oth||0)+(A.bank||0);
-  const st=[["Food cost",A.food],["Packaging, gas, cleaning, card fees",A.odir],["Staff",A.staff],["Aggregator commission",A.comm],["Other marketing",(A.mkt||0)-(A.comm||0)],["Rent",A.rent],
-    [P.est?"Repairs & maintenance (3-mo avg)":"Repairs & maintenance",rm],[P.est?"Utilities (3-mo avg)":"Utilities",A.util],["Vehicles, licences, office, other",veh],["Other fixed (Finance, confidential)",A.ofi]];
-  let cum=rev,h=`<div class="wr"><span>Net revenue</span><div class="wb"><i style="left:0;width:100%;background:${T.accentBlue}"></i></div><b>${plFmt(rev)}</b></div>`;
-  for(const [n,x0] of st){const x=x0||0;if(!x)continue;const lo=Math.max(Math.min(cum,cum-x),0),hi=Math.min(Math.max(cum,cum-x),rev);
-    h+=`<div class="wr"><span>${n}</span><div class="wb">${hi>lo?`<i style="left:${lo/rev*100}%;width:${(hi-lo)/rev*100}%;background:${/confidential/.test(n)?T.accentPurple:"#F59E0B"}"></i>`:""}</div><b>${x>=0?"−":"+"}${plFmt(Math.abs(x))} <span class="mut" style="font-weight:500">${(x/rev*100).toFixed(0)}%</span></b></div>`;cum-=x;}
-  h+=`<div class="wr"><span><b>Net profit</b></span><div class="wb"><i style="left:0;width:${Math.min(Math.abs(cum)/rev*100,100)}%;background:${cum<0?T.accentRed:T.accentGreen}"></i></div><b class="${cum<0?"dn":"up"}">${plFmt(cum)}</b></div>`;
-  const rng=P.est&&A.lumpyHi?`<div class="sub" style="margin-top:6px">Repairs + utilities could be ${plFmt(A.lumpyLo)}–${plFmt(A.lumpyHi)} on recent months (shown at the average) — net profit range ${plFmt(cum+(A.rmE+A.util)-A.lumpyHi)} to ${plFmt(cum+(A.rmE+A.util)-A.lumpyLo)}.</div>`:"";
-  return`<div class="card"><div style="font-weight:800;font-size:15px">Where the money went — ${esc(r.name)}, ${esc(P.label)}</div>${h}${rng}</div>`;}
-function plBrandsHTML(P,T){const br=(P.group||{}).br||{};const names=["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"].filter(n=>br[n]&&(br[n].A.rev||br[n].B.rev));
-  if(P.est||!names.length)return`<div class="card sub">${P.est?"The brand split is shown for Finance's actual months only.":"No brand split in this file."}</div>`;
-  const pct=(o,k)=>o.rev?((o[k]||0)/o.rev*100).toFixed(0)+"%":"—";
-  const tr=names.map(n=>{const A=br[n].A,B=br[n].B;return`<tr><td style="font-weight:700">${n}</td><td>${plFmt(A.rev)}</td><td>${plFmt(B.rev)}</td><td>${pct(A,"food")}</td><td>${pct(A,"staff")}</td><td>${pct(A,"comm")}</td><td style="font-weight:800" class="${(A.np||0)>=0?"up":"dn"}">${plFmt(A.np)}</td><td>${A.rev?((A.np||0)/A.rev*100).toFixed(0)+"%":"—"}</td><td>${plFmt(B.np)}</td></tr>`;}).join("");
-  // outlet × brand net profit
-  const outs=P.rows.filter(r=>Object.values(r.br||{}).some(x=>x.A.rev));
-  const mx=`<table><tr><th>Outlet</th>${names.map(n=>`<th>${n}</th>`).join("")}</tr>${outs.map(r=>`<tr><td>${esc(r.name)}</td>${names.map(n=>{const x=((r.br||{})[n]||{}).A;return`<td>${x&&(x.rev||x.np)?`<span class="${(x.np||0)>=0?"up":"dn"}">${plFmt(x.np)}</span> <span class="mut">/ ${plK(x.rev)}</span>`:'<span class="mut">—</span>'}</td>`;}).join("")}</tr>`).join("")}</table>`;
-  return`<div class="card"><div style="font-weight:800;font-size:15px">Brands — ${esc(P.label)}</div><div class="sub" style="margin:3px 0 8px">As Finance splits it. At an outlet with one front-end brand (e.g. Al Reef → Smokeys) that brand carries the outlet's costs.</div>
-    <div class="scroll"><table><tr><th>Brand</th><th>Net revenue</th><th>Budget</th><th>Food</th><th>Staff</th><th>Agg. comm.</th><th>Net profit</th><th>NP %</th><th>Budget NP</th></tr>${tr}</table></div></div>
-    <div class="card"><div style="font-weight:800;font-size:15px">Net profit by outlet and brand <span class="sub" style="font-weight:500">· profit / revenue</span></div><div class="scroll">${mx}</div></div>`;}
 // ── wiring: page + menu entry for Nikhil only ──
 (function plInit(){
   if(typeof renderPage!=="function"||typeof NAV_LAYOUTS==="undefined"||typeof getActiveSession!=="function"||!document.querySelector(".pg"))return setTimeout(plInit,400);
