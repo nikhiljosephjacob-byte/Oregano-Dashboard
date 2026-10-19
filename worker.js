@@ -38,8 +38,6 @@ const AUTH_USERS = {
   "rijeesh":  { password: "oregano2023", displayName: "Rijeesh",  initials: "R" },
   "nicole":   { password: "oregano2024", displayName: "Nicole",   initials: "N" },
   "arun":     { password: "oregano2025", displayName: "Arun",     initials: "A" },
-  "admin":    { password: "admin2026",       displayName: "Admin",    initials: "A" },
-  "bd":       { password: "oregano2027", displayName: "BD Team",  initials: "BD" }
 };
 
 const SESSION_TTL_SECONDS = 86400; // 24 hours — refreshed by 60s heartbeats. Was 300 (5 min) which caused frequent logouts when tab was backgrounded or phone screen turned off.
@@ -91,9 +89,9 @@ function deviceOf(ua) {
 // v580: one system per login — the newest sign-in wins and the older system is signed out within a minute.
 // Nikhil may stay signed in on his phone and laptop at the same time.
 const MULTI_DEVICE_USERS = new Set(["nikhil"]);
-async function replaceOtherSessions(env, userKey, newSession, request) {
-  let ids = [];
-  const known = await env.SESSIONS.get(`usersess:${userKey}`);
+async function replaceOtherSessions(env, userKey, newSession, request, prevPointer) {
+  let ids = [];const replaced = [];
+  const known = prevPointer !== undefined ? prevPointer : await env.SESSIONS.get(`usersess:${userKey}`);
   if (known) ids = [known];
   else { // first login since this went live, or the pointer expired: look the user's sessions up once
     const list = await env.SESSIONS.list({ prefix: "session:", limit: 1000 });
@@ -113,17 +111,22 @@ async function replaceOtherSessions(env, userKey, newSession, request) {
       oldIp: old.ip, oldOs: old.os || deviceOf(old.ua).os, oldBrowser: old.browser || deviceOf(old.ua).browser,
       newOs: newSession.os, newBrowser: newSession.browser, sameSystem };
     await logEvent(env, info);
+    replaced.push({ os: info.oldOs, browser: info.oldBrowser, ip: old.ip, sameSystem });
     if (!sameSystem) {
       const ts = new Date().toISOString();
       await env.SESSIONS.put(`alert:${ts}:${crypto.randomUUID().slice(0, 6)}`, JSON.stringify(Object.assign({ ts }, info)), { expirationTtl: 60 * 60 * 24 * 90 });
     }
   }
+  return replaced;
 }
 
 async function getSession(env, sessionId) {
   if (!sessionId) return null;
   const raw = await env.SESSIONS.get(`session:${sessionId}`);
-  return raw ? JSON.parse(raw) : null;
+  if (!raw) return null;
+  const sess = JSON.parse(raw);
+  if (!AUTH_USERS[sess.user]) { await env.SESSIONS.delete(`session:${sessionId}`); return null; } // v583: login removed (bd, admin)
+  return sess;
 }
 
 // ─── auth endpoints ──────────────────────────────────────────────────────────
@@ -169,8 +172,11 @@ async function handleLogin(request, env) {
   });
 
   if (!MULTI_DEVICE_USERS.has(userKey)) {
-    await replaceOtherSessions(env, userKey, session, request);
+    // pointer first, so the older system is caught by its next heartbeat even before the delete has spread across Cloudflare
+    const prevPtr = await env.SESSIONS.get(`usersess:${userKey}`);
     await env.SESSIONS.put(`usersess:${userKey}`, sessionId, { expirationTtl: SESSION_TTL_SECONDS });
+    const rep = (await replaceOtherSessions(env, userKey, session, request, prevPtr)).filter(x => !x.sameSystem);
+    if (rep.length) await env.SESSIONS.put(`notice:${sessionId}`, JSON.stringify(rep), { expirationTtl: 60 * 60 });
   }
   await logEvent(env, { user: userKey, event: "login_success", ip, ua, sessionId, ...deviceOf(ua) });
 
@@ -196,6 +202,21 @@ async function handleHeartbeat(request, env) {
     await env.SESSIONS.delete(`session:${sessionId}`);
     return json({ error: "banned" }, 403);
   }
+  // v583: one system per login, checked on EVERY heartbeat (not only at sign-in) — a newer sign-in moved the pointer
+  if (!MULTI_DEVICE_USERS.has(session.user)) {
+    const ptr = await env.SESSIONS.get(`usersess:${session.user}`);
+    if (ptr && ptr !== sessionId) {
+      const nraw = await env.SESSIONS.get(`session:${ptr}`);
+      if (nraw) {
+        const n = JSON.parse(nraw);
+        await env.SESSIONS.delete(`session:${sessionId}`);
+        return json({ error: "replaced", by: { os: n.os, browser: n.browser, ip: n.ip, ts: n.loginTs } }, 401);
+      }
+    }
+  }
+  let notice = null;
+  const nt = await env.SESSIONS.get(`notice:${sessionId}`);
+  if (nt) { notice = JSON.parse(nt); await env.SESSIONS.delete(`notice:${sessionId}`); }
 
   // ── KV write throttling ──
   // The client pings this endpoint every 60s. Writing to KV on every single ping
@@ -220,7 +241,7 @@ async function handleHeartbeat(request, env) {
     // still valid (kick/ban checks above already ran). Report the CURRENT time
     // as lastSeen in the response so the client UI still looks live, without
     // actually writing to KV.
-    return json({ ok: true, lastSeen: now.toISOString(), throttled: true });
+    return json({ ok: true, lastSeen: now.toISOString(), throttled: true, notice });
   }
 
   session.lastSeen = now.toISOString();
@@ -234,7 +255,7 @@ async function handleHeartbeat(request, env) {
   });
   // keep the one-system pointer alive as long as the session (rewritten at most every 5 min, like the session)
   if (!MULTI_DEVICE_USERS.has(session.user)) await env.SESSIONS.put(`usersess:${session.user}`, sessionId, { expirationTtl: SESSION_TTL_SECONDS });
-  return json({ ok: true, lastSeen: session.lastSeen });
+  return json({ ok: true, lastSeen: session.lastSeen, notice });
 }
 
 async function handleLogout(request, env) {
@@ -933,6 +954,25 @@ async function handlePosReconList(request, env) {
   const recs = (await Promise.all(want.map(k => env.SESSIONS.get(k)))).filter(Boolean).map(r => JSON.parse(r));
   return json({ ok: true, recs });
 }
+// v582: dine-in discount name → Customer / Internal, set by an admin; one small KV value read by every dashboard
+async function handleDDClassGet(request, env) {
+  const s = await getSession(env, request.headers.get("X-Session-Id"));
+  if (!s) return json({ error: "no_session" }, 401);
+  return json({ map: JSON.parse((await env.SESSIONS.get("ddclass")) || "{}") });
+}
+async function handleDDClassSet(request, env) {
+  const admin = await requireAdmin(request, env);
+  if (!admin) return json({ error: "Only an admin can change discount classifications" }, 403);
+  const { name, cls } = await readBody(request);
+  const k = String(name || "").trim().toUpperCase().slice(0, 120);
+  if (!k || !["Customer", "Internal"].includes(cls)) return json({ error: "name and cls (Customer|Internal) required" }, 400);
+  const map = JSON.parse((await env.SESSIONS.get("ddclass")) || "{}");
+  map[k] = cls;
+  await env.SESSIONS.put("ddclass", JSON.stringify(map));
+  await logEvent(env, { user: admin.user, event: "discount_classified", target: k, reason: cls, ip: clientIP(request) });
+  return json({ ok: true, map });
+}
+
 async function handlePosReconAck(request, env) {
   const s = await requirePosUser(request, env);
   if (!s) return json({ error: "forbidden" }, 403);
@@ -1034,7 +1074,8 @@ async function handlePosJTList(request, env) {
   const u = new URL(request.url), from = u.searchParams.get("from") || "", to = u.searchParams.get("to") || "9999", keysOnly = u.searchParams.get("keys") === "1";
   const keys = []; let cursor;
   do { const l = await env.SESSIONS.list({ prefix: "pos:jt:", limit: 1000, cursor }); keys.push(...l.keys.map(k => k.name)); cursor = l.list_complete ? null : l.cursor; } while (cursor);
-  const want = keys.filter(n => { const d = n.slice(7, 17); return d >= from && d <= to; }).sort().slice(0, 900);
+  const locs = (u.searchParams.get("locs") || "").split(",").map(x => x.trim().toUpperCase()).filter(Boolean); // v583: e.g. REM,REF,NAD,ALF
+  const want = keys.filter(n => { const d = n.slice(7, 17); if (!(d >= from && d <= to)) return false; return !locs.length || locs.includes(n.slice(18, 21)); }).sort().slice(0, 900);
   if (keysOnly) return json({ ok: true, keys: want.map(n => n.slice(7)) });
   const vals = await Promise.all(want.map(k => env.SESSIONS.get(k)));
   return json({ ok: true, days: want.map((k, i) => ({ date: k.slice(7, 17), loc: k.slice(18), data: vals[i] ? JSON.parse(vals[i]) : null })).filter(x => x.data) });
@@ -1231,6 +1272,8 @@ export default {
       if (path === "/api/pos/msys/probe"  && method === "POST") return await handlePosMsysProbe(request, env);
       if (path === "/api/pos/recon"       && method === "GET")  return await handlePosReconList(request, env);
       if (path === "/api/pos/recon/ack"   && method === "POST") return await handlePosReconAck(request, env);
+      if (path === "/api/ddclass"         && method === "GET")  return await handleDDClassGet(request, env);
+      if (path === "/api/ddclass"         && method === "POST") return await handleDDClassSet(request, env);
     } catch (e) {
       return json({ error: "server_error", detail: String(e.message || e) }, 500);
     }
