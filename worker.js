@@ -954,6 +954,29 @@ async function handlePosReconList(request, env) {
   const recs = (await Promise.all(want.map(k => env.SESSIONS.get(k)))).filter(Boolean).map(r => JSON.parse(r));
   return json({ ok: true, recs });
 }
+// v585: delivery-button sales the platforms don't account for (catering, direct deliveries, test orders, voids/timing),
+// per outlet × button × day, from the daily reconciliation — so the dashboard's group total equals Finance's DSR.
+// Read-only and compact; any signed-in user (the figures are totals, no customer details).
+async function handlePosTillOnly(request, env) {
+  const s = await getSession(env, request.headers.get("X-Session-Id"));
+  if (!s) return json({ error: "no_session" }, 401);
+  const u = new URL(request.url), from = u.searchParams.get("from") || "", to = u.searchParams.get("to") || "9999";
+  const keys = [];let cursor;
+  do { const l = await env.SESSIONS.list({ prefix: "pos:recon:", limit: 1000, cursor }); keys.push(...l.keys); cursor = l.list_complete ? null : l.cursor; } while (cursor);
+  const want = keys.map(k => k.name).filter(n => { const d = n.slice(10); return d >= from && d <= to; }).sort().slice(-400);
+  const recs = (await Promise.all(want.map(k => env.SESSIONS.get(k)))).filter(Boolean).map(r => JSON.parse(r));
+  const rows = [], days = [];
+  for (const rec of recs) {
+    days.push(rec.date);
+    for (const x of rec.rows || []) {
+      const cat = (x.other || []).filter(o => /catering/i.test(o[0])).reduce((a, o) => a + o[1], 0);
+      const test = (x.other || []).filter(o => /deliverect mp card/i.test(o[0])).reduce((a, o) => a + o[1], 0);
+      const ack = (rec.ack || {})[x.loc + "|" + x.rc];
+      rows.push({ d: rec.date, loc: x.loc, out: x.out, rc: x.rc, b: x.brand, g: x.gap, cat, test, ack: ack ? (ack.note || "explained") : null });
+    }
+  }
+  return json({ ok: true, days, rows });
+}
 // v582: dine-in discount name → Customer / Internal, set by an admin; one small KV value read by every dashboard
 async function handleDDClassGet(request, env) {
   const s = await getSession(env, request.headers.get("X-Session-Id"));
@@ -1271,6 +1294,7 @@ export default {
       if (path === "/api/pos/msys/menu"   && method === "POST") return await handlePosMsysMenu(request, env);
       if (path === "/api/pos/msys/probe"  && method === "POST") return await handlePosMsysProbe(request, env);
       if (path === "/api/pos/recon"       && method === "GET")  return await handlePosReconList(request, env);
+      if (path === "/api/pos/tillonly"    && method === "GET")  return await handlePosTillOnly(request, env);
       if (path === "/api/pos/recon/ack"   && method === "POST") return await handlePosReconAck(request, env);
       if (path === "/api/ddclass"         && method === "GET")  return await handleDDClassGet(request, env);
       if (path === "/api/ddclass"         && method === "POST") return await handleDDClassSet(request, env);
