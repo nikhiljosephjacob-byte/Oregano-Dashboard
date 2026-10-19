@@ -977,6 +977,29 @@ async function handlePosTillOnly(request, env) {
   }
   return json({ ok: true, days, dayPos, rows });
 }
+// v589: Site P&L — Finance's monthly P&L (parsed in the browser), stored in KV "pl:data". Nikhil only.
+const PL_USERS = ["nikhil"];
+async function plSession(request, env) {
+  const s = await getSession(env, request.headers.get("X-Session-Id"));
+  return s && PL_USERS.includes(String(s.user || "").toLowerCase()) ? s : null;
+}
+async function handlePLGet(request, env) {
+  const s = await plSession(request, env);
+  if (!s) return json({ error: "not_allowed" }, 403);
+  const raw = await env.SESSIONS.get("pl:data");
+  return json({ data: raw ? JSON.parse(raw) : null });
+}
+async function handlePLSave(request, env) {
+  const s = await plSession(request, env);
+  if (!s) return json({ error: "not_allowed" }, 403);
+  const { data } = await readBody(request);
+  if (!data || typeof data !== "object" || !data.outlets || !data.combined) return json({ error: "bad_data" }, 400);
+  const str = JSON.stringify(data);
+  if (str.length > 20 * 1024 * 1024) return json({ error: "too_large" }, 413);
+  await env.SESSIONS.put("pl:data", str);
+  await logEvent(env, { user: s.user, event: "pl_uploaded", target: String(data.file || "").slice(0, 120), ip: clientIP(request) });
+  return json({ ok: true, bytes: str.length });
+}
 // v582: dine-in discount name → Customer / Internal, set by an admin; one small KV value read by every dashboard
 async function handleDDClassGet(request, env) {
   const s = await getSession(env, request.headers.get("X-Session-Id"));
@@ -1298,6 +1321,8 @@ export default {
       if (path === "/api/pos/recon/ack"   && method === "POST") return await handlePosReconAck(request, env);
       if (path === "/api/ddclass"         && method === "GET")  return await handleDDClassGet(request, env);
       if (path === "/api/ddclass"         && method === "POST") return await handleDDClassSet(request, env);
+      if (path === "/api/pl"              && method === "GET")  return await handlePLGet(request, env);
+      if (path === "/api/pl"              && method === "POST") return await handlePLSave(request, env);
     } catch (e) {
       return json({ error: "server_error", detail: String(e.message || e) }, 500);
     }
