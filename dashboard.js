@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-20-587";
+const BUILD_VERSION="2026-10-20-588";
 const BUILD_NOTES=[
+  "⏳ NEW LOADING SCREEN. While dine-in, takeaway, catering and discounts load, Overview / All Channels / Compare show all five brand logos rising in a wave with 'One moment — pulling in today's sales' and a live step line (Delivery ✓ · Dine-in & Takeaway… · Catering · Discounts). Replaces the old faint 'Loading dine-in & takeaway…' card.",
   "🍱 CATERING IS NOW ITS OWN CHANNEL. A fourth channel button — Delivery · Dine-in · Takeaway · Catering ('All 4') — on Overview, All Channels, Compare's channel row and the Daily Digest. Catering = bills on the delivery buttons charged to a credit catering account (e.g. DSO 7 Oct, AED 2,324), from the daily reconciliation. Direct deliveries paid to us, the Deliverect test order and small till differences stay in Delivery ('incl. AED … direct & other till'), so the group total still equals Finance's DSR. Catering rung on the takeaway or dine-in buttons stays there (Microsys has no catering revenue centre). Anyone who had 'All 3' selected is moved to 'All 4' once.",
   "🎯 GROUP SALES NOW EQUAL THE TILL EXACTLY ON RECONCILED DAYS. 585 added the reconciliation's outlet gaps (AED 5 and over), which left 1–18 Oct AED 110 above Finance: gaps under AED 5 per outlet, platform sales not tied to an outlet and ÷1.05 rounding weren't netted. Now each reconciled day's delivery is set to that day's till total (Microsys Sales Summary, the DSR's source): outlet gaps of AED 5+ still show on their outlet, and the small remainder goes into the group total only. NEEDS the new worker.js.",
   "🧾 GROUP SALES = FINANCE'S DSR. Finance counts every bill on the delivery buttons; the dashboard counted platform orders only, so e.g. 1–18 Oct was AED 4,923 lower (catering on credit accounts, direct deliveries paid to us, the Deliverect test order). The daily reconciliation already finds these per outlet × button × day — they are now added to Delivery as 'catering & direct' in group, channel and outlet totals (Overview, All Channels, Daily Digest), shown as 'incl. AED … catering & direct' under Delivery. Brands, Platforms, Campaigns, Compare and discount pages stay platform-only. Only days the reconciliation has checked are included (every Pull checks its days; POS Sync → 'Check these days now' fills older ones). NEEDS the new worker.js.",
@@ -27079,12 +27080,28 @@ var _lensIdx=new Map(),_diGen=0,_diInLens=false;
 // (3) Overview/Compare with dine-in & takeaway switched on: until the Dine-In & Takeaway tab has loaded, show a short
 // "loading" card instead of delivery-only totals that then jump. The page paints itself once the tab arrives.
 function lensWaitingInstore(p){return typeof LENS_PAGES!=="undefined"&&LENS_PAGES.has(p)&&lensMode==="all"&&!(lensSel.size===1&&lensSel.has("D"))&&(!instoreLoaded||(typeof ddLoaded!=="undefined"&&!ddLoaded)||(typeof tillOnly!=="undefined"&&tillOnly.rows===null&&lensSel.has("D")&&!tillOnly.failed));}
+// Loading card (588): all five brand logos rise in a wave + a live step line (Delivery ✓ · Dine-in & Takeaway… · Catering · Discounts).
+const RD_LOAD_BRANDS=["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"];
+function rdLoadSteps(){const till=typeof tillOnly==="undefined"||tillOnly.rows!==null||tillOnly.failed;
+  return[["Delivery",true],["Dine-in & Takeaway",!!instoreLoaded],["Catering",!!till],["Discounts",typeof ddLoaded==="undefined"||!!ddLoaded]];}
+function rdLoadStepsHTML(){const st=rdLoadSteps();let cur=false;
+  return st.map(([n,ok])=>{if(ok)return`<span style="color:#6B7280">${n} ✓</span>`;if(!cur){cur=true;return`<b style="color:#C2410C">${esc(n)}…</b>`;}return`<span style="color:#9CA3AF">${esc(n)}</span>`;}).join('<span style="color:#D1C9BC"> &nbsp;·&nbsp; </span>');}
+function rdLoadCardHTML(){const L=typeof LOGOS!=="undefined"?LOGOS:{};const st=rdLoadSteps(),done=st.filter(x=>x[1]).length;
+  const logos=RD_LOAD_BRANDS.map((b,k)=>`<div class="lg" style="display:flex;flex-direction:column;align-items:center;gap:8px;animation-delay:${(k*0.25).toFixed(2)}s">${L[b]?`<img src="${L[b]}" alt="" onerror="this.style.visibility='hidden'">`:`<div style="width:72px;height:72px;border-radius:16px;background:#F3ECE1"></div>`}<span style="font-size:12px;color:#6B7280;font-weight:600">${b}</span></div>`).join("");
+  return`<div class="card" id="rdLoadCard" style="padding:48px 20px 40px;text-align:center;background:#FFFDF9"><div class="lgs" style="display:flex;justify-content:center;gap:30px;flex-wrap:wrap;align-items:flex-end;min-height:112px">${logos}</div>
+  <div class="ttl" style="margin-top:20px;font-size:21px;font-weight:800;color:#1F2937">One moment — pulling in today's sales</div>
+  <div id="rdLoadSteps" style="margin-top:6px;font-size:13.5px">${rdLoadStepsHTML()}</div>
+  <div style="margin:18px auto 0;max-width:300px;height:6px;border-radius:3px;background:#EFE8DC;overflow:hidden"><div id="rdLoadFill" style="height:100%;width:${Math.round(done/st.length*100)}%;background:#F07B2B;border-radius:3px;transition:width .4s"></div></div>
+  <div style="margin-top:8px;font-size:12px;color:#6B7280">Usually takes under 10 seconds · numbers show once every channel is in</div></div>`;}
+function rdLoadCardTick(){clearTimeout(window._rdLoadT);const el=document.getElementById("rdLoadSteps");if(!el)return;
+  el.innerHTML=rdLoadStepsHTML();const st=rdLoadSteps(),f=document.getElementById("rdLoadFill");if(f)f.style.width=Math.round(st.filter(x=>x[1]).length/st.length*100)+"%";
+  window._rdLoadT=setTimeout(rdLoadCardTick,400);}
 (function lensWaitHook(){
   if(typeof renderPage!=="function"||!window.lensSet)return setTimeout(lensWaitHook,250);
   const _rp=renderPage;renderPage=function(p){
     if(lensWaitingInstore(p)){const pg=document.getElementById("page-"+p);if(pg){const T=DARK_THEME;
-      pg.innerHTML=`<div class="card" style="padding:28px 22px;text-align:center;color:${T.textSecondary}"><div style="font-size:15px;font-weight:800;color:${T.textPrimary};margin-bottom:6px">⏳ Loading dine-in &amp; takeaway…</div><div style="font-size:12.5px">Numbers appear once delivery, dine-in and takeaway are all in — so you never see a half total.</div><div style="margin:14px auto 0;max-width:260px;height:6px;border-radius:3px;background:${T.bg};overflow:hidden"><div style="height:100%;width:40%;background:${T.accentOrange};border-radius:3px;animation:rdLoadBar 1.2s ease-in-out infinite"></div></div></div>`;
-      if(!document.getElementById("rd-loadbar-css")){const st=document.createElement("style");st.id="rd-loadbar-css";st.textContent="@keyframes rdLoadBar{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}";document.head.appendChild(st);}}
+      pg.innerHTML=rdLoadCardHTML();rdLoadCardTick();
+      if(!document.getElementById("rd-loadbar-css")){const st=document.createElement("style");st.id="rd-loadbar-css";st.textContent="@keyframes rdLoadBar{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}@keyframes rdLogoWave{0%,60%,100%{transform:translateY(0);opacity:.7}20%{transform:translateY(-10px);opacity:1}}#rdLoadCard .lg{animation:rdLogoWave 2s ease-in-out infinite}#rdLoadCard .lg img{width:72px;height:72px;border-radius:16px;object-fit:contain;background:#fff;box-shadow:0 0 0 4px #F6EFE5,0 6px 14px rgba(0,0,0,.08)}@media(max-width:640px){#rdLoadCard{padding:28px 12px 24px!important}#rdLoadCard .lg img{width:38px;height:38px;border-radius:10px;box-shadow:0 0 0 3px #F6EFE5}#rdLoadCard .lg span{display:none}#rdLoadCard .lgs{gap:8px!important;min-height:56px!important}#rdLoadCard .ttl{font-size:17px!important}}";document.head.appendChild(st);}}
       return;}
     return _rp.apply(this,arguments);};window.renderPage=renderPage;
 })();
