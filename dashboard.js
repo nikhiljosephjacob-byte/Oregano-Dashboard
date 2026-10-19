@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-20-588";
+const BUILD_VERSION="2026-10-20-589";
 const BUILD_NOTES=[
+  "🏪 SITE P&L (NIKHIL ONLY). New page under Analyse: upload Finance's monthly 'PL report' workbook and see each outlet's month — revenue, food / staff / rent / commission %, repairs, Finance's confidential fixed line, net profit vs budget and last year, daily sales vs break-even — a 'where the money went' breakdown per outlet, a brand view, year to date, and the current month as an estimate from live sales (food & commission at recent ratios, fixed costs pro rata, repairs & utilities at the 3-month average with a range). Shown exactly as Finance reports it. The file is read in the browser and stored on the server; only Nikhil's login can read or upload it.",
   "⏳ NEW LOADING SCREEN. While dine-in, takeaway, catering and discounts load, Overview / All Channels / Compare show all five brand logos rising in a wave with 'One moment — pulling in today's sales' and a live step line (Delivery ✓ · Dine-in & Takeaway… · Catering · Discounts). Replaces the old faint 'Loading dine-in & takeaway…' card.",
   "🍱 CATERING IS NOW ITS OWN CHANNEL. A fourth channel button — Delivery · Dine-in · Takeaway · Catering ('All 4') — on Overview, All Channels, Compare's channel row and the Daily Digest. Catering = bills on the delivery buttons charged to a credit catering account (e.g. DSO 7 Oct, AED 2,324), from the daily reconciliation. Direct deliveries paid to us, the Deliverect test order and small till differences stay in Delivery ('incl. AED … direct & other till'), so the group total still equals Finance's DSR. Catering rung on the takeaway or dine-in buttons stays there (Microsys has no catering revenue centre). Anyone who had 'All 3' selected is moved to 'All 4' once.",
   "🎯 GROUP SALES NOW EQUAL THE TILL EXACTLY ON RECONCILED DAYS. 585 added the reconciliation's outlet gaps (AED 5 and over), which left 1–18 Oct AED 110 above Finance: gaps under AED 5 per outlet, platform sales not tied to an outlet and ÷1.05 rounding weren't netted. Now each reconciled day's delivery is set to that day's till total (Microsys Sales Summary, the DSR's source): outlet gaps of AED 5+ still show on their outlet, and the small remainder goes into the group total only. NEEDS the new worker.js.",
@@ -27417,3 +27418,219 @@ function dgaBuild(){
 }
 (function(){const go=()=>{if(typeof digestBuildReportHTML!=="function"||typeof rdDigestSectionHTML==="undefined"&&false)return setTimeout(go,300);
   if(!digestBuildReportHTML.__optA){digestBuildReportHTML=function(){return digestBuildOptionA();};digestBuildReportHTML.__optA=1;window.digestBuildReportHTML=digestBuildReportHTML;}};[0,1500,5000,15000].forEach(t=>setTimeout(go,t));})();
+
+// ═══ v589 SITE P&L — Finance's monthly P&L workbook, per outlet, visible to Nikhil only ═══════════════════════
+// Nikhil uploads Finance's "PL report" xlsx (one tab per outlet + Combined). The browser reads it (SheetJS), keeps the
+// lines below for every month × outlet × (Budget, Actual, 2025) and per brand, and stores it on the server (KV pl:data).
+// Shown exactly as Finance has it (incl. outlets without head-office allocation). The current month is an ESTIMATE:
+// live dashboard sales + cost ratios / fixed costs from Finance's last months, replaced when Finance's file arrives.
+const PL_USERS=["nikhil"];
+function plAllowed(){try{const s=getActiveSession();return !!(s&&PL_USERS.includes(String(s.user||"").toLowerCase()));}catch(e){return false;}}
+// row (1-based, Finance's layout) → key. Labels are checked on upload so a layout change is caught, not misread.
+const PL_ROWS={gross:8,disc:9,rs:10,oi:11,rev:12,food:20,pack:23,merch:24,fuel:25,clean:27,gas:28,odir:31,sal:34,staff:48,promo:51,comm:53,mkt:57,
+  rmE:61,rmB:62,rmF:63,rmS:64,rmH:65,rest:71,veh:85,office:90,rentx:92,rent:95,lic:102,water:106,util:109,oth:113,bank:118,ofi:119,ind:120,np:121,be:141};
+const PL_HO_ROWS=[30,47,56,70,84,89,94,101,108,112,117];
+const PL_CHECK={8:/gross sales/i,12:/net revenue/i,20:/food cost/i,31:/total other direct/i,48:/total staff/i,57:/total marketing/i,95:/total rent/i,119:/other fixed/i,121:/net profit/i};
+const PL_MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
+const PL_SKIP=/^(summary|sheet\d*|.*pre)$/i;
+// Finance tab → dashboard outlet (sales check + live estimate). Wasl = the Jumeirah (Al Wasl Rd) outlet.
+const PL_OUTLET={"Mirdiff":"Mirdiff","DMC":"DMC","Motor City":"Motorcity","DSO":"DSO","Villa":"Villa","DIP":"DIP (Oregano)","Furjan":"Furjan","Al Forsan":"Al Forsan",
+  "Al Quoz":"Al Quoz","Safari":"Safari Park","Town Square":"Town Square","Marina":"Marina","WTC Mall":"WTC","Wasl":"Jumeirah","Al Reem":"Al Reem","Nad Al Shiba":"NAS",
+  "DIP-Fyoozhen":"DIP (Fyoozhen)","Al Reef":"Al Reef"};
+let plData=null,plErr=null,plLoading=false,plBusy=false,plMsg=null;const plUI={per:null,view:"outlets",sel:null};
+function plNum(v){return typeof v==="number"&&isFinite(v)?v:0;}
+function plParse(wb){
+  const out={outlets:{},combined:null,ho:null,months:[]};let n=0;
+  for(const name of wb.SheetNames){
+    if(PL_SKIP.test(name.trim()))continue;
+    const rows=XLSX.utils.sheet_to_json(wb.Sheets[name],{header:1,defval:null,raw:true});
+    const lab=r=>String((rows[r-1]||[])[1]||"");
+    if(!/net profit/i.test(lab(121)))continue; // not a P&L tab
+    for(const [r,re] of Object.entries(PL_CHECK))if(!re.test(lab(+r)))throw new Error(`Tab "${name}", row ${r}: expected "${re.source}", found "${lab(+r)}". Finance may have changed the layout — send me the file.`);
+    const cell=(r,c)=>plNum((rows[r-1]||[])[c-1]);
+    const pick=c=>{const o={};for(const [k,r] of Object.entries(PL_ROWS)){const v=cell(r,c);if(v)o[k]=Math.round(v*100)/100;}const ho=PL_HO_ROWS.reduce((a,r)=>a+cell(r,c),0);if(ho)o.ho=Math.round(ho*100)/100;return o;};
+    const r3=rows[2]||[],r4=rows[3]||[],months={};
+    r3.forEach((v,i)=>{const m=PL_MONTHS.indexOf(String(v||"").trim());if(m<0)return;const c=i+1;
+      if(!/total/i.test(String(r4[c+20-1]||"")))throw new Error(`Tab "${name}", ${PL_MONTHS[m]}: the Total block isn't where expected.`);
+      const br={};for(let b=0;b<5;b++){const bn=String(r4[c+4*b-1]||"").trim();if(!bn)continue;const B=pick(c+4*b+1),A=pick(c+4*b+3);if(Object.keys(B).length||Object.keys(A).length)br[bn.replace(/wicked wings/i,"Wicked Wings")]={B,A};}
+      months[m+1]={B:pick(c+21),A:pick(c+23),LY:pick(c+26),br};});
+    if(!Object.keys(months).length)continue;
+    if(/^combined$/i.test(name.trim()))out.combined=months;else if(/\bHO\b|head ?office/i.test(name))out.ho=Object.assign(out.ho||{},{[name.trim()]:months});else{out.outlets[name.trim()]=months;n++;}
+  }
+  if(!n)throw new Error("No outlet P&L tabs found in this file.");
+  if(!out.combined)throw new Error("The Combined tab is missing.");
+  for(let m=1;m<=12;m++)if(out.combined[m]&&(out.combined[m].A.rev||0)>0)out.months.push(m);
+  return out;
+}
+async function plUpload(file){
+  if(!file)return;plBusy=true;plMsg=null;renderSitePL();
+  try{await loadSheetJS();const wb=XLSX.read(await file.arrayBuffer(),{type:"array"});const p=plParse(wb);
+    const yr=(String(file.name).match(/20\d\d/)||[])[0]||String(new Date().getFullYear());
+    const data=Object.assign(p,{year:+yr,file:file.name,uploadedAt:new Date().toISOString()});
+    await posApi("/api/pl",{data});plData=data;plUI.per=null;
+    plMsg={ok:true,t:`Loaded ${file.name}: ${Object.keys(p.outlets).length} outlets, actuals for ${p.months.map(m=>PL_MONTHS[m-1].slice(0,3)).join(", ")}.`};
+  }catch(e){plMsg={ok:false,t:e.message||String(e)};}
+  plBusy=false;renderSitePL();
+}
+async function plLoad(){if(plLoading)return;plLoading=true;plErr=null;
+  try{const j=await posApi("/api/pl");plData=j.data||null;}catch(e){plErr=e.message;}
+  plLoading=false;if(typeof curPage!=="undefined"&&curPage==="sitepl")renderSitePL();}
+// ── numbers ──
+const PL_FIXED=["staff","rent","lic","office","veh","bank","oth","ofi"],PL_LUMPY=["rm","util"];
+function plRM(o){return(o.rmE||0)+(o.rmB||0)+(o.rmF||0)+(o.rmS||0)+(o.rmH||0);}
+function plSum(list){const o={};for(const x of list)for(const k in x)o[k]=(o[k]||0)+x[k];return o;}
+function plDim(y,m){return new Date(y,m,0).getDate();}
+function plMonthDash(y,m,uptoDay){ // dashboard sales excl. VAT for the month (all 4 channels), by dashboard outlet
+  const key=y+"-"+m+"-"+uptoDay+"-"+(typeof lensVer!=="undefined"?lensVer:0)+"-"+(allData||[]).length+"-"+(instoreData||[]).length;
+  if(plMonthDash._k===key)return plMonthDash._v;
+  const p=n=>String(n).padStart(2,"0"),s=`${y}-${p(m)}-01`,e=`${y}-${p(m)}-${p(uptoDay||plDim(y,m))}`;
+  let v=null;try{const A=chAggregate(s,e,true),f=chState.vat==="excl"?1:1/1.05,by={};for(const o in A.by)by[o]=A.sum(A.by[o])*f;
+    const first=(allData||[]).reduce((mn,r)=>r.date<mn?r.date:mn,"9999");v={by,total:A.total*f,full:first<=s&&typeof latest!=="undefined"&&latest>=e};}catch(e){}
+  plMonthDash._k=key;plMonthDash._v=v;return v;}
+// One period → rows per outlet {name,A,B,LY,est,...} + group (from Combined)
+function plPeriod(per){
+  const D=plData,y=D.year,O=D.outlets;
+  if(per==="ytd"){const ms=D.months;const agg=src=>({A:plSum(ms.map(m=>(src[m]||{}).A||{})),B:plSum(ms.map(m=>(src[m]||{}).B||{})),LY:plSum(ms.map(m=>(src[m]||{}).LY||{})),
+      br:(()=>{const b={};ms.forEach(m=>{const x=(src[m]||{}).br||{};for(const n in x){b[n]=b[n]||{A:[],B:[]};b[n].A.push(x[n].A);b[n].B.push(x[n].B);}});for(const n in b)b[n]={A:plSum(b[n].A),B:plSum(b[n].B)};return b;})()});
+    const rows=Object.keys(O).map(n=>Object.assign({name:n},agg(O[n])));return{rows,group:agg(D.combined),label:`Jan–${PL_MONTHS[ms[ms.length-1]-1].slice(0,3)} ${y}`,days:ms.reduce((a,m)=>a+plDim(y,m),0),ytd:true};}
+  if(per==="est")return plEstimate();
+  const m=+per,rows=Object.keys(O).map(n=>Object.assign({name:n},O[n][m]||{A:{},B:{},LY:{},br:{}}));
+  return{rows,group:D.combined[m],label:`${PL_MONTHS[m-1]} ${y}`,days:plDim(y,m),m};
+}
+function plEstimate(){
+  const D=plData,y=D.year,last=D.months[D.months.length-1],basis=D.months.slice(-3);
+  const lt=typeof latest!=="undefined"&&latest?latest:null;if(!lt)return null;
+  const ly=+lt.slice(0,4),lm=+lt.slice(5,7),ld=+lt.slice(8,10);if(ly!==y||lm<=last)return null;
+  const dm=plDim(y,lm),fr=ld/dm,dash=plMonthDash(y,lm,ld);if(!dash)return null;
+  const est=(src,dashName)=>{
+    const L=(src[last]||{}).A||{},bs=basis.map(m=>(src[m]||{}).A||{}),bRev=bs.reduce((a,x)=>a+(x.rev||0),0);
+    const rev=dashName!=null?(dash.by[dashName]||0):(L.rev||0)*fr;
+    const ratio=k=>bRev?bs.reduce((a,x)=>a+(x[k]||0),0)/bRev:0;
+    const o={rev,est:true};
+    for(const k of["food","comm"])o[k]=ratio(k)*rev;
+    o.odir=ratio("odir")*rev;o.mkt=o.comm+ratio("mkt")*rev-ratio("comm")*rev;
+    for(const k of PL_FIXED)o[k]=(L[k]||0)*fr;
+    const restNoRm=(L.rest||0)-plRM(L);
+    const avg=f=>bs.reduce((a,x)=>a+f(x),0)/Math.max(bs.length,1),mn=f=>Math.min(...bs.map(f)),mx=f=>Math.max(...bs.map(f));
+    const rmF=x=>plRM(x),utF=x=>x.util||0;
+    o.rmE=avg(rmF)*fr;o.util=avg(utF)*fr;o.rest=restNoRm*fr+o.rmE;
+    o.lumpyLo=(mn(rmF)+mn(utF))*fr;o.lumpyHi=(mx(rmF)+mx(utF))*fr;
+    o.ho=(L.ho||0)*fr;o.be=L.be||0;
+    o.np=o.rev-o.food-o.odir-o.staff-o.mkt-o.rest-o.veh-o.office-o.rent-o.lic-o.util-o.oth-o.bank-o.ofi;
+    if(dashName==null&&!(L.rev>0))o.np=(L.np||0)*fr; // no sales line (e.g. Kiosk) → last month's result, pro rata
+    return o;};
+  const scale=o=>{const r={};for(const k in o)r[k]=o[k]*fr;return r;}; // budget / last year pro rata to the same days
+  const rows=Object.keys(D.outlets).map(n=>({name:n,A:est(D.outlets[n],PL_OUTLET[n]!==undefined?PL_OUTLET[n]:null),B:scale(((D.outlets[n][lm]||{}).B)||{}),LY:scale(((D.outlets[n][lm]||{}).LY)||{}),br:{}}));
+  // group = outlets + the Combined-vs-outlets balance (head office) of the last actual month, pro rata
+  const sumA=plSum(rows.map(r=>r.A)),lastOut=plSum(Object.values(D.outlets).map(o=>((o[last]||{}).A)||{})),cl=(D.combined[last]||{}).A||{};
+  const hoBal=((cl.np||0)-(lastOut.np||0))*fr;const gA=Object.assign({},sumA,{np:sumA.np+hoBal,rev:sumA.rev+((cl.rev||0)-(lastOut.rev||0))*fr,est:true});
+  return{rows,group:{A:gA,B:scale((D.combined[lm]||{}).B||{}),LY:scale((D.combined[lm]||{}).LY||{})},label:`${PL_MONTHS[lm-1]} 1–${ld} (estimate)`,days:ld,m:lm,est:true,
+    note:`${ld} of ${dm} days · sales = dashboard (all channels, excl. VAT) · food, packaging & commission at each outlet's ${basis.map(m=>PL_MONTHS[m-1].slice(0,3)).join("–")} ratio · fixed costs = ${PL_MONTHS[last-1].slice(0,3)} × ${ld}/${dm} · repairs & utilities = 3-month average × ${ld}/${dm}`};
+}
+// ── page ──
+function plFmt(v){return Math.round(v||0).toLocaleString("en-US");}
+function plK(v){const a=Math.abs(v||0);return(v<0?"−":"")+(a>=1e6?(a/1e6).toFixed(2)+"M":a>=1e4?Math.round(a/1e3)+"K":a>=1e3?(a/1e3).toFixed(1)+"K":Math.round(a));}
+function renderSitePL(){
+  const pg=document.getElementById("page-sitepl");if(!pg)return;const T=DARK_THEME;
+  if(!plData&&!plErr&&!plLoading){plLoad();}
+  const css=`<style>#page-sitepl{background:${T.bg};border-radius:12px;padding:16px 20px;color:${T.textPrimary}}
+   #page-sitepl .card{background:${T.card}!important;border:1px solid ${T.cardBorder}!important;border-radius:12px;padding:16px 18px;margin-bottom:14px}
+   #page-sitepl .sub{color:${T.textSecondary};font-size:12.5px}#page-sitepl .up{color:${T.accentGreen}}#page-sitepl .dn{color:${T.accentRed}}#page-sitepl .mut{color:${T.textMuted}}
+   #page-sitepl .chip{display:inline-block;padding:5px 11px;border:1px solid ${T.cardBorder};border-radius:8px;font-size:12px;font-weight:700;margin:0 6px 6px 0;background:${T.bg};color:${T.textSecondary};cursor:pointer}
+   #page-sitepl .chip.on{background:${T.accentOrange}22;border-color:${T.accentOrange};color:${T.accentOrange}}
+   #page-sitepl .kp{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:14px}#page-sitepl .kp .card{margin:0}
+   #page-sitepl .kl{font-size:11px;font-weight:800;color:${T.textSecondary};text-transform:uppercase;letter-spacing:.05em}#page-sitepl .kv{font-size:26px;font-weight:800;margin:5px 0 3px}
+   #page-sitepl table{width:100%;border-collapse:collapse;font-size:12.5px}#page-sitepl th{text-align:right;font-size:11px;color:${T.textSecondary};padding:7px 6px;border-bottom:2px solid ${T.cardBorder};white-space:nowrap}
+   #page-sitepl td{text-align:right;padding:6px;border-bottom:1px solid ${T.cardBorder}55;white-space:nowrap}#page-sitepl th:first-child,#page-sitepl td:first-child{text-align:left}
+   #page-sitepl tr.rw{cursor:pointer}#page-sitepl tr.rw:hover td{background:${T.cardBorder}33}#page-sitepl tr.sel td{background:${T.accentOrange}18}
+   #page-sitepl .tag{font-size:10px;background:#F59E0B26;color:#F59E0B;border-radius:4px;padding:1px 5px;font-weight:700;margin-left:4px}
+   #page-sitepl .bt{position:relative;display:inline-block;width:80px;height:7px;background:${T.cardBorder}66;border-radius:4px;vertical-align:middle;margin-right:6px}#page-sitepl .bt i{position:absolute;left:0;top:0;bottom:0;border-radius:4px}#page-sitepl .bt b{position:absolute;top:-3px;bottom:-3px;width:2px;left:66.7%;background:${T.textPrimary}}
+   #page-sitepl .wr{display:flex;align-items:center;gap:10px;font-size:12.5px;margin:5px 0}#page-sitepl .wr>span{width:210px}#page-sitepl .wb{flex:1;position:relative;height:15px;background:${T.cardBorder}44;border-radius:4px}#page-sitepl .wb i{position:absolute;top:0;bottom:0;border-radius:3px}#page-sitepl .wr>b{width:150px;text-align:right}
+   #page-sitepl .scroll{overflow-x:auto}</style>`;
+  const head=(inner)=>`<div class="card" style="display:flex;flex-wrap:wrap;align-items:center;gap:14px"><div><div style="font-size:20px;font-weight:800">🏪 Site P&amp;L <span class="tag" style="font-size:10.5px">only you can see this</span></div>
+    <div class="sub">${plData?`Finance P&amp;L · ${esc(plData.file)} · uploaded ${esc(new Date(plData.uploadedAt).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"}))} · AED · as Finance reports it`:"Finance's monthly P&amp;L by outlet"}</div></div>
+    <div style="flex:1"></div><label class="chip" style="margin:0;${plBusy?"opacity:.6":""}">${plBusy?"⏳ Reading…":"📤 Upload Finance P&amp;L (.xlsx)"}<input type="file" accept=".xlsx,.xlsm,.xls" style="display:none" ${plBusy?"disabled":""} onchange="plUpload(this.files[0])"></label>${inner||""}</div>
+    ${plMsg?`<div class="card" style="padding:10px 14px;border-color:${plMsg.ok?T.accentGreen:T.accentRed}!important;color:${plMsg.ok?T.accentGreen:T.accentRed}">${plMsg.ok?"✅":"⚠"} ${esc(plMsg.t)}</div>`:""}`;
+  if(plLoading&&!plData){pg.innerHTML=css+head()+`<div class="card sub">Loading…</div>`;return;}
+  if(plErr&&!plData){pg.innerHTML=css+head()+`<div class="card dn">Couldn't load the P&amp;L: ${esc(plErr)}</div>`;return;}
+  if(!plData){pg.innerHTML=css+head()+`<div class="card"><div style="font-weight:800;margin-bottom:6px">No P&amp;L uploaded yet</div><div class="sub">Upload Finance's "PL report" workbook (the one with a tab per outlet and a Combined tab). Each month, upload the new file — it replaces the old one and the months it contains.</div></div>`;return;}
+  const D=plData;const estOK=!!plEstimate();
+  if(plUI.per==null||(plUI.per==="est"&&!estOK))plUI.per=String(D.months[D.months.length-1]);
+  const P=plPeriod(plUI.per);const G=P.group.A,GB=P.group.B||{},GL=P.group.LY||{};
+  const chips=D.months.map(m=>`<span class="chip ${plUI.per===String(m)?"on":""}" onclick="plUI.per='${m}';plUI.sel=null;renderSitePL()">${PL_MONTHS[m-1].slice(0,3)}</span>`).join("")+
+    (estOK?`<span class="chip ${plUI.per==="est"?"on":""}" onclick="plUI.per='est';plUI.sel=null;renderSitePL()">${PL_MONTHS[(+latest.slice(5,7))-1].slice(0,3)} so far · estimate</span>`:"")+
+    `<span class="chip ${plUI.per==="ytd"?"on":""}" onclick="plUI.per='ytd';plUI.sel=null;renderSitePL()">Year to date</span>`;
+  const views=`<span class="chip ${plUI.view==="outlets"?"on":""}" onclick="plUI.view='outlets';renderSitePL()">Outlets</span><span class="chip ${plUI.view==="brands"?"on":""}" onclick="plUI.view='brands';renderSitePL()">Brands</span>`;
+  const chg=(a,b)=>{if(!b)return'<span class="mut">—</span>';const p=(a-b)/Math.abs(b)*100;return`<span class="${p>=0?"up":"dn"}">${p>=0?"▲":"▼"}${Math.abs(p).toFixed(0)}%</span>`;};
+  const dlt=(a,b,has)=>has?`<span class="${a-b>=0?"up":"dn"}">${a-b>=0?"+":"−"}${plK(Math.abs(a-b))}</span>`:'<span class="mut">—</span>';
+  const live=P.rows.filter(r=>(r.A.rev||0)>0||(r.A.np||0)!==0);
+  const outRev=live.reduce((a,r)=>a+(r.A.rev||0),0),sumK=k=>live.reduce((a,r)=>a+(r.A[k]||0),0);
+  const inProfit=live.filter(r=>(r.A.rev||0)>0&&(r.A.np||0)>0).length,nRev=live.filter(r=>(r.A.rev||0)>0).length;
+  const worst=live.filter(r=>(r.A.np||0)<0).sort((a,b)=>a.A.np-b.A.np).slice(0,4).map(r=>r.name);
+  const E=P.est?' <span class="tag">estimate</span>':"";
+  const kp=`<div class="kp">
+   <div class="card"><div class="kl">Net revenue${E}</div><div class="kv">${plK(G.rev)}</div><div class="sub">vs budget ${plK(GB.rev)} ${chg(G.rev,GB.rev)} · vs ${P.ytd?"2025":"last year"} ${chg(G.rev,GL.rev)}</div></div>
+   <div class="card"><div class="kl">Net profit${E}</div><div class="kv ${G.np>=0?"up":"dn"}">${plK(G.np)} <span style="font-size:14px;color:${T.textSecondary}">${G.rev?(G.np/G.rev*100).toFixed(1):0}%</span></div><div class="sub">budget ${plK(GB.np)} · ${P.ytd?"2025":"last year"} ${plK(GL.np)}</div></div>
+   <div class="card"><div class="kl">Prime cost (food + staff)${E}</div><div class="kv">${outRev?((sumK("food")+sumK("staff"))/outRev*100).toFixed(0):0}%</div><div class="sub">food ${outRev?(sumK("food")/outRev*100).toFixed(1):0}% · staff ${outRev?(sumK("staff")/outRev*100).toFixed(1):0}%</div></div>
+   <div class="card"><div class="kl">Aggregator commission${E}</div><div class="kv">${outRev?(sumK("comm")/outRev*100).toFixed(1):0}%</div><div class="sub">AED ${plK(sumK("comm"))} of outlet revenue</div></div>
+   <div class="card"><div class="kl">Outlets in profit${E}</div><div class="kv">${inProfit} <span style="font-size:14px;color:${T.textSecondary}">of ${nRev}</span></div><div class="sub">${worst.length?"Biggest losses: "+worst.map(esc).join(", "):"No outlet made a loss"}</div></div></div>`;
+  let body="";
+  if(plUI.view==="brands")body=plBrandsHTML(P,T);
+  else{
+    const dash=!P.est&&!P.ytd&&P.m?plMonthDash(D.year,P.m):null,showDash=dash&&dash.full;
+    const rows=live.slice().sort((a,b)=>(b.A.np||0)-(a.A.np||0));
+    const pct=(r,k)=>r.A.rev?((r.A[k]||0)/r.A.rev*100).toFixed(0)+"%":"—";
+    const tr=rows.map(r=>{const A=r.A,npp=A.rev?A.np/A.rev*100:0,act=A.rev/P.days,be=P.ytd?0:(A.be||0),bar=be?act/be:0;
+      const dn=PL_OUTLET[r.name],dv=showDash&&dn?dash.by[dn]||0:null,dd=dv!=null&&A.rs?(dv-A.rs)/A.rs*100:null;
+      return`<tr class="rw ${plUI.sel===r.name?"sel":""}" onclick="plUI.sel='${esc(r.name).replace(/'/g,"\\'")}';renderSitePL()"><td>${esc(r.name)}${!P.ytd&&!(A.ho)&&A.rev?'<span class="tag" title="Finance allocated no head-office cost to this outlet">no HO alloc.</span>':""}</td>
+       <td>${plFmt(A.rev)}</td><td>${pct(r,"food")}</td><td>${pct(r,"staff")}</td><td>${pct(r,"rent")}</td><td>${pct(r,"comm")}</td><td>${P.est?plFmt(A.rmE):plFmt(plRM(A))}</td><td>${plFmt(A.ofi)}</td>
+       <td style="font-weight:800" class="${A.np>=0?"up":"dn"}">${plFmt(A.np)}</td><td class="${npp>=0?"up":"dn"}">${A.rev?npp.toFixed(0)+"%":"—"}</td>
+       <td>${dlt(A.np||0,r.B.np||0,Object.keys(r.B).length)}</td><td>${dlt(A.np||0,(r.LY||{}).np||0,(r.LY||{}).rev)}</td>
+       <td>${be?`<span class="bt"><i style="width:${Math.min(bar,1.5)/1.5*100}%;background:${bar>=1?T.accentGreen:T.accentRed}"></i><b></b></span><span class="sub">${plFmt(act)} / ${plFmt(be)}</span>`:'<span class="mut">—</span>'}</td>
+       ${showDash?`<td class="sub">${dv!=null?plFmt(dv)+(dd!=null?` <span class="${Math.abs(dd)<=3?"up":"dn"}">${dd>=0?"+":""}${dd.toFixed(1)}%</span>`:""):"—"}</td>`:""}</tr>`;}).join("");
+    const bal=(G.np||0)-live.reduce((a,r)=>a+(r.A.np||0),0);
+    body=`<div class="card"><div style="font-weight:800;font-size:15px">Outlets — ${esc(P.label)} <span class="sub" style="font-weight:500">· sorted by net profit · click an outlet for its breakdown</span></div>
+      <div class="sub" style="margin:3px 0 8px">% = share of net revenue. R&amp;M = repairs &amp; maintenance. Other fixed = Finance's confidential fixed-cost line (row 119). ${P.ytd?"":"Daily sales / break-even: bar = average daily sales vs Finance's daily break-even (line)."}${P.est?"<br>"+esc(P.note):""}</div>
+      <div class="scroll"><table><tr><th>Outlet</th><th>Net revenue</th><th>Food</th><th>Staff</th><th>Rent</th><th>Agg. comm.</th><th>R&amp;M</th><th>Other fixed</th><th>Net profit</th><th>NP %</th><th>vs budget</th><th>vs last yr</th><th>Daily sales / break-even</th>${showDash?'<th title="Dashboard sales, excl. VAT, all channels, vs Finance\'s restaurant sales">Dashboard sales</th>':""}</tr>${tr}
+      ${Math.abs(bal)>=1?`<tr><td class="sub" title="Combined net profit minus the outlets above: head office after its costs are allocated to outlets">Head office (after allocation to outlets)</td><td colspan="7"></td><td class="${bal>=0?"up":"dn"}" style="font-weight:800">${plFmt(bal)}</td><td colspan="${showDash?5:4}"></td></tr>`:""}
+      <tr><td style="font-weight:800">${P.est?"Group (estimate)":"Group (Combined tab)"}</td><td style="font-weight:800">${plFmt(G.rev)}</td><td colspan="6"></td><td style="font-weight:800" class="${G.np>=0?"up":"dn"}">${plFmt(G.np)}</td><td>${G.rev?(G.np/G.rev*100).toFixed(1)+"%":""}</td><td>${dlt(G.np||0,GB.np||0,Object.keys(GB).length)}</td><td>${dlt(G.np||0,GL.np||0,GL.rev)}</td><td colspan="${showDash?2:1}"></td></tr></table></div></div>`;
+    const sel=rows.find(r=>r.name===plUI.sel)||rows.slice().sort((a,b)=>(a.A.np||0)-(b.A.np||0))[0];
+    if(sel)body+=plWaterfallHTML(sel,P,T);
+  }
+  pg.innerHTML=css+head(`<div style="width:100%"></div><div>${chips}</div><div style="margin-left:auto">${views}</div>`)+kp+body;
+}
+function plWaterfallHTML(r,P,T){const A=r.A,rev=A.rev||0;if(!rev)return"";
+  const rm=P.est?A.rmE:plRM(A),veh=(A.rest||0)-rm+(A.veh||0)+(A.office||0)+(A.lic||0)+(A.oth||0)+(A.bank||0);
+  const st=[["Food cost",A.food],["Packaging, gas, cleaning, card fees",A.odir],["Staff",A.staff],["Aggregator commission",A.comm],["Other marketing",(A.mkt||0)-(A.comm||0)],["Rent",A.rent],
+    [P.est?"Repairs & maintenance (3-mo avg)":"Repairs & maintenance",rm],[P.est?"Utilities (3-mo avg)":"Utilities",A.util],["Vehicles, licences, office, other",veh],["Other fixed (Finance, confidential)",A.ofi]];
+  let cum=rev,h=`<div class="wr"><span>Net revenue</span><div class="wb"><i style="left:0;width:100%;background:${T.accentBlue}"></i></div><b>${plFmt(rev)}</b></div>`;
+  for(const [n,x0] of st){const x=x0||0;if(!x)continue;const lo=Math.max(Math.min(cum,cum-x),0),hi=Math.min(Math.max(cum,cum-x),rev);
+    h+=`<div class="wr"><span>${n}</span><div class="wb">${hi>lo?`<i style="left:${lo/rev*100}%;width:${(hi-lo)/rev*100}%;background:${/confidential/.test(n)?T.accentPurple:"#F59E0B"}"></i>`:""}</div><b>${x>=0?"−":"+"}${plFmt(Math.abs(x))} <span class="mut" style="font-weight:500">${(x/rev*100).toFixed(0)}%</span></b></div>`;cum-=x;}
+  h+=`<div class="wr"><span><b>Net profit</b></span><div class="wb"><i style="left:0;width:${Math.min(Math.abs(cum)/rev*100,100)}%;background:${cum<0?T.accentRed:T.accentGreen}"></i></div><b class="${cum<0?"dn":"up"}">${plFmt(cum)}</b></div>`;
+  const rng=P.est&&A.lumpyHi?`<div class="sub" style="margin-top:6px">Repairs + utilities could be ${plFmt(A.lumpyLo)}–${plFmt(A.lumpyHi)} on recent months (shown at the average) — net profit range ${plFmt(cum+(A.rmE+A.util)-A.lumpyHi)} to ${plFmt(cum+(A.rmE+A.util)-A.lumpyLo)}.</div>`:"";
+  return`<div class="card"><div style="font-weight:800;font-size:15px">Where the money went — ${esc(r.name)}, ${esc(P.label)}</div>${h}${rng}</div>`;}
+function plBrandsHTML(P,T){const br=(P.group||{}).br||{};const names=["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"].filter(n=>br[n]&&(br[n].A.rev||br[n].B.rev));
+  if(P.est||!names.length)return`<div class="card sub">${P.est?"The brand split is shown for Finance's actual months only.":"No brand split in this file."}</div>`;
+  const pct=(o,k)=>o.rev?((o[k]||0)/o.rev*100).toFixed(0)+"%":"—";
+  const tr=names.map(n=>{const A=br[n].A,B=br[n].B;return`<tr><td style="font-weight:700">${n}</td><td>${plFmt(A.rev)}</td><td>${plFmt(B.rev)}</td><td>${pct(A,"food")}</td><td>${pct(A,"staff")}</td><td>${pct(A,"comm")}</td><td style="font-weight:800" class="${(A.np||0)>=0?"up":"dn"}">${plFmt(A.np)}</td><td>${A.rev?((A.np||0)/A.rev*100).toFixed(0)+"%":"—"}</td><td>${plFmt(B.np)}</td></tr>`;}).join("");
+  // outlet × brand net profit
+  const outs=P.rows.filter(r=>Object.values(r.br||{}).some(x=>x.A.rev));
+  const mx=`<table><tr><th>Outlet</th>${names.map(n=>`<th>${n}</th>`).join("")}</tr>${outs.map(r=>`<tr><td>${esc(r.name)}</td>${names.map(n=>{const x=((r.br||{})[n]||{}).A;return`<td>${x&&(x.rev||x.np)?`<span class="${(x.np||0)>=0?"up":"dn"}">${plFmt(x.np)}</span> <span class="mut">/ ${plK(x.rev)}</span>`:'<span class="mut">—</span>'}</td>`;}).join("")}</tr>`).join("")}</table>`;
+  return`<div class="card"><div style="font-weight:800;font-size:15px">Brands — ${esc(P.label)}</div><div class="sub" style="margin:3px 0 8px">As Finance splits it. At an outlet with one front-end brand (e.g. Al Reef → Smokeys) that brand carries the outlet's costs.</div>
+    <div class="scroll"><table><tr><th>Brand</th><th>Net revenue</th><th>Budget</th><th>Food</th><th>Staff</th><th>Agg. comm.</th><th>Net profit</th><th>NP %</th><th>Budget NP</th></tr>${tr}</table></div></div>
+    <div class="card"><div style="font-weight:800;font-size:15px">Net profit by outlet and brand <span class="sub" style="font-weight:500">· profit / revenue</span></div><div class="scroll">${mx}</div></div>`;}
+// ── wiring: page + menu entry for Nikhil only ──
+(function plInit(){
+  if(typeof renderPage!=="function"||typeof NAV_LAYOUTS==="undefined"||typeof getActiveSession!=="function"||!document.querySelector(".pg"))return setTimeout(plInit,400);
+  if(!getActiveSession())return setTimeout(plInit,1000);
+  if(!plAllowed())return;
+  if(!document.getElementById("page-sitepl")){const any=document.querySelector(".pg");const div=document.createElement("div");div.className="pg";div.id="page-sitepl";any.parentNode.appendChild(div);
+    const tabs=document.querySelectorAll(".tab");if(tabs.length){const b=document.createElement(tabs[0].tagName.toLowerCase());b.className="tab";b.innerHTML="🏪 Site P&amp;L";b.dataset.pg="sitepl";b.onclick=()=>gp("sitepl");const last=tabs[tabs.length-1];last.parentNode.insertBefore(b,last.nextSibling);}}
+  NV_ICON.pl='<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/><path d="M14 7l2-2 2 2"/>';
+  for(const k in NAV_LAYOUTS){const L=NAV_LAYOUTS[k];if(!Array.isArray(L)||L.some(n=>n.subs&&n.subs.some(s=>s[0]==="sitepl")))continue;
+    let i=L.findIndex(n=>n.sec==="Tools");if(i<0)i=L.findIndex(n=>n.id==="tools");if(i<0)i=L.length;
+    const usesIco=L.some(n=>n.ico);L.splice(i,0,usesIco?{id:"pl",ico:"pl",label:"Site P&L",subs:[["sitepl","Site P&L"]]}:{id:"pl",icon:"🏪",label:"Site P&L",subs:[["sitepl","Site P&L"]]});}
+  try{DARK_PAGES.add("sitepl");}catch(e){}
+  const _rp=renderPage;renderPage=function(p){const r=_rp.apply(this,arguments);if(p==="sitepl")renderSitePL();return r;};window.renderPage=renderPage;
+  try{navPaint();}catch(e){}
+})();
