@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-18-579";
+const BUILD_VERSION="2026-10-19-581";
 const BUILD_NOTES=[
+  "🎟️ DISCOUNT DEPTH = CUSTOMER DISCOUNTS ONLY. Per Nikhil, in-store discount depth now counts only discounts given to customers — partner programmes (Entertainer, Esaad, Z Pro, Careem/Noon Dine Out, Mall, GEMS, Palma, Kingspan), promotions (Happy Tuesday, BOGO, sales promo), customer discount, comp meal voucher, catering and gift vouchers. Internal discounts — staff, managers / supervisors / GM, BOD, chef, training, security, business dev, ops, head office, food trials, employee errors — are left out of the % and shown beside it as 'internal AED … excl.'. Depth = customer discount ÷ (gross − internal). Applies to Overview 'At a glance' and All Channels; delivery depth unchanged. Classification comes from the discount name on the Dine-In Discounts tab (DI = dine-in, TO = takeaway).",
+  "🔐 ONE SYSTEM PER LOGIN + WHICH SYSTEM. (1) Every login can be signed in on one system at a time (Nikhil exempt — phone + laptop). Signing in on a second system signs the first one out within a minute, with a message saying which system took over; the admin is alerted. (2) Admin shows each session's system — 🪟 Windows, 🍎 Apple Mac, 📱 Apple iPhone/iPad, 🤖 Android — and browser, plus a new 'One system per login' card listing every sign-in on a second system (older vs newer system, IPs, time). Signing in again on the same system isn't flagged. (3) Overview / All Channels: 'What the delivery-only brands add to each kitchen' removed — not a metric the company tracks. NEEDS the new worker.js.",
   "⚡ FASTER, AND NO HALF-LOADED NUMBERS. (1) Overview / Compare with dine-in & takeaway on now wait for the Dine-In & Takeaway tab and show a short 'Loading…' card instead of delivery-only totals that jump a second later. (2) Campaign analyses no longer re-read every campaign's comment and outlet list thousands of times — that work ran after every statement upload and froze the page; now each campaign is read once per data load. (3) Switching between pages no longer rebuilds the whole data index each time (each channel view is built once and reused). (4) 'Discount variance' no longer scrolls down the page — the Discount Discrepancy table is placed first. (5) Reconciliation: days explained as direct deliveries now show green.",
   "🏠 DIRECT DELIVERIES ARE EXPECTED, NOT ERRORS. Per Nikhil, bills on the Delivery button that no aggregator paid for (e.g. DIP, Town Square, Jumeirah) are catering / bulk orders from the catering team, or regular customers we delivered to who paid us directly. Rare but legitimate. After every Pull, the reconciliation card now reads the Journal Tape bills behind each 💵 gap; when they add up to the gap and were rung by staff (not a Deliverect order), the day is marked explained automatically ('🏠 Direct delivery paid to us', with the voucher numbers) and drops off the red badge. Bills that don't add up, or Deliverect orders paid by an unknown method, stay open.",
   "🏷️ MARK-UP CAMPAIGNS NO LONGER SHOW AS A DISCOUNT GAP. Oregano × Careem '20% OFF Combos' (8–13 Oct, combo prices raised then discounted): the Discount Discrepancy table compared the statement's 20% against the sheet AFTER the mark-up was taken out (≈ AED 0), so it showed about −AED 6,255 of gap that wasn't real. It now compares the discount as listed on both sides, tags those days 🏷️ and shows the real cost after the mark-up (what profitability uses) alongside.",
@@ -462,7 +464,8 @@ async function sessionHeartbeat(){
     const res=await fetch("/api/heartbeat",{method:"POST",headers:{"X-Session-Id":sess.sessionId}});
     if(res.status===401||res.status===403){
       const body=await res.json().catch(()=>({}));
-      const msg=body.error==="banned"?"Your account has been suspended by the admin.":"Your session has ended. Please sign in again.";
+      const by=body.by||{},tm=by.ts?new Date(by.ts).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}):"";
+      const msg=body.error==="banned"?"Your account has been suspended by the admin.":body.error==="replaced"?`This login was just used on another system (${by.os||"another device"}${by.browser?" · "+by.browser:""}${tm?" at "+tm:""}).\n\nOnly one system can be signed in with a login at a time, so you have been signed out here. If this wasn't you, tell Nikhil.`:"Your session has ended. Please sign in again.";
       try{localStorage.removeItem("oregano_session");}catch(e){}
       alert(msg);
       location.reload();
@@ -24496,12 +24499,13 @@ async function renderAdmin(){
     const d=new Date(iso);
     return d.toLocaleDateString("en-GB",{day:"2-digit",month:"short"})+" "+d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
   };
-  const shortUA=(ua)=>{
-    if(!ua)return"—";
-    const m=ua.match(/Chrome|Firefox|Safari|Edge|Mobile|Android|iPhone|iPad/g);
-    return m?m.slice(0,3).join(" · "):ua.slice(0,40);
-  };
-  const evColor=(ev)=>({login_success:"#22C55E",login_failed:"#EF4444",login_blocked_banned:"#EF4444",logout:"#94a3b8",admin_kick:"#FBBF24",admin_ban:"#EF4444",admin_unban:"#22C55E"})[ev]||"#94a3b8";
+  // v580: show the SYSTEM (Windows / Apple …) and browser, not raw user-agent fragments
+  const osIco={Windows:"🪟",macOS:"🍎",iPhone:"📱",iPad:"📱",Android:"🤖",ChromeOS:"💻",Linux:"🐧"};
+  const devOf=(ua)=>{ua=String(ua||"");const os=/iPhone/.test(ua)?"iPhone":/iPad/.test(ua)?"iPad":/Android/.test(ua)?"Android":/Windows NT/.test(ua)?"Windows":/CrOS/.test(ua)?"ChromeOS":/Mac OS X|Macintosh/.test(ua)?"macOS":/Linux/.test(ua)?"Linux":"Unknown";
+    const br=/Edg\//.test(ua)?"Edge":/OPR\//.test(ua)?"Opera":/Firefox\//.test(ua)?"Firefox":/Chrome\//.test(ua)?"Chrome":/Safari\//.test(ua)?"Safari":"Other";return{os,browser:br};};
+  const sysLbl=(os,br)=>`${osIco[os]||"❔"} <b>${os==="macOS"?"Apple Mac":os==="iPhone"||os==="iPad"?"Apple "+os:os}</b>${br?" · "+br:""}`;
+  const shortUA=(ua,s)=>{if(!ua&&!(s&&s.os))return"—";const d=s&&s.os?{os:s.os,browser:s.browser}:devOf(ua);return sysLbl(d.os,d.browser);};
+  const evColor=(ev)=>({session_replaced:"#FB923C",login_success:"#22C55E",login_failed:"#EF4444",login_blocked_banned:"#EF4444",logout:"#94a3b8",admin_kick:"#FBBF24",admin_ban:"#EF4444",admin_unban:"#22C55E"})[ev]||"#94a3b8";
   // v442: real bug caught by Nikhil right after the loading fix — this page never checked
   // _darkPage at all, relying on the shared .card/.ct/.tbl CSS classes (light-theme only, no
   // dark variant), while every other page in the app builds its own inline, theme-aware styling.
@@ -24526,7 +24530,7 @@ async function renderAdmin(){
     <tr>
       <td style="${tdBase}"><strong style="color:#22C55E">${s.displayName||s.user}</strong></td>
       <td style="${tdBase}"><code style="font-size:10px;color:${T.muted};background:${T.codeBg};padding:1px 5px;border-radius:4px">${s.ip}</code></td>
-      <td style="${tdBase};color:${T.muted};font-size:11px">${shortUA(s.ua)}</td>
+      <td style="${tdBase};color:${T.text};font-size:11.5px" title="${String(s.ua||"").replace(/"/g,"&quot;")}">${shortUA(s.ua,s)}</td>
       <td style="${tdBase};color:${T.text}">${fmtTime(s.loginTs)}</td>
       <td style="${tdBase};color:#22C55E">${fmtAgo(s.lastSeen)}</td>
       <td style="${tdBase};text-align:right">
@@ -24542,7 +24546,7 @@ async function renderAdmin(){
       <td style="${tdBase}"><strong style="color:${evColor(e.event)}">${e.user||"—"}</strong></td>
       <td style="${tdBase};color:${evColor(e.event)};font-size:11px;font-weight:700">${(e.event||"").replace(/_/g," ")}</td>
       <td style="${tdBase}"><code style="font-size:10px;color:${T.muted};background:${T.codeBg};padding:1px 5px;border-radius:4px">${e.ip||"—"}</code></td>
-      <td style="${tdBase};color:${T.label};font-size:11px">${e.target?"→ "+e.target:""}${e.reason?" · "+e.reason:""}${e.kickedCount?" ("+e.kickedCount+" kicked)":""}</td>
+      <td style="${tdBase};color:${T.label};font-size:11px">${e.event==="session_replaced"?`${sysLbl(e.oldOs,e.oldBrowser)} (${e.oldIp||"?"}) signed out by ${sysLbl(e.newOs,e.newBrowser)}${e.sameSystem?" · same system":""}`:e.ua?shortUA(e.ua,e)+" ":""}${e.target?"→ "+e.target:""}${e.reason?" · "+e.reason:""}${e.kickedCount?" ("+e.kickedCount+" kicked)":""}</td>
     </tr>
   `).join("")||`<tr><td colspan="5" style="${tdBase};color:${T.label};text-align:center;padding:14px">No events yet.</td></tr>`;
 
@@ -24566,10 +24570,16 @@ async function renderAdmin(){
       <div style="font-size:10px;color:${T.label}">Server time: ${fmtTime(data.serverTime)}</div>
     </div>
 
+    ${(()=>{const A=(data.alerts||[]);const md=(data.multiDevice||[]).join(", ");
+      const rows=A.slice(0,30).map(a=>`<tr><td style="${tdBase};color:${T.muted};font-size:11px;white-space:nowrap">${fmtTime(a.ts)}</td><td style="${tdBase}"><strong style="color:#FB923C">${a.user}</strong></td><td style="${tdBase};font-size:11.5px;color:${T.text}">${sysLbl(a.oldOs,a.oldBrowser)} <code style="font-size:10px;color:${T.muted};background:${T.codeBg};padding:1px 5px;border-radius:4px">${a.oldIp||"?"}</code></td><td style="${tdBase};font-size:11.5px;color:${T.text}">→ ${sysLbl(a.newOs,a.newBrowser)} <code style="font-size:10px;color:${T.muted};background:${T.codeBg};padding:1px 5px;border-radius:4px">${a.ip||"?"}</code></td></tr>`).join("");
+      return `<div style="background:${T.cardBg};border:1px solid ${A.length?"#FB923C88":T.border};border-radius:12px;padding:16px 18px;margin-bottom:14px">
+      <div style="${ctStyle}">${A.length?"⚠️":"✅"} One system per login <span style="color:${A.length?"#FB923C":"#22C55E"};font-weight:700">(${A.length} sign-in${A.length===1?"":"s"} on a second system · last 90 days)</span></div>
+      <div style="font-size:12px;color:${T.muted};margin-bottom:${A.length?10:0}px;line-height:1.5">Each login can be signed in on one system at a time — a new sign-in signs the older system out within a minute and is listed here. Signing in again on the same system is not listed. Exempt (phone + laptop allowed): <b style="color:${T.text}">${md||"—"}</b>.</div>
+      ${A.length?`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse"><thead><tr><th style="${thStyle}">When</th><th style="${thStyle}">Login</th><th style="${thStyle}">Signed out (older system)</th><th style="${thStyle}">Signed in (newer system)</th></tr></thead><tbody>${rows}</tbody></table></div>`:""}</div>`;})()}
     ${cardOpen}
       <div style="${ctStyle}">Active sessions <span style="color:#22C55E;font-weight:700">(${(data.active||[]).length})</span></div>
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
-        <thead><tr><th style="${thStyle}">User</th><th style="${thStyle}">IP</th><th style="${thStyle}">Device</th><th style="${thStyle}">Login time</th><th style="${thStyle}">Last seen</th><th style="${thStyle}"></th></tr></thead>
+        <thead><tr><th style="${thStyle}">User</th><th style="${thStyle}">IP</th><th style="${thStyle}">System</th><th style="${thStyle}">Login time</th><th style="${thStyle}">Last seen</th><th style="${thStyle}"></th></tr></thead>
         <tbody>${activeRows}</tbody>
       </table></div>
     </div>
@@ -25930,7 +25940,7 @@ function renderChannels(){
     stat("Dine-in check",`AED ${aov(di).toFixed(1)}`,pctOf(aov(di),aov(dip)),"per check")+
     stat("Takeaway AOV",`AED ${aov(to).toFixed(1)}`,pctOf(aov(to),aov(top)),"per order")+
     stat("Delivery AOV",`AED ${aov(del).toFixed(1)}`,pctOf(aov(del),aov(delp)),"per order")+
-    stat("Discount depth",`${depth(di).toFixed(1)}% · ${depth(to).toFixed(1)}% · ${depth(del).toFixed(1)}%`,null,"dine-in · takeaway · delivery")+
+    (()=>{const _in=ddInternal(s,e,chState.outlet||null),_t=_in["Dine-In"]+_in.Takeaway;return stat("Customer discount depth",`<span title="Customer discounts only — internal discounts (staff, managers, BOD, training…) left out: AED ${Math.round(_t).toLocaleString()}">${ddCustDepth(di,_in["Dine-In"]).toFixed(1)}% · ${ddCustDepth(to,_in.Takeaway).toFixed(1)}% · ${depth(del).toFixed(1)}%</span>`,null,"dine-in · takeaway · delivery"+(_t>0?` · internal AED ${fmtAED(_t).replace(/^AED /,"")} excl.`:""));})()+
   `</div></div>`;
   // Outlet table — always every outlet (the selected one is highlighted), so another can be picked
   const curA=chState.outlet?chAggregate(s,e,true):cur,prevA=chState.outlet?chAggregate(cmp.s,cmp.e,true):prev;
@@ -25946,7 +25956,7 @@ function renderChannels(){
       `<span style="color:${dsc>=20?T.accentRed:dsc>=10?"#F59E0B":"#22C55E"};font-weight:700">${dsc.toFixed(1)}%</span>`,fmtChgCell(t,pt,true)],
       sortVals:[o,c.Delivery.sales,c["Dine-In"].sales,c.Takeaway.sales,t,t>0?c["Dine-In"].sales/t:0,c["Dine-In"].guests,spg(c["Dine-In"]),dsc,pctOf(t,pt)]};});
   h+=`<div class="card"><div class="ct">📍 Outlets ranked by total sales — all channels <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· click an outlet to focus the page on it</span></div>${sortableTable("ch-outlets",heads,rows,4)}</div>`;
-  h+=chVirtualCardHTML(s,e,cmp);
+  // v580: "What the delivery-only brands add to each kitchen" removed — not a metric the company tracks
   pg.innerHTML=h;
   // chart
   const keys=Object.keys(cur.days).sort();const bucket=d=>{if(gran==="day")return d;if(gran==="month")return d.slice(0,7)+"-01";const x=new Date(d+"T12:00:00");x.setDate(x.getDate()-((x.getDay()+6)%7));return dk(x);};
@@ -26071,8 +26081,6 @@ function lensHeroHTML(){
   const shown=lensChannelsShown();const cur=ch.filter(([n])=>shown.includes(n)).map(([n,c,fn])=>({n,c,v:sumBy(s,e,fn),p:sumBy(cmp.s,cmp.e,fn)}));
   const tot=cur.reduce((a,x)=>a+x.v.s,0),totP=cur.reduce((a,x)=>a+x.p.s,0);
   const phys=new Set(["Oregano","Fyoozhen"]);
-  const sb=rdSiteBrand(s,e);let physV=0,allV=0;for(const site of Object.keys(sb)){const h=instoreBrandOf(site);for(const[b,v]of Object.entries(sb[site])){allV+=v;if(b===h)physV+=v;}}
-  const virtV=Math.max(0,allV-physV);
   const chg=v=>v==null||isNaN(v)?"":`<span style="color:${pctClr(v)};font-weight:800">${fmtPct(v)}</span>`;
   return`<div class="card rd-in" id="lens-hero" style="background:linear-gradient(135deg,${T.card} 0%,#1E2A44 100%)!important">
     <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-end;justify-content:space-between">
@@ -26082,10 +26090,7 @@ function lensHeroHTML(){
       <div style="display:flex;gap:22px;flex-wrap:wrap">${cur.map(x=>`<div><div style="font-size:11px;font-weight:800;color:${x.c}">● ${x.n}</div><div class="kpi-value-num" style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(x.v.s)}</div><div style="font-size:12px;color:${T.textMuted}">${tot>0?(x.v.s/tot*100).toFixed(1):"0.0"}% · ${chg(pctOf(x.v.s,x.p.s))}</div></div>`).join("")}</div>
     </div>
     <div class="rd-grow" style="display:flex;height:12px;border-radius:6px;overflow:hidden;margin:16px 0 10px;background:${T.bg}">${cur.map(x=>`<div title="${x.n}" style="width:${tot>0?x.v.s/tot*100:0}%;background:${x.c}"></div>`).join("")}</div>
-    <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:${T.textSecondary}">${lensSel.has("D")&&lensSel.size>1?`
-      <span><b style="color:${T.textPrimary}">Front-of-house brand</b> at each site, incl. its dine-in &amp; takeaway ${fmtAED(physV)} · ${allV>0?(physV/allV*100).toFixed(0):0}%</span>
-      <span><b style="color:${T.textPrimary}">Delivery-only brands</b> in the same kitchens ${fmtAED(virtV)} · ${allV>0?(virtV/allV*100).toFixed(0):0}%</span>`:""}
-</div>
+    
   </div>`;
 }
 (function lensHeroHook(){
@@ -26098,7 +26103,7 @@ function lensHeroHTML(){
     if(p!=="overview"||!lensHero||lensMode!=="all")return;
     const pg=document.getElementById("page-overview");const fb=pg&&pg.querySelector(".fbar");if(!fb||document.getElementById("lens-hero"))return;
     const f=curFilters(),s=f.start,e=dispEnd(f.start,f.end),cmp=getCompRange();
-    fb.insertAdjacentHTML("afterend",lensHeroHTML()+lensGlanceHTML()+lensRankHTML()+lensMixHTML()+(lensSel.has("D")&&lensSel.size>1?chVirtualCardHTML(s,e,cmp):""));lensMixChart();};window.renderPage=renderPage;
+    fb.insertAdjacentHTML("afterend",lensHeroHTML()+lensGlanceHTML()+lensRankHTML()+lensMixHTML());lensMixChart();};window.renderPage=renderPage;
 })();
 
 // ── Idea 2: outlet-first ranking on Overview (All sales) — every physical outlet ranked by total sales, all channels
@@ -26285,7 +26290,8 @@ function lensGlanceHTML(){
   if(shown.includes("Dine-In")){st.push(stat("Guests",Math.round(di.guests).toLocaleString(),pctOf(di.guests,dip.guests),cs,CH_CLR["Dine-In"]));st.push(stat("Spend / guest",`AED ${spg(di).toFixed(1)}`,pctOf(spg(di),spg(dip)),cs,CH_CLR["Dine-In"]));st.push(stat("Dine-in check",`AED ${aov(di).toFixed(1)}`,pctOf(aov(di),aov(dip)),"per check",CH_CLR["Dine-In"]));}
   if(shown.includes("Takeaway"))st.push(stat("Takeaway AOV",`AED ${aov(to).toFixed(1)}`,pctOf(aov(to),aov(top)),"per order",CH_CLR.Takeaway));
   if(shown.includes("Delivery"))st.push(stat("Delivery AOV",`AED ${aov(del).toFixed(1)}`,pctOf(aov(del),aov(delp)),"per order",CH_CLR.Delivery));
-  st.push(stat("Discount depth",`<span style="font-size:${shown.length>1?15:19}px">${shown.map(c=>depth(cur.tot[c]).toFixed(1)+"%").join(" · ")}</span>`,null,shown.map(c=>c.toLowerCase()).join(" · ")));
+  const _in=ddInternal(s,e,null),_inT=_in["Dine-In"]*(shown.includes("Dine-In")?1:0)+_in.Takeaway*(shown.includes("Takeaway")?1:0);
+  st.push(stat("Customer discount depth",`<span style="font-size:${shown.length>1?15:19}px" title="Customer discounts only (Entertainer, Esaad, Happy Tuesday, Z Pro, Careem Dine Out, customer discount, comp vouchers…). Internal discounts (staff, managers, BOD, training…) are left out: AED ${Math.round(_inT).toLocaleString()} in this period.">${shown.map(c=>(c==="Delivery"?depth(cur.tot[c]):ddCustDepth(cur.tot[c],_in[c])).toFixed(1)+"%").join(" · ")}</span>`,null,shown.map(c=>c.toLowerCase()).join(" · ")+(_inT>0?` · <span style="white-space:nowrap">internal AED ${fmtAED(_inT).replace(/^AED /,"")} excl.</span>`:"")));
   return`<div class="card rd-in" id="lens-glance" style="animation-delay:.04s"><div class="ct">🍽️ At a glance <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· guests, checks and discount depth by channel</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">${st.join("")}</div></div>`;
 }
 
@@ -26777,8 +26783,17 @@ const DD_PROGS=[[/entertainer/i,"Entertainer","Partner programme"],[/esaad/i,"Es
   [/happy tuesday/i,"Happy Tuesday","Promotion"],[/bogo|buy ?1/i,null,"Promotion"],[/training/i,"Training","Team & owners"],[/sales promo/i,"Sales promo","Promotion"],[/catering/i,"Catering discount","Catering"],
   [/customer disc/i,"Customer discount","Guest recovery"],[/comp meal/i,"Comp meal voucher","Guest recovery"],
   [/\bbod\b/i,"BOD (owners)","Team & owners"],[/head office/i,"Head office","Team & owners"],[/staff/i,"Staff meals","Team & owners"],[/food trial/i,"Food trial","Team & owners"],
-  [/manager|supervisor|asst ops|ar mgr|business dev|chef|security/i,"Management & team","Team & owners"]];
+  [/manager|supervisor|asst ops|ar mgr|business dev|chef|security/i,"Management & team","Team & owners"],[/emp(loyee)?\s*error/i,"Employee error","Team & owners"],[/gift voucher/i,"Gift voucher","Guest recovery"]];
 const DD_TYPE_CLR={"Partner programme":"#22C55E","Promotion":"#4E9BFF","Catering":"#A78BFA","Guest recovery":"#F59E0B","Team & owners":"#94A3B8","Other":"#64748B"};
+// v581: Nikhil — discount depth shows CUSTOMER discounts only. Internal = staff, managers/supervisors, BOD, chef, training,
+// security, business dev, ops, head office, food trials, employee errors ("Team & owners"). Everything else — partner programmes,
+// promotions, guest recovery (customer discount, comp meal voucher), catering, sales promo, gift vouchers — is a customer discount.
+function ddIsInternal(r){return r.type==="Team & owners";}
+function ddChannelOf(name){const n=String(name||"").trim();if(/\s(DL|DT|PO)$/i.test(n))return null;return/\sTO$/i.test(n)?"Takeaway":"Dine-In";}
+function ddInternal(s,e,outlet){const o={"Dine-In":0,Takeaway:0};if(!ddLoaded||ddErr)return o;
+  for(const r of ddData){if(r.date<s||r.date>e||(outlet&&r.outlet!==outlet)||!ddIsInternal(r))continue;const c=ddChannelOf(r.name);if(c)o[c]+=r.disc;}return o;}
+// customer-only depth: customer discount ÷ (gross − internal discounts); delivery unchanged (platform promotions are all customer)
+function ddCustDepth(x,internal){const g=x.sales+x.disc,i=Math.min(internal||0,x.disc),base=g-i;return base>0?(x.disc-i)/base*100:0;}
 function ddProg(name){const nm=String(name||"").replace(/\s+(DI|TO)$/i,"").trim();for(const[re,p,t]of DD_PROGS)if(re.test(name))return{p:p||nm,t};return{p:String(name||"Other").trim(),t:"Other"};}
 async function loadDinDiscData(){
   let gid=DD_TAB_GID;
@@ -26791,7 +26806,7 @@ async function loadDinDiscData(){
     const num=v=>{const n=parseFloat(String(v||"").replace(/,/g,""));return isNaN(n)?0:n;};
     ddData=rows.slice(hi+1).map(x=>{const d=parseDate(x[iD]);if(!d)return null;const g=ddProg(x[iN]);return{date:dk(d),outlet:chNormOutlet(x[iO]),name:String(x[iN]||"").trim(),prog:g.p,type:g.t,checks:num(x[iC]),disc:num(x[iA]),net:num(x[iNet]),gross:num(x[iG])};}).filter(Boolean);
     ddLoaded=true;ddErr=null;}catch(e){ddLoaded=true;ddErr=e.message;}
-  if(typeof curPage!=="undefined"&&curPage==="dindisc"){Object.values(charts).forEach(c=>c.destroy());charts={};renderPage("dindisc");}
+  if(typeof curPage!=="undefined"&&(curPage==="dindisc"||curPage==="channels"||(typeof lensMode!=="undefined"&&lensMode==="all"&&LENS_PAGES.has(curPage)))){Object.values(charts).forEach(c=>c.destroy());charts={};renderPage(curPage);}
 }
 function ddSet(k,v){ddState[k]=ddState[k]===v?null:v;Object.values(charts).forEach(c=>c.destroy());charts={};renderPage("dindisc");}
 function ddAgg(s,e){const by={},out={},days={};const z=()=>({checks:0,disc:0,net:0,gross:0});
@@ -26975,7 +26990,7 @@ var _lensIdx=new Map(),_diGen=0,_diInLens=false;
 })();
 // (3) Overview/Compare with dine-in & takeaway switched on: until the Dine-In & Takeaway tab has loaded, show a short
 // "loading" card instead of delivery-only totals that then jump. The page paints itself once the tab arrives.
-function lensWaitingInstore(p){return typeof LENS_PAGES!=="undefined"&&LENS_PAGES.has(p)&&lensMode==="all"&&!(lensSel.size===1&&lensSel.has("D"))&&!instoreLoaded;}
+function lensWaitingInstore(p){return typeof LENS_PAGES!=="undefined"&&LENS_PAGES.has(p)&&lensMode==="all"&&!(lensSel.size===1&&lensSel.has("D"))&&(!instoreLoaded||(typeof ddLoaded!=="undefined"&&!ddLoaded));}
 (function lensWaitHook(){
   if(typeof renderPage!=="function"||!window.lensSet)return setTimeout(lensWaitHook,250);
   const _rp=renderPage;renderPage=function(p){
