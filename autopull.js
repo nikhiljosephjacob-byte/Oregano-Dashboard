@@ -1263,7 +1263,8 @@ function AP_gs(o,what){
     ScriptApp.newTrigger("autoPull").timeBased().everyDays(1).atHour(hour).nearMinute(0).inTimezone("Asia/Dubai").create();
     AP_BASE=o.base;AP_SID="auto:"+o.token;AP_T0=Date.now();AP_FINAL=true;try{posApi("/api/auto/report",{stage:"setup",hour});}catch(e){Logger.log("Couldn't reach the dashboard: "+e.message);}
     Logger.log(`Done — the pull runs every day at about ${hour}:00 Dubai time.`);return;}
-  if(what==="notifyReady"){drop("notifyReady");const m=P.getProperty("msg");if(m)send(JSON.parse(m));return;}
+  if(what==="notifyReady"){drop("notifyReady");const m=P.getProperty("msg");if(m){send(JSON.parse(m));AP_mailDigest(o,JSON.parse(m));}return;}
+  if(what==="emailNow"){const m=P.getProperty("msg");AP_mailDigest(o,m?JSON.parse(m):null,true);return;}
   const retry=what==="autoPullRetry",now=what==="runNow";if(retry)drop("autoPullRetry");
   Logger.log("Pulling yesterday from Microsys…");
   const msg=AP_run({base:o.base,token:o.token,retry,hour});
@@ -1271,6 +1272,38 @@ function AP_gs(o,what){
   if(msg.ok&&!now){P.setProperty("msg",JSON.stringify(msg));ScriptApp.newTrigger("notifyReady").timeBased().after(5*60*1000).create();Logger.log("The notification goes out in 5 minutes.");}
   else if(!msg.ok&&!retry&&!now){ScriptApp.newTrigger("autoPullRetry").timeBased().after(30*60*1000).create();Logger.log("Will try again in 30 minutes.");}
   else send(msg);
+}
+// v606: email the full Daily Digest (PDF made by the dashboard in Cloudflare's headless browser) to the list set in the
+// dashboard. Tried twice; if the PDF can't be made the email still goes out with the summary and says why.
+function AP_mailDigest(o,msg,test){
+  const H={"X-Session-Id":"auto:"+o.token};
+  let cfg;try{cfg=JSON.parse(UrlFetchApp.fetch(o.base+"/api/auto/digestcfg",{headers:H,muteHttpExceptions:true}).getContentText());}catch(e){Logger.log("Couldn't read the email settings: "+e.message);return;}
+  if(!cfg||!cfg.to||!cfg.to.length){Logger.log("No email recipients set in the dashboard.");return;}
+  if(!cfg.on&&!test){Logger.log("Digest email is switched off in the dashboard.");return;}
+  let pdf=null,why="";
+  for(let a=0;a<2&&!pdf;a++){
+    if(a)Utilities.sleep(20000);
+    try{const r=UrlFetchApp.fetch(o.base+"/api/digest/pdf",{method:"post",headers:H,muteHttpExceptions:true});
+      const ct=String((r.getHeaders()||{})["Content-Type"]||(r.getHeaders()||{})["content-type"]||"");
+      if(r.getResponseCode()===200&&/pdf/.test(ct))pdf=r.getBlob();
+      else{let j=null;try{j=JSON.parse(r.getContentText());}catch(e){}why=(j&&(j.error+(j.detail?": "+j.detail:"")))||("HTTP "+r.getResponseCode());}}
+    catch(e){why=String(e.message||e);}
+    Logger.log(pdf?"Digest PDF made.":"Digest PDF attempt "+(a+1)+" failed: "+why);
+  }
+  const y=posAddDays(posDubaiToday(),-1),day=posFmtDate(y)+" "+y.slice(0,4);
+  if(pdf)pdf.setName(`OreganoGroup_DailyDigest_${y}.pdf`);
+  const esc_=x=>String(x||"").replace(/&/g,"&amp;").replace(/</g,"&lt;");
+  const lines=msg&&msg.body?msg.body.split("\n").map(l=>`<div style="margin:2px 0">${esc_(l)}</div>`).join(""):"";
+  const html=`<div style="font-family:Arial,sans-serif;font-size:14px;color:#1B2233;max-width:640px">
+    <div style="font-size:12px;color:#B8862F;font-weight:700;letter-spacing:1px">OREGANO GROUP · DAILY DIGEST</div>
+    <h2 style="margin:6px 0 10px;font-weight:600">${esc_(day)}</h2>
+    ${lines?`<div style="background:#F6F7F9;border-radius:8px;padding:10px 12px;margin-bottom:12px">${lines}</div>`:""}
+    ${pdf?"<div>The full Daily Digest (6 pages) is attached.</div>":`<div style="color:#C0392B">The full Daily Digest PDF couldn't be made this morning (${esc_(why)}). Open the dashboard → Overview → Export Daily Digest.</div>`}
+    <div style="margin-top:14px;font-size:11px;color:#6B7385">Sent automatically after the morning POS pull · <a href="${o.base}">Open the dashboard</a> · sales excl. VAT</div></div>`;
+  try{MailApp.sendEmail({to:cfg.to.join(","),subject:`Oregano Group — Daily Digest · ${day}${test?" (test)":""}`,htmlBody:html,name:"Oregano Dashboard",attachments:pdf?[pdf]:[]});
+    Logger.log(`Emailed to ${cfg.to.join(", ")}${pdf?" with the PDF":" without the PDF"}.`);
+    try{UrlFetchApp.fetch(o.base+"/api/auto/report",{method:"post",contentType:"application/json",headers:H,payload:JSON.stringify({stage:"email",ok:!!pdf,to:cfg.to.length,msg:pdf?"Digest emailed":"Emailed without the PDF — "+why}),muteHttpExceptions:true});}catch(e){}}
+  catch(e){Logger.log("Email failed: "+e.message);}
 }
 // ── the dashboard's network call, done with Apps Script's UrlFetchApp (synchronous) ──
 posApi=function(path,body){
