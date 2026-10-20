@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-20-595";
+const BUILD_VERSION="2026-10-20-596";
 const BUILD_NOTES=[
+  "🧾 KEETA MINIMUM COMMISSION — FOLLOWS YOUR DATES, FILLS GAPS FROM MICROSYS, CHECK BEFORE LAUNCH. (1) The Platforms → Keeta strip now uses the period chosen in the filters (it was always the last 7 days); Overview and Digest alerts stay on the last 7 days. (2) Days no Keeta statement covers yet are estimated from the till: every POS Sync pull / reconciliation check now keeps each Keeta order's value from Microsys Credit Sales, calibrated per brand against the statement on days both exist; estimated orders are labelled. (3) Campaign Planner → Keeta: a 'check before launch' replays the brand's real Keeta baskets from the last 30 statement days with the planned % and cap — orders that would pay the AED 6 minimum, extra commission per month, and the smallest minimum order that avoids it (with how many orders still get the offer). Needs Keeta files uploaded from this build on, and worker.js.",
   "📐 CAMPAIGN PLANNER IN NET TERMS + KNOWS THE CAMPAIGN SHEET + KEETA ACTION STRIP. (1) Per Nikhil ('we only work with NET AOVs'): every AOV and sales figure in the planner is now net (what customers paid after all discounts) — chart labels, the P&L cards (net sales, net AOV, what the platform pays back, our discount), the baseline tiles and the 'is it paying off' table. Gross / menu value is only used inside the maths (food cost on what's cooked, commission on the contract base). (2) The planner reads the campaign sheet by itself: a line shows the offer before, anything overlapping and the next scheduled one; continuation mode now also covers menu-wide % offers (same % within 5 points, same cap within AED 5, same audience — FTU / lapsed / new customers kept apart); if the sheet has no discount figures for the comparison weeks, the profit verdict is withheld instead of being wrong. (3) Platforms → Keeta opens with an action strip: each brand / outlet above the minimum-commission alert level, with orders on the AED 6 minimum, extra commission, discount on those orders and a suggested minimum order value.",
   "🎯 CAMPAIGN PLANNER — BOGO / SELECT-ITEMS FORECAST FIXED. Nikhil's Smokeys × Deliveroo BOGO (23–25 Oct) forecast showed more contribution per order than today (AED ~45 vs ~19) and a break-even below today's orders. Cause: the baseline weeks WERE the running BOGO and were charged 100% of its discount, while the forecast gave the campaign Deliveroo's 50% co-funding. Now: (1) the baseline always carries the discount it really had, at our share after any co-funding in those weeks; break-even is recomputed from it. (2) When the same offer is already running (BOGO or select items on 60%+ of the last 28 days), the new campaign is treated as a continuation: forecast = today's level with the last weeks' range, and a new panel answers the real question — is the offer paying off vs the 4 weeks before it started (orders, AOV, our discount per order, gross sales, contribution per day, adjusted for the brand's other platforms). (3) A red warning if a discount campaign ever shows more profit per order than today.",
   "🐞 'FORECASTED' SHOWN ON CAMPAIGNS NOBODY FORECASTED — caught by Nikhil on two new Deliveroo BOGO campaigns (Oregano and Smokeys, 23–25 Oct). A saved forecast was matched to a campaign by brand × platform × type only, so ANY older BOGO forecast (e.g. one from September) counted. Now a forecast belongs to a campaign only if it was made for that campaign's dates (start within 7 days and overlapping). Same fix in the two other places that link forecasts and campaigns: 'Upcoming campaigns without a forecast' and the forecast-accuracy check (which could compare an old forecast with a much later campaign).",
@@ -3064,7 +3065,7 @@ async function parseKeetaXlsx(file){
     for(let i=0;i<attributions.length;i++){
       const[campaign,share]=attributions[i];
       const key=`${brand}|${outlet}|${date}|${campaign}`;
-      if(!agg[key])agg[key]={brand,outlet,date,campaign,orders:0,gross:0,net:0,menu_disc:0,real_commission:0,real_fd:0,real_earnings:0,fl_n:0,fl_x:0,fl_d:0,cbase:0,o1:0,hasBasic:basicCommission!==null};
+      if(!agg[key])agg[key]={brand,outlet,date,campaign,orders:0,gross:0,net:0,menu_disc:0,real_commission:0,real_fd:0,real_earnings:0,fl_n:0,fl_x:0,fl_d:0,cbase:0,o1:0,ph:{},hasBasic:basicCommission!==null};
       if(!ordersSeen[key])ordersSeen[key]=new Set();
       if(!ordersSeen[key].has(orderNo)){
         ordersSeen[key].add(orderNo);
@@ -3077,7 +3078,7 @@ async function parseKeetaXlsx(file){
           if(basicCommission!==null)agg[key].real_commission+=basicCommission;
           if(realEarnings!==null)agg[key].real_earnings+=realEarnings;
           agg[key].real_fd+=realFD;
-          agg[key].cbase+=kBase;agg[key].o1++;if(kFloor){agg[key].fl_n++;agg[key].fl_x+=kExtra;agg[key].fl_d+=merch;}
+          agg[key].cbase+=kBase;agg[key].o1++;{const pk=Math.round(gross);agg[key].ph[pk]=(agg[key].ph[pk]||0)+1;}if(kFloor){agg[key].fl_n++;agg[key].fl_x+=kExtra;agg[key].fl_d+=merch;}
         }
       }
       agg[key].menu_disc+=share;
@@ -3102,7 +3103,7 @@ async function parseKeetaXlsx(file){
     real_commission:Math.round((r.real_commission||0)*100)/100,
     real_fd:Math.round((r.real_fd||0)*100)/100,
     real_earnings:Math.round((r.real_earnings||0)*100)/100,
-    ...(r.hasBasic?{o1:r.o1,fl_n:r.fl_n,fl_x:Math.round(r.fl_x*100)/100,fl_d:Math.round(r.fl_d*100)/100,cbase:Math.round(r.cbase*100)/100}:{})
+    ...(r.hasBasic?{o1:r.o1,ph:r.ph,fl_n:r.fl_n,fl_x:Math.round(r.fl_x*100)/100,fl_d:Math.round(r.fl_d*100)/100,cbase:Math.round(r.cbase*100)/100}:{})
   }));
   const dates=Array.from(datesSeen).sort();
   return{
@@ -25098,7 +25099,7 @@ function psRcBrand(suf,loc){return(PS_FYZ_LOCS.has(loc)?{DL:"Fyoozhen",DT:"Lollo
 function psReconOut(loc){return loc==="MSS - Mirdif Sports Society"?"Mirdiff Sports Society":loc==="ALF - Khalifa City (Fyoozhen)"?"Al Forsan (Fyoozhen kitchen)":(PS_INSTORE_MAP[loc]||loc);}
 function psCustLabel(cn){return String(cn||"").replace(/#\w+$/,"").replace(/^\s*\d+\s*-\s*/,"").trim()||"(blank)";}
 function psRecon(creditCsv,summaryCsv,iso){
-  const pos={},cr={},mis={};
+  const pos={},cr={},mis={},kt={}; // v596: kt = Keeta order values per brand|outlet (incl. VAT) for the minimum-commission estimate
   const t=psParseCSV(summaryCsv||"");
   if(t.length){const h=t[0].map(x=>x.trim()),iL=h.indexOf("Location");
     for(const r of t.slice(1)){const loc=(r[iL]||"").trim();if(!loc||/^total/i.test(loc))continue;const o=pos[loc]=pos[loc]||{};
@@ -25111,6 +25112,7 @@ function psRecon(creditCsv,summaryCsv,iso){
       const amt=psNum(r[iA]),b=psGetBrand(cn,suf,loc),a=psGetAgg(cn),br=PS_LOCATION_MAP[loc];
       const L=((cr[loc]=cr[loc]||{})[suf]=cr[loc][suf]||{agg:0,other:{},orders:[]});
       const oref={cust:psCustLabel(cn),ord:iO>=0?String(r[iO]||"").trim():"",inv:iT>=0?String(r[iT]||"").trim():"",ref:iR>=0?String(r[iR]||"").trim():"",amt:psRound(amt,2)}; // v565: order-level detail
+      if(b&&a==='Keeta'&&br&&amt>0){const kk=b+'|'+(br==='MC'?'Motorcity':br);(kt[kk]=kt[kk]||[]).push(psRound(amt,2));}
       if(b&&a&&br){L.agg+=amt;const home=psRcBrand(suf,loc);if(home&&b!==home){const k=loc+"|"+suf+"|"+b;mis[k]=mis[k]||{amt:0,orders:[]};mis[k].amt+=amt;mis[k].orders.push(oref);}}
       else{const k=psCustLabel(cn);L.other[k]=(L.other[k]||0)+amt;L.orders.push(oref);}}}
   const rows=[];let tp=0,ta=0;
@@ -25123,7 +25125,7 @@ function psRecon(creditCsv,summaryCsv,iso){
       if(Math.abs(gap)>=5)rows.push({loc,out:psReconOut(loc),rc:PS_RC_NAME[s],brand:psRcBrand(s,loc),pos:psRound(p,2),agg:psRound(a,2),gap:psRound(gap,2),other,unexpl:psRound(gap-ov,2),orders:L.orders.slice(0,30)});}}
   const misp=Object.entries(mis).map(([k,v])=>{const[loc,s,b]=k.split("|");return{loc,out:psReconOut(loc),rc:PS_RC_NAME[s],till:psRcBrand(s,loc),brand:b,amt:psRound(v.amt/1.05,2),orders:v.orders.slice(0,40)};});
   rows.sort((x,y)=>Math.abs(y.gap)-Math.abs(x.gap));
-  return{date:iso,pos:psRound(tp,2),agg:psRound(ta,2),rows,mis:misp};
+  return{date:iso,pos:psRound(tp,2),agg:psRound(ta,2),rows,mis:misp,kt};
 }
 
 // v564: formatting for the Dine-In Discounts tab (it was written as plain values). Header takes the look of
@@ -27751,29 +27753,55 @@ function renderSitePL(){
 const KM_BRAND_PCT=0.30,KM_OUTLET_PCT=0.50,KM_MIN_BRAND=30,KM_MIN_OUTLET=20,KM_ALERT_DAYS=7;
 function kmRecs(){return(typeof keetaOrdersData!=="undefined"&&keetaOrdersData&&keetaOrdersData.records)||[];}
 function kmHas(){return kmRecs().some(r=>r.fl_n!==undefined);}
+function kmHasAny(){return kmHas()||Object.keys(kmTill.days||{}).length>0;}
 function kmCover(){const d=kmRecs().filter(r=>r.fl_n!==undefined).map(r=>r.date).sort();return d.length?[d[0],d[d.length-1]]:null;}
+// v596: the till (Microsys Credit Sales, saved with every POS Sync pull / reconciliation check) fills the days no Keeta
+// statement covers yet. Till values are calibrated per brand against the statement on days both exist.
+const kmTill={days:null,loading:false,key:""};
+function kmTillLoad(){if(kmTill.loading||kmTill.days)return;kmTill.loading=true;const to=(typeof posDubaiToday==="function")?posDubaiToday():new Date().toISOString().slice(0,10);
+  const from=(()=>{const d=new Date(to+"T00:00:00Z");d.setUTCDate(d.getUTCDate()-119);return d.toISOString().slice(0,10);})();
+  const sess=typeof getActiveSession==="function"?getActiveSession():null;
+  fetch(`/api/pos/keetatill?from=${from}&to=${to}`,{headers:{"X-Session-Id":sess?sess.sessionId:""}}).then(r=>r.ok?r.json():{days:{}}).then(j=>{kmTill.days=j.days||{};}).catch(()=>{kmTill.days={};}).finally(()=>{kmTill.loading=false;kmCalib._k=null;try{if(typeof curPage!=="undefined"&&curPage==="platforms")kmPaint();}catch(e){}});}
+function kmStmtDates(){const S={};for(const r of kmRecs())if(r.fl_n!==undefined)(S[r.brand]=S[r.brand]||new Set()).add(r.date);return S;}
+function kmCalib(){ // per brand: till value (excl. VAT) that matches the statement's AED 37.50 line
+  const key=kmRecs().length+"|"+Object.keys(kmTill.days||{}).length;if(kmCalib._k===key)return kmCalib._v;
+  const out={},S=kmStmtDates(),T=kmTill.days||{},allV=[];let allFl=0,allN=0;
+  const st={};for(const r of kmRecs()){if(r.fl_n===undefined||!T[r.date])continue;const x=st[r.brand]=st[r.brand]||{fl:0,n:0,dates:new Set()};x.fl+=r.fl_n;x.n+=(r.o1!==undefined?r.o1:r.orders);x.dates.add(r.date);}
+  for(const[b,x]of Object.entries(st)){const V=[];for(const d of x.dates)for(const[k,arr]of Object.entries(T[d]||{}))if(k.split("|")[0]===b)arr.forEach(v=>V.push(v/1.05));
+    V.sort((p,q)=>p-q);allFl+=x.fl;allN+=x.n;V.forEach(v=>allV.push(v));
+    if(V.length>=50&&x.n>0){const q=x.fl/x.n,thr=V[Math.min(V.length-1,Math.max(0,Math.round(q*V.length)-1))];out[b]={thr:Math.min(60,Math.max(20,thr)),n:V.length};}}
+  allV.sort((p,q)=>p-q);const g=allV.length>=100&&allN?{thr:Math.min(60,Math.max(20,allV[Math.min(allV.length-1,Math.max(0,Math.round(allFl/allN*allV.length)-1))])),n:allV.length}:null;
+  kmCalib._k=key;kmCalib._v={byB:out,g};return kmCalib._v;}
 function kmAgg(s,e){
-  const z=()=>({n:0,fl:0,x:0,d:0,c:0,b:0});const T=z(),byB={},byBO={},byD={};
-  for(const r of kmRecs()){if(r.fl_n===undefined||r.date<s||r.date>e)continue;
-    for(const t of[T,byB[r.brand]=byB[r.brand]||z(),byBO[r.brand+"|"+r.outlet]=byBO[r.brand+"|"+r.outlet]||z(),byD[r.date]=byD[r.date]||z()]){t.n+=(r.o1!==undefined?r.o1:r.orders);t.fl+=r.fl_n;t.x+=r.fl_x;t.d+=r.fl_d||0;t.c+=r.real_commission||0;t.b+=r.cbase||0;}}
-  return{T,byB,byBO,byD};}
+  const z=()=>({n:0,fl:0,x:0,d:0,c:0,b:0,estN:0});const T=z(),byB={},byBO={},byD={},estDays=new Set(),stmtDays=new Set();
+  const add=(brand,outlet,date,f)=>{for(const t of[T,byB[brand]=byB[brand]||z(),byBO[brand+"|"+outlet]=byBO[brand+"|"+outlet]||z(),byD[date]=byD[date]||z()])f(t);};
+  for(const r of kmRecs()){if(r.fl_n===undefined||r.date<s||r.date>e)continue;stmtDays.add(r.date);
+    add(r.brand,r.outlet,r.date,t=>{t.n+=(r.o1!==undefined?r.o1:r.orders);t.fl+=r.fl_n;t.x+=r.fl_x;t.d+=r.fl_d||0;t.c+=r.real_commission||0;t.b+=r.cbase||0;});}
+  // till estimate for brand × day the statement doesn't cover
+  const S=kmStmtDates(),C=kmCalib(),avgD={};for(const[b,x]of Object.entries(byB))avgD[b]=x.fl?x.d/x.fl:null;
+  for(const[d,obj]of Object.entries(kmTill.days||{})){if(d<s||d>e)continue;const{rt,th}=kmThreshold(d);
+    for(const[k,arr]of Object.entries(obj)){const[b,o]=k.split("|");if(S[b]&&S[b].has(d))continue;const cal=C.byB[b]||C.g,thr=cal?cal.thr:th;estDays.add(d);
+      let n=0,fl=0,x=0;for(const a of arr){const v=a/1.05;n++;if(v<thr){fl++;x+=Math.max(0,6-rt*(v+(th-thr)));}}
+      add(b,o,d,t=>{t.n+=n;t.fl+=fl;t.x+=x;t.estN+=n;t.d+=fl*(avgD[b]||15);t.c+=n*0;t.b+=0;});}}
+  return{T,byB,byBO,byD,estDays,stmtDays};}
+function kmLastDay(){const c=kmCover();let e=c?c[1]:"";for(const d of Object.keys(kmTill.days||{}))if(d>e)e=d;return e||null;}
 function kmThreshold(dateStr){const rt=typeof keetaCommissionFor==="function"?keetaCommissionFor(dateStr):0.16;return{rt,th:6/rt};}
-function kmAlerts(){if(!kmHas())return[];const cov=kmCover();const e=cov[1],s=(()=>{const d=new Date(e+"T00:00:00Z");d.setUTCDate(d.getUTCDate()-(KM_ALERT_DAYS-1));return d.toISOString().slice(0,10);})();
-  const A=kmAgg(s,e),out=[],pc=v=>Math.round(v*100)+"%",f=v=>"AED "+Math.round(v).toLocaleString(),win=`${fmtShort(s)}–${fmtShort(e)}`;
-  const flagged=new Set();
+function kmFlags(A,win){const out=[],pc=v=>Math.round(v*100)+"%",f=v=>"AED "+Math.round(v).toLocaleString(),flagged=new Set(),est=t=>t.estN?` (incl. ${t.estN} estimated from Microsys)`:"";
   for(const[b,t]of Object.entries(A.byB))if(t.n>=KM_MIN_BRAND&&t.fl/t.n>=KM_BRAND_PCT){flagged.add(b);
-    out.push({sev:t.fl/t.n>=0.5?"high":"medium",brand:b,where:`${b} · Keeta`,msg:`${pc(t.fl/t.n)} of orders on Keeta's AED 6 minimum (${t.fl} of ${t.n}, ${win}) — ${f(t.x)} extra commission, ${f(t.d)} discount on those orders. Check the discount depth / add a minimum order.`,share:t.fl/t.n});}
+    out.push({sev:t.fl/t.n>=0.5?"high":"medium",brand:b,key:b,t,where:`${b} · Keeta`,msg:`${pc(t.fl/t.n)} of orders on Keeta's AED 6 minimum (${Math.round(t.fl)} of ${t.n}${est(t)}, ${win}) — ${f(t.x)} extra commission, ${f(t.d)} discount on those orders. Check the discount depth / add a minimum order.`,share:t.fl/t.n});}
   for(const[k,t]of Object.entries(A.byBO)){const[b,o]=k.split("|");if(t.n>=KM_MIN_OUTLET&&t.fl/t.n>=KM_OUTLET_PCT&&!flagged.has(b))
-    out.push({sev:"medium",brand:b,where:`${b} · ${o} · Keeta`,msg:`${pc(t.fl/t.n)} of orders on the AED 6 minimum (${t.fl} of ${t.n}, ${win}) — ${f(t.x)} extra commission.`,share:t.fl/t.n});}
+    out.push({sev:"medium",brand:b,key:k,t,where:`${b} · ${o} · Keeta`,msg:`${pc(t.fl/t.n)} of orders on the AED 6 minimum (${Math.round(t.fl)} of ${t.n}${est(t)}, ${win}) — ${f(t.x)} extra commission.`,share:t.fl/t.n});}
   return out.sort((a,b)=>b.share-a.share);}
+function kmAlerts(){kmTillLoad();if(!kmHasAny())return[];const e=kmLastDay();if(!e)return[];const s=(()=>{const d=new Date(e+"T00:00:00Z");d.setUTCDate(d.getUTCDate()-(KM_ALERT_DAYS-1));return d.toISOString().slice(0,10);})();
+  return kmFlags(kmAgg(s,e),`${fmtShort(s)}–${fmtShort(e)}`);}
 // ── Overview: add to the data checks list
 (function kmHookDH(){if(typeof dataHealthChecks!=="function")return setTimeout(kmHookDH,300);
   const _o=dataHealthChecks;dataHealthChecks=function(){const r=_o.apply(this,arguments)||[];try{
       if(kmRecs().length&&!kmHas())r.unshift({sev:"medium",check:"Keeta min. commission",text:"Switched off until Keeta order files are uploaded again: the files already loaded are from before build 591 and don't carry the per-order commission. Re-upload September and October Recent Orders (Promotions → upload).",where:"Keeta"});
       r.unshift(...kmAlerts().map(a=>({sev:a.sev,check:"Keeta min. commission",text:a.msg,where:a.where})));}catch(e){}return r;};window.dataHealthChecks=dataHealthChecks;
   // the Keeta order data arrives from the server after Overview's first paint — refresh the checks when it changes
-  if(typeof dataHealthBannerHTML==="function"){const _b=dataHealthBannerHTML;let stamp="";dataHealthBannerHTML=function(){const st=kmRecs().length+"|"+kmHas()+"|"+((kmCover()||[])[1]||"");if(st!==stamp){stamp=st;try{_dhCache=null;}catch(e){}}return _b.apply(this,arguments);};window.dataHealthBannerHTML=dataHealthBannerHTML;}
-  let last="";setInterval(()=>{try{const st=kmRecs().length+"|"+kmHas();if(st!==last){const first=!last;last=st;if(!first&&typeof curPage!=="undefined"&&curPage==="overview"&&typeof renderOverview==="function")renderOverview();try{navPaint();}catch(e){}}}catch(e){}},3000);
+  if(typeof dataHealthBannerHTML==="function"){const _b=dataHealthBannerHTML;let stamp="";dataHealthBannerHTML=function(){const st=kmRecs().length+"|"+kmHas()+"|"+((kmCover()||[])[1]||"")+"|"+Object.keys(kmTill.days||{}).length;if(st!==stamp){stamp=st;try{_dhCache=null;}catch(e){}}return _b.apply(this,arguments);};window.dataHealthBannerHTML=dataHealthBannerHTML;}
+  let last="";setInterval(()=>{try{const st=kmRecs().length+"|"+kmHas()+"|"+Object.keys(kmTill.days||{}).length;if(st!==last){const first=!last;last=st;if(!first&&typeof curPage!=="undefined"&&curPage==="overview"&&typeof renderOverview==="function")renderOverview();try{navPaint();}catch(e){}}}catch(e){}},3000);
 })();
 // ── Platforms → Keeta card
 let kmOpen={};
@@ -27782,13 +27810,13 @@ function kmCardHTML(){const T=DARK_THEME,F=curFilters(),s=F.start,e=dispEnd(F.st
   const box=(inner)=>`<div id="km-card" class="sm" style="margin-bottom:12px;background:${T.card};border:1px solid ${T.cardBorder};border-radius:12px;padding:16px 18px;color:${T.textPrimary}">${inner}</div>`;
   const{rt,th}=kmThreshold(e);
   const head=`<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px"><div style="font-size:15px;font-weight:800">🧾 Keeta minimum commission</div><div style="font-size:12px;color:${T.textSecondary}">Keeta takes ${Math.round(rt*100)}% of (order value − your discount), but at least AED 6 — so an order under <b style="color:${T.textPrimary}">AED ${th.toFixed(2)}</b> after the discount pays more than ${Math.round(rt*100)}%.</div></div>`;
-  if(!kmHas())return box(head+`<div style="font-size:12.5px;color:${T.textSecondary}">Upload a Keeta <b>Recent Orders</b> file (Campaigns → upload) to see this — files uploaded before build 591 don't have the per-order commission yet, so upload September and October once more.</div>`);
-  const cov=kmCover(),A=kmAgg(s,e),t=A.T;
-  if(!t.n)return box(head+`<div style="font-size:12.5px;color:${T.textSecondary}">No Keeta order-file data in this date range. Covered: ${fmtShort(cov[0])} – ${fmtShort(cov[1])}.</div>`);
+  kmTillLoad();if(!kmHasAny())return box(head+`<div style="font-size:12.5px;color:${T.textSecondary}">Upload a Keeta <b>Recent Orders</b> file (Campaigns → upload) to see this — files uploaded before build 591 don't have the per-order commission yet, so upload September and October once more.</div>`);
+  const A=kmAgg(s,e),t=A.T;
+  if(!t.n)return box(head+`<div style="font-size:12.5px;color:${T.textSecondary}">No Keeta order data in this date range yet.</div>`);
   const pc=v=>(v*100).toFixed(1)+"%",f=v=>"AED "+Math.round(v).toLocaleString(),col=p=>p>=0.5?T.accentRed:p>=0.3?"#F59E0B":T.accentGreen;
   const tile=(l,v,sub,c)=>`<div style="background:${T.bg};border:1px solid ${T.cardBorder};border-radius:10px;padding:11px 13px;flex:1;min-width:170px"><div style="font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:${T.textSecondary}">${l}</div><div style="font-size:22px;font-weight:800;margin:3px 0 1px;color:${c||T.textPrimary}">${v}</div><div style="font-size:11.5px;color:${T.textMuted}">${sub}</div></div>`;
   const sh=t.fl/t.n,eff=t.b?t.c/t.b:0;
-  let h=head+`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${tile("Orders on the minimum",`${t.fl.toLocaleString()} <span style="font-size:13px;color:${T.textSecondary}">of ${t.n.toLocaleString()}</span>`,pc(sh)+" of Keeta orders",col(sh))}${tile("Extra commission",f(t.x),`above ${Math.round(rt*100)}% · ${t.fl?"AED "+(t.x/t.fl).toFixed(2)+" per order":""}`)}${tile("Effective commission",pc(eff),`vs ${Math.round(rt*100)}% contract`)}${tile("Discount on those orders",f(t.d),"merchant-funded, incl. AED 2 delivery share")}</div>`;
+  let h=head+`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${tile("Orders on the minimum",`${Math.round(t.fl).toLocaleString()} <span style="font-size:13px;color:${T.textSecondary}">of ${t.n.toLocaleString()}</span>`,pc(sh)+" of Keeta orders",col(sh))}${tile("Extra commission",f(t.x),`above ${Math.round(rt*100)}% · ${t.fl?"AED "+(t.x/t.fl).toFixed(2)+" per order":""}`)}${tile("Effective commission",pc(eff),`vs ${Math.round(rt*100)}% contract`)}${tile("Discount on those orders",f(t.d),"merchant-funded, incl. AED 2 delivery share")}</div>`;
   // daily strip
   const days=Object.keys(A.byD).sort();if(days.length>1){const mx=Math.max(...days.map(d=>A.byD[d].fl/A.byD[d].n),0.01);
     h+=`<div style="display:flex;align-items:flex-end;gap:2px;height:46px;margin-bottom:4px">${days.map(d=>{const x=A.byD[d],p=x.fl/x.n;return`<div title="${fmtShort(d)}: ${x.fl} of ${x.n} orders (${pc(p)}) · ${f(x.x)} extra" style="flex:1;max-width:16px;height:${Math.max(3,p/mx*44)}px;background:${col(p)};border-radius:3px 3px 0 0;opacity:.85"></div>`;}).join("")}</div><div style="font-size:11px;color:${T.textMuted};margin-bottom:12px">% of orders on the minimum, per day · ${fmtShort(days[0])} – ${fmtShort(days[days.length-1])}</div>`;}
@@ -27801,20 +27829,22 @@ function kmCardHTML(){const T=DARK_THEME,F=curFilters(),s=F.start,e=dispEnd(F.st
       tr+=`<tr style="background:${T.bg}"><td style="${td};text-align:left;padding-left:26px;color:${T.textSecondary}">${esc(k.split("|")[1])}</td><td style="${td};color:${T.textSecondary}">${y.n}</td><td style="${td}">${bar(q)}${pc(q)}</td><td style="${td};color:${T.textSecondary}">${y.fl}</td><td style="${td};color:${T.textSecondary}">${f(y.x)}</td><td style="${td};color:${T.textSecondary}">${pc(y.b?y.c/y.b:0)}</td><td style="${td};color:${T.textSecondary}">${f(y.d)}</td></tr>`;});}
   const th_=x=>`<th style="padding:7px 6px;border-bottom:1px solid ${T.cardBorder};font-size:10.5px;color:${T.textSecondary};text-transform:uppercase;letter-spacing:.04em;text-align:${x==="Brand"?"left":"right"};white-space:nowrap">${x}</th>`;
   h+=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.8px"><tr>${["Brand","Orders","Share on the minimum","Orders on min.","Extra commission","Effective rate","Discount on those orders"].map(th_).join("")}</tr>${tr}</table></div>
-    <div style="font-size:11.5px;color:${T.textMuted};margin-top:8px">Click a brand for its outlets. Alerts (Overview + Daily Digest): a brand at ${Math.round(KM_BRAND_PCT*100)}%+ or an outlet at ${Math.round(KM_OUTLET_PCT*100)}%+ of orders on the minimum over the last ${KM_ALERT_DAYS} days. Data: Keeta order files, ${fmtShort(cov[0])} – ${fmtShort(cov[1])}.</div>`;
+    <div style="font-size:11.5px;color:${T.textMuted};margin-top:8px">Click a brand for its outlets. Alerts (Overview + Daily Digest): a brand at ${Math.round(KM_BRAND_PCT*100)}%+ or an outlet at ${Math.round(KM_OUTLET_PCT*100)}%+ of orders on the minimum over the last ${KM_ALERT_DAYS} days. Data: ${kmSourceNote(A)}. Effective rate uses statement days only.</div>`;
   return box(h);}
 function kmMOV(t){if(!t.fl)return null;const m=37.5+t.d/t.fl;return Math.ceil(m/5)*5;} // order value needed so that, after the usual discount, it stays above AED 37.50
-function kmStripHTML(){const T=DARK_THEME;if(!kmHas())return"";const A=kmAlerts();const cov=kmCover();
-  const f=v=>"AED "+Math.round(v).toLocaleString();
-  const e=cov[1],s=(()=>{const d=new Date(e+"T00:00:00Z");d.setUTCDate(d.getUTCDate()-(KM_ALERT_DAYS-1));return d.toISOString().slice(0,10);})(),G=kmAgg(s,e);
-  if(!A.length)return`<div id="km-strip" style="display:flex;gap:10px;align-items:center;background:${T.accentGreen}12;border:1px solid ${T.accentGreen}55;border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:12.5px;color:${T.textPrimary}">✅ <b>Keeta minimum commission:</b> nothing to act on — no brand or outlet above the alert level (${fmtShort(s)}–${fmtShort(e)}).</div>`;
-  const rows=A.slice(0,5).map(a=>{const key=a.where.replace(" · Keeta","").split(" · ");const t=key.length>1?G.byBO[key[0]+"|"+key[1]]:G.byB[key[0]];const mov=t?kmMOV(t):null;const sh=a.share;
+function kmSourceNote(A){const sd=[...A.stmtDays].sort(),ed=[...A.estDays].sort();const p=[];
+  if(sd.length)p.push(`Keeta statements ${fmtShort(sd[0])} – ${fmtShort(sd[sd.length-1])}`);if(ed.length)p.push(`Microsys till estimate ${ed.length===1?fmtShort(ed[0]):fmtShort(ed[0])+" – "+fmtShort(ed[ed.length-1])} (${ed.length} day${ed.length>1?"s":""}, calibrated to the statements)`);return p.join(" + ")||"no Keeta data";}
+function kmStripHTML(){const T=DARK_THEME;kmTillLoad();if(!kmHasAny())return"";const F=curFilters(),s=F.start,e=dispEnd(F.start,F.end);
+  const f=v=>"AED "+Math.round(v).toLocaleString(),G=kmAgg(s,e),win=`${fmtShort(s)}–${fmtShort(e)}`,A=kmFlags(G,win);
+  if(!G.T.n)return`<div id="km-strip" style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:12.5px;color:${T.textSecondary}">🧾 <b style="color:${T.textPrimary}">Keeta minimum commission:</b> no Keeta order data for ${win} yet — upload the Keeta statement, or run a POS Sync pull for these days.</div>`;
+  if(!A.length)return`<div id="km-strip" style="display:flex;gap:10px;align-items:center;background:${T.accentGreen}12;border:1px solid ${T.accentGreen}55;border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:12.5px;color:${T.textPrimary}">✅ <b>Keeta minimum commission:</b> nothing to act on in ${win} — ${(G.T.fl/G.T.n*100).toFixed(0)}% of orders on the AED 6 minimum overall, no brand or outlet above the alert level. <span style="color:${T.textMuted}">${kmSourceNote(G)}</span></div>`;
+  const rows=A.slice(0,6).map(a=>{const t=a.t,mov=kmMOV(t),sh=a.share;
     return`<div style="display:flex;gap:12px;align-items:center;padding:8px 0;border-top:1px solid ${T.cardBorder}66;flex-wrap:wrap"><span style="font-size:10px;font-weight:800;padding:2px 7px;border-radius:5px;background:${sh>=0.5?T.accentRed:"#F59E0B"}26;color:${sh>=0.5?T.accentRed:"#F59E0B"}">${Math.round(sh*100)}%</span>
-      <b style="min-width:170px">${esc(a.where.replace(" · Keeta",""))}</b><span style="color:${T.textSecondary};flex:1;min-width:220px">${t?`${t.fl} of ${t.n} orders on the AED 6 minimum · ${f(t.x)} extra commission · ${f(t.d)} discount on those orders`:esc(a.msg)}</span>
+      <b style="min-width:170px">${esc(a.where.replace(" · Keeta",""))}</b><span style="color:${T.textSecondary};flex:1;min-width:220px">${Math.round(t.fl)} of ${t.n} orders on the AED 6 minimum${t.estN?` <span style="color:${T.textMuted}">(${t.estN} from Microsys, estimated)</span>`:""} · ${f(t.x)} extra commission · ${f(t.d)} discount on those orders</span>
       <span style="font-weight:700;color:${T.textPrimary}">→ ${mov?`Set a minimum order of <span style="color:#FBBF24">AED ${mov}</span>`:"Check the discount depth"}</span></div>`;}).join("");
   return`<div id="km-strip" style="background:${T.card};border:1px solid #F59E0B88;border-radius:12px;padding:12px 16px;margin-bottom:12px;color:${T.textPrimary}">
-    <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:4px"><div style="font-size:14.5px;font-weight:800">⚠️ Keeta minimum commission — ${A.length} to act on</div><span style="font-size:12px;color:${T.textSecondary}">last 7 days of Keeta data (${fmtShort(s)}–${fmtShort(e)}) · orders under AED 37.50 after the discount pay AED 6 instead of 16%</span><a href="#km-card" style="margin-left:auto;font-size:12px;color:${T.accentOrange}">details ↓</a></div>
-    ${rows}<div style="font-size:11px;color:${T.textMuted};margin-top:6px">Minimum order = AED 37.50 + the average discount on those orders, rounded up to AED 5 — so a discounted order still clears AED 37.50. Source: Keeta statements up to ${fmtShort(e)}.</div></div>`;}
+    <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:4px"><div style="font-size:14.5px;font-weight:800">⚠️ Keeta minimum commission — ${A.length} to act on</div><span style="font-size:12px;color:${T.textSecondary}">${win} · orders under AED 37.50 after the discount pay AED 6 instead of 16%</span><a href="#km-card" style="margin-left:auto;font-size:12px;color:${T.accentOrange}">details ↓</a></div>
+    ${rows}<div style="font-size:11px;color:${T.textMuted};margin-top:6px">Minimum order = AED 37.50 + the average discount on those orders, rounded up to AED 5. Source: ${kmSourceNote(G)}.</div></div>`;}
 function kmPaint(){const pg=document.getElementById("page-platforms");if(!pg)return;const old=document.getElementById("km-card");
   if(typeof selPlatform==="undefined"||selPlatform!=="Keeta"){if(old)old.remove();return;}
   const html=kmStripHTML()+kmCardHTML();const os=document.getElementById("km-strip");if(os)os.remove();if(old){old.outerHTML=html;return;}
@@ -27940,3 +27970,31 @@ function cpfEcon(w,commRate,foodRate,agg){ // contribution/day with our share of
     const k=h.indexOf("📦 Orders / day");if(k<0)return h+p;const at=h.lastIndexOf("<div",k);return h.slice(0,at)+p+h.slice(at);};
   window.campPlanHTML=campPlanHTML;
 })();
+// ═══ v596 KEETA CHECK BEFORE LAUNCH — replays the brand's real Keeta baskets (last 30 statement days) with the planned
+// discount: how many orders would fall under AED 37.50 and pay Keeta's AED 6 minimum, and which minimum order avoids it.
+function kcSim(hist,pct,cap,cofund,mov,rate){let n=0,fl=0,x=0,kept=0;
+  for(const[o,c]of hist){const O=+o;let merch=2;if(O>=mov){let d=O*pct/100;if(cap>0)d=Math.min(d,cap);merch+=d*(1-cofund);kept+=c;}
+    const base=Math.max(0,O-merch);n+=c;if(rate*base<6-0.005){fl+=c;x+=c*(6-rate*base);}}
+  return{n,fl,x,kept};}
+function kcHTML(r){if(typeof campPlanAgg==="undefined"||campPlanAgg!=="Keeta"||typeof keetaOrdersData==="undefined"||!keetaOrdersData)return"";
+  const T=DARK_THEME,recs=(keetaOrdersData.records||[]).filter(x=>x.brand===campPlanBrand&&x.ph&&(!campPlanBranches||!campPlanBranches.size||campPlanBranches.has(x.outlet)));
+  const box=i=>`<div style="border:1px solid #FBBF2488;background:#FBBF240d;border-radius:12px;padding:14px 16px;margin:12px 0;color:${T.textPrimary};text-align:left">${i}</div>`;
+  const head=`<div style="font-size:14px;font-weight:800;margin-bottom:4px">🧾 Keeta check before launch — the AED 6 minimum commission</div>`;
+  if(!recs.length)return box(head+`<div style="font-size:12.5px;color:${T.textSecondary}">Needs a Keeta Recent Orders file for ${esc(campPlanBrand)} uploaded from build 596 onwards (it now keeps each order's value). Upload the latest Keeta file and run again.</div>`);
+  if(campPlanType!=="menu")return box(head+`<div style="font-size:12.5px;color:${T.textSecondary}">This check replays a % discount on each real basket. For a BOGO or select-items offer the free item varies by basket — watch the minimum-commission strip on Platforms → Keeta in the first days instead.</div>`);
+  const ds=[...new Set(recs.map(x=>x.date))].sort(),last=ds[ds.length-1],from=subDays(last,29),H={},days=new Set();
+  for(const x of recs){if(x.date<from)continue;days.add(x.date);for(const[o,c]of Object.entries(x.ph))H[o]=(H[o]||0)+c;}
+  const hist=Object.entries(H),nd=days.size||1,rate=typeof keetaCommissionFor==="function"?keetaCommissionFor(campPlanStart||last):0.16;
+  const pct=+campPlanDiscPct||0,cap=+campPlanCap||0,cf=campPlanCoFund?(+campPlanCoFundPct||0)/100:0;
+  const f=v=>"AED "+Math.round(v).toLocaleString(),mo=v=>f(v/nd*30);
+  const P=kcSim(hist,pct,cap,cf,0,rate);
+  let best=null;for(let m=30;m<=120;m+=5){const y=kcSim(hist,pct,cap,cf,m,rate),disc=y.kept?y.fl/y.n:0;if(disc<=0.05||y.fl/P.fl<=0.25){best={m,...y};break;}}
+  const L=pct>10?kcSim(hist,pct-10,cap,cf,0,rate):null;
+  const row=(lbl,y,note)=>`<tr><td style="padding:6px 8px">${lbl}</td><td style="padding:6px 8px;text-align:right;font-weight:800;color:${y.fl/y.n>=0.3?T.accentRed:y.fl/y.n>=0.1?"#F59E0B":T.accentGreen}">${(y.fl/y.n*100).toFixed(0)}%</td><td style="padding:6px 8px;text-align:right">${mo(y.x)}</td><td style="padding:6px 8px;text-align:right">${(y.kept/y.n*100).toFixed(0)}%</td><td style="padding:6px 8px;color:${T.textMuted}">${note||""}</td></tr>`;
+  return box(head+`<div style="font-size:12.5px;color:${T.textSecondary};margin-bottom:8px">Replays ${P.n.toLocaleString()} real ${esc(campPlanBrand)} Keeta orders (${fmtShort(from>ds[0]?from:ds[0])} – ${fmtShort(last)}) with ${pct}% off${cap?` cap AED ${cap}`:""}${cf?`, ${Math.round(cf*100)}% funded by Keeta`:""}. Keeta takes ${Math.round(rate*100)}% of (order − your discount, incl. the AED 2 delivery share), at least AED 6.</div>
+    <table style="border-collapse:collapse;font-size:12.5px;width:100%;max-width:820px"><tr style="color:${T.textMuted};font-size:10.5px;text-transform:uppercase"><th style="text-align:left;padding:6px 8px">Option</th><th style="text-align:right;padding:6px 8px">Orders on the AED 6 minimum</th><th style="text-align:right;padding:6px 8px">Extra commission / month</th><th style="text-align:right;padding:6px 8px">Orders that get the offer</th><th></th></tr>
+    ${row("As planned",P)}${best?row(`<b>Minimum order AED ${best.m}</b>`,best,"suggested — smallest minimum order that clears most of it"):""}${L?row(`${pct-10}% off instead`,L):""}</table>
+    <div style="font-size:11.5px;color:${T.textMuted};margin-top:6px">Orders under the minimum order still come in without the offer (still paying the AED 2 delivery share). Monthly figures scale the ${nd}-day sample to 30 days.</div>`);}
+(function kcHook(){if(typeof campPlanHTML!=="function"||!window.campPlanHTML)return setTimeout(kcHook,500);
+  const _h=campPlanHTML;campPlanHTML=function(){let h=_h.apply(this,arguments);if(!campPlanResult)return h;let k="";try{k=kcHTML(campPlanResult);}catch(e){console.warn(e);}if(!k)return h;
+    const i=h.indexOf("📦 Orders / day");if(i<0)return h+k;const at=h.lastIndexOf("<div",i);return h.slice(0,at)+k+h.slice(at);};window.campPlanHTML=campPlanHTML;})();
