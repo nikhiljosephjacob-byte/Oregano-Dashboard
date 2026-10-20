@@ -1300,16 +1300,18 @@ async function handleAutoToken(request, env) {
 async function handleAutoStatus(request, env) {
   const s = await requirePosUser(request, env);
   if (!s) return json({ error: "forbidden" }, 403);
-  const [last, meta] = await Promise.all([env.SESSIONS.get("auto:last"), env.SESSIONS.get("auto:tokenmeta")]);
+  const [last, meta, hour] = await Promise.all([env.SESSIONS.get("auto:last"), env.SESSIONS.get("auto:tokenmeta"), env.SESSIONS.get("auto:hour")]);
   const lk = (await env.SESSIONS.list({ prefix: "auto:log:", limit: 1000 })).keys.sort((a, b) => b.name.localeCompare(a.name)).slice(0, 7);
   const log = (await Promise.all(lk.map(k => env.SESSIONS.get(k.name)))).filter(Boolean).map(x => JSON.parse(x));
   const subs = (await env.SESSIONS.list({ prefix: "push:sub:", limit: 1000 })).keys.length;
-  return json({ ok: true, hasToken: !!meta, tokenMeta: meta ? JSON.parse(meta) : null, last: last ? JSON.parse(last) : null, log, subs });
+  return json({ ok: true, hour: hour ? +hour : null, hasToken: !!meta, tokenMeta: meta ? JSON.parse(meta) : null, last: last ? JSON.parse(last) : null, log, subs });
 }
 async function handleAutoReport(request, env) {
   const s = await requirePosUser(request, env);
   if (!s) return json({ error: "forbidden" }, 403);
   const b = await readBody(request);
+  if (b.hour) await env.SESSIONS.put("auto:hour", String(Math.max(0, Math.min(23, +b.hour || 0))));
+  if (b.stage === "setup") return json({ ok: true }); // v603: setup only records the hour
   const rec = { ts: new Date().toISOString(), by: s.user, date: String(b.date || "").slice(0, 10), ok: !!b.ok, stage: String(b.stage || "").slice(0, 40), msg: String(b.msg || "").slice(0, 600), secs: +b.secs || 0 };
   await env.SESSIONS.put("auto:last", JSON.stringify(rec));
   await env.SESSIONS.put("auto:log:" + rec.ts, JSON.stringify(rec), { expirationTtl: 60 * 60 * 24 * 60 });
