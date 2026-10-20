@@ -126,7 +126,7 @@ async function getSession(env, sessionId) {
   const raw = await env.SESSIONS.get(`session:${sessionId}`);
   if (!raw) return null;
   const sess = JSON.parse(raw);
-  if (!AUTH_USERS[sess.user]) { await env.SESSIONS.delete(`session:${sessionId}`); return null; } // v583: login removed (bd, admin)
+  if (!AUTH_USERS[sess.user] && !sess.digest) { await env.SESSIONS.delete(`session:${sessionId}`); return null; } // v583: login removed (bd, admin)
   return sess;
 }
 
@@ -1304,7 +1304,8 @@ async function handleAutoStatus(request, env) {
   const lk = (await env.SESSIONS.list({ prefix: "auto:log:", limit: 1000 })).keys.sort((a, b) => b.name.localeCompare(a.name)).slice(0, 7);
   const log = (await Promise.all(lk.map(k => env.SESSIONS.get(k.name)))).filter(Boolean).map(x => JSON.parse(x));
   const subs = (await env.SESSIONS.list({ prefix: "push:sub:", limit: 1000 })).keys.length;
-  return json({ ok: true, hour: hour ? +hour : null, hasToken: !!meta, tokenMeta: meta ? JSON.parse(meta) : null, last: last ? JSON.parse(last) : null, log, subs });
+  const [lastmail, dcfg] = await Promise.all([env.SESSIONS.get("auto:lastmail"), env.SESSIONS.get("auto:digestcfg")]);
+  return json({ ok: true, hasBR: !!(env.CF_BR_TOKEN && env.CF_ACCOUNT_ID), lastmail: lastmail ? JSON.parse(lastmail) : null, digest: dcfg ? JSON.parse(dcfg) : DIGEST_DEFAULT, hour: hour ? +hour : null, hasToken: !!meta, tokenMeta: meta ? JSON.parse(meta) : null, last: last ? JSON.parse(last) : null, log, subs });
 }
 async function handleAutoReport(request, env) {
   const s = await requirePosUser(request, env);
@@ -1312,6 +1313,10 @@ async function handleAutoReport(request, env) {
   const b = await readBody(request);
   if (b.hour) await env.SESSIONS.put("auto:hour", String(Math.max(0, Math.min(23, +b.hour || 0))));
   if (b.stage === "setup") return json({ ok: true }); // v603: setup only records the hour
+  if (b.stage === "email") { // v606: the Daily Digest email has its own status line
+    await env.SESSIONS.put("auto:lastmail", JSON.stringify({ ts: new Date().toISOString(), ok: !!b.ok, msg: String(b.msg || "").slice(0, 400), to: +b.to || 0 }));
+    return json({ ok: true });
+  }
   const rec = { ts: new Date().toISOString(), by: s.user, date: String(b.date || "").slice(0, 10), ok: !!b.ok, stage: String(b.stage || "").slice(0, 40), msg: String(b.msg || "").slice(0, 600), secs: +b.secs || 0 };
   await env.SESSIONS.put("auto:last", JSON.stringify(rec));
   await env.SESSIONS.put("auto:log:" + rec.ts, JSON.stringify(rec), { expirationTtl: 60 * 60 * 24 * 60 });
@@ -1377,6 +1382,51 @@ async function handlePushSend(request, env) {
     } catch (e) { failed++; errs.push(String(e.message || e).slice(0, 120)); }
   }
   return json({ ok: true, sent, failed, removed, errs: errs.slice(0, 3) });
+}
+// ── v606 Daily Digest by email ──
+// The full Digest is built by the dashboard itself in a browser. Each morning the Apps Script asks for it here: the worker
+// makes a one-time, 10-minute, read-only "digest" sign-in, has Cloudflare's headless browser (Browser Rendering, free plan:
+// 10 browser-minutes a day) open the dashboard with it, waits for the Digest to be built and returns it as a PDF. The Apps
+// Script then emails it from Nikhil's Gmail. Needs two Cloudflare secrets: CF_BR_TOKEN (API token with "Browser Rendering
+// – Edit") and CF_ACCOUNT_ID.
+const DIGEST_DEFAULT = { on: true, to: ["nikhil@oreganorestaurants.com"] };
+async function handleAutoKey(request, env) {
+  const s = await getSession(env, request.headers.get("X-Session-Id"));
+  if (!s || s.auto || !(s.admin || s.user === "nikhil")) return json({ error: "forbidden" }, 403);
+  return json({ ok: true, token: await env.SESSIONS.get("auto:token") });
+}
+async function handleDigestCfgGet(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const c = await env.SESSIONS.get("auto:digestcfg");
+  return json(Object.assign({ ok: true }, c ? JSON.parse(c) : DIGEST_DEFAULT));
+}
+async function handleDigestCfgSet(request, env) {
+  const s = await getSession(env, request.headers.get("X-Session-Id"));
+  if (!s || s.auto || !(s.admin || s.user === "nikhil")) return json({ error: "forbidden" }, 403);
+  const b = await readBody(request);
+  const to = [...new Set((Array.isArray(b.to) ? b.to : []).map(x => String(x || "").trim().toLowerCase()).filter(x => /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(x)))].slice(0, 20);
+  const c = { on: !!b.on, to, by: s.user, at: new Date().toISOString() };
+  await env.SESSIONS.put("auto:digestcfg", JSON.stringify(c));
+  return json(Object.assign({ ok: true }, c));
+}
+async function handleDigestPdf(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  if (!env.CF_BR_TOKEN || !env.CF_ACCOUNT_ID) return json({ error: "no_browser_key", detail: "Add CF_BR_TOKEN and CF_ACCOUNT_ID as secrets on the worker" }, 400);
+  const sid = hex(crypto.getRandomValues(new Uint8Array(20)));
+  await env.SESSIONS.put(`session:${sid}`, JSON.stringify({ user: "digest", digest: true, displayName: "Daily Digest (automatic)", initials: "DD", admin: false, loginTs: new Date().toISOString() }), { expirationTtl: 600 });
+  const origin = new URL(request.url).origin;
+  try {
+    const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/browser-rendering/pdf`, {
+      method: "POST", headers: { "Authorization": "Bearer " + env.CF_BR_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({ url: `${origin}/?dsid=${sid}`, gotoOptions: { waitUntil: "domcontentloaded", timeout: 45000 },
+        waitForSelector: { selector: "#digest-ready", timeout: 50000 }, viewport: { width: 1280, height: 900 },
+        pdfOptions: { format: "a4", printBackground: true, preferCSSPageSize: true, timeout: 60000 } }) });
+    const ct = r.headers.get("content-type") || "";
+    if (!r.ok || !ct.includes("pdf")) { const t = (await r.text()).slice(0, 300); return json({ error: "browser_failed", detail: r.status + " " + t }, 502); }
+    return new Response(r.body, { headers: { "Content-Type": "application/pdf", "Cache-Control": "no-store" } });
+  } finally { await env.SESSIONS.delete(`session:${sid}`); }
 }
 async function handlePushLast(request, env) {
   const ep = new URL(request.url).searchParams.get("ep") || "";
@@ -1470,6 +1520,10 @@ export default {
       if (path === "/api/push/unsubscribe"&& method === "POST") return await handlePushUnsubscribe(request, env);
       if (path === "/api/push/send"       && method === "POST") return await handlePushSend(request, env);
       if (path === "/api/push/last"       && method === "GET")  return await handlePushLast(request, env);
+      if (path === "/api/auto/key"        && method === "GET")  return await handleAutoKey(request, env);
+      if (path === "/api/auto/digestcfg"  && method === "GET")  return await handleDigestCfgGet(request, env);
+      if (path === "/api/auto/digestcfg"  && method === "POST") return await handleDigestCfgSet(request, env);
+      if (path === "/api/digest/pdf"      && method === "POST") return await handleDigestPdf(request, env);
     } catch (e) {
       return json({ error: "server_error", detail: String(e.message || e) }, 500);
     }
