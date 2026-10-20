@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-21-601";
+const BUILD_VERSION="2026-10-21-602";
 const BUILD_NOTES=[
+  "⏰ MORNING AUTO-PULL + PHONE NOTIFICATIONS (build 602, free Cloudflare plan). Every day at about 9:00 Dubai, yesterday is pulled from Microsys into the LIVE sheet by itself — the same Pull as the button (delivery tabs, Dine-In & Takeaway, Dine-In Discounts, till check, low-sales check, 14-day catch-up, Journal Tape) — run by a free Google Apps Script in Nikhil's own Google account, which loads the dashboard's own POS Sync code each morning (/autopull.js). Five minutes later (once Google's published copy has caught up) a notification arrives on the phone through the dashboard in Chrome: net sales excl. VAT vs the same day last week, delivery / dine-in / takeaway, delivery by brand, outlets unusually low. If the run fails it retries 30 minutes later; if that fails too the phone gets 'tap to finish', which opens POS Sync and finishes the pull with no questions, then notifies everyone. New card on POS Sync: status, last runs, 🔔 Turn on notifications for this device, Send a test, and the one-time setup (key + ready-made Apps Script code). NEEDS the new worker.js plus sw.js and autopull.js uploaded next to dashboard.js.",
   "📈 COMPLAINTS INDEX — THE CURRENT MONTH NO LONGER DRAGS THE LINES DOWN + PROGRESS ON EVERY UPLOAD (build 601). (1) Feedback → Index: the month in progress is projected from its daily pace (complaints and orders each to their own last day × days in the month), drawn dashed with a hollow dot and labelled 'so far'; the tooltip shows the real count and the pace. A 'How to read this' note sits above the chart, and under it a 'Same days' strip compares the first N days of this month with the same days last month — orders, complaints, complaints per 1,000 orders and a verdict — with no projection. The red/green alert uses the projection, but not before day 7. (2) Progress: uploading the Feedback Excel now shows the glowing panel (file x of y, reading / saving to the server), and anything without its own panel — order-file uploads, Daily Digest and Compare PDFs, the raw Microsys report — now shows it pinned at the top of the page you started it on (before, the corner toast hid itself on that page).",
   "✨ ONE EYE-CATCHING PROGRESS STYLE EVERYWHERE (build 600). Every wait now shows the same glowing panel — spinning ring, what's running, the item being read right now, %, time left and a thick animated striped bar, turning green with a ✓ when done: Pull POS data (with the last steps as a checklist), Backfill, Journal Tape history, Test connection, Till vs dashboard checks, 'Show the bills for every gap', Site P&L upload, and the first load of Promotions and the KPI tracker. Anything still running also shows a thin glowing line along the top of the screen and a corner toast on every other page (order-file uploads and PDF exports included) — click it to go back.",
   "✨ TILL VS DASHBOARD — A RUNNING CHECK IS IMPOSSIBLE TO MISS. Per Nikhil (nobody noticed the small grey 'Checking 0 of 1…'): while a check runs the button turns into a glowing orange 'Checking…', and a large panel appears at the top of the card — spinning ring, 'Checking with Microsys — day X of Y', the date being read, time left, a big % and a thick animated striped progress bar, with a pulsing glow around it.",
@@ -25392,6 +25393,7 @@ function renderPosSync(){
   if(posSyncState.testing&&typeof bzPanel==="function")h+=bzPanel({title:"Testing Microsys and the Google Sheet",pct:null,cur:"signing in to Microsys",steps:[{t:"Sign in to Microsys and read yesterday's Sales Summary",st:"run"},{t:"Open the Google Sheet and read its tabs",st:"run"}]}); // v600
   h+=posFlagsCardHTML(T,card,ct,btn);
   h+=posPullCardHTML(T,card,ct,btn);
+  if(typeof apCardHTML==="function")h+=apCardHTML(T,card,ct,btn); // v601: morning auto-pull
   if(posSyncState.progress.length||posSyncState.results)h+=posResultsHTML(T,card,ct);
   h+=posReconCardHTML(T,card,ct,btn);
   // less-used tools fold into one card
@@ -25444,12 +25446,15 @@ function posPullCardHTML(T,card,ct,btn){
   h+=`</div>`;
   return h;
 }
-async function posStartPull(){
-  const P=posSyncState,dates=posSelectedDates();if(!dates.length||P.pulling)return;
-  if(P.status&&!P.status.hasCreds){posOpenCreds();return;}
+async function posStartPull(opt){
+  // v601: opt={auto:true} = the 9 am auto-pull (Apps Script) or "Finish pull" from the phone notification — yesterday,
+  // LIVE sheet, no questions asked
+  const auto=!!(opt&&opt.auto),P=posSyncState;if(auto){P.sheet="live";P.preset="y";}
+  const dates=auto?[posAddDays(posDubaiToday(),-1)]:posSelectedDates();if(!dates.length||P.pulling)return;
+  if(P.status&&!P.status.hasCreds){if(!auto)posOpenCreds();return;}
   const where=P.sheet==="live"?"the LIVE Virtual Brands Performance sheet":"the TEST sheet";
-  if(!confirm(`Pull ${dates.length} day(s) (${posFmtDate(dates[0])}${dates.length>1?" → "+posFmtDate(dates[dates.length-1]):""}) from Microsys into ${where}?\n\nThis writes:\n • Delivery sales & discounts → Oregano, Lollorosso, Smokeys, Wicked Wings, Fyoozhen tabs\n • Dine-in & takeaway sales, guests & discounts → Dine-In & Takeaway tab\n • Each in-store discount (Entertainer, Esaad…) → Dine-In Discounts tab\n • Till-vs-dashboard check → Daily reconciliation card\n\nThen it fills any of the last 14 days still missing dine-in, takeaway or discount detail.`))return;
-  if(P.sheet==="live"&&!confirm("Final check: this writes to the REAL sheet the dashboard reads. Continue?"))return;
+  if(!auto&&!confirm(`Pull ${dates.length} day(s) (${posFmtDate(dates[0])}${dates.length>1?" → "+posFmtDate(dates[dates.length-1]):""}) from Microsys into ${where}?\n\nThis writes:\n • Delivery sales & discounts → Oregano, Lollorosso, Smokeys, Wicked Wings, Fyoozhen tabs\n • Dine-in & takeaway sales, guests & discounts → Dine-In & Takeaway tab\n • Each in-store discount (Entertainer, Esaad…) → Dine-In Discounts tab\n • Till-vs-dashboard check → Daily reconciliation card\n\nThen it fills any of the last 14 days still missing dine-in, takeaway or discount detail.`))return;
+  if(!auto&&P.sheet==="live"&&!confirm("Final check: this writes to the REAL sheet the dashboard reads. Continue?"))return;
   P.pulling=true;P.progress=[];P.results={sheet:P.sheet,days:[]};
   // v543: progress bar — 6 steps per day (Credit Sales, Discounts, Sales Summary, read sheet, write, low-sales check)
   P.bar={total:dates.length*6+1,done:0,start:Date.now(),day:0,days:dates.length,finished:false,failed:0};
@@ -25520,7 +25525,7 @@ async function posStartPull(){
   // Only missing days are fetched, so when everything is there it's just one quick read of the tab.
   if(!P.bar.stopped){const last=dates[dates.length-1];try{const r=await posStartBackfill({auto:true,from:posAddDays(last,-13),to:last});P.results.catchup=r;}catch(e){step("Catch-up failed: "+e.message,"err");}}
   if(!P.bar.stopped&&okDays){try{await posJTAfterPull(dates);}catch(e){step("Journal Tape failed: "+e.message,"err");}} // v575
-  posInstoreReloadSoon();
+  posInstoreReloadSoon();  return{okDays,failDays,dates,days:P.results.days}; // v601: the auto-pull builds its "data ready" message from this
 }
 function posBeforeUnload(e){if(posSyncState.pulling){e.preventDefault();e.returnValue="A POS pull is still running. Leaving now stops it.";return e.returnValue;}}
 // v549: Stop — finishes the day in progress, saves everything done so far, formats the tab, then stops
@@ -28214,3 +28219,139 @@ function fbSameDaysHTML(fp){
   ${k("Complaints per 1,000 orders",rA==null?"—":rA.toFixed(1)+(dR==null?"":dR<0?" ↓":dR>0?" ↑":""),rB==null?"":"was "+rB.toFixed(1),dR==null?neu:dR<=0?good:bad)}
   ${k("Verdict",vt,vs,vc,vc===neu?null:vc+"66")}</div>`;
 }
+
+// ═══ v601 MORNING AUTO-PULL — shared by the dashboard and /autopull.js (the Google Apps Script runner) ═══
+// Builds the phone notification from a Pull's result. Sales are NET (after discounts) and excl. VAT, like the Digest:
+// total = Microsys Sales Summary NetSalesValue for all outlets (the DSR's source), dine-in / takeaway from the same
+// report, delivery = the rest; brand split = Credit Sales per brand ÷ 1.05.
+function apK(n){n=+n||0;return n>=1000?(n/1000).toFixed(1).replace(/\.0$/,"")+"K":String(Math.round(n));}
+function apNetSum(csv){if(!csv)return 0;const o=psNetByLoc(csv);return Object.values(o).reduce((a,b)=>a+b,0);}
+function apMessage(res,sumY,sumW){
+  const dates=(res&&res.dates)||[],iso=dates[dates.length-1]||"",day=((res&&res.days)||[]).find(d=>d.date===iso)||{};
+  const dl=iso?posFmtDate(iso):"yesterday";
+  if(!res||!res.okDays||day.error)return{ok:false,title:"⏳ Auto-pull didn't finish — tap to finish it",
+    body:`${dl}: ${day.error||(res&&res.err)||"nothing was written"}. Tap to open POS Sync and finish the pull (about a minute, no questions asked).`,url:"/?autopull=1",tag:"autopull"};
+  const tot=apNetSum(sumY),lw=apNetSum(sumW);
+  const di=day.instore?day.instore.di/PS_VAT:0,to=day.instore?day.instore.to/PS_VAT:0,dlv=Math.max(0,tot-di-to);
+  const ch=lw>0&&tot>0?Math.round((tot/lw-1)*100):null,dow=PS_DOW[new Date(iso+"T12:00:00Z").getUTCDay()];
+  const L=[];
+  if(tot>0)L.push(`Net sales AED ${apK(tot)} excl. VAT${ch==null?"":` (${ch>=0?"+":""}${ch}% vs last ${dow})`}`);
+  if(tot>0)L.push(`Delivery ${apK(dlv)} · Dine-in ${apK(di)} · Takeaway ${apK(to)}`);
+  const br=Object.entries(day.brands||{}).filter(([,v])=>v.sales>0).sort((a,b)=>b[1].sales-a[1].sales).map(([b,v])=>`${b} ${apK(v.sales/PS_VAT)}`);
+  if(br.length)L.push("Delivery: "+br.join(" · "));
+  const fl=day.flags||[];
+  if(fl.length)L.push(`⚠ ${fl.length} outlet${fl.length>1?"s":""} unusually low: ${fl.slice(0,3).map(f=>`${String(f.loc).split(" - ").slice(1).join(" - ")||f.loc} (${Math.round(f.pct)}%)`).join(", ")}`);
+  const w=day.warn||[];
+  if(w.some(x=>/incomplete/i.test(x)))L.push("⚠ Credit Sales looked incomplete — re-pull this day");
+  else if(w.some(x=>/hasn't split/i.test(x)))L.push("Dine-in / takeaway split not in Microsys yet — added on the next pull");
+  return{ok:true,title:`✅ Yesterday's data is ready — ${dl}`,body:L.join("\n")||"Pulled from Microsys into the LIVE sheet.",url:"/",tag:"autopull"};
+}
+
+// ═══ v601 MORNING AUTO-PULL — POS Sync card, notifications on this device, "Finish pull" from the notification ═══
+const apS={st:null,loading:false,err:null,sub:null,busy:"",token:null,showSetup:false,note:""};
+async function apLoad(){if(apS.loading)return;apS.loading=true;
+  try{apS.st=await posApi("/api/auto/status");apS.err=null;}catch(e){apS.err=e.message;}
+  apS.loading=false;await apCheckSub();if(curPage==="possync")renderPosSync();}
+async function apCheckSub(){try{if(!("serviceWorker" in navigator))return;const reg=await navigator.serviceWorker.getRegistration("/");apS.sub=reg?await reg.pushManager.getSubscription():null;}catch(e){apS.sub=null;}}
+function apB64(s){const p="=".repeat((4-s.length%4)%4),b=atob((s+p).replace(/-/g,"+").replace(/_/g,"/"));return Uint8Array.from(b,c=>c.charCodeAt(0));}
+function apDevice(){const u=navigator.userAgent;return(/Android/.test(u)?"Android phone":/iPhone|iPad/.test(u)?"iPhone":/Windows/.test(u)?"Windows PC":/Mac/.test(u)?"Mac":"device")+" · "+(((getActiveSession()||{}).user)||"");}
+async function apEnable(){
+  if(!("serviceWorker" in navigator)||!("PushManager" in window)||!("Notification" in window)){alert("This browser can't show notifications. On your Android phone, open the dashboard in Chrome (or the Chrome app you added) and try again.");return;}
+  apS.busy="Turning on…";apS.note="";renderPosSync();
+  try{let reg;try{reg=await navigator.serviceWorker.register("/sw.js");}catch(e){throw new Error("sw.js isn't on the site yet — upload sw.js next to dashboard.js, then try again");}
+    await navigator.serviceWorker.ready;
+    const perm=await Notification.requestPermission();
+    if(perm!=="granted")throw new Error("Notifications are blocked for this site — Chrome ⋮ → Settings → Site settings → Notifications → allow the dashboard, then try again");
+    const k=await posApi("/api/push/key");let sub=await reg.pushManager.getSubscription();
+    if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:apB64(k.key)});
+    await posApi("/api/push/subscribe",{sub:sub.toJSON(),label:apDevice()});apS.sub=sub;apS.note="✓ Notifications are on for this device — tap 'Send a test' to check";}
+  catch(e){apS.note="❌ "+e.message;}
+  apS.busy="";await apLoad();}
+async function apDisable(){try{const reg=await navigator.serviceWorker.getRegistration("/");const sub=reg&&await reg.pushManager.getSubscription();
+  if(sub){await posApi("/api/push/unsubscribe",{endpoint:sub.endpoint});await sub.unsubscribe();}apS.sub=null;apS.note="Notifications turned off for this device";}catch(e){apS.note="❌ "+e.message;}await apLoad();}
+async function apTest(){apS.busy="Sending…";renderPosSync();
+  try{const r=await posApi("/api/push/send",{title:"🔔 Test from the Oregano Dashboard",body:"Notifications work on this device. The 9 am message will arrive the same way.",url:"/",tag:"test",onlyMe:true});
+    apS.note=r.sent?`✓ Sent to ${r.sent>1?r.sent+" of your devices":"your device"} — it should pop up within a few seconds`:`Nothing was sent${r.errs&&r.errs.length?" — "+r.errs[0]:" — turn notifications on for this device first"}`;}
+  catch(e){apS.note="❌ "+e.message;}apS.busy="";renderPosSync();}
+async function apNewToken(){
+  if(apS.st&&apS.st.hasToken&&!confirm("Make a new key? The current one stops working straight away — you then paste the new code into the Apps Script."))return;
+  try{const r=await posApi("/api/auto/token",{});apS.token=r.token;apS.showSetup=true;apS.note="";}catch(e){apS.note="❌ "+e.message;}await apLoad();}
+function apCopy(){const t=document.getElementById("ap-code");if(!t)return;t.select();try{navigator.clipboard.writeText(t.value);}catch(e){try{document.execCommand("copy");}catch(e2){}}apS.note="✓ Code copied — paste it into the Apps Script";renderPosSync();}
+function apToggleSetup(){apS.showSetup=!apS.showSetup;renderPosSync();}
+function apCode(tok){return `// Oregano Dashboard — morning auto-pull (Google Apps Script). Made by the dashboard: POS Sync → Morning auto-pull.
+// Every day at about 9:00 Dubai time it pulls yesterday from Microsys into the LIVE sheet using the dashboard's own
+// POS Sync code (downloaded fresh each morning from the dashboard), then sends the "data is ready" notification
+// 5 minutes later, once Google's published copy of the sheet has caught up. If the pull fails it tries again 30 minutes
+// later; if that fails too, your phone gets "tap to finish", which finishes the pull in the dashboard.
+// Keep this private: the key below lets this script run POS Sync. Make a new key in the dashboard any time.
+const DASH = "${location.origin}";
+const KEY = "${tok}";
+
+function setup() {
+  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger("autoPull").timeBased().everyDays(1).atHour(9).nearMinute(0).inTimezone("Asia/Dubai").create();
+  Logger.log("Done — the pull runs every day at about 9:00 Dubai time.");
+}
+async function runNow() { await run_(false, true); }          // test: pull yesterday now and notify straight away
+async function autoPull() { await run_(false, false); }
+async function autoPullRetry() { drop_("autoPullRetry"); await run_(true, false); }
+function notifyReady() { drop_("notifyReady"); const m = PropertiesService.getScriptProperties().getProperty("msg"); if (m) send_(JSON.parse(m)); }
+
+async function run_(retry, now) {
+  const code = UrlFetchApp.fetch(DASH + "/autopull.js?v=" + Date.now()).getContentText();
+  const AP = new Function(code + "\\nreturn { AP_run };")();
+  const msg = await AP.AP_run({ base: DASH, token: KEY, retry: retry });
+  Logger.log(msg.title + "\\n" + msg.body);
+  if (msg.ok && !now) {
+    PropertiesService.getScriptProperties().setProperty("msg", JSON.stringify(msg));
+    ScriptApp.newTrigger("notifyReady").timeBased().after(5 * 60 * 1000).create();
+  } else if (!msg.ok && !retry && !now) {
+    ScriptApp.newTrigger("autoPullRetry").timeBased().after(30 * 60 * 1000).create();
+  } else send_(msg);
+}
+function send_(msg) {
+  const r = UrlFetchApp.fetch(DASH + "/api/push/send", { method: "post", contentType: "application/json",
+    headers: { "X-Session-Id": "auto:" + KEY }, payload: JSON.stringify(msg), muteHttpExceptions: true });
+  Logger.log("notification: " + r.getContentText());
+}
+function drop_(name) { ScriptApp.getProjectTriggers().forEach(t => { if (t.getHandlerFunction() === name) ScriptApp.deleteTrigger(t); }); }
+`;}
+function apFmtTs(ts){if(!ts)return"";const d=new Date(ts);return d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",timeZone:"Asia/Dubai"})+" "+d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Dubai"});}
+function apCardHTML(T,card,ct,btn){
+  if(!apS.st&&!apS.loading&&!apS.err)setTimeout(apLoad,0);
+  const s=apS.st||{},L=s.last,me=getActiveSession()||{},isN=me.user==="nikhil"||!!me.admin,f=x=>esc(String(x||""));
+  const row=(l,sub,r)=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid ${T.cardBorder}88"><div style="font-size:13.5px;min-width:0">${l}${sub?`<div style="font-size:12px;color:${T.textSecondary};margin-top:2px">${sub}</div>`:""}</div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${r}</div></div>`;
+  const pill=(on,t)=>`<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;color:${on?T.accentGreen:T.textSecondary}"><span style="width:8px;height:8px;border-radius:50%;background:${on?T.accentGreen:T.textMuted}"></span>${t}</span>`;
+  let h=`<div style="${card}"><div style="${ct}">⏰ Morning auto-pull</div>`;
+  h+=row(`Pull yesterday automatically at about <b>9:00</b> (Dubai) → LIVE sheet`,s.hasToken?`Runs in your Google Apps Script · key made ${apFmtTs(s.tokenMeta&&s.tokenMeta.at)}`:"Not set up yet — one-time setup, about 5 minutes",
+    s.hasToken?pill(true,"Set up"):pill(false,"Off")+(isN?btn("Set it up","apToggleSetup()",true,false):""));
+  h+=row("Last run",L?`<span style="color:${L.ok?T.accentGreen:T.accentOrange}">${L.ok?"✓":"⚠"} ${apFmtTs(L.ts)} · ${f(L.stage)}${L.secs?` · ${L.secs}s`:""}</span> — ${f(L.msg).replace(/\n/g," · ")}`:"No automatic run yet","");
+  const supported=typeof navigator!=="undefined"&&"serviceWorker" in navigator&&typeof window!=="undefined"&&"PushManager" in window;
+  h+=row("Notifications on this device",supported?(apS.sub?`On · ${s.subs||1} device${(s.subs||1)>1?"s":""} get the 9 am message`:`Off · ${s.subs||0} device${s.subs===1?"":"s"} signed up`):"This browser can't show notifications",
+    apS.busy?`<span style="font-size:12px;color:${T.accentOrange};font-weight:800">${f(apS.busy)}</span>`:(apS.sub?pill(true,"On")+btn("Send a test","apTest()",false,false)+btn("Turn off","apDisable()",false,false):btn("🔔 Turn on","apEnable()",true,!supported)));
+  if(apS.note)h+=`<div style="margin-top:10px;font-size:12.5px;font-weight:700;color:${/^❌/.test(apS.note)?T.accentRed:T.accentGreen}">${f(apS.note)}</div>`;
+  if(apS.err)h+=`<div style="margin-top:10px;font-size:12px;color:${T.accentOrange}">Couldn't read the auto-pull status (${f(apS.err)}) — is the new worker.js uploaded?</div>`;
+  const log=(s.log||[]).slice(0,5);
+  if(log.length)h+=`<div style="margin-top:12px;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:${T.textMuted}">Recent mornings</div>`+log.map(x=>`<div style="font-size:12.5px;padding:6px 9px;border-radius:7px;margin-top:5px;background:${x.ok?T.accentGreen+"12":T.accentOrange+"14"};color:${x.ok?T.textPrimary:T.accentOrange}">${x.ok?"✓":"⚠"} ${apFmtTs(x.ts)} — ${f(x.msg).split(" — ")[0]}</div>`).join("");
+  if(isN&&(apS.showSetup||apS.token)){
+    const st=(n,t)=>`<li style="margin:7px 0;line-height:1.5"><b>${n}.</b> ${t}</li>`;
+    h+=`<div style="margin-top:14px;padding:14px;border-radius:10px;border:1px solid ${T.accentOrange}66;background:${T.accentOrange}0d"><div style="font-weight:800;margin-bottom:6px">One-time setup (about 5 minutes, free)</div><ol style="margin:0;padding-left:4px;list-style:none;font-size:13px">
+      ${st(1,"Upload <b>sw.js</b> and <b>autopull.js</b> next to dashboard.js (they come with this build). Then, on your phone, open POS Sync and tap <b>🔔 Turn on</b> above.")}
+      ${st(2,`Make the key: ${btn(s.hasToken?"Make a new key":"🔑 Make the key","apNewToken()",!apS.token,false)} — the code below fills itself in.`)}
+      ${st(3,`Open <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener" style="color:${T.accentOrange}">script.google.com → New project</a> (your own Google account). Name it “Oregano auto-pull”, delete what's in the editor, paste the code, press 💾 Save.`)}
+      ${st(4,"At the top, pick <b>setup</b> in the function list → ▶ Run → allow access (Google shows “Google hasn't verified this app” — it's your own script: Advanced → Go to Oregano auto-pull). That creates the daily 9:00 run.")}
+      ${st(5,"Test it: pick <b>runNow</b> → ▶ Run. In 2–4 minutes yesterday is pulled again (same as pressing Pull) and your phone gets the message.")}</ol>
+      ${apS.token?`<textarea id="ap-code" readonly style="width:100%;height:150px;margin-top:8px;border-radius:8px;border:1px solid ${T.cardBorder};background:${T.bg};color:${T.textPrimary};font:11.5px/1.4 ui-monospace,Consolas,monospace;padding:8px;box-sizing:border-box">${esc(apCode(apS.token))}</textarea><div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${btn("📋 Copy the code","apCopy()",true,false)}<span style="font-size:12px;color:${T.textSecondary}">The key is shown only now. Lost it? Make a new key and paste the new code.</span></div>`:""}</div>`;}
+  return h+`</div>`;
+}
+// "Finish pull" from the phone notification (/?autopull=1): yesterday → LIVE, no questions, then "data is ready" to every device
+async function apFinish(){const P=posSyncState;if(P.pulling)return;try{await posLoadStatus();}catch(e){}
+  const res=await posStartPull({auto:true});if(!res)return;const y=res.dates[0];let sy="",sw="";
+  if(res.okDays){try{sy=(await posApi("/api/pos/report",{kind:"summary",date:y})).csv;}catch(e){}try{sw=(await posApi("/api/pos/report",{kind:"summary",date:posAddDays(y,-7)})).csv;}catch(e){}}
+  const m=apMessage(res,sy,sw);
+  try{await posApi("/api/auto/report",{date:y,ok:m.ok,stage:"finished in the dashboard",msg:m.title+" — "+m.body});if(m.ok)await posApi("/api/push/send",m);}catch(e){}
+  apLoad();}
+(function apDeepLink(){if(typeof location==="undefined"||!/[?&]autopull=1/.test(location.search))return;let n=0;
+  const go=()=>{if(++n>600)return;if(!getActiveSession()||!document.getElementById("page-possync")||typeof gp!=="function")return setTimeout(go,1000);
+    try{history.replaceState(null,"",location.pathname);}catch(e){}gp("possync");setTimeout(apFinish,600);};setTimeout(go,1500);})();
+window.apEnable=apEnable;window.apDisable=apDisable;window.apTest=apTest;window.apNewToken=apNewToken;window.apCopy=apCopy;window.apToggleSetup=apToggleSetup;
