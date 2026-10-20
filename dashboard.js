@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-20-598";
+const BUILD_VERSION="2026-10-20-600";
 const BUILD_NOTES=[
+  "✨ ONE EYE-CATCHING PROGRESS STYLE EVERYWHERE (build 600). Every wait now shows the same glowing panel — spinning ring, what's running, the item being read right now, %, time left and a thick animated striped bar, turning green with a ✓ when done: Pull POS data (with the last steps as a checklist), Backfill, Journal Tape history, Test connection, Till vs dashboard checks, 'Show the bills for every gap', Site P&L upload, and the first load of Promotions and the KPI tracker. Anything still running also shows a thin glowing line along the top of the screen and a corner toast on every other page (order-file uploads and PDF exports included) — click it to go back.",
+  "✨ TILL VS DASHBOARD — A RUNNING CHECK IS IMPOSSIBLE TO MISS. Per Nikhil (nobody noticed the small grey 'Checking 0 of 1…'): while a check runs the button turns into a glowing orange 'Checking…', and a large panel appears at the top of the card — spinning ring, 'Checking with Microsys — day X of Y', the date being read, time left, a big % and a thick animated striped progress bar, with a pulsing glow around it.",
   "🐞 TILL VS DASHBOARD — '49 THINGS TO CHECK, AED 141,150' ON 20 SEP WAS A BAD MICROSYS READ, NOT A REAL GAP. After a 30-day check, 20 Sep (fine the day before) showed nearly the whole day's Oregano delivery as unexplained: Microsys returned an incomplete Credit Sales report for that day and the check saved it over the good one. Now: (1) a day where the platforms account for under 80% of the till's delivery buttons is treated as a bad read — retried once, and if still incomplete it isn't saved (the earlier check stays); (2) the worker refuses to replace a good day with an incomplete one; (3) any incomplete day already saved is left out of the card's totals, the badge and the till-only sales added to Overview, with a button to check that day again; (4) every day square can be clicked to re-check just that day; (5) a Pull warns if that day's Credit Sales looks incomplete (the sheet may be missing orders — pull it again).",
   "🏷️ SITE P&L — BRAND FILTER WORKS IN 'SO FAR' (ESTIMATE). The brand selector was switched off for the current-month estimate. Now each outlet's month is also estimated per brand: live sales split by brand (delivery per brand from the sheet; dine-in & takeaway to the outlet's own brand — Fyoozhen at DIP-Fyoozhen, WTC and NAS, Oregano elsewhere; catering by the till's brand), with each brand's costs from Finance's brand columns. Brand totals add up to the outlet totals. Also: Finance's brand headers are now read as one name per brand (one tab said 'FyoozJen'), and 'outlets in profit' counts the selected brand.",
   "🧾 KEETA MINIMUM COMMISSION — FOLLOWS YOUR DATES, FILLS GAPS FROM MICROSYS, CHECK BEFORE LAUNCH. (1) The Platforms → Keeta strip now uses the period chosen in the filters (it was always the last 7 days); Overview and Digest alerts stay on the last 7 days. (2) Days no Keeta statement covers yet are estimated from the till: every POS Sync pull / reconciliation check now keeps each Keeta order's value from Microsys Credit Sales, calibrated per brand against the statement on days both exist; estimated orders are labelled. (3) Campaign Planner → Keeta: a 'check before launch' replays the brand's real Keeta baskets from the last 30 statement days with the planned % and cap — orders that would pay the AED 6 minimum, extra commission per month, and the smallest minimum order that avoids it (with how many orders still get the offer). Needs Keeta files uploaded from this build on, and worker.js.",
@@ -17400,7 +17402,7 @@ async function renderCampaigns(){
     #page-campaigns .preset.act{background:rgba(245,158,11,.15)!important;border-color:#f59e0b!important;color:#f59e0b!important}
   </style>`:"";
   if(!campLoaded){
-    pg.innerHTML=`${styleOverride}<div style="padding:30px;text-align:center;color:${T.muted};font-size:13px">⏳ Loading campaigns from Google Sheets...</div>`;
+    pg.innerHTML=`${styleOverride}${bzLoading('Loading campaigns from the Google Sheet','every campaign, past and upcoming')}`;
     try{const csv=await fetchCSV(CAMPAIGN_GID);campaignData=parseCampaigns(csv);campLoaded=true;campAnalysisCache.clear();rebuildCampIdxMap();}
     catch(e){pg.innerHTML=`${styleOverride}<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ Could not load Campaign Activations sheet</div><div style="color:${T.muted};font-size:12px">Error: ${e.message}</div></div>`;return;}
   }
@@ -19523,11 +19525,11 @@ async function renderKPI(){
     #page-kpi table td{color:${DARK_THEME.textPrimary}!important}
   </style>`:"";
   if(!kpiLoaded&&!kpiLoading){
-    pg.innerHTML=`${styleOverride}<div style="padding:30px;text-align:center;color:${T.muted};font-size:13px">⏳ Loading KPI data from all outlets…<div style="font-size:11px;margin-top:6px">(loading in parallel — usually a few seconds)</div></div>`;
+    pg.innerHTML=`${styleOverride}${bzLoading('Loading KPI data from all outlets','in parallel — usually a few seconds')}`;
     loadKPIData();return;
   }
   if(kpiLoading&&!kpiLoaded){
-    pg.innerHTML=`${styleOverride}<div style="padding:30px;text-align:center;color:${T.muted};font-size:13px">⏳ Loading KPI data…</div>`;return;
+    pg.innerHTML=`${styleOverride}${bzLoading('Loading KPI data','')}`;return;
   }
   if(!kpiData||Object.keys(kpiData).length===0){
     pg.innerHTML=`${styleOverride}<div class="card" style="border-color:rgba(239,68,68,.3)"><div style="color:#ef4444;font-weight:700;margin-bottom:8px">⚠️ No KPI data loaded</div><div style="color:${T.muted};font-size:12px">The KPI Tracker sheet tabs could not be fetched. Make sure the sheet is published to web. <button onclick="kpiLoaded=false;renderKPI()" style="background:#f59e0b22;border:1px solid #f59e0b44;border-radius:5px;color:#f59e0b;padding:3px 10px;font-size:11px;cursor:pointer;margin-left:8px">↻ Retry</button></div></div>`;return;
@@ -25376,6 +25378,7 @@ function renderPosSync(){
   if(posSyncState.err)h+=`<span style="color:${T.accentRed};font-size:12px">Couldn't load status: ${esc(posSyncState.err)}</span>`;
   h+=st?dot(st.hasCreds,"Microsys",st.hasCreds?`Login ${st.credsUser||""} · saved by ${st.credsSetBy||""} · ${posFmtTs(st.credsSetAt)}`:"Microsys login not set")+dot(st.hasGoogle,"Google Sheet",st.hasGoogle?"Google key set in Cloudflare":"Google key missing in Cloudflare"):`<span style="color:${T.textSecondary};font-size:12px">Loading…</span>`;
   h+=`<span style="display:inline-flex;border:1px solid ${T.cardBorder};border-radius:8px;overflow:hidden" title="Which Google Sheet a Pull writes to">${modeBtn("test","TEST",T.accentGreen)}${modeBtn("live","LIVE",T.accentRed)}</span>${sbtn(posSyncState.testing?"⏳ Testing…":"Test connection","posRunTest()",posSyncState.testing)}${sbtn("Microsys login","posOpenCreds()")}</div>`;
+  if(posSyncState.testing&&typeof bzPanel==="function")h+=bzPanel({title:"Testing Microsys and the Google Sheet",pct:null,cur:"signing in to Microsys",steps:[{t:"Sign in to Microsys and read yesterday's Sales Summary",st:"run"},{t:"Open the Google Sheet and read its tabs",st:"run"}]}); // v600
   h+=posFlagsCardHTML(T,card,ct,btn);
   h+=posPullCardHTML(T,card,ct,btn);
   if(posSyncState.progress.length||posSyncState.results)h+=posResultsHTML(T,card,ct);
@@ -25386,7 +25389,7 @@ function renderPosSync(){
   const hist=(st&&st.history)||[];
   const histH=!hist.length?`<div style="font-size:13px;color:${T.textSecondary}">No tests or pulls yet.</div>`:`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;color:${T.textPrimary}"><tr>${["When","Who","What","Sheet","Result"].map(x=>`<th style="text-align:left;padding:6px 8px;color:${T.textSecondary};font-size:11px;text-transform:uppercase;border-bottom:1px solid ${T.cardBorder}">${x}</th>`).join("")}</tr>${hist.map(r=>`<tr><td style="padding:6px 8px;white-space:nowrap">${posFmtTs(r.ts)}</td><td style="padding:6px 8px">${esc(r.user||"")}</td><td style="padding:6px 8px">${r.kind==="test"?"Connection test":r.kind==="pull"?"Pull "+esc(r.dates||""):esc(r.kind||"")}</td><td style="padding:6px 8px">${esc(r.sheet||"")}</td><td style="padding:6px 8px">${r.kind==="test"?`Microsys ${r.microsysOk?"✅":"❌"} · Google ${r.googleOk?"✅":"❌"}`:esc(r.result||"")}</td></tr>`).join("")}</table></div>`;
   h+=`<div style="${card};padding:6px 16px 4px"><div style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:${T.textMuted};padding:8px 4px 6px">More tools</div>
-    ${fold("🧾","Journal Tape history","bill-by-bill reads for earlier days",posJTCardHTML(T,inner,"display:none",btn),!!(posJT&&posJT.run&&posJT.run.active))}
+    ${fold("🧾","Journal Tape history","bill-by-bill reads for earlier days",posJTCardHTML(T,inner,"display:none",btn),!!(posJT&&posJT.run&&posJT.run.running))}
     ${fold("🗂","Backfill dine-in & takeaway","fill past months into the Dine-In tab",posBackfillCardHTML(T,inner,"display:none",btn),false)}
     ${fold("🔍","Raw Microsys report","look at any report for any day",posInspectCardHTML(T,inner,"display:none",btn),false)}
     ${fold("🕘","History","tests and pulls",histH,false)}</div>`;
@@ -25523,7 +25526,7 @@ function posProgressHTML(T){
     <div style="height:12px;border-radius:6px;background:${T.bg};border:1px solid ${T.cardBorder};overflow:hidden"><div style="height:100%;width:${pct}%;background:${clr};border-radius:6px;transition:width .4s ease"></div></div></div>`;
 }
 function posResultsHTML(T,card,ct){
-  const P=posSyncState;let h=`<div style="${card}"><div style="${ct}">${P.pulling?"Pulling…":"Pull result"} <span style="text-transform:none;letter-spacing:0;font-weight:600">· ${(P.results&&P.results.sheet)==="live"?"LIVE":"TEST"} sheet</span></div>`+posProgressHTML(T);
+  const P=posSyncState;let h=`<div style="${card}"><div style="${ct}">${P.pulling?"Pulling…":"Pull result"} <span style="text-transform:none;letter-spacing:0;font-weight:600">· ${(P.results&&P.results.sheet)==="live"?"LIVE":"TEST"} sheet</span></div>`+(P.pulling?"":posProgressHTML(T)); // v600: while running, the panel sits in the Pull card only
   h+=`<div style="display:grid;gap:4px;margin-bottom:12px">`+P.progress.map(p=>`<div style="font-size:12.5px;padding:5px 8px;border-radius:6px;background:${p.st==="err"?T.accentRed+"18":p.st==="ok"?T.accentGreen+"10":T.accentOrange+"14"};color:${p.st==="err"?T.accentRed:p.st==="ok"?T.textPrimary:T.accentOrange}">${p.st==="ok"?"✓":p.st==="err"?"✕":"◐"} ${esc(p.t)}</div>`).join("")+`</div>`;
   const days=(P.results&&P.results.days)||[];
   if(days.length){
@@ -25730,7 +25733,8 @@ async function posReconReadDay(d){let rec=null;
 async function posReconCheck(onlyDates){const P=posSyncState;if(posRecon.checking||P.pulling)return;if(P.status&&!P.status.hasCreds){posOpenCreds();return;}
   const to=posAddDays(posDubaiToday(),-1),dates=[];if(Array.isArray(onlyDates))dates.push(...onlyDates);else for(let i=posRecon.days-1;i>=0;i--)dates.push(posAddDays(to,-i));
   posRecon.checking={n:0,of:dates.length,fail:0,bad:[]};renderPosSync();
-  for(const d of dates){try{const R=await posReconReadDay(d);
+  posRecon.checking.start=Date.now();
+  for(const d of dates){posRecon.checking.cur=d;renderPosSync();try{const R=await posReconReadDay(d);
       if(R.ok)await posApi("/api/pos/recon",{date:d,rec:R.rec});else posRecon.checking.bad.push(d);}catch(e){posRecon.checking.fail++;}
     posRecon.checking.n++;renderPosSync();}
   const bad=posRecon.checking.bad,fail=posRecon.checking.fail;posRecon.lastMsg=bad.length||fail?`${bad.length?`Microsys returned incomplete Credit Sales for ${bad.map(posFmtDate).join(", ")} (tried twice) — kept the earlier check for ${bad.length>1?"those days":"that day"}. Click the day's square to try again later.`:""}${fail?` ${fail} day(s) couldn't be read.`:""}`:"";
@@ -25747,7 +25751,19 @@ function posReconCardHTML(T,card,ct,btn){
   const seg=[7,14,30,60].map(n=>`<button onclick="posReconSetDays(${n})" style="border:none;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer;background:${posRecon.days===n?T.accentOrange+"22":"transparent"};color:${posRecon.days===n?T.accentOrange:T.textSecondary}">${n} days</button>`).join("");
   const sBtn=(lbl,on,c)=>`<button onclick="${on}" style="padding:5px 11px;border-radius:7px;border:1px solid ${c||T.cardBorder};background:transparent;color:${c||T.textSecondary};font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">${lbl}</button>`;
   let h=`<div style="${card}" id="pos-recon"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px"><div style="display:flex;align-items:baseline;gap:10px"><div style="font-size:15px;font-weight:800;color:${T.textPrimary}">🧾 Till vs dashboard</div><span style="font-size:12px;color:${T.textMuted}">daily check · delivery, excl. VAT</span></div>
-    <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="display:inline-flex;border:1px solid ${T.cardBorder};border-radius:8px;overflow:hidden">${seg}</span>${btn(posRecon.checking?`⏳ Checking ${posRecon.checking.n} of ${posRecon.checking.of}…`:"↻ Check these days again","posReconCheck()",false,!!posRecon.checking||posSyncState.pulling)}</div></div>`;
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="display:inline-flex;border:1px solid ${T.cardBorder};border-radius:8px;overflow:hidden">${seg}</span>${posRecon.checking?`<span class="rc-busy">⏳ Checking…</span>`:btn("↻ Check these days again","posReconCheck()",false,posSyncState.pulling)}</div></div>`;
+  // v599: a check in progress is impossible to miss — glowing panel, live day, animated progress bar
+  if(posRecon.checking){const C=posRecon.checking,pc=C.of?Math.round(C.n/C.of*100):0,el=(Date.now()-(C.start||Date.now()))/1000,per=C.n?el/C.n:6,left=Math.max(0,Math.round(per*(C.of-C.n)));
+    h+=`<style>@keyframes rcGlow{0%,100%{box-shadow:0 0 0 1px #FF8A3D66,0 0 18px 2px #FF8A3D33}50%{box-shadow:0 0 0 1px #FF8A3Dcc,0 0 34px 8px #FF8A3D55}}@keyframes rcStripe{to{background-position:40px 0}}@keyframes rcSpin{to{transform:rotate(360deg)}}@keyframes rcPulse{0%,100%{opacity:.55}50%{opacity:1}}
+      .rc-busy{display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border-radius:9px;background:linear-gradient(135deg,#FF8A3D,#F59E0B);color:#1A1205;font-weight:800;font-size:13px;animation:rcGlow 1.6s ease-in-out infinite}</style>
+      <div style="border-radius:12px;padding:16px 18px;margin-bottom:14px;background:linear-gradient(135deg,#FF8A3D1f,#F59E0B0d);border:1px solid #FF8A3D;animation:rcGlow 1.6s ease-in-out infinite">
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <div style="width:34px;height:34px;border-radius:50%;border:4px solid #FF8A3D33;border-top-color:#FF8A3D;animation:rcSpin .9s linear infinite"></div>
+          <div style="flex:1;min-width:220px"><div style="font-size:17px;font-weight:800;color:${T.textPrimary}">Checking with Microsys — day ${Math.min(C.n+1,C.of)} of ${C.of}</div>
+            <div style="font-size:12.5px;color:${T.textSecondary};margin-top:2px">Reading Credit Sales + Sales Summary for <b style="color:#FBBF24;animation:rcPulse 1.2s ease-in-out infinite">${C.cur?posFmtDate(C.cur):"…"}</b> · keep this page open${C.n?` · about ${left<60?left+" s":Math.round(left/60)+" min"} left`:""}${C.bad&&C.bad.length?` · ${C.bad.length} incomplete read(s)`:""}${C.fail?` · ${C.fail} failed`:""}</div></div>
+          <div style="font-size:26px;font-weight:800;color:#FF8A3D;font-variant-numeric:tabular-nums">${pc}%</div></div>
+        <div style="margin-top:12px;height:12px;border-radius:7px;background:${T.bg};border:1px solid ${T.cardBorder};overflow:hidden">
+          <div style="height:100%;width:${Math.max(4,pc)}%;border-radius:7px;background:repeating-linear-gradient(45deg,#FF8A3D 0 10px,#FBBF24 10px 20px);background-size:40px 12px;animation:rcStripe .8s linear infinite;transition:width .5s;box-shadow:0 0 12px #FF8A3D99"></div></div></div>`;}
   if(posRecon.loading&&!posRecon.recs)return h+`<div style="color:${T.textSecondary};font-size:12px">Loading…</div></div>`;
   if(posRecon.err)h+=`<div style="color:${T.accentRed};font-size:12px;margin-bottom:8px">${esc(posRecon.err)}</div>`;
   if(!R.length)return h+`<div style="color:${T.textSecondary};font-size:12.5px">No days checked yet in this range — click <b>Check these days again</b>, or it fills itself from the next Pull.</div></div>`;
@@ -25767,6 +25783,7 @@ function posReconCardHTML(T,card,ct,btn){
     const c=st==="open"?"#F59E0B":st==="ok"?T.accentGreen+"77":T.cardBorder+"66";
     strip+=`<span onclick="posReconCheckDay('${d}')" title="${posFmtDate(d)} — ${st==="none"?"not checked":st==="open"?f(openD[d])+" to check":"all explained · till "+f(r.pos)} · click to check this day again" style="cursor:pointer;display:inline-block;width:${posRecon.days>30?13:20}px;height:20px;border-radius:5px;margin:0 3px 3px 0;background:${c}"></span>`;}
   h+=`<div style="margin-bottom:16px">${strip}<div style="font-size:11px;color:${T.textMuted};margin-top:2px">each square = a day (oldest left) · green = explained · amber = something to check · grey = not checked · click a square to check that day again</div></div>`;
+  if(posRecon.billsAll&&posRecon.billsAll.running&&typeof bzPanel==="function"){const B=posRecon.billsAll;h+=bzPanel({title:`Reading the bills behind each gap — ${Math.min(B.done+1,B.total)} of ${B.total}`,pct:B.total?B.done/B.total:null,cur:B.cur});}
   if(badReads.length)h+=`<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:#FBBF2414;border:1px solid #FBBF2466;border-radius:10px;padding:10px 14px;margin:-4px 0 12px;font-size:12.5px;color:${T.textPrimary}">⚠ <span style="flex:1">Credit Sales for <b>${badReads.map(r=>posFmtDate(r.date)).join(", ")}</b> came back incomplete from Microsys (platforms ${badReads.map(r=>"AED "+Math.round(r.agg).toLocaleString()+" vs till AED "+Math.round(r.pos).toLocaleString()).join("; ")}) — left out of the figures above, not a real gap.</span>${badReads.map(r=>sBtn("↻ Check "+posFmtDate(r.date)+" again",`posReconCheckDay('${r.date}')`,T.accentOrange)).join(" ")}</div>`;
   if(posRecon.lastMsg)h+=`<div style="font-size:12.5px;color:#FBBF24;margin:-6px 0 12px">⚠ ${esc(posRecon.lastMsg)}</div>`;
   // ── things to check
@@ -25888,8 +25905,8 @@ async function posJTHistory(){const P=posSyncState;if(P.pulling||(posJT.run&&pos
   const y=posAddDays(posDubaiToday(),-1);let f=posJT.from||posAddDays(y,-13),t=posJT.to||y;if(f>t)[f,t]=[t,f];if(t>y)t=y;
   const dates=[];for(let d=f;d<=t;d=posAddDays(d,1))dates.push(d);
   let have=new Set();try{const j=await posApi(`/api/pos/jt?from=${f}&to=${t}&keys=1`);have=new Set(j.keys||[]);}catch(e){}
-  const R=posJT.run={running:true,day:0,days:dates.length,loc:"",done:0,skipped:0,fail:0,bills:0};P.stop=false;renderPosSync();
-  for(const iso of dates){if(P.stop){R.stopped=true;break;}R.day++;
+  const R=posJT.run={running:true,day:0,days:dates.length,loc:"",done:0,skipped:0,fail:0,bills:0,start:Date.now(),iso:""};P.stop=false;renderPosSync();
+  for(const iso of dates){if(P.stop){R.stopped=true;break;}R.day++;R.iso=iso;
     const locs=PS_JT_LOCS.filter(l=>!have.has(iso+":"+posJTLocKey(l)));if(!locs.length){R.skipped++;continue;}
     const r=await posJTCollectDay(iso,locs,l=>{R.loc=(PS_INSTORE_MAP[l]||l);renderPosSync();});R.done++;R.fail+=r.fail;R.bills+=r.bills;}
   R.running=false;P.stop=false;posJT.cache=null;renderPosSync();}
@@ -27692,7 +27709,7 @@ function renderSitePL(){
    @media(max-width:900px){#page-sitepl .g2,#page-sitepl .g2b{grid-template-columns:1fr}}</style>`;
   const up=`<label style="cursor:pointer;font-size:12px;font-weight:700;color:${T.textSecondary};border:1px solid ${T.cardBorder};border-radius:9px;padding:7px 12px;${plBusy?"opacity:.6":""}">${plBusy?"⏳ Reading…":"📤 Upload Finance P&amp;L"}<input type="file" accept=".xlsx,.xlsm,.xls" style="display:none" ${plBusy?"disabled":""} onchange="plUpload(this.files[0])"></label>`;
   const msg=plMsg?`<div class="cd" style="padding:10px 14px;margin-bottom:12px;border-color:${plMsg.ok?T.accentGreen:T.accentRed};color:${plMsg.ok?T.accentGreen:T.accentRed}">${plMsg.ok?"✅":"⚠"} ${esc(plMsg.t)}</div>`:"";
-  const shell=(inner)=>`${css}<div class="cd" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:12px"><div><div style="font-size:19px;font-weight:800">🏪 Site P&amp;L</div><div class="sub">${plData?`Finance P&amp;L · ${esc(plData.file)} · uploaded ${esc(new Date(plData.uploadedAt).toLocaleDateString("en-GB",{day:"numeric",month:"short"}))} · only you can see this page`:"Finance's monthly P&amp;L by outlet · only you can see this page"}</div></div><div style="flex:1"></div>${up}</div>${msg}${inner}`;
+  const shell=(inner)=>`${css}<div class="cd" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:12px"><div><div style="font-size:19px;font-weight:800">🏪 Site P&amp;L</div><div class="sub">${plData?`Finance P&amp;L · ${esc(plData.file)} · uploaded ${esc(new Date(plData.uploadedAt).toLocaleDateString("en-GB",{day:"numeric",month:"short"}))} · only you can see this page`:"Finance's monthly P&amp;L by outlet · only you can see this page"}</div></div><div style="flex:1"></div>${up}</div>${plBusy&&typeof bzPanel==="function"?bzPanel({title:"Reading the Finance P&L",pct:null,cur:"every outlet tab, Jan–Dec, budget, actual and last year"}):""}${msg}${inner}`;
   if(plLoading&&!plData){pg.innerHTML=shell(`<div class="cd sub">Loading…</div>`);return;}
   if(plErr&&!plData){pg.innerHTML=shell(`<div class="cd dn">Couldn't load the P&amp;L: ${esc(plErr)}</div>`);return;}
   if(!plData){pg.innerHTML=shell(`<div class="cd"><div class="ttl" style="margin-bottom:6px">No P&amp;L uploaded yet</div><div class="sub">Upload Finance's "PL report" workbook (a tab per outlet + a Combined tab). Each month, upload the new file — it replaces the old one.</div></div>`);return;}
@@ -28043,3 +28060,80 @@ function kcHTML(r){if(typeof campPlanAgg==="undefined"||campPlanAgg!=="Keeta"||t
 (function kcHook(){if(typeof campPlanHTML!=="function"||!window.campPlanHTML)return setTimeout(kcHook,500);
   const _h=campPlanHTML;campPlanHTML=function(){let h=_h.apply(this,arguments);if(!campPlanResult)return h;let k="";try{k=kcHTML(campPlanResult);}catch(e){console.warn(e);}if(!k)return h;
     const i=h.indexOf("📦 Orders / day");if(i<0)return h+k;const at=h.lastIndexOf("<div",i);return h.slice(0,at)+k+h.slice(at);};window.campPlanHTML=campPlanHTML;})();
+
+// ═══ v600 ONE "BUSY" STYLE FOR EVERY WAIT — glowing panel, live step, %, time left, animated striped bar; plus a thin
+// glowing line at the top of the screen and a corner toast that follow you to any page while something runs. ═══
+function bzCSS(){if(document.getElementById("bz-css"))return;const s=document.createElement("style");s.id="bz-css";s.textContent=`
+@keyframes bzGlow{0%,100%{box-shadow:0 0 0 1px #FF8A3D66,0 0 18px 2px #FF8A3D33}50%{box-shadow:0 0 0 1px #FF8A3Dcc,0 0 34px 8px #FF8A3D55}}
+@keyframes bzStripe{to{background-position:40px 0}}@keyframes bzSpin{to{transform:rotate(360deg)}}@keyframes bzPulse{0%,100%{opacity:.55}50%{opacity:1}}
+@keyframes bzShim{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}
+.bz{border-radius:12px;padding:14px 16px;margin:0 0 14px;background:linear-gradient(135deg,#FF8A3D1f,#F59E0B0d);border:1px solid #FF8A3D;animation:bzGlow 1.6s ease-in-out infinite;color:#F1F5F9;text-align:left}
+.bz.ok{animation:none;border-color:#2ECC71;background:linear-gradient(135deg,#2ECC711a,#2ECC7108);box-shadow:0 0 0 1px #2ECC7155}
+.bz .r{display:flex;align-items:center;gap:12px}.bz .ring{width:30px;height:30px;border-radius:50%;border:4px solid #FF8A3D33;border-top-color:#FF8A3D;animation:bzSpin .9s linear infinite;flex:none}
+.bz .tick{width:30px;height:30px;border-radius:50%;background:#2ECC71;color:#0F1729;display:flex;align-items:center;justify-content:center;font-weight:900;flex:none}
+.bz .h{font-size:15px;font-weight:800}.bz .s{font-size:12.5px;color:#94A3B8;margin-top:2px}.bz .cur{color:#FBBF24;font-weight:700;animation:bzPulse 1.2s ease-in-out infinite}
+.bz .pc{font-size:24px;font-weight:800;color:#FF8A3D;font-variant-numeric:tabular-nums}.bz.ok .pc{color:#2ECC71}
+.bz .bar{margin-top:10px;height:12px;border-radius:7px;background:#0F1729;border:1px solid #3A4875;overflow:hidden;position:relative}
+.bz .fill{height:100%;border-radius:7px;background:repeating-linear-gradient(45deg,#FF8A3D 0 10px,#FBBF24 10px 20px);background-size:40px 12px;animation:bzStripe .8s linear infinite;box-shadow:0 0 12px #FF8A3D99;transition:width .5s}
+.bz.ok .fill{background:#2ECC71;animation:none;box-shadow:0 0 10px #2ECC7166}.bz .fill.ind{width:35%!important;animation:bzShim 1.3s ease-in-out infinite}
+.bz ul{margin:10px 0 0;padding:0;list-style:none;font-size:12.5px;display:grid;gap:3px}.bz li{display:flex;gap:8px;color:#64748B}.bz li.ok{color:#94A3B8}.bz li.run{color:#F1F5F9;font-weight:700}.bz li.err{color:#FF6B6B}
+#bz-top{position:fixed;left:0;right:0;top:0;height:4px;z-index:99998;overflow:hidden;background:#FF8A3D22;display:none;pointer-events:none}
+#bz-top i{position:absolute;top:0;bottom:0;width:30%;background:linear-gradient(90deg,transparent,#FF8A3D,#FBBF24,transparent);animation:bzShim 1.4s linear infinite}
+#bz-toast{position:fixed;right:18px;bottom:18px;width:340px;max-width:calc(100vw - 36px);z-index:99999;display:none;cursor:pointer}
+#bz-toast .bz{background:#1A2337f2;margin:0;padding:11px 13px}#bz-toast .h{font-size:13px}#bz-toast .ring{width:22px;height:22px;border-width:3px}#bz-toast .bar{height:7px;margin-top:8px}`;document.head.appendChild(s);}
+function bzFmtLeft(sec){if(sec==null||!isFinite(sec)||sec<=0)return"";return sec>=90?`about ${Math.round(sec/60)} min left`:`about ${Math.max(1,Math.round(sec))} s left`;}
+// o = {title, cur, sub, pct (0-1, null = unknown), left (s), steps:[{t,st}], ok, okText}
+function bzPanel(o){bzCSS();const esc_=typeof esc==="function"?esc:(x=>x);
+  if(o.ok)return`<div class="bz ok"><div class="r"><div class="tick">✓</div><div style="flex:1;min-width:0"><div class="h">${esc_(o.title||"Done")}</div><div class="s">${o.okText||""}</div></div><div class="pc">100%</div></div><div class="bar"><div class="fill" style="width:100%"></div></div></div>`;
+  const pc=o.pct==null?null:Math.max(0,Math.min(1,o.pct));
+  const bits=[o.cur?`Now: <span class="cur">${esc_(o.cur)}</span>`:"","keep this page open",bzFmtLeft(o.left),o.sub||""].filter(Boolean).join(" · ");
+  const steps=o.steps&&o.steps.length?`<ul>${o.steps.map(x=>`<li class="${x.st}"><span style="width:14px;text-align:center">${x.st==="ok"?"✓":x.st==="run"?"◐":x.st==="err"?"✗":"○"}</span>${esc_(x.t)}</li>`).join("")}</ul>`:"";
+  return`<div class="bz"><div class="r"><div class="ring"></div><div style="flex:1;min-width:0"><div class="h">${esc_(o.title)}</div><div class="s">${bits}</div></div>${pc==null?"":`<div class="pc">${Math.round(pc*100)}%</div>`}</div><div class="bar"><div class="fill ${pc==null?"ind":""}" style="width:${pc==null?35:Math.max(4,pc*100)}%"></div></div>${steps}</div>`;}
+// ── what is running right now (read from each feature's own state — no feature has to "register")
+function bzJobs(){const J=[];try{
+  const P=typeof posSyncState!=="undefined"?posSyncState:null;
+  if(P&&P.pulling&&P.bar&&!P.bar.finished){const b=P.bar,bf=b.total===b.days+1&&b.total!==b.days*6+1,el=(Date.now()-b.start)/1000;
+    J.push({id:"pull",page:"possync",title:`${bf?"Backfilling dine-in & takeaway":"Pulling from Microsys"} — day ${Math.max(1,Math.min(b.day,b.days))} of ${b.days}`,pct:b.done/b.total,left:b.done?el/b.done*(b.total-b.done):null,cur:((P.progress||[]).slice(-1)[0]||{}).t||""});}
+  if(P&&P.testing)J.push({id:"test",page:"possync",title:"Testing Microsys and the Google Sheet",pct:null,cur:"signing in and reading yesterday's Sales Summary"});
+  if(typeof posRecon!=="undefined"&&posRecon.checking){const C=posRecon.checking,el=(Date.now()-(C.start||Date.now()))/1000;J.push({id:"check",page:"possync",title:`Checking with Microsys — day ${Math.min(C.n+1,C.of)} of ${C.of}`,pct:C.of?C.n/C.of:null,left:C.n?el/C.n*(C.of-C.n):null,cur:C.cur?posFmtDate(C.cur):""});}
+  if(typeof posRecon!=="undefined"&&posRecon.billsAll&&posRecon.billsAll.running){const B=posRecon.billsAll;J.push({id:"bills",page:"possync",title:`Reading the bills behind each gap — ${Math.min(B.done+1,B.total)} of ${B.total}`,pct:B.total?B.done/B.total:null,cur:B.cur||""});}
+  if(typeof posJT!=="undefined"&&posJT.run&&posJT.run.running){const R=posJT.run,el=(Date.now()-(R.start||Date.now()))/1000;J.push({id:"jt",page:"possync",title:`Reading Journal Tape — day ${Math.max(1,R.day)} of ${R.days}`,pct:R.days?Math.max(0,R.day-1)/R.days:null,left:R.day>1?el/(R.day-1)*(R.days-R.day+1):null,cur:(R.loc||"")+(R.iso?" · "+posFmtDate(R.iso):""),sub:`${R.bills} bills kept`});}
+  if(window.__bzUpload){const U=window.__bzUpload,tab=typeof campNavTab==="function"?campNavTab():null,m=tab&&/Parsing file (\d+) of (\d+): (.*)…/.exec(tab.title||"");
+    J.push({id:"upload",page:"campaigns",title:`Reading ${U.n>1?U.n+" order files":"the order file"}${m?` — file ${m[1]} of ${m[2]}`:""}`,pct:m?(+m[1]-1)/(+m[2]):null,cur:m?m[3]:U.names[0]});}
+  if(window.__bzPdf)J.push({id:"pdf",page:window.__bzPdf.page||"",title:window.__bzPdf.title,pct:null,cur:"laying out the pages"});
+  else{const cb=document.getElementById("cmp-export-pdf-btn");if(cb&&/Generating/.test(cb.textContent||""))J.push({id:"pdf",page:"compare",title:"Building the Compare PDF",pct:null,cur:"laying out the pages"});}
+  if(typeof plBusy!=="undefined"&&plBusy)J.push({id:"pl",page:"sitepl",title:"Reading the Finance P&L",pct:null,cur:"every outlet tab"});
+}catch(e){}return J;}
+function bzTick(){bzCSS();let top=document.getElementById("bz-top"),t=document.getElementById("bz-toast");
+  if(!top){top=document.createElement("div");top.id="bz-top";top.innerHTML="<i></i>";document.body.appendChild(top);}
+  if(!t){t=document.createElement("div");t.id="bz-toast";t.onclick=()=>{const j=bzJobs()[0];if(j&&j.page&&typeof gp==="function")gp(j.page);};document.body.appendChild(t);}
+  const J=bzJobs(),cur=typeof curPage!=="undefined"?curPage:"";top.style.display=J.length?"block":"none";
+  const away=J.filter(j=>j.page!==cur);
+  if(!away.length){if(t.style.display!=="none")t.style.display="none";return;}
+  const j=away[0],html=`<div class="bz"><div class="r"><div class="ring"></div><div style="flex:1;min-width:0"><div class="h">${j.title}</div><div class="s">${j.pct==null?"working…":Math.round(j.pct*100)+"%"}${J.length>1?` · +${J.length-1} more running`:""} · click to open</div></div></div><div class="bar"><div class="fill ${j.pct==null?"ind":""}" style="width:${j.pct==null?35:Math.max(4,j.pct*100)}%"></div></div></div>`;
+  if(t._h!==html){t.innerHTML=html;t._h=html;}t.style.display="block";}
+setInterval(bzTick,500);
+// ── hooks for the ones that only had a button label
+(function bzHooks(){if(typeof handleOrdersUpload!=="function"||typeof digestExportPDF!=="function")return setTimeout(bzHooks,500);
+  const _u=handleOrdersUpload;handleOrdersUpload=async function(f){const files=f instanceof File?[f]:Array.from(f||[]);window.__bzUpload={n:files.length,names:files.map(x=>x.name)};bzTick();try{return await _u.apply(this,arguments);}finally{window.__bzUpload=null;bzTick();}};window.handleOrdersUpload=handleOrdersUpload;
+  const _d=digestExportPDF;digestExportPDF=async function(){window.__bzPdf={title:"Building the Daily Digest PDF",page:""};bzTick();await new Promise(r=>setTimeout(r,60));try{return await _d.apply(this,arguments);}finally{window.__bzPdf=null;bzTick();}};window.digestExportPDF=digestExportPDF;
+  if(typeof posReconBillsAll==="function"){posReconBillsAll=async function(){const items=posReconItems(posRecon.recs).filter(i=>i.unexpl>=5&&!posRecon.bills[posReconBillKey(i)]);
+    posRecon.billsAll={running:true,done:0,total:items.length,cur:""};renderPosSync();
+    for(const i of items){posRecon.billsAll.cur=`${i.out} · ${posFmtDate(i.date)}`;renderPosSync();await posReconBills(posReconBillKey(i));posRecon.billsAll.done++;}
+    posRecon.billsAll={running:false};renderPosSync();};window.posReconBillsAll=posReconBillsAll;}
+})();
+// Pull / Backfill: the panel replaces the old thin bar (finished state keeps its summary, now as a green panel)
+(function bzPull(){if(typeof posProgressHTML!=="function")return setTimeout(bzPull,500);const _o=posProgressHTML;
+  posProgressHTML=function(T){const P=posSyncState,b=P.bar;if(!b)return"";
+    if(b.finished&&!b.failed&&!b.stopped){const el=Math.round(((b.end||Date.now())-b.start)/1000);return bzPanel({ok:true,title:"Completed",okText:`${b.days} day${b.days>1?"s":""} written to the ${P.sheet==="live"?"LIVE":"TEST"} sheet in ${el} s`});}
+    if(b.finished)return _o.apply(this,arguments);
+    const bf=b.total===b.days+1&&b.total!==b.days*6+1,el=(Date.now()-b.start)/1000,pr=P.progress||[];
+    const steps=pr.slice(-6).map(x=>({t:x.t,st:x.st==="ok"?"ok":x.st==="err"?"err":"run"}));
+    return bzPanel({title:`${bf?"Backfilling dine-in & takeaway":"Pulling from Microsys"} — day ${Math.max(1,Math.min(b.day,b.days))} of ${b.days}`,pct:b.done/b.total,left:b.done?el/b.done*(b.total-b.done):null,cur:(pr.slice(-1)[0]||{}).t||"starting",steps});};
+  window.posProgressHTML=posProgressHTML;})();
+// Journal Tape: panel above the card while it reads
+(function bzJT(){if(typeof posJTCardHTML!=="function")return setTimeout(bzJT,500);const _o=posJTCardHTML;
+  posJTCardHTML=function(T){const h=_o.apply(this,arguments),R=posJT.run;if(!R||!R.running)return h;const el=(Date.now()-(R.start||Date.now()))/1000;
+    return bzPanel({title:`Reading Journal Tape — day ${Math.max(1,R.day)} of ${R.days}`,pct:R.days?Math.max(0,R.day-1)/R.days:null,left:R.day>1?el/(R.day-1)*(R.days-R.day+1):null,cur:(R.loc||"…")+(R.iso?" · "+posFmtDate(R.iso):""),sub:`${R.bills} bills kept · ${R.skipped} day(s) already there`})+h;};window.posJTCardHTML=posJTCardHTML;})();
+// first loads of Promotions / KPI tracker
+function bzLoading(title,hint){return typeof bzPanel==="function"?`<div style="padding:18px">${bzPanel({title,pct:null,cur:hint})}</div>`:`<div style="padding:30px;text-align:center">⏳ ${title}…</div>`;}
