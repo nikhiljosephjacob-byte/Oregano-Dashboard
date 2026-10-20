@@ -940,7 +940,9 @@ async function handlePosReconSave(request, env) {
   const out = { date, pos: num(rec.pos), agg: num(rec.agg), by: s.user, at: new Date().toISOString(), ack: (prev && prev.ack) || {},
     rows: (Array.isArray(rec.rows) ? rec.rows : []).slice(0, 80).map(r => ({ loc: str(r.loc, 80), out: str(r.out, 40), rc: str(r.rc, 20), brand: str(r.brand, 20),
       pos: num(r.pos), agg: num(r.agg), gap: num(r.gap), unexpl: num(r.unexpl), other: (Array.isArray(r.other) ? r.other : []).slice(0, 8).map(o => [str(o[0], 60), num(o[1])]), orders: ordl(r.orders, 30) })),
-    mis: (Array.isArray(rec.mis) ? rec.mis : []).slice(0, 40).map(m => ({ loc: str(m.loc, 80), out: str(m.out, 40), rc: str(m.rc, 20), till: str(m.till, 20), brand: str(m.brand, 20), amt: num(m.amt), orders: ordl(m.orders, 40) })) };
+    mis: (Array.isArray(rec.mis) ? rec.mis : []).slice(0, 40).map(m => ({ loc: str(m.loc, 80), out: str(m.out, 40), rc: str(m.rc, 20), till: str(m.till, 20), brand: str(m.brand, 20), amt: num(m.amt), orders: ordl(m.orders, 40) })),
+    // v596: Keeta order values per brand|outlet (numbers only) for the minimum-commission estimate
+    kt: (() => { if (!rec.kt || typeof rec.kt !== "object") return (prev && prev.kt) || {}; const o = {}; for (const [k, v] of Object.entries(rec.kt).slice(0, 80)) if (Array.isArray(v)) o[str(k, 60)] = v.slice(0, 600).map(num); return o; })() };
   await env.SESSIONS.put(key, JSON.stringify(out), { expirationTtl: 60 * 60 * 24 * 400 });
   return json({ ok: true, rec: out });
 }
@@ -953,6 +955,19 @@ async function handlePosReconList(request, env) {
   const want = keys.map(k => k.name).filter(n => { const d = n.slice(10); return d >= from && d <= to; }).sort().slice(-120);
   const recs = (await Promise.all(want.map(k => env.SESSIONS.get(k)))).filter(Boolean).map(r => JSON.parse(r));
   return json({ ok: true, recs });
+}
+// v596: Keeta order values from the till (Microsys Credit Sales) per day — for the minimum-commission estimate on days
+// no Keeta statement covers yet. Numbers only; any signed-in user.
+async function handlePosKeetaTill(request, env) {
+  const s = await getSession(env, request.headers.get("X-Session-Id"));
+  if (!s) return json({ error: "no_session" }, 401);
+  const u = new URL(request.url), from = u.searchParams.get("from") || "", to = u.searchParams.get("to") || "9999";
+  const keys = [];let cursor;
+  do { const l = await env.SESSIONS.list({ prefix: "pos:recon:", limit: 1000, cursor }); keys.push(...l.keys); cursor = l.list_complete ? null : l.cursor; } while (cursor);
+  const want = keys.map(k => k.name).filter(n => { const d = n.slice(10); return d >= from && d <= to; }).sort().slice(-120);
+  const days = {};
+  for (const r of (await Promise.all(want.map(k => env.SESSIONS.get(k)))).filter(Boolean)) { const x = JSON.parse(r); if (x.kt && Object.keys(x.kt).length) days[x.date] = x.kt; }
+  return json({ ok: true, days });
 }
 // v585: delivery-button sales the platforms don't account for (catering, direct deliveries, test orders, voids/timing),
 // per outlet × button × day, from the daily reconciliation — so the dashboard's group total equals Finance's DSR.
@@ -1318,6 +1333,7 @@ export default {
       if (path === "/api/pos/msys/probe"  && method === "POST") return await handlePosMsysProbe(request, env);
       if (path === "/api/pos/recon"       && method === "GET")  return await handlePosReconList(request, env);
       if (path === "/api/pos/tillonly"    && method === "GET")  return await handlePosTillOnly(request, env);
+      if (path === "/api/pos/keetatill"   && method === "GET")  return await handlePosKeetaTill(request, env);
       if (path === "/api/pos/recon/ack"   && method === "POST") return await handlePosReconAck(request, env);
       if (path === "/api/ddclass"         && method === "GET")  return await handleDDClassGet(request, env);
       if (path === "/api/ddclass"         && method === "POST") return await handleDDClassSet(request, env);
