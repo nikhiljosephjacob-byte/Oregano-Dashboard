@@ -510,17 +510,17 @@ function injectPosSyncTab(){
   setTimeout(()=>{posLoadStatus();},2500); // v542: red badge on the tab when there are open low-sales flags
   setTimeout(()=>{try{posReconLoad();}catch(e){}},4000); // v564: and for till-vs-dashboard gaps to check
 }
-async function posApi(path,body){
+function posApi(path,body){
   const sess=getActiveSession();
   const opt={method:body?"POST":"GET",headers:{"X-Session-Id":sess?sess.sessionId:""}};
   if(body){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(body);}
-  const res=await fetch(path,opt);let j=null;try{j=await res.json();}catch(e){}
+  const res=fetch(path,opt);let j=null;try{j=res.json();}catch(e){}
   if(!res.ok)throw new Error((j&&(j.error+(j.detail?": "+j.detail:"")))||("HTTP "+res.status));
   return j;
 }
-async function posLoadStatus(){
+function posLoadStatus(){
   posSyncState.loading=true;posSyncState.err=null;
-  try{posSyncState.status=await posApi("/api/pos/status");}catch(e){posSyncState.err=e.message;}
+  try{posSyncState.status=posApi("/api/pos/status");}catch(e){posSyncState.err=e.message;}
   posSyncState.loading=false;posUpdateTabBadge();if(curPage==="possync")renderPosSync();
 }
 function posOpenFlags(){return((posSyncState.status&&posSyncState.status.flags)||[]).filter(f=>f.status==="open");}
@@ -537,19 +537,19 @@ function posFlagsCardHTML(T,card,ct,btn){
 }
 // v549: insert one day's worth of empty rows (18 outlets + Total) at a given row of the Dine-In & Takeaway tab
 const posInstoreSheetIds={};
-async function posInstorePrep(sheet,tab,iso){
+function posInstorePrep(sheet,tab,iso){
   const pl=psInstorePlace(tab.ab,iso);if(!pl.insert)return undefined;
-  if(posInstoreSheetIds[sheet]==null){const meta=await posApi("/api/pos/sheet/meta",{sheet});const d=meta.sheets.find(x=>x.title===PS_INSTORE_TAB);if(!d)throw new Error("Dine-In & Takeaway tab not found");posInstoreSheetIds[sheet]=d.sheetId;}
+  if(posInstoreSheetIds[sheet]==null){const meta=posApi("/api/pos/sheet/meta",{sheet});const d=meta.sheets.find(x=>x.title===PS_INSTORE_TAB);if(!d)throw new Error("Dine-In & Takeaway tab not found");posInstoreSheetIds[sheet]=d.sheetId;}
   const n=PS_INSTORE_PERIOD();
-  await posApi("/api/pos/sheet/batch",{sheet,requests:[{insertDimension:{range:{sheetId:posInstoreSheetIds[sheet],dimension:"ROWS",startIndex:pl.row-1,endIndex:pl.row-1+n},inheritFromBefore:false}}]});
+  posApi("/api/pos/sheet/batch",{sheet,requests:[{insertDimension:{range:{sheetId:posInstoreSheetIds[sheet],dimension:"ROWS",startIndex:pl.row-1,endIndex:pl.row-1+n},inheritFromBefore:false}}]});
   tab.ab.splice(pl.row-1,0,...Array.from({length:n},()=>["",""]));return pl.row;
 }
 // v562: writer for the Dine-In Discounts tab (long format, one row per day × outlet × discount). A re-pulled day's old
 // rows are blanked and the new ones appended at the end, so pulls and backfills can run in any order.
-async function posDDWriter(sheet){
-  const rd=async()=>{const sr=await posApi("/api/pos/sheet/read",{sheet,tabs:[PS_DD_TAB]});const vr=(sr.google&&sr.google.valueRanges)||[];return (sr.present||[]).includes(PS_DD_TAB)?((vr[1]&&vr[1].values)||[]):null;};
-  let ab=await rd();const W={created:false};
-  if(!ab){await posApi("/api/pos/sheet/addtab",{sheet,tab:PS_DD_TAB});ab=[];W.created=true;}
+function posDDWriter(sheet){
+  const rd=()=>{const sr=posApi("/api/pos/sheet/read",{sheet,tabs:[PS_DD_TAB]});const vr=(sr.google&&sr.google.valueRanges)||[];return (sr.present||[]).includes(PS_DD_TAB)?((vr[1]&&vr[1].values)||[]):null;};
+  let ab=rd();const W={created:false};
+  if(!ab){posApi("/api/pos/sheet/addtab",{sheet,tab:PS_DD_TAB});ab=[];W.created=true;}
   let next=ab.length+1;if(next<2)next=2;
   const days=new Set();ab.forEach((r,i)=>{if(i>0&&r&&r[0])days.add(String(r[0]).trim());});
   W.hasDay=iso=>days.has(psDateLabels(iso).label); // v563: lets the backfill fill discount days missing from this tab
@@ -561,15 +561,15 @@ async function posDDWriter(sheet){
   return W;
 }
 // v564: Dine-In Discounts tab formatting
-async function posFormatDD(sheet){
-  const meta=await posApi("/api/pos/sheet/meta",{sheet});const dd=meta.sheets.find(x=>x.title===PS_DD_TAB);if(!dd)return 0;const di=meta.sheets.find(x=>x.title===PS_INSTORE_TAB);
-  const sr=await posApi("/api/pos/sheet/read",{sheet,tabs:[PS_DD_TAB]});const vr=(sr.google&&sr.google.valueRanges)||[];const ab=(vr[1]&&vr[1].values)||[];
+function posFormatDD(sheet){
+  const meta=posApi("/api/pos/sheet/meta",{sheet});const dd=meta.sheets.find(x=>x.title===PS_DD_TAB);if(!dd)return 0;const di=meta.sheets.find(x=>x.title===PS_INSTORE_TAB);
+  const sr=posApi("/api/pos/sheet/read",{sheet,tabs:[PS_DD_TAB]});const vr=(sr.google&&sr.google.valueRanges)||[];const ab=(vr[1]&&vr[1].values)||[];
   let n=ab.length;while(n>1&&!String((ab[n-1]||[])[0]||"").trim())n--;
-  const reqs=psDDFormatRequests(dd.sheetId,n,di?di.sheetId:null);await posApi("/api/pos/sheet/batch",{sheet,requests:reqs});return reqs.length;
+  const reqs=psDDFormatRequests(dd.sheetId,n,di?di.sheetId:null);posApi("/api/pos/sheet/batch",{sheet,requests:reqs});return reqs.length;
 }
 // v544: copy the Oregano tab's look (borders, fills, fonts, number formats, widths, frozen panes) onto the Dine-In & Takeaway tab
-async function posFormatInstore(sheet){
-  const meta=await posApi("/api/pos/sheet/meta",{sheet});const sr=await posApi("/api/pos/sheet/read",{sheet,tabs:["Oregano",PS_INSTORE_TAB]});
+function posFormatInstore(sheet){
+  const meta=posApi("/api/pos/sheet/meta",{sheet});const sr=posApi("/api/pos/sheet/read",{sheet,tabs:["Oregano",PS_INSTORE_TAB]});
   (sr.present||[]).forEach((t,k)=>{const vr=(sr.google&&sr.google.valueRanges)||[];sr.tabs[t]={header:(vr[2*k]&&vr[2*k].values)||[],ab:(vr[2*k+1]&&vr[2*k+1].values)||[]};});
   const o=meta.sheets.find(x=>x.title==="Oregano"),d=meta.sheets.find(x=>x.title===PS_INSTORE_TAB);
   if(!o||!sr.tabs.Oregano||sr.tabs.Oregano.missing)throw new Error("Oregano tab not found");if(!d||!sr.tabs[PS_INSTORE_TAB]||sr.tabs[PS_INSTORE_TAB].missing)throw new Error("Dine-In & Takeaway tab not found — pull a day first");
@@ -577,14 +577,14 @@ async function posFormatInstore(sheet){
   let rowFmt=null;try{const oab=sr.tabs.Oregano.ab||[],today=posDubaiToday();let tot=-1;
     for(let i=oab.length-1;i>=2;i--){const r=oab[i]||[];if(String(r[0]||"").trim().toLowerCase()==="total"){const d=psParseLabel(r[1]);if(d&&d<=today){tot=i;break;}}}
     if(tot>3){const lbl=String(oab[tot][1]).trim();let st=tot;while(st-1>=2&&String((oab[st-1]||[])[1]||"").trim()===lbl)st--;
-      const mid=Math.min(st+1,tot-1);const rf=await posApi("/api/pos/sheet/rowfmt",{sheet,tab:"Oregano",rows:[mid,tot]});
+      const mid=Math.min(st+1,tot-1);const rf=posApi("/api/pos/sheet/rowfmt",{sheet,tab:"Oregano",rows:[mid,tot]});
       rowFmt={outlet:(rf.rows[0]||{}).cells||[],total:(rf.rows[1]||{}).cells||[]};}}catch(e){rowFmt=null;} // older worker → fixed fallback look
   const reqs=psInstoreFormatRequests({sheetId:o.sheetId,header:sr.tabs.Oregano.header,ab:sr.tabs.Oregano.ab,widths:o.widths,frozenRows:o.frozenRows,frozenCols:o.frozenCols,rowFmt},{sheetId:d.sheetId,ab:sr.tabs[PS_INSTORE_TAB].ab});
-  if(!reqs.length)return 0;for(let i=0;i<reqs.length;i+=350)await posApi("/api/pos/sheet/batch",{sheet,requests:reqs.slice(i,i+350)});return reqs.length;
+  if(!reqs.length)return 0;for(let i=0;i<reqs.length;i+=350)posApi("/api/pos/sheet/batch",{sheet,requests:reqs.slice(i,i+350)});return reqs.length;
 }
-async function posFormatNow(){const P=posSyncState;if(P.pulling||P.formatting)return;P.formatting="⏳ Formatting…";renderPosSync();
-  try{const n=await posFormatInstore(P.sheet);let m="";try{if(await posFormatDD(P.sheet))m=" + Dine-In Discounts";}catch(e2){m=" (Dine-In Discounts: "+e2.message+")";}P.formatting=`✅ Dine-In & Takeaway${m} formatted (${n} steps)`;}catch(e){P.formatting="❌ "+e.message;}renderPosSync();setTimeout(()=>{if(!String(P.formatting).startsWith("⏳")){P.formatting=null;renderPosSync();}},8000);}
-async function posFlagOk(date,loc){try{await posApi("/api/pos/flag/ok",{date,loc});}catch(e){alert(e.message);}await posLoadStatus();}
+function posFormatNow(){const P=posSyncState;if(P.pulling||P.formatting)return;P.formatting="⏳ Formatting…";renderPosSync();
+  try{const n=posFormatInstore(P.sheet);let m="";try{if(posFormatDD(P.sheet))m=" + Dine-In Discounts";}catch(e2){m=" (Dine-In Discounts: "+e2.message+")";}P.formatting=`✅ Dine-In & Takeaway${m} formatted (${n} steps)`;}catch(e){P.formatting="❌ "+e.message;}renderPosSync();setTimeout(()=>{if(!String(P.formatting).startsWith("⏳")){P.formatting=null;renderPosSync();}},8000);}
+function posFlagOk(date,loc){try{posApi("/api/pos/flag/ok",{date,loc});}catch(e){alert(e.message);}posLoadStatus();}
 function posRepull(date){posSyncState.preset="c";posSyncState.from=date;posSyncState.to=date;renderPosSync();posStartPull();}
 function posFmtTs(iso){try{const d=new Date(iso);return d.toLocaleString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Asia/Dubai"});}catch(e){return iso||"";}}
 function posSetSheet(v){if(v==="live"&&!confirm("Switch to the LIVE sheet? (The test is read-only, but later pulls will write to the real Virtual Brands Performance sheet.)"))return;posSyncState.sheet=v;renderPosSync();}
@@ -606,20 +606,20 @@ function posOpenCreds(){
     </div></div>`;
   document.body.appendChild(m);setTimeout(()=>{const i=document.getElementById("pos-cu");if(i)i.focus();},50);
 }
-async function posSaveCreds(){
+function posSaveCreds(){
   const u=(document.getElementById("pos-cu")||{}).value||"",p=(document.getElementById("pos-cp")||{}).value||"";
   const err=document.getElementById("pos-cerr"),b=document.getElementById("pos-csave");
   if(!u.trim()||!p){err.textContent="Enter both username and password";return;}
   b.disabled=true;b.textContent="Saving…";
-  try{await posApi("/api/pos/creds",{user:u.trim(),pass:p});document.getElementById("pos-creds-modal").remove();await posLoadStatus();}
+  try{posApi("/api/pos/creds",{user:u.trim(),pass:p});document.getElementById("pos-creds-modal").remove();posLoadStatus();}
   catch(e){err.textContent=e.message;b.disabled=false;b.textContent="Save";}
 }
-async function posRunTest(){
+function posRunTest(){
   if(posSyncState.status&&!posSyncState.status.hasCreds){posOpenCreds();return;}
   posSyncState.testing=true;posSyncState.test=null;renderPosSync();
-  try{posSyncState.test=await posApi("/api/pos/test",{sheet:posSyncState.sheet});}
+  try{posSyncState.test=posApi("/api/pos/test",{sheet:posSyncState.sheet});}
   catch(e){posSyncState.test={microsys:{ok:false,error:e.message},google:{ok:false,error:e.message}};}
-  posSyncState.testing=false;await posLoadStatus();
+  posSyncState.testing=false;posLoadStatus();
 }
 function posExplain(err){
   const e=String(err||"");
@@ -706,7 +706,7 @@ function posPullCardHTML(T,card,ct,btn){
   h+=`</div>`;
   return h;
 }
-async function posStartPull(opt){
+function posStartPull(opt){
   // v601: opt={auto:true} = the 9 am auto-pull (Apps Script) or "Finish pull" from the phone notification — yesterday,
   // LIVE sheet, no questions asked
   const auto=!!(opt&&opt.auto),P=posSyncState;if(auto){P.sheet="live";P.preset="y";}
@@ -722,7 +722,7 @@ async function posStartPull(opt){
   const step=(t,st)=>{P.progress.push({t,st:st||"run"});renderPosSync();return P.progress.length-1;};
   const done=(i,st,t)=>{if(P.progress[i].st==="run"&&P.bar)P.bar.done=Math.min(P.bar.total,P.bar.done+1);P.progress[i].st=st;if(t)P.progress[i].t=t;renderPosSync();};
   let okDays=0,failDays=0,ddW=null;const sumCache={};
-  const getSummary=async d=>{if(sumCache[d]==null){try{sumCache[d]=(await posApi("/api/pos/report",{kind:"summary",date:d})).csv;}catch(e){sumCache[d]="";}}return sumCache[d];};
+  const getSummary=d=>{if(sumCache[d]==null){try{sumCache[d]=(posApi("/api/pos/report",{kind:"summary",date:d})).csv;}catch(e){sumCache[d]="";}}return sumCache[d];};
   P.stop=false;
   for(const iso of dates){
     if(P.stop){P.bar.stopped=true;P.bar.stoppedAt=P.bar.day;step(`⏹ Stopped by you after ${P.bar.day} day(s) — those are saved; the remaining ${dates.length-P.bar.day} day(s) were not pulled`,"err");break;}
@@ -730,16 +730,16 @@ async function posStartPull(opt){
     const day={date:iso,brands:{},cells:0,newRows:[],updatedRows:[],warn:[],error:null,instoreDisc:0,deliveryDisc:0,instore:null};
     let i=step(`${posFmtDate(iso)} — Credit Sales`);
     try{
-      const cr=await posApi("/api/pos/report",{kind:"credit",date:iso});const C=psProcessCredit(cr.csv,iso);
+      const cr=posApi("/api/pos/report",{kind:"credit",date:iso});const C=psProcessCredit(cr.csv,iso);
       done(i,"ok",`${posFmtDate(iso)} — Credit Sales: ${C.lines.toLocaleString()} lines, ${C.kept.toLocaleString()} delivery orders`);
       if(C.otherDates)day.warn.push(`${C.otherDates} Credit Sales line(s) dated another day were skipped`);
       i=step(`${posFmtDate(iso)} — Sales Discount Details`);
-      const dr=await posApi("/api/pos/report",{kind:"disc",date:iso});const D=psProcessDisc(dr.csv);
+      const dr=posApi("/api/pos/report",{kind:"disc",date:iso});const D=psProcessDisc(dr.csv);
       day.instoreDisc=psRound(D.instore.reduce((s,x)=>s+x.amount,0),2);day.deliveryDisc=psRound(D.rows.reduce((s,x)=>s+x.disc,0),2);
       done(i,"ok",`${posFmtDate(iso)} — Discounts: ${D.kept} delivery lines (AED ${day.deliveryDisc.toLocaleString()}), ${D.excluded} in-store`);
       if(!C.kept)day.warn.push("No delivery orders found in Credit Sales for this day");
       i=step(`${posFmtDate(iso)} — Sales Summary by Outlet (dine-in & takeaway)`);
-      const sumCsv=await getSummary(iso);if(!sumCsv)throw new Error("Sales Summary by Outlet couldn't be pulled");sumCache[iso]=sumCsv;const I=psProcessInstore(sumCsv,D.instore);
+      const sumCsv=getSummary(iso);if(!sumCsv)throw new Error("Sales Summary by Outlet couldn't be pulled");sumCache[iso]=sumCsv;const I=psProcessInstore(sumCsv,D.instore);
       try{day.recon=psRecon(cr.csv,sumCsv,iso);if(posReconLooksIncomplete(day.recon)){day.warn.push(`Credit Sales looks incomplete for this day (platforms ${Math.round(day.recon.agg).toLocaleString()} vs till ${Math.round(day.recon.pos).toLocaleString()}) — delivery figures written to the sheet may be missing orders. Pull this day again.`);throw new Error("skip");}posApi("/api/pos/recon",{date:iso,rec:day.recon}).then(()=>{posRecon.recs=null;}).catch(e=>day.warn.push("Reconciliation not saved: "+e.message));}catch(e){if(e.message!=="skip")day.warn.push("Reconciliation failed: "+e.message);} // v564
       const SP=psSummaryHasSplit(sumCsv);if(!SP.split){I.skip=true;day.warn.push("Microsys hasn't split dine-in/takeaway for this day yet — Dine-In & Takeaway not written now; the next Pull adds it automatically");}
       I.warn.forEach(w=>day.warn.push(w));
@@ -750,41 +750,41 @@ async function posStartPull(opt){
       brands.forEach(b=>{const r=C.rows.filter(x=>x.brand===b),d=D.rows.filter(x=>x.brand===b);
         day.brands[b]={sales:psRound(r.reduce((s,x)=>s+x.sales,0),2),orders:r.reduce((s,x)=>s+x.orders,0),disc:psRound(d.reduce((s,x)=>s+x.disc,0),2)};});
       i=step(`${posFmtDate(iso)} — Reading ${P.sheet==="live"?"LIVE":"TEST"} sheet`);
-      const sr=await posApi("/api/pos/sheet/read",{sheet:P.sheet,tabs:[...brands,PS_INSTORE_TAB]});
+      const sr=posApi("/api/pos/sheet/read",{sheet:P.sheet,tabs:[...brands,PS_INSTORE_TAB]});
       (sr.present||[]).forEach((t,k)=>{const vr=(sr.google&&sr.google.valueRanges)||[];sr.tabs[t]={header:(vr[2*k]&&vr[2*k].values)||[],ab:(vr[2*k+1]&&vr[2*k+1].values)||[]};});
       const data=[];
       for(const b of brands){const tab=sr.tabs[b];if(!tab||tab.missing){day.warn.push(`Tab '${b}' not found — skipped`);continue;}
         const res=psCellsForBrand(tab.header,tab.ab,C.rows,D.rows,b,iso);
         (res.scaffolded?day.newRows:day.updatedRows).push(b);data.push(...psCellsToRanges(b,res.cells));}
       if(!I.skip){let tab=sr.tabs[PS_INSTORE_TAB];
-        if(!tab||tab.missing){await posApi("/api/pos/sheet/addtab",{sheet:P.sheet});const hd=psInstoreHeader();
+        if(!tab||tab.missing){posApi("/api/pos/sheet/addtab",{sheet:P.sheet});const hd=psInstoreHeader();
           data.push({range:`'${PS_INSTORE_TAB}'!A1:${psColLetter(hd[0].length)}2`,values:hd});tab={header:hd,ab:hd.map(r=>r.slice(0,2))};day.warn.push("Created the 'Dine-In & Takeaway' tab");}
-        const at=await posInstorePrep(P.sheet,tab,iso);const res=psCellsForInstore(tab.header,tab.ab,I.rows,iso,at);(res.scaffolded?day.newRows:day.updatedRows).push("Dine-In & Takeaway");data.push(...psCellsToRanges(PS_INSTORE_TAB,res.cells));}
-      try{if(!ddW)ddW=await posDDWriter(P.sheet);const dd=psDiscInstoreRows(dr.csv);data.push(...ddW.queue(iso,dd));day.ddRows=dd.length;}catch(e){day.warn.push("Dine-In Discounts tab not updated: "+e.message);}
+        const at=posInstorePrep(P.sheet,tab,iso);const res=psCellsForInstore(tab.header,tab.ab,I.rows,iso,at);(res.scaffolded?day.newRows:day.updatedRows).push("Dine-In & Takeaway");data.push(...psCellsToRanges(PS_INSTORE_TAB,res.cells));}
+      try{if(!ddW)ddW=posDDWriter(P.sheet);const dd=psDiscInstoreRows(dr.csv);data.push(...ddW.queue(iso,dd));day.ddRows=dd.length;}catch(e){day.warn.push("Dine-In Discounts tab not updated: "+e.message);}
       done(i,"ok");
       if(data.length){i=step(`${posFmtDate(iso)} — Writing ${brands.length} brand tab(s) + Dine-In & Takeaway + Dine-In Discounts`);
-        const wr=await posApi("/api/pos/sheet/write",{sheet:P.sheet,data});day.cells=wr.updatedCells;
+        const wr=posApi("/api/pos/sheet/write",{sheet:P.sheet,data});day.cells=wr.updatedCells;
         done(i,"ok",`${posFmtDate(iso)} — Wrote ${wr.updatedCells.toLocaleString()} cells (${day.newRows.length?"new rows: "+day.newRows.join(", "):""}${day.newRows.length&&day.updatedRows.length?" · ":""}${day.updatedRows.length?"updated: "+day.updatedRows.join(", "):""})`);}
       okDays++;
     }catch(e){day.error=e.message;done(i,"err",`${posFmtDate(iso)} — ❌ ${e.message}`);failDays++;}
     if(!day.error){try{const ii=step(`${posFmtDate(iso)} — Checking for unusually low outlet sales`);
-      const base=[];for(const w of[7,14,21,28])base.push(psNetByLoc(await getSummary(posAddDays(iso,-w))));
-      day.flags=psFlagsFor(psNetByLoc(sumCache[iso]),base);await posApi("/api/pos/flags",{date:iso,flags:day.flags});
+      const base=[];for(const w of[7,14,21,28])base.push(psNetByLoc(getSummary(posAddDays(iso,-w))));
+      day.flags=psFlagsFor(psNetByLoc(sumCache[iso]),base);posApi("/api/pos/flags",{date:iso,flags:day.flags});
       done(ii,day.flags.length?"err":"ok",`${posFmtDate(iso)} — ${day.flags.length?`⚠ ${day.flags.length} outlet(s) unusually low: ${day.flags.map(f=>f.loc.split(" - ")[1]||f.loc).join(", ")}`:"No unusually low outlets"}`);}
       catch(e){day.warn.push("Low-sales check failed: "+e.message);}}
     P.bar.done=Math.max(P.bar.done,stepsBefore+6); // a failed day still counts as finished for the bar
     P.results.days.push(day);renderPosSync();
   }
-  if(okDays){const fi=step("Formatting the Dine-In & Takeaway tab like the delivery tabs");try{const n=await posFormatInstore(P.sheet);done(fi,"ok",`Dine-In & Takeaway tab formatted like the delivery tabs (${n} format steps)`);}catch(e){done(fi,"err","Formatting failed: "+e.message);}}
-  if(okDays){const fi=step("Formatting the Dine-In Discounts tab");try{await posFormatDD(P.sheet);done(fi,"ok","Dine-In Discounts tab formatted");}catch(e){done(fi,"err","Dine-In Discounts formatting failed: "+e.message);}}
-  try{await posApi("/api/pos/log",{sheet:P.sheet,dates:dates.length===1?dates[0]:dates[0]+" → "+dates[dates.length-1],result:`${okDays} ok${failDays?", "+failDays+" failed":""}`});}catch(e){}
+  if(okDays){const fi=step("Formatting the Dine-In & Takeaway tab like the delivery tabs");try{const n=posFormatInstore(P.sheet);done(fi,"ok",`Dine-In & Takeaway tab formatted like the delivery tabs (${n} format steps)`);}catch(e){done(fi,"err","Formatting failed: "+e.message);}}
+  if(okDays){const fi=step("Formatting the Dine-In Discounts tab");try{posFormatDD(P.sheet);done(fi,"ok","Dine-In Discounts tab formatted");}catch(e){done(fi,"err","Dine-In Discounts formatting failed: "+e.message);}}
+  try{posApi("/api/pos/log",{sheet:P.sheet,dates:dates.length===1?dates[0]:dates[0]+" → "+dates[dates.length-1],result:`${okDays} ok${failDays?", "+failDays+" failed":""}`});}catch(e){}
   P.pulling=false;P.stop=false;P.bar.done=P.bar.total;P.bar.finished=true;P.bar.failed=failDays;P.bar.end=Date.now();
-  window.removeEventListener("beforeunload",posBeforeUnload);await posLoadStatus();
+  window.removeEventListener("beforeunload",posBeforeUnload);posLoadStatus();
   // v569: catch-up — fill dine-in & takeaway and discount detail for any of the last 14 days that are still missing
   // (a day pulled before Microsys split dine-in/takeaway, a day nobody pulled, a day without discount detail).
   // Only missing days are fetched, so when everything is there it's just one quick read of the tab.
-  if(!P.bar.stopped){const last=dates[dates.length-1];try{const r=await posStartBackfill({auto:true,from:posAddDays(last,-13),to:last});P.results.catchup=r;}catch(e){step("Catch-up failed: "+e.message,"err");}}
-  if(!P.bar.stopped&&okDays){try{await posJTAfterPull(dates);}catch(e){step("Journal Tape failed: "+e.message,"err");}} // v575
+  if(!P.bar.stopped){const last=dates[dates.length-1];try{const r=posStartBackfill({auto:true,from:posAddDays(last,-13),to:last});P.results.catchup=r;}catch(e){step("Catch-up failed: "+e.message,"err");}}
+  if(!P.bar.stopped&&okDays){try{posJTAfterPull(dates);}catch(e){step("Journal Tape failed: "+e.message,"err");}} // v575
   posInstoreReloadSoon();  return{okDays,failDays,dates,days:P.results.days}; // v601: the auto-pull builds its "data ready" message from this
 }
 function posBeforeUnload(e){if(posSyncState.pulling){e.preventDefault();e.returnValue="A POS pull is still running. Leaving now stops it.";return e.returnValue;}}
@@ -840,7 +840,7 @@ function posBackfillCardHTML(T,card,ct,btn){
   return h;
 }
 // v569: opt={auto:true,from,to} = the catch-up a Pull runs by itself (no confirm, progress appended to the Pull's)
-async function posStartBackfill(opt){
+function posStartBackfill(opt){
   const auto=!!(opt&&opt.auto);
   const P=posSyncState;if(P.pulling)return;const y=posAddDays(posDubaiToday(),-1);
   let from=auto?opt.from:(P.bf_from||"2026-01-01"),to=auto?opt.to:(P.bf_to||y);if(from>to)[from,to]=[to,from];if(to>y)to=y;
@@ -853,10 +853,10 @@ async function posStartBackfill(opt){
   let ok=0,skipped=0,failed=0,written=0,nodata=0,nosplit=0,ddFilled=0;const unknown=new Set();
   try{
     let i=step("Reading the Dine-In & Takeaway tab");
-    const rd=async()=>{const sr=await posApi("/api/pos/sheet/read",{sheet:P.sheet,tabs:[PS_INSTORE_TAB]});const vr=(sr.google&&sr.google.valueRanges)||[];
+    const rd=()=>{const sr=posApi("/api/pos/sheet/read",{sheet:P.sheet,tabs:[PS_INSTORE_TAB]});const vr=(sr.google&&sr.google.valueRanges)||[];
       return (sr.present||[]).includes(PS_INSTORE_TAB)?{header:(vr[0]&&vr[0].values)||[],ab:(vr[1]&&vr[1].values)||[]}:null;};
-    let tab=await rd();const data0=[];
-    if(!tab){await posApi("/api/pos/sheet/addtab",{sheet:P.sheet});const hd=psInstoreHeader();data0.push({range:`'${PS_INSTORE_TAB}'!A1:${psColLetter(hd[0].length)}2`,values:hd});tab={header:hd,ab:hd.map(r=>r.slice(0,2))};}
+    let tab=rd();const data0=[];
+    if(!tab){posApi("/api/pos/sheet/addtab",{sheet:P.sheet});const hd=psInstoreHeader();data0.push({range:`'${PS_INSTORE_TAB}'!A1:${psColLetter(hd[0].length)}2`,values:hd});tab={header:hd,ab:hd.map(r=>r.slice(0,2))};}
     const have=new Set();tab.ab.forEach(r=>{const d=psParseLabel(r&&r[1]);if(d&&String(r[0]||"").trim())have.add(d);});
     const legacy=psInstoreLegacyLayout(tab.ab);
     const anchor=legacy?psParseLabel(((tab.ab||[])[3]||[])[1]):psParseLabel(((tab.ab||[])[2]||[])[1]);
@@ -870,19 +870,19 @@ async function posStartBackfill(opt){
       // so a run for Jan 2026 doesn't first go back over old Jan 2025 attempts. Earlier days can be backfilled separately.
       const existing=[...have].sort();extra=existing.filter(d=>d>to);
       done(i,"ok",`Old layout (blank row 3 + gap rows) — re-laying it${extra.length?` (re-pulling the ${extra.length} later day(s) already there)`:""}`);
-      i=step("Clearing the Dine-In & Takeaway rows (formatting kept)");await posApi("/api/pos/sheet/clear-instore",{sheet:P.sheet});
+      i=step("Clearing the Dine-In & Takeaway rows (formatting kept)");posApi("/api/pos/sheet/clear-instore",{sheet:P.sheet});
       tab.ab=tab.ab.slice(0,2);have.clear();done(i,"ok");
     }else done(i,"ok",`Tab has ${have.size} day(s) already — those are skipped`);
     const dates=[];extra.filter(d=>d<from).sort().forEach(d=>dates.push(d));for(let d=from;d<=to;d=posAddDays(d,1))dates.push(d);dates.push(...extra.filter(d=>d>to).sort());
     P.bar={total:dates.length+1,done:0,start:Date.now(),day:0,days:dates.length,finished:false,failed:0};renderPosSync();
-    let pending=data0.slice();let ddW=null;try{ddW=await posDDWriter(P.sheet);}catch(e){step("Dine-In Discounts tab couldn't be prepared ("+e.message+") — only Dine-In & Takeaway will be written","err");}
-    const flush=async()=>{if(!pending.length)return;const wi=step(`Writing ${written?"next ":""}days to the sheet`);P.bar.done=Math.max(0,P.bar.done-1);
-      const wr=await posApi("/api/pos/sheet/write",{sheet:P.sheet,data:pending});pending=[];done(wi,"ok",`Wrote ${wr.updatedCells.toLocaleString()} cells (${ok} day(s) so far)`);};
+    let pending=data0.slice();let ddW=null;try{ddW=posDDWriter(P.sheet);}catch(e){step("Dine-In Discounts tab couldn't be prepared ("+e.message+") — only Dine-In & Takeaway will be written","err");}
+    const flush=()=>{if(!pending.length)return;const wi=step(`Writing ${written?"next ":""}days to the sheet`);P.bar.done=Math.max(0,P.bar.done-1);
+      const wr=posApi("/api/pos/sheet/write",{sheet:P.sheet,data:pending});pending=[];done(wi,"ok",`Wrote ${wr.updatedCells.toLocaleString()} cells (${ok} day(s) so far)`);};
     let sinceFlush=0;
     // v549: fetch the next days' reports while the current one is processed (3 days in flight) — ~3× faster
-    const PS_BF_AHEAD=1,inflight={},todo=dates.filter(d=>!have.has(d));
-    const fetchDay=iso=>{if(!inflight[iso])inflight[iso]=Promise.all([posApi("/api/pos/report",{kind:"summary",date:iso}),posApi("/api/pos/report",{kind:"disc",date:iso})]);
-      const k=todo.indexOf(iso);for(let j=k+1;j<=k+PS_BF_AHEAD&&j<todo.length;j++)if(!inflight[todo[j]]&&!P.stop){const d=todo[j];inflight[d]=Promise.all([posApi("/api/pos/report",{kind:"summary",date:d}),posApi("/api/pos/report",{kind:"disc",date:d})]);inflight[d].catch(()=>{});}
+    const PS_BF_AHEAD=0,inflight={},todo=dates.filter(d=>!have.has(d));
+    const fetchDay=iso=>{if(!inflight[iso])inflight[iso]=__all([posApi("/api/pos/report",{kind:"summary",date:iso}),posApi("/api/pos/report",{kind:"disc",date:iso})]);
+      const k=todo.indexOf(iso);for(let j=k+1;j<=k+PS_BF_AHEAD&&j<todo.length;j++)if(!inflight[todo[j]]&&!P.stop){const d=todo[j];inflight[d]=__all([posApi("/api/pos/report",{kind:"summary",date:d}),posApi("/api/pos/report",{kind:"disc",date:d})]);inflight[d].catch(()=>{});}
       const pr=inflight[iso];delete inflight[iso];return pr;};
     P.stop=false;
     for(const iso of dates){
@@ -891,34 +891,34 @@ async function posStartBackfill(opt){
       if(have.has(iso)){
         // v563: the day is already in Dine-In & Takeaway — but if its discount detail is missing, fetch just the discounts report for it
         if(ddW&&ddW.hasDay&&!ddW.hasDay(iso)){const di=step(`${posFmtDate(iso)} ${iso.slice(0,4)} — totals already there, adding discount detail`);
-          try{let disc;try{disc=await posApi("/api/pos/report",{kind:"disc",date:iso});}catch(e1){await new Promise(r=>setTimeout(r,2500));disc=await posApi("/api/pos/report",{kind:"disc",date:iso});}
+          try{let disc;try{disc=posApi("/api/pos/report",{kind:"disc",date:iso});}catch(e1){new Promise(r=>setTimeout(r,2500));disc=posApi("/api/pos/report",{kind:"disc",date:iso});}
             const dd=psDiscInstoreRows(disc.csv);pending.push(...ddW.queue(iso,dd));ddFilled++;done(di,"ok",`${posFmtDate(iso)} ${iso.slice(0,4)} — ${dd.length} discount line(s) added`);}
           catch(e){failed++;done(di,"err",`${posFmtDate(iso)} ${iso.slice(0,4)} — discounts ❌ ${e.message}`);}
-          P.bar.done++;renderPosSync();if(++sinceFlush>=PS_BF_FLUSH){sinceFlush=0;await flush();written++;}continue;}
+          P.bar.done++;renderPosSync();if(++sinceFlush>=PS_BF_FLUSH){sinceFlush=0;flush();written++;}continue;}
         skipped++;P.bar.done++;renderPosSync();continue;}
       const di=step(`${posFmtDate(iso)} ${iso.slice(0,4)} — Sales Summary + discounts`);
       try{
-        let sum,disc;try{[sum,disc]=await fetchDay(iso);}catch(e1){ // v551: one retry after a short pause (Microsys sometimes drops a session mid-run)
-          await new Promise(r=>setTimeout(r,2500));[sum,disc]=await Promise.all([posApi("/api/pos/report",{kind:"summary",date:iso}),posApi("/api/pos/report",{kind:"disc",date:iso})]);}
+        let sum,disc;try{[sum,disc]=fetchDay(iso);}catch(e1){ // v551: one retry after a short pause (Microsys sometimes drops a session mid-run)
+          new Promise(r=>setTimeout(r,2500));[sum,disc]=__all([posApi("/api/pos/report",{kind:"summary",date:iso}),posApi("/api/pos/report",{kind:"disc",date:iso})]);}
         const sp=psSummaryHasSplit(sum.csv);
         if(!sp.rows){nodata++;done(di,"err",`${posFmtDate(iso)} ${iso.slice(0,4)} — no Sales Summary rows in Microsys for this day — not written`);continue;}
         if(!sp.split){nosplit++;done(di,"err",`${posFmtDate(iso)} ${iso.slice(0,4)} — Microsys has net sales (AED ${Math.round(sp.net).toLocaleString()}) but no dine-in/takeaway split for this day — not written`);continue;}
         const D=psProcessDisc(disc.csv),I=psProcessInstore(sum.csv,D.instore);
         if(ddW)pending.push(...ddW.queue(iso,psDiscInstoreRows(disc.csv)));
         I.warn.forEach(w=>{const m=w.match(/Unknown POS location '([^']+)'/);if(m)unknown.add(m[1]);});
-        const at=await posInstorePrep(P.sheet,tab,iso);const res=psCellsForInstore(tab.header,tab.ab,I.rows,iso,at);pending.push(...psCellsToRanges(PS_INSTORE_TAB,res.cells));
+        const at=posInstorePrep(P.sheet,tab,iso);const res=psCellsForInstore(tab.header,tab.ab,I.rows,iso,at);pending.push(...psCellsToRanges(PS_INSTORE_TAB,res.cells));
         // keep the local copy of column A:B in step with what will be written
         for(const[k,v]of res.cells){const[rr,cc]=k.split(",").map(Number);if(cc>2)continue;while(tab.ab.length<rr)tab.ab.push(["",""]);tab.ab[rr-1]=tab.ab[rr-1]||["",""];tab.ab[rr-1][cc-1]=v;}
         const t=res.totals;ok++;have.add(iso);
         done(di,"ok",`${posFmtDate(iso)} ${iso.slice(0,4)} — dine-in AED ${Math.round(t.di.sales).toLocaleString()}, takeaway AED ${Math.round(t.to.sales).toLocaleString()}`);
       }catch(e){failed++;done(di,"err",`${posFmtDate(iso)} ${iso.slice(0,4)} — ❌ ${e.message}`);}
-      if(++sinceFlush>=PS_BF_FLUSH){sinceFlush=0;await flush();written++;}
+      if(++sinceFlush>=PS_BF_FLUSH){sinceFlush=0;flush();written++;}
       if(P.progress.length>60)P.progress.splice(0,P.progress.length-60); // keep the list short on long runs
     }
-    await flush();
+    flush();
     const fi=step("Formatting the Dine-In & Takeaway tab like the delivery tabs");
-    try{await posFormatInstore(P.sheet);done(fi,"ok");}catch(e){done(fi,"err","Formatting failed: "+e.message+" — use 🎨 Re-apply sheet formatting");}
-    if(ddW){const fd=step("Formatting the Dine-In Discounts tab");try{await posFormatDD(P.sheet);done(fd,"ok");}catch(e){done(fd,"err","Dine-In Discounts formatting failed: "+e.message);}}
+    try{posFormatInstore(P.sheet);done(fi,"ok");}catch(e){done(fi,"err","Formatting failed: "+e.message+" — use 🎨 Re-apply sheet formatting");}
+    if(ddW){const fd=step("Formatting the Dine-In Discounts tab");try{posFormatDD(P.sheet);done(fd,"ok");}catch(e){done(fd,"err","Dine-In Discounts formatting failed: "+e.message);}}
     if(auto)step(ok||ddFilled||nosplit?`Catch-up done — ${ok} missing day(s) of dine-in & takeaway added${ddFilled?`, ${ddFilled} day(s) given their discount detail`:""}${nosplit?` · ⚠ ${nosplit} day(s) still have no dine-in/takeaway split in Microsys — the next Pull will try them again`:""}`:`Catch-up: dine-in, takeaway and discounts are complete for ${posFmtDate(from)} → ${posFmtDate(to)}`,nosplit?"err":"ok");
     else step(`Done — ${ok} day(s) written, ${skipped} already there and skipped${ddFilled?`, ${ddFilled} older day(s) given their discount detail`:""}${nosplit?`, ${nosplit} without a dine-in/takeaway split in Microsys`:""}${nodata?`, ${nodata} with no POS data`:""}${failed?`, ${failed} failed (run the same range again to retry them)`:""}`,failed||nosplit||nodata?"err":"ok");
     if(unknown.size)step(`⚠ Not written — POS locations with no row in the tab: ${[...unknown].join(", ")}. Tell Claude which row they belong to.`,"err");
@@ -926,8 +926,8 @@ async function posStartBackfill(opt){
   P.pulling=false;P.stop=false;if(P.bar){P.bar.done=P.bar.total;P.bar.finished=true;P.bar.failed=failed;P.bar.end=Date.now();}
   P.results.backfill={ok,skipped,failed};
   window.removeEventListener("beforeunload",posBeforeUnload);
-  if(!auto||ok||ddFilled)try{await posApi("/api/pos/log",{kind:"backfill",sheet:P.sheet,dates:from+" → "+to,result:`${auto?"auto catch-up after Pull: ":""}${ok} written, ${skipped} skipped${ddFilled?", "+ddFilled+" discount days":""}${failed?", "+failed+" failed":""}`});}catch(e){}
-  await posLoadStatus();posInstoreReloadSoon();
+  if(!auto||ok||ddFilled)try{posApi("/api/pos/log",{kind:"backfill",sheet:P.sheet,dates:from+" → "+to,result:`${auto?"auto catch-up after Pull: ":""}${ok} written, ${skipped} skipped${ddFilled?", "+ddFilled+" discount days":""}${failed?", "+failed+" failed":""}`});}catch(e){}
+  posLoadStatus();posInstoreReloadSoon();
   return{ok,skipped,failed,nosplit,ddFilled};
 }
 // v569: after writing dine-in data, re-read it in the dashboard (Google's published copy can take a few minutes to update)
@@ -948,8 +948,8 @@ function posInspectCardHTML(T,card,ct,btn){
       `<tr>${sums.map((x,i)=>`<td style="padding:5px 8px;font-weight:800;white-space:nowrap">${i===0?"Sum":x===""?"":x.toLocaleString()}</td>`).join("")}</tr></table></div>${body.length>40?`<div style="font-size:11px;color:${T.textMuted};margin-top:4px">First 40 of ${body.length} rows shown; Sum covers all rows.</div>`:""}`;}
   return h+`</div>`;
 }
-async function posInspect(){const P=posSyncState,y=posAddDays(posDubaiToday(),-1),d=P.in_date||y,k=P.in_kind||"summary";P.in_busy=true;renderPosSync();
-  try{const r=await posApi("/api/pos/report",{kind:k,date:d});P.in_res={kind:{summary:"Sales Summary by Outlet",disc:"Sales Discount Details",credit:"Credit Sales"}[k],date:d,csv:r.csv};}
+function posInspect(){const P=posSyncState,y=posAddDays(posDubaiToday(),-1),d=P.in_date||y,k=P.in_kind||"summary";P.in_busy=true;renderPosSync();
+  try{const r=posApi("/api/pos/report",{kind:k,date:d});P.in_res={kind:{summary:"Sales Summary by Outlet",disc:"Sales Discount Details",credit:"Credit Sales"}[k],date:d,csv:r.csv};}
   catch(e){P.in_res={err:e.message};}P.in_busy=false;renderPosSync();}
 
 // ── v548 DATA COVERAGE SCAN — how complete is Microsys over time? Checks the Sales Summary on the 1st
@@ -966,12 +966,12 @@ function posCoverageCardHTML(T,card,ct,btn){
     if(!C.running)h+=`<div style="margin-top:10px;font-size:13px;font-weight:800;color:${first?T.accentGreen:T.accentOrange}">${first?`Microsys looks complete from about ${posFmtDate(first.date)} ${first.date.slice(0,4)} — start the backfill there.`:"No date looks complete on every check after it — send Claude a screenshot of this table."}</div>`;}
   return h+`</div>`;
 }
-async function posCoverageScan(){
+function posCoverageScan(){
   const P=posSyncState,y=posAddDays(posDubaiToday(),-1),dates=[];
   for(let d="2025-01-01";d<=y;){dates.push(d);const m=d.slice(0,7),d15=m+"-15";if(d15<=y)dates.push(d15);const[yy,mm]=m.split("-").map(Number);d=`${mm===12?yy+1:yy}-${String(mm===12?1:mm+1).padStart(2,"0")}-01`;}
   P.cov={running:true,done:0,total:dates.length,rows:[]};renderPosSync();
   for(const d of dates){
-    try{const r=await posApi("/api/pos/report",{kind:"summary",date:d});const t=psParseCSV(r.csv||"");const h=(t[0]||[]).map(x=>x.trim());const ix=k=>h.indexOf(k);
+    try{const r=posApi("/api/pos/report",{kind:"summary",date:d});const t=psParseCSV(r.csv||"");const h=(t[0]||[]).map(x=>x.trim());const ix=k=>h.indexOf(k);
       let outlets=0,net=0,di=0,to=0;for(const row of t.slice(1)){if(/^total/i.test((row[0]||"").trim()))continue;const n=psNum(row[ix("NetSalesValue")]);if(n>0)outlets++;net+=n;if(ix("DineIn")>=0)di+=psNum(row[ix("DineIn")]);if(ix("TakeOut")>=0)to+=psNum(row[ix("TakeOut")]);}
       P.cov.rows.push({date:d,outlets,net,di,to,split:(di+to)>0});}
     catch(e){P.cov.rows.push({date:d,err:e.message});}
@@ -982,9 +982,9 @@ async function posCoverageScan(){
 
 // ── v564: DAILY RECONCILIATION CARD — till (POS revenue centres) vs dashboard (aggregator orders), per outlet × day
 const posRecon={days:14,recs:null,loading:false,err:null,checking:null,open:{}};
-async function posReconLoad(){if(posRecon.loading)return;posRecon.loading=true;posRecon.err=null;
+function posReconLoad(){if(posRecon.loading)return;posRecon.loading=true;posRecon.err=null;
   const to=posAddDays(posDubaiToday(),-1),from=posAddDays(to,-(posRecon.days-1));
-  try{const j=await posApi(`/api/pos/recon?from=${from}&to=${to}`);posRecon.recs=j.recs||[];}catch(e){posRecon.err=e.message;posRecon.recs=[];}
+  try{const j=posApi(`/api/pos/recon?from=${from}&to=${to}`);posRecon.recs=j.recs||[];}catch(e){posRecon.err=e.message;posRecon.recs=[];}
   posRecon.loading=false;if(typeof curPage!=="undefined"&&curPage==="possync")renderPosSync();try{navPaint();}catch(e){}}
 function posReconSetDays(n){posRecon.days=n;posRecon.recs=null;renderPosSync();}
 function posReconWhy(o){return/catering/i.test(o[0])?"catering":/deliverect mp card/i.test(o[0])?"test":"platform";} // v583: DELIVERECT MP CARD = test account (Nikhil) — ignored
@@ -994,31 +994,31 @@ function posReconItems(recs){const out=[];for(const r of recs||[])for(const x of
   const open=!ack&&(Math.abs(x.unexpl)>=50||unk>=50);out.push(Object.assign({date:r.date,id,ack,unk,open},x));}
   return out.sort((a,b)=>b.date.localeCompare(a.date)||Math.abs(b.gap)-Math.abs(a.gap));}
 function posReconOpenCount(){return posReconItems((posRecon.recs||[]).filter(r=>!(typeof posReconLooksIncomplete==='function'&&posReconLooksIncomplete(r)))).filter(i=>i.open).length;}
-async function posReconAck(date,id){const note=prompt("What explains this gap? (e.g. 'catering / bulk order — paid directly', 'regular customer, paid cash')","");if(note===null)return;
-  try{await posApi("/api/pos/recon/ack",{date,id,note});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
-async function posReconUnack(date,id){try{await posApi("/api/pos/recon/ack",{date,id,clear:true});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
+function posReconAck(date,id){const note=prompt("What explains this gap? (e.g. 'catering / bulk order — paid directly', 'regular customer, paid cash')","");if(note===null)return;
+  try{posApi("/api/pos/recon/ack",{date,id,note});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
+function posReconUnack(date,id){try{posApi("/api/pos/recon/ack",{date,id,clear:true});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
 // v598: a Credit Sales read can come back incomplete (Microsys sometimes returns only part of the day) — the till then
 // looks AED 100K+ "unexplained" (Nikhil: 20 Sep after a 30-day check, while the same day was fine the day before).
 // A day where the platforms account for under 80% of the till's delivery buttons is treated as a bad read: retried once,
 // and if still incomplete it is NOT saved (the earlier check stays). The worker refuses to replace a good day with one too.
 function posReconLooksIncomplete(rec){return rec&&rec.pos>2000&&rec.agg<0.8*rec.pos;}
-async function posReconReadDay(d){let rec=null;
-  for(let a=0;a<2;a++){const[c,su]=await Promise.all([posApi("/api/pos/report",{kind:"credit",date:d}),posApi("/api/pos/report",{kind:"summary",date:d})]);
+function posReconReadDay(d){let rec=null;
+  for(let a=0;a<2;a++){const[c,su]=__all([posApi("/api/pos/report",{kind:"credit",date:d}),posApi("/api/pos/report",{kind:"summary",date:d})]);
     rec=psRecon(c.csv,su.csv,d);if(!posReconLooksIncomplete(rec))return{rec,ok:true};}
   return{rec,ok:false};}
-async function posReconCheck(onlyDates){const P=posSyncState;if(posRecon.checking||P.pulling)return;if(P.status&&!P.status.hasCreds){posOpenCreds();return;}
+function posReconCheck(onlyDates){const P=posSyncState;if(posRecon.checking||P.pulling)return;if(P.status&&!P.status.hasCreds){posOpenCreds();return;}
   const to=posAddDays(posDubaiToday(),-1),dates=[];if(Array.isArray(onlyDates))dates.push(...onlyDates);else for(let i=posRecon.days-1;i>=0;i--)dates.push(posAddDays(to,-i));
   posRecon.checking={n:0,of:dates.length,fail:0,bad:[]};renderPosSync();
   posRecon.checking.start=Date.now();
-  for(const d of dates){posRecon.checking.cur=d;renderPosSync();try{const R=await posReconReadDay(d);
-      if(R.ok)await posApi("/api/pos/recon",{date:d,rec:R.rec});else posRecon.checking.bad.push(d);}catch(e){posRecon.checking.fail++;}
+  for(const d of dates){posRecon.checking.cur=d;renderPosSync();try{const R=posReconReadDay(d);
+      if(R.ok)posApi("/api/pos/recon",{date:d,rec:R.rec});else posRecon.checking.bad.push(d);}catch(e){posRecon.checking.fail++;}
     posRecon.checking.n++;renderPosSync();}
   const bad=posRecon.checking.bad,fail=posRecon.checking.fail;posRecon.lastMsg=bad.length||fail?`${bad.length?`Microsys returned incomplete Credit Sales for ${bad.map(posFmtDate).join(", ")} (tried twice) — kept the earlier check for ${bad.length>1?"those days":"that day"}. Click the day's square to try again later.`:""}${fail?` ${fail} day(s) couldn't be read.`:""}`:"";
   posRecon.checking=null;posRecon.recs=null;renderPosSync();}
 function posReconCheckDay(d){posReconCheck([d]);}
 window.posReconCheckDay=posReconCheckDay;
 // v590: redesigned — verdict first, a strip of days, only the open items with one-click answers; the detail folds away.
-async function posReconAckAs(date,id,note){try{await posApi("/api/pos/recon/ack",{date,id,note});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
+function posReconAckAs(date,id,note){try{posApi("/api/pos/recon/ack",{date,id,note});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
 function posReconCardHTML(T,card,ct,btn){
   if(posRecon.recs==null&&!posRecon.loading)setTimeout(posReconLoad,0);
   const R0=posRecon.recs||[],badReads=R0.filter(posReconLooksIncomplete),R=R0.filter(r=>!posReconLooksIncomplete(r)),items=posReconItems(R),open=items.filter(i=>i.open); // v598: incomplete reads kept out of the totals
@@ -1107,10 +1107,10 @@ function posReconExport(){const R=posRecon.recs||[],rows=[["Date","Outlet","Till
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`reconciliation-orders-${posRecon.days}d.csv`;document.body.appendChild(a);a.click();a.remove();}
 window.posReconExport=posReconExport;
 
-async function posReconMenu(){posRecon.menu={loading:true};renderPosSync();try{const j=await posApi("/api/pos/msys/menu",{});posRecon.menu={reports:j.reports||[],seen:j.seen||[]};}catch(e){posRecon.menu={err:e.message};}renderPosSync();}
+function posReconMenu(){posRecon.menu={loading:true};renderPosSync();try{const j=posApi("/api/pos/msys/menu",{});posRecon.menu={reports:j.reports||[],seen:j.seen||[]};}catch(e){posRecon.menu={err:e.message};}renderPosSync();}
 window.posReconMenu=posReconMenu;
 
-async function posReconJT(){posRecon.jt={loading:true};renderPosSync();try{const j=await posApi("/api/pos/msys/probe",{date:"2026-10-06",match:"journal"});posRecon.jt={res:j};}catch(e){posRecon.jt={err:e.message};}renderPosSync();}
+function posReconJT(){posRecon.jt={loading:true};renderPosSync();try{const j=posApi("/api/pos/msys/probe",{date:"2026-10-06",match:"journal"});posRecon.jt={res:j};}catch(e){posRecon.jt={err:e.message};}renderPosSync();}
 function posReconJTCopy(){try{navigator.clipboard.writeText(JSON.stringify(posRecon.jt.res,null,1));posRecon.jt.copied=true;}catch(e){}renderPosSync();}
 window.posReconJT=posReconJT;window.posReconJTCopy=posReconJTCopy;
 
@@ -1126,8 +1126,8 @@ function posReconBillsHTML(T,i){const k=posReconBillKey(i),B=posRecon.bills[k];c
   const th=x=>`<th style="text-align:left;padding:3px 6px;font-size:10px;color:${T.textMuted};text-transform:uppercase;letter-spacing:.5px">${x}</th>`;
   return`<details open style="margin-top:4px"><summary style="cursor:pointer;color:${match?T.accentGreen:T.accentOrange};font-size:11.5px;font-weight:700">${B.list.length} bill${B.list.length===1?"":"s"} on the ${esc(i.rc)} button paid to us directly — AED ${sum.toFixed(2)} incl. VAT ${match?"✓ matches the gap — direct delivery (catering / regular customer)":`(gap AED ${gapIncl.toFixed(2)})`}</summary>
     ${B.list.length?`<table style="border-collapse:collapse;font-size:11.5px;margin-top:4px"><thead><tr>${th("Voucher")}${th("Order")}${th("Time")}${th("Employee")}${th("Paid by")}${th("Items")}${th("AED")}</tr></thead><tbody>${B.list.map(b=>`<tr><td style="padding:2px 6px;font-weight:700">${esc(b.voucher)}</td><td style="padding:2px 6px">#${esc(b.order)}</td><td style="padding:2px 6px">${esc(b.time)}</td><td style="padding:2px 6px">${esc(b.employee)}</td><td style="padding:2px 6px">${esc(b.pays.map(p=>p.type+(p.customer?" ("+p.customer+")":"")).join(" + ")||"—")}</td><td style="padding:2px 6px;max-width:320px">${esc(b.items.map(x=>x.name.replace(/^[A-Z0-9]+ - /,"")).join(", "))}</td><td style="padding:2px 6px;text-align:right;font-variant-numeric:tabular-nums">${b.total.toFixed(2)}</td></tr>`).join("")}</tbody></table>`:`<div style="font-size:11.5px;color:${T.textMuted}">No such bills — the gap may be a void or a bill dated another day.</div>`}</details>`;}
-async function posReconBills(k){const[date,loc,rc]=k.split("|");posRecon.bills[k]={loading:true};renderPosSync();
-  try{const r=await posApi("/api/pos/report",{kind:"jt",date,loc});const B=psParseJT(r.csv);posRecon.bills[k]={list:psJTTillOnly(B,PS_RC_SUF[rc]||"DL")};await posReconAutoDirect(k);}
+function posReconBills(k){const[date,loc,rc]=k.split("|");posRecon.bills[k]={loading:true};renderPosSync();
+  try{const r=posApi("/api/pos/report",{kind:"jt",date,loc});const B=psParseJT(r.csv);posRecon.bills[k]={list:psJTTillOnly(B,PS_RC_SUF[rc]||"DL")};posReconAutoDirect(k);}
   catch(e){posRecon.bills[k]={err:e.message};}renderPosSync();}
 // v578: Nikhil — the 💵 bills are catering / bulk orders taken by the catering team, or regular customers who asked us to
 // deliver and paid us directly; rare but legitimate, and punched on the Delivery button. When Journal Tape shows the gap is
@@ -1137,38 +1137,38 @@ function posReconIsDirect(i,B){if(!B||!B.list||!B.list.length||!(i.unexpl>0))ret
   const sum=B.list.reduce((a,b)=>a+b.total,0),gapIncl=i.unexpl*1.05;
   if(Math.abs(sum-gapIncl)>Math.max(2,gapIncl*0.01))return false;
   return B.list.every(b=>!/deliverect|bot/i.test(b.employee||""));}
-async function posReconAutoDirect(k){const B=posRecon.bills[k];const[date,loc,rc]=k.split("|");
+function posReconAutoDirect(k){const B=posRecon.bills[k];const[date,loc,rc]=k.split("|");
   const i=posReconItems(posRecon.recs).find(x=>x.date===date&&x.loc===loc&&x.rc===rc);
   if(!i||i.ack||!posReconIsDirect(i,B))return;
   const v=B.list.map(b=>b.voucher).join(", ");
   const note=`🏠 Direct delivery paid to us (catering / bulk or regular customer) — ${B.list.length} bill${B.list.length>1?"s":""}: ${v}`.slice(0,200);
-  try{await posApi("/api/pos/recon/ack",{date,id:i.id,note});
+  try{posApi("/api/pos/recon/ack",{date,id:i.id,note});
     const rec=(posRecon.recs||[]).find(r=>r.date===date);if(rec){rec.ack=rec.ack||{};rec.ack[i.id]={by:"auto · Journal Tape",note};}}catch(e){}}
 // after a Pull: read the bills behind every new 💵 gap on the pulled days (this also auto-explains direct deliveries)
-async function posReconDirectAfterPull(dates){try{posRecon.recs=null;await posReconLoad();const ds=new Set(dates);
+function posReconDirectAfterPull(dates){try{posRecon.recs=null;posReconLoad();const ds=new Set(dates);
   const items=posReconItems(posRecon.recs).filter(i=>ds.has(i.date)&&!i.ack&&i.unexpl>=5&&!posRecon.bills[posReconBillKey(i)]);
-  for(const i of items)await posReconBills(posReconBillKey(i));}catch(e){console.log("[recon direct]",e);}}
-async function posReconBillsAll(){const items=posReconItems(posRecon.recs).filter(i=>i.unexpl>=5&&!posRecon.bills[posReconBillKey(i)]);
-  for(const i of items){await posReconBills(posReconBillKey(i));}}
+  for(const i of items)posReconBills(posReconBillKey(i));}catch(e){console.log("[recon direct]",e);}}
+function posReconBillsAll(){const items=posReconItems(posRecon.recs).filter(i=>i.unexpl>=5&&!posRecon.bills[posReconBillKey(i)]);
+  for(const i of items){posReconBills(posReconBillKey(i));}}
 window.posReconBills=posReconBills;window.posReconBillsAll=posReconBillsAll;
 
 // ── v575: JOURNAL TAPE COLLECTION — per outlet-day, compact delivery bills → KV (for item-level discount attribution
 // and the Wicked Wings / Smokeys split). Runs after every Pull for the pulled days; history via the card below.
 function posJTLocKey(loc){return loc.slice(0,3)+(PS_FYZ_LOCS.has(loc)?"-F":"");}
 const PS_JT_LOCS=Object.keys(PS_LOCATION_MAP);
-async function posJTCollectDay(iso,locs,onLoc){let ok=0,fail=0,bills=0;
+function posJTCollectDay(iso,locs,onLoc){let ok=0,fail=0,bills=0;
   for(const loc of locs){if(posSyncState.stop)break;
-    try{let r;try{r=await posApi("/api/pos/report",{kind:"jt",date:iso,loc});}catch(e1){await new Promise(z=>setTimeout(z,2000));r=await posApi("/api/pos/report",{kind:"jt",date:iso,loc});}
-      const c=psJTCompact(psParseJT(r.csv),loc);await posApi("/api/pos/jt",{date:iso,loc:posJTLocKey(loc),data:c});ok++;bills+=c.bills.length;}
+    try{let r;try{r=posApi("/api/pos/report",{kind:"jt",date:iso,loc});}catch(e1){new Promise(z=>setTimeout(z,2000));r=posApi("/api/pos/report",{kind:"jt",date:iso,loc});}
+      const c=psJTCompact(psParseJT(r.csv),loc);posApi("/api/pos/jt",{date:iso,loc:posJTLocKey(loc),data:c});ok++;bills+=c.bills.length;}
     catch(e){fail++;}
     if(onLoc)onLoc(loc);}
   return{ok,fail,bills};}
 // after a Pull: the pulled days (≤ 7, to keep the Pull quick)
-async function posJTAfterPull(dates){const P=posSyncState;const ds=dates.slice(-7);if(!ds.length)return;
+function posJTAfterPull(dates){const P=posSyncState;const ds=dates.slice(-7);if(!ds.length)return;
   P.pulling=true;
   for(const iso of ds){const i=P.progress.push({t:`${posFmtDate(iso)} — Journal Tape (bill by bill, ${PS_JT_LOCS.length} outlets)…`,st:"run"})-1;renderPosSync();
-    const r=await posJTCollectDay(iso,PS_JT_LOCS);P.progress[i]={t:`${posFmtDate(iso)} — Journal Tape: ${r.ok} outlet(s), ${r.bills} delivery bills kept${r.fail?` · ${r.fail} failed`:""}`,st:r.fail?"err":"ok"};renderPosSync();}
-  P.pulling=false;renderPosSync();posJT.cache=null;await posReconDirectAfterPull(ds);}
+    const r=posJTCollectDay(iso,PS_JT_LOCS);P.progress[i]={t:`${posFmtDate(iso)} — Journal Tape: ${r.ok} outlet(s), ${r.bills} delivery bills kept${r.fail?` · ${r.fail} failed`:""}`,st:r.fail?"err":"ok"};renderPosSync();}
+  P.pulling=false;renderPosSync();posJT.cache=null;posReconDirectAfterPull(ds);}
 // history card
 const posJT={from:null,to:null,run:null,cache:null};
 function posJTCardHTML(T,card,ct,btn){const y=posAddDays(posDubaiToday(),-1),f=posJT.from||posAddDays(y,-13),t=posJT.to||y,R=posJT.run;
@@ -1177,14 +1177,14 @@ function posJTCardHTML(T,card,ct,btn){const y=posAddDays(posDubaiToday(),-1),f=p
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">${inp("from",f)}<span style="color:${T.textSecondary}">→</span>${inp("to",t)}${btn(R&&R.running?`⏳ Day ${R.day} of ${R.days} · ${R.loc}…`:"🧾 Read Journal Tape","posJTHistory()",true,!!(R&&R.running)||posSyncState.pulling)}${R&&R.running?btn("⏹ Stop","posSyncState.stop=true",false,false):""}</div>`;
   if(R&&!R.running)h+=`<div style="margin-top:10px;font-size:12.5px;color:${R.fail?T.accentOrange:T.accentGreen};font-weight:700">${R.stopped?"⏹ Stopped — ":"✅ "}${R.done} day(s) read, ${R.skipped} already there, ${R.bills} delivery bills kept${R.fail?` · ${R.fail} outlet-day(s) failed (run again to retry)`:""}</div>`;
   return h+`</div>`;}
-async function posJTHistory(){const P=posSyncState;if(P.pulling||(posJT.run&&posJT.run.running))return;if(P.status&&!P.status.hasCreds){posOpenCreds();return;}
+function posJTHistory(){const P=posSyncState;if(P.pulling||(posJT.run&&posJT.run.running))return;if(P.status&&!P.status.hasCreds){posOpenCreds();return;}
   const y=posAddDays(posDubaiToday(),-1);let f=posJT.from||posAddDays(y,-13),t=posJT.to||y;if(f>t)[f,t]=[t,f];if(t>y)t=y;
   const dates=[];for(let d=f;d<=t;d=posAddDays(d,1))dates.push(d);
-  let have=new Set();try{const j=await posApi(`/api/pos/jt?from=${f}&to=${t}&keys=1`);have=new Set(j.keys||[]);}catch(e){}
+  let have=new Set();try{const j=posApi(`/api/pos/jt?from=${f}&to=${t}&keys=1`);have=new Set(j.keys||[]);}catch(e){}
   const R=posJT.run={running:true,day:0,days:dates.length,loc:"",done:0,skipped:0,fail:0,bills:0,start:Date.now(),iso:""};P.stop=false;renderPosSync();
   for(const iso of dates){if(P.stop){R.stopped=true;break;}R.day++;R.iso=iso;
     const locs=PS_JT_LOCS.filter(l=>!have.has(iso+":"+posJTLocKey(l)));if(!locs.length){R.skipped++;continue;}
-    const r=await posJTCollectDay(iso,locs,l=>{R.loc=(PS_INSTORE_MAP[l]||l);renderPosSync();});R.done++;R.fail+=r.fail;R.bills+=r.bills;}
+    const r=posJTCollectDay(iso,locs,l=>{R.loc=(PS_INSTORE_MAP[l]||l);renderPosSync();});R.done++;R.fail+=r.fail;R.bills+=r.bills;}
   R.running=false;P.stop=false;posJT.cache=null;renderPosSync();}
 window.posJTHistory=posJTHistory;window.posJT=posJT;
 
@@ -1232,23 +1232,43 @@ function apMessage(res,sumY,sumW){
   return{ok:true,title:`✅ Yesterday's data is ready — ${dl}`,body:L.join("\n")||"Pulled from Microsys into the LIVE sheet.",url:"/",tag:"autopull"};
 }
 
-// ═══ v601 /autopull.js — run by Nikhil's Google Apps Script at ~9:00 Dubai. It is the dashboard's own POS Sync code
+// ═══ v601 /autopull.js — run by Nikhil's Google Apps Script every morning. It is the dashboard's own POS Sync code
 // (possync_core + possync_client) with the screen parts switched off, calling the same /api/pos/* endpoints with the
-// auto-pull token. Nothing here is secret; the token lives only in the Apps Script and in Cloudflare KV. ═══
-async function AP_run(o){
+// auto-pull key. v603: the code is turned fully synchronous when this file is built (async/await removed — every call
+// here is Apps Script's synchronous UrlFetchApp anyway), because Apps Script cancelled the first test run while it was
+// still working through the async chain. Nothing here is secret; the key lives only in the Apps Script and Cloudflare KV. ═══
+function __all(a){const r=a.slice();Object.defineProperty(r,"then",{value:function(f){if(f)f(r);return r;}});Object.defineProperty(r,"catch",{value:function(){return r;}});return r;}
+function AP_run(o){
   AP_BASE=o.base;AP_SID="auto:"+o.token;AP_T0=Date.now();AP_FINAL=false;
   const y=posAddDays(posDubaiToday(),-1);let res=null,err=null;
-  try{res=await posStartPull({auto:true});}catch(e){err=e;}
+  try{res=posStartPull({auto:true});}catch(e){err=e;}
   if(!res)res={dates:[y],days:[{date:y,error:err?String(err.message||err):"the pull did not start"}],okDays:0};
   let sy="",sw="";AP_FINAL=true;
-  if(res.okDays){try{sy=(await posApi("/api/pos/report",{kind:"summary",date:y})).csv;}catch(e){}try{sw=(await posApi("/api/pos/report",{kind:"summary",date:posAddDays(y,-7)})).csv;}catch(e){}}
+  if(res.okDays){try{sy=posApi("/api/pos/report",{kind:"summary",date:y}).csv;}catch(e){}try{sw=posApi("/api/pos/report",{kind:"summary",date:posAddDays(y,-7)}).csv;}catch(e){}}
   const msg=apMessage(res,sy,sw),secs=Math.round((Date.now()-AP_T0)/1000);
-  try{await posApi("/api/auto/report",{date:y,ok:msg.ok,stage:o.retry?"retry":"9am",msg:msg.title+" — "+msg.body,secs});}catch(e){}
+  try{posApi("/api/auto/report",{date:y,ok:msg.ok,stage:o.retry?"retry":"morning run",msg:msg.title+" — "+msg.body,secs,hour:o.hour});}catch(e){}
   return msg;
 }
-async function AP_notify(o,msg){AP_BASE=o.base;AP_SID="auto:"+o.token;return await posApi("/api/push/send",msg);}
+// What each Apps Script function does (the script itself only names them, so changes here need no re-paste)
+function AP_gs(o,what){
+  const P=PropertiesService.getScriptProperties(),hour=Math.max(5,Math.min(12,+o.hour||9));
+  const drop=n=>ScriptApp.getProjectTriggers().forEach(t=>{if(t.getHandlerFunction()===n)ScriptApp.deleteTrigger(t);});
+  const send=m=>{const r=UrlFetchApp.fetch(o.base+"/api/push/send",{method:"post",contentType:"application/json",headers:{"X-Session-Id":"auto:"+o.token},payload:JSON.stringify(m),muteHttpExceptions:true});Logger.log("notification: "+r.getContentText());};
+  if(what==="setup"){ScriptApp.getProjectTriggers().forEach(t=>ScriptApp.deleteTrigger(t));
+    ScriptApp.newTrigger("autoPull").timeBased().everyDays(1).atHour(hour).nearMinute(0).inTimezone("Asia/Dubai").create();
+    AP_BASE=o.base;AP_SID="auto:"+o.token;AP_T0=Date.now();AP_FINAL=true;try{posApi("/api/auto/report",{stage:"setup",hour});}catch(e){Logger.log("Couldn't reach the dashboard: "+e.message);}
+    Logger.log(`Done — the pull runs every day at about ${hour}:00 Dubai time.`);return;}
+  if(what==="notifyReady"){drop("notifyReady");const m=P.getProperty("msg");if(m)send(JSON.parse(m));return;}
+  const retry=what==="autoPullRetry",now=what==="runNow";if(retry)drop("autoPullRetry");
+  Logger.log("Pulling yesterday from Microsys…");
+  const msg=AP_run({base:o.base,token:o.token,retry,hour});
+  Logger.log(msg.title+"\n"+msg.body);
+  if(msg.ok&&!now){P.setProperty("msg",JSON.stringify(msg));ScriptApp.newTrigger("notifyReady").timeBased().after(5*60*1000).create();Logger.log("The notification goes out in 5 minutes.");}
+  else if(!msg.ok&&!retry&&!now){ScriptApp.newTrigger("autoPullRetry").timeBased().after(30*60*1000).create();Logger.log("Will try again in 30 minutes.");}
+  else send(msg);
+}
 // ── the dashboard's network call, done with Apps Script's UrlFetchApp (synchronous) ──
-posApi=async function(path,body){
+posApi=function(path,body){
   // Apps Script stops a run at 6 minutes: Journal Tape stops reading at 4 min and the catch-up at 5 (both continue on the
   // next Pull); yesterday itself is always done first, and the closing summary reads are never cut
   const el=Date.now()-AP_T0;
@@ -1257,6 +1277,7 @@ posApi=async function(path,body){
   if(body){opt.contentType="application/json";opt.payload=JSON.stringify(body);}
   const res=UrlFetchApp.fetch(AP_BASE+path,opt),code=res.getResponseCode();let j=null;try{j=JSON.parse(res.getContentText());}catch(e){}
   if(code<200||code>=300)throw new Error((j&&(j.error+(j.detail?": "+j.detail:"")))||("HTTP "+code));
+  j=j||{};Object.defineProperty(j,"then",{value:function(f){if(f)f(j);return j;}});Object.defineProperty(j,"catch",{value:function(){return j;}});
   return j;
 };
 renderPosSync=function(){};posUpdateTabBadge=function(){};posInstoreReloadSoon=function(){};
