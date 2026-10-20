@@ -937,6 +937,9 @@ async function handlePosReconSave(request, env) {
   const prev = JSON.parse((await env.SESSIONS.get(key)) || "null");
   const num = v => Math.round((+v || 0) * 100) / 100, str = (v, n) => String(v == null ? "" : v).slice(0, n);
   const ordl = (l, n) => (Array.isArray(l) ? l : []).slice(0, n).map(o => ({ cust: str(o.cust, 60), ord: str(o.ord, 20), inv: str(o.inv, 20), ref: str(o.ref, 30), amt: num(o.amt) })); // v565: order numbers
+  // v598: never replace a good day with an incomplete Credit Sales read (platforms under 80% of the till's delivery buttons)
+  const bad = r => r && +r.pos > 2000 && +r.agg < 0.8 * +r.pos;
+  if (bad(rec) && prev && !bad(prev)) return json({ error: "incomplete_read", detail: "Credit Sales looks incomplete for this day — kept the earlier check" }, 409);
   const out = { date, pos: num(rec.pos), agg: num(rec.agg), by: s.user, at: new Date().toISOString(), ack: (prev && prev.ack) || {},
     rows: (Array.isArray(rec.rows) ? rec.rows : []).slice(0, 80).map(r => ({ loc: str(r.loc, 80), out: str(r.out, 40), rc: str(r.rc, 20), brand: str(r.brand, 20),
       pos: num(r.pos), agg: num(r.agg), gap: num(r.gap), unexpl: num(r.unexpl), other: (Array.isArray(r.other) ? r.other : []).slice(0, 8).map(o => [str(o[0], 60), num(o[1])]), orders: ordl(r.orders, 30) })),
@@ -983,6 +986,7 @@ async function handlePosTillOnly(request, env) {
   const rows = [], days = [], dayPos = {};
   for (const rec of recs) {
     days.push(rec.date); dayPos[rec.date] = rec.pos;
+    if (+rec.pos > 2000 && +rec.agg < 0.8 * +rec.pos) continue; // v598: incomplete Credit Sales read — its gaps aren't real
     for (const x of rec.rows || []) {
       const cat = (x.other || []).filter(o => /catering/i.test(o[0])).reduce((a, o) => a + o[1], 0);
       const test = (x.other || []).filter(o => /deliverect mp card/i.test(o[0])).reduce((a, o) => a + o[1], 0);
