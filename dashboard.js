@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-21-603";
+const BUILD_VERSION="2026-10-21-604";
 const BUILD_NOTES=[
+  "🎨 TWO FIXES (build 604). (1) While the dashboard was still loading, Overview could paint in the light theme — the Avg Ratings card came up white and the KPI numbers dark grey on dark cards. The page starts on Overview but switched to the dark colours only after the sheets finished loading, so anything that repainted earlier (Keeta data, data checks, ratings) used light colours. It now starts dark. (2) POS Sync → Morning auto-pull: once set up, the card only showed 'Set up' with no way back into the setup (to make a new key or copy the code again) — there is now a 'Key & code' button next to it.",
   "⏰ MORNING AUTO-PULL + PHONE NOTIFICATIONS (builds 602–603, free Cloudflare plan). Every morning at about 8:00 Dubai (the hour is set in the Apps Script), yesterday is pulled from Microsys into the LIVE sheet by itself — the same Pull as the button (delivery tabs, Dine-In & Takeaway, Dine-In Discounts, till check, low-sales check, 14-day catch-up, Journal Tape) — run by a free Google Apps Script in Nikhil's own Google account, which loads the dashboard's own POS Sync code each morning (/autopull.js). Five minutes later (once Google's published copy has caught up) a notification arrives on the phone through the dashboard in Chrome: net sales excl. VAT vs the same day last week, delivery / dine-in / takeaway, delivery by brand, outlets unusually low. If the run fails it retries 30 minutes later; if that fails too the phone gets 'tap to finish', which opens POS Sync and finishes the pull with no questions, then notifies everyone. New card on POS Sync: status, last runs, 🔔 Turn on notifications for this device, Send a test, and the one-time setup (key + ready-made Apps Script code). NEEDS the new worker.js plus sw.js and autopull.js uploaded next to dashboard.js. 603: the Apps Script code runs fully synchronously (the first test run was cancelled by Apps Script part-way through the async chain), and the script is now a short stub that loads everything from autopull.js, so later changes never need a re-paste.",
   "📈 COMPLAINTS INDEX — THE CURRENT MONTH NO LONGER DRAGS THE LINES DOWN + PROGRESS ON EVERY UPLOAD (build 601). (1) Feedback → Index: the month in progress is projected from its daily pace (complaints and orders each to their own last day × days in the month), drawn dashed with a hollow dot and labelled 'so far'; the tooltip shows the real count and the pace. A 'How to read this' note sits above the chart, and under it a 'Same days' strip compares the first N days of this month with the same days last month — orders, complaints, complaints per 1,000 orders and a verdict — with no projection. The red/green alert uses the projection, but not before day 7. (2) Progress: uploading the Feedback Excel now shows the glowing panel (file x of y, reading / saving to the server), and anything without its own panel — order-file uploads, Daily Digest and Compare PDFs, the raw Microsys report — now shows it pinned at the top of the page you started it on (before, the corner toast hid itself on that page).",
   "✨ ONE EYE-CATCHING PROGRESS STYLE EVERYWHERE (build 600). Every wait now shows the same glowing panel — spinning ring, what's running, the item being read right now, %, time left and a thick animated striped bar, turning green with a ✓ when done: Pull POS data (with the last steps as a checklist), Backfill, Journal Tape history, Test connection, Till vs dashboard checks, 'Show the bills for every gap', Site P&L upload, and the first load of Promotions and the KPI tracker. Anything still running also shows a thin glowing line along the top of the screen and a corner toast on every other page (order-file uploads and PDF exports included) — click it to go back.",
@@ -1678,7 +1679,7 @@ function pctClr(n){if(n==null)return _darkPage?DARK_THEME.textMuted:"#64748b";if
 // theming these shared, inline-styled functions requires them to check which theme is active,
 // not a CSS override alone. Defaults to light (false) so every page other than Overview is
 // completely unaffected; renderOverview() sets this true only while it's rendering.
-let _darkPage=false;
+let _darkPage=true; // v604: every page is dark — start dark so early background repaints match
 
 // ═══════════════════════════════════════════════════════════════
 // KEETA EXACT-DISCOUNT MODULE
@@ -6183,7 +6184,7 @@ function toggleOvRatingsExpand(brand,agg){
 // change that only affects two small elements), this swaps just the ratings panel and its
 // expand wrapper in place via their ids — cheap, and doesn't touch anything else on the page.
 function refreshOvRatingsLive(){
-  if(curPage!=="overview")return;
+  if(curPage!=="overview")return;_darkPage=true;
   const g=document.getElementById("ov-ratings-panel");if(g)g.outerHTML=renderOvRatingsGridItem();
   const w=document.getElementById("ov-ratings-expand-wrap");if(w)w.innerHTML=renderOvRatingsExpand();
 }
@@ -28305,7 +28306,7 @@ function apCardHTML(T,card,ct,btn){
   const pill=(on,t)=>`<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;color:${on?T.accentGreen:T.textSecondary}"><span style="width:8px;height:8px;border-radius:50%;background:${on?T.accentGreen:T.textMuted}"></span>${t}</span>`;
   let h=`<div style="${card}"><div style="${ct}">⏰ Morning auto-pull</div>`;
   h+=row(`Pull yesterday automatically at about <b>${s.hour||8}:00</b> (Dubai) → LIVE sheet`,s.hasToken?`Runs in your Google Apps Script · key made ${apFmtTs(s.tokenMeta&&s.tokenMeta.at)}`:"Not set up yet — one-time setup, about 5 minutes",
-    s.hasToken?pill(true,"Set up"):pill(false,"Off")+(isN?btn("Set it up","apToggleSetup()",true,false):""));
+    s.hasToken?pill(true,"Set up")+(isN?btn(apS.showSetup?"Hide":"🔑 Key & code","apToggleSetup()",false,false):""):pill(false,"Off")+(isN?btn("Set it up","apToggleSetup()",true,false):""));
   h+=row("Last run",L?`<span style="color:${L.ok?T.accentGreen:T.accentOrange}">${L.ok?"✓":"⚠"} ${apFmtTs(L.ts)} · ${f(L.stage)}${L.secs?` · ${L.secs}s`:""}</span> — ${f(L.msg).replace(/\n/g," · ")}`:"No automatic run yet","");
   const supported=typeof navigator!=="undefined"&&"serviceWorker" in navigator&&typeof window!=="undefined"&&"PushManager" in window;
   h+=row("Notifications on this device",supported?(apS.sub?`On · ${s.subs||1} device${(s.subs||1)>1?"s":""} get the 9 am message`:`Off · ${s.subs||0} device${s.subs===1?"":"s"} signed up`):"This browser can't show notifications",
