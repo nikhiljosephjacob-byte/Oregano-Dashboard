@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-21-605";
+const BUILD_VERSION="2026-10-21-606";
 const BUILD_NOTES=[
+  "📧 DAILY DIGEST BY EMAIL, AUTOMATICALLY + CAREEM / NOON BUDGET FLAG FIXED (build 606). (1) After the morning pull (when the 'data is ready' notification goes out), the full 6-page Daily Digest is emailed as a PDF from Nikhil's Gmail to the list on POS Sync → Morning auto-pull (starts with nikhil@oreganorestaurants.com; add or remove addresses there, switch it on/off). The dashboard builds it in Cloudflare's headless browser (free plan: 10 browser-minutes a day) using a one-time, 10-minute, read-only 'digest' sign-in made for that run. If the PDF can't be made, the email still goes with the summary and says why. Needs two Cloudflare secrets (CF_BR_TOKEN, CF_ACCOUNT_ID) and the updated Apps Script code (Key & code now shows the code with the current key). (2) Per Nikhil: Careem and Noon ad budgets marked 'Combined per brand' are one pool shared by the brand's outlets, so an outlet can't run out while the brand pool has money — the Digest ('Needs a decision today', Actions, ads notes) now judges those per brand × platform × ad type instead of flagging single outlets (Oregano · Al Quoz / DMC / Jumeirah · Careem were false flags).",
   "⏰ AUTO-PULL FIXES (build 605). (1) Apps Script decides which permissions a script needs by reading its code; the short script from 603 no longer mentioned triggers or script storage, so 'setup' failed with 'Specified permissions are not sufficient to call ScriptApp.getProjectTriggers'. The code from 🔑 Key & code now ends with a permissions_ line naming them. (2) A run before 4 AM Dubai (e.g. a late-night test) now says '⏳ Pulled early — day not finished': outlets trade until about 3 AM and those sales belong to the previous day; the morning run pulls the day again.",
   "🎨 TWO FIXES (build 604). (1) While the dashboard was still loading, Overview could paint in the light theme — the Avg Ratings card came up white and the KPI numbers dark grey on dark cards. The page starts on Overview but switched to the dark colours only after the sheets finished loading, so anything that repainted earlier (Keeta data, data checks, ratings) used light colours. It now starts dark. (2) POS Sync → Morning auto-pull: once set up, the card only showed 'Set up' with no way back into the setup (to make a new key or copy the code again) — there is now a 'Key & code' button next to it.",
   "⏰ MORNING AUTO-PULL + PHONE NOTIFICATIONS (builds 602–603, free Cloudflare plan). Every morning at about 8:00 Dubai (the hour is set in the Apps Script), yesterday is pulled from Microsys into the LIVE sheet by itself — the same Pull as the button (delivery tabs, Dine-In & Takeaway, Dine-In Discounts, till check, low-sales check, 14-day catch-up, Journal Tape) — run by a free Google Apps Script in Nikhil's own Google account, which loads the dashboard's own POS Sync code each morning (/autopull.js). Five minutes later (once Google's published copy has caught up) a notification arrives on the phone through the dashboard in Chrome: net sales excl. VAT vs the same day last week, delivery / dine-in / takeaway, delivery by brand, outlets unusually low. If the run fails it retries 30 minutes later; if that fails too the phone gets 'tap to finish', which opens POS Sync and finishes the pull with no questions, then notifies everyone. New card on POS Sync: status, last runs, 🔔 Turn on notifications for this device, Send a test, and the one-time setup (key + ready-made Apps Script code). NEEDS the new worker.js plus sw.js and autopull.js uploaded next to dashboard.js. 603: the Apps Script code runs fully synchronously (the first test run was cancelled by Apps Script part-way through the async chain), and the script is now a short stub that loads everything from autopull.js, so later changes never need a re-paste.",
@@ -1132,8 +1133,15 @@ function digestAdSnapshot(){
     byAgg[r.aggregator].spent+=r.budgetSpent;byAgg[r.aggregator].alloc+=r.budgetAlloc;
   }
   const today=cpcRealToday();
-  const critical=active.filter(r=>r.status==="Critical").sort((a,b)=>(a.daysUntilExhausted??999)-(b.daysUntilExhausted??999)).slice(0,3);
-  const underspending=active.filter(r=>{
+  const units=[],pools={};
+  for(const r of active){if(r.budgetType!=="combined"){units.push(r);continue;}
+    const k=r.brand+"|"+r.aggregator+"|"+(r.adType||"");
+    const p=pools[k]||(pools[k]={brand:r.brand,aggregator:r.aggregator,adType:r.adType,branch:"all outlets (combined budget)",pooled:true,n:0,budgetAlloc:0,budgetSpent:0,leftover:0,liveBurn:0,startDate:r.startDate,endDate:r.endDate});
+    p.n++;p.budgetAlloc+=r.budgetAlloc||0;p.budgetSpent+=r.budgetSpent||0;p.leftover+=Math.max(0,r.leftover||0);p.liveBurn+=r.liveBurn||0;
+    if(r.startDate&&(!p.startDate||r.startDate<p.startDate))p.startDate=r.startDate;if(r.endDate&&(!p.endDate||r.endDate>p.endDate))p.endDate=r.endDate;}
+  Object.values(pools).forEach(p=>{p.status=p.leftover>5?"Active":"Critical";p.daysUntilExhausted=p.status==="Active"&&p.liveBurn>0?Math.floor(p.leftover/p.liveBurn):null;units.push(p);});
+  const critical=units.filter(r=>r.status==="Critical").sort((a,b)=>(a.daysUntilExhausted??999)-(b.daysUntilExhausted??999)).slice(0,3);
+  const underspending=units.filter(r=>{
     if(!r.startDate||!r.endDate||r.budgetAlloc<=0)return false;
     const totalDays=Math.max(1,(new Date(r.endDate)-new Date(r.startDate))/86400000+1);
     const elapsed=Math.max(0,(new Date(today)-new Date(r.startDate))/86400000+1);
@@ -28279,7 +28287,16 @@ async function apNewToken(){
   if(apS.st&&apS.st.hasToken&&!confirm("Make a new key? The current one stops working straight away — you then paste the new code into the Apps Script."))return;
   try{const r=await posApi("/api/auto/token",{});apS.token=r.token;apS.showSetup=true;apS.note="";}catch(e){apS.note="❌ "+e.message;}await apLoad();}
 function apCopy(){const t=document.getElementById("ap-code");if(!t)return;t.select();try{navigator.clipboard.writeText(t.value);}catch(e){try{document.execCommand("copy");}catch(e2){}}apS.note="✓ Code copied — paste it into the Apps Script";renderPosSync();}
-function apToggleSetup(){apS.showSetup=!apS.showSetup;renderPosSync();}
+async function apToggleSetup(){apS.showSetup=!apS.showSetup;
+  if(apS.showSetup&&!apS.token&&apS.st&&apS.st.hasToken){try{const r=await posApi("/api/auto/key");if(r.token)apS.token=r.token;}catch(e){}} // v606: show the code with the current key — no new key needed
+  renderPosSync();}
+// v606: Daily Digest email — who gets it
+function apDgCfg(){return(apS.st&&apS.st.digest)||{on:true,to:["nikhil@oreganorestaurants.com"]};}
+async function apDgSave(c){try{const r=await posApi("/api/auto/digestcfg",c);apS.st=Object.assign({},apS.st||{},{digest:{on:r.on,to:r.to}});apS.note="✓ Email settings saved";}catch(e){apS.note="❌ "+e.message;}renderPosSync();}
+function apDgAdd(){const i=document.getElementById("ap-dg-add");const v=(i&&i.value||"").trim().toLowerCase();if(!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(v)){apS.note="❌ That doesn't look like an email address";renderPosSync();return;}
+  const c=apDgCfg();if(c.to.includes(v))return;apDgSave({on:c.on,to:[...c.to,v]});}
+function apDgDel(e){const c=apDgCfg();apDgSave({on:c.on,to:c.to.filter(x=>x!==e)});}
+function apDgToggle(){const c=apDgCfg();apDgSave({on:!c.on,to:c.to});}
 function apCode(tok){return `// Oregano Dashboard — morning auto-pull (Google Apps Script). Made by the dashboard: POS Sync → Morning auto-pull.
 // Every day at about HOUR:00 Dubai time it pulls yesterday from Microsys into the LIVE sheet with the dashboard's own
 // POS Sync code (downloaded fresh from the dashboard each time, so dashboard updates never need a re-paste) and sends
@@ -28291,6 +28308,7 @@ const HOUR = 8;   // the hour (Dubai) the pull runs — change it, save, then ru
 
 function setup() { go_("setup"); }          // run once (and again after changing HOUR)
 function runNow() { go_("runNow"); }        // test: pull yesterday now and notify straight away
+function emailNow() { go_("emailNow"); }    // test: email the Daily Digest now to the list set in the dashboard
 function autoPull() { go_("autoPull"); }
 function autoPullRetry() { go_("autoPullRetry"); }
 function notifyReady() { go_("notifyReady"); }
@@ -28299,7 +28317,7 @@ function go_(what) {
   new Function(code + "\\nreturn AP_gs;")()({ base: DASH, token: KEY, hour: HOUR }, what);
 }
 // Never runs — it only tells Google which permissions the script needs (schedule its runs, remember the message, reach the dashboard)
-function permissions_() { ScriptApp.getProjectTriggers(); PropertiesService.getScriptProperties(); UrlFetchApp.fetch(DASH); }
+function permissions_() { ScriptApp.getProjectTriggers(); PropertiesService.getScriptProperties(); UrlFetchApp.fetch(DASH); MailApp.getRemainingDailyQuota(); }
 `;}
 function apFmtTs(ts){if(!ts)return"";const d=new Date(ts);return d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",timeZone:"Asia/Dubai"})+" "+d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Dubai"});}
 function apCardHTML(T,card,ct,btn){
@@ -28316,6 +28334,12 @@ function apCardHTML(T,card,ct,btn){
     apS.busy?`<span style="font-size:12px;color:${T.accentOrange};font-weight:800">${f(apS.busy)}</span>`:(apS.sub?pill(true,"On")+btn("Send a test","apTest()",false,false)+btn("Turn off","apDisable()",false,false):btn("🔔 Turn on","apEnable()",true,!supported)));
   if(apS.note)h+=`<div style="margin-top:10px;font-size:12.5px;font-weight:700;color:${/^❌/.test(apS.note)?T.accentRed:T.accentGreen}">${f(apS.note)}</div>`;
   if(apS.err)h+=`<div style="margin-top:10px;font-size:12px;color:${T.accentOrange}">Couldn't read the auto-pull status (${f(apS.err)}) — is the new worker.js uploaded?</div>`;
+  // v606: Daily Digest email
+  {const c=apDgCfg(),M=s.lastmail;
+   const chips=c.to.map(e=>`<span style="display:inline-flex;align-items:center;gap:6px;background:${T.bg};border:1px solid ${T.cardBorder};border-radius:14px;padding:3px 6px 3px 10px;font-size:12px;margin:3px 6px 3px 0">${f(e)}${isN?`<button onclick="apDgDel('${f(e)}')" title="Remove" style="border:none;background:transparent;color:${T.textSecondary};cursor:pointer;font-size:13px;padding:0 3px">✕</button>`:""}</span>`).join("")||`<span style="font-size:12px;color:${T.textSecondary}">nobody yet</span>`;
+   h+=row(`Email the full Daily Digest (PDF) after the pull`,`${chips}${isN?`<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><input id="ap-dg-add" type="email" placeholder="add an email address" onkeydown="if(event.key==='Enter')apDgAdd()" style="padding:6px 9px;border-radius:7px;border:1px solid ${T.cardBorder};background:${T.bg};color:${T.textPrimary};font:inherit;font-size:12px;min-width:220px">${btn("+ Add","apDgAdd()",false,false)}</div>`:""}
+     <div style="margin-top:6px">${s.hasBR?"":`<span style="color:${T.accentOrange}">⚠ Needs the Cloudflare browser key (CF_BR_TOKEN and CF_ACCOUNT_ID) — see the setup steps. Until then the email goes out with the summary only. </span>`}${M?`Last email: <span style="color:${M.ok?T.accentGreen:T.accentOrange}">${M.ok?"✓":"⚠"} ${apFmtTs(M.ts)} · ${M.to} recipient${M.to===1?"":"s"} · ${f(M.msg)}</span>`:"No email sent yet"}</div>`,
+     isN?(c.on?pill(true,"On")+btn("Turn off","apDgToggle()",false,false):pill(false,"Off")+btn("Turn on","apDgToggle()",true,false)):pill(c.on,c.on?"On":"Off"));}
   const log=(s.log||[]).slice(0,5);
   if(log.length)h+=`<div style="margin-top:12px;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:${T.textMuted}">Recent mornings</div>`+log.map(x=>`<div style="font-size:12.5px;padding:6px 9px;border-radius:7px;margin-top:5px;background:${x.ok?T.accentGreen+"12":T.accentOrange+"14"};color:${x.ok?T.textPrimary:T.accentOrange}">${x.ok?"✓":"⚠"} ${apFmtTs(x.ts)} — ${f(x.msg).split(" — ")[0]}</div>`).join("");
   if(isN&&(apS.showSetup||apS.token)){
@@ -28325,8 +28349,10 @@ function apCardHTML(T,card,ct,btn){
       ${st(2,`Make the key: ${btn(s.hasToken?"Make a new key":"🔑 Make the key","apNewToken()",!apS.token,false)} — the code below fills itself in.`)}
       ${st(3,`Open <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener" style="color:${T.accentOrange}">script.google.com → New project</a> (your own Google account). Name it “Oregano auto-pull”, delete what's in the editor, paste the code, press 💾 Save.`)}
       ${st(4,"At the top, pick <b>setup</b> in the function list → ▶ Run → allow access (Google shows “Google hasn't verified this app” — it's your own script: Advanced → Go to Oregano auto-pull). That creates the daily run (8:00 — to change it, edit <b>HOUR</b> in the code, save, and run setup again).")}
-      ${st(5,"Test it: pick <b>runNow</b> → ▶ Run. In 2–4 minutes yesterday is pulled again (same as pressing Pull) and your phone gets the message.")}</ol>
-      ${apS.token?`<textarea id="ap-code" readonly style="width:100%;height:150px;margin-top:8px;border-radius:8px;border:1px solid ${T.cardBorder};background:${T.bg};color:${T.textPrimary};font:11.5px/1.4 ui-monospace,Consolas,monospace;padding:8px;box-sizing:border-box">${esc(apCode(apS.token))}</textarea><div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${btn("📋 Copy the code","apCopy()",true,false)}<span style="font-size:12px;color:${T.textSecondary}">The key is shown only now. Lost it? Make a new key and paste the new code.</span></div>`:""}</div>`;}
+      ${st(5,"Test it: pick <b>runNow</b> → ▶ Run. In 2–4 minutes yesterday is pulled again (same as pressing Pull) and your phone gets the message.")}
+      ${st(6,`For the Digest email: in Cloudflare, <b>Manage account → Account API tokens → Create token → Custom token</b>, permission <b>Account · Browser Rendering · Edit</b> → create and copy it. Then <b>Workers &amp; Pages → your dashboard worker → Settings → Variables and Secrets</b> → add two <b>Secrets</b>: <b>CF_BR_TOKEN</b> (the token) and <b>CF_ACCOUNT_ID</b> (your Account ID, shown on the Workers &amp; Pages overview page). Status: ${s.hasBR?`<span style="color:${T.accentGreen};font-weight:800">✓ set</span>`:`<span style="color:${T.accentOrange};font-weight:800">not set yet</span>`}.`)}
+      ${st(7,"Test the email: in Apps Script pick <b>emailNow</b> → ▶ Run (about a minute). The Digest goes to the addresses above.")}</ol>
+      ${apS.token?`<textarea id="ap-code" readonly style="width:100%;height:150px;margin-top:8px;border-radius:8px;border:1px solid ${T.cardBorder};background:${T.bg};color:${T.textPrimary};font:11.5px/1.4 ui-monospace,Consolas,monospace;padding:8px;box-sizing:border-box">${esc(apCode(apS.token))}</textarea><div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${btn("📋 Copy the code","apCopy()",true,false)}<span style="font-size:12px;color:${T.textSecondary}">Paste over everything in the Apps Script, save, then run <b>setup</b> once (Google asks again for permission — this time also to send email as you).</span></div>`:""}</div>`;}
   return h+`</div>`;
 }
 // "Finish pull" from the phone notification (/?autopull=1): yesterday → LIVE, no questions, then "data is ready" to every device
@@ -28340,3 +28366,27 @@ async function apFinish(){const P=posSyncState;if(P.pulling)return;try{await pos
   const go=()=>{if(++n>600)return;if(!getActiveSession()||!document.getElementById("page-possync")||typeof gp!=="function")return setTimeout(go,1000);
     try{history.replaceState(null,"",location.pathname);}catch(e){}gp("possync");setTimeout(apFinish,600);};setTimeout(go,1500);})();
 window.apEnable=apEnable;window.apDisable=apDisable;window.apTest=apTest;window.apNewToken=apNewToken;window.apCopy=apCopy;window.apToggleSetup=apToggleSetup;
+
+// ═══ v606 DAILY DIGEST FOR THE MORNING EMAIL — when Cloudflare's headless browser opens /?dsid=<one-time sign-in>, the
+// dashboard signs in with it, waits until delivery, dine-in & takeaway, till discounts, catering, campaigns and ads are
+// loaded, builds the same 6-page Daily Digest as "Export Daily Digest" and shows it as the page (#digest-ready marks it
+// done), so the worker can turn it into a PDF for the Apps Script to email. ═══
+(function dgAuto(){
+  const m=typeof location!=="undefined"&&/[?&]dsid=([a-f0-9]{20,64})/.exec(location.search);if(!m)return;
+  window.__DG_AUTO=true;
+  try{localStorage.setItem("oregano_session",JSON.stringify({sessionId:m[1],user:"digest",displayName:"Daily Digest",initials:"DD",admin:false,loginAt:Date.now()}));}catch(e){}
+  const show=()=>{const l=document.getElementById("login-screen");if(l)l.style.display="none";const ls=document.getElementById("loading-screen");if(ls)ls.style.display="flex";if(typeof doLoad==="function")doLoad();};
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",show);else setTimeout(show,0);
+  const t0=Date.now();
+  const ready=()=>typeof latest!=="undefined"&&latest&&typeof allData!=="undefined"&&allData.length&&(typeof instoreLoaded==="undefined"||instoreLoaded)&&(typeof ddLoaded==="undefined"||ddLoaded)
+    &&(typeof tillOnly==="undefined"||tillOnly.rows!==null||tillOnly.failed);
+  const build=async()=>{
+    try{if(typeof campLoaded!=="undefined"&&!campLoaded){const csv=await fetchCSV(CAMPAIGN_GID);campaignData=parseCampaigns(csv);campLoaded=true;if(typeof rebuildCampIdxMap==="function")rebuildCampIdxMap();}}catch(e){}
+    try{if(typeof cpcLoaded!=="undefined"&&!cpcLoaded){const csv=await fetchCSV(CPC_GID);cpcData=parseCPCSheet(csv);cpcLoaded=true;}}catch(e){}
+    let html;try{html=digestBuildReportHTML().html;}catch(e){html=`<!DOCTYPE html><html><body style="font-family:Arial;padding:40px"><h2>Daily Digest couldn't be built</h2><p>${String(e&&e.message||e)}</p></body></html>`;}
+    const hi=setTimeout(()=>{},0);for(let i=0;i<=hi+50;i++){clearTimeout(i);clearInterval(i);} // stop the dashboard's timers so nothing draws over the report
+    document.open();document.write(html.replace("</body>",'<div id="digest-ready" style="display:none"></div></body>'));document.close();
+  };
+  const wait=()=>{if(ready()||Date.now()-t0>38000)setTimeout(build,1500);else setTimeout(wait,500);};
+  setTimeout(wait,1000);
+})();
