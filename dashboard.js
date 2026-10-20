@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-20-592";
+const BUILD_VERSION="2026-10-20-593";
 const BUILD_NOTES=[
+  "🐞 'FORECASTED' SHOWN ON CAMPAIGNS NOBODY FORECASTED — caught by Nikhil on two new Deliveroo BOGO campaigns (Oregano and Smokeys, 23–25 Oct). A saved forecast was matched to a campaign by brand × platform × type only, so ANY older BOGO forecast (e.g. one from September) counted. Now a forecast belongs to a campaign only if it was made for that campaign's dates (start within 7 days and overlapping). Same fix in the two other places that link forecasts and campaigns: 'Upcoming campaigns without a forecast' and the forecast-accuracy check (which could compare an old forecast with a much later campaign).",
   "🔧 KEETA ALERTS VISIBLE + LIVE DISCOUNTS IN THE P&L ESTIMATE. (1) Overview's data checks were worked out before the Keeta order data arrived from the server, so the Keeta minimum-commission alerts never showed — they now refresh when it arrives. If the loaded Keeta files are from before 591, a check says to re-upload them. (2) Site P&L 'so far' estimate: discounts now come live from the Google Sheet (delivery) and Microsys (dine-in & takeaway) instead of '—', with the discount chart and discount problems included.",
   "🧾 KEETA MINIMUM COMMISSION. Keeta charges 16% × (Original price − merchant-funded promo), minimum AED 6 — confirmed on every one of 5,760 September orders. Orders worth under AED 37.50 after the discount pay the AED 6. The Keeta order-file parser now records, per order, whether the minimum applied and the extra above 16%. Shown on Platforms → Keeta (orders on the minimum, extra commission, effective rate, discount on those orders, per brand → outlet, per day) and in each Keeta campaign's breakdown on Promotions. Alerts on Overview (data checks) and in the Daily Digest when a brand has 30%+ or an outlet 50%+ of its Keeta orders on the minimum over the last 7 days. Re-upload Keeta files from before 591 to fill it in.",
   "📊 SITE P&L REDESIGN + CLEANER POS SYNC. Site P&L: filters for month / year to date / current-month estimate, outlet and brand; tiles with trends; charts — revenue & net profit by month vs budget and last year, where every AED 100 of sales went (donut), net profit by outlet with budget markers (click to filter), why profit differs from budget, discounts % of gross vs last year; problems & proposed actions per outlet (structure, sales, discounts, costs over budget) with the group discount trend on top; outlet table folded. POS Sync: one header row (status, TEST/LIVE, test, login), Pull first, the new Till vs dashboard card (verdict, day strip, open items with one-click answers), and the less-used tools folded under More tools.",
@@ -14141,6 +14142,14 @@ function campCollapseSection(title,inner){
 // whose brand/platform/discount depth/cap match and which was saved BEFORE this campaign
 // started (a forecast can't be "for" something that already happened). Triggers a background
 // load of the forecast history the first time it's needed, same lazy pattern used elsewhere.
+function campFcDatesFit(f,c){
+  const day=s=>Date.parse(String(s).slice(0,10)+"T00:00:00Z")/864e5;
+  if(!c||!c.startDate)return false;
+  if(f.start){ // the forecast's planned window must be this campaign's window (±7 days on the start, and overlapping)
+    const fs=day(f.start),fe=day(f.end||f.start),cs=day(c.startDate),ce=day(c.endDate||c.startDate);
+    return Math.abs(fs-cs)<=7&&fs<=ce+3&&fe>=cs-3;}
+  if(!f.savedAt)return false; // very old records without planned dates: only a campaign starting within 21 days of saving
+  const g=day(c.startDate)-day(f.savedAt);return g>=0&&g<=21;}
 function campFcMatchSaved(c){
   if(campFcHistory===null){if(!campFcHistoryLoading)setTimeout(campFcLoadHistory,0);return null;}
   if(!campFcHistory.length)return null;
@@ -14161,6 +14170,7 @@ function campFcMatchSaved(c){
       const fIsBogo=f.type==='bogo'||(f.type==null&&f.discPct==null);
       if(!fIsBogo)return false;
       if(f.savedAt.slice(0,10)>c.startDate)return false;
+      if(!campFcDatesFit(f,c))return false; // v593
       return true;
     });
     if(!candidates.length)return null;
@@ -14176,6 +14186,7 @@ function campFcMatchSaved(c){
     if(f.discPct==null||Math.abs(f.discPct-hp)>8)return false; // v370: also guard the non-BOGO path — a null discPct should never satisfy a percentage match
     if(f.cap&&cCap&&Math.abs(f.cap-cCap)>6)return false;
     if(f.savedAt.slice(0,10)>c.startDate)return false;
+    if(!campFcDatesFit(f,c))return false; // v593
     return true;
   });
   if(!candidates.length)return null;
@@ -16877,6 +16888,7 @@ function campFcMatchActual(fRec){
     if(campStatus(c)!=='Completed'&&campStatus(c)!=='Running')return false;
     if(c.brand!==fRec.brand||c.aggregator!==fRec.agg)return false;
     if(c.startDate<fRec.savedAt.slice(0,10))return false; // must be after the forecast was saved
+    if(!campFcDatesFit(fRec,c))return false; // v593: and be the campaign the forecast was made for (its dates)
     // v416: real bug caught directly by Nikhil asking "is my saved history actually being used?"
     // — BOGO forecasts save discPct=null (there's no meaningful "% off" for a BOGO deal), but this
     // match always ran the same percentage comparison regardless of type, extracting whatever
