@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-20-600";
+const BUILD_VERSION="2026-10-21-601";
 const BUILD_NOTES=[
+  "📈 COMPLAINTS INDEX — THE CURRENT MONTH NO LONGER DRAGS THE LINES DOWN + PROGRESS ON EVERY UPLOAD (build 601). (1) Feedback → Index: the month in progress is projected from its daily pace (complaints and orders each to their own last day × days in the month), drawn dashed with a hollow dot and labelled 'so far'; the tooltip shows the real count and the pace. A 'How to read this' note sits above the chart, and under it a 'Same days' strip compares the first N days of this month with the same days last month — orders, complaints, complaints per 1,000 orders and a verdict — with no projection. The red/green alert uses the projection, but not before day 7. (2) Progress: uploading the Feedback Excel now shows the glowing panel (file x of y, reading / saving to the server), and anything without its own panel — order-file uploads, Daily Digest and Compare PDFs, the raw Microsys report — now shows it pinned at the top of the page you started it on (before, the corner toast hid itself on that page).",
   "✨ ONE EYE-CATCHING PROGRESS STYLE EVERYWHERE (build 600). Every wait now shows the same glowing panel — spinning ring, what's running, the item being read right now, %, time left and a thick animated striped bar, turning green with a ✓ when done: Pull POS data (with the last steps as a checklist), Backfill, Journal Tape history, Test connection, Till vs dashboard checks, 'Show the bills for every gap', Site P&L upload, and the first load of Promotions and the KPI tracker. Anything still running also shows a thin glowing line along the top of the screen and a corner toast on every other page (order-file uploads and PDF exports included) — click it to go back.",
   "✨ TILL VS DASHBOARD — A RUNNING CHECK IS IMPOSSIBLE TO MISS. Per Nikhil (nobody noticed the small grey 'Checking 0 of 1…'): while a check runs the button turns into a glowing orange 'Checking…', and a large panel appears at the top of the card — spinning ring, 'Checking with Microsys — day X of Y', the date being read, time left, a big % and a thick animated striped progress bar, with a pulsing glow around it.",
   "🐞 TILL VS DASHBOARD — '49 THINGS TO CHECK, AED 141,150' ON 20 SEP WAS A BAD MICROSYS READ, NOT A REAL GAP. After a 30-day check, 20 Sep (fine the day before) showed nearly the whole day's Oregano delivery as unexplained: Microsys returned an incomplete Credit Sales report for that day and the check saved it over the good one. Now: (1) a day where the platforms account for under 80% of the till's delivery buttons is treated as a bad read — retried once, and if still incomplete it isn't saved (the earlier check stays); (2) the worker refuses to replace a good day with an incomplete one; (3) any incomplete day already saved is left out of the card's totals, the badge and the till-only sales added to Overview, with a button to check that day again; (4) every day square can be clicked to re-check just that day; (5) a Pull warns if that day's Credit Sales looks incomplete (the sheet may be missing orders — pull it again).",
@@ -20594,6 +20595,7 @@ function feedbackBuildOverview(T){
       <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${T.label}"><span style="width:10px;height:10px;border-radius:2px;background:#FF8A3D"></span>Complaints</span>
       <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:${T.label}"><span style="width:16px;height:2px;background:#5AB4E8;border-radius:1px"></span>Total orders <span style="color:${T.muted}">(hover a point)</span></span>
     </div>
+    <div id="feedback-trend-explain"></div>
     <div style="position:relative;height:220px"><canvas id="feedback-trend-chart"></canvas></div>
     <div id="feedback-trend-alert"></div>
   </div>`;
@@ -20641,8 +20643,10 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
       const baseVals=feedbackMonthValues(baseMonth);
       const ordersBase=baseVals.orders;
       const complaintsBase=baseVals.complaints;
-      const ordersIdx=orderVol.map(v=>ordersBase>0?+(v/ordersBase*100).toFixed(1):0);
-      const complaintsIdx=counts.map(v=>complaintsBase>0?+(v/complaintsBase*100).toFixed(1):0);
+      const _fp=typeof fbPartial==="function"?fbPartial(months):null; // v601: month in progress → projected from its daily pace
+      const _ov=orderVol.map((v,i)=>_fp&&i===_fp.i?v*_fp.fO:v),_cv=counts.map((v,i)=>_fp&&i===_fp.i?v*_fp.fC:v);
+      const ordersIdx=_ov.map(v=>ordersBase>0?+(v/ordersBase*100).toFixed(1):0);
+      const complaintsIdx=_cv.map(v=>complaintsBase>0?+(v/complaintsBase*100).toFixed(1):0);
       const baseMonthLabel=baseMonth?new Date(baseMonth+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short",year:"numeric"}):"—";
       // v464: alert threshold — complaints index running >15pts ahead of orders index. 15 is a
       // starting point, not a tuned figure; easy to move if it flags too often or too rarely
@@ -20652,17 +20656,20 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
       const alertHtml=document.getElementById('feedback-trend-alert');
       if(alertHtml){
         let maxGapIdx=-1,maxGap=-Infinity;
-        gaps.forEach((g,i)=>{if(orderVol[i]>0&&counts[i]>0&&g>maxGap){maxGap=g;maxGapIdx=i;}});
+        gaps.forEach((g,i)=>{if(_fp&&i===_fp.i&&_fp.n<7)return;if(orderVol[i]>0&&counts[i]>0&&g>maxGap){maxGap=g;maxGapIdx=i;}}); // v601: under 7 days in, the projection is too early to alert on
         if(maxGapIdx>=0&&maxGap>GAP_ALERT){
-          const mo=new Date(months[maxGapIdx]+"-01T12:00:00").toLocaleDateString("en-AE",{month:"long",year:"numeric"});
+          const mo=new Date(months[maxGapIdx]+"-01T12:00:00").toLocaleDateString("en-AE",{month:"long",year:"numeric"})+(_fp&&maxGapIdx===_fp.i?" (projected)":"");
           alertHtml.innerHTML=`<div style="margin-top:8px;padding:9px 12px;background:#EF444418;border-radius:7px;display:flex;align-items:center;gap:8px"><span style="font-size:14px">⚠️</span><span style="font-size:11.5px;color:#F87171">${esc(mo)}: complaints index is ${maxGap.toFixed(0)}pts above the orders index (base: ${esc(baseMonthLabel)}) — growing faster than order volume explains.</span></div>`;
         }else{
           alertHtml.innerHTML=`<div style="margin-top:8px;padding:9px 12px;background:#22C55E18;border-radius:7px;display:flex;align-items:center;gap:8px"><span style="font-size:14px">✓</span><span style="font-size:11.5px;color:#4ADE80">Complaints are tracking order volume — no month running materially ahead (base: ${esc(baseMonthLabel)}).</span></div>`;
         }
       }
-      const monthLabelsIdx=months.map(m=>{
+      if(alertHtml&&typeof fbSameDaysHTML==="function")alertHtml.innerHTML+=fbSameDaysHTML(_fp);
+      {const ex=document.getElementById('feedback-trend-explain');if(ex&&typeof fbExplainHTML==="function")ex.innerHTML=fbExplainHTML(_fp,baseMonthLabel);}
+      const monthLabelsIdx=months.map((m,i)=>{
         const short=new Date(m+"-01T12:00:00").toLocaleDateString("en-AE",{month:"short"});
         const isJan=m.endsWith("-01");
+        if(_fp&&i===_fp.i)return isJan?[short+" (so far)",m.slice(0,4)]:[short,"so far"];
         return isJan?[short,m.slice(0,4)]:[short];
       });
       const axisColorIdx=_darkPage?'#D5DCEA':'#334155';
@@ -20693,6 +20700,7 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
         function step(now){
           const t=Math.min(1,(now-start)/DUR);
           chart._idxSnakeProgress=1-Math.pow(1-t,3);
+          if(!chart.canvas||!chart.ctx){chart._idxSnakeAnimating=false;return;}
           chart.draw();
           if(t<1){chart._idxSnakeAnimId=requestAnimationFrame(step);}
           else{chart._idxSnakeAnimating=false;}
@@ -20704,15 +20712,16 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
       const idxChart=new Chart(trendCtx,{
         type:'line',
         data:{labels:monthLabelsIdx,datasets:[
-          {label:'Complaints (index)',data:complaintsIdx,borderColor:'#DE4A42',backgroundColor:'#DE4A42',borderWidth:2,pointRadius:0,tension:.3},
-          {label:'Total orders (index)',data:ordersIdx,borderColor:'#5AB4E8',backgroundColor:'#5AB4E8',borderWidth:2,pointRadius:0,tension:.3}
+          {label:'Complaints (index)',data:complaintsIdx,borderColor:'#DE4A42',backgroundColor:'#DE4A42',borderWidth:2,pointRadius:0,tension:.3,...(typeof fbProjStyle==="function"?fbProjStyle(_fp,'#DE4A42',complaintsIdx.length,_darkPage?DARK_THEME.card:'#fff'):{})},
+          {label:'Total orders (index)',data:ordersIdx,borderColor:'#5AB4E8',backgroundColor:'#5AB4E8',borderWidth:2,pointRadius:0,tension:.3,...(typeof fbProjStyle==="function"?fbProjStyle(_fp,'#5AB4E8',ordersIdx.length,_darkPage?DARK_THEME.card:'#fff'):{})}
         ]},
         options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:12}},
           interaction:{mode:'index',intersect:false},
           animation:{duration:0},
           plugins:{legend:{display:false},
             tooltip:{callbacks:{
-              title:items=>{const i=items[0].dataIndex;return new Date(months[i]+"-01T12:00:00").toLocaleDateString("en-AE",{month:"long",year:"numeric"});},
+              title:items=>{const i=items[0].dataIndex;return new Date(months[i]+"-01T12:00:00").toLocaleDateString("en-AE",{month:"long",year:"numeric"})+(_fp&&i===_fp.i?" · PROJECTED":"");},
+              footer:items=>{const i=items[0].dataIndex;if(!_fp||i!==_fp.i)return'';return['Projection = daily average so far × '+_fp.dim+' days','(complaints to '+_fp.dC+' '+fbMonShort(_fp.m)+', orders to '+_fp.dO+' '+fbMonShort(_fp.m)+').','Changes daily until the month closes.'];},
               // v466: real gap Nikhil caught — "87" and "101" mean nothing on their own to
               // someone who only thinks in complaint counts and order counts. Every tooltip
               // line now leads with the real number (already computed above as counts/orderVol
@@ -20720,6 +20729,7 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
               // in parentheses as the secondary, technical detail for anyone who does want it.
               label:c=>{
                 const i=c.dataIndex;
+                if(_fp&&i===_fp.i){if(c.datasetIndex===0)return'Complaints: '+counts[i]+' so far → on pace for ~'+Math.round(_cv[i]).toLocaleString()+' (index '+c.parsed.y.toFixed(0)+')';return'Total orders: '+orderVol[i].toLocaleString()+' so far → on pace for ~'+Math.round(_ov[i]).toLocaleString()+' (index '+c.parsed.y.toFixed(0)+')';}
                 if(c.datasetIndex===0)return'Complaints: '+counts[i]+' (index '+c.parsed.y.toFixed(0)+')';
                 return'Total orders: '+orderVol[i].toLocaleString()+' (index '+c.parsed.y.toFixed(0)+')';
               }
@@ -20743,6 +20753,7 @@ function feedbackDrawOverviewCharts(months,dimRecs,outletRanked,chartCatShort){
       idxObs.observe(trendCtx);
       _feedbackTrendObserver=idxObs;
     }else{
+    {const ex=document.getElementById('feedback-trend-explain');if(ex)ex.innerHTML='';const al=document.getElementById('feedback-trend-alert');if(al)al.innerHTML='';} // v601: index-only notes off in Trend
     const selected=feedbackFilterMonths.size?months.map(m=>feedbackFilterMonths.has(m)):months.map(()=>true);
     // v466: was a count/rate ternary — dead now that % is merged into this same view (rate is
     // still shown, just in the tooltip alongside count, not as a separate bar-height mode).
@@ -28093,21 +28104,30 @@ function bzPanel(o){bzCSS();const esc_=typeof esc==="function"?esc:(x=>x);
 function bzJobs(){const J=[];try{
   const P=typeof posSyncState!=="undefined"?posSyncState:null;
   if(P&&P.pulling&&P.bar&&!P.bar.finished){const b=P.bar,bf=b.total===b.days+1&&b.total!==b.days*6+1,el=(Date.now()-b.start)/1000;
-    J.push({id:"pull",page:"possync",title:`${bf?"Backfilling dine-in & takeaway":"Pulling from Microsys"} — day ${Math.max(1,Math.min(b.day,b.days))} of ${b.days}`,pct:b.done/b.total,left:b.done?el/b.done*(b.total-b.done):null,cur:((P.progress||[]).slice(-1)[0]||{}).t||""});}
-  if(P&&P.testing)J.push({id:"test",page:"possync",title:"Testing Microsys and the Google Sheet",pct:null,cur:"signing in and reading yesterday's Sales Summary"});
-  if(typeof posRecon!=="undefined"&&posRecon.checking){const C=posRecon.checking,el=(Date.now()-(C.start||Date.now()))/1000;J.push({id:"check",page:"possync",title:`Checking with Microsys — day ${Math.min(C.n+1,C.of)} of ${C.of}`,pct:C.of?C.n/C.of:null,left:C.n?el/C.n*(C.of-C.n):null,cur:C.cur?posFmtDate(C.cur):""});}
-  if(typeof posRecon!=="undefined"&&posRecon.billsAll&&posRecon.billsAll.running){const B=posRecon.billsAll;J.push({id:"bills",page:"possync",title:`Reading the bills behind each gap — ${Math.min(B.done+1,B.total)} of ${B.total}`,pct:B.total?B.done/B.total:null,cur:B.cur||""});}
-  if(typeof posJT!=="undefined"&&posJT.run&&posJT.run.running){const R=posJT.run,el=(Date.now()-(R.start||Date.now()))/1000;J.push({id:"jt",page:"possync",title:`Reading Journal Tape — day ${Math.max(1,R.day)} of ${R.days}`,pct:R.days?Math.max(0,R.day-1)/R.days:null,left:R.day>1?el/(R.day-1)*(R.days-R.day+1):null,cur:(R.loc||"")+(R.iso?" · "+posFmtDate(R.iso):""),sub:`${R.bills} bills kept`});}
+    J.push({id:"pull",page:"possync",inPage:1,title:`${bf?"Backfilling dine-in & takeaway":"Pulling from Microsys"} — day ${Math.max(1,Math.min(b.day,b.days))} of ${b.days}`,pct:b.done/b.total,left:b.done?el/b.done*(b.total-b.done):null,cur:((P.progress||[]).slice(-1)[0]||{}).t||""});}
+  if(P&&P.testing)J.push({id:"test",page:"possync",inPage:1,title:"Testing Microsys and the Google Sheet",pct:null,cur:"signing in and reading yesterday's Sales Summary"});
+  if(typeof posRecon!=="undefined"&&posRecon.checking){const C=posRecon.checking,el=(Date.now()-(C.start||Date.now()))/1000;J.push({id:"check",page:"possync",inPage:1,title:`Checking with Microsys — day ${Math.min(C.n+1,C.of)} of ${C.of}`,pct:C.of?C.n/C.of:null,left:C.n?el/C.n*(C.of-C.n):null,cur:C.cur?posFmtDate(C.cur):""});}
+  if(typeof posRecon!=="undefined"&&posRecon.billsAll&&posRecon.billsAll.running){const B=posRecon.billsAll;J.push({id:"bills",page:"possync",inPage:1,title:`Reading the bills behind each gap — ${Math.min(B.done+1,B.total)} of ${B.total}`,pct:B.total?B.done/B.total:null,cur:B.cur||""});}
+  if(typeof posJT!=="undefined"&&posJT.run&&posJT.run.running){const R=posJT.run,el=(Date.now()-(R.start||Date.now()))/1000;J.push({id:"jt",page:"possync",inPage:1,title:`Reading Journal Tape — day ${Math.max(1,R.day)} of ${R.days}`,pct:R.days?Math.max(0,R.day-1)/R.days:null,left:R.day>1?el/(R.day-1)*(R.days-R.day+1):null,cur:(R.loc||"")+(R.iso?" · "+posFmtDate(R.iso):""),sub:`${R.bills} bills kept`});}
   if(window.__bzUpload){const U=window.__bzUpload,tab=typeof campNavTab==="function"?campNavTab():null,m=tab&&/Parsing file (\d+) of (\d+): (.*)…/.exec(tab.title||"");
     J.push({id:"upload",page:"campaigns",title:`Reading ${U.n>1?U.n+" order files":"the order file"}${m?` — file ${m[1]} of ${m[2]}`:""}`,pct:m?(+m[1]-1)/(+m[2]):null,cur:m?m[3]:U.names[0]});}
   if(window.__bzPdf)J.push({id:"pdf",page:window.__bzPdf.page||"",title:window.__bzPdf.title,pct:null,cur:"laying out the pages"});
   else{const cb=document.getElementById("cmp-export-pdf-btn");if(cb&&/Generating/.test(cb.textContent||""))J.push({id:"pdf",page:"compare",title:"Building the Compare PDF",pct:null,cur:"laying out the pages"});}
-  if(typeof plBusy!=="undefined"&&plBusy)J.push({id:"pl",page:"sitepl",title:"Reading the Finance P&L",pct:null,cur:"every outlet tab"});
+  if(window.__bzFb){const F=window.__bzFb;J.push({id:"feedback",page:"feedback",title:`Uploading ${F.n>1?F.n+" feedback files":"the feedback file"}${F.n>1?` — file ${Math.min(F.i+1,F.n)} of ${F.n}`:""}`,pct:F.n?(F.i+(F.stage==="saving"?0.6:0.15))/F.n:null,cur:(F.stage==="saving"?"saving to the server — ":"reading ")+(F.name||""),sub:F.done?`${F.done} done`:""});}
+  if(P&&P.in_busy)J.push({id:"raw",page:"possync",title:"Reading the raw Microsys report",pct:null,cur:(P.in_kind||"summary")+" · "+(P.in_date?posFmtDate(P.in_date):"yesterday")});
+  if(typeof kpiLoading!=="undefined"&&kpiLoading)J.push({id:"kpi",page:"kpi",inPage:1,title:"Loading KPI data from all outlets",pct:null,cur:"every outlet tab, in parallel"});
+  if(typeof plBusy!=="undefined"&&plBusy)J.push({id:"pl",page:"sitepl",inPage:1,title:"Reading the Finance P&L",pct:null,cur:"every outlet tab"});
 }catch(e){}return J;}
 function bzTick(){bzCSS();let top=document.getElementById("bz-top"),t=document.getElementById("bz-toast");
   if(!top){top=document.createElement("div");top.id="bz-top";top.innerHTML="<i></i>";document.body.appendChild(top);}
   if(!t){t=document.createElement("div");t.id="bz-toast";t.onclick=()=>{const j=bzJobs()[0];if(j&&j.page&&typeof gp==="function")gp(j.page);};document.body.appendChild(t);}
   const J=bzJobs(),cur=typeof curPage!=="undefined"?curPage:"";top.style.display=J.length?"block":"none";
+  // v601: a job with no panel of its own (uploads, PDFs, raw report) now shows a full panel pinned to the top of
+  // ITS page — before 601 the toast hid itself there, so you saw nothing on the page you were working on.
+  const here=J.filter(j=>j.page===cur&&!j.inPage),host=document.getElementById("page-"+cur);let il=document.getElementById("bz-inline");
+  if(here.length&&host){if(!il||il.parentNode!==host){if(il)il.remove();il=document.createElement("div");il.id="bz-inline";il.style.cssText="position:sticky;top:8px;z-index:60;margin:0 0 10px";host.insertBefore(il,host.firstChild);}
+    const h2=here.map(j=>bzPanel({title:j.title,pct:j.pct,cur:j.cur,sub:j.sub,left:j.left})).join("");if(il._h!==h2){il.innerHTML=h2;il._h=h2;}}
+  else if(il)il.remove();
   const away=J.filter(j=>j.page!==cur);
   if(!away.length){if(t.style.display!=="none")t.style.display="none";return;}
   const j=away[0],html=`<div class="bz"><div class="r"><div class="ring"></div><div style="flex:1;min-width:0"><div class="h">${j.title}</div><div class="s">${j.pct==null?"working…":Math.round(j.pct*100)+"%"}${J.length>1?` · +${J.length-1} more running`:""} · click to open</div></div></div><div class="bar"><div class="fill ${j.pct==null?"ind":""}" style="width:${j.pct==null?35:Math.max(4,j.pct*100)}%"></div></div></div>`;
@@ -28116,7 +28136,11 @@ setInterval(bzTick,500);
 // ── hooks for the ones that only had a button label
 (function bzHooks(){if(typeof handleOrdersUpload!=="function"||typeof digestExportPDF!=="function")return setTimeout(bzHooks,500);
   const _u=handleOrdersUpload;handleOrdersUpload=async function(f){const files=f instanceof File?[f]:Array.from(f||[]);window.__bzUpload={n:files.length,names:files.map(x=>x.name)};bzTick();try{return await _u.apply(this,arguments);}finally{window.__bzUpload=null;bzTick();}};window.handleOrdersUpload=handleOrdersUpload;
-  const _d=digestExportPDF;digestExportPDF=async function(){window.__bzPdf={title:"Building the Daily Digest PDF",page:""};bzTick();await new Promise(r=>setTimeout(r,60));try{return await _d.apply(this,arguments);}finally{window.__bzPdf=null;bzTick();}};window.digestExportPDF=digestExportPDF;
+  const _d=digestExportPDF;digestExportPDF=async function(){window.__bzPdf={title:"Building the Daily Digest PDF",page:typeof curPage!=="undefined"?curPage:""};bzTick();await new Promise(r=>setTimeout(r,60));try{return await _d.apply(this,arguments);}finally{window.__bzPdf=null;bzTick();}};window.digestExportPDF=digestExportPDF;
+  if(typeof doFeedbackUpload==="function"&&!doFeedbackUpload.__bz){const _f=doFeedbackUpload,_p=parseFeedbackXlsx,_s=saveFeedbackToStorage;
+    parseFeedbackXlsx=async function(file){const F=window.__bzFb;if(F){F.name=file&&file.name;F.stage="reading";bzTick();}return await _p.apply(this,arguments);};window.parseFeedbackXlsx=parseFeedbackXlsx;
+    saveFeedbackToStorage=async function(){const F=window.__bzFb;if(F){F.stage="saving";bzTick();}try{return await _s.apply(this,arguments);}finally{if(F){F.i++;F.done=F.i;}}};window.saveFeedbackToStorage=saveFeedbackToStorage;
+    doFeedbackUpload=async function(files){window.__bzFb={n:files.length,i:0,name:files[0]&&files[0].name,stage:"reading",done:0};bzTick();try{return await _f.apply(this,arguments);}finally{window.__bzFb=null;bzTick();}};doFeedbackUpload.__bz=1;window.doFeedbackUpload=doFeedbackUpload;}
   if(typeof posReconBillsAll==="function"){posReconBillsAll=async function(){const items=posReconItems(posRecon.recs).filter(i=>i.unexpl>=5&&!posRecon.bills[posReconBillKey(i)]);
     posRecon.billsAll={running:true,done:0,total:items.length,cur:""};renderPosSync();
     for(const i of items){posRecon.billsAll.cur=`${i.out} · ${posFmtDate(i.date)}`;renderPosSync();await posReconBills(posReconBillKey(i));posRecon.billsAll.done++;}
@@ -28137,3 +28161,56 @@ setInterval(bzTick,500);
     return bzPanel({title:`Reading Journal Tape — day ${Math.max(1,R.day)} of ${R.days}`,pct:R.days?Math.max(0,R.day-1)/R.days:null,left:R.day>1?el/(R.day-1)*(R.days-R.day+1):null,cur:(R.loc||"…")+(R.iso?" · "+posFmtDate(R.iso):""),sub:`${R.bills} bills kept · ${R.skipped} day(s) already there`})+h;};window.posJTCardHTML=posJTCardHTML;})();
 // first loads of Promotions / KPI tracker
 function bzLoading(title,hint){return typeof bzPanel==="function"?`<div style="padding:18px">${bzPanel({title,pct:null,cur:hint})}</div>`:`<div style="padding:30px;text-align:center">⏳ ${title}…</div>`;}
+
+// ═══ v601 COMPLAINTS INDEX — the month in progress is projected from its daily pace, plus a "same days" check ═══
+// Per Nikhil: October counted for 19 of 31 days dragged both index lines down. The in-progress month is now
+// actual ÷ days covered × days in the month — each source on its own last day (feedback file vs order data) —
+// drawn dashed with a hollow dot; and a strip compares the same days of this month and last month (no projection).
+function fbDubaiToday(){return new Date(Date.now()+4*3600e3).toISOString().slice(0,10);}
+function fbDim(m){return new Date(+m.slice(0,4),+m.slice(5,7),0).getDate();}
+function fbMonLong(m){return new Date(m+"-01T12:00:00").toLocaleDateString("en-GB",{month:"long",year:"numeric"});}
+function fbMonShort(m){return new Date(m+"-01T12:00:00").toLocaleDateString("en-GB",{month:"short"});}
+function fbPartial(months){
+  if(!months||!months.length)return null;const i=months.length-1,m=months[i];
+  if(m<fbDubaiToday().slice(0,7))return null; // closed months are never projected
+  const dim=fbDim(m);let dC=0,dO=0;
+  ((feedbackData&&feedbackData.records)||[]).forEach(r=>{if(r.date&&r.date.slice(0,7)===m){const d=+r.date.slice(8,10);if(d>dC)dC=d;}});
+  (typeof allData!=="undefined"?allData:[]).forEach(r=>{if(r.date&&r.date.slice(0,7)===m){const d=+r.date.slice(8,10);if(d>dO)dO=d;}});
+  if(!dC&&!dO)return null;dC=dC||dim;dO=dO||dim;if(dC>=dim&&dO>=dim)return null;
+  return{i,m,dim,dC,dO,fC:dim/dC,fO:dim/dO,n:Math.min(dC,dO)};
+}
+function fbDimOk(r){return(!feedbackFilterCategory||r.category===feedbackFilterCategory)&&(!feedbackFilterAggregator||r.aggregator===feedbackFilterAggregator)&&(!feedbackFilterOutlet||r.branch===feedbackFilterOutlet)&&(!feedbackFilterBrand||r.brand===feedbackFilterBrand);}
+function fbRange(m,n){ // complaints + orders on days 1..n of month m, same Category/Aggregator/Outlet/Brand filters as the chart
+  const last=m+"-"+String(Math.min(n,fbDim(m))).padStart(2,"0"),first=m+"-01";let c=0,o=0;
+  ((feedbackData&&feedbackData.records)||[]).forEach(r=>{if(r.date>=first&&r.date<=last&&fbDimOk(r))c++;});
+  (typeof allData!=="undefined"?allData:[]).forEach(r=>{if(!r.date||r.date<first||r.date>last)return;if(feedbackFilterBrand&&r.brand!==feedbackFilterBrand)return;if(feedbackFilterOutlet&&r.branch!==feedbackFilterOutlet)return;if(feedbackFilterAggregator&&r.aggregator!==feedbackFilterAggregator)return;o+=(r.orders||0);});
+  return{c,o};
+}
+function fbPrevMonth(m){const y=+m.slice(0,4),mo=+m.slice(5,7);return mo===1?`${y-1}-12`:`${y}-${String(mo-1).padStart(2,"0")}`;}
+function fbProjStyle(fp,col,len,bg){if(!fp)return{};const r=Array.from({length:len},(_,i)=>i===fp.i?5:0);
+  return{segment:{borderDash:c=>c.p1DataIndex===fp.i?[6,5]:undefined},pointRadius:r,pointHoverRadius:Array.from({length:len},(_,i)=>i===fp.i?7:4),pointBackgroundColor:Array.from({length:len},(_,i)=>i===fp.i?bg:col),pointBorderColor:col,pointBorderWidth:2.5};}
+function fbExplainHTML(fp,baseLabel){
+  const dark=typeof _darkPage!=="undefined"&&_darkPage,bg=dark?"#0F1626":"#F1F5F9",tx=dark?"#B6C2D6":"#475569",st=dark?"#E2E8F0":"#0F172A";
+  const pill=fp?` <span style="display:inline-block;margin-left:4px;background:#5AB4E822;color:${dark?"#7CC4EE":"#0369A1"};border:1px solid #5AB4E855;border-radius:20px;padding:1px 9px;font-size:11px;font-weight:700">${fbMonShort(fp.m)}: ${fp.n} of ${fp.dim} days in</span>`:"";
+  const proj=fp?` <b style="color:${st}">${fbMonLong(fp.m).split(" ")[0]} isn't finished</b>, so its point is <b style="color:${st}">projected</b>: the daily average so far × ${fp.dim} days (dashed line, hollow dot). It firms up every day. The cards under the chart skip the projection and compare <b style="color:${st}">the same days</b> with last month.`:"";
+  return`<div style="background:${bg};border-left:3px solid #5AB4E8;border-radius:6px;padding:8px 12px;font-size:12px;color:${tx};line-height:1.55;margin:6px 0 4px">ⓘ <b style="color:${st}">How to read this:</b> both lines start at 100 in ${esc(baseLabel)}. If the <b style="color:#DE4A42">red</b> line climbs faster than the <b style="color:#5AB4E8">blue</b> line, complaints are growing faster than orders.${proj}${pill}</div>`;
+}
+function fbSameDaysHTML(fp){
+  if(!fp)return"";const dark=typeof _darkPage!=="undefined"&&_darkPage,kb=dark?"#0F1626":"#F8FAFC",bd=dark?"#243049":"#E2E8F0",mu=dark?"#8B9AB5":"#64748B",tx=dark?"#CBD5E1":"#0F172A";
+  const pm=fbPrevMonth(fp.m),n=fp.n,A=fbRange(fp.m,n),B=fbRange(pm,n),nB=Math.min(n,fbDim(pm));
+  const pct=(a,b)=>b>0?(a-b)/b*100:null,fp1=x=>x==null?"—":(x>=0?"+":"")+x.toFixed(1)+"%";
+  const rA=A.o>0?A.c/A.o*1000:null,rB=B.o>0?B.c/B.o*1000:null,dR=rA!=null&&rB?(rA-rB)/rB*100:null;
+  const good="#22C55E",bad="#EF4444",neu=dark?"#E2E8F0":"#0F172A";
+  let vt="Not enough data",vs="",vc=neu;
+  if(dR!=null){if(dR<=-3){vt="Improving";vs="complaints rising slower than orders";vc=good;}else if(dR>=3){vt="Getting worse";vs="complaints rising faster than orders";vc=bad;}else{vt="Steady";vs="complaints moving in line with orders";}}
+  if(n<5)vs="only "+n+" day"+(n>1?"s":"")+" in — early read"+(vs?" · "+vs:"");
+  const cC=pct(A.c,B.c),cO=pct(A.o,B.o);
+  const k=(l,v,s,c,b)=>`<div style="background:${kb};border:1px solid ${b||bd};border-radius:10px;padding:10px 12px"><div style="font-size:10.5px;color:${mu};font-weight:700;text-transform:uppercase;letter-spacing:.4px">${l}</div><div style="font-size:21px;font-weight:800;margin:3px 0 1px;color:${c}">${v}</div><div style="font-size:11px;color:${mu}">${s}</div></div>`;
+  const lab=`1–${n} ${fbMonShort(fp.m)} vs 1–${nB} ${fbMonShort(pm)}`;
+  return`<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-top:12px;font-size:12px;font-weight:800;color:${tx}"><span>Same days, this month vs last</span><span style="font-weight:400;color:${mu}">${lab} · no projection</span></div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:8px">
+  ${k("Orders",fp1(cO),`${A.o.toLocaleString()} vs ${B.o.toLocaleString()}`,"#5AB4E8")}
+  ${k("Complaints",fp1(cC),`${A.c.toLocaleString()} vs ${B.c.toLocaleString()}`,cC==null?neu:cC<=(cO||0)?good:bad)}
+  ${k("Complaints per 1,000 orders",rA==null?"—":rA.toFixed(1)+(dR==null?"":dR<0?" ↓":dR>0?" ↑":""),rB==null?"":"was "+rB.toFixed(1),dR==null?neu:dR<=0?good:bad)}
+  ${k("Verdict",vt,vs,vc,vc===neu?null:vc+"66")}</div>`;
+}
