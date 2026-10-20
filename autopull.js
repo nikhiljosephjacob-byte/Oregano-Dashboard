@@ -1300,7 +1300,11 @@ function AP_mailDigest(o,msg,test){
     ${lines?`<div style="background:#F6F7F9;border-radius:8px;padding:10px 12px;margin-bottom:12px">${lines}</div>`:""}
     ${pdf?"<div>The full Daily Digest (6 pages) is attached.</div>":`<div style="color:#C0392B">The full Daily Digest PDF couldn't be made this morning (${esc_(why)}). Open the dashboard → Overview → Export Daily Digest.</div>`}
     <div style="margin-top:14px;font-size:11px;color:#6B7385">Sent automatically after the morning POS pull · <a href="${o.base}">Open the dashboard</a> · sales excl. VAT</div></div>`;
-  try{MailApp.sendEmail({to:cfg.to.join(","),subject:`Oregano Group — Daily Digest · ${day}${test?" (test)":""}`,htmlBody:html,name:"Oregano Dashboard",attachments:pdf?[pdf]:[]});
+  try{// v607: no "Oregano Dashboard" sender name — a Gmail address sending under the company's own brand name looks like
+    // impersonation to company mail filters (Microsoft 365 held the first test while a plain Gmail message got through).
+    // Sent under the account's own name, with a plain-text copy alongside the formatted one.
+    const plain=`Oregano Group — Daily Digest · ${day}\n\n${msg&&msg.body?msg.body+"\n\n":""}${pdf?"The full Daily Digest (6 pages) is attached.":"The full Daily Digest PDF couldn't be made this morning ("+why+")."}\n\nSent automatically after the morning POS pull · ${o.base}`;
+    MailApp.sendEmail({to:cfg.to.join(","),subject:`Daily Digest ${day}${test?" (test)":""}`,body:plain,htmlBody:html,attachments:pdf?[pdf]:[]});
     Logger.log(`Emailed to ${cfg.to.join(", ")}${pdf?" with the PDF":" without the PDF"}.`);
     try{UrlFetchApp.fetch(o.base+"/api/auto/report",{method:"post",contentType:"application/json",headers:H,payload:JSON.stringify({stage:"email",ok:!!pdf,to:cfg.to.length,msg:pdf?"Digest emailed":"Emailed without the PDF — "+why}),muteHttpExceptions:true});}catch(e){}}
   catch(e){Logger.log("Email failed: "+e.message);}
