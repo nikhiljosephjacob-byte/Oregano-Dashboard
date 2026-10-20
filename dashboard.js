@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-20-596";
+const BUILD_VERSION="2026-10-20-598";
 const BUILD_NOTES=[
+  "🐞 TILL VS DASHBOARD — '49 THINGS TO CHECK, AED 141,150' ON 20 SEP WAS A BAD MICROSYS READ, NOT A REAL GAP. After a 30-day check, 20 Sep (fine the day before) showed nearly the whole day's Oregano delivery as unexplained: Microsys returned an incomplete Credit Sales report for that day and the check saved it over the good one. Now: (1) a day where the platforms account for under 80% of the till's delivery buttons is treated as a bad read — retried once, and if still incomplete it isn't saved (the earlier check stays); (2) the worker refuses to replace a good day with an incomplete one; (3) any incomplete day already saved is left out of the card's totals, the badge and the till-only sales added to Overview, with a button to check that day again; (4) every day square can be clicked to re-check just that day; (5) a Pull warns if that day's Credit Sales looks incomplete (the sheet may be missing orders — pull it again).",
+  "🏷️ SITE P&L — BRAND FILTER WORKS IN 'SO FAR' (ESTIMATE). The brand selector was switched off for the current-month estimate. Now each outlet's month is also estimated per brand: live sales split by brand (delivery per brand from the sheet; dine-in & takeaway to the outlet's own brand — Fyoozhen at DIP-Fyoozhen, WTC and NAS, Oregano elsewhere; catering by the till's brand), with each brand's costs from Finance's brand columns. Brand totals add up to the outlet totals. Also: Finance's brand headers are now read as one name per brand (one tab said 'FyoozJen'), and 'outlets in profit' counts the selected brand.",
   "🧾 KEETA MINIMUM COMMISSION — FOLLOWS YOUR DATES, FILLS GAPS FROM MICROSYS, CHECK BEFORE LAUNCH. (1) The Platforms → Keeta strip now uses the period chosen in the filters (it was always the last 7 days); Overview and Digest alerts stay on the last 7 days. (2) Days no Keeta statement covers yet are estimated from the till: every POS Sync pull / reconciliation check now keeps each Keeta order's value from Microsys Credit Sales, calibrated per brand against the statement on days both exist; estimated orders are labelled. (3) Campaign Planner → Keeta: a 'check before launch' replays the brand's real Keeta baskets from the last 30 statement days with the planned % and cap — orders that would pay the AED 6 minimum, extra commission per month, and the smallest minimum order that avoids it (with how many orders still get the offer). Needs Keeta files uploaded from this build on, and worker.js.",
   "📐 CAMPAIGN PLANNER IN NET TERMS + KNOWS THE CAMPAIGN SHEET + KEETA ACTION STRIP. (1) Per Nikhil ('we only work with NET AOVs'): every AOV and sales figure in the planner is now net (what customers paid after all discounts) — chart labels, the P&L cards (net sales, net AOV, what the platform pays back, our discount), the baseline tiles and the 'is it paying off' table. Gross / menu value is only used inside the maths (food cost on what's cooked, commission on the contract base). (2) The planner reads the campaign sheet by itself: a line shows the offer before, anything overlapping and the next scheduled one; continuation mode now also covers menu-wide % offers (same % within 5 points, same cap within AED 5, same audience — FTU / lapsed / new customers kept apart); if the sheet has no discount figures for the comparison weeks, the profit verdict is withheld instead of being wrong. (3) Platforms → Keeta opens with an action strip: each brand / outlet above the minimum-commission alert level, with orders on the AED 6 minimum, extra commission, discount on those orders and a suggested minimum order value.",
   "🎯 CAMPAIGN PLANNER — BOGO / SELECT-ITEMS FORECAST FIXED. Nikhil's Smokeys × Deliveroo BOGO (23–25 Oct) forecast showed more contribution per order than today (AED ~45 vs ~19) and a break-even below today's orders. Cause: the baseline weeks WERE the running BOGO and were charged 100% of its discount, while the forecast gave the campaign Deliveroo's 50% co-funding. Now: (1) the baseline always carries the discount it really had, at our share after any co-funding in those weeks; break-even is recomputed from it. (2) When the same offer is already running (BOGO or select items on 60%+ of the last 28 days), the new campaign is treated as a continuation: forecast = today's level with the last weeks' range, and a new panel answers the real question — is the offer paying off vs the 4 weeks before it started (orders, AOV, our discount per order, gross sales, contribution per day, adjusted for the brand's other platforms). (3) A red warning if a discount campaign ever shows more profit per order than today.",
@@ -25459,7 +25461,7 @@ async function posStartPull(){
       if(!C.kept)day.warn.push("No delivery orders found in Credit Sales for this day");
       i=step(`${posFmtDate(iso)} — Sales Summary by Outlet (dine-in & takeaway)`);
       const sumCsv=await getSummary(iso);if(!sumCsv)throw new Error("Sales Summary by Outlet couldn't be pulled");sumCache[iso]=sumCsv;const I=psProcessInstore(sumCsv,D.instore);
-      try{day.recon=psRecon(cr.csv,sumCsv,iso);posApi("/api/pos/recon",{date:iso,rec:day.recon}).then(()=>{posRecon.recs=null;}).catch(e=>day.warn.push("Reconciliation not saved: "+e.message));}catch(e){day.warn.push("Reconciliation failed: "+e.message);} // v564
+      try{day.recon=psRecon(cr.csv,sumCsv,iso);if(posReconLooksIncomplete(day.recon)){day.warn.push(`Credit Sales looks incomplete for this day (platforms ${Math.round(day.recon.agg).toLocaleString()} vs till ${Math.round(day.recon.pos).toLocaleString()}) — delivery figures written to the sheet may be missing orders. Pull this day again.`);throw new Error("skip");}posApi("/api/pos/recon",{date:iso,rec:day.recon}).then(()=>{posRecon.recs=null;}).catch(e=>day.warn.push("Reconciliation not saved: "+e.message));}catch(e){if(e.message!=="skip")day.warn.push("Reconciliation failed: "+e.message);} // v564
       const SP=psSummaryHasSplit(sumCsv);if(!SP.split){I.skip=true;day.warn.push("Microsys hasn't split dine-in/takeaway for this day yet — Dine-In & Takeaway not written now; the next Pull adds it automatically");}
       I.warn.forEach(w=>day.warn.push(w));
       const it=Object.values(I.rows).reduce((a,o)=>({di:a.di+o.di.sales,to:a.to+o.to.sales,dd:a.dd+o.di.disc,td:a.td+o.to.disc,g:a.g+o.di.guests}),{di:0,to:0,dd:0,td:0,g:0});
@@ -25712,22 +25714,34 @@ function posReconItems(recs){const out=[];for(const r of recs||[])for(const x of
   const unk=(x.other||[]).filter(o=>posReconWhy(o)==="platform").reduce((a,o)=>a+o[1],0);
   const open=!ack&&(Math.abs(x.unexpl)>=50||unk>=50);out.push(Object.assign({date:r.date,id,ack,unk,open},x));}
   return out.sort((a,b)=>b.date.localeCompare(a.date)||Math.abs(b.gap)-Math.abs(a.gap));}
-function posReconOpenCount(){return posReconItems(posRecon.recs).filter(i=>i.open).length;}
+function posReconOpenCount(){return posReconItems((posRecon.recs||[]).filter(r=>!(typeof posReconLooksIncomplete==='function'&&posReconLooksIncomplete(r)))).filter(i=>i.open).length;}
 async function posReconAck(date,id){const note=prompt("What explains this gap? (e.g. 'catering / bulk order — paid directly', 'regular customer, paid cash')","");if(note===null)return;
   try{await posApi("/api/pos/recon/ack",{date,id,note});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
 async function posReconUnack(date,id){try{await posApi("/api/pos/recon/ack",{date,id,clear:true});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
-async function posReconCheck(){const P=posSyncState;if(posRecon.checking||P.pulling)return;if(P.status&&!P.status.hasCreds){posOpenCreds();return;}
-  const to=posAddDays(posDubaiToday(),-1),dates=[];for(let i=posRecon.days-1;i>=0;i--)dates.push(posAddDays(to,-i));
-  posRecon.checking={n:0,of:dates.length,fail:0};renderPosSync();
-  for(const d of dates){try{const[c,su]=await Promise.all([posApi("/api/pos/report",{kind:"credit",date:d}),posApi("/api/pos/report",{kind:"summary",date:d})]);
-      await posApi("/api/pos/recon",{date:d,rec:psRecon(c.csv,su.csv,d)});}catch(e){posRecon.checking.fail++;}
+// v598: a Credit Sales read can come back incomplete (Microsys sometimes returns only part of the day) — the till then
+// looks AED 100K+ "unexplained" (Nikhil: 20 Sep after a 30-day check, while the same day was fine the day before).
+// A day where the platforms account for under 80% of the till's delivery buttons is treated as a bad read: retried once,
+// and if still incomplete it is NOT saved (the earlier check stays). The worker refuses to replace a good day with one too.
+function posReconLooksIncomplete(rec){return rec&&rec.pos>2000&&rec.agg<0.8*rec.pos;}
+async function posReconReadDay(d){let rec=null;
+  for(let a=0;a<2;a++){const[c,su]=await Promise.all([posApi("/api/pos/report",{kind:"credit",date:d}),posApi("/api/pos/report",{kind:"summary",date:d})]);
+    rec=psRecon(c.csv,su.csv,d);if(!posReconLooksIncomplete(rec))return{rec,ok:true};}
+  return{rec,ok:false};}
+async function posReconCheck(onlyDates){const P=posSyncState;if(posRecon.checking||P.pulling)return;if(P.status&&!P.status.hasCreds){posOpenCreds();return;}
+  const to=posAddDays(posDubaiToday(),-1),dates=[];if(Array.isArray(onlyDates))dates.push(...onlyDates);else for(let i=posRecon.days-1;i>=0;i--)dates.push(posAddDays(to,-i));
+  posRecon.checking={n:0,of:dates.length,fail:0,bad:[]};renderPosSync();
+  for(const d of dates){try{const R=await posReconReadDay(d);
+      if(R.ok)await posApi("/api/pos/recon",{date:d,rec:R.rec});else posRecon.checking.bad.push(d);}catch(e){posRecon.checking.fail++;}
     posRecon.checking.n++;renderPosSync();}
+  const bad=posRecon.checking.bad,fail=posRecon.checking.fail;posRecon.lastMsg=bad.length||fail?`${bad.length?`Microsys returned incomplete Credit Sales for ${bad.map(posFmtDate).join(", ")} (tried twice) — kept the earlier check for ${bad.length>1?"those days":"that day"}. Click the day's square to try again later.`:""}${fail?` ${fail} day(s) couldn't be read.`:""}`:"";
   posRecon.checking=null;posRecon.recs=null;renderPosSync();}
+function posReconCheckDay(d){posReconCheck([d]);}
+window.posReconCheckDay=posReconCheckDay;
 // v590: redesigned — verdict first, a strip of days, only the open items with one-click answers; the detail folds away.
 async function posReconAckAs(date,id,note){try{await posApi("/api/pos/recon/ack",{date,id,note});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
 function posReconCardHTML(T,card,ct,btn){
   if(posRecon.recs==null&&!posRecon.loading)setTimeout(posReconLoad,0);
-  const R=posRecon.recs||[],items=posReconItems(R),open=items.filter(i=>i.open);
+  const R0=posRecon.recs||[],badReads=R0.filter(posReconLooksIncomplete),R=R0.filter(r=>!posReconLooksIncomplete(r)),items=posReconItems(R),open=items.filter(i=>i.open); // v598: incomplete reads kept out of the totals
   const f=v=>"AED "+Math.round(v).toLocaleString(),f2=v=>(v<0?"−":"")+"AED "+Math.abs(Math.round(v)).toLocaleString();
   const tp=R.reduce((a,r)=>a+r.pos,0),ta=R.reduce((a,r)=>a+r.agg,0);
   const seg=[7,14,30,60].map(n=>`<button onclick="posReconSetDays(${n})" style="border:none;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer;background:${posRecon.days===n?T.accentOrange+"22":"transparent"};color:${posRecon.days===n?T.accentOrange:T.textSecondary}">${n} days</button>`).join("");
@@ -25751,8 +25765,10 @@ function posReconCardHTML(T,card,ct,btn){
   const to=posAddDays(posDubaiToday(),-1),byD={};R.forEach(r=>byD[r.date]=r);const openD={};open.forEach(i=>openD[i.date]=(openD[i.date]||0)+Math.max(i.unexpl,0)+i.unk);
   let strip="";for(let k=posRecon.days-1;k>=0;k--){const d=posAddDays(to,-k),r=byD[d],st=!r?"none":openD[d]?"open":"ok";
     const c=st==="open"?"#F59E0B":st==="ok"?T.accentGreen+"77":T.cardBorder+"66";
-    strip+=`<span title="${posFmtDate(d)} — ${st==="none"?"not checked":st==="open"?f(openD[d])+" to check":"all explained · till "+f(r.pos)}" style="display:inline-block;width:${posRecon.days>30?13:20}px;height:20px;border-radius:5px;margin:0 3px 3px 0;background:${c}"></span>`;}
-  h+=`<div style="margin-bottom:16px">${strip}<div style="font-size:11px;color:${T.textMuted};margin-top:2px">each square = a day (oldest left) · green = explained · amber = something to check · grey = not checked</div></div>`;
+    strip+=`<span onclick="posReconCheckDay('${d}')" title="${posFmtDate(d)} — ${st==="none"?"not checked":st==="open"?f(openD[d])+" to check":"all explained · till "+f(r.pos)} · click to check this day again" style="cursor:pointer;display:inline-block;width:${posRecon.days>30?13:20}px;height:20px;border-radius:5px;margin:0 3px 3px 0;background:${c}"></span>`;}
+  h+=`<div style="margin-bottom:16px">${strip}<div style="font-size:11px;color:${T.textMuted};margin-top:2px">each square = a day (oldest left) · green = explained · amber = something to check · grey = not checked · click a square to check that day again</div></div>`;
+  if(badReads.length)h+=`<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:#FBBF2414;border:1px solid #FBBF2466;border-radius:10px;padding:10px 14px;margin:-4px 0 12px;font-size:12.5px;color:${T.textPrimary}">⚠ <span style="flex:1">Credit Sales for <b>${badReads.map(r=>posFmtDate(r.date)).join(", ")}</b> came back incomplete from Microsys (platforms ${badReads.map(r=>"AED "+Math.round(r.agg).toLocaleString()+" vs till AED "+Math.round(r.pos).toLocaleString()).join("; ")}) — left out of the figures above, not a real gap.</span>${badReads.map(r=>sBtn("↻ Check "+posFmtDate(r.date)+" again",`posReconCheckDay('${r.date}')`,T.accentOrange)).join(" ")}</div>`;
+  if(posRecon.lastMsg)h+=`<div style="font-size:12.5px;color:#FBBF24;margin:-6px 0 12px">⚠ ${esc(posRecon.lastMsg)}</div>`;
   // ── things to check
   h+=`<div style="background:${T.bg};border:1px solid ${T.cardBorder};border-radius:10px;padding:12px 14px;margin-bottom:12px"><div style="font-size:13.5px;font-weight:800;color:${T.textPrimary};margin-bottom:4px">${ok?"Nothing to check":"Things to check"}</div>`;
   if(ok)h+=`<div style="font-size:12.5px;color:${T.textSecondary}">Every gap in this range is explained. 👍</div>`;
@@ -27512,18 +27528,23 @@ function plParse(wb){
   for(let m=1;m<=12;m++)if(out.combined[m]&&(out.combined[m].A.rev||0)>0)out.months.push(m);
   return out;
 }
+// v597: Finance's brand headers vary by tab (e.g. "FyoozJen", "Wicked wings") — one name per brand
+function plBrandNorm(n){const t=String(n||"").toLowerCase();return/^fyo/.test(t)?"Fyoozhen":/^lol/.test(t)?"Lollorosso":/^smok/.test(t)?"Smokeys":/^wick/.test(t)?"Wicked Wings":/^ore/.test(t)?"Oregano":String(n||"").trim();}
+function plNormData(D){if(!D)return D;const fix=months=>{for(const m of Object.keys(months||{})){const x=months[m];if(!x||!x.br)continue;const nb={};
+    for(const[b,v]of Object.entries(x.br)){const k=plBrandNorm(b);if(!nb[k])nb[k]={A:{},B:{}};for(const w of["A","B"])for(const[f,val]of Object.entries(v[w]||{}))nb[k][w][f]=(nb[k][w][f]||0)+val;}x.br=nb;}};
+  for(const o of Object.values(D.outlets||{}))fix(o);fix(D.combined);return D;}
 async function plUpload(file){
   if(!file)return;plBusy=true;plMsg=null;renderSitePL();
   try{await loadSheetJS();const wb=XLSX.read(await file.arrayBuffer(),{type:"array"});const p=plParse(wb);
     const yr=(String(file.name).match(/20\d\d/)||[])[0]||String(new Date().getFullYear());
-    const data=Object.assign(p,{year:+yr,file:file.name,uploadedAt:new Date().toISOString()});
+    const data=Object.assign(plNormData(p),{year:+yr,file:file.name,uploadedAt:new Date().toISOString()});
     await posApi("/api/pl",{data});plData=data;plUI.per=null;
     plMsg={ok:true,t:`Loaded ${file.name}: ${Object.keys(p.outlets).length} outlets, actuals for ${p.months.map(m=>PL_MONTHS[m-1].slice(0,3)).join(", ")}.`};
   }catch(e){plMsg={ok:false,t:e.message||String(e)};}
   plBusy=false;renderSitePL();
 }
 async function plLoad(){if(plLoading)return;plLoading=true;plErr=null;
-  try{const j=await posApi("/api/pl");plData=j.data||null;}catch(e){plErr=e.message;}
+  try{const j=await posApi("/api/pl");plData=plNormData(j.data||null);}catch(e){plErr=e.message;}
   plLoading=false;if(typeof curPage!=="undefined"&&curPage==="sitepl")renderSitePL();}
 // ── numbers ──
 const PL_FIXED=["staff","rent","lic","office","veh","bank","oth","ofi"],PL_LUMPY=["rm","util"];
@@ -27547,17 +27568,29 @@ function plPeriod(per){
   const m=+per,rows=Object.keys(O).map(n=>Object.assign({name:n},O[n][m]||{A:{},B:{},LY:{},br:{}}));
   return{rows,group:D.combined[m],label:`${PL_MONTHS[m-1]} ${y}`,days:plDim(y,m),m};
 }
+// v597: brand split of the live month — delivery from the sheet (per brand), dine-in & takeaway to the outlet's own
+// brand (Fyoozhen at DIP-Fyoozhen / WTC / NAS, otherwise Oregano), catering & direct deliveries by the till's brand.
+function plDashBrand(y,m,uptoDay){
+  const key=y+"-"+m+"-"+uptoDay+"-"+(allData||[]).length+"-"+(instoreData||[]).length+"-"+((typeof tillOnly!=="undefined"&&tillOnly.rows)||[]).length;
+  if(plDashBrand._k===key)return plDashBrand._v;
+  const p=n=>String(n).padStart(2,"0"),s=`${y}-${p(m)}-01`,e=`${y}-${p(m)}-${p(uptoDay||plDim(y,m))}`,by={};
+  const add=(o,b,sales,disc)=>{const x=((by[o]=by[o]||{})[b]=by[o][b]||{sales:0,disc:0});x.sales+=sales;x.disc+=disc;};
+  const home=o=>/fyoozhen|^WTC$|^NAS$/i.test(o)?"Fyoozhen":"Oregano";
+  try{for(const r of chDelivSrc()){if(r.channel==="instore"||r.branch==="(brand-level)"||r.date<s||r.date>e)continue;add(chOutletOfDelivery(r),r.brand,r.sales/1.05,r.disc||0);}
+    for(const r of instoreData){if(r.date<s||r.date>e)continue;add(r.outlet,home(r.outlet),(r.di.sales+r.to.sales)/1.05,(r.di.disc||0)+(r.to.disc||0));}
+    if(typeof tillOnlyRows==="function")for(const t of tillOnlyRows(s,e))add(t.o,t.b||home(t.o),t.g,0);}catch(err){}
+  plDashBrand._k=key;plDashBrand._v=by;return by;}
 function plEstimate(){
   const D=plData,y=D.year,last=D.months[D.months.length-1],basis=D.months.slice(-3);
   const lt=typeof latest!=="undefined"&&latest?latest:null;if(!lt)return null;
   const ly=+lt.slice(0,4),lm=+lt.slice(5,7),ld=+lt.slice(8,10);if(ly!==y||lm<=last)return null;
   const dm=plDim(y,lm),fr=ld/dm,dash=plMonthDash(y,lm,ld);if(!dash)return null;
-  const est=(src,dashName)=>{
+  const est=(src,dashName,live)=>{ // live = {sales,disc} for a brand slice
     const L=(src[last]||{}).A||{},bs=basis.map(m=>(src[m]||{}).A||{}),bRev=bs.reduce((a,x)=>a+(x.rev||0),0);
-    const rev=dashName!=null?(dash.by[dashName]||0):(L.rev||0)*fr;
+    const rev=live?live.sales:dashName!=null?(dash.by[dashName]||0):(L.rev||0)*fr;
     const ratio=k=>bRev?bs.reduce((a,x)=>a+(x[k]||0),0)/bRev:0;
     const o={rev,est:true};
-    if(dashName!=null){o.disc=dash.disc[dashName]||0;o.gross=rev+o.disc;}else if(L.gross){o.disc=(L.disc||0)*fr;o.gross=(L.gross||0)*fr;}
+    if(live){o.disc=live.disc;o.gross=rev+o.disc;}else if(dashName!=null){o.disc=dash.disc[dashName]||0;o.gross=rev+o.disc;}else if(L.gross){o.disc=(L.disc||0)*fr;o.gross=(L.gross||0)*fr;}
     for(const k of["food","comm"])o[k]=ratio(k)*rev;
     o.odir=ratio("odir")*rev;o.mkt=o.comm+ratio("mkt")*rev-ratio("comm")*rev;
     for(const k of PL_FIXED)o[k]=(L[k]||0)*fr;
@@ -27568,14 +27601,24 @@ function plEstimate(){
     o.lumpyLo=(mn(rmF)+mn(utF))*fr;o.lumpyHi=(mx(rmF)+mx(utF))*fr;
     o.ho=(L.ho||0)*fr;o.be=L.be||0;
     o.np=o.rev-o.food-o.odir-o.staff-o.mkt-o.rest-o.veh-o.office-o.rent-o.lic-o.util-o.oth-o.bank-o.ofi;
-    if(dashName==null&&!(L.rev>0))o.np=(L.np||0)*fr; // no sales line (e.g. Kiosk) → last month's result, pro rata
+    if(!live&&dashName==null&&!(L.rev>0))o.np=(L.np||0)*fr; // no sales line (e.g. Kiosk) → last month's result, pro rata
     return o;};
   const scale=o=>{const r={};for(const k in o)r[k]=o[k]*fr;return r;}; // budget / last year pro rata to the same days
-  const rows=Object.keys(D.outlets).map(n=>({name:n,A:est(D.outlets[n],PL_OUTLET[n]!==undefined?PL_OUTLET[n]:null),B:scale(((D.outlets[n][lm]||{}).B)||{}),LY:scale(((D.outlets[n][lm]||{}).LY)||{}),br:{}}));
+  const DB=plDashBrand(y,lm,ld);
+  const rows=Object.keys(D.outlets).map(n=>{const src=D.outlets[n],dn=PL_OUTLET[n]!==undefined?PL_OUTLET[n]:null,A=est(src,dn),br={};
+    // brand slices: Finance's brand columns for costs, live sales split by brand (scaled to the outlet's live total)
+    const names=new Set();[last,...basis].forEach(m=>Object.keys(((src[m]||{}).br)||{}).forEach(b=>names.add(b)));
+    const live=dn!=null?(DB[dn]||{}):{},tot=Object.values(live).reduce((a,x)=>a+x.sales,0),k=tot?(dash.by[dn]||0)/tot:1;
+    for(const b of names){const bsrc={};for(const m of Object.keys(src))if(src[m].br&&src[m].br[b])bsrc[m]={A:src[m].br[b].A||{},B:src[m].br[b].B||{}};
+      if(!Object.keys(bsrc).length)continue;const lv=dn!=null?{sales:((live[b]||{}).sales||0)*k,disc:(live[b]||{}).disc||0}:null;
+      if(lv&&!lv.sales&&!(((bsrc[last]||{}).A||{}).rev))continue;
+      br[b]={A:est(bsrc,dn,lv),B:scale(((src[lm]||{}).br||{})[b]?(src[lm].br[b].B||{}):{})};}
+    return{name:n,A,B:scale(((src[lm]||{}).B)||{}),LY:scale(((src[lm]||{}).LY)||{}),br};});
   // group = outlets + the Combined-vs-outlets balance (head office) of the last actual month, pro rata
   const sumA=plSum(rows.map(r=>r.A)),lastOut=plSum(Object.values(D.outlets).map(o=>((o[last]||{}).A)||{})),cl=(D.combined[last]||{}).A||{};
   const hoBal=((cl.np||0)-(lastOut.np||0))*fr;const gA=Object.assign({},sumA,{np:sumA.np+hoBal,rev:sumA.rev+((cl.rev||0)-(lastOut.rev||0))*fr,est:true});
-  return{rows,group:{A:gA,B:scale((D.combined[lm]||{}).B||{}),LY:scale((D.combined[lm]||{}).LY||{})},label:`${PL_MONTHS[lm-1]} 1–${ld} (estimate)`,days:ld,m:lm,est:true,
+  const gBr={};for(const r of rows)for(const[b,x]of Object.entries(r.br)){(gBr[b]=gBr[b]||{A:[],B:scale((((D.combined[lm]||{}).br||{})[b]||{}).B||{})}).A.push(x.A);}for(const b in gBr)gBr[b].A=Object.assign(plSum(gBr[b].A),{est:true});
+  return{rows,group:{A:gA,B:scale((D.combined[lm]||{}).B||{}),LY:scale((D.combined[lm]||{}).LY||{}),br:gBr},label:`${PL_MONTHS[lm-1]} 1–${ld} (estimate)`,days:ld,m:lm,est:true,
     note:`${ld} of ${dm} days · sales = dashboard (all channels, excl. VAT) · food, packaging & commission at each outlet's ${basis.map(m=>PL_MONTHS[m-1].slice(0,3)).join("–")} ratio · fixed costs = ${PL_MONTHS[last-1].slice(0,3)} × ${ld}/${dm} · repairs & utilities = 3-month average × ${ld}/${dm}`};
 }
 // ── page ──
@@ -27593,7 +27636,9 @@ function plRows(per){ // per-outlet {name,A,B,LY,br} for a period
     return{name:n,A:g("A"),B:g("B"),LY:g("LY"),br};});}
 function plSel(per,outlet,brand){ // {A,B,LY} for the current filters
   const D=plData;
-  if(per==="est"){const E=plEstimate();if(!E)return{A:{},B:{},LY:{}};if(outlet){const r=E.rows.find(x=>x.name===outlet);return r?{A:r.A,B:r.B,LY:r.LY}:{A:{},B:{},LY:{}};}return E.group;}
+  if(per==="est"){const E=plEstimate();const none={A:{},B:{},LY:{}};if(!E)return none;
+    if(outlet){const r=E.rows.find(x=>x.name===outlet);if(!r)return none;if(brand){const b=r.br[brand];return b?{A:b.A,B:b.B,LY:{}}:none;}return{A:r.A,B:r.B,LY:r.LY};}
+    if(brand){const b=(E.group.br||{})[brand];return b?{A:b.A,B:b.B,LY:{}}:none;}return E.group;}
   const ms=per==="ytd"?D.months:[+per],src=outlet?D.outlets[outlet]:D.combined;
   const pick=(m,w)=>{const x=(src||{})[m]||{};if(brand){const b=(x.br||{})[brand];return b?(b[w]||{}):{};}return x[w]||{};};
   return{A:plSum(ms.map(m=>pick(m,"A"))),B:plSum(ms.map(m=>pick(m,"B"))),LY:brand?{}:plSum(ms.map(m=>pick(m,"LY")))};}
@@ -27653,7 +27698,7 @@ function renderSitePL(){
   if(!plData){pg.innerHTML=shell(`<div class="cd"><div class="ttl" style="margin-bottom:6px">No P&amp;L uploaded yet</div><div class="sub">Upload Finance's "PL report" workbook (a tab per outlet + a Combined tab). Each month, upload the new file — it replaces the old one.</div></div>`);return;}
   const D=plData,estOK=!!plEstimate();
   if(plUI.per==null||(plUI.per==="est"&&!estOK))plUI.per=String(D.months[D.months.length-1]);
-  const per=plUI.per,O=plUI.outlet||"",Br=per==="est"?"":(plUI.brand||"");
+  const per=plUI.per,O=plUI.outlet||"",Br=plUI.brand||"";
   const S=plSel(per,O,Br),A=S.A,B=S.B,L=S.LY,rows=plRows(per),live=rows.filter(r=>(r.A.rev||0)>0||(r.A.np||0)!==0);
   const lbl=per==="ytd"?`Jan–${PL_MONTHS[D.months[D.months.length-1]-1].slice(0,3)} ${D.year}`:per==="est"?`${PL_MONTHS[+latest.slice(5,7)-1]} 1–${+latest.slice(8,10)} (estimate)`:`${PL_MONTHS[+per-1]} ${D.year}`;
   const who=(O||"All outlets")+(Br?" · "+Br:"");
@@ -27662,7 +27707,7 @@ function renderSitePL(){
   const flt=`<div class="cd" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;padding:12px 16px"><span class="seg">${D.months.slice(-4).map(m=>segB(String(m),PL_MONTHS[m-1].slice(0,3))).join("")}${estOK?segB("est",PL_MONTHS[+latest.slice(5,7)-1].slice(0,3)+" so far"):""}${segB("ytd","Year to date")}</span>
     ${D.months.length>4?`<select onchange="plSet('per',this.value)"><option value="">Earlier month…</option>${D.months.slice(0,-4).map(m=>`<option value="${m}" ${per===String(m)?"selected":""}>${PL_MONTHS[m-1]}</option>`).join("")}</select>`:""}
     <div style="flex:1"></div><select onchange="plSet('outlet',this.value)"><option value="">All outlets</option>${Object.keys(D.outlets).sort().map(n=>`<option ${O===n?"selected":""}>${esc(n)}</option>`).join("")}</select>
-    <select onchange="plSet('brand',this.value)" ${per==="est"?"disabled title='Brand split is for Finance months only'":""}><option value="">All brands</option>${["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"].map(b=>`<option ${Br===b?"selected":""}>${b}</option>`).join("")}</select>
+    <select onchange="plSet('brand',this.value)"><option value="">All brands</option>${["Oregano","Lollorosso","Smokeys","Fyoozhen","Wicked Wings"].map(b=>`<option ${Br===b?"selected":""}>${b}</option>`).join("")}</select>
     ${O||Br?`<button onclick="plUI.outlet='';plUI.brand='';renderSitePL()" style="border:none;background:none;color:${T.accentOrange};font-weight:700;cursor:pointer;font-size:12.5px">✕ Clear</button>`:""}</div>`;
   // KPIs
   const pill=(a,b,inv,lab)=>{if(!b)return"";const p=(a-b)/Math.abs(b)*100,good=(p>=0)!==!!inv;return`<span class="pill" style="background:${good?T.accentGreen:T.accentRed}22;color:${good?T.accentGreen:T.accentRed}">${p>=0?"▲":"▼"}${Math.abs(p).toFixed(0)}% ${lab}</span>`;};
@@ -27670,7 +27715,7 @@ function renderSitePL(){
   const dpg=x=>x&&x.gross?(x.disc||0)/x.gross*100:0;
   const E=per==="est"?` <span class="tag" style="background:#c9850026;color:#c98500">ESTIMATE</span>`:"";
   const npP=A.rev?A.np/A.rev*100:0,prime=A.rev?((A.food||0)+(A.staff||0))/A.rev*100:0,primeB=B.rev?((B.food||0)+(B.staff||0))/B.rev*100:0;
-  const nP=live.filter(r=>(r.A.rev||0)>20000),inP=nP.filter(r=>(r.A.np||0)>0).length;
+  const liveK=Br?rows.map(r=>Object.assign({},r,{A:((r.br||{})[Br]||{}).A||{},B:((r.br||{})[Br]||{}).B||{}})):live,nP=liveK.filter(r=>(r.A.rev||0)>(Br?3000:20000)),inP=nP.filter(r=>(r.A.np||0)>0).length; // v597: brand-aware
   const kp=`<div class="kp" style="margin-bottom:12px">
    <div class="cd"><div class="kl">Net revenue${E}</div><div class="kv">${plK(A.rev)}</div>${pill(A.rev,B.rev,0,"vs budget")}${pill(A.rev,L.rev,0,"vs last yr")}${plSpark(trend("rev"),T,PL_CLR[0])}</div>
    <div class="cd"><div class="kl">Net profit${E}</div><div class="kv ${A.np>=0?"up":"dn"}">${plK(A.np)} <span style="font-size:14px;color:${T.textSecondary}">${npP.toFixed(1)}%</span></div><span class="sub">budget ${plK(B.np)}${L.rev?" · last yr "+plK(L.np):""}</span>${plSpark(trend("np"),T)}</div>
