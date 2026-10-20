@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-20-591";
+const BUILD_VERSION="2026-10-20-592";
 const BUILD_NOTES=[
+  "🔧 KEETA ALERTS VISIBLE + LIVE DISCOUNTS IN THE P&L ESTIMATE. (1) Overview's data checks were worked out before the Keeta order data arrived from the server, so the Keeta minimum-commission alerts never showed — they now refresh when it arrives. If the loaded Keeta files are from before 591, a check says to re-upload them. (2) Site P&L 'so far' estimate: discounts now come live from the Google Sheet (delivery) and Microsys (dine-in & takeaway) instead of '—', with the discount chart and discount problems included.",
   "🧾 KEETA MINIMUM COMMISSION. Keeta charges 16% × (Original price − merchant-funded promo), minimum AED 6 — confirmed on every one of 5,760 September orders. Orders worth under AED 37.50 after the discount pay the AED 6. The Keeta order-file parser now records, per order, whether the minimum applied and the extra above 16%. Shown on Platforms → Keeta (orders on the minimum, extra commission, effective rate, discount on those orders, per brand → outlet, per day) and in each Keeta campaign's breakdown on Promotions. Alerts on Overview (data checks) and in the Daily Digest when a brand has 30%+ or an outlet 50%+ of its Keeta orders on the minimum over the last 7 days. Re-upload Keeta files from before 591 to fill it in.",
   "📊 SITE P&L REDESIGN + CLEANER POS SYNC. Site P&L: filters for month / year to date / current-month estimate, outlet and brand; tiles with trends; charts — revenue & net profit by month vs budget and last year, where every AED 100 of sales went (donut), net profit by outlet with budget markers (click to filter), why profit differs from budget, discounts % of gross vs last year; problems & proposed actions per outlet (structure, sales, discounts, costs over budget) with the group discount trend on top; outlet table folded. POS Sync: one header row (status, TEST/LIVE, test, login), Pull first, the new Till vs dashboard card (verdict, day strip, open items with one-click answers), and the less-used tools folded under More tools.",
   "🏪 SITE P&L (NIKHIL ONLY). New page under Analyse: upload Finance's monthly 'PL report' workbook and see each outlet's month — revenue, food / staff / rent / commission %, repairs, Finance's confidential fixed line, net profit vs budget and last year, daily sales vs break-even — a 'where the money went' breakdown per outlet, a brand view, year to date, and the current month as an estimate from live sales (food & commission at recent ratios, fixed costs pro rata, repairs & utilities at the 3-month average with a range). Shown exactly as Finance reports it. The file is read in the browser and stored on the server; only Nikhil's login can read or upload it.",
@@ -27516,8 +27517,8 @@ function plMonthDash(y,m,uptoDay){ // dashboard sales excl. VAT for the month (a
   const key=y+"-"+m+"-"+uptoDay+"-"+(typeof lensVer!=="undefined"?lensVer:0)+"-"+(allData||[]).length+"-"+(instoreData||[]).length;
   if(plMonthDash._k===key)return plMonthDash._v;
   const p=n=>String(n).padStart(2,"0"),s=`${y}-${p(m)}-01`,e=`${y}-${p(m)}-${p(uptoDay||plDim(y,m))}`;
-  let v=null;try{const A=chAggregate(s,e,true),f=chState.vat==="excl"?1:1/1.05,by={};for(const o in A.by)by[o]=A.sum(A.by[o])*f;
-    const first=(allData||[]).reduce((mn,r)=>r.date<mn?r.date:mn,"9999");v={by,total:A.total*f,full:first<=s&&typeof latest!=="undefined"&&latest>=e};}catch(e){}
+  let v=null;try{const A=chAggregate(s,e,true),f=chState.vat==="excl"?1:1/1.05,by={},disc={};for(const o in A.by){by[o]=A.sum(A.by[o])*f;disc[o]=CH_LIST.reduce((a,c)=>a+(A.by[o][c].disc||0),0);} // v592: discounts from the live sheet (delivery) + Microsys (dine-in, takeaway)
+    const first=(allData||[]).reduce((mn,r)=>r.date<mn?r.date:mn,"9999");v={by,disc,total:A.total*f,full:first<=s&&typeof latest!=="undefined"&&latest>=e};}catch(e){}
   plMonthDash._k=key;plMonthDash._v=v;return v;}
 // One period → rows per outlet {name,A,B,LY,est,...} + group (from Combined)
 function plPeriod(per){
@@ -27539,6 +27540,7 @@ function plEstimate(){
     const rev=dashName!=null?(dash.by[dashName]||0):(L.rev||0)*fr;
     const ratio=k=>bRev?bs.reduce((a,x)=>a+(x[k]||0),0)/bRev:0;
     const o={rev,est:true};
+    if(dashName!=null){o.disc=dash.disc[dashName]||0;o.gross=rev+o.disc;}else if(L.gross){o.disc=(L.disc||0)*fr;o.gross=(L.gross||0)*fr;}
     for(const k of["food","comm"])o[k]=ratio(k)*rev;
     o.odir=ratio("odir")*rev;o.mkt=o.comm+ratio("mkt")*rev-ratio("comm")*rev;
     for(const k of PL_FIXED)o[k]=(L[k]||0)*fr;
@@ -27655,7 +27657,7 @@ function renderSitePL(){
   const kp=`<div class="kp" style="margin-bottom:12px">
    <div class="cd"><div class="kl">Net revenue${E}</div><div class="kv">${plK(A.rev)}</div>${pill(A.rev,B.rev,0,"vs budget")}${pill(A.rev,L.rev,0,"vs last yr")}${plSpark(trend("rev"),T,PL_CLR[0])}</div>
    <div class="cd"><div class="kl">Net profit${E}</div><div class="kv ${A.np>=0?"up":"dn"}">${plK(A.np)} <span style="font-size:14px;color:${T.textSecondary}">${npP.toFixed(1)}%</span></div><span class="sub">budget ${plK(B.np)}${L.rev?" · last yr "+plK(L.np):""}</span>${plSpark(trend("np"),T)}</div>
-   <div class="cd"><div class="kl">Discounts</div><div class="kv">${A.gross?dpg(A).toFixed(1)+"%":"—"}</div><span class="sub">${A.gross?`of gross sales · AED ${plK(A.disc)}`:"not in the estimate"}</span>${L.gross?(()=>{const d=dpg(A)-dpg(L),bad=d>0;return`<div style="margin-top:4px"><span class="pill" style="background:${bad?T.accentRed:T.accentGreen}22;color:${bad?T.accentRed:T.accentGreen}">${d>=0?"▲ +":"▼ "}${d.toFixed(1)} pts vs last yr (${dpg(L).toFixed(1)}%)</span></div>`;})():""}</div>
+   <div class="cd"><div class="kl">Discounts</div><div class="kv">${A.gross?dpg(A).toFixed(1)+"%":"—"}</div><span class="sub">${A.gross?`of gross sales · AED ${plK(A.disc)}${per==="est"?" · live (sheet + Microsys)":""}`:"no data"}</span>${L.gross?(()=>{const d=dpg(A)-dpg(L),bad=d>0;return`<div style="margin-top:4px"><span class="pill" style="background:${bad?T.accentRed:T.accentGreen}22;color:${bad?T.accentRed:T.accentGreen}">${d>=0?"▲ +":"▼ "}${d.toFixed(1)} pts vs last yr (${dpg(L).toFixed(1)}%)</span></div>`;})():""}</div>
    <div class="cd"><div class="kl">Prime cost${E}</div><div class="kv">${prime.toFixed(0)}%</div><span class="sub">food ${A.rev?((A.food||0)/A.rev*100).toFixed(1):0}% + staff ${A.rev?((A.staff||0)/A.rev*100).toFixed(1):0}% · budget ${primeB.toFixed(0)}%</span></div>
    <div class="cd"><div class="kl">${O?"Daily sales vs break-even":"Outlets in profit"}${E}</div>${O?(()=>{const nd=per==="ytd"?D.months.reduce((a,m)=>a+plDim(D.year,m),0):per==="est"?+latest.slice(8,10):plDim(D.year,+per),d=A.rev/nd,be=A.be||0;return`<div class="kv">${plFmt(d)}</div><span class="sub">${per==="ytd"?"average per day":be?`break-even ${plFmt(be)}/day · <b class="${d>=be?"up":"dn"}">${d>=be?"+":"−"}${plFmt(Math.abs(d-be))}</b>`:""}</span>`;})():`<div class="kv">${inP} <span style="font-size:14px;color:${T.textSecondary}">of ${nP.length}</span></div><span class="sub">click a bar below to filter</span>`}</div></div>`;
   // charts row 1
@@ -27663,7 +27665,7 @@ function renderSitePL(){
     <div class="cd"><div class="ttl">Where every AED 100 of sales went</div><div class="sub" style="margin-bottom:6px">${esc(who)} · ${esc(lbl)}</div><div style="height:250px"><canvas id="pl-c-mix"></canvas></div></div></div>`;
   const r2=`<div class="g2b" style="margin-bottom:12px"><div class="cd"><div class="ttl">Net profit by outlet</div><div class="sub" style="margin-bottom:6px">${esc(lbl)}${Br?" · "+esc(Br):""} · line = budget · click an outlet to filter</div><div style="height:${Math.max(260,nP.length*22+40)}px"><canvas id="pl-c-out"></canvas></div></div>
     <div class="cd"><div class="ttl">Why profit differs from budget</div><div class="sub" style="margin-bottom:6px">${esc(who)} · ${esc(lbl)} · AED, green = helped, red = hurt</div><div style="height:${Math.max(260,nP.length*22+40)}px"><canvas id="pl-c-bridge"></canvas></div></div></div>`;
-  const r3=per==="est"||Br?"":`<div class="cd" style="margin-bottom:12px"><div class="ttl">Discounts as % of gross sales — this year vs last year</div><div class="sub" style="margin-bottom:6px">${esc(lbl)} · group ${dpg(plSel(per,"","").A).toFixed(1)}% vs ${dpg(plSel(per,"","").LY).toFixed(1)}% last year</div><div style="height:230px"><canvas id="pl-c-disc"></canvas></div></div>`;
+  const r3=Br?"":`<div class="cd" style="margin-bottom:12px"><div class="ttl">Discounts as % of gross sales — this year vs last year</div><div class="sub" style="margin-bottom:6px">${esc(lbl)} · group ${dpg(plSel(per,"","").A).toFixed(1)}% vs ${dpg(plSel(per,"","").LY).toFixed(1)}% last year</div><div style="height:230px"><canvas id="pl-c-disc"></canvas></div></div>`;
   // problems
   const probs=plProblems(per,rows,plSel(per,"","").A).filter(p=>!O||p.name===O);
   const gA=plSel(per,"","").A,gL=plSel(per,"","").LY;
@@ -27751,7 +27753,13 @@ function kmAlerts(){if(!kmHas())return[];const cov=kmCover();const e=cov[1],s=((
   return out.sort((a,b)=>b.share-a.share);}
 // ── Overview: add to the data checks list
 (function kmHookDH(){if(typeof dataHealthChecks!=="function")return setTimeout(kmHookDH,300);
-  const _o=dataHealthChecks;dataHealthChecks=function(){const r=_o.apply(this,arguments)||[];try{r.unshift(...kmAlerts().map(a=>({sev:a.sev,check:"Keeta min. commission",text:a.msg,where:a.where})));}catch(e){}return r;};window.dataHealthChecks=dataHealthChecks;})();
+  const _o=dataHealthChecks;dataHealthChecks=function(){const r=_o.apply(this,arguments)||[];try{
+      if(kmRecs().length&&!kmHas())r.unshift({sev:"medium",check:"Keeta min. commission",text:"Switched off until Keeta order files are uploaded again: the files already loaded are from before build 591 and don't carry the per-order commission. Re-upload September and October Recent Orders (Promotions → upload).",where:"Keeta"});
+      r.unshift(...kmAlerts().map(a=>({sev:a.sev,check:"Keeta min. commission",text:a.msg,where:a.where})));}catch(e){}return r;};window.dataHealthChecks=dataHealthChecks;
+  // the Keeta order data arrives from the server after Overview's first paint — refresh the checks when it changes
+  if(typeof dataHealthBannerHTML==="function"){const _b=dataHealthBannerHTML;let stamp="";dataHealthBannerHTML=function(){const st=kmRecs().length+"|"+kmHas()+"|"+((kmCover()||[])[1]||"");if(st!==stamp){stamp=st;try{_dhCache=null;}catch(e){}}return _b.apply(this,arguments);};window.dataHealthBannerHTML=dataHealthBannerHTML;}
+  let last="";setInterval(()=>{try{const st=kmRecs().length+"|"+kmHas();if(st!==last){const first=!last;last=st;if(!first&&typeof curPage!=="undefined"&&curPage==="overview"&&typeof renderOverview==="function")renderOverview();try{navPaint();}catch(e){}}}catch(e){}},3000);
+})();
 // ── Platforms → Keeta card
 let kmOpen={};
 function kmToggle(b){kmOpen[b]=!kmOpen[b];kmPaint();}
