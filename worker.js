@@ -122,6 +122,7 @@ async function replaceOtherSessions(env, userKey, newSession, request, prevPoint
 
 async function getSession(env, sessionId) {
   if (!sessionId) return null;
+  if (sessionId.startsWith("auto:")) return await autoSession(env, sessionId); // v601: the 9 am auto-pull (Google Apps Script)
   const raw = await env.SESSIONS.get(`session:${sessionId}`);
   if (!raw) return null;
   const sess = JSON.parse(raw);
@@ -551,7 +552,7 @@ const STI_PARAMS = {"viewerId":"MvcViewer","routes":{"action":"Reports","control
 async function requirePosUser(request, env) {
   const session = await getSession(env, request.headers.get("X-Session-Id"));
   if (!session) return null;
-  if (!session.admin && !POS_USERS.includes(session.user)) return null;
+  if (!session.admin && !session.auto && !POS_USERS.includes(session.user)) return null;
   return session;
 }
 
@@ -1272,6 +1273,116 @@ async function handlePosTest(request, env) {
 }
 
 // ─── main router ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// v601 MORNING AUTO-PULL + PHONE NOTIFICATIONS (free Cloudflare plan)
+// The 9 am pull runs in Nikhil's own Google Apps Script (free, up to 6 min per run): it loads /autopull.js — the same
+// POS Sync code the dashboard runs — and calls these same /api/pos/* endpoints with a token instead of a login session
+// (X-Session-Id: "auto:<token>"). The token is made from the dashboard (POS Sync → Morning auto-pull), kept in KV,
+// and can be replaced any time (the old one stops working at once).
+// Notifications are standard Web Push to the dashboard in Chrome on the phone: VAPID keys are generated once and kept
+// in KV; a push carries no data — the phone's service worker (/sw.js) fetches the message from /api/push/last.
+// ═══════════════════════════════════════════════════════════════════════════════
+async function autoSession(env, sid) {
+  const tok = await env.SESSIONS.get("auto:token");
+  if (tok && sid === "auto:" + tok) return { user: "autopull", admin: false, auto: true };
+  return null;
+}
+function hex(bytes) { return [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, "0")).join(""); }
+async function sha(text) { return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))).slice(0, 32); }
+async function handleAutoToken(request, env) {
+  const s = await getSession(env, request.headers.get("X-Session-Id"));
+  if (!s || s.auto || !(s.admin || s.user === "nikhil")) return json({ error: "forbidden" }, 403);
+  const tok = hex(crypto.getRandomValues(new Uint8Array(24)));
+  await env.SESSIONS.put("auto:token", tok);
+  await env.SESSIONS.put("auto:tokenmeta", JSON.stringify({ by: s.user, at: new Date().toISOString() }));
+  return json({ ok: true, token: tok });
+}
+async function handleAutoStatus(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const [last, meta] = await Promise.all([env.SESSIONS.get("auto:last"), env.SESSIONS.get("auto:tokenmeta")]);
+  const lk = (await env.SESSIONS.list({ prefix: "auto:log:", limit: 1000 })).keys.sort((a, b) => b.name.localeCompare(a.name)).slice(0, 7);
+  const log = (await Promise.all(lk.map(k => env.SESSIONS.get(k.name)))).filter(Boolean).map(x => JSON.parse(x));
+  const subs = (await env.SESSIONS.list({ prefix: "push:sub:", limit: 1000 })).keys.length;
+  return json({ ok: true, hasToken: !!meta, tokenMeta: meta ? JSON.parse(meta) : null, last: last ? JSON.parse(last) : null, log, subs });
+}
+async function handleAutoReport(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const b = await readBody(request);
+  const rec = { ts: new Date().toISOString(), by: s.user, date: String(b.date || "").slice(0, 10), ok: !!b.ok, stage: String(b.stage || "").slice(0, 40), msg: String(b.msg || "").slice(0, 600), secs: +b.secs || 0 };
+  await env.SESSIONS.put("auto:last", JSON.stringify(rec));
+  await env.SESSIONS.put("auto:log:" + rec.ts, JSON.stringify(rec), { expirationTtl: 60 * 60 * 24 * 60 });
+  return json({ ok: true });
+}
+// ── Web Push (VAPID, no payload) ──
+async function pushVapid(env) {
+  const raw = await env.SESSIONS.get("push:vapid");
+  if (raw) return JSON.parse(raw);
+  const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const pub = b64url(await crypto.subtle.exportKey("raw", kp.publicKey));
+  const jwk = await crypto.subtle.exportKey("jwk", kp.privateKey);
+  const v = { pub, jwk };
+  await env.SESSIONS.put("push:vapid", JSON.stringify(v));
+  return v;
+}
+async function handlePushKey(request, env) {
+  const s = await getSession(env, request.headers.get("X-Session-Id"));
+  if (!s) return json({ error: "unauthorized" }, 401);
+  return json({ ok: true, key: (await pushVapid(env)).pub });
+}
+async function handlePushSubscribe(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s || s.auto) return json({ error: "forbidden" }, 403);
+  const b = await readBody(request), sub = b.sub || {};
+  if (!sub.endpoint || !/^https:\/\//.test(sub.endpoint)) return json({ error: "bad_subscription" }, 400);
+  await env.SESSIONS.put("push:sub:" + await sha(sub.endpoint), JSON.stringify({ endpoint: sub.endpoint, user: s.user, label: String(b.label || "").slice(0, 60), ts: new Date().toISOString() }));
+  return json({ ok: true });
+}
+async function handlePushUnsubscribe(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const b = await readBody(request);
+  if (b.endpoint) await env.SESSIONS.delete("push:sub:" + await sha(b.endpoint));
+  return json({ ok: true });
+}
+async function pushJWT(v, aud, sub) {
+  const key = await crypto.subtle.importKey("jwk", v.jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  const head = b64url(new TextEncoder().encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
+  const claim = b64url(new TextEncoder().encode(JSON.stringify({ aud, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub })));
+  const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(head + "." + claim));
+  return head + "." + claim + "." + b64url(sig);
+}
+async function handlePushSend(request, env) {
+  const s = await requirePosUser(request, env);
+  if (!s) return json({ error: "forbidden" }, 403);
+  const b = await readBody(request);
+  const msg = { title: String(b.title || "Oregano Dashboard").slice(0, 120), body: String(b.body || "").slice(0, 900), url: String(b.url || "/").slice(0, 200), tag: String(b.tag || "dash").slice(0, 30), ts: new Date().toISOString() };
+  if (!msg.url.startsWith("/")) msg.url = "/";
+  await env.SESSIONS.put("push:msg", JSON.stringify(msg), { expirationTtl: 60 * 60 * 24 * 3 });
+  const v = await pushVapid(env), origin = new URL(request.url).origin;
+  const keys = (await env.SESSIONS.list({ prefix: "push:sub:", limit: 1000 })).keys.slice(0, 30);
+  let sent = 0, failed = 0, removed = 0; const errs = [];
+  for (const k of keys) {
+    const raw = await env.SESSIONS.get(k.name); if (!raw) continue;
+    const sub = JSON.parse(raw);
+    if (b.onlyMe && !s.auto && sub.user !== s.user) continue;
+    try {
+      const jwt = await pushJWT(v, new URL(sub.endpoint).origin, origin);
+      const r = await fetch(sub.endpoint, { method: "POST", headers: { TTL: "21600", Urgency: "high", Authorization: `vapid t=${jwt}, k=${v.pub}`, "Content-Length": "0" }, body: new Uint8Array(0) });
+      if (r.status === 404 || r.status === 410) { await env.SESSIONS.delete(k.name); removed++; }
+      else if (r.ok) sent++; else { failed++; errs.push(r.status + " " + (await r.text()).slice(0, 120)); }
+    } catch (e) { failed++; errs.push(String(e.message || e).slice(0, 120)); }
+  }
+  return json({ ok: true, sent, failed, removed, errs: errs.slice(0, 3) });
+}
+async function handlePushLast(request, env) {
+  const ep = new URL(request.url).searchParams.get("ep") || "";
+  if (!ep || !(await env.SESSIONS.get("push:sub:" + await sha(ep)))) return json({ error: "unknown_device" }, 403);
+  const m = await env.SESSIONS.get("push:msg");
+  return json(m ? JSON.parse(m) : { title: "Oregano Dashboard", body: "", url: "/", tag: "dash" });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -1343,6 +1454,20 @@ export default {
       if (path === "/api/ddclass"         && method === "POST") return await handleDDClassSet(request, env);
       if (path === "/api/pl"              && method === "GET")  return await handlePLGet(request, env);
       if (path === "/api/pl"              && method === "POST") return await handlePLSave(request, env);
+    } catch (e) {
+      return json({ error: "server_error", detail: String(e.message || e) }, 500);
+    }
+
+    // v601: morning auto-pull + phone notifications
+    try {
+      if (path === "/api/auto/token"      && method === "POST") return await handleAutoToken(request, env);
+      if (path === "/api/auto/status"     && method === "GET")  return await handleAutoStatus(request, env);
+      if (path === "/api/auto/report"     && method === "POST") return await handleAutoReport(request, env);
+      if (path === "/api/push/key"        && method === "GET")  return await handlePushKey(request, env);
+      if (path === "/api/push/subscribe"  && method === "POST") return await handlePushSubscribe(request, env);
+      if (path === "/api/push/unsubscribe"&& method === "POST") return await handlePushUnsubscribe(request, env);
+      if (path === "/api/push/send"       && method === "POST") return await handlePushSend(request, env);
+      if (path === "/api/push/last"       && method === "GET")  return await handlePushLast(request, env);
     } catch (e) {
       return json({ error: "server_error", detail: String(e.message || e) }, 500);
     }
