@@ -1246,6 +1246,11 @@ function AP_run(o){
   let sy="",sw="";AP_FINAL=true;
   if(res.okDays){try{sy=posApi("/api/pos/report",{kind:"summary",date:y}).csv;}catch(e){}try{sw=posApi("/api/pos/report",{kind:"summary",date:posAddDays(y,-7)}).csv;}catch(e){}}
   const msg=apMessage(res,sy,sw),secs=Math.round((Date.now()-AP_T0)/1000);
+  // v605: outlets trade until ~3 AM and those sales belong to the previous day — a run before 4 AM Dubai reads an
+  // unfinished day. Say so; the morning run pulls the same day again (a pull overwrites, so nothing doubles).
+  const dn=new Date(Date.now()+4*3600e3),hr=dn.getUTCHours();
+  if(msg.ok&&hr<4){msg.title=msg.title.replace("✅ Yesterday's data is ready","⏳ Pulled early — day not finished");
+    msg.body=`⚠ Pulled at ${String(hr).padStart(2,"0")}:${String(dn.getUTCMinutes()).padStart(2,"0")} — outlets open past midnight were still trading, so these figures are incomplete. The morning run pulls the day again.\n`+msg.body;}
   try{posApi("/api/auto/report",{date:y,ok:msg.ok,stage:o.retry?"retry":"morning run",msg:msg.title+" — "+msg.body,secs,hour:o.hour});}catch(e){}
   return msg;
 }
