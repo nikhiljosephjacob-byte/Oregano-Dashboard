@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-20-593";
+const BUILD_VERSION="2026-10-20-594";
 const BUILD_NOTES=[
+  "🎯 CAMPAIGN PLANNER — BOGO / SELECT-ITEMS FORECAST FIXED. Nikhil's Smokeys × Deliveroo BOGO (23–25 Oct) forecast showed more contribution per order than today (AED ~45 vs ~19) and a break-even below today's orders. Cause: the baseline weeks WERE the running BOGO and were charged 100% of its discount, while the forecast gave the campaign Deliveroo's 50% co-funding. Now: (1) the baseline always carries the discount it really had, at our share after any co-funding in those weeks; break-even is recomputed from it. (2) When the same offer is already running (BOGO or select items on 60%+ of the last 28 days), the new campaign is treated as a continuation: forecast = today's level with the last weeks' range, and a new panel answers the real question — is the offer paying off vs the 4 weeks before it started (orders, AOV, our discount per order, gross sales, contribution per day, adjusted for the brand's other platforms). (3) A red warning if a discount campaign ever shows more profit per order than today.",
   "🐞 'FORECASTED' SHOWN ON CAMPAIGNS NOBODY FORECASTED — caught by Nikhil on two new Deliveroo BOGO campaigns (Oregano and Smokeys, 23–25 Oct). A saved forecast was matched to a campaign by brand × platform × type only, so ANY older BOGO forecast (e.g. one from September) counted. Now a forecast belongs to a campaign only if it was made for that campaign's dates (start within 7 days and overlapping). Same fix in the two other places that link forecasts and campaigns: 'Upcoming campaigns without a forecast' and the forecast-accuracy check (which could compare an old forecast with a much later campaign).",
   "🔧 KEETA ALERTS VISIBLE + LIVE DISCOUNTS IN THE P&L ESTIMATE. (1) Overview's data checks were worked out before the Keeta order data arrived from the server, so the Keeta minimum-commission alerts never showed — they now refresh when it arrives. If the loaded Keeta files are from before 591, a check says to re-upload them. (2) Site P&L 'so far' estimate: discounts now come live from the Google Sheet (delivery) and Microsys (dine-in & takeaway) instead of '—', with the discount chart and discount problems included.",
   "🧾 KEETA MINIMUM COMMISSION. Keeta charges 16% × (Original price − merchant-funded promo), minimum AED 6 — confirmed on every one of 5,760 September orders. Orders worth under AED 37.50 after the discount pay the AED 6. The Keeta order-file parser now records, per order, whether the minimum applied and the extra above 16%. Shown on Platforms → Keeta (orders on the minimum, extra commission, effective rate, discount on those orders, per brand → outlet, per day) and in each Keeta campaign's breakdown on Promotions. Alerts on Overview (data checks) and in the Daily Digest when a brand has 30%+ or an outlet 50%+ of its Keeta orders on the minimum over the last 7 days. Re-upload Keeta files from before 591 to fill it in.",
@@ -27809,3 +27810,101 @@ function kmPaint(){const pg=document.getElementById("page-platforms");if(!pg)ret
 (function kmHookPlat(){if(typeof renderPlatforms!=="function"||typeof renderPage!=="function"||!window.lensSet)return setTimeout(kmHookPlat,300);
   const _rp=renderPage;renderPage=function(p){const r=_rp.apply(this,arguments);if(p==="platforms")try{kmPaint();}catch(e){console.warn(e);}return r;};window.renderPage=renderPage;})();
 window.kmToggle=kmToggle;window.kmAlerts=kmAlerts;
+
+// ═══ v594 CAMPAIGN PLANNER — consistent discount maths + "continuation" of an offer that is already running ═══
+// Nikhil: the Smokeys × Deliveroo BOGO forecast showed MORE contribution per order than the baseline. Cause: the
+// baseline window was the running BOGO itself and was charged 100% of its discount, while the campaign scenarios got
+// Deliveroo's 50% co-funding. Fixes: (A) the baseline's discount gets the co-funding of the campaigns that ran in it;
+// (B) when the same structure is already running (BOGO, select items), the new campaign is a CONTINUATION — same
+// economics as today, and the real question is answered instead: is the offer paying off vs the weeks before it began?
+// (C) a sanity warning if a discount campaign ever shows more profit per order than the baseline.
+function cpfCoFundOn(brand,agg,d){let best=0;for(const c of (typeof campaignData!=="undefined"?campaignData:[])){if(c.brand!==brand||c.aggregator!==agg||c.startDate>d||c.endDate<d)continue;
+  if(typeof campStatus==="function"&&campStatus(c)==="Cancelled")continue;try{const p=parseCampComment(c).coFundedPctOfDiscount||0;if(p>best)best=p;}catch(e){}}return best;}
+function cpfIsStruct(c,type){const t=(c.comments||"")+" "+(c.name||"");
+  if(type==="bogo")return c.discountStructure?c.discountStructure==="bogo":CAMP_FC_BOGO_RE.test(t);
+  if(type==="selectItems")return c.discountStructure?c.discountStructure==="selectItems":(typeof campFcIsSelectItemsText==="function"&&campFcIsSelectItemsText(t));return false;}
+function cpfActive(brand,agg,d,pred){return(typeof campaignData!=="undefined"?campaignData:[]).some(c=>c.brand===brand&&c.aggregator===agg&&c.startDate<=d&&c.endDate>=d&&!isRewardsCampaign(c)&&(typeof campStatus!=="function"||campStatus(c)!=="Cancelled")&&pred(c));}
+function cpfWindow(brand,agg,branches,s,e,others){ // daily figures for a window; others=true → same brand on the OTHER platforms (control)
+  const recs=allData.filter(r=>r.brand===brand&&(others?r.aggregator!==agg:r.aggregator===agg)&&r.branch!=="(brand-level)"&&r.date>=s&&r.date<=e&&(!branches||!branches.size||branches.has(r.branch))&&!(typeof outletRowRetired==="function"&&outletRowRetired(r)));
+  const days=new Set(recs.map(r=>r.date)).size;if(!days)return null;
+  const o=recs.reduce((a,r)=>a+r.orders,0),n=recs.reduce((a,r)=>a+r.sales,0),d=recs.reduce((a,r)=>a+(r.disc||0),0);
+  let cf=0;if(!others){const ds=[...new Set(recs.map(r=>r.date))];cf=ds.reduce((a,x)=>a+cpfCoFundOn(brand,agg,x),0)/ds.length;}
+  return{days,orders:o/days,net:n/days,disc:d/days,gross:(n+d)/days,cf};}
+function cpfEcon(w,commRate,foodRate,agg){ // contribution/day with our share of the discount only
+  const our=w.disc*(1-w.cf),inc=w.gross-our,comm=inc*commRate,food=w.gross*foodRate,fd=agg==="Keeta"?w.orders*KEETA_FD_COST:0;
+  return{our,aggF:w.disc-our,inc,comm,food,fd,contrib:inc-comm-food-fd};}
+(function cpfHook(){
+  if(typeof campPlanCompute!=="function"||typeof campPlanHTML!=="function")return setTimeout(cpfHook,400);
+  const _c=campPlanCompute;
+  campPlanCompute=function(brand,agg,start,end,type,discPct,cap,coFund,coFundPct,branches){
+    const r=_c.apply(this,arguments);if(!r)return r;
+    try{
+      const bm=r.baselineMeta,B=r.baseline,rate=r.commRate,food=r.foodRate;
+      // (A) baseline: our share of its discount, using the co-funding of campaigns that ran in that window
+      let cf0=0;{let n=0,t=0;for(let d=bm.windowStart;d<=bm.windowEnd;d=subDays(d,-1)){t+=cpfCoFundOn(brand,agg,d);n++;}cf0=n?t/n:0;}
+      // the baseline always carries the discount it really had (not only when flagged 'degraded'), at our share
+      {const W=cpfWindow(brand,agg,branches,bm.windowStart,bm.windowEnd);
+        if(W&&W.orders>0){const dpo=W.disc/W.orders;B.discTotalDay=B.orders*dpo;}
+        const our=B.discTotalDay*(1-cf0);B.brandFundDay=our;B.aggFundDay=B.discTotalDay-our;B.netSalesDay=B.grossDay-our;B.commDay=B.netSalesDay*rate;B.contribDay=B.netSalesDay-B.commDay-B.foodDay-B.fdDay;}
+      r.baseCoFund=cf0;
+      // break-even against the corrected baseline
+      if(r.expected&&r.expected.orders>0){const cpoE=r.expected.contribDay/r.expected.orders;
+        if(cpoE>0){const o=B.contribDay/cpoE,k=o/r.expected.orders,E=r.expected;r.breakEven={orders:o,grossDay:E.grossDay*k,discTotalDay:E.discTotalDay*k,aggFundDay:E.aggFundDay*k,brandFundDay:E.brandFundDay*k,netSalesDay:E.netSalesDay*k,commDay:E.commDay*k,foodDay:E.foodDay*k,fdDay:E.fdDay*k,contribDay:B.contribDay,upliftPct:(o/B.orders-1)*100};}else r.breakEven=null;}
+      // (B) continuation of an offer that is already running
+      if(type==="bogo"||type==="selectItems"){
+        const look=28,ref=(typeof latest!=="undefined"&&latest<start)?latest:subDays(start,1);let on=0;
+        for(let i=0;i<look;i++)if(cpfActive(brand,agg,subDays(ref,i),c=>cpfIsStruct(c,type)))on++;
+        const otherOverlap=cpfActive(brand,agg,start,c=>!cpfIsStruct(c,type))||cpfActive(brand,agg,end,c=>!cpfIsStruct(c,type));
+        if(on/look>=0.6){
+          // start of the unbroken run (gaps up to 3 days)
+          let d=ref,gap=0,first=ref;for(let i=0;i<400;i++){d=subDays(d,1);if(cpfActive(brand,agg,d,c=>cpfIsStruct(c,type))){first=d;gap=0;}else if(++gap>3)break;}
+          const runS=first,preE=subDays(runS,1),preS=subDays(runS,28),curS=subDays(ref,27)>runS?subDays(ref,27):runS;
+          const pre=cpfWindow(brand,agg,branches,preS,preE),cur=cpfWindow(brand,agg,branches,curS,ref);
+          const preC=cpfWindow(brand,agg,branches,preS,preE,true),curC=cpfWindow(brand,agg,branches,curS,ref,true);
+          // same economics as today: rebuild the three scenarios + break-even from the baseline's per-order figures
+          const per=k=>B.orders?B[k]/B.orders:0;
+          const at=(o,u)=>({orders:o,grossDay:per("grossDay")*o,discTotalDay:per("discTotalDay")*o,aggFundDay:per("aggFundDay")*o,brandFundDay:per("brandFundDay")*o,netSalesDay:per("netSalesDay")*o,commDay:per("commDay")*o,foodDay:per("foodDay")*o,fdDay:per("fdDay")*o,contribDay:per("contribDay")*o,upliftPct:u*100});
+          // week-to-week spread of the running offer → conservative / optimistic
+          const wk=[];for(let w=0;w<6;w++){const x=cpfWindow(brand,agg,branches,subDays(ref,w*7+6),subDays(ref,w*7));if(x&&x.days>=5&&subDays(ref,w*7+6)>=runS)wk.push(x.orders);}
+          const mean=wk.length?wk.reduce((a,b)=>a+b,0)/wk.length:B.orders,sw=wk.slice().sort((a,b)=>a-b);
+          const q=p=>sw.length?sw[Math.min(sw.length-1,Math.floor(p*(sw.length-1)+0.5))]:mean;
+          const lo=wk.length>=3?Math.min(0,q(0.25)/mean-1):-0.08,hi=wk.length>=3?Math.max(0,q(0.75)/mean-1):0.08;
+          r.conservative=at(B.orders*(1+lo),lo);r.expected=at(B.orders,0);r.optimistic=at(B.orders*(1+hi),hi);r.breakEven=null;
+          let prog=null;
+          if(pre&&cur&&pre.orders>0){
+            const eP=cpfEcon(pre,rate,food,agg),eC=cpfEcon(cur,rate,food,agg);
+            const ctrl=preC&&curC&&preC.orders>0?curC.orders/preC.orders:null;
+            const raw=cur.orders/pre.orders-1,adj=ctrl?cur.orders/pre.orders/ctrl-1:null;
+            const preCamps=(campaignData||[]).filter(c=>c.brand===brand&&c.aggregator===agg&&c.startDate<=preE&&c.endDate>=preS&&!isRewardsCampaign(c)).map(c=>c.comments||c.name).filter(Boolean);
+            prog={runS,preS,preE,curS,curE:ref,pre,cur,eP,eC,raw,adj,ctrl,preCamps:[...new Set(preCamps)].slice(0,3),preDays:pre.days,curDays:cur.days};}
+          r.cont={type,on,look,otherOverlap,prog,weeks:wk.length,lo,hi};
+        }
+      }
+      // (C) sanity
+      const cpo=x=>x&&x.orders?x.contribDay/x.orders:null,eB=cpo(r.baseline),eE=cpo(r.expected);
+      r.warn=(type!=="menu"&&!r.cont&&eB!=null&&eE!=null&&eE>eB*1.05&&eB>0)?`The campaign shows AED ${eE.toFixed(1)} contribution per order vs AED ${eB.toFixed(1)} today — a discount campaign can't earn more per order than no extra discount. Check the discount and co-funding inputs before relying on this forecast.`:null;
+    }catch(e){console.warn("planner fix",e);}
+    return r;};
+  window.campPlanCompute=campPlanCompute;
+  const _h=campPlanHTML;
+  campPlanHTML=function(){let h=_h.apply(this,arguments);const r=campPlanResult;if(!r||(!r.cont&&!r.warn))return h;
+    const T=DARK_THEME,f=v=>Math.round(v||0).toLocaleString(),sg=v=>(v>=0?"+":"−")+f(Math.abs(v)),pc=v=>(v>=0?"+":"−")+Math.abs(v*100).toFixed(0)+"%";
+    let p="";
+    if(r.warn)p+=`<div style="border:1px solid ${T.accentRed};background:${T.accentRed}14;border-radius:10px;padding:12px 14px;margin:12px 0;font-size:12.5px;color:${T.textPrimary}">⚠️ ${r.warn}</div>`;
+    if(r.cont){const C=r.cont,P=C.prog,nm=C.type==="bogo"?"BOGO":"select-items offer";
+      p+=`<div style="border:1px solid ${T.accentBlue}88;background:${T.accentBlue}10;border-radius:12px;padding:14px 16px;margin:12px 0;color:${T.textPrimary}">
+        <div style="font-size:14px;font-weight:800;margin-bottom:4px">🔁 This continues a ${nm} that is already running</div>
+        <div style="font-size:12.5px;color:${T.textSecondary};line-height:1.55">A ${nm} ran on ${C.on} of the last ${C.look} days${P?`, without a break since <b>${fmtShort(P.runS)}</b>`:""}. So the forecast below is today's level (no extra uplift, no extra discount)${C.weeks>=3?`, with the range of the last ${C.weeks} weeks (${pc(C.lo)} to ${pc(C.hi)})`:""}${r.baseCoFund>0?` · Deliveroo's ${Math.round(r.baseCoFund*100)}% co-funding applied to today's discount`:""}.${C.otherOverlap?` <b style="color:#FBBF24">Another offer overlaps these dates — check it.</b>`:""}</div>`;
+      if(P){const d=P.eC.contrib-P.eP.contrib,good=d>=0;
+        const row=(l,a,b,fm,inv)=>{const x=b-a,g=inv?x<=0:x>=0;return`<tr><td style="padding:5px 8px;color:${T.textSecondary}">${l}</td><td style="padding:5px 8px;text-align:right">${fm(a)}</td><td style="padding:5px 8px;text-align:right;font-weight:700">${fm(b)}</td><td style="padding:5px 8px;text-align:right;color:${g?T.accentGreen:T.accentRed};font-weight:700">${fm===f?sg(x):(x>=0?"+":"−")+Math.abs(x).toFixed(1)}</td></tr>`;};
+        p+=`<div style="margin-top:12px;font-size:13.5px;font-weight:800">Is it paying off? Since it's been running vs the 4 weeks before it started</div>
+        <div style="font-size:12px;color:${T.textSecondary};margin:2px 0 8px">Before: ${fmtShort(P.preS)} – ${fmtShort(P.preE)}${P.preCamps.length?` (running then: ${P.preCamps.map(esc).join(" · ")})`:" (no offer)"} · Now: ${fmtShort(P.curS)} – ${fmtShort(P.curE)}</div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start"><table style="border-collapse:collapse;font-size:12.5px;min-width:440px"><tr style="color:${T.textMuted};font-size:10.5px;text-transform:uppercase"><th style="text-align:left;padding:5px 8px">Per day</th><th style="text-align:right;padding:5px 8px">Before</th><th style="text-align:right;padding:5px 8px">Now</th><th style="text-align:right;padding:5px 8px">Change</th></tr>
+          ${row("Orders",P.pre.orders,P.cur.orders,v=>v.toFixed(1))}${row("Gross AOV (AED)",P.pre.gross/P.pre.orders,P.cur.gross/P.cur.orders,v=>v.toFixed(1))}${row("Our discount / order (AED)",P.eP.our/P.pre.orders,P.eC.our/P.cur.orders,v=>v.toFixed(1),true)}${row("Gross sales (AED)",P.pre.gross,P.cur.gross,f)}${row("Contribution (AED)",P.eP.contrib,P.eC.contrib,f)}</table>
+          <div style="flex:1;min-width:240px;background:${T.bg};border:1px solid ${T.cardBorder};border-radius:10px;padding:12px 14px"><div style="font-size:11px;font-weight:800;color:${T.textSecondary};text-transform:uppercase;letter-spacing:.05em">Verdict</div>
+            <div style="font-size:18px;font-weight:800;margin:4px 0;color:${good?T.accentGreen:T.accentRed}">${good?"Paying off":"Not paying off"}: ${sg(d)} AED/day</div>
+            <div style="font-size:12.5px;color:${T.textSecondary};line-height:1.5">Orders ${pc(P.raw)} vs before${P.adj!=null?` — ${pc(P.adj)} after allowing for the brand's other platforms (${pc(P.ctrl-1)} over the same weeks)`:""}. Contribution after food, commission and our share of the discount.${P.preDays<20||P.curDays<20?` <b>Short history — read with care.</b>`:""}</div></div></div>`;}
+      p+=`</div>`;}
+    const k=h.indexOf("📦 Orders / day");if(k<0)return h+p;const at=h.lastIndexOf("<div",k);return h.slice(0,at)+p+h.slice(at);};
+  window.campPlanHTML=campPlanHTML;
+})();
