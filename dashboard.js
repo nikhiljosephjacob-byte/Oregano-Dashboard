@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-20-594";
+const BUILD_VERSION="2026-10-20-595";
 const BUILD_NOTES=[
+  "📐 CAMPAIGN PLANNER IN NET TERMS + KNOWS THE CAMPAIGN SHEET + KEETA ACTION STRIP. (1) Per Nikhil ('we only work with NET AOVs'): every AOV and sales figure in the planner is now net (what customers paid after all discounts) — chart labels, the P&L cards (net sales, net AOV, what the platform pays back, our discount), the baseline tiles and the 'is it paying off' table. Gross / menu value is only used inside the maths (food cost on what's cooked, commission on the contract base). (2) The planner reads the campaign sheet by itself: a line shows the offer before, anything overlapping and the next scheduled one; continuation mode now also covers menu-wide % offers (same % within 5 points, same cap within AED 5, same audience — FTU / lapsed / new customers kept apart); if the sheet has no discount figures for the comparison weeks, the profit verdict is withheld instead of being wrong. (3) Platforms → Keeta opens with an action strip: each brand / outlet above the minimum-commission alert level, with orders on the AED 6 minimum, extra commission, discount on those orders and a suggested minimum order value.",
   "🎯 CAMPAIGN PLANNER — BOGO / SELECT-ITEMS FORECAST FIXED. Nikhil's Smokeys × Deliveroo BOGO (23–25 Oct) forecast showed more contribution per order than today (AED ~45 vs ~19) and a break-even below today's orders. Cause: the baseline weeks WERE the running BOGO and were charged 100% of its discount, while the forecast gave the campaign Deliveroo's 50% co-funding. Now: (1) the baseline always carries the discount it really had, at our share after any co-funding in those weeks; break-even is recomputed from it. (2) When the same offer is already running (BOGO or select items on 60%+ of the last 28 days), the new campaign is treated as a continuation: forecast = today's level with the last weeks' range, and a new panel answers the real question — is the offer paying off vs the 4 weeks before it started (orders, AOV, our discount per order, gross sales, contribution per day, adjusted for the brand's other platforms). (3) A red warning if a discount campaign ever shows more profit per order than today.",
   "🐞 'FORECASTED' SHOWN ON CAMPAIGNS NOBODY FORECASTED — caught by Nikhil on two new Deliveroo BOGO campaigns (Oregano and Smokeys, 23–25 Oct). A saved forecast was matched to a campaign by brand × platform × type only, so ANY older BOGO forecast (e.g. one from September) counted. Now a forecast belongs to a campaign only if it was made for that campaign's dates (start within 7 days and overlapping). Same fix in the two other places that link forecasts and campaigns: 'Upcoming campaigns without a forecast' and the forecast-accuracy check (which could compare an old forecast with a much later campaign).",
   "🔧 KEETA ALERTS VISIBLE + LIVE DISCOUNTS IN THE P&L ESTIMATE. (1) Overview's data checks were worked out before the Keeta order data arrived from the server, so the Keeta minimum-commission alerts never showed — they now refresh when it arrives. If the loaded Keeta files are from before 591, a check says to re-upload them. (2) Site P&L 'so far' estimate: discounts now come live from the Google Sheet (delivery) and Microsys (dine-in & takeaway) instead of '—', with the discount chart and discount problems included.",
@@ -15485,7 +15486,7 @@ function campPlanHTML(){
   const momNote=r.mom?`<div style="font-size:10.5px;color:#60A5FA;margin-top:5px">📈 Recent momentum: ${r.mom.momentum>=1?'+':''}${((r.mom.momentum-1)*100).toFixed(0)}% — last ~45 real days averaging ${Math.round(r.mom.recentOrders)}/day vs ${Math.round(r.mom.priorOrders)}/day the ~45 days before that.</div>`:'';
   const bgNote=r.useBg?`<div style="font-size:10.5px;color:#A78BFA;margin-top:5px">🧭 Uplift measured vs normal days: each past campaign is compared with orders/day on days with no entire-menu, BOGO or platform-event promo (±28 days around it), then weighted by similarity (discount depth, cap) with gentle recency. No single campaign carries more than 35% of the weight.</div>`:'';
   const rampNote=(r.ramp)?`<div style="font-size:10.5px;color:#34D399;margin-top:5px">📊 Typical ramp (${r.ramp.n} comparable campaigns): days 1–3 about <strong>${Math.round(r.ramp.earlyOrders)}/day</strong> (${r.ramp.early>=0?'+':''}${r.ramp.early.toFixed(0)}%), day 4 onward about <strong>${Math.round(r.ramp.lateOrders)}/day</strong> (${r.ramp.late>=0?'+':''}${r.ramp.late.toFixed(0)}%) — before calibration.</div>`:'';
-  const aovNote=r.aovRatio?`<div style="font-size:10.5px;color:#F59E0B;margin-top:5px">📉 Real AOV drop applied: campaign AOV ${fA(r.campaignAOV)} vs baseline ${fA(r.grossAOV)} (${((r.aovRatio.ratio-1)*100).toFixed(0)}%), from ${r.aovRatio.sampleCount} real past campaign${r.aovRatio.sampleCount!==1?'s':''}${r.aovRatio.isCoFundSpecific?' with the same co-funding status':' (not enough co-funding-specific history yet, using all past campaigns)'}.</div>`:'';
+  const aovNote=r.aovRatio?`<div style="font-size:10.5px;color:#F59E0B;margin-top:5px">📉 Basket change applied: net AOV ${fA(r.expected&&r.expected.orders?(r.expected.grossDay-r.expected.discTotalDay)/r.expected.orders:0)} during the campaign vs ${fA(r.baseline.orders?(r.baseline.grossDay-r.baseline.discTotalDay)/r.baseline.orders:0)} today, from ${r.aovRatio.sampleCount} real past campaign${r.aovRatio.sampleCount!==1?'s':''}${r.aovRatio.isCoFundSpecific?' with the same co-funding status':' (not enough co-funding-specific history yet, using all past campaigns)'}.</div>`:'';
   const verdict=verdictBad
     ?`<div style="border-radius:10px;padding:15px 18px;margin-bottom:14px;background:#EF44441A;border:1px solid #EF444455">
         <div style="font-size:13.5px;font-weight:800;color:#F87171">⚠️ Likely to fall short of break-even at this discount depth</div>
@@ -15547,17 +15548,18 @@ function campPlanHTML(){
       <div style="font-size:21px;font-weight:800;color:${T.text};line-height:1">${Math.round(p.orders).toLocaleString()}</div>
       <div style="font-size:10px;color:${T.muted}">orders/day</div>
       <div style="margin-top:7px;padding-top:7px;border-top:0.5px solid ${T.border}88">
-        <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;color:${T.muted}"><span>Gross Sales</span><span style="font-weight:700;color:${T.secondary}">${fA(p.grossDay)}</span></div>
-        ${discLines}
-        <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;color:${T.muted}"><span>Net Sales</span><span style="font-weight:700;color:${T.secondary}">${fA(p.netSalesDay)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;color:${T.muted}"><span>Net sales <span style="opacity:.7">(customers paid)</span></span><span style="font-weight:700;color:${T.text}">${fA(p.grossDay-p.discTotalDay)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;color:${T.muted}"><span>Net AOV</span><span style="font-weight:700;color:${T.secondary}">${p.orders>0?fA((p.grossDay-p.discTotalDay)/p.orders):'—'}</span></div>
+        ${p.aggFundDay>0.5?`<div style="display:flex;justify-content:space-between;padding:2px 0 2px 10px;font-size:10px;color:${T.muted}"><span>+ ${campPlanAgg||'Platform'} pays back (co-funding)</span><span style="font-weight:700;color:#4ADE80">+ ${fA(p.aggFundDay)}</span></div>`:''}
+        <div style="display:flex;justify-content:space-between;padding:2px 0 2px 10px;font-size:10px;color:${T.muted}"><span>our discount ${fA(p.brandFundDay)}/day · ${p.orders>0?fA(p.brandFundDay/p.orders):'—'}/order</span><span></span></div>
         <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;color:${T.muted}"><span>Commission (${(r.commRate*100).toFixed(0)}%)</span><span style="font-weight:700;color:#FB923C">– ${fA(p.commDay)}</span></div>
-        <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;color:${T.muted}"><span>Food+Pkg (${(r.foodRate*100).toFixed(0)}%)</span><span style="font-weight:700;color:#FB923C">– ${fA(p.foodDay)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;color:${T.muted}"><span title="Food & packaging cost runs on everything cooked — including a free BOGO item — so it is worked out on the menu value">Food+Pkg</span><span style="font-weight:700;color:#FB923C">– ${fA(p.foodDay)}</span></div>
         ${p.fdDay>0?`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10.5px;color:${T.muted}"><span>Keeta Free Delivery</span><span style="font-weight:700;color:#FB923C">– ${fA(p.fdDay)}</span></div>`:''}
       </div>
       <div style="margin-top:7px;padding-top:7px;border-top:0.5px solid ${T.border}88">
         <div style="font-size:10px;font-weight:700;color:${T.muted};text-transform:uppercase">Net Contribution</div>
         <div style="font-size:17px;font-weight:800;color:${cat.color}">${fA(p.contribDay)}/day</div>
-        ${contribMarginPct(p.contribDay,p.netSalesDay)!=null?`<div style="font-size:10.5px;font-weight:700;color:${cat.color};opacity:.85">${fmtMarginPct(contribMarginPct(p.contribDay,p.netSalesDay))} of net sales</div>`:''}
+        ${contribMarginPct(p.contribDay,p.grossDay-p.discTotalDay)!=null?`<div style="font-size:10.5px;font-weight:700;color:${cat.color};opacity:.85">${fmtMarginPct(contribMarginPct(p.contribDay,p.grossDay-p.discTotalDay))} of net sales</div>`:''}
         <div style="font-size:10.5px;color:${T.muted}">${isBase?'reference':'vs baseline: '+(diff>=0?'+':'– ')+fA(Math.abs(diff))+' ('+(diff>=0?'+':'')+diffPct.toFixed(1)+'%)'}</div>
       </div>
     </div>`;
@@ -15576,7 +15578,7 @@ function campPlanHTML(){
     // v422 (batch 3): "How we got the baseline" — ported from the Forecaster, using the REAL
     // clean window (post-419 contamination fix) rather than a naive latest/latest-29 guess.
     const bm=r.baselineMeta;
-    const netAOV=r.baseline.orders>0?r.baseline.netSalesDay/r.baseline.orders:0;
+    const netAOV=r.baseline.orders>0?(r.baseline.grossDay-r.baseline.discTotalDay)/r.baseline.orders:0;
     // v433: real fallback caught by Nikhil (Lollorosso × Deliveroo runs campaigns nearly
     // back-to-back, exhausting the entire 90-day clean-window search) — shown honestly here
     // rather than silently presenting a contaminated baseline as if it were clean.
@@ -15591,7 +15593,7 @@ function campPlanHTML(){
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px">
           <div style="background:${T.panelBg};border-radius:8px;padding:9px;text-align:center"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Avg orders/day</div><div style="font-size:15px;font-weight:800;color:${T.text};margin-top:3px">${Math.round(r.baseline.orders).toLocaleString()}</div></div>
           <div style="background:${T.panelBg};border-radius:8px;padding:9px;text-align:center"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Net AOV</div><div style="font-size:15px;font-weight:800;color:${T.text};margin-top:3px">${fA(netAOV)}</div></div>
-          <div style="background:${T.panelBg};border-radius:8px;padding:9px;text-align:center"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Gross AOV</div><div style="font-size:15px;font-weight:800;color:${T.text};margin-top:3px">${fA(r.grossAOV)}</div></div>
+          <div style="background:${T.panelBg};border-radius:8px;padding:9px;text-align:center"><div style="font-size:9px;color:${T.muted};font-weight:700;text-transform:uppercase">Our discount / order</div><div style="font-size:15px;font-weight:800;color:${T.text};margin-top:3px">${fA(r.baseline.orders>0?r.baseline.brandFundDay/r.baseline.orders:0)}</div></div>
         </div>
       </div>
     </div>`;
@@ -15853,7 +15855,7 @@ function campPlanRenderChart(){
   // both viewBoxes roughly halved (300->172, 264->156), using the same tightened lineGap/margins
   // renderPanel now uses throughout.
   renderPanel('svgPlanOrders', ordersArr, function(v){return Math.round(v).toLocaleString()+'/day';},
-    function(cat){return ['AOV '+Math.round(cat.pnl.grossDay/cat.pnl.orders)+' · Sales '+Math.round(cat.pnl.grossDay).toLocaleString()+'/day'];}, 72, 142, 172);
+    function(cat){const n=cat.pnl.grossDay-cat.pnl.discTotalDay;return ['Net AOV '+Math.round(n/cat.pnl.orders)+' · Net sales '+Math.round(n).toLocaleString()+'/day'];}, 72, 142, 172);
   renderPanel('svgPlanContrib', contribArr, function(v){return 'AED '+Math.round(v).toLocaleString()+'/day';}, null, 58, 128, 156);
   bindEvents();
   campPlanChartCycleTimeout=setTimeout(beginCycle, drawDurMs+400);
@@ -27801,12 +27803,25 @@ function kmCardHTML(){const T=DARK_THEME,F=curFilters(),s=F.start,e=dispEnd(F.st
   h+=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.8px"><tr>${["Brand","Orders","Share on the minimum","Orders on min.","Extra commission","Effective rate","Discount on those orders"].map(th_).join("")}</tr>${tr}</table></div>
     <div style="font-size:11.5px;color:${T.textMuted};margin-top:8px">Click a brand for its outlets. Alerts (Overview + Daily Digest): a brand at ${Math.round(KM_BRAND_PCT*100)}%+ or an outlet at ${Math.round(KM_OUTLET_PCT*100)}%+ of orders on the minimum over the last ${KM_ALERT_DAYS} days. Data: Keeta order files, ${fmtShort(cov[0])} – ${fmtShort(cov[1])}.</div>`;
   return box(h);}
+function kmMOV(t){if(!t.fl)return null;const m=37.5+t.d/t.fl;return Math.ceil(m/5)*5;} // order value needed so that, after the usual discount, it stays above AED 37.50
+function kmStripHTML(){const T=DARK_THEME;if(!kmHas())return"";const A=kmAlerts();const cov=kmCover();
+  const f=v=>"AED "+Math.round(v).toLocaleString();
+  const e=cov[1],s=(()=>{const d=new Date(e+"T00:00:00Z");d.setUTCDate(d.getUTCDate()-(KM_ALERT_DAYS-1));return d.toISOString().slice(0,10);})(),G=kmAgg(s,e);
+  if(!A.length)return`<div id="km-strip" style="display:flex;gap:10px;align-items:center;background:${T.accentGreen}12;border:1px solid ${T.accentGreen}55;border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:12.5px;color:${T.textPrimary}">✅ <b>Keeta minimum commission:</b> nothing to act on — no brand or outlet above the alert level (${fmtShort(s)}–${fmtShort(e)}).</div>`;
+  const rows=A.slice(0,5).map(a=>{const key=a.where.replace(" · Keeta","").split(" · ");const t=key.length>1?G.byBO[key[0]+"|"+key[1]]:G.byB[key[0]];const mov=t?kmMOV(t):null;const sh=a.share;
+    return`<div style="display:flex;gap:12px;align-items:center;padding:8px 0;border-top:1px solid ${T.cardBorder}66;flex-wrap:wrap"><span style="font-size:10px;font-weight:800;padding:2px 7px;border-radius:5px;background:${sh>=0.5?T.accentRed:"#F59E0B"}26;color:${sh>=0.5?T.accentRed:"#F59E0B"}">${Math.round(sh*100)}%</span>
+      <b style="min-width:170px">${esc(a.where.replace(" · Keeta",""))}</b><span style="color:${T.textSecondary};flex:1;min-width:220px">${t?`${t.fl} of ${t.n} orders on the AED 6 minimum · ${f(t.x)} extra commission · ${f(t.d)} discount on those orders`:esc(a.msg)}</span>
+      <span style="font-weight:700;color:${T.textPrimary}">→ ${mov?`Set a minimum order of <span style="color:#FBBF24">AED ${mov}</span>`:"Check the discount depth"}</span></div>`;}).join("");
+  return`<div id="km-strip" style="background:${T.card};border:1px solid #F59E0B88;border-radius:12px;padding:12px 16px;margin-bottom:12px;color:${T.textPrimary}">
+    <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:4px"><div style="font-size:14.5px;font-weight:800">⚠️ Keeta minimum commission — ${A.length} to act on</div><span style="font-size:12px;color:${T.textSecondary}">last 7 days of Keeta data (${fmtShort(s)}–${fmtShort(e)}) · orders under AED 37.50 after the discount pay AED 6 instead of 16%</span><a href="#km-card" style="margin-left:auto;font-size:12px;color:${T.accentOrange}">details ↓</a></div>
+    ${rows}<div style="font-size:11px;color:${T.textMuted};margin-top:6px">Minimum order = AED 37.50 + the average discount on those orders, rounded up to AED 5 — so a discounted order still clears AED 37.50. Source: Keeta statements up to ${fmtShort(e)}.</div></div>`;}
 function kmPaint(){const pg=document.getElementById("page-platforms");if(!pg)return;const old=document.getElementById("km-card");
   if(typeof selPlatform==="undefined"||selPlatform!=="Keeta"){if(old)old.remove();return;}
-  const html=kmCardHTML();if(old){old.outerHTML=html;return;}
+  const html=kmStripHTML()+kmCardHTML();const os=document.getElementById("km-strip");if(os)os.remove();if(old){old.outerHTML=html;return;}
   const anchor=[...pg.querySelectorAll(".sm")].find(x=>/Net Sales Trend/.test(x.textContent));
-  const d=document.createElement("div");d.innerHTML=html;const el=d.firstElementChild;
-  if(anchor)anchor.parentNode.insertBefore(el,anchor);else pg.appendChild(el);}
+  const d=document.createElement("div");d.innerHTML=html;const els=[...d.children];
+  const top=pg.querySelector(".sm")||null;
+  els.forEach(el=>{if(el.id==="km-strip"&&top)top.parentNode.insertBefore(el,top);else if(anchor)anchor.parentNode.insertBefore(el,anchor);else pg.appendChild(el);});}
 (function kmHookPlat(){if(typeof renderPlatforms!=="function"||typeof renderPage!=="function"||!window.lensSet)return setTimeout(kmHookPlat,300);
   const _rp=renderPage;renderPage=function(p){const r=_rp.apply(this,arguments);if(p==="platforms")try{kmPaint();}catch(e){console.warn(e);}return r;};window.renderPage=renderPage;})();
 window.kmToggle=kmToggle;window.kmAlerts=kmAlerts;
@@ -27820,9 +27835,21 @@ window.kmToggle=kmToggle;window.kmAlerts=kmAlerts;
 // (C) a sanity warning if a discount campaign ever shows more profit per order than the baseline.
 function cpfCoFundOn(brand,agg,d){let best=0;for(const c of (typeof campaignData!=="undefined"?campaignData:[])){if(c.brand!==brand||c.aggregator!==agg||c.startDate>d||c.endDate<d)continue;
   if(typeof campStatus==="function"&&campStatus(c)==="Cancelled")continue;try{const p=parseCampComment(c).coFundedPctOfDiscount||0;if(p>best)best=p;}catch(e){}}return best;}
+let cpfMenuSpec=null; // {pct,cap} of the menu-wide campaign being planned
+function cpfMenuOf(c){const t=(c.comments||"")+" "+(c.name||"");if(CAMP_FC_BOGO_RE.test(t)||(typeof campFcIsSelectItemsText==="function"&&campFcIsSelectItemsText(t)))return null;
+  if(c.discountStructure&&c.discountStructure!=="menu")return null;const m=t.match(/(\d{1,3})\s*%/);if(!m)return null;const cm=t.match(/cap(?:ped)?\s*(?:at\s*)?(?:aed\s*)?(\d{1,4})/i);return{pct:+m[1],cap:cm?+cm[1]:0};}
 function cpfIsStruct(c,type){const t=(c.comments||"")+" "+(c.name||"");
   if(type==="bogo")return c.discountStructure?c.discountStructure==="bogo":CAMP_FC_BOGO_RE.test(t);
-  if(type==="selectItems")return c.discountStructure?c.discountStructure==="selectItems":(typeof campFcIsSelectItemsText==="function"&&campFcIsSelectItemsText(t));return false;}
+  if(type==="selectItems")return c.discountStructure?c.discountStructure==="selectItems":(typeof campFcIsSelectItemsText==="function"&&campFcIsSelectItemsText(t));
+  if(type==="menu"&&cpfMenuSpec){const AUD=/\b(ftu|first[- ]time|new (?:customer|user)s?|lapsed|repeat|returning)\b/i,ta=((t.match(AUD)||[])[1]||"").toLowerCase().slice(0,3),pa=(((typeof campPlanComments!=="undefined"&&campPlanComments)||"").match(AUD)||[])[1];if(ta!==((pa||"").toLowerCase().slice(0,3)))return false;const x=cpfMenuOf(c);return!!x&&Math.abs(x.pct-cpfMenuSpec.pct)<=5&&(!x.cap||!cpfMenuSpec.cap||Math.abs(x.cap-cpfMenuSpec.cap)<=5);}
+  return false;}
+function cpfNear(brand,agg,start,end){ // what the sheet says is around these dates — so nobody has to flag it
+  const L=(typeof campaignData!=="undefined"?campaignData:[]).filter(c=>c.brand===brand&&c.aggregator===agg&&!isRewardsCampaign(c)&&(typeof campStatus!=="function"||campStatus(c)!=="Cancelled"));
+  const nm=c=>(c.comments||c.name||"Campaign").split("\n")[0].slice(0,70);
+  const before=L.filter(c=>c.endDate<start).sort((a,b)=>b.endDate.localeCompare(a.endDate))[0]||null;
+  const overlap=L.filter(c=>c.startDate<=end&&c.endDate>=start&&!(c.startDate===start&&c.endDate===end));
+  const after=L.filter(c=>c.startDate>end).sort((a,b)=>a.startDate.localeCompare(b.startDate))[0]||null;
+  return{before:before&&{n:nm(before),s:before.startDate,e:before.endDate},overlap:overlap.map(c=>({n:nm(c),s:c.startDate,e:c.endDate})),after:after&&{n:nm(after),s:after.startDate,e:after.endDate}};}
 function cpfActive(brand,agg,d,pred){return(typeof campaignData!=="undefined"?campaignData:[]).some(c=>c.brand===brand&&c.aggregator===agg&&c.startDate<=d&&c.endDate>=d&&!isRewardsCampaign(c)&&(typeof campStatus!=="function"||campStatus(c)!=="Cancelled")&&pred(c));}
 function cpfWindow(brand,agg,branches,s,e,others){ // daily figures for a window; others=true → same brand on the OTHER platforms (control)
   const recs=allData.filter(r=>r.brand===brand&&(others?r.aggregator!==agg:r.aggregator===agg)&&r.branch!=="(brand-level)"&&r.date>=s&&r.date<=e&&(!branches||!branches.size||branches.has(r.branch))&&!(typeof outletRowRetired==="function"&&outletRowRetired(r)));
@@ -27851,7 +27878,9 @@ function cpfEcon(w,commRate,foodRate,agg){ // contribution/day with our share of
       if(r.expected&&r.expected.orders>0){const cpoE=r.expected.contribDay/r.expected.orders;
         if(cpoE>0){const o=B.contribDay/cpoE,k=o/r.expected.orders,E=r.expected;r.breakEven={orders:o,grossDay:E.grossDay*k,discTotalDay:E.discTotalDay*k,aggFundDay:E.aggFundDay*k,brandFundDay:E.brandFundDay*k,netSalesDay:E.netSalesDay*k,commDay:E.commDay*k,foodDay:E.foodDay*k,fdDay:E.fdDay*k,contribDay:B.contribDay,upliftPct:(o/B.orders-1)*100};}else r.breakEven=null;}
       // (B) continuation of an offer that is already running
-      if(type==="bogo"||type==="selectItems"){
+      cpfMenuSpec=type==="menu"?{pct:+discPct||0,cap:+cap||0}:null;
+      r.near=cpfNear(brand,agg,start,end);
+      if(type==="bogo"||type==="selectItems"||(type==="menu"&&cpfMenuSpec.pct>0)){
         const look=28,ref=(typeof latest!=="undefined"&&latest<start)?latest:subDays(start,1);let on=0;
         for(let i=0;i<look;i++)if(cpfActive(brand,agg,subDays(ref,i),c=>cpfIsStruct(c,type)))on++;
         const otherOverlap=cpfActive(brand,agg,start,c=>!cpfIsStruct(c,type))||cpfActive(brand,agg,end,c=>!cpfIsStruct(c,type));
@@ -27876,31 +27905,34 @@ function cpfEcon(w,commRate,foodRate,agg){ // contribution/day with our share of
             const ctrl=preC&&curC&&preC.orders>0?curC.orders/preC.orders:null;
             const raw=cur.orders/pre.orders-1,adj=ctrl?cur.orders/pre.orders/ctrl-1:null;
             const preCamps=(campaignData||[]).filter(c=>c.brand===brand&&c.aggregator===agg&&c.startDate<=preE&&c.endDate>=preS&&!isRewardsCampaign(c)).map(c=>c.comments||c.name).filter(Boolean);
-            prog={runS,preS,preE,curS,curE:ref,pre,cur,eP,eC,raw,adj,ctrl,preCamps:[...new Set(preCamps)].slice(0,3),preDays:pre.days,curDays:cur.days};}
+            prog={runS,preS,preE,curS,curE:ref,pre,cur,eP,eC,raw,adj,ctrl,preCamps:[...new Set(preCamps)].slice(0,3),preDays:pre.days,curDays:cur.days,noDisc:(pre.disc<1&&preCamps.length>0)||(cur.disc<1)};}
           r.cont={type,on,look,otherOverlap,prog,weeks:wk.length,lo,hi};
         }
       }
       // (C) sanity
       const cpo=x=>x&&x.orders?x.contribDay/x.orders:null,eB=cpo(r.baseline),eE=cpo(r.expected);
-      r.warn=(type!=="menu"&&!r.cont&&eB!=null&&eE!=null&&eE>eB*1.05&&eB>0)?`The campaign shows AED ${eE.toFixed(1)} contribution per order vs AED ${eB.toFixed(1)} today — a discount campaign can't earn more per order than no extra discount. Check the discount and co-funding inputs before relying on this forecast.`:null;
+      r.warn=(!r.cont&&eB!=null&&eE!=null&&eE>eB*1.05&&eB>0)?`The campaign shows AED ${eE.toFixed(1)} contribution per order vs AED ${eB.toFixed(1)} today — a discount campaign can't earn more per order than no extra discount. Check the discount and co-funding inputs before relying on this forecast.`:null;
     }catch(e){console.warn("planner fix",e);}
     return r;};
   window.campPlanCompute=campPlanCompute;
   const _h=campPlanHTML;
-  campPlanHTML=function(){let h=_h.apply(this,arguments);const r=campPlanResult;if(!r||(!r.cont&&!r.warn))return h;
+  campPlanHTML=function(){let h=_h.apply(this,arguments);const r=campPlanResult;if(!r||(!r.cont&&!r.warn&&!r.near))return h;
     const T=DARK_THEME,f=v=>Math.round(v||0).toLocaleString(),sg=v=>(v>=0?"+":"−")+f(Math.abs(v)),pc=v=>(v>=0?"+":"−")+Math.abs(v*100).toFixed(0)+"%";
     let p="";
+    if(r.near){const N=r.near,it=(l,x,c)=>x?`<span style="margin-right:16px"><span style="color:${T.textMuted}">${l}</span> <b style="color:${c||T.textPrimary}">${esc(x.n)}</b> <span style="color:${T.textMuted}">${fmtShort(x.s)}–${fmtShort(x.e)}</span></span>`:"";
+      p+=`<div style="border:1px solid ${T.cardBorder};background:${T.bg};border-radius:10px;padding:10px 14px;margin:12px 0;font-size:12px;line-height:1.7;text-align:left;color:${T.textPrimary}">📅 <b>From the campaign sheet</b> · ${it("Before:",N.before)}${N.overlap.length?N.overlap.map(x=>it("Overlapping:",x,"#FBBF24")).join(""):`<span style="margin-right:16px;color:${T.textMuted}">Nothing else overlapping these dates</span>`}${it("Next:",N.after)}</div>`;}
     if(r.warn)p+=`<div style="border:1px solid ${T.accentRed};background:${T.accentRed}14;border-radius:10px;padding:12px 14px;margin:12px 0;font-size:12.5px;color:${T.textPrimary}">⚠️ ${r.warn}</div>`;
-    if(r.cont){const C=r.cont,P=C.prog,nm=C.type==="bogo"?"BOGO":"select-items offer";
+    if(r.cont){const C=r.cont,P=C.prog,nm=C.type==="bogo"?"BOGO":C.type==="menu"?`${cpfMenuSpec?cpfMenuSpec.pct:""}% off offer`:"select-items offer";
       p+=`<div style="border:1px solid ${T.accentBlue}88;background:${T.accentBlue}10;border-radius:12px;padding:14px 16px;margin:12px 0;color:${T.textPrimary}">
         <div style="font-size:14px;font-weight:800;margin-bottom:4px">🔁 This continues a ${nm} that is already running</div>
         <div style="font-size:12.5px;color:${T.textSecondary};line-height:1.55">A ${nm} ran on ${C.on} of the last ${C.look} days${P?`, without a break since <b>${fmtShort(P.runS)}</b>`:""}. So the forecast below is today's level (no extra uplift, no extra discount)${C.weeks>=3?`, with the range of the last ${C.weeks} weeks (${pc(C.lo)} to ${pc(C.hi)})`:""}${r.baseCoFund>0?` · Deliveroo's ${Math.round(r.baseCoFund*100)}% co-funding applied to today's discount`:""}.${C.otherOverlap?` <b style="color:#FBBF24">Another offer overlaps these dates — check it.</b>`:""}</div>`;
-      if(P){const d=P.eC.contrib-P.eP.contrib,good=d>=0;
+      if(P&&P.noDisc)p+=`<div style="margin-top:10px;font-size:12.5px;color:#FBBF24">⚠ The sheet has no discount figures for ${P.pre.disc<1?`the weeks before it started (${fmtShort(P.preS)} – ${fmtShort(P.preE)})`:"the recent weeks"}, although offers were running — so a profit comparison would be wrong. Orders: ${P.pre.orders.toFixed(1)}/day before vs ${P.cur.orders.toFixed(1)}/day now (${pc(P.raw)}${P.adj!=null?`, ${pc(P.adj)} after allowing for the brand's other platforms`:""}).</div>`;
+      if(P&&!P.noDisc){const d=P.eC.contrib-P.eP.contrib,good=d>=0;
         const row=(l,a,b,fm,inv)=>{const x=b-a,g=inv?x<=0:x>=0;return`<tr><td style="padding:5px 8px;color:${T.textSecondary}">${l}</td><td style="padding:5px 8px;text-align:right">${fm(a)}</td><td style="padding:5px 8px;text-align:right;font-weight:700">${fm(b)}</td><td style="padding:5px 8px;text-align:right;color:${g?T.accentGreen:T.accentRed};font-weight:700">${fm===f?sg(x):(x>=0?"+":"−")+Math.abs(x).toFixed(1)}</td></tr>`;};
         p+=`<div style="margin-top:12px;font-size:13.5px;font-weight:800">Is it paying off? Since it's been running vs the 4 weeks before it started</div>
         <div style="font-size:12px;color:${T.textSecondary};margin:2px 0 8px">Before: ${fmtShort(P.preS)} – ${fmtShort(P.preE)}${P.preCamps.length?` (running then: ${P.preCamps.map(esc).join(" · ")})`:" (no offer)"} · Now: ${fmtShort(P.curS)} – ${fmtShort(P.curE)}</div>
         <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start"><table style="border-collapse:collapse;font-size:12.5px;min-width:440px"><tr style="color:${T.textMuted};font-size:10.5px;text-transform:uppercase"><th style="text-align:left;padding:5px 8px">Per day</th><th style="text-align:right;padding:5px 8px">Before</th><th style="text-align:right;padding:5px 8px">Now</th><th style="text-align:right;padding:5px 8px">Change</th></tr>
-          ${row("Orders",P.pre.orders,P.cur.orders,v=>v.toFixed(1))}${row("Gross AOV (AED)",P.pre.gross/P.pre.orders,P.cur.gross/P.cur.orders,v=>v.toFixed(1))}${row("Our discount / order (AED)",P.eP.our/P.pre.orders,P.eC.our/P.cur.orders,v=>v.toFixed(1),true)}${row("Gross sales (AED)",P.pre.gross,P.cur.gross,f)}${row("Contribution (AED)",P.eP.contrib,P.eC.contrib,f)}</table>
+          ${row("Orders",P.pre.orders,P.cur.orders,v=>v.toFixed(1))}${row("Net AOV (AED)",P.pre.net/P.pre.orders,P.cur.net/P.cur.orders,v=>v.toFixed(1))}${row("Our discount / order (AED)",P.eP.our/P.pre.orders,P.eC.our/P.cur.orders,v=>v.toFixed(1),true)}${row("Net sales (AED)",P.pre.net,P.cur.net,f)}${row("Contribution (AED)",P.eP.contrib,P.eC.contrib,f)}</table>
           <div style="flex:1;min-width:240px;background:${T.bg};border:1px solid ${T.cardBorder};border-radius:10px;padding:12px 14px"><div style="font-size:11px;font-weight:800;color:${T.textSecondary};text-transform:uppercase;letter-spacing:.05em">Verdict</div>
             <div style="font-size:18px;font-weight:800;margin:4px 0;color:${good?T.accentGreen:T.accentRed}">${good?"Paying off":"Not paying off"}: ${sg(d)} AED/day</div>
             <div style="font-size:12.5px;color:${T.textSecondary};line-height:1.5">Orders ${pc(P.raw)} vs before${P.adj!=null?` — ${pc(P.adj)} after allowing for the brand's other platforms (${pc(P.ctrl-1)} over the same weeks)`:""}. Contribution after food, commission and our share of the discount.${P.preDays<20||P.curDays<20?` <b>Short history — read with care.</b>`:""}</div></div></div>`;}
