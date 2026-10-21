@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-21-616";
+const BUILD_VERSION="2026-10-21-617";
 const BUILD_NOTES=[
+  "🧾 WRONG SETTLEMENTS ARE NOW CAUGHT (build 617). Per Nikhil, after two DIP (Fyoozhen) dine-in bills on 20 Oct were settled to 1041 Fyoo zhen Careem (delivery) instead of 1030 Careem Dine Out. Every Credit Sales line shows the account AND how the bill was punched, so each morning's pull (and 'Check these days again') now flags: ⛔ dine-in / takeaway bills on a delivery account; ⛔ delivery bills on a dine-out account (Careem Dine Out, Noon Out, Zomato); ⛔ bills on another brand's account; ⚠ bills settled by hand with no platform order number (Finance can't match them to the platform's statement); ⚠ order numbers that look like a different platform's (Talabat 10 digits, Careem 9). Also ℹ when an outlet settled several orders by hand while Deliverect handled the rest (Deliverect may have missed them). Shown in POS Sync → Till vs dashboard with '✓ Told Finance' / 'OK as is' (a settled bill can't be changed in Microsys), an Export for Finance CSV, a count per outlet, the red menu badge, the morning notification and Nikhil's Daily Digest. NEEDS the new worker.js (keeps the findings with each day).",
   "🧮 FEWER CLOUDFLARE WRITES — 'KV put() limit exceeded' (build 616). The free Cloudflare plan allows 1,000 storage writes a day and on 21 Oct they ran out, so the Raw Microsys report (and anything else that saves) failed until the daily reset (4 AM Dubai). (1) Open dashboards now refresh their sign-in every 30 minutes instead of every 5, and the one-system-per-login pointer every 6 hours — the biggest source of writes. (2) Re-pulling a day no longer rewrites Journal Tape, till-check or low-sales records that haven't changed. (3) Caches and logs (Microsys sign-in, Google token, event log, POS log) no longer break a request when the limit is hit — Raw report, pulls and the till check keep working; only signing in fresh still needs a write. NEEDS the new worker.js.",
   "🔍 RAW MICROSYS REPORT — PICKERS FIXED + CSV DOWNLOAD (build 615). Per Nikhil: on POS Sync → Raw Microsys report, choosing Credit Sales or Sales Discount Details (or another date) snapped straight back to Sales Summary · yesterday — the pickers were saving into the Backfill card's settings. They now stick, and a '⬇ Download CSV' button saves the whole report shown (all rows, not just the 40 on screen).",
   "⛔ CANCELLED ADS SHOW AS CANCELLED (build 614). Per Nikhil's approved mock-up: when the Ad Investments Remarks column says 'Cancelled' (e.g. 'Cancelled – non-performance 21-Oct-2026'), the ad is treated as stopped on that date — a red '⛔ Cancelled <date>' tag with the reason and the dates it ran under the outlet on the Advertising page, leftover greyed as 'not spent · saved', Invest/Bid says 'Cancelled — no pacing advice', and the table header counts the cancelled ads. It drops out of 'running now', budget alerts and pacing straight away (even on the day it's cancelled), and its cost is never stretched past the cancel date — even if the End Date was left unchanged. Any other text written in Remarks (besides the date) now shows in grey under the outlet and in the History tab. The Daily Digest and Board Brief ad section list ads cancelled in the last 7 days. Google comments and cell colours aren't in the published sheet, so the Remarks cell is the source.",
@@ -25231,7 +25232,8 @@ function psRecon(creditCsv,summaryCsv,iso){
       if(Math.abs(gap)>=5)rows.push({loc,out:psReconOut(loc),rc:PS_RC_NAME[s],brand:psRcBrand(s,loc),pos:psRound(p,2),agg:psRound(a,2),gap:psRound(gap,2),other,unexpl:psRound(gap-ov,2),orders:L.orders.slice(0,30)});}}
   const misp=Object.entries(mis).map(([k,v])=>{const[loc,s,b]=k.split("|");return{loc,out:psReconOut(loc),rc:PS_RC_NAME[s],till:psRcBrand(s,loc),brand:b,amt:psRound(v.amt/1.05,2),orders:v.orders.slice(0,40)};});
   rows.sort((x,y)=>Math.abs(y.gap)-Math.abs(x.gap));
-  return{date:iso,pos:psRound(tp,2),agg:psRound(ta,2),rows,mis:misp,kt};
+  const ws=psSettleCheck(creditCsv,iso); // v617: wrong settlements
+  return{date:iso,pos:psRound(tp,2),agg:psRound(ta,2),rows,mis:misp,kt,ws:ws.items,wsm:ws.manual};
 }
 
 // v564: formatting for the Dine-In Discounts tab (it was written as plain values). Header takes the look of
@@ -25312,6 +25314,50 @@ function psJTCompact(bills,loc){
     out.push([b.voucher,PS_JT_BCODE[brand],plat,disc,psRound(b.total,2),real.map(i=>[it(i.name),psRound(i.amount,2)]),cb?PS_JT_BCODE[cb]:"",b.type]);}
   return{v:1,items,bills:out};
 }
+
+// ── v617: WRONG SETTLEMENTS — every Credit Sales line carries the account a bill was settled to AND how it was punched
+// (the #DI/#TO/#DL/#DT/#PO suffix). Per Nikhil: DIP (Fyoozhen) 20 Oct — two dine-in bills (Careem Dine Out) settled to
+// 1041 Fyoo zhen Careem (a delivery account) instead of 1030 Careem Dine Out. A settled bill can't be changed in
+// Microsys, so these are flagged for Finance (move between accounts) and for the outlet (training).
+// Deliverect-injected bills use the platform's own settlement (TALABAT ONLINE, DELIVEROO CARD, CAREEM ONLINE…);
+// numbered accounts ("1032 - Fyoo zhen Talabat") are settled by hand — Wicked Wings and Fyoozhen Al Forsan always,
+// everyone else only when Deliverect missed an order.
+const PS_WS_DINEOUT=/\bdine\b|dine\s*out|zomato|\bout\b|take\s*away|walk/i; // dine-out / takeaway / walk-in accounts (Careem DINE, Careem Dine Out, Noon Out, Noon Takeaway, Zomato)
+const PS_WS_DLV_AGG=/talabat|deliveroo|careem|noon|keeta|meituan|instashop|slider|smiles|eat_easy/i;
+const PS_WS_SHOULD_DO={Careem:"1030 - Careem Dine Out",Noon:"1061 - Noon Out"};
+function psWsAgg(n){return psGetAgg(n)||(/zomato/i.test(n)?"Zomato":null);}
+function psWsBrandOfAcct(n){return /fyoo\s*zhen|fyoozhen/i.test(n)?"Fyoozhen":/lollo/i.test(n)?"Lollorosso":/oregano/i.test(n)?"Oregano":/smokey/i.test(n)?"Smokeys":/wicked|wckd/i.test(n)?"Wicked Wings":null;}
+// what a platform's order number looks like (Deliverect lines, 20 Oct 2026): Talabat 10 digits, Careem 9, Deliveroo / Noon 3–4
+const PS_WS_REF={Talabat:/^\d{10}$/,Careem:/^\d{9}$/,Deliveroo:/^\d{3,4}$/,Noon:/^\d{3,4}$/};
+function psWsRefOwner(ref){return /^\d{10}$/.test(ref)?"Talabat":/^\d{9}$/.test(ref)?"Careem":/^\d{16}$/.test(ref)?"Keeta":null;}
+function psSettleCheck(creditCsv,iso){
+  const c=psParseCSV(creditCsv||""),items=[],man={};if(!c.length)return{items,manual:[]};
+  const h=c[0].map(x=>x.trim()),iC=h.indexOf("CustomerName"),iD=h.indexOf("Date"),iL=h.indexOf("Location"),iA=h.indexOf("Amount"),iO=h.indexOf("OrderNo"),iT=h.indexOf("TaxInvoice"),iR=h.indexOf("Reference");
+  for(const r of c.slice(1)){const cn=(r[iC]||"").trim(),loc=(r[iL]||"").trim(),m=cn.match(/#(\w+)$/),suf=m?m[1].toUpperCase():"";
+    if(!cn||!suf)continue;
+    if(iD>=0&&iso){const d=(r[iD]||"").split("/");if(d.length===3&&`${d[2]}-${d[1].padStart(2,"0")}-${d[0].padStart(2,"0")}`!==iso)continue;}
+    const name=cn.replace(/#\w+$/,"").trim(),acct=name.replace(/^\d+\s*-\s*/,""),amt=psNum(r[iA]),ref=iR>=0?String(r[iR]||"").trim():"";
+    const base={loc,out:psReconOut(loc),cust:name,suf,amt:psRound(amt,2),ref,inv:iT>=0?String(r[iT]||"").trim():"",ord:iO>=0?String(r[iO]||"").trim():""};
+    const agg=psWsAgg(acct),dineOut=PS_WS_DINEOUT.test(acct),isDel=["DL","DT","PO"].includes(suf),numbered=/^\d{3,4}\s*-/.test(name);
+    if((suf==="DI"||suf==="TO")&&agg&&!dineOut&&PS_WS_DLV_AGG.test(acct)){
+      items.push(Object.assign({kind:"in_on_delivery",should:PS_WS_SHOULD_DO[agg]||`${agg}'s dine-out account`},base));continue;}
+    if(isDel&&dineOut){items.push(Object.assign({kind:"delivery_on_dineout",should:agg&&agg!=="Zomato"?`${agg}'s delivery account`:"the delivery platform's account (Zomato is dine-out only)"},base));continue;}
+    if(!isDel)continue;
+    const home=psRcBrand(suf,loc),ab=psWsBrandOfAcct(acct);
+    if(ab&&home&&ab!==home&&ab!=="Wicked Wings"&&!(ab==="Smokeys"&&home==="Wicked Wings")&&psGetBrand(cn,suf,loc)!==ab){ // (when psGetBrand already reads the account's brand, the till check's 'another brand's button' line has it) // Wicked Wings on the Smokeys button is the till check's own line
+      items.push(Object.assign({kind:"brand_account",should:`${home}'s ${agg||"platform"} account`,accBrand:ab,tillBrand:home},base));continue;}
+    if(numbered&&agg){
+      if(!ref)items.push(Object.assign({kind:"no_ref",should:`the ${agg} order number in Reference`},base));
+      else{const want=PS_WS_REF[agg],own=psWsRefOwner(ref);if(want&&!want.test(ref)&&own&&own!==agg)items.push(Object.assign({kind:"ref_other_platform",should:`check: looks like a ${own} order`,refOwner:own},base));}
+    }
+    // hand-settled vs Deliverect, per outlet × till button (Wicked Wings is always by hand — not counted)
+    if(agg&&ab!=="Wicked Wings"){const k=loc+"|"+suf,o=man[k]||(man[k]={loc,out:psReconOut(loc),rc:PS_RC_NAME[suf]||suf,brand:home,n:0,amt:0,auto:0});
+      if(numbered){o.n++;o.amt+=amt;}else o.auto++;}
+  }
+  const manual=Object.values(man).filter(o=>o.n>=3&&o.auto>0).map(o=>Object.assign(o,{amt:psRound(o.amt,2)}));
+  return{items,manual};
+}
+if(typeof module!=="undefined")Object.assign(module.exports,{psSettleCheck});
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -25814,6 +25860,43 @@ async function posCoverageScan(){
   P.cov.running=false;renderPosSync();
 }
 
+// ── v617: WRONG SETTLEMENTS (from psSettleCheck, saved with each day's till check) ──
+const PS_WS_KIND={
+  in_on_delivery:{sev:"red",t:"⛔ Dine-in / takeaway bill settled to a delivery account"},
+  delivery_on_dineout:{sev:"red",t:"⛔ Delivery bill settled to a dine-out account"},
+  brand_account:{sev:"red",t:"⛔ Settled to another brand's account"},
+  no_ref:{sev:"amber",t:"⚠ Settled by hand with no platform order number"},
+  ref_other_platform:{sev:"amber",t:"⚠ Order number looks like another platform's"}};
+function posWsItems(recs){const out=[];for(const r of recs||[])for(const w of r.ws||[]){const K=PS_WS_KIND[w.kind];if(!K)continue;const id="ws|"+(w.inv||w.ord)+"|"+w.loc,ack=(r.ack||{})[id];
+  out.push(Object.assign({date:r.date,id,ack,sev:K.sev,open:!ack},w));}
+  return out.sort((a,b)=>b.date.localeCompare(a.date)||(a.sev===b.sev?0:a.sev==="red"?-1:1)||String(a.out).localeCompare(String(b.out)));}
+function posWsLabel(w){const what={DI:"Dine-in",TO:"Takeaway",DL:"Delivery",DT:"Lollorosso button",PO:"Smokeys / WW button"}[w.suf]||w.suf;return what;}
+async function posWsAck(date,id,note){try{await posApi("/api/pos/recon/ack",{date,id,note});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
+function posWsExport(){const L=posWsItems(posRecon.recs||[]);if(!L.length){alert("No wrong settlements in this range.");return;}
+  const q=v=>{const x=String(v==null?"":v);return /[",\n]/.test(x)?`"${x.replace(/"/g,'""')}"`:x;};
+  const rows=[["Date","Outlet","Voucher","Order no","Punched as","Settled to","Should be","Amount (AED incl. VAT)","Platform ref","Issue","Status"]].concat(L.map(w=>[w.date,w.out,w.inv,w.ord,posWsLabel(w),w.cust,w.should,w.amt,w.ref,(PS_WS_KIND[w.kind]||{}).t.replace(/^\S+\s/,""),w.ack?w.ack.note:"open"]));
+  const blob=new Blob(["﻿"+rows.map(r=>r.map(q).join(",")).join("\n")],{type:"text/csv;charset=utf-8"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+  a.download=`WrongSettlements_${posRecon.days}days_to_${posAddDays(posDubaiToday(),-1)}.csv`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1500);}
+function posWsSectionHTML(T,R,sBtn){
+  const L=posWsItems(R),man=[];R.forEach(r=>(r.wsm||[]).forEach(m=>man.push(Object.assign({date:r.date},m))));
+  if(!L.length&&!man.length)return`<div style="font-size:12.5px;color:${T.textSecondary};margin:0 0 12px">🧾 <b>Wrong settlements:</b> none in this range — every bill's account matches how it was punched.${R.some(r=>r.ws)?"":` <span style="color:${T.textMuted}">(checked from the next Pull, or click “Check these days again”)</span>`}</div>`;
+  const f=v=>"AED "+(+v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}),openRed=L.filter(w=>w.open&&w.sev==="red"),openAm=L.filter(w=>w.open&&w.sev==="amber");
+  const tot=openRed.reduce((a,w)=>a+w.amt,0),bc=openRed.length?"#EF4444":openAm.length?"#F59E0B":T.cardBorder;
+  let h=`<div style="border:1px solid ${bc}88;background:${openRed.length?"rgba(239,68,68,.05)":T.bg};border-radius:10px;padding:12px 14px;margin-bottom:12px">
+   <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><div style="font-size:14px;font-weight:800;color:${T.textPrimary}">🧾 Wrong settlements${openRed.length?` <span style="color:#FCA5A5">· ${openRed.length} for Finance · ${f(tot)}</span>`:""}${openAm.length?` <span style="color:#FBBF24">· ${openAm.length} to check</span>`:""}${!openRed.length&&!openAm.length?` <span style="color:${T.accentGreen}">· all handled</span>`:""}</div>
+   <div style="margin-left:auto">${sBtn("⬇ Export for Finance","posWsExport()",T.accentGreen)}</div></div>
+   <div style="font-size:11.5px;color:${T.textMuted};margin:3px 0 6px">The account each bill was settled to, checked against how it was punched. A settled bill can't be changed in Microsys — ⛔ ones need Finance to move the amount between the two accounts; sales figures on the dashboard aren't affected.</div>`;
+  for(const [k,K] of Object.entries(PS_WS_KIND)){const G=L.filter(w=>w.kind===k);if(!G.length)continue;
+    h+=`<div style="margin-top:8px;font-size:12.5px;font-weight:800;color:${K.sev==="red"?"#FCA5A5":"#FBBF24"}">${K.t} — ${G.length} bill${G.length>1?"s":""} · ${f(G.reduce((a,w)=>a+w.amt,0))}</div>
+     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:4px"><tr style="color:${T.textMuted};font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;text-align:left"><th style="padding:4px 6px">Date</th><th style="padding:4px 6px">Outlet</th><th style="padding:4px 6px">Voucher</th><th style="padding:4px 6px">Punched as</th><th style="padding:4px 6px">Settled to</th><th style="padding:4px 6px">Should be</th><th style="padding:4px 6px;text-align:right">Amount</th><th style="padding:4px 6px"></th></tr>`+
+     G.map(w=>{const id=esc(w.id),act=w.ack?`<span style="color:${T.accentGreen};font-size:11.5px">✓ ${esc(w.ack.note)} · ${esc(w.ack.by||"")}</span> <a href="#" onclick="posReconUnack('${w.date}','${id}');return false" style="color:${T.textMuted};font-size:11px">undo</a>`
+        :(K.sev==="red"?sBtn("✓ Told Finance",`posWsAck('${w.date}','${id}','Told Finance')`,T.accentGreen):sBtn("✓ Checked",`posWsAck('${w.date}','${id}','Checked')`,T.accentGreen))+" "+sBtn("OK as is",`posWsAck('${w.date}','${id}','OK as is')`);
+      return`<tr style="border-top:1px solid ${T.cardBorder}66;${w.ack?"opacity:.6":""}"><td style="padding:6px">${posFmtDate(w.date)}</td><td style="padding:6px"><b>${esc(w.out)}</b></td><td style="padding:6px">${esc(w.inv||"—")}${w.ref?`<div style="font-size:10.5px;color:${T.textMuted}">ref ${esc(w.ref)}</div>`:""}</td><td style="padding:6px">${esc(posWsLabel(w))}</td><td style="padding:6px;color:${K.sev==="red"?"#FCA5A5":T.textPrimary};font-weight:700">${esc(w.cust)}</td><td style="padding:6px">${esc(w.should)}</td><td style="padding:6px;text-align:right;font-weight:700">${f(w.amt)}</td><td style="padding:6px;white-space:nowrap">${act}</td></tr>`;}).join("")+`</table></div>`;}
+  if(man.length)h+=`<div style="margin-top:10px;font-size:12.5px;font-weight:800;color:${T.textSecondary}">ℹ Settled by hand while Deliverect was working for the rest — Deliverect may have missed these</div>`+
+    man.sort((a,b)=>b.date.localeCompare(a.date)).map(m=>`<div style="font-size:12px;color:${T.textSecondary};padding:3px 0">${posFmtDate(m.date)} · <b style="color:${T.textPrimary}">${esc(m.out)}</b> · ${esc(m.brand||m.rc)}: ${m.n} order${m.n>1?"s":""} by hand (${f(m.amt)}) vs ${m.auto} via Deliverect — the bills most likely to land on the wrong account or button</div>`).join("");
+  const byO={};L.filter(w=>w.sev==="red").forEach(w=>byO[w.out]=(byO[w.out]||0)+1);const bo=Object.entries(byO).sort((a,b)=>b[1]-a[1]);
+  if(bo.length)h+=`<div style="font-size:11.5px;color:${T.textMuted};margin-top:8px">By outlet, last ${posRecon.days} days: ${bo.map(([o,n])=>`${esc(o)} ${n}`).join(" · ")}</div>`;
+  return h+`</div>`;}
 // ── v564: DAILY RECONCILIATION CARD — till (POS revenue centres) vs dashboard (aggregator orders), per outlet × day
 const posRecon={days:14,recs:null,loading:false,err:null,checking:null,open:{}};
 async function posReconLoad(){if(posRecon.loading)return;posRecon.loading=true;posRecon.err=null;
@@ -25827,7 +25910,7 @@ function posReconItems(recs){const out=[];for(const r of recs||[])for(const x of
   const unk=(x.other||[]).filter(o=>posReconWhy(o)==="platform").reduce((a,o)=>a+o[1],0);
   const open=!ack&&(Math.abs(x.unexpl)>=50||unk>=50);out.push(Object.assign({date:r.date,id,ack,unk,open},x));}
   return out.sort((a,b)=>b.date.localeCompare(a.date)||Math.abs(b.gap)-Math.abs(a.gap));}
-function posReconOpenCount(){return posReconItems((posRecon.recs||[]).filter(r=>!(typeof posReconLooksIncomplete==='function'&&posReconLooksIncomplete(r)))).filter(i=>i.open).length;}
+function posReconOpenCount(){return posReconItems((posRecon.recs||[]).filter(r=>!(typeof posReconLooksIncomplete==='function'&&posReconLooksIncomplete(r)))).filter(i=>i.open).length+posWsItems(posRecon.recs||[]).filter(i=>i.open&&i.sev==='red').length;} // v617: + wrong settlements
 async function posReconAck(date,id){const note=prompt("What explains this gap? (e.g. 'catering / bulk order — paid directly', 'regular customer, paid cash')","");if(note===null)return;
   try{await posApi("/api/pos/recon/ack",{date,id,note});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
 async function posReconUnack(date,id){try{await posApi("/api/pos/recon/ack",{date,id,clear:true});}catch(e){alert(e.message);}posRecon.recs=null;renderPosSync();}
@@ -25905,6 +25988,7 @@ function posReconCardHTML(T,card,ct,btn){
       <div style="flex:1;min-width:260px;font-size:13px"><b>${esc(i.out)}</b> · ${esc(i.rc)} button <span style="color:${T.textMuted}">→ ${esc(i.brand||"")}</span> · ${what}${i.unexpl>0?posReconBillsHTML(T,i):""}</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">${i.unexpl>0?sBtn("✓ Paid to us directly",`posReconAckAs('${i.date}','${id}','🏠 Direct delivery paid to us (catering / bulk or regular customer)')`,T.accentGreen)+sBtn("Void",`posReconAckAs('${i.date}','${id}','Void after billing')`):""}${sBtn("Other…",`posReconAck('${i.date}','${id}')`)}</div></div>`;}
   h+=`</div>`;
+  h+=posWsSectionHTML(T,R,sBtn); // v617: wrong settlements
   // ── already explained (one line) + full detail folded
   const parts=[cat>=1?`catering ${f(cat)}`:"",acked>=1?`direct deliveries &amp; voids you confirmed ${f(acked)}`:"",test>=1?`Deliverect test ${f(test)}`:"",Math.abs(small)>=1?`small differences under AED 50 ${f2(small)}`:""].filter(Boolean);
   if(parts.length)h+=`<div style="font-size:12.5px;color:${T.textSecondary};margin-bottom:8px">Already explained: ${parts.join(" · ")}</div>`;
@@ -25925,7 +26009,7 @@ function posReconCardHTML(T,card,ct,btn){
   return h+`</div>`;
 }
 window.posReconAckAs=posReconAckAs;
-window.posReconSetDays=posReconSetDays;window.posReconCheck=posReconCheck;window.posReconAck=posReconAck;window.posReconUnack=posReconUnack;window.posReconOpenCount=posReconOpenCount;window.posReconLoad=posReconLoad;
+window.posReconSetDays=posReconSetDays;window.posWsAck=posWsAck;window.posWsExport=posWsExport;window.posReconCheck=posReconCheck;window.posReconAck=posReconAck;window.posReconUnack=posReconUnack;window.posReconOpenCount=posReconOpenCount;window.posReconLoad=posReconLoad;
 
 // v565: order-level detail (from Credit Sales) for the reconciliation card
 function posReconOrdersHTML(T,orders,withDate){
@@ -27500,6 +27584,9 @@ function dgaBuild(opts){
   if(D.ads){D.ads.critical.forEach(r=>acts.push(["BUDGET","#B7791F",`${r.brand} · ${r.branch||""} · ${r.aggregator}`,`nearly out of ad budget${r.daysUntilExhausted!=null?` (~${r.daysUntilExhausted}d left)`:""}. Top up or let it lapse.`]));
     D.ads.underspending.forEach(r=>acts.push(["BID","#B7791F",`${r.brand} · ${r.branch||""} · ${r.aggregator}`,"under 15% of budget used past the halfway mark. Check bid/cap."]));}
   try{if(typeof kmAlerts==="function")kmAlerts().forEach(a=>acts.push(["MIN. COMM.","#C0392B",a.where,a.msg]));}catch(e){} // v591 Keeta minimum commission
+  try{if(typeof posWsItems==="function"&&typeof posRecon!=="undefined"){const W=posWsItems(posRecon.recs||[]).filter(w=>w.open&&w.sev==="red"); // v617 wrong settlements
+    const g={};W.forEach(w=>{const k=w.out+"|"+w.cust;(g[k]=g[k]||{out:w.out,cust:w.cust,should:w.should,n:0,amt:0}).n++;g[k].amt+=w.amt;});
+    Object.values(g).forEach(x=>acts.push(["SETTLEMENT","#C0392B",`${x.out} · ${x.n} bill${x.n>1?"s":""} on ${x.cust}`,`should be ${x.should} — AED ${x.amt.toFixed(2)}. Tell Finance (POS Sync → Till check → Export for Finance).`]));}}catch(e){}
   D.moves.sort((a,z)=>Math.abs(z.diff)-Math.abs(a.diff));const watch=D.moves.slice(0,5);
   watch.filter(m=>m.diff<0).slice(0,2).forEach(m=>acts.push(["CHECK","#4E7FD8",`${m.brand} · ${m.outlet}`,`sales down AED ${n0(-m.diff)} vs last week. Worth investigating.`]));
   // outlets below their usual (POS flags)
@@ -28613,6 +28700,8 @@ function apMessage(res,sumY,sumW){
   if(br.length)L.push("Delivery: "+br.join(" · "));
   const fl=day.flags||[];
   if(fl.length)L.push(`⚠ ${fl.length} outlet${fl.length>1?"s":""} unusually low: ${fl.slice(0,3).map(f=>`${String(f.loc).split(" - ").slice(1).join(" - ")||f.loc} (${Math.round(f.pct)}%)`).join(", ")}`);
+  const ws=((day.recon&&day.recon.ws)||[]).filter(x=>["in_on_delivery","delivery_on_dineout","brand_account"].includes(x.kind)); // v617
+  if(ws.length){const outs=[...new Set(ws.map(x=>x.out))];L.push(`⛔ ${ws.length} wrong settlement${ws.length>1?"s":""}: ${outs.slice(0,3).join(", ")} (AED ${ws.reduce((a,x)=>a+x.amt,0).toFixed(2)}) — see POS Sync`);}
   const w=day.warn||[];
   if(w.some(x=>/incomplete/i.test(x)))L.push("⚠ Credit Sales looked incomplete — re-pull this day");
   else if(w.some(x=>/hasn't split/i.test(x)))L.push("Dine-in / takeaway split not in Microsys yet — added on the next pull");
