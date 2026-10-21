@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-21-609";
+const BUILD_VERSION="2026-10-21-610";
 const BUILD_NOTES=[
+  "🧭 MENU — DELIVERY AND DINE-IN & TAKEAWAY AS CLEAR BANDS, ALL ON ONE SCREEN (build 610). Nikhil picked option B: Delivery and the in-store section are now coloured bands with an icon (blue Delivery, amber Dine-in & Takeaway — 'In-store' renamed); 'Service' is now 'Ratings & KPIs' (KPI tracker, cancellations, feedback). The menu items no longer stretch to fill the column, so everything down to Admin fits without scrolling. The directors' PDF is now named OreganoGroup_BoardBrief_<date> (the full one stays OreganoGroup_DailyDigest_<date>) and the morning email says 'Board Brief'. DAILY DIGEST, BOTH EDITIONS: page 1's small bar chart is replaced by two charts — a 3D pie of the overall sales split by channel (rounded edges, the same gap between every slice, cards with % and AED beside it) and a half donut of delivery sales by brand in each brand's logo colours (Oregano maroon, Lollorosso olive, Fyoozhen black with gold, Smokeys orange, Wicked Wings plum-red-orange) with the % inside every piece and brand chips underneath. Page 2 is now 'Sales by channel & outlet'; the ad-spend table is more compact.",
   "💰 DIGEST — AD SPEND BY BRAND × PLATFORM + FULL EDITION SAME LAYOUT (build 609). (1) Platforms page: 'Ad spend — budgets running now' replaces the platform-only snapshot: every brand × platform with AED spent of the budget allocated, a bar, % used and days left at the current pace (red when used up or ≤3 days left), brand and platform totals, plus this week's ad spend vs last week. Careem / Noon combined budgets count as one pool per brand. Shown in both editions; when no budget is running the section says so instead of disappearing. (2) Full edition now has the same page 1 as the board edition (the grouped 'What moved yesterday'), with 'Needs a decision today' as a tidy two-column box below it; the Action list is laid out in aligned columns.",
   "🔺 DIGEST ARROWS = DIRECTION, COLOUR = GOOD / BAD (build 608). Per Nikhil: ▲ always means the number went up and ▼ down; green means the change is good, red bad. So discount, ad spend or commission going UP is a red ▲, going down a green ▼; sales, orders or contribution up is a green ▲, down a red ▼. Delivery KPI cards now also say what the figure was on the same day last week ('was AED 26,094 on 8 Jul'), so a difference can't be read as the old value. The brand table on the Delivery page was running off the right edge (Ad spend and Contribution cut) — fixed columns, every column now fits.",
   "📰 DAILY DIGEST FOR DIRECTORS & GM (build 607). Per Nikhil: (1) Two editions — the morning email sends the BOARD edition (7 pages: the numbers and what's going on, no 'Needs a decision today', no Action list, no ad-budget housekeeping); 'Export Daily Digest' now asks Full (8 pages, for Nikhil) or Board. (2) Every comparison shows the ACTUAL difference with a small grey % beside it; ▲ green = a good change, ▼ red = a bad one — sales, orders, guests, contribution up is good; discount, ad spend, commission up is bad. (3) 'What moved yesterday' expanded and split into Group & delivery, Dine-in & takeaway (sales, guests, spend per guest, best and weakest dine-in outlet, takeaway orders and busiest outlet) and Outlets. (4) NEW page 'Delivery · by outlet': orders per brand at every location (with net sales), total orders, net sales and AOV per outlet vs the same day last week, plus orders by brand × platform. (5) NEW page 'KPIs & Ratings': current ratings (Talabat, Deliveroo, Google Maps) and the last entered prep time and driver wait (Talabat, Deliveroo, Careem) by brand × platform, with the best 5 and worst 5 outlets, each with the date it was last updated. Platform × brand grid now shows the contribution change in AED.",
@@ -26595,7 +26596,7 @@ const NAV_LAYOUTS={
   B:[{id:"home",icon:"🏠",label:"Home",subs:[["overview","Summary"]]},
     {id:"sales",icon:"💰",label:"Sales",subs:[["dinein","Dine-in guests"],["dindisc","Dine-in discounts"],["brands","Brands"],["outlets","Outlets"],["platforms","Platforms"],["compare","Compare"]]},
     {id:"mkt",icon:"🎯",label:"Marketing",subs:[["campaigns","Campaigns & discounts"],["cpc","Ads (CPC)"]]},
-    {id:"svc",icon:"⭐",label:"Service",subs:[["kpi","KPI tracker"],["cancellations","Cancellations"],["feedback","Feedback"]]},
+    {id:"svc",icon:"⭐",label:"Ratings & KPIs",subs:[["kpi","KPI tracker"],["cancellations","Cancellations"],["feedback","Feedback"]]},
     {id:"tools",icon:"🛠️",label:"Tools",subs:[["possync","POS Sync"],["admin","Admin"]]}],
   C:[{sec:"Every morning"},
     {id:"home",icon:"☀️",label:"Today",subs:[["overview","Overview"],["dinein","Dine-in"],["dindisc","Dine-in discounts"]]},
@@ -26637,14 +26638,15 @@ const NV_ICON={
   admin:'<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>'};
 function nvSvg(k){return`<svg class="nv-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${NV_ICON[k]||NV_ICON.overview}</svg>`;}
 // Designs: S1 Refined · S2 Channel colours · S3 Tree (everything visible). "A" = the v559 menu.
-const NV_SEC_CLR={Business:"#FF8A3D",Today:"#FF8A3D",Group:"#FF8A3D",Delivery:"#4E9BFF",Analyse:"#A78BFA","In-store":"#F5B544",Tools:"#94A3B8"};
+const NV_SEC_CLR={Business:"#FF8A3D",Today:"#FF8A3D",Group:"#FF8A3D",Delivery:"#4E9BFF",Analyse:"#A78BFA","In-store":"#F5B544","Dine-in & Takeaway":"#F5B544",Tools:"#94A3B8"};
+const NV_BANDS={Delivery:"delivery","Dine-in & Takeaway":"guests"}; // v610 (Nikhil, option B): the two channels are coloured bands
 NAV_LAYOUTS.S1=[{sec:"Group"},
   {id:"home",ico:"overview",label:"Overview",subs:[["overview","Overview"]]},
   {id:"cmp",ico:"compare",label:"Compare",subs:[["compare","Compare"]]},
   {sec:"Delivery"},
   {id:"sales",ico:"delivery",label:"Performance",subs:[["brands","Brands"],["outlets","Outlets"],["platforms","Platforms"]]},
   {id:"mkt",ico:"marketing",label:"Marketing",subs:[["campaigns","Promotions"],["discvar","Discount variance"],["cpc","Advertising"]]},
-  {id:"svc",ico:"service",label:"Service",subs:[["kpi","KPI tracker"],["cancellations","Cancellations"],["feedback","Feedback"]]},
+  {id:"svc",ico:"service",label:"Ratings & KPIs",subs:[["kpi","KPI tracker"],["cancellations","Cancellations"],["feedback","Feedback"]]},
   {sec:"In-store"},
   {id:"dine",ico:"dine",label:"Dine-in",subs:[["dinein","Guests & spend"],["dindisc","Discounts & ROI"]]},
   {sec:"Tools"},
@@ -26654,8 +26656,8 @@ NAV_LAYOUTS.S2=[{sec:"Today"},
   {sec:"Delivery"},
   {id:"sales",ico:"delivery",label:"Performance",subs:[["brands","Brands"],["outlets","Outlets"],["platforms","Platforms"]]},
   {id:"mkt",ico:"marketing",label:"Marketing",subs:[["campaigns","Promotions"],["discvar","Discount variance"],["cpc","Advertising"]]},
-  {id:"svc",ico:"service",label:"Service",subs:[["kpi","KPI tracker"],["cancellations","Cancellations"],["feedback","Feedback"]]},
-  {sec:"In-store"},
+  {id:"svc",ico:"service",label:"Ratings & KPIs",subs:[["kpi","KPI tracker"],["cancellations","Cancellations"],["feedback","Feedback"]]},
+  {sec:"Dine-in & Takeaway"},
   {id:"dine1",ico:"guests",label:"Guests & spend",subs:[["dinein","Guests & spend"]]},
   {id:"dine2",ico:"discount",label:"Discounts & ROI",subs:[["dindisc","Discounts & ROI"]]},
   {sec:"Analyse"},
@@ -26719,7 +26721,7 @@ function navPaint(){
   if(st==="top"){nvTopPaint(L);nvCss(T);navHubPaint();return;}
   box.className="nv-"+st+(col?" nv-col":"");let sec="",i=0;
   box.innerHTML=`<div id="nv-ind"></div>`+L.map(n=>{
-    if(n.sec){sec=n.sec;return`<div class="nav-sec" data-nv-sec="1" style="--sc:${NV_SEC_CLR[n.sec]||T.textMuted}"><span class="nav-sec-txt">${n.sec}</span></div>`;}
+    if(n.sec){sec=n.sec;const bd=NV_BANDS[n.sec]&&typeof nvSvg==="function";return`<div class="nav-sec${bd?" nv-band":""}" data-nv-sec="1" style="--sc:${NV_SEC_CLR[n.sec]||T.textMuted}">${bd?nvSvg(NV_BANDS[n.sec]):""}<span class="nav-sec-txt">${n.sec}</span></div>`;}
     const act=cur&&cur.id===n.id,sc=(st==="colour"||st==="live"||st==="rail")?(NV_SEC_CLR[sec]||T.accentOrange):T.accentOrange,bd=nvBadge(n),multi=n.subs.length>1,open=multi&&!col&&st!=="rail"&&(st==="tree"||act);
     const ic=n.ico?nvSvg(n.ico):`<span class="tab-icon">${n.icon||"•"}</span>`;
     return`<div class="tab nv-item ${act?"act":""} ${nvAnimated?"":"nv-enter"}" style="--sc:${sc};animation-delay:${(i++*.04).toFixed(2)}s" data-nv="${n.id}" onclick="navGo('${n.id}')" title="${n.label}${multi?": "+n.subs.map(s=>s[1]).join(" · "):""}">${ic}<span class="tab-label">${st==="rail"?(NV_SHORT[n.label]||n.label):n.label}${st==="live"?nvLive(n):""}</span>${bd?`<span class="nv-badge" title="${bd.t}" style="background:${bd.c}">${bd.n}</span>`:multi&&!col&&st!=="tree"&&st!=="plain"&&st!=="rail"?`<svg class="nv-chev ${open?"open":""}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>`:multi&&!col&&st==="plain"?`<span class="tab-label" style="margin-left:auto;font-size:10px;font-weight:800;color:${T.textMuted}">${n.subs.length}</span>`:""}</div>`+
@@ -26763,6 +26765,10 @@ function nvCss(T){
 #app-sidebar[data-collapsed="1"] .nav-sec-txt{display:none}
 #app-sidebar[data-collapsed="1"] .nav-sec::after{content:"";display:block;border-top:1px solid ${T.cardBorder}}
 #nv-box{position:relative;display:flex;flex-direction:column;gap:2px}
+#nv-box .nv-item{flex:0 0 auto!important;height:auto!important} /* v610: items no longer stretch to fill the column — the whole menu fits without scrolling */
+#nv-box .nav-sec.nv-band{margin:8px 2px 3px;padding:8px 10px!important;border-radius:9px;font-size:12px!important;letter-spacing:.8px!important;font-weight:900!important;white-space:nowrap;color:var(--sc)!important;background:color-mix(in srgb,var(--sc) 13%,transparent);border:1px solid color-mix(in srgb,var(--sc) 38%,transparent);display:flex!important;align-items:center;gap:8px}
+#nv-box .nav-sec.nv-band::before{display:none!important}#nv-box .nav-sec.nv-band svg{width:17px;height:17px;flex:none;color:var(--sc)}
+#app-sidebar[data-collapsed="1"] #nv-box .nav-sec.nv-band{justify-content:center;padding:6px!important}
 #nv-box .nv-ico{width:19px;height:19px;flex-shrink:0;transition:transform .25s cubic-bezier(.2,.8,.2,1),color .2s}
 #nv-box .nv-item{position:relative;z-index:1;transition:color .2s,background .2s;padding:9px 10px!important}
 #nv-box .nv-item:hover .nv-ico{transform:scale(1.15) rotate(-4deg)}
@@ -27357,6 +27363,7 @@ tr.tot td{font-weight:800;border-top:1.5px solid var(--ink);border-bottom:none}
 .chip{display:inline-block;font-size:8.5px;padding:1px 6px;border-radius:7px;background:var(--soft);color:var(--mut);margin-left:6px;font-weight:700}
 .ex{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:start;padding:7px 0;border-bottom:1px solid var(--line);font-size:10.5px;line-height:1.35}
 `;
+const DGA_BRIEF_ON=false; // v610: the new Board Brief page 1 stays a preview ({brief:true}) until Nikhil signs it off
 function digestBuildOptionA(opts){
   // the digest day = the last day that has delivery sales (never ahead of `latest`), so a day whose delivery tabs
   // aren't filled yet doesn't print as AED 0
@@ -27379,7 +27386,7 @@ function dgaBuild(opts){
   const LOGO=(typeof LOGOS!=="undefined"&&LOGOS["Oregano"])||"";
   const vsLbl=`vs ${fmtDisp(SD)} · week ${fmtShort(dr.thisWeek.start)}–${fmtShort(dr.thisWeek.end)} · all sales excl. VAT`;
   const head=(t,s)=>`<div class="hd">${LOGO?`<img src="${LOGO}">`:""}<div><div class="t">${t}</div><div class="s">${s}</div></div><div class="d"><b>${E(fmtDisp(Y))}</b><span>${E(vsLbl)}</span></div></div>`;
-  const foot=()=>`<div class="ft"><span>Oregano Group — Daily Digest · Confidential — internal use only · generated ${E(fmtDisp(dk(new Date())))}</span><span>Page %%PG%% of %%TOT%%</span></div>`; // v607: numbered at the end (pages differ by edition)
+  const foot=()=>`<div class="ft"><span>Oregano Group — ${BOARD?"Board Brief":"Daily Digest"} · Confidential — internal use only · generated ${E(fmtDisp(dk(new Date())))}</span><span>Page %%PG%% of %%TOT%%</span></div>`; // v607: numbered at the end (pages differ by edition)
 
   // ---------- delivery (excl. VAT) ----------
   const D=dgaWithDeliveryExcl(()=>{
@@ -27395,7 +27402,8 @@ function dgaBuild(opts){
   // ---------- channels / outlets (chAggregate, excl. VAT) ----------
   const prevVat=chState.vat;chState.vat="excl";
   let Cy,Cs,Ctw,Clw,Cfw,Cly;
-  try{Cy=chAggregate(Y,Y,true);Cs=chAggregate(SD,SD,true);Ctw=chAggregate(dr.thisWeek.start,dr.thisWeek.end,true);Clw=chAggregate(dr.lastWeek.start,dr.lastWeek.end,true);Cfw=chAggregate(dr.fourWeeksBack.start,dr.fourWeeksBack.end,true);Cly=chAggregate(dr.lastYear.start,dr.lastYear.end,true);}
+  let C14=null;
+  try{C14=chAggregate(subDays(Y,13),Y,true);Cy=chAggregate(Y,Y,true);Cs=chAggregate(SD,SD,true);Ctw=chAggregate(dr.thisWeek.start,dr.thisWeek.end,true);Clw=chAggregate(dr.lastWeek.start,dr.lastWeek.end,true);Cfw=chAggregate(dr.fourWeeksBack.start,dr.fourWeeksBack.end,true);Cly=chAggregate(dr.lastYear.start,dr.lastYear.end,true);}
   finally{chState.vat=prevVat;}
   const CH=["Delivery","Dine-In","Takeaway"].concat(Ctw.tot.Catering.sales>0||Cy.tot.Catering.sales>0?["Catering"]:[]),chLbl=c=>c==="Dine-In"?"Dine-in":c; // v587: Catering shown when there is any
   const gY=Cy.total,gS=Cs.total,gTW=Ctw.total,gLW=Clw.total,gFW=Cfw.total;
@@ -27467,9 +27475,7 @@ function dgaBuild(opts){
     +`<tr><td class="mut">Dine-in guests</td><td class="r">${n0(Ctw.tot["Dine-In"].guests)}</td><td class="r">${chg(Ctw.tot["Dine-In"].guests,Clw.tot["Dine-In"].guests)}</td><td class="r">${chg(Ctw.tot["Dine-In"].guests,Cfw.tot["Dine-In"].guests)}</td><td class="r mut">—</td><td></td></tr>`
     +`<tr><td class="mut">Spend / guest</td><td class="r">AED ${spg(Ctw.tot["Dine-In"]).toFixed(1)}</td><td class="r">${chg(spg(Ctw.tot["Dine-In"]),spg(Clw.tot["Dine-In"]))}</td><td class="r">${chg(spg(Ctw.tot["Dine-In"]),spg(Cfw.tot["Dine-In"]))}</td><td class="r mut">—</td><td></td></tr>`;
   const p1=`<div class="page">${head("OREGANO GROUP · DAILY DIGEST","All channels · all brands · all platforms")}${hero}
-   <h2>This week so far — by channel</h2><div class="sub">${E(fmtShort(dr.thisWeek.start))}–${E(fmtShort(dr.thisWeek.end))} vs last week (${E(fmtShort(dr.lastWeek.start))}–${E(fmtShort(dr.lastWeek.end))}), 4 weeks ago (${E(fmtShort(dr.fourWeeksBack.start))}–${E(fmtShort(dr.fourWeeksBack.end))}) and the same week last year</div>
-   <table><tr><th>Channel</th><th class="r">This week</th><th class="r">vs last week</th><th class="r">vs 4 weeks ago</th><th class="r">vs last year</th><th class="r">Share</th></tr>${wkRows}</table>
-   ${CH.every(lyHas)?"":'<div class="note">* No POS dine-in/takeaway data for last year, so the group comparison is left out rather than overstating growth.</div>'}
+   ${dgaMixDonut({Cy,D,CH,n0,E,lg,kf})}
    <div style="margin-top:12px">${mvBox(true)}</div>
    ${BOARD?"":`<div class="box" style="margin-top:10px"><h3>⚡ Needs a decision today</h3>${topActs.length?`<div class="dec">${topActs.map(a=>`<div><span class="pill" style="background:${a[1]}">${a[0]}</span><div><b>${E(a[2])}</b> — ${E(a[3])}</div></div>`).join("")}</div>`:'<div class="mut">Nothing urgent today.</div>'}${acts.length>topActs.length?`<div class="note">Full list on the last page.</div>`:""}</div>`}${foot(1)}</div>`;
 
@@ -27483,7 +27489,7 @@ function dgaBuild(opts){
     +`<tr class="tot"><td></td><td>Group</td><td></td><td class="r">${n0(de.sales)}</td><td class="r">${n0(di.sales)}</td><td class="r">${n0(ta.sales)}</td>${HASC?`<td class="r">${n0(Cy.tot.Catering.sales)}</td>`:""}<td class="r">${n0(gY)}</td><td class="r">${chg(gY,gS)}</td></tr>`;
   const wRows=watch.map(m=>`<tr><td>${lg(m.brand,15)}${E(m.brand)} · ${E(m.outlet)}</td><td class="r">${aed(m.cur)}</td><td class="r">${m.diff>=0?`<span class="up">▲ +${n0(m.diff)}</span>`:`<span class="dn">▼ −${n0(-m.diff)}</span>`}</td></tr>`).join("");
   const hRows=BR.filter(b=>D.hl[b.n]).map(b=>{const m=D.hl[b.n];return`<tr><td>${lg(b.n,16)}<b>${E(b.n)}</b></td><td class="r"><span class="up">▲ ${E(m.g.outlet)}</span><br><span class="mut">${aed(m.g.cur)} (${m.g.diff>=0?"+":"−"}${n0(Math.abs(m.g.diff))})</span></td><td class="r"><span class="${m.d.diff<0?"dn":"up"}">${m.d.diff<0?"▼":"▲"} ${E(m.d.outlet)}</span><br><span class="mut">${aed(m.d.cur)} (${m.d.diff>=0?"+":"−"}${n0(Math.abs(m.d.diff))})</span></td></tr>`;}).join("");
-  const p2=`<div class="page">${head("OUTLETS · ALL CHANNELS","Every site ranked by total sales yesterday")}
+  const p2=`<div class="page">${head("SALES BY CHANNEL &amp; OUTLET","The week by channel · every site ranked by total sales yesterday")}
    <div class="sub" style="margin-top:9px"><b style="color:var(--del)">■ Delivery</b> &nbsp;<b style="color:var(--din)">■ Dine-in</b> &nbsp;<b style="color:var(--ta)">■ Takeaway</b>${HASC?' &nbsp;<b style="color:#16A34A">■ Catering</b>':""} · AED excl. VAT · change vs ${E(fmtDisp(SD))}${fl.length?" · ⚠ = POS sales under half the usual":""}</div>
    <table><tr><th>#</th><th>Outlet</th><th>Channel mix</th><th class="r">Delivery</th><th class="r">Dine-in</th><th class="r">Takeaway</th>${HASC?'<th class="r">Catering</th>':""}<th class="r">Total</th><th class="r">vs LW</th></tr>${oRows}</table>
    <div class="two" style="margin-top:12px"><div class="box"><h3>🔎 Watch list — biggest swings this week</h3><table><tr><th>Brand · outlet</th><th class="r">Week to date</th><th class="r">vs LW</th></tr>${wRows}</table></div>
@@ -27546,15 +27552,68 @@ function dgaBuild(opts){
    ${acts.length?acts.map(a=>`<div class="ex"><span>☐</span><span class="pill" style="background:${a[1]}">${a[0]}</span><div><b>${E(a[2])}</b> — ${E(a[3])}</div><span class="mut">Owner: ______</span></div>`).join(""):'<div class="mut">No actions today.</div>'}
    <h2>Data notes</h2><div class="note" style="font-size:9.5px">All sales excl. VAT. Delivery = aggregator orders from the brand tabs (discount burn, ad spend and contribution as on the dashboard)${Ctw.till>0.5?`, plus direct deliveries and other till-only bills on the delivery buttons (AED ${n0(Ctw.till)} this week); Catering = credit catering accounts on the delivery buttons — so group totals equal Finance's DSR; delivery KPIs on page 3 are platform orders only`:""}. Dine-in &amp; takeaway = Microsys POS (Dine-In &amp; Takeaway tab). Till discounts from the Dine-In Discounts tab, classified per the confirmed list (customer vs internal); internal discounts are excluded from discount depth. Last-year comparisons are delivery only — POS data starts in 2026.</div>${foot(6)}</div>`;
 
+
+  // ================= v610 BOARD BRIEF — page 1 of the directors' edition: the day in five minutes =================
+  let pB="",p2B="";
+  if(BOARD){
+    const sk=v=>(v<0?"−":"")+"AED "+(Math.abs(v)>=1000?(Math.abs(v)/1000).toFixed(1)+"K":n0(Math.abs(v)));
+    const pcT=(d,b)=>b?` <span class="pc">(${d>=0?"+":"−"}${Math.abs(d/b*100).toFixed(0)}%)</span>`:"";
+    const dv=(d,inv)=>{const g=(d>0)!==!!inv;return`<span class="${g?"up":"dn"}">${d>0?"▲":"▼"} ${d>=0?"+":"−"}${n0(Math.abs(d))}</span>`;};
+    // headline
+    const chD=[["delivery",de.sales-des.sales],["dine-in",di.sales-dis.sales],["takeaway",ta.sales-tas.sales]].sort((a,z)=>Math.abs(z[1])-Math.abs(a[1]));
+    const gp=gS?(gY/gS-1)*100:0,wp=gLW?(gTW/gLW-1)*100:0;
+    const head1=`Group sales <b>AED ${n0(gY)}</b> yesterday — <b class="${gp>=0?"up":"dn"}">${Math.abs(gp).toFixed(0)}% ${gp>=0?"above":"below"}</b> last ${E(dow)}, ${Math.abs(chD[0][1])>Math.abs(gY-gS)*0.5?`mostly ${chD[0][0]} (${sg(chD[0][1])})`:`spread across channels`}.`;
+    const head2=`Week to date <b>AED ${n0(gTW)}</b>, <b class="${wp>=0?"up":"dn"}">${Math.abs(wp).toFixed(0)}% ${wp>=0?"ahead of":"behind"}</b> last week. Delivery contribution <b>AED ${n0(D.y.contribution)}</b> (${D.y.sales?(D.y.contribution/D.y.sales*100).toFixed(0):0}% of delivery sales).`;
+    // 14-day bars
+    const days=[];for(let i=13;i>=0;i--)days.push(subDays(Y,i));
+    const tv=days.map(d=>{const x=C14&&C14.days[d];return x?CH_LIST.reduce((a,c)=>a+(x[c]?x[c].sales:0),0):0;}),mx=Math.max(1,...tv);
+    const bars=`<svg width="100%" height="34" viewBox="0 0 140 34" preserveAspectRatio="none">${tv.map((v,i)=>`<rect x="${i*10+1}" y="${(32-v/mx*30).toFixed(1)}" width="7.5" height="${(v/mx*30).toFixed(1)}" rx="1.5" fill="${i===13?"#E8B04A":i===6?"#8A93A6":"#4A5468"}"/>`).join("")}</svg><div class="spk"><span>${E(fmtShort(days[0]))}</span><span>last 14 days · <i style="background:#8A93A6"></i> last ${E(dow)} <i style="background:#E8B04A"></i> yesterday</span></div>`;
+    const tile=(c,l,v,d,b,inv,extra)=>`<div class="bt1" style="--c:${c}"><div class="l">${l}</div><div class="v">${v}</div><div>${dv(d,inv)}${pcT(d,b)}</div><div class="x">was ${sk(b)} last ${E(dow)}${extra?" · "+extra:""}</div></div>`;
+    // what's working / needs attention — ranked by AED impact, one item per kind
+    const W=[],A=[];const push=(arr,kind,imp,txt)=>arr.push({kind,imp:Math.abs(imp),txt});
+    bm.forEach(x=>push(x.d>=0?W:A,"brand",x.d,`<b>${E(x.b)} delivery ${sg(x.d)}</b>${pcT(x.d,x.s.sales)} — AED ${n0(x.y.sales)}, ${n0(x.y.orders)} orders.`));
+    om.forEach(x=>push(x.d>=0?W:A,"outlet",x.d,`<b>${E(x.o)} ${sg(x.d)}</b>${pcT(x.d,x.b)} across all channels — AED ${n0(x.t)} yesterday.`));
+    BR.forEach(b=>D.aggs.forEach((a,i)=>{const g=D.grid[b.n][i];if(g&&Math.abs(g.d)>150)push(g.d>=0?W:A,"platform",g.d/7,`<b>${E(b.n)} · ${E(a)} contribution ${sg(g.d)}</b> this week vs last week.`);}));
+    if(D.spot&&D.spot.best&&D.spot.best.a.incrContribPerDay>0){const c=D.spot.best.c;push(W,"campaign",D.spot.best.a.incrContribPerDay,`<b>${E(c.brand)} · ${E(c.aggregator)} "${E(c.name||c.comments||"campaign")}"</b> is paying off — +AED ${n0(D.spot.best.a.incrContribPerDay)} contribution a day.`);}
+    if(D.spot&&D.spot.worst&&D.spot.worst.a.incrContribPerDay<0){const c=D.spot.worst.c;push(A,"campaign",D.spot.worst.a.incrContribPerDay*3,`<b>${E(c.brand)} · ${E(c.aggregator)} "${E(c.name||c.comments||"campaign")}"</b> is losing AED ${n0(-D.spot.worst.a.incrContribPerDay)} a day in contribution.`);}
+    {const d=D.y.disc-D.ys.disc;if(Math.abs(d)>300)push(d>0?A:W,"discount",d,`<b>Delivery discount ${d>0?"up":"down"} AED ${n0(Math.abs(d))}</b>${pcT(d,D.ys.disc)} — ${D.y.sales?(D.y.disc/D.y.sales*100).toFixed(1):0}% of delivery sales.`);}
+    if(dis.guests){const d=di.guests-dis.guests;if(Math.abs(d)>=10)push(d>=0?W:A,"guests",(di.sales-dis.sales),`<b>Dine-in ${n0(di.guests)} guests (${sg(d)})</b>, AED ${spg(di).toFixed(1)} each (${sg(spg(di)-spg(dis),1)}).`);}
+    if(D.ads&&D.ads.critical.length)push(A,"ads",2500,`<b>Ad budget used up:</b> ${D.ads.critical.map(r=>`${E(r.brand)} · ${E(r.aggregator)}`).join(", ")}.`);
+    let KR=[];try{KR=(typeof kpiLoaded!=="undefined"&&kpiLoaded)?buildKPIEvalRows().filter(r=>r.type==="rating"):[];}catch(e){}
+    if(KR.length){const low=KR.filter(r=>r.latest<4.5).sort((a,z)=>a.latest-z.latest);if(low.length)push(A,"ratings",1800,`<b>${low.length} listing${low.length>1?"s":""} rated under 4.5</b> — lowest ${E(low[0].brand)} · ${E(String(low[0].outlet).replace(/^FYOOZHEN-DIP$/i,"DIP"))} on ${E(low[0].aggregator)} (${low[0].latest.toFixed(2)}).`);}
+    fl.forEach(f=>push(A,"pos",3000,`<b>${E(f.loc)}</b>: till sales under half the usual — check the POS synced.`));
+    const pick=arr=>{const seen={},out=[];arr.sort((a,z)=>z.imp-a.imp).forEach(x=>{if(out.length<4&&(seen[x.kind]||0)<(x.kind==="outlet"?2:1)){seen[x.kind]=(seen[x.kind]||0)+1;out.push(x);}});return out;};
+    const Wp=pick(W),Ap=pick(A);
+    // brands at a glance
+    const ratingOf=b=>{const x=KR.filter(r=>r.brand===b&&(r.aggregator==="Talabat"||r.aggregator==="Deliveroo"));return x.length?(x.reduce((a,r)=>a+r.latest,0)/x.length):null;};
+    const bRows=BR.map(b=>{const x=D.brands[b.n],m=x.y.sales?x.y.contribution/x.y.sales*100:0,rt=ratingOf(b.n);return`<tr><td>${lg(b.n,18)}<b>${E(b.n)}</b></td><td class="r">${n0(x.y.sales)}</td><td class="r">${chg(x.y.sales,x.ys.sales)}</td><td class="r">${n0(x.tw.sales)}</td><td class="r">${chg(x.tw.sales,x.lw.sales)}</td><td class="r"><b>${m.toFixed(0)}%</b></td><td class="r">${rt==null?'<span class="mut">–</span>':`<b class="${rt<4.6?"dn":rt>=4.7?"up":""}">${rt.toFixed(2)}</b>`}</td></tr>`;}).join("");
+    const idx=[["2","Sales by channel &amp; outlet"],["3","Delivery — brands, week"],["4","Delivery by outlet &amp; platform"],["5","Platforms, campaigns &amp; ad spend"],["6","Dine-in &amp; takeaway"],["7","KPIs &amp; ratings"]];
+    pB=`<div class="page">${head("OREGANO GROUP · BOARD BRIEF","Yesterday in five minutes · all channels · all brands")}
+     <div class="hl"><div>${head1}</div><div style="margin-top:4px">${head2}</div></div>
+     <div class="bts">${tile("#E8B04A","Group sales",`AED ${n0(gY)}`,gY-gS,gS,false,"")}${tile("var(--del)","Delivery",sk(de.sales),de.sales-des.sales,des.sales,false,`${n0(D.y.orders)} orders`)}${tile("var(--din)","Dine-in",sk(di.sales),di.sales-dis.sales,dis.sales,false,`${n0(di.guests)} guests`)}${tile("var(--ta)","Takeaway",sk(ta.sales),ta.sales-tas.sales,tas.sales,false,`${n0(ta.orders)} orders`)}</div>
+     ${dgaMixDonut({Cy,D,CH,n0,E,lg,kf})}
+     <div class="wa"><div class="box ok"><h3>✓ What's working</h3><ul class="act">${Wp.map(x=>`<li>${x.txt}</li>`).join("")||'<li class="mut">Nothing stood out on the upside.</li>'}</ul></div>
+      <div class="box bad"><h3>! Needs attention</h3><ul class="act">${Ap.map(x=>`<li>${x.txt}</li>`).join("")||'<li class="mut">Nothing needs attention today.</li>'}</ul></div></div>
+     <h2>Brands at a glance — delivery</h2><div class="sub">Net sales AED excl. VAT · contribution = what's left after commission, discounts and ads · rating = average of the Talabat and Deliveroo listings</div>
+     <table class="fx"><colgroup><col style="width:22%"><col style="width:12%"><col style="width:15%"><col style="width:13%"><col style="width:16%"><col style="width:11%"><col style="width:11%"></colgroup><tr><th>Brand</th><th class="r">Yesterday</th><th class="r">vs last ${E(dow.slice(0,3))}</th><th class="r">Week to date</th><th class="r">vs last week</th><th class="r">Contrib. %</th><th class="r">Rating</th></tr>${bRows}</table>
+     <div class="idx"><b>Deep dives →</b> ${idx.map(x=>`<span><i>${x[0]}</i>${x[1]}</span>`).join("")}</div>${foot()}</div>`;
+  }
+  { // page 2 in both editions = the week by channel + every outlet (the channel table moved here from page 1)
+    p2B=p2.replace('<div class="sub" style="margin-top:9px">',`<h2>This week so far — by channel</h2><div class="sub">${E(fmtShort(dr.thisWeek.start))}–${E(fmtShort(dr.thisWeek.end))} vs last week, 4 weeks ago and the same week last year</div>
+     <table><tr><th>Channel</th><th class="r">This week</th><th class="r">vs last week</th><th class="r">vs 4 weeks ago</th><th class="r">vs last year</th><th class="r">Share</th></tr>${wkRows}</table>
+     ${CH.every(lyHas)?"":'<div class="note">* No POS dine-in/takeaway data for last year, so the group comparison is left out rather than overstating growth.</div>'}
+     <h2>Outlets — yesterday</h2><div class="sub">`);
+  }
   const pDO=dgaDeliveryByOutlet({Y,SD,E,n0,aed,kf,chg,lg,head,foot,fmtDisp,SMALLP});
   const pK=dgaKpiPage({E,lg,head,foot,fd});
-  const filename=`OreganoGroup_DailyDigest_${Y}${BOARD?"":""}`;
-  const pages=BOARD?[p1,p2,p3,pDO,p4,p5,pK]:[p1,p2,p3,pDO,p4,p5,pK,p6];
+  const filename=BOARD?`OreganoGroup_BoardBrief_${Y}`:`OreganoGroup_DailyDigest_${Y}`; // v610: different names for the two editions
+  const pages=BOARD?(DGA_BRIEF_ON||(opts&&opts.brief)?[pB,p2B,p3,pDO,p4,p5,pK]:[p1,p2B,p3,pDO,p4,p5,pK]):[p1,p2B,p3,pDO,p4,p5,pK,p6];
   let pn=0;const body=pages.join("").replace(/%%PG%%/g,()=>++pn).replace(/%%TOT%%/g,pages.length);
   // v607: type is a size larger; a page whose content would run past its footer is scaled down just enough to fit
-  const FIT=`<script>(function(){document.querySelectorAll(".page").forEach(function(p){var kids=[].slice.call(p.children).filter(function(k){return!k.classList.contains("ft")});var lim=p.clientHeight-p.querySelector(".ft").offsetHeight-14;
+  const FIT=`<script>(function fit(){document.querySelectorAll(".page").forEach(function(p){[].forEach.call(p.children,function(k){k.style.zoom="";});var kids=[].slice.call(p.children).filter(function(k){return!k.classList.contains("ft")});var lim=p.querySelector(".ft").offsetTop-8;
     function bottom(){var b=0;kids.forEach(function(k){var r=k.getBoundingClientRect(),t=p.getBoundingClientRect();b=Math.max(b,r.bottom-t.top);});return b;}
-    var z=1;while(bottom()>lim&&z>0.72){z-=0.03;kids.forEach(function(k){k.style.zoom=z;});}});})();<\/script>`;
+    var z=1;while(bottom()>lim&&z>0.72){z-=0.03;kids.forEach(function(k){k.style.zoom=z;});}});
+    if(!window.__fitL){window.__fitL=1;window.addEventListener("load",fit);}})();<\/script>`; // again once the logos have loaded
   const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${E(filename)}</title><style>${DGA_CSS}${DGA_CSS2}</style></head><body>${body}${FIT}</body></html>`;
   return{html,filename};
 }
@@ -27572,7 +27631,18 @@ ul.act{padding-left:0;list-style:none;margin:0}ul.act li{font-size:10.5px;margin
 body{font-size:12px}table{font-size:11.5px}th{font-size:9px}td{padding:5px 6px}.sub{font-size:10px}.note{font-size:9px}ul.act li{font-size:11.5px}
 table.fx{table-layout:fixed}table.fx th.c,table.fx td.c{text-align:center}table.fx th.c{text-transform:none;letter-spacing:0;font-size:9.5px;line-height:1.25;word-break:break-word}
 table.fx .pc{display:block}table.bt{font-size:10.5px}table.bt th{font-size:8.5px}table.bt td{padding:5px 4px}table.bt td:first-child b{font-size:10.5px}table.fx td{overflow:hidden}.pt td.c b{display:block;font-size:12px}.pt .pc{display:block}.bc b{font-size:12px}.bc span{font-size:9px}
-.k3 table{font-size:10.5px}.tile .k{font-size:10px}.kpi .x{font-size:10px}.up,.dn{white-space:nowrap}.dec{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px}.dec>div{display:grid;grid-template-columns:62px 1fr;gap:6px;font-size:10.5px;line-height:1.35;align-items:start}.dec .pill,.ex .pill{display:block;text-align:center;margin:1px 0 0}
+.k3 table{font-size:10.5px}.tile .k{font-size:10px}.kpi .x{font-size:10px}.up,.dn{white-space:nowrap}
+.ad1{font-size:11.5px;white-space:nowrap}.ad1 span{color:var(--mut);font-size:10px}.ad2{display:flex;align-items:center;gap:5px;margin-top:3px}.ad2 .sb{flex:1;height:6px}.ad2 span{font-size:9.5px;font-weight:700;color:var(--mut);min-width:26px;text-align:right}.ad2 span.dn{color:var(--dn)}.ad3{font-size:9px;color:var(--dn);font-weight:700;margin-top:1px}
+.mix td{white-space:nowrap}.mix{display:grid;grid-template-columns:165px minmax(0,.95fr) minmax(0,1.35fr);gap:16px;align-items:center;margin-top:10px;border:1px solid var(--line);border-radius:12px;padding:10px 14px}
+.mix h3{margin:0 0 5px;font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--mut)}.mix table{font-size:11px}.mix td{padding:3px 4px;border-bottom:1px solid var(--line)}.mix tr:last-child td{border-bottom:none}
+.mix2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:10px}.mxp{border:1px solid var(--line);border-radius:12px;padding:9px 12px 10px}.mxp h3{margin:0 0 6px;font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--mut)}.mxr{display:flex;align-items:flex-start;gap:8px}.mxl{display:flex;flex-direction:column;gap:5px;flex:1;min-width:0;margin-top:2px}.mxc{border:1px solid var(--line);border-left:4px solid;border-radius:8px;padding:3px 7px}.mxc span{display:block;font-size:10px;font-weight:800}.mxc div{white-space:nowrap}.mxc b{font-size:14.5px}.mxc i{font-style:normal;font-size:9.5px;color:var(--mut);margin-left:5px}.mxt{font-size:10.5px;color:var(--mut);margin-top:2px;padding-left:58px}.mxt b{color:#1B2233}.mxg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin-top:6px}.mxb{border:1px solid var(--line);border-radius:7px;padding:3px 6px;display:flex;gap:5px;align-items:center;font-size:9.5px;line-height:1.25}.mxb i{width:8px;height:8px;border-radius:50%;flex:none}.mxb b{font-size:10px}.mxb span{display:block;color:var(--mut);white-space:nowrap}.mxb span b{color:#1B2233;font-size:9.5px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.hl{margin-top:12px;background:#1B2233;color:#E9ECF2;border-radius:12px;padding:13px 16px;font-size:13.5px;line-height:1.5}.hl b{color:#fff}.hl .up{color:#5BD08C}.hl .dn{color:#FF8A80}
+.bts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:10px}.bt1{border:1px solid var(--line);border-top:4px solid var(--c);border-radius:11px;padding:9px 11px}
+.bt1 .l{font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--mut)}.bt1 .v{font-size:20px;font-weight:800;margin:3px 0 2px;white-space:nowrap}.bt1 .x{font-size:9.5px;color:var(--mut);margin-top:2px}
+.trend{margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:7px 10px 5px}.spk{display:flex;justify-content:space-between;font-size:8.5px;color:var(--mut);margin-top:2px}.spk i{display:inline-block;width:8px;height:8px;border-radius:2px;margin:0 3px 0 6px;vertical-align:-1px}
+.wa{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.box.ok{border-color:#BFE6CD;background:#F3FBF6}.box.ok h3{color:var(--up)}.box.bad{border-color:#F2C7C2;background:#FDF5F4}.box.bad h3{color:var(--dn)}
+.idx{margin-top:12px;font-size:10px;color:var(--mut);display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center}.idx span{display:inline-flex;align-items:center;gap:4px}.idx i{font-style:normal;background:var(--ink);color:#fff;border-radius:4px;padding:0 5px;font-weight:800;font-size:9px}.dec{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px}.dec>div{display:grid;grid-template-columns:62px 1fr;gap:6px;font-size:10.5px;line-height:1.35;align-items:start}.dec .pill,.ex .pill{display:block;text-align:center;margin:1px 0 0}
 .ex{grid-template-columns:18px 64px 1fr 92px!important;font-size:11px!important}.pc{color:#9AA1AE;font-size:.82em;font-weight:400;white-space:nowrap}.big .pc{color:#AEB5C2}
 .hero{grid-template-columns:minmax(0,1.05fr) minmax(0,2fr)}.ch{grid-template-columns:repeat(3,minmax(0,1fr))}.big .v{white-space:nowrap}
 .tile .k{white-space:normal;align-items:flex-start}.tile .k span:first-child{white-space:nowrap}.tile .k b{text-align:right}.tile .k b .pc{display:block}`;
@@ -27628,7 +27698,7 @@ function dgaKpiPage(H){const{E,lg,head,foot}=H;
 function dgaPickEdition(){return new Promise(res=>{const o=document.createElement("div");o.style.cssText="position:fixed;inset:0;background:rgba(5,10,20,.6);z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px";
   const T=typeof DARK_THEME!=="undefined"?DARK_THEME:{card:"#1A2337",cardBorder:"#3A4875",textPrimary:"#F1F5F9",textSecondary:"#94A3B8",accentOrange:"#FF8A3D"};
   const card=(k,t,d)=>`<button data-k="${k}" style="text-align:left;flex:1;min-width:200px;background:${T.bg||"#0F1729"};border:1px solid ${T.cardBorder};border-radius:12px;padding:14px;color:${T.textPrimary};cursor:pointer;font:inherit"><div style="font-weight:800;font-size:15px;margin-bottom:4px">${t}</div><div style="font-size:12.5px;color:${T.textSecondary};line-height:1.45">${d}</div></button>`;
-  o.innerHTML=`<div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:14px;padding:18px;max-width:560px;width:100%;color:${T.textPrimary}"><div style="font-size:16px;font-weight:800;margin-bottom:12px">📄 Which Daily Digest?</div><div style="display:flex;gap:10px;flex-wrap:wrap">${card("full","Full — for me","8 pages, with 'Needs a decision today' and the Action list.")}${card("board","Board — directors &amp; GM","7 pages: the numbers and what's going on. Same as the morning email.")}</div><div style="text-align:right;margin-top:12px"><button data-k="" style="background:none;border:1px solid ${T.cardBorder};border-radius:8px;padding:7px 14px;color:${T.textSecondary};cursor:pointer;font:inherit">Cancel</button></div></div>`;
+  o.innerHTML=`<div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:14px;padding:18px;max-width:560px;width:100%;color:${T.textPrimary}"><div style="font-size:16px;font-weight:800;margin-bottom:12px">📄 Which report?</div><div style="display:flex;gap:10px;flex-wrap:wrap">${card("full","Full — for me","8 pages, with 'Needs a decision today' and the Action list.")}${card("board","Board Brief — directors &amp; GM","Page 1 is the day in five minutes, then 6 pages of deep dives. Same as the morning email.")}</div><div style="text-align:right;margin-top:12px"><button data-k="" style="background:none;border:1px solid ${T.cardBorder};border-radius:8px;padding:7px 14px;color:${T.textSecondary};cursor:pointer;font:inherit">Cancel</button></div></div>`;
   o.addEventListener("click",e=>{const b=e.target.closest("button");if(!b&&e.target!==o)return;o.remove();res(b?b.dataset.k||null:null);});document.body.appendChild(o);});}
 function dgaHookExport(){if(typeof digestExportPDF!=="function"||window.__DG_AUTO)return window.__DG_AUTO?null:setTimeout(dgaHookExport,400);if(digestExportPDF.__ed)return;
   const _d=digestExportPDF;digestExportPDF=async function(){const k=await dgaPickEdition();if(!k)return;window.__dgEdition=k;try{return await _d.apply(this,arguments);}finally{window.__dgEdition=null;}};digestExportPDF.__ed=1;window.digestExportPDF=digestExportPDF;}
@@ -27645,12 +27715,96 @@ function dgaAdTable(H){const{E,n0,lg,BOARD,SMALLP,D,chg,adNotes}=H;
   const PO=["Talabat","Deliveroo","Careem","Noon","Keeta","Instashop","Smiles"],plats=PO.filter(p=>act.some(r=>r.aggregator===p)).concat([...new Set(act.map(r=>r.aggregator))].filter(p=>!PO.includes(p)));
   const brands=BR.map(b=>b.n).filter(b=>act.some(r=>r.brand===b));
   const cellOf=rs=>{if(!rs.length)return null;const x={alloc:0,spent:0,left:0,burn:0};rs.forEach(r=>{x.alloc+=r.budgetAlloc||0;x.spent+=r.budgetSpent||0;x.left+=Math.max(0,r.leftover||0);x.burn+=r.liveBurn||0;});x.pc=x.alloc>0?x.spent/x.alloc*100:0;x.days=x.left>5&&x.burn>0?Math.floor(x.left/x.burn):null;return x;};
-  const show=x=>{if(!x)return'<span class="mut">–</span>';const low=x.left<=5||(x.days!=null&&x.days<=3);return`<b>${n0(x.spent)}</b><span class="pc"> of ${n0(x.alloc)}</span><div class="sb" style="margin:3px auto 2px;width:85%"><i style="width:${Math.min(100,x.pc).toFixed(0)}%;background:${low?"#C0392B":"var(--gold)"}"></i></div><span class="pc">${x.pc.toFixed(0)}% used${x.left<=5?" · <b style='color:var(--dn)'>used up</b>":x.days!=null?" · ~"+x.days+"d left":""}</span>`;};
+  const show=x=>{if(!x)return'<span class="mut">–</span>';const low=x.left<=5||(x.days!=null&&x.days<=3);return`<div class="ad1"><b>${n0(x.spent)}</b><span> / ${n0(x.alloc)}</span></div><div class="ad2"><div class="sb"><i style="width:${Math.min(100,x.pc).toFixed(0)}%;background:${low?"#C0392B":"var(--gold)"}"></i></div><span class="${low?"dn":""}">${x.pc.toFixed(0)}%</span></div>${low?`<div class="ad3">${x.left<=5?"used up":"~"+x.days+"d left"}</div>`:""}`;};
   const rows=brands.map(b=>`<tr><td>${lg(b,16)}<b>${E(b)}</b></td>${plats.map(p=>`<td class="c">${show(cellOf(act.filter(r=>r.brand===b&&r.aggregator===p)))}</td>`).join("")}<td class="c" style="border-left:2px solid var(--line)">${show(cellOf(act.filter(r=>r.brand===b)))}</td></tr>`).join("")
     +`<tr class="tot"><td>All brands</td>${plats.map(p=>`<td class="c">${show(cellOf(act.filter(r=>r.aggregator===p)))}</td>`).join("")}<td class="c" style="border-left:2px solid var(--line)">${show(cellOf(act))}</td></tr>`;
-  return`<h2>Ad spend — budgets running now</h2><div class="sub">AED spent of the budget allocated, % used and days left at the current pace · from the Ad Investments sheet · Careem / Noon combined budgets counted as one pool per brand</div>
+  return`<h2>Ad spend — budgets running now</h2><div class="sub">AED spent / budget and % used · red = used up or ≤3 days left at the current pace · Careem &amp; Noon budgets are one pool per brand</div>
    <table class="fx"><colgroup><col style="width:16%">${plats.map(()=>`<col style="width:${(68/plats.length).toFixed(2)}%">`).join("")}<col style="width:16%"></colgroup><tr><th>Brand</th>${plats.map(p=>`<th class="c">${lg(p,16)}<br>${E(p)}</th>`).join("")}<th class="c" style="border-left:2px solid var(--line)">Total</th></tr>${rows}</table>${wk}
    ${adNotes&&adNotes.length&&!BOARD?`<ul style="margin:7px 0 0;padding-left:16px;font-size:10.5px;line-height:1.5">${adNotes.map(x=>`<li>${x}</li>`).join("")}</ul>`:""}`;
+}
+
+// v610: sales mix donut — inner ring = channels (delivery, dine-in, takeaway, catering), outer ring = delivery split by brand
+// v610: Sales mix — futuristic 3D pie (overall split by channel, equal gaps between every slice, rounded edges)
+// + half donut (delivery by brand, rounded corners). Pure SVG so it prints sharp in the PDF.
+let DGA_MIX_N=0;
+function dgaHex(h,f){const n=parseInt(h.slice(1),16),c=x=>Math.max(0,Math.min(255,Math.round(x)));const r=n>>16,g=(n>>8)&255,b=n&255;
+  return f>=1?`rgb(${c(r+(255-r)*(f-1))},${c(g+(255-g)*(f-1))},${c(b+(255-b)*(f-1))})`:`rgb(${c(r*f)},${c(g*f)},${c(b*f)})`;}
+// 3D pie. sl=[{n,v,c}] ; equal screen-space gap between neighbours, rounded corners via a round-join stroke.
+function dgaPie3D(sl,o){const id="m"+(++DGA_MIX_N)+"p",W=o.W,H=o.H,cx=o.cx,cy=o.cy,rx=o.rx,ry=o.ry,dep=o.dep,gap=o.gap,rc=o.rc,d=gap/2+rc;
+  const tot=sl.reduce((a,x)=>a+x.v,0)||1,MIN=o.min||0.42;
+  // visual sweep: tiny slices get a minimum angle (taken from the biggest) so they stay visible; labels keep the true %
+  let sw=sl.map(x=>x.v/tot*Math.PI*2);const need=sw.reduce((a,s)=>a+Math.max(0,MIN-s),0);if(need>0){const big=sw.indexOf(Math.max(...sw));sw=sw.map((s,i)=>i===big?s-need:Math.max(s,MIN));}
+  const E=(t,ex=0,ey=0)=>[cx+(rx-ex)*Math.cos(t),cy+(ry-ey)*Math.sin(t)],sub=(a,b)=>[a[0]-b[0],a[1]-b[1]],dot=(a,b)=>a[0]*b[0]+a[1]*b[1],nrm=a=>{const l=Math.hypot(a[0],a[1])||1;return[a[0]/l,a[1]/l];};
+  const C=[cx,cy],rest=sw.slice(1).reduce((z,x)=>z+x,0);let a=(o.at==null?-1.15:o.at)+rest/2;
+  const S=sl.map((x,i)=>{const a0=a,a1=a+sw[i];a=a1;return{...x,i,a0,a1};});
+  const ink=rc*(ry/rx);
+  S.forEach(s=>{
+    const u0=nrm(sub(E(s.a0),C)),u1=nrm(sub(E(s.a1),C));
+    const side=(u,t)=>{const p=[-u[1],u[0]],q=sub(E(t),C);return dot(p,q)>=0?p:[-p[0],-p[1]];};
+    const n0=side(u0,s.a0+0.02),n1=side(u1,s.a1-0.02);
+    // where the offset edge meets the inset rim (bisection on the ellipse parameter)
+    const hit=(u,n,t0,t1)=>{const f=t=>{const P=sub(E(t,rc,ink),[cx+d*n[0],cy+d*n[1]]);return u[0]*P[1]-u[1]*P[0];};let lo=t0,hi=t1,flo=f(lo);for(let k=0;k<40;k++){const m=(lo+hi)/2,fm=f(m);if((fm>0)===(flo>0)){lo=m;flo=fm;}else hi=m;}return(lo+hi)/2;};
+    const mid=(s.a0+s.a1)/2;let t0=hit(u0,n0,s.a0,mid),t1=hit(u1,n1,s.a1,mid);
+    const pts=[];
+    if(s.a1-s.a0>Math.PI){ // reflex slice: small arc of radius d round the centre, on the far side from the gap
+      const g=nrm([u0[0]+u1[0],u0[1]+u1[1]]);let f0=Math.atan2(n0[1],n0[0]),f1=Math.atan2(n1[1],n1[0]);
+      let dl=f1-f0;while(dl<0)dl+=Math.PI*2;const mA=f0+dl/2;if(Math.cos(mA)*g[0]+Math.sin(mA)*g[1]>0)dl-=Math.PI*2;
+      for(let k=0;k<=8;k++){const f=f0+dl*k/8;pts.push([cx+d*Math.cos(f),cy+d*Math.sin(f)]);}
+    }else{ // apex = where the two offset edges meet
+      const P0=[cx+d*n0[0],cy+d*n0[1]],P1=[cx+d*n1[0],cy+d*n1[1]],den=u0[0]*u1[1]-u0[1]*u1[0];
+      const t=den?((P1[0]-P0[0])*u1[1]-(P1[1]-P0[1])*u1[0])/den:0;pts.push([P0[0]+t*u0[0],P0[1]+t*u0[1]]);
+      if(t1<=t0){t0=t1=mid;} }
+    for(let k=0;k<=48;k++)pts.push(E(t0+(t1-t0)*k/48,rc,ink));
+    s.pts=pts;s.cy=pts.reduce((z,p)=>z+p[1],0)/pts.length;s.mid=mid;});
+  const P=(pts,dy)=>pts.map(p=>p[0].toFixed(1)+","+(p[1]+dy).toFixed(1)).join(" ");
+  let defs=`<filter id="${id}gl" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="7"/></filter><filter id="${id}ds" x="-20%" y="-20%" width="140%" height="160%"><feDropShadow dx="0" dy="3" stdDeviation="2.2" flood-color="#0B1530" flood-opacity=".28"/></filter>`,body="";
+  S.forEach(s=>{defs+=`<linearGradient id="${id}t${s.i}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${dgaHex(s.c,1.42)}"/><stop offset=".55" stop-color="${s.c}"/><stop offset="1" stop-color="${dgaHex(s.c,.82)}"/></linearGradient>`;});
+  body+=`<ellipse cx="${cx}" cy="${cy+dep+10}" rx="${rx*.92}" ry="${ry*.5}" fill="${S[0].c}" opacity=".22" filter="url(#${id}gl)"/>`;
+  // front rim walls only (no radial walls), so every gap stays open and reads the same width all round
+  S.forEach(s=>{const rim=s.pts.slice(-49).filter(p=>p[1]>cy-0.5);if(rim.length<2)return;
+    defs+=`<linearGradient id="${id}s${s.i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${dgaHex(s.c,.78)}"/><stop offset="1" stop-color="${dgaHex(s.c,.48)}"/></linearGradient>`;
+    body+=`<polygon points="${P(rim,0)} ${P(rim.slice().reverse(),dep)}" fill="url(#${id}s${s.i})" stroke="url(#${id}s${s.i})" stroke-width="${rc*2}" stroke-linejoin="round"/>`;});
+  body+=`<g filter="url(#${id}ds)">`;S.forEach(s=>{body+=`<polygon points="${P(s.pts,0)}" fill="url(#${id}t${s.i})" stroke="url(#${id}t${s.i})" stroke-width="${rc*2}" stroke-linejoin="round"/>`;
+    body+=`<polyline points="${P(s.pts.slice(-49),0)}" fill="none" stroke="#fff" stroke-opacity=".45" stroke-width=".9" stroke-linecap="round"/>`;});body+=`</g>`;
+  const lab=S.filter(s=>s.v/tot>=.25).map(s=>{const[lx,ly]=E(s.mid,rx*.42,ry*.42);return`<text x="${lx}" y="${ly-3}" text-anchor="middle" font-size="${o.fs}" font-weight="800" fill="#fff">${s.n}</text><text x="${lx}" y="${ly+o.fs-1}" text-anchor="middle" font-size="${o.fs-2}" fill="#fff" opacity=".95">${(s.v/tot*100).toFixed(0)}%</text>`;}).join("");
+  return`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block;overflow:visible"><defs>${defs}</defs>${body}${lab}</svg>`;}
+// half donut. sl=[{n,v,c}]
+function dgaHalfDonut(sl,o){const id="m"+(++DGA_MIX_N)+"h",W=o.W,H=o.H,cx=o.cx,cy=o.cy,R=o.R,ri=o.ri,rc=o.rc,gp=o.gap,tot=sl.reduce((a,x)=>a+x.v,0)||1,rm=(R+ri)/2,out=o.lab==="out";
+  let defs="",b=`<path d="M${cx-R-4},${cy} A${R+4},${R+4} 0 0 1 ${cx+R+4},${cy} L${cx+ri-4},${cy} A${ri-4},${ri-4} 0 0 0 ${cx-ri+4},${cy}Z" fill="#F1F3F7"/>`,a=Math.PI,labs="";
+  const P2=(r,x)=>[cx+r*Math.cos(x),cy+r*Math.sin(x)],S2=(r,x)=>P2(r,x).map(v=>v.toFixed(1)).join(",");
+  const pct=v=>{const p=v/tot*100;return(p<2?p.toFixed(1):p.toFixed(0))+"%";},lum=h=>{const n=parseInt(h.slice(1),16);return(.299*(n>>16)+.587*((n>>8)&255)+.114*(n&255))/255;};
+  // minimum sweep: inside labels need room for the text; outside labels only need a visible piece
+  const mn=(gp+2*rc+(out?7:13))/rm;let sw=sl.map(x=>x.v/tot*Math.PI);const nd=sw.reduce((z,v)=>z+Math.max(0,mn-v),0);if(nd>0){const bg=sw.indexOf(Math.max(...sw));sw=sw.map((v,i)=>i===bg?v-nd:Math.max(v,mn));}
+  const outL=[];
+  sl.forEach((x,i)=>{const a1=a+sw[i];const gs=x.g||[dgaHex(x.c,1.32),x.c];defs+=`<linearGradient id="${id}${i}" x1="0" y1="0" x2="1" y2="1">${gs.map((c,k)=>`<stop offset="${gs.length>1?k/(gs.length-1):0}" stop-color="${c}"/>`).join("")}</linearGradient>`;
+    const ro=R-rc,rn=ri+rc,ins=r=>(rc+gp/2)/r,m=(a+a1)/2;let s0o=a+ins(ro),s1o=a1-ins(ro),s0i=a+ins(rn),s1i=a1-ins(rn);if(s1o<s0o)s0o=s1o=m;if(s1i<s0i)s0i=s1i=m;
+    const pts=[];for(let k=0;k<=36;k++)pts.push(S2(ro,s0o+(s1o-s0o)*k/36));for(let k=36;k>=0;k--)pts.push(S2(rn,s0i+(s1i-s0i)*k/36));
+    b+=`<polygon points="${pts.join(" ")}" fill="url(#${id}${i})" stroke="url(#${id}${i})" stroke-width="${rc*2}" stroke-linejoin="round"/>`;
+    const big=x.v/tot>=.12,[mx,my]=P2(rm,m),tc=x.tc||(lum(x.c)>.62?"#3A2C05":"#fff");
+    if(big)labs+=`<text x="${mx.toFixed(1)}" y="${(my+4).toFixed(1)}" text-anchor="middle" font-size="${o.fs}" font-weight="800" fill="${tc}">${pct(x.v)}</text>`;
+    else if(!out){let deg=m*180/Math.PI;if(Math.cos(m)<0)deg+=180;labs+=`<text x="${mx.toFixed(1)}" y="${mx?my.toFixed(1):0}" transform="rotate(${deg.toFixed(1)} ${mx.toFixed(1)} ${my.toFixed(1)})" text-anchor="middle" dominant-baseline="central" font-size="${o.fs-1.5}" font-weight="800" fill="${tc}">${pct(x.v)}</text>`;}
+    else outL.push({m,c:x.c,t:pct(x.v),y:P2(R,m)[1]});
+    a=a1;});
+  if(outL.length){outL.sort((p,q)=>q.y-p.y);let lim=cy-3;outL.forEach(L=>{L.ly=Math.min(L.y,lim);lim=L.ly-13;});
+    outL.forEach(L=>{const[ex,ey]=P2(R+1,L.m),lx=cx+R+10;labs+=`<polyline points="${ex.toFixed(1)},${ey.toFixed(1)} ${(lx-4).toFixed(1)},${L.ly.toFixed(1)}" fill="none" stroke="${L.c}" stroke-width="1"/><circle cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="1.6" fill="${L.c}"/><text x="${lx}" y="${(L.ly+3.5).toFixed(1)}" font-size="${o.fs-1}" font-weight="800" fill="${dgaHex(L.c,.8)}">${L.t}</text>`;});}
+  b+=labs+`<text x="${cx}" y="${cy-o.fs*3.2}" text-anchor="middle" font-size="${o.fs-2.5}" font-weight="800" letter-spacing="1.2" fill="#6B7385">DELIVERY</text><text x="${cx}" y="${cy-o.fs*.9}" text-anchor="middle" font-size="${o.fs*2.2}" font-weight="800" fill="#1B2233">${o.mid}</text><text x="${cx}" y="${cy+1}" text-anchor="middle" font-size="${o.fs-3}" fill="#6B7385">${o.sub}</text>`;
+  return`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block"><defs>${defs}</defs>${b}</svg>`;}
+function dgaMixDonut(H){const{Cy,D,n0,E}=H;
+  const CC={Delivery:"#3B6FE0","Dine-In":"#F07C2B",Takeaway:"#8B5CF6",Catering:"#16A34A"},lbl=c=>c==="Dine-In"?"Dine-in":c;
+  const chans=["Delivery","Dine-In","Takeaway","Catering"].filter(c=>Cy.tot[c]&&Cy.tot[c].sales>0.5),tot=chans.reduce((a,c)=>a+Cy.tot[c].sales,0)||1;
+  // v610: brand colours taken from each brand's logo
+  const BC={Oregano:{c:"#7A232E",g:["#A8404A","#7A232E"],tc:"#E9C77E"},Lollorosso:{c:"#707D35",g:["#97A456","#6A7731"],tc:"#fff"},Smokeys:{c:"#F96400",g:["#FF8C3A","#F05F00"],tc:"#fff"},
+    Fyoozhen:{c:"#111111",g:["#3A3A3A","#050505"],tc:"#D2B26E",ol:"#C9A86A"},"Wicked Wings":{c:"#C2403A",g:["#6A2C5E","#D34C38","#EFA058"],tc:"#fff"}};
+  const del=Cy.tot.Delivery?Cy.tot.Delivery.sales:0,bsum=BR.reduce((a,b)=>a+(D.brands[b.n].y.sales||0),0);
+  const bsl=BR.map(b=>({n:b.n,v:bsum?del*(D.brands[b.n].y.sales||0)/Math.max(bsum,del):0,...(BC[b.n]||{c:b.c})})).filter(x=>x.v>0.5).sort((x,y)=>y.v-x.v);
+  const other=del-bsl.reduce((a,x)=>a+x.v,0);if(other>del*0.01)bsl.push({n:"Direct & other",v:other,c:"#9AA6BC"});
+  const k=v=>v>=1000?(v/1000).toFixed(1)+"K":n0(v),pc=(v,t)=>{const p=v/(t||1)*100;return(p<2?p.toFixed(1):p.toFixed(0))+"%";};
+  const pie=dgaPie3D(chans.map(c=>({n:lbl(c),v:Cy.tot[c].sales,c:CC[c]})),{W:196,H:170,cx:98,cy:70,rx:92,ry:60,dep:24,gap:7,rc:3.5,fs:12});
+  const leg=chans.map(c=>`<div class="mxc" style="border-left-color:${CC[c]}"><span style="color:${CC[c]}">${lbl(c)}</span><div><b>${pc(Cy.tot[c].sales,tot)}</b><i>AED ${k(Cy.tot[c].sales)}</i></div></div>`).join("");
+  const half=dgaHalfDonut(bsl,{W:260,H:134,cx:130,cy:126,R:122,ri:80,rc:3.5,gap:4.5,fs:11,mid:k(del),sub:`AED excl. VAT · ${bsl.length} brands`});
+  const chips=bsl.map(x=>`<div class="mxb"><i style="background:${x.g?`linear-gradient(135deg,${x.g.join(",")})`:x.c}${x.ol?`;box-shadow:0 0 0 1.5px ${x.ol}`:""}"></i><div><b>${E(x.n)}</b><span>AED ${k(x.v)} · <b>${pc(x.v,del)}</b></span></div></div>`).join("");
+  return`<div class="mix2"><div class="mxp"><h3>Overall sales split · yesterday</h3><div class="mxr">${pie}<div class="mxl">${leg}</div></div><div class="mxt">Total <b>AED ${n0(tot)}</b></div></div>
+   <div class="mxp"><h3>Delivery sales by brand · yesterday</h3>${half}<div class="mxg">${chips}</div></div></div>`;
 }
 
 // ═══ v589 SITE P&L — Finance's monthly P&L workbook, per outlet, visible to Nikhil only ═══════════════════════
