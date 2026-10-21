@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-21-610";
+const BUILD_VERSION="2026-10-21-611";
 const BUILD_NOTES=[
+  "🔁 BRANDS THAT FAIL TO LOAD NOW RETRY BY THEMSELVES (build 611). Per Nikhil — the red '2 brands failed to load' banner was turning up more often and needed a tap on Retry each time. (1) Each brand tab is now also fetched through the dashboard's own server (Cloudflare), alongside the direct Google link and the two public proxies, whichever answers first — the public proxies were the usual weak point. (2) If a brand still fails, the dashboard retries it in the background (after 4s, 10s, 20s, 40s, 75s and 2 min) and again straight away when the internet comes back or the app is reopened; the banner shows the countdown, and when the data arrives the page redraws and a green note confirms it. The buttons are now 'Retry … now'. NEEDS the new worker.js.",
   "🧭 MENU — DELIVERY AND DINE-IN & TAKEAWAY AS CLEAR BANDS, ALL ON ONE SCREEN (build 610). Nikhil picked option B: Delivery and the in-store section are now coloured bands with an icon (blue Delivery, amber Dine-in & Takeaway — 'In-store' renamed); 'Service' is now 'Ratings & KPIs' (KPI tracker, cancellations, feedback). The menu items no longer stretch to fill the column, so everything down to Admin fits without scrolling. The directors' PDF is now named OreganoGroup_BoardBrief_<date> (the full one stays OreganoGroup_DailyDigest_<date>) and the morning email says 'Board Brief'. DAILY DIGEST, BOTH EDITIONS: page 1's small bar chart is replaced by two charts — a 3D pie of the overall sales split by channel (rounded edges, the same gap between every slice, cards with % and AED beside it) and a half donut of delivery sales by brand in each brand's logo colours (Oregano maroon, Lollorosso olive, Fyoozhen black with gold, Smokeys orange, Wicked Wings plum-red-orange) with the % inside every piece and brand chips underneath. Page 2 is now 'Sales by channel & outlet'; the ad-spend table is more compact.",
   "💰 DIGEST — AD SPEND BY BRAND × PLATFORM + FULL EDITION SAME LAYOUT (build 609). (1) Platforms page: 'Ad spend — budgets running now' replaces the platform-only snapshot: every brand × platform with AED spent of the budget allocated, a bar, % used and days left at the current pace (red when used up or ≤3 days left), brand and platform totals, plus this week's ad spend vs last week. Careem / Noon combined budgets count as one pool per brand. Shown in both editions; when no budget is running the section says so instead of disappearing. (2) Full edition now has the same page 1 as the board edition (the grouped 'What moved yesterday'), with 'Needs a decision today' as a tidy two-column box below it; the Action list is laid out in aligned columns.",
   "🔺 DIGEST ARROWS = DIRECTION, COLOUR = GOOD / BAD (build 608). Per Nikhil: ▲ always means the number went up and ▼ down; green means the change is good, red bad. So discount, ad spend or commission going UP is a red ▲, going down a green ▼; sales, orders or contribution up is a green ▲, down a red ▼. Delivery KPI cards now also say what the figure was on the same day last week ('was AED 26,094 on 8 Jul'), so a difference can't be read as the old value. The brand table on the Delivery page was running off the right edge (Ad spend and Contribution cut) — fixed columns, every column now fits.",
@@ -4908,10 +4909,10 @@ function parseBrand(csv,brand){
 // freeze the ENTIRE loading screen forever on whichever brand drew it. Now a stuck request is
 // abandoned after 8s and the next fallback is tried, so a flaky proxy degrades gracefully
 // instead of hanging the whole dashboard.
-async function fetchWithTimeout(url,ms){
+async function fetchWithTimeout(url,ms,headers){
   const ctrl=new AbortController();
   const t=setTimeout(()=>ctrl.abort(),ms);
-  try{return await fetch(url,{signal:ctrl.signal});}
+  try{return await fetch(url,headers?{signal:ctrl.signal,headers}:{signal:ctrl.signal});}
   finally{clearTimeout(t);}
 }
 // v148: RELIABILITY FIX — was trying these three sources SEQUENTIALLY, each with an 8s
@@ -4936,23 +4937,28 @@ async function fetchWithTimeout(url,ms){
 // ever add a retry, never break loading. csvFetchInfo records which route answered and when, so
 // the Campaigns page can show what it actually loaded instead of leaving it a mystery.
 const csvFetchInfo={};
-async function fetchCSV(gid){
+async function fetchCSV(gid,opt){
+  opt=opt||{};const ms=opt.timeout||12000;
+  let sid="";try{sid=(JSON.parse(localStorage.getItem("oregano_session")||"{}")||{}).sessionId||"";}catch(e){}
   const routes=(cb)=>{
     const raw=`${PUB}?gid=${gid}&single=true&output=csv${cb?`&_cb=${Date.now()}${Math.floor(Math.random()*1e6)}`:""}`;
-    return[["direct",raw],["allorigins",`https://api.allorigins.win/raw?url=${encodeURIComponent(raw)}`],["corsproxy",`https://corsproxy.io/?${encodeURIComponent(raw)}`]];
+    const L=[["direct",raw],["allorigins",`https://api.allorigins.win/raw?url=${encodeURIComponent(raw)}`],["corsproxy",`https://corsproxy.io/?${encodeURIComponent(raw)}`]];
+    // v611: the dashboard's own worker fetches the published sheet server-side — no public proxy involved
+    if(sid)L.push(["worker",`/api/sheet/csv?gid=${encodeURIComponent(gid)}${cb?`&_cb=${Date.now()}`:""}`,{"X-Session-Id":sid}]);
+    return L;
   };
-  const race=(list)=>Promise.any(list.map(async([src,u])=>{
-    const r=await fetchWithTimeout(u,10000);
+  const race=(list,t)=>Promise.any(list.map(async([src,u,h])=>{
+    const r=await fetchWithTimeout(u,src==="worker"?Math.max(t,20000):t,h);
     if(!r.ok)throw new Error("not ok");
-    const t=await r.text();
-    if(t.length>200&&t.includes(","))return{t,src};
+    const tx=await r.text();
+    if(tx.length>200&&tx.includes(","))return{t:tx,src};
     throw new Error("invalid content");
   }));
   let res,busted=true;
-  try{res=await race(routes(true));}
+  try{res=await race(routes(true),ms);}
   catch(e){
     busted=false;
-    try{res=await race(routes(false));}
+    try{res=await race(routes(false),ms);}
     catch(e2){throw new Error("blocked");}
   }
   csvFetchInfo[gid]={source:res.src,at:Date.now(),bytes:res.t.length,cacheBusted:busted};
@@ -5043,6 +5049,7 @@ async function doLoad(){
   // Time-based ticker: assume typical load takes ~6s. Climb toward the current ceiling
   // (based on completed brands) at a rate of ~1% per 60ms.
   let currentPct=0;
+  if(typeof brandRetryReset==="function")brandRetryReset(); // v611
   window.failedBrandGids={}; // brand name -> gid, for ones that failed this load — cleared/updated per attempt
   const ticker=setInterval(()=>{
     const ceiling=(completedCount/totalBrands)*100;
@@ -5067,6 +5074,7 @@ async function doLoad(){
   setTimeout(()=>{clearInterval(ticker);setLoadingProgress(100);},100);
   allData=all;
   buildDataIndex();
+  if(typeof brandAutoRetrySchedule==="function")setTimeout(brandAutoRetrySchedule,0); // v611
   if(typeof lensReset==="function")lensReset(); // v551: delivery data reloaded — the All-sales switch re-applies on the next render
   if(typeof loadInstoreData==="function")loadInstoreData(); // v551: Dine-In & Takeaway tab (async, non-blocking)
   if(typeof loadDinDiscData==="function")loadDinDiscData(); // v556: Dine-In Discounts tab
@@ -5203,14 +5211,46 @@ function failedBrandBanner(contextNote){
   const failedBrands=Object.keys(window.failedBrandGids||{});
   if(!failedBrands.length)return "";
   return `<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.4);border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-    <div><div style="font-size:13px;font-weight:800;color:#EF4444">⚠ ${failedBrands.length} brand${failedBrands.length===1?"":"s"} failed to load — every number below is understated</div><div style="font-size:11px;color:#94A3B8;margin-top:2px">${failedBrands.join(", ")} ${failedBrands.length===1?"has":"have"} no sales data this session (a network/proxy issue, not a data problem)${contextNote?" — "+contextNote:""}.</div></div>
-    <div style="display:flex;gap:6px">${failedBrands.map(b=>`<button onclick="retryBrand('${b}')" style="background:#EF4444;color:#fff;border:none;border-radius:6px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer">Retry ${b}</button>`).join("")}</div>
+    <div><div style="font-size:13px;font-weight:800;color:#EF4444">⚠ ${failedBrands.length} brand${failedBrands.length===1?"":"s"} failed to load — every number below is understated</div>${typeof brandRetryLine==="function"?brandRetryLine():""}<div style="font-size:11px;color:#94A3B8;margin-top:2px">${failedBrands.join(", ")} ${failedBrands.length===1?"has":"have"} no sales data this session (a network/proxy issue, not a data problem)${contextNote?" — "+contextNote:""}.</div></div>
+    <div style="display:flex;gap:6px">${failedBrands.map(b=>`<button onclick="retryBrand('${b}')" style="background:#EF4444;color:#fff;border:none;border-radius:6px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer">${typeof BRAND_RETRY!=="undefined"?"Retry "+b+" now":"Retry "+b}</button>`).join("")}</div>
   </div>`;
 }
+// v611: AUTOMATIC RETRY of brands that failed to load — per Nikhil ("this is happening more and more").
+const BRAND_RETRY={n:0,timer:null,tick:null,next:0,running:false,delays:[4,10,20,40,75,120]};
+function brandRetryReset(){clearTimeout(BRAND_RETRY.timer);clearInterval(BRAND_RETRY.tick);BRAND_RETRY.n=0;BRAND_RETRY.timer=null;BRAND_RETRY.tick=null;BRAND_RETRY.running=false;}
+function brandRetryFailed(){return Object.keys(window.failedBrandGids||{});}
+function brandRetryText(){const R=BRAND_RETRY,max=R.delays.length;
+  if(R.running)return`⟳ Retrying automatically now (attempt ${R.n} of ${max})…`;
+  if(R.timer){const s=Math.max(0,Math.ceil((R.next-Date.now())/1000));return`⟳ Retrying automatically in ${s}s (attempt ${R.n+1} of ${max}) — the page updates by itself when the data arrives.`;}
+  if(R.n>=max)return`Automatic retries stopped after ${max} attempts — check the internet connection, then tap Retry (it also retries by itself when you come back to the app).`;
+  return"";}
+function brandRetryLine(){if(!brandRetryFailed().length)return"";return`<div class="fb-retry-status" style="font-size:11.5px;color:#FBBF24;margin-top:4px;font-weight:700">${brandRetryText()}</div>`;}
+function brandRetryPaint(){document.querySelectorAll(".fb-retry-status").forEach(el=>{el.textContent=brandRetryText();});}
+function brandAutoRetrySchedule(){const R=BRAND_RETRY;if(!brandRetryFailed().length){brandRetryReset();return;}
+  if(R.timer||R.running)return;if(R.n>=R.delays.length){brandRetryPaint();return;}
+  const d=R.delays[R.n];R.next=Date.now()+d*1000;R.timer=setTimeout(brandAutoRetryRun,d*1000);
+  clearInterval(R.tick);R.tick=setInterval(brandRetryPaint,1000);brandRetryPaint();}
+async function brandAutoRetryRun(){const R=BRAND_RETRY;clearTimeout(R.timer);R.timer=null;clearInterval(R.tick);R.tick=null;
+  const f=Object.entries(window.failedBrandGids||{});if(!f.length||R.running)return;
+  R.running=true;R.n++;brandRetryPaint();const ok=[];
+  await Promise.all(f.map(async([n,gid])=>{try{const recs=parseBrand(await fetchCSV(gid,{timeout:20000}),n);if(!recs.length)throw new Error("empty");
+    allData=allData.filter(x=>x.brand!==n);allData.push(...recs);delete window.failedBrandGids[n];ok.push(n);}catch(e){}}));
+  R.running=false;
+  if(ok.length){buildDataIndex();if(typeof lensReset==="function")lensReset();if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
+    try{if(typeof renderPage==="function"&&typeof curPage!=="undefined")renderPage(curPage);}catch(e){}
+    brandRetryToast(`✓ ${ok.join(" & ")} loaded — the figures now include ${ok.length===1?"it":"them"}`);}
+  if(brandRetryFailed().length)brandAutoRetrySchedule();else brandRetryReset();
+  brandRetryPaint();}
+function brandRetryToast(msg){try{const t=document.createElement("div");t.textContent=msg;
+  t.style.cssText="position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#065F46;color:#ECFDF5;border:1px solid #10B981;padding:10px 16px;border-radius:10px;font-weight:700;font-size:13px;z-index:99999;box-shadow:0 8px 24px rgba(0,0,0,.35);transition:opacity .4s";
+  document.body.appendChild(t);setTimeout(()=>{t.style.opacity="0";setTimeout(()=>t.remove(),500);},4500);}catch(e){}}
+// back online, or the app brought to the front again → try straight away (and start a fresh round if the last one gave up)
+function brandRetryNow(){const R=BRAND_RETRY;if(!brandRetryFailed().length||R.running)return;if(R.n>=R.delays.length)R.n=0;clearTimeout(R.timer);R.timer=null;brandAutoRetryRun();}
+try{window.addEventListener("online",brandRetryNow);document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")brandRetryNow();});}catch(e){}
 async function retryBrand(brandName){
   const gid=(window.failedBrandGids||{})[brandName];
   if(!gid)return; // not currently marked failed — nothing to retry
-  const btn=document.getElementById(`retry-brand-${brandName.replace(/\\s+/g,'-')}`);
+  const btn=document.getElementById(`retry-brand-${brandName.replace(/\s+/g,'-')}`);
   if(btn){btn.textContent='Retrying…';btn.style.pointerEvents='none';btn.style.opacity='.6';}
   try{
     const csv=await fetchCSV(gid);
@@ -5221,6 +5261,8 @@ async function retryBrand(brandName){
     allData.push(...recs);
     buildDataIndex();
     delete window.failedBrandGids[brandName];
+    if(typeof lensReset==="function")lensReset(); // v611
+    if(typeof brandRetryPaint==="function")brandRetryPaint();
     if(typeof campAnalysisCache!=="undefined")campAnalysisCache.clear();
     if(typeof renderPage==="function"&&typeof curPage!=="undefined")renderPage(curPage);
   }catch(e){
@@ -9185,8 +9227,8 @@ function cpcObligationsCard(priorMonth,priorLabel,nextLabel){
   // data or logic bug — the GMV/mandate math itself is correct once the real data is present.
   const failedBrands=Object.keys(window.failedBrandGids||{});
   const failedWarning=failedBrands.length?`<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.4);border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-    <div><div style="font-size:13px;font-weight:800;color:#EF4444">⚠ ${failedBrands.length} brand${failedBrands.length===1?"":"s"} failed to load — every number below is understated</div><div style="font-size:11px;color:${T.label};margin-top:2px">${failedBrands.join(", ")} ${failedBrands.length===1?"has":"have"} no sales data this session (a network/proxy issue, not a data problem) — GMV and mandate figures on this page only reflect the brands that DID load.</div></div>
-    <div style="display:flex;gap:6px">${failedBrands.map(b=>`<button id="retry-brand-${b.replace(/\s+/g,'-')}" onclick="retryBrand('${b}')" style="background:#EF4444;color:#fff;border:none;border-radius:6px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer">Retry ${b}</button>`).join("")}</div>
+    <div><div style="font-size:13px;font-weight:800;color:#EF4444">⚠ ${failedBrands.length} brand${failedBrands.length===1?"":"s"} failed to load — every number below is understated</div>${typeof brandRetryLine==="function"?brandRetryLine():""}<div style="font-size:11px;color:${T.label};margin-top:2px">${failedBrands.join(", ")} ${failedBrands.length===1?"has":"have"} no sales data this session (a network/proxy issue, not a data problem) — GMV and mandate figures on this page only reflect the brands that DID load.</div></div>
+    <div style="display:flex;gap:6px">${failedBrands.map(b=>`<button id="retry-brand-${b.replace(/\s+/g,'-')}" onclick="retryBrand('${b}')" style="background:#EF4444;color:#fff;border:none;border-radius:6px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer">${typeof BRAND_RETRY!=="undefined"?"Retry "+b+" now":"Retry "+b}</button>`).join("")}</div>
   </div>`:"";
   const AGG_CARD_CLR={Deliveroo:"#00CCBC",Talabat:"#FF6000",Careem:"#3DDC73",Noon:"#F5CF00"};
   const aggs=["Deliveroo","Talabat","Careem","Noon"];
