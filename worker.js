@@ -62,13 +62,24 @@ function clientUA(request) {
   return (request.headers.get("User-Agent") || "unknown").slice(0, 200);
 }
 
+// v616: Cloudflare's free plan allows 1,000 KV writes a day. Writes that are only a cache or a log no longer
+// fail the request when that limit is hit (the feature keeps working, it just isn't cached/logged), and
+// rewrites of data that hasn't changed are skipped.
+async function kvPut(env, key, val, opt) {
+  try { await env.SESSIONS.put(key, val, opt); return true; }
+  catch (e) { console.log("KV put skipped (" + key.split(":").slice(0, 2).join(":") + "): " + String(e && e.message || e)); return false; }
+}
+async function kvPutChanged(env, key, val, opt) {
+  try { if ((await env.SESSIONS.get(key)) === val) return true; } catch (e) {}
+  return kvPut(env, key, val, opt);
+}
 async function logEvent(env, ev) {
   const ts = new Date().toISOString();
   ev.ts = ts;
   // Use ISO timestamp + random suffix as key so sorted descending gives most recent first
   const key = `event:${ts}:${crypto.randomUUID().slice(0, 8)}`;
   // Keep event log for 90 days then auto-delete (KV TTL)
-  await env.SESSIONS.put(key, JSON.stringify(ev), { expirationTtl: 60 * 60 * 24 * 90 });
+  await kvPut(env, key, JSON.stringify(ev), { expirationTtl: 60 * 60 * 24 * 90 });
 }
 
 async function isBanned(env, user) {
@@ -105,7 +116,7 @@ async function replaceOtherSessions(env, userKey, newSession, request, prevPoint
     const old = JSON.parse(raw);
     await env.SESSIONS.delete(`session:${id}`);
     const by = { os: newSession.os, browser: newSession.browser, ip: newSession.ip, ts: newSession.loginTs };
-    await env.SESSIONS.put(`replaced:${id}`, JSON.stringify(by), { expirationTtl: 60 * 60 * 48 });
+    await kvPut(env, `replaced:${id}`, JSON.stringify(by), { expirationTtl: 60 * 60 * 48 });
     const sameSystem = old.ua === newSession.ua && old.ip === newSession.ip;
     const info = { user: userKey, event: "session_replaced", ip: newSession.ip, ua: newSession.ua,
       oldIp: old.ip, oldOs: old.os || deviceOf(old.ua).os, oldBrowser: old.browser || deviceOf(old.ua).browser,
@@ -114,7 +125,7 @@ async function replaceOtherSessions(env, userKey, newSession, request, prevPoint
     replaced.push({ os: info.oldOs, browser: info.oldBrowser, ip: old.ip, sameSystem });
     if (!sameSystem) {
       const ts = new Date().toISOString();
-      await env.SESSIONS.put(`alert:${ts}:${crypto.randomUUID().slice(0, 6)}`, JSON.stringify(Object.assign({ ts }, info)), { expirationTtl: 60 * 60 * 24 * 90 });
+      await kvPut(env, `alert:${ts}:${crypto.randomUUID().slice(0, 6)}`, JSON.stringify(Object.assign({ ts }, info)), { expirationTtl: 60 * 60 * 24 * 90 });
     }
   }
   return replaced;
@@ -232,7 +243,7 @@ async function handleHeartbeat(request, env) {
   // heartbeat-driven KV writes by ~5x without changing the 60s client-side ping
   // interval (still checks for kick/ban promptly), and still updates lastSeen
   // in the RESPONSE for the client even on ticks where we skip the KV write.
-  const HEARTBEAT_WRITE_THROTTLE_SECONDS = 300; // 5 minutes
+  const HEARTBEAT_WRITE_THROTTLE_SECONDS = 1800; // v616: 30 minutes (was 5) — the free plan's 1,000 writes/day ran out on 21 Oct
   const now = new Date();
   const lastSeenDate = new Date(session.lastSeen);
   const secondsSinceLastWrite = (now - lastSeenDate) / 1000;
@@ -251,11 +262,13 @@ async function handleHeartbeat(request, env) {
   if (newIp !== session.ip) session.ip = newIp;
   if (!session.os) Object.assign(session, deviceOf(session.ua));
 
-  await env.SESSIONS.put(`session:${sessionId}`, JSON.stringify(session), {
+  // v616: the one-system pointer only needs refreshing every 6 h (it lives 24 h)
+  const ptrDue = !MULTI_DEVICE_USERS.has(session.user) && (!session.ptrAt || (now - new Date(session.ptrAt)) / 1000 > 6 * 3600);
+  if (ptrDue) session.ptrAt = now.toISOString();
+  await kvPut(env, `session:${sessionId}`, JSON.stringify(session), {
     expirationTtl: SESSION_TTL_SECONDS
   });
-  // keep the one-system pointer alive as long as the session (rewritten at most every 5 min, like the session)
-  if (!MULTI_DEVICE_USERS.has(session.user)) await env.SESSIONS.put(`usersess:${session.user}`, sessionId, { expirationTtl: SESSION_TTL_SECONDS });
+  if (ptrDue) await kvPut(env, `usersess:${session.user}`, sessionId, { expirationTtl: SESSION_TTL_SECONDS });
   return json({ ok: true, lastSeen: session.lastSeen, notice });
 }
 
@@ -645,7 +658,7 @@ async function msysLogin(env, force = false) {
     headers: { "Content-Type": "application/x-www-form-urlencoded", "Origin": MSYS, "Referer": MSYS + "/Home/Index" } });
   steps.push("continue " + r4.status);
   await r4.text();
-  await env.SESSIONS.put("pos:msys", JSON.stringify({ jar, ts: new Date().toISOString() }), { expirationTtl: MSYS_SESSION_TTL });
+  await kvPut(env, "pos:msys", JSON.stringify({ jar, ts: new Date().toISOString() }), { expirationTtl: MSYS_SESSION_TTL }); // v616: cache only
   return jar;
 }
 
@@ -722,7 +735,7 @@ async function googleToken(env) {
 
 async function posLog(env, rec) {
   const ts = new Date().toISOString();
-  await env.SESSIONS.put(`pos:log:${ts}:${crypto.randomUUID().slice(0, 6)}`, JSON.stringify(Object.assign({ ts }, rec)), { expirationTtl: 60 * 60 * 24 * 180 });
+  await kvPut(env, `pos:log:${ts}:${crypto.randomUUID().slice(0, 6)}`, JSON.stringify(Object.assign({ ts }, rec)), { expirationTtl: 60 * 60 * 24 * 180 });
 }
 
 // Google token cached in KV (~50 min) so repeated pull steps don't re-sign a JWT every call.
@@ -730,7 +743,7 @@ async function googleTokenCached(env) {
   const c = await env.SESSIONS.get("pos:gtoken");
   if (c) return JSON.parse(c);
   const t = await googleToken(env);
-  await env.SESSIONS.put("pos:gtoken", JSON.stringify(t), { expirationTtl: 3000 });
+  await kvPut(env, "pos:gtoken", JSON.stringify(t), { expirationTtl: 3000 }); // v616: cache only
   return t;
 }
 const POS_TABS = ["Oregano", "Lollorosso", "Smokeys", "Wicked Wings", "Fyoozhen", "Dine-In & Takeaway", "Dine-In Discounts"];
@@ -892,7 +905,7 @@ async function handleSheetGid(request, env) {
   const mj = await (await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${posSheetId("live")}?fields=sheets.properties(sheetId,title)`, { headers: { Authorization: "Bearer " + token } })).json();
   const t = ((mj && mj.sheets) || []).map(x => x.properties).find(p => p.title === name);
   if (!t) return json({ ok: true, gid: null });
-  await env.SESSIONS.put(ck, String(t.sheetId), { expirationTtl: 86400 * 30 });
+  await kvPut(env, ck, String(t.sheetId), { expirationTtl: 86400 * 30 });
   return json({ ok: true, gid: String(t.sheetId) });
 }
 // v539: create the "Dine-In & Takeaway" tab on first use (only that exact tab — nothing else).
@@ -930,6 +943,8 @@ async function handlePosFlags(request, env) {
   });
   prev.filter(p => !out.find(o => o.loc === p.loc) && p.status !== "fixed").forEach(p => out.push(Object.assign({}, p, { status: "fixed", by: s.user, at: now })));
   if (!out.length && !prev.length) return json({ ok: true, flags: [] }); // nothing to store — saves a KV write
+  { const strip = l => JSON.stringify(l.map(x => Object.assign({}, x, { at: 0, by: 0 }))); // v616: same flags as last time → no rewrite
+    if (strip(prev) === strip(out)) return json({ ok: true, flags: prev, unchanged: true }); }
   await env.SESSIONS.put(key, JSON.stringify(out), { expirationTtl: 60 * 60 * 24 * 120 });
   return json({ ok: true, flags: out });
 }
@@ -966,6 +981,8 @@ async function handlePosReconSave(request, env) {
     mis: (Array.isArray(rec.mis) ? rec.mis : []).slice(0, 40).map(m => ({ loc: str(m.loc, 80), out: str(m.out, 40), rc: str(m.rc, 20), till: str(m.till, 20), brand: str(m.brand, 20), amt: num(m.amt), orders: ordl(m.orders, 40) })),
     // v596: Keeta order values per brand|outlet (numbers only) for the minimum-commission estimate
     kt: (() => { if (!rec.kt || typeof rec.kt !== "object") return (prev && prev.kt) || {}; const o = {}; for (const [k, v] of Object.entries(rec.kt).slice(0, 80)) if (Array.isArray(v)) o[str(k, 60)] = v.slice(0, 600).map(num); return o; })() };
+  { const strip = o => JSON.stringify(Object.assign({}, o, { at: 0, by: 0 })); // v616: same numbers as last time → no rewrite
+    if (prev && strip(prev) === strip(out)) return json({ ok: true, unchanged: true, rec: prev }); }
   await env.SESSIONS.put(key, JSON.stringify(out), { expirationTtl: 60 * 60 * 24 * 400 });
   return json({ ok: true, rec: out });
 }
@@ -1150,7 +1167,7 @@ async function handlePosJTSave(request, env) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "") || !/^[A-Z]{3}[A-Z0-9-]{0,8}$/.test(loc || "") || !data || typeof data !== "object") return json({ error: "bad_request" }, 400);
   const raw = JSON.stringify(data);
   if (raw.length > 900000) return json({ error: "too_large" }, 400);
-  await env.SESSIONS.put(`pos:jt:${date}:${loc}`, raw, { expirationTtl: 60 * 60 * 24 * 450 });
+  await kvPutChanged(env, `pos:jt:${date}:${loc}`, raw, { expirationTtl: 60 * 60 * 24 * 450 }); // v616: skip identical re-pulls
   return json({ ok: true, bytes: raw.length });
 }
 async function handlePosJTList(request, env) {
@@ -1330,7 +1347,7 @@ async function handleAutoReport(request, env) {
   const s = await requirePosUser(request, env);
   if (!s) return json({ error: "forbidden" }, 403);
   const b = await readBody(request);
-  if (b.hour) await env.SESSIONS.put("auto:hour", String(Math.max(0, Math.min(23, +b.hour || 0))));
+  if (b.hour) await kvPutChanged(env, "auto:hour", String(Math.max(0, Math.min(23, +b.hour || 0)))); // v616
   if (b.stage === "setup") return json({ ok: true }); // v603: setup only records the hour
   if (b.stage === "email") { // v606: the Daily Digest email has its own status line
     await env.SESSIONS.put("auto:lastmail", JSON.stringify({ ts: new Date().toISOString(), ok: !!b.ok, msg: String(b.msg || "").slice(0, 400), to: +b.to || 0 }));
