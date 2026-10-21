@@ -1291,20 +1291,20 @@ function AP_mailDigest(o,msg,test){
     Logger.log(pdf?"Digest PDF made.":"Digest PDF attempt "+(a+1)+" failed: "+why);
   }
   const y=posAddDays(posDubaiToday(),-1),day=posFmtDate(y)+" "+y.slice(0,4);
-  if(pdf)pdf.setName(`OreganoGroup_DailyDigest_${y}.pdf`);
+  if(pdf)pdf.setName(`OreganoGroup_BoardBrief_${y}.pdf`);
   const esc_=x=>String(x||"").replace(/&/g,"&amp;").replace(/</g,"&lt;");
   const lines=msg&&msg.body?msg.body.split("\n").map(l=>`<div style="margin:2px 0">${esc_(l)}</div>`).join(""):"";
   const html=`<div style="font-family:Arial,sans-serif;font-size:14px;color:#1B2233;max-width:640px">
-    <div style="font-size:12px;color:#B8862F;font-weight:700;letter-spacing:1px">OREGANO GROUP · DAILY DIGEST</div>
+    <div style="font-size:12px;color:#B8862F;font-weight:700;letter-spacing:1px">OREGANO GROUP · BOARD BRIEF</div>
     <h2 style="margin:6px 0 10px;font-weight:600">${esc_(day)}</h2>
     ${lines?`<div style="background:#F6F7F9;border-radius:8px;padding:10px 12px;margin-bottom:12px">${lines}</div>`:""}
-    ${pdf?"<div>The full Daily Digest (6 pages) is attached.</div>":`<div style="color:#C0392B">The full Daily Digest PDF couldn't be made this morning (${esc_(why)}). Open the dashboard → Overview → Export Daily Digest.</div>`}
+    ${pdf?"<div>The Board Brief is attached — page 1 is the day in five minutes, deep dives follow.</div>":`<div style="color:#C0392B">The full Daily Digest PDF couldn't be made this morning (${esc_(why)}). Open the dashboard → Overview → Export Daily Digest.</div>`}
     <div style="margin-top:14px;font-size:11px;color:#6B7385">Sent automatically after the morning POS pull · <a href="${o.base}">Open the dashboard</a> · sales excl. VAT</div></div>`;
   try{// v607: no "Oregano Dashboard" sender name — a Gmail address sending under the company's own brand name looks like
     // impersonation to company mail filters (Microsoft 365 held the first test while a plain Gmail message got through).
     // Sent under the account's own name, with a plain-text copy alongside the formatted one.
-    const plain=`Oregano Group — Daily Digest · ${day}\n\n${msg&&msg.body?msg.body+"\n\n":""}${pdf?"The full Daily Digest (6 pages) is attached.":"The full Daily Digest PDF couldn't be made this morning ("+why+")."}\n\nSent automatically after the morning POS pull · ${o.base}`;
-    MailApp.sendEmail({to:cfg.to.join(","),subject:`Daily Digest ${day}${test?" (test)":""}`,body:plain,htmlBody:html,attachments:pdf?[pdf]:[]});
+    const plain=`Oregano Group — Board Brief · ${day}\n\n${msg&&msg.body?msg.body+"\n\n":""}${pdf?"The Board Brief is attached — page 1 is the day in five minutes, deep dives follow.":"The full Daily Digest PDF couldn't be made this morning ("+why+")."}\n\nSent automatically after the morning POS pull · ${o.base}`;
+    MailApp.sendEmail({to:cfg.to.join(","),subject:`Board Brief ${day}${test?" (test)":""}`,body:plain,htmlBody:html,attachments:pdf?[pdf]:[]});
     Logger.log(`Emailed to ${cfg.to.join(", ")}${pdf?" with the PDF":" without the PDF"}.`);
     try{UrlFetchApp.fetch(o.base+"/api/auto/report",{method:"post",contentType:"application/json",headers:H,payload:JSON.stringify({stage:"email",ok:!!pdf,to:cfg.to.length,msg:pdf?"Digest emailed":"Emailed without the PDF — "+why}),muteHttpExceptions:true});}catch(e){}}
   catch(e){Logger.log("Email failed: "+e.message);}
