@@ -980,7 +980,10 @@ async function handlePosReconSave(request, env) {
       pos: num(r.pos), agg: num(r.agg), gap: num(r.gap), unexpl: num(r.unexpl), other: (Array.isArray(r.other) ? r.other : []).slice(0, 8).map(o => [str(o[0], 60), num(o[1])]), orders: ordl(r.orders, 30) })),
     mis: (Array.isArray(rec.mis) ? rec.mis : []).slice(0, 40).map(m => ({ loc: str(m.loc, 80), out: str(m.out, 40), rc: str(m.rc, 20), till: str(m.till, 20), brand: str(m.brand, 20), amt: num(m.amt), orders: ordl(m.orders, 40) })),
     // v596: Keeta order values per brand|outlet (numbers only) for the minimum-commission estimate
-    kt: (() => { if (!rec.kt || typeof rec.kt !== "object") return (prev && prev.kt) || {}; const o = {}; for (const [k, v] of Object.entries(rec.kt).slice(0, 80)) if (Array.isArray(v)) o[str(k, 60)] = v.slice(0, 600).map(num); return o; })() };
+    kt: (() => { if (!rec.kt || typeof rec.kt !== "object") return (prev && prev.kt) || {}; const o = {}; for (const [k, v] of Object.entries(rec.kt).slice(0, 80)) if (Array.isArray(v)) o[str(k, 60)] = v.slice(0, 600).map(num); return o; })(),
+    // v617: wrong settlements (account vs how the bill was punched) + hand-settled clusters; an older dashboard that doesn't send them keeps the stored ones
+    ws: Array.isArray(rec.ws) ? rec.ws.slice(0, 80).map(w => ({ kind: str(w.kind, 24), loc: str(w.loc, 80), out: str(w.out, 40), cust: str(w.cust, 60), suf: str(w.suf, 4), amt: num(w.amt), ref: str(w.ref, 30), inv: str(w.inv, 20), ord: str(w.ord, 20), should: str(w.should, 80), refOwner: str(w.refOwner, 20), accBrand: str(w.accBrand, 20), tillBrand: str(w.tillBrand, 20) })) : ((prev && prev.ws) || []),
+    wsm: Array.isArray(rec.wsm) ? rec.wsm.slice(0, 30).map(w => ({ loc: str(w.loc, 80), out: str(w.out, 40), rc: str(w.rc, 20), brand: str(w.brand, 20), n: +w.n || 0, amt: num(w.amt), auto: +w.auto || 0 })) : ((prev && prev.wsm) || []) };
   { const strip = o => JSON.stringify(Object.assign({}, o, { at: 0, by: 0 })); // v616: same numbers as last time → no rewrite
     if (prev && strip(prev) === strip(out)) return json({ ok: true, unchanged: true, rec: prev }); }
   await env.SESSIONS.put(key, JSON.stringify(out), { expirationTtl: 60 * 60 * 24 * 400 });
