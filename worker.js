@@ -862,6 +862,25 @@ async function handlePosSheetWrite(request, env) {
   return json({ ok: true, updatedCells: j.totalUpdatedCells || 0, updatedRanges: (j.responses || []).length });
 }
 // v562: gid of a POS Sync tab in the LIVE sheet, for any logged-in dashboard user (the published link reads tabs by gid).
+// v611: the dashboard's brand / campaign / ad tabs, fetched server-side from the published sheet — one more
+// route next to the direct link and the public CORS proxies, so a flaky proxy no longer leaves a brand unloaded.
+// Signed-in sessions only; only the dashboard's own published sheet; the body is streamed straight through.
+const DASH_PUB = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR2PpdGikWQBRBclmQCvw95Z_1RtbkQ8AmZiv2SQq3CX8SPDTGHj3wqCUnJahp-lLGQet8FnLaXQbMa/pub";
+async function handleSheetCsv(request, env) {
+  const session = await getSession(env, request.headers.get("X-Session-Id"));
+  if (!session) return json({ error: "unauthorized" }, 401);
+  const gid = new URL(request.url).searchParams.get("gid") || "";
+  if (!/^\d{1,12}$/.test(gid)) return json({ error: "bad_request" }, 400);
+  let last = "";
+  for (let i = 0; i < 2; i++) {
+    try {
+      const r = await fetch(`${DASH_PUB}?gid=${gid}&single=true&output=csv&_cb=${Date.now()}${i}`, { redirect: "follow", cf: { cacheTtl: 0, cacheEverything: false } });
+      if (r.ok) return new Response(r.body, { headers: { "Content-Type": "text/csv; charset=utf-8", "Cache-Control": "no-store" } });
+      last = "HTTP " + r.status;
+    } catch (e) { last = String(e && e.message || e); }
+  }
+  return json({ error: "upstream", detail: last }, 502);
+}
 async function handleSheetGid(request, env) {
   const session = await getSession(env, request.headers.get("X-Session-Id"));
   if (!session) return json({ error: "unauthorized" }, 401);
@@ -1480,6 +1499,7 @@ export default {
       if (path === "/api/admin/unban"     && method === "POST") return await handleAdminUnban(request, env);
       if (path === "/api/pos/status"      && method === "GET")  return await handlePosStatus(request, env);
       if (path === "/api/sheet/gid"       && method === "GET")  return await handleSheetGid(request, env);
+      if (path === "/api/sheet/csv"       && method === "GET")  return await handleSheetCsv(request, env); // v611
       if (path === "/api/pos/creds"       && method === "POST") return await handlePosCreds(request, env);
       if (path === "/api/pos/test"        && method === "POST") return await handlePosTest(request, env);
       if (path === "/api/pos/report"      && method === "POST") return await handlePosReport(request, env);
