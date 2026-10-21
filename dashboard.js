@@ -13,8 +13,11 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-21-606";
+const BUILD_VERSION="2026-10-21-609";
 const BUILD_NOTES=[
+  "💰 DIGEST — AD SPEND BY BRAND × PLATFORM + FULL EDITION SAME LAYOUT (build 609). (1) Platforms page: 'Ad spend — budgets running now' replaces the platform-only snapshot: every brand × platform with AED spent of the budget allocated, a bar, % used and days left at the current pace (red when used up or ≤3 days left), brand and platform totals, plus this week's ad spend vs last week. Careem / Noon combined budgets count as one pool per brand. Shown in both editions; when no budget is running the section says so instead of disappearing. (2) Full edition now has the same page 1 as the board edition (the grouped 'What moved yesterday'), with 'Needs a decision today' as a tidy two-column box below it; the Action list is laid out in aligned columns.",
+  "🔺 DIGEST ARROWS = DIRECTION, COLOUR = GOOD / BAD (build 608). Per Nikhil: ▲ always means the number went up and ▼ down; green means the change is good, red bad. So discount, ad spend or commission going UP is a red ▲, going down a green ▼; sales, orders or contribution up is a green ▲, down a red ▼. Delivery KPI cards now also say what the figure was on the same day last week ('was AED 26,094 on 8 Jul'), so a difference can't be read as the old value. The brand table on the Delivery page was running off the right edge (Ad spend and Contribution cut) — fixed columns, every column now fits.",
+  "📰 DAILY DIGEST FOR DIRECTORS & GM (build 607). Per Nikhil: (1) Two editions — the morning email sends the BOARD edition (7 pages: the numbers and what's going on, no 'Needs a decision today', no Action list, no ad-budget housekeeping); 'Export Daily Digest' now asks Full (8 pages, for Nikhil) or Board. (2) Every comparison shows the ACTUAL difference with a small grey % beside it; ▲ green = a good change, ▼ red = a bad one — sales, orders, guests, contribution up is good; discount, ad spend, commission up is bad. (3) 'What moved yesterday' expanded and split into Group & delivery, Dine-in & takeaway (sales, guests, spend per guest, best and weakest dine-in outlet, takeaway orders and busiest outlet) and Outlets. (4) NEW page 'Delivery · by outlet': orders per brand at every location (with net sales), total orders, net sales and AOV per outlet vs the same day last week, plus orders by brand × platform. (5) NEW page 'KPIs & Ratings': current ratings (Talabat, Deliveroo, Google Maps) and the last entered prep time and driver wait (Talabat, Deliveroo, Careem) by brand × platform, with the best 5 and worst 5 outlets, each with the date it was last updated. Platform × brand grid now shows the contribution change in AED.",
   "📧 DAILY DIGEST BY EMAIL, AUTOMATICALLY + CAREEM / NOON BUDGET FLAG FIXED (build 606). (1) After the morning pull (when the 'data is ready' notification goes out), the full 6-page Daily Digest is emailed as a PDF from Nikhil's Gmail to the list on POS Sync → Morning auto-pull (starts with nikhil@oreganorestaurants.com; add or remove addresses there, switch it on/off). The dashboard builds it in Cloudflare's headless browser (free plan: 10 browser-minutes a day) using a one-time, 10-minute, read-only 'digest' sign-in made for that run. If the PDF can't be made, the email still goes with the summary and says why. Needs two Cloudflare secrets (CF_BR_TOKEN, CF_ACCOUNT_ID) and the updated Apps Script code (Key & code now shows the code with the current key). (2) Per Nikhil: Careem and Noon ad budgets marked 'Combined per brand' are one pool shared by the brand's outlets, so an outlet can't run out while the brand pool has money — the Digest ('Needs a decision today', Actions, ads notes) now judges those per brand × platform × ad type instead of flagging single outlets (Oregano · Al Quoz / DMC / Jumeirah · Careem were false flags).",
   "⏰ AUTO-PULL FIXES (build 605). (1) Apps Script decides which permissions a script needs by reading its code; the short script from 603 no longer mentioned triggers or script storage, so 'setup' failed with 'Specified permissions are not sufficient to call ScriptApp.getProjectTriggers'. The code from 🔑 Key & code now ends with a permissions_ line naming them. (2) A run before 4 AM Dubai (e.g. a late-night test) now says '⏳ Pulled early — day not finished': outlets trade until about 3 AM and those sales belong to the previous day; the morning run pulls the day again.",
   "🎨 TWO FIXES (build 604). (1) While the dashboard was still loading, Overview could paint in the light theme — the Avg Ratings card came up white and the KPI numbers dark grey on dark cards. The page starts on Overview but switched to the dark colours only after the sheets finished loading, so anything that repainted earlier (Keeta data, data checks, ratings) used light colours. It now starts dark. (2) POS Sync → Morning auto-pull: once set up, the card only showed 'Set up' with no way back into the setup (to make a new key or copy the code again) — there is now a 'Key & code' button next to it.",
@@ -27354,33 +27357,39 @@ tr.tot td{font-weight:800;border-top:1.5px solid var(--ink);border-bottom:none}
 .chip{display:inline-block;font-size:8.5px;padding:1px 6px;border-radius:7px;background:var(--soft);color:var(--mut);margin-left:6px;font-weight:700}
 .ex{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:start;padding:7px 0;border-bottom:1px solid var(--line);font-size:10.5px;line-height:1.35}
 `;
-function digestBuildOptionA(){
+function digestBuildOptionA(opts){
   // the digest day = the last day that has delivery sales (never ahead of `latest`), so a day whose delivery tabs
   // aren't filled yet doesn't print as AED 0
   const _lat=latest;let lastDel="";for(const r of(lensBase||allData)){if(r.channel!=="instore"&&(r.sales||0)>0&&r.date>lastDel&&r.date<=_lat)lastDel=r.date;}
   if(lastDel&&lastDel<_lat)latest=lastDel;
-  try{return dgaBuild();}finally{latest=_lat;}
+  try{return dgaBuild(opts);}finally{latest=_lat;}
 }
-function dgaBuild(){
+function dgaBuild(opts){
+  // v607: BOARD = the version emailed to the directors & GM — numbers and what's going on; no "Needs a decision today",
+  // no Action list, no ad-budget housekeeping notes. The dashboard's own "Export Daily Digest" keeps everything.
+  const BOARD=!!(opts&&opts.board),SMALLP=new Set(BOARD?["Instashop","Smiles"]:[]); // v607: board edition leaves out the small platforms
   const dr=digestDateRanges(),Y=dr.yesterday.start,SD=dr.sameDayLastWeek.start;
   const E=x=>esc(String(x==null?"":x)),n0=v=>Math.round(v||0).toLocaleString("en-US"),aed=v=>"AED "+n0(v),kf=v=>Math.abs(v)>=1000?(v/1000).toFixed(1)+"K":n0(v);
-  const chg=(cur,base,inv,short)=>{const p=pctOf(cur,base);if(p==null)return'<span class="mut">—</span>';const good=(p>=0)!==!!inv;const t=(short||Math.abs(p)>=100)?Math.abs(p).toFixed(0)+"%":Math.abs(p).toFixed(1)+"%";return`<span class="${good?"up":"dn"}">${p>=0?"▲":"▼"}${t}</span>`;};
+  // v607 (Nikhil): comparisons show the ACTUAL difference, not %. ▲ green = a good change, ▼ red = a bad one —
+  // sales, orders, guests, contribution going up is good; discount, ad spend, commission going up is bad (inv).
+  const fd=(d,a,b)=>{const m=Math.abs(d),dec=(Math.max(Math.abs(a||0),Math.abs(b||0))<1000&&m<100&&(Math.round(a||0)!==(a||0)||Math.round(b||0)!==(b||0)))?1:0;return(d>0?"+":"−")+m.toLocaleString("en-US",{minimumFractionDigits:dec,maximumFractionDigits:dec});};
+  const chg=(cur,base,inv)=>{if(cur==null||base==null||!isFinite(cur)||!isFinite(base)||!base)return'<span class="mut">—</span>';const d=cur-base;if(Math.abs(d)<0.05)return'<span class="mut">± 0</span>';const good=(d>0)!==!!inv,pc=d/Math.abs(base)*100;return`<span class="${good?"up":"dn"}">${d>0?"▲":"▼"} ${fd(d,cur,base)}</span><span class="pc"> (${pc>0?"+":"−"}${Math.abs(pc)>=10?Math.abs(pc).toFixed(0):Math.abs(pc).toFixed(1)}%)</span>`;}; // v607: + small grey % (Nikhil)
   const lg=(nm,s)=>{const src=(typeof LOGOS!=="undefined"&&LOGOS[nm])||(typeof LOGO_FALLBACK!=="undefined"&&LOGO_FALLBACK[nm])||"";return src?`<img class="bl" style="width:${s||16}px;height:${s||16}px" src="${src}">`:"";};
   const CHC={Delivery:"var(--del)","Dine-In":"var(--din)",Takeaway:"var(--ta)",Catering:"#16A34A"};
   const LOGO=(typeof LOGOS!=="undefined"&&LOGOS["Oregano"])||"";
   const vsLbl=`vs ${fmtDisp(SD)} · week ${fmtShort(dr.thisWeek.start)}–${fmtShort(dr.thisWeek.end)} · all sales excl. VAT`;
   const head=(t,s)=>`<div class="hd">${LOGO?`<img src="${LOGO}">`:""}<div><div class="t">${t}</div><div class="s">${s}</div></div><div class="d"><b>${E(fmtDisp(Y))}</b><span>${E(vsLbl)}</span></div></div>`;
-  const TOT=6,foot=p=>`<div class="ft"><span>Oregano Group — Daily Digest · Confidential — internal use only · generated ${E(fmtDisp(dk(new Date())))}</span><span>Page ${p} of ${TOT}</span></div>`;
+  const foot=()=>`<div class="ft"><span>Oregano Group — Daily Digest · Confidential — internal use only · generated ${E(fmtDisp(dk(new Date())))}</span><span>Page %%PG%% of %%TOT%%</span></div>`; // v607: numbered at the end (pages differ by edition)
 
   // ---------- delivery (excl. VAT) ----------
   const D=dgaWithDeliveryExcl(()=>{
     const P=(s,e,b,a)=>digestPeriodTotals(s,e,b,a);
     const o={y:P(Y,Y),ys:P(SD,SD),tw:P(dr.thisWeek.start,dr.thisWeek.end),lw:P(dr.lastWeek.start,dr.lastWeek.end),fw:P(dr.fourWeeksBack.start,dr.fourWeeksBack.end),ly:P(dr.lastYear.start,dr.lastYear.end),brands:{},grid:{},moves:[],hl:{}};
     BR.forEach(b=>{o.brands[b.n]={y:P(Y,Y,b.n),ys:P(SD,SD,b.n),tw:P(dr.thisWeek.start,dr.thisWeek.end,b.n),lw:P(dr.lastWeek.start,dr.lastWeek.end,b.n),fw:P(dr.fourWeeksBack.start,dr.fourWeeksBack.end,b.n),ly:P(dr.lastYear.start,dr.lastYear.end,b.n)};
-      o.grid[b.n]=AGGS.map(a=>pctOf(P(dr.thisWeek.start,dr.thisWeek.end,b.n,a).contribution,P(dr.lastWeek.start,dr.lastWeek.end,b.n,a).contribution));
+      o.grid[b.n]=AGGS.map(a=>{const c=P(dr.thisWeek.start,dr.thisWeek.end,b.n,a).contribution,l=P(dr.lastWeek.start,dr.lastWeek.end,b.n,a).contribution;return(c||l)?{d:c-l,b:l}:null;});
       const tw=digestOutletTotals(b.n,dr.thisWeek.start,dr.thisWeek.end),lw=digestOutletTotals(b.n,dr.lastWeek.start,dr.lastWeek.end),mv=[];
-      new Set([...Object.keys(tw),...Object.keys(lw)]).forEach(x=>{const c=(tw[x]&&tw[x].sales)||0,bs=(lw[x]&&lw[x].sales)||0;if(bs<=0||outletIsRetired(b.n,x))return;const p=pctOf(c,bs);if(p==null)return;const m={brand:b.n,outlet:x,cur:c,pct:p};mv.push(m);o.moves.push(m);});
-      mv.sort((a,z)=>z.pct-a.pct);if(mv.length)o.hl[b.n]={g:mv[0],d:mv[mv.length-1]};});
+      new Set([...Object.keys(tw),...Object.keys(lw)]).forEach(x=>{const c=(tw[x]&&tw[x].sales)||0,bs=(lw[x]&&lw[x].sales)||0;if(bs<=0||outletIsRetired(b.n,x))return;const p=pctOf(c,bs);if(p==null)return;const m={brand:b.n,outlet:x,cur:c,pct:p,diff:c-bs};mv.push(m);o.moves.push(m);});
+      mv.sort((a,z)=>z.diff-a.diff);if(mv.length)o.hl[b.n]={g:mv[0],d:mv[mv.length-1]};});
     o.spot=digestCampaignSpotlight();o.ads=digestAdSnapshot();o.aggs=AGGS.slice();
     return o;});
   // ---------- channels / outlets (chAggregate, excl. VAT) ----------
@@ -27403,23 +27412,38 @@ function dgaBuild(){
   if(D.ads){D.ads.critical.forEach(r=>acts.push(["BUDGET","#B7791F",`${r.brand} · ${r.branch||""} · ${r.aggregator}`,`nearly out of ad budget${r.daysUntilExhausted!=null?` (~${r.daysUntilExhausted}d left)`:""}. Top up or let it lapse.`]));
     D.ads.underspending.forEach(r=>acts.push(["BID","#B7791F",`${r.brand} · ${r.branch||""} · ${r.aggregator}`,"under 15% of budget used past the halfway mark. Check bid/cap."]));}
   try{if(typeof kmAlerts==="function")kmAlerts().forEach(a=>acts.push(["MIN. COMM.","#C0392B",a.where,a.msg]));}catch(e){} // v591 Keeta minimum commission
-  D.moves.sort((a,z)=>Math.abs(z.pct)-Math.abs(a.pct));const watch=D.moves.slice(0,5);
-  watch.filter(m=>m.pct<0).slice(0,2).forEach(m=>acts.push(["CHECK","#4E7FD8",`${m.brand} · ${m.outlet}`,`sales down ${Math.abs(m.pct).toFixed(0)}% vs last week. Worth investigating.`]));
+  D.moves.sort((a,z)=>Math.abs(z.diff)-Math.abs(a.diff));const watch=D.moves.slice(0,5);
+  watch.filter(m=>m.diff<0).slice(0,2).forEach(m=>acts.push(["CHECK","#4E7FD8",`${m.brand} · ${m.outlet}`,`sales down AED ${n0(-m.diff)} vs last week. Worth investigating.`]));
   // outlets below their usual (POS flags)
   const fl=((typeof posSyncState!=="undefined"&&posSyncState.status&&posSyncState.status.flags)||[]).filter(x=>x.status==="open"&&x.date===Y);
   fl.forEach(f=>acts.push(["POS","#C0392B",f.loc,`POS sales under half the usual for a ${new Date(Y+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long"})} — check the till synced.`]));
   const topActs=[...acts.filter(a=>a[0]!=="KEEP")].slice(0,4);
 
-  // ---------- what moved (auto) ----------
-  const mv=[];
-  const bm=BR.map(b=>({b:b.n,p:pctOf(D.brands[b.n].y.sales,D.brands[b.n].ys.sales),y:D.brands[b.n].y})).filter(x=>x.p!=null&&x.y.sales>1000).sort((a,z)=>Math.abs(z.p)-Math.abs(a.p));
-  if(bm[0])mv.push(`<b>${E(bm[0].b)} delivery ${bm[0].p>=0?"▲":"▼"}${Math.abs(bm[0].p).toFixed(0)}%</b> vs last ${new Date(SD+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long"})} — ${aed(bm[0].y.sales)}, ${n0(bm[0].y.orders)} orders.`);
-  const om=Object.keys(Cy.by).map(o=>({o,t:Cy.sum(Cy.by[o]),p:Cs.by[o]?pctOf(Cy.sum(Cy.by[o]),Cs.sum(Cs.by[o])):null})).filter(x=>x.p!=null&&x.t>500);
-  const up=om.slice().sort((a,z)=>z.p-a.p).slice(0,3),dn=om.slice().sort((a,z)=>a.p-z.p).filter(x=>x.p<0).slice(0,2);
-  if(up.length)mv.push(`<b>${up.map(x=>`${E(x.o)} ▲${x.p.toFixed(0)}%`).join(", ")}</b> — strongest outlets, all channels.`);
-  if(dn.length)mv.push(`<b>${dn.map(x=>`${E(x.o)} ▼${Math.abs(x.p).toFixed(0)}%`).join(", ")}</b> — weakest outlets vs the same day last week.`);
-  const dp=pctOf(D.y.disc,D.ys.disc);if(dp!=null)mv.push(`<b>Delivery discount burn ${dp>=0?"▲":"▼"}${Math.abs(dp).toFixed(0)}%</b> to ${D.y.sales?(D.y.disc/D.y.sales*100).toFixed(1):0}% of delivery sales.`);
-  if(spg(di))mv.push(`<b>Dine-in:</b> ${n0(di.guests)} guests (${chg(di.guests,dis.guests,false,true)}), AED ${spg(di).toFixed(1)} per guest (${chg(spg(di),spg(dis),false,true)}).`);
+  // ---------- what moved (auto) — v607: actual numbers, delivery + dine-in + takeaway + outlets ----------
+  const dow=new Date(SD+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long"}),ar=(d,inv)=>{const g=(d>0)!==!!inv;return`<span class="${g?"up":"dn"}">${d>0?"▲":"▼"}</span>`;}; // v607: ▲/▼ = direction, green/red = good/bad (Nikhil)
+  const sg=(d,dec,base)=>(d>=0?"+":"−")+Math.abs(d).toLocaleString("en-US",{minimumFractionDigits:dec||0,maximumFractionDigits:dec||0})+(base?` <span class="pc">(${d>=0?"+":"−"}${Math.abs(d/base*100).toFixed(0)}%)</span>`:"");
+  const mvD=[],mvI=[],mvO=[];
+  // group & delivery
+  mvD.push(`${ar(gY-gS)} <b>Group sales AED ${n0(gY)}</b> (${sg(gY-gS,0,gS)} vs last ${dow}) — delivery ${sg(de.sales-des.sales)}, dine-in ${sg(di.sales-dis.sales)}, takeaway ${sg(ta.sales-tas.sales)}.`);
+  const bm=BR.map(b=>({b:b.n,y:D.brands[b.n].y,s:D.brands[b.n].ys})).filter(x=>x.y.sales>500||x.s.sales>500).map(x=>Object.assign(x,{d:x.y.sales-x.s.sales})).sort((a,z)=>Math.abs(z.d)-Math.abs(a.d));
+  bm.slice(0,2).forEach(x=>mvD.push(`${ar(x.d)} <b>${E(x.b)} delivery ${sg(x.d)}</b>${x.s.sales?` <span class="pc">(${x.d>=0?"+":"−"}${Math.abs(x.d/x.s.sales*100).toFixed(0)}%)</span>`:""} to AED ${n0(x.y.sales)} · ${n0(x.y.orders)} orders (${sg(x.y.orders-x.s.orders)}).`));
+  // v607 (Nikhil): discount going UP is bad, down is good — said in words, not just by the arrow; plus net contribution (up = good)
+  const pctS=(v,base)=>base?(v/base*100).toFixed(1)+"%":"0%";
+  if(D.y.disc||D.ys.disc){const d=D.y.disc-D.ys.disc;mvD.push(`${ar(d,true)} <b>Delivery discount ${d>0?"up":"down"} AED ${n0(Math.abs(d))}</b>${D.ys.disc?` <span class="pc">(${d>=0?"+":"−"}${Math.abs(d/D.ys.disc*100).toFixed(0)}%)</span>`:""} to AED ${n0(D.y.disc)} — ${pctS(D.y.disc,D.y.sales)} of delivery sales (was ${pctS(D.ys.disc,D.ys.sales)}).`);}
+  if(D.y.contribution||D.ys.contribution){const d=D.y.contribution-D.ys.contribution;mvD.push(`${ar(d)} <b>Delivery contribution ${d>=0?"up":"down"} AED ${n0(Math.abs(d))}</b>${D.ys.contribution?` <span class="pc">(${d>=0?"+":"−"}${Math.abs(d/D.ys.contribution*100).toFixed(0)}%)</span>`:""} to AED ${n0(D.y.contribution)} — ${pctS(D.y.contribution,D.y.sales)} of delivery sales (was ${pctS(D.ys.contribution,D.ys.sales)}).`);}
+  // dine-in & takeaway
+  if(di.sales||dis.sales){mvI.push(`${ar(di.sales-dis.sales)} <b>Dine-in AED ${n0(di.sales)}</b> (${sg(di.sales-dis.sales,0,dis.sales)}) — ${n0(di.guests)} guests (${sg(di.guests-dis.guests)}), AED ${spg(di).toFixed(1)} per guest (${sg(spg(di)-spg(dis),1)}).`);
+    const dOut=Object.keys(Cy.by).map(o=>({o,c:Cy.by[o]["Dine-In"].sales,b:Cs.by[o]?Cs.by[o]["Dine-In"].sales:0,g:Cy.by[o]["Dine-In"].guests,gb:Cs.by[o]?Cs.by[o]["Dine-In"].guests:0})).filter(x=>x.c||x.b).map(x=>Object.assign(x,{d:x.c-x.b})).sort((a,z)=>z.d-a.d);
+    if(dOut.length&&dOut[0].d>0)mvI.push(`${ar(1)} <b>Best dine-in: ${E(dOut[0].o)}</b> AED ${n0(dOut[0].c)} (${sg(dOut[0].d)}), ${n0(dOut[0].g)} guests (${sg(dOut[0].g-dOut[0].gb)}).`);
+    const w=dOut[dOut.length-1];if(w&&w.d<0)mvI.push(`${ar(-1)} <b>Weakest dine-in: ${E(w.o)}</b> AED ${n0(w.c)} (${sg(w.d)}), ${n0(w.g)} guests (${sg(w.g-w.gb)}).`);}
+  if(ta.sales||tas.sales){mvI.push(`${ar(ta.sales-tas.sales)} <b>Takeaway AED ${n0(ta.sales)}</b> (${sg(ta.sales-tas.sales,0,tas.sales)}) — ${n0(ta.orders)} orders (${sg(ta.orders-tas.orders)})${topTA&&Cy.by[topTA].Takeaway.sales>0?`; busiest ${E(topTA)} AED ${n0(Cy.by[topTA].Takeaway.sales)}`:""}.`);}
+  // outlets, all channels
+  const om=Object.keys(Cy.by).map(o=>({o,t:Cy.sum(Cy.by[o]),b:Cs.by[o]?Cs.sum(Cs.by[o]):0})).filter(x=>x.b>0&&x.t>300).map(x=>Object.assign(x,{d:x.t-x.b}));
+  const up=om.slice().sort((a,z)=>z.d-a.d).filter(x=>x.d>0).slice(0,3),dn=om.slice().sort((a,z)=>a.d-z.d).filter(x=>x.d<0).slice(0,3);
+  if(up.length)mvO.push(`${ar(1)} <b>Up most:</b> ${up.map(x=>`${E(x.o)} ${sg(x.d)}`).join(" · ")} <span class="mut">(all channels)</span>`);
+  if(dn.length)mvO.push(`${ar(-1)} <b>Down most:</b> ${dn.map(x=>`${E(x.o)} ${sg(x.d)}`).join(" · ")}`);
+  const mv=[...mvD,...mvI,...mvO];
+  const mvBox=(full)=>`<div class="box"><h3>📈 What moved yesterday <span class="chip">vs ${E(dow)} ${E(fmtShort(SD))} · AED excl. VAT</span></h3>${full?`<div class="mv3"><div><div class="mvh" style="color:var(--del)">Group &amp; delivery</div><ul class="act">${mvD.map(t=>`<li>${t}</li>`).join("")}</ul></div><div><div class="mvh" style="color:var(--din)">Dine-in &amp; takeaway</div><ul class="act">${mvI.map(t=>`<li>${t}</li>`).join("")||'<li class="mut">No dine-in or takeaway data for this day yet.</li>'}</ul><div class="mvh" style="color:var(--gold);margin-top:6px">Outlets</div><ul class="act">${mvO.map(t=>`<li>${t}</li>`).join("")}</ul></div></div>`:`<ul class="act">${mv.slice(0,7).map(t=>`<li>${t}</li>`).join("")}</ul>`}</div>`;
 
   // ================= PAGE 1 — SUMMARY =================
   const sh=x=>gY>0?x/gY*100:0;
@@ -27446,8 +27470,8 @@ function dgaBuild(){
    <h2>This week so far — by channel</h2><div class="sub">${E(fmtShort(dr.thisWeek.start))}–${E(fmtShort(dr.thisWeek.end))} vs last week (${E(fmtShort(dr.lastWeek.start))}–${E(fmtShort(dr.lastWeek.end))}), 4 weeks ago (${E(fmtShort(dr.fourWeeksBack.start))}–${E(fmtShort(dr.fourWeeksBack.end))}) and the same week last year</div>
    <table><tr><th>Channel</th><th class="r">This week</th><th class="r">vs last week</th><th class="r">vs 4 weeks ago</th><th class="r">vs last year</th><th class="r">Share</th></tr>${wkRows}</table>
    ${CH.every(lyHas)?"":'<div class="note">* No POS dine-in/takeaway data for last year, so the group comparison is left out rather than overstating growth.</div>'}
-   <div class="two" style="margin-top:12px"><div class="box"><h3>⚡ Needs a decision today</h3>${topActs.length?`<ol class="act">${topActs.map(a=>`<li><span class="pill" style="background:${a[1]}">${a[0]}</span><b>${E(a[2])}</b> — ${E(a[3])}</li>`).join("")}</ol>`:'<div class="mut">Nothing urgent today.</div>'}${acts.length>topActs.length?`<div class="note">Full list on page 6.</div>`:""}</div>
-   <div class="box"><h3>📈 What moved yesterday</h3><ol class="act">${mv.slice(0,4).map(t=>`<li>${t}</li>`).join("")}</ol></div></div>${foot(1)}</div>`;
+   <div style="margin-top:12px">${mvBox(true)}</div>
+   ${BOARD?"":`<div class="box" style="margin-top:10px"><h3>⚡ Needs a decision today</h3>${topActs.length?`<div class="dec">${topActs.map(a=>`<div><span class="pill" style="background:${a[1]}">${a[0]}</span><div><b>${E(a[2])}</b> — ${E(a[3])}</div></div>`).join("")}</div>`:'<div class="mut">Nothing urgent today.</div>'}${acts.length>topActs.length?`<div class="note">Full list on the last page.</div>`:""}</div>`}${foot(1)}</div>`;
 
   // ================= PAGE 2 — OUTLETS =================
   const outs=Object.keys(Cy.by).filter(o=>Cy.sum(Cy.by[o])>0||(Cs.by[o]&&Cs.sum(Cs.by[o])>0)).sort((a,z)=>Cy.sum(Cy.by[z])-Cy.sum(Cy.by[a]));
@@ -27457,8 +27481,8 @@ function dgaBuild(){
     return`<tr><td class="mut">${i+1}</td><td><b>${E(o)}</b>${[...flagged].some(f=>f.includes(o.toLowerCase().slice(0,4)))?" ⚠":""}</td><td style="width:130px"><div class="sb" style="width:${(t/mx*100).toFixed(1)}%"><i style="width:${w(c.Delivery.sales).toFixed(1)}%;background:var(--del)"></i><i style="width:${w(c["Dine-In"].sales).toFixed(1)}%;background:var(--din)"></i><i style="width:${w(c.Takeaway.sales).toFixed(1)}%;background:var(--ta)"></i><i style="width:${w(c.Catering.sales).toFixed(1)}%;background:#16A34A"></i></div></td>
      <td class="r">${n0(c.Delivery.sales)}</td><td class="r">${c["Dine-In"].sales?n0(c["Dine-In"].sales):'<span class="mut">–</span>'}</td><td class="r">${c.Takeaway.sales?n0(c.Takeaway.sales):'<span class="mut">–</span>'}</td>${HASC?`<td class="r">${c.Catering.sales?n0(c.Catering.sales):'<span class="mut">–</span>'}</td>`:""}<td class="r"><b>${n0(t)}</b></td><td class="r">${pv?chg(t,pv):'<span class="mut">—</span>'}</td></tr>`;}).join("")
     +`<tr class="tot"><td></td><td>Group</td><td></td><td class="r">${n0(de.sales)}</td><td class="r">${n0(di.sales)}</td><td class="r">${n0(ta.sales)}</td>${HASC?`<td class="r">${n0(Cy.tot.Catering.sales)}</td>`:""}<td class="r">${n0(gY)}</td><td class="r">${chg(gY,gS)}</td></tr>`;
-  const wRows=watch.map(m=>`<tr><td>${lg(m.brand,15)}${E(m.brand)} · ${E(m.outlet)}</td><td class="r">${aed(m.cur)}</td><td class="r">${m.pct>=0?`<span class="up">▲${m.pct.toFixed(0)}%</span>`:`<span class="dn">▼${Math.abs(m.pct).toFixed(0)}%</span>`}</td></tr>`).join("");
-  const hRows=BR.filter(b=>D.hl[b.n]).map(b=>{const m=D.hl[b.n];return`<tr><td>${lg(b.n,16)}<b>${E(b.n)}</b></td><td class="r"><span class="up">▲ ${E(m.g.outlet)}</span><br><span class="mut">${aed(m.g.cur)} (${m.g.pct>=0?"+":""}${m.g.pct.toFixed(0)}%)</span></td><td class="r"><span class="${m.d.pct<0?"dn":"up"}">${m.d.pct<0?"▼":"▲"} ${E(m.d.outlet)}</span><br><span class="mut">${aed(m.d.cur)} (${m.d.pct>=0?"+":""}${m.d.pct.toFixed(0)}%)</span></td></tr>`;}).join("");
+  const wRows=watch.map(m=>`<tr><td>${lg(m.brand,15)}${E(m.brand)} · ${E(m.outlet)}</td><td class="r">${aed(m.cur)}</td><td class="r">${m.diff>=0?`<span class="up">▲ +${n0(m.diff)}</span>`:`<span class="dn">▼ −${n0(-m.diff)}</span>`}</td></tr>`).join("");
+  const hRows=BR.filter(b=>D.hl[b.n]).map(b=>{const m=D.hl[b.n];return`<tr><td>${lg(b.n,16)}<b>${E(b.n)}</b></td><td class="r"><span class="up">▲ ${E(m.g.outlet)}</span><br><span class="mut">${aed(m.g.cur)} (${m.g.diff>=0?"+":"−"}${n0(Math.abs(m.g.diff))})</span></td><td class="r"><span class="${m.d.diff<0?"dn":"up"}">${m.d.diff<0?"▼":"▲"} ${E(m.d.outlet)}</span><br><span class="mut">${aed(m.d.cur)} (${m.d.diff>=0?"+":"−"}${n0(Math.abs(m.d.diff))})</span></td></tr>`;}).join("");
   const p2=`<div class="page">${head("OUTLETS · ALL CHANNELS","Every site ranked by total sales yesterday")}
    <div class="sub" style="margin-top:9px"><b style="color:var(--del)">■ Delivery</b> &nbsp;<b style="color:var(--din)">■ Dine-in</b> &nbsp;<b style="color:var(--ta)">■ Takeaway</b>${HASC?' &nbsp;<b style="color:#16A34A">■ Catering</b>':""} · AED excl. VAT · change vs ${E(fmtDisp(SD))}${fl.length?" · ⚠ = POS sales under half the usual":""}</div>
    <table><tr><th>#</th><th>Outlet</th><th>Channel mix</th><th class="r">Delivery</th><th class="r">Dine-in</th><th class="r">Takeaway</th>${HASC?'<th class="r">Catering</th>':""}<th class="r">Total</th><th class="r">vs LW</th></tr>${oRows}</table>
@@ -27466,7 +27490,7 @@ function dgaBuild(){
    <div class="box"><h3>📍 Top gainer &amp; decliner by brand</h3><table><tr><th>Brand</th><th class="r">Gainer (week)</th><th class="r">Decliner (week)</th></tr>${hRows}</table></div></div>${foot(2)}</div>`;
 
   // ================= PAGE 3 — DELIVERY =================
-  const kp=(l,v,sub,c)=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${sub?`<span class="x">${sub} · </span>`:""}${c}</div>`;
+  const kp=(l,v,sub,c,was)=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${was!=null?`<div class="x">was ${was} on ${E(fmtShort(SD))}</div>`:""}${sub?`<span class="x">${sub} · </span>`:""}${c}</div>`;
   const pcs=v=>D.y.sales?(v/D.y.sales*100).toFixed(1)+"% of sales":"";
   const wk=(l,key,fmt,inv)=>`<tr><td><b>${l}</b></td><td class="r">${fmt(D.tw[key])}</td><td class="r">${chg(D.tw[key],D.lw[key],inv)}</td><td class="r">${chg(D.tw[key],D.fw[key],inv)}</td><td class="r">${chg(D.tw[key],D.ly[key],inv)}</td></tr>`;
   const bRows=BR.map(b=>{const x=D.brands[b.n];return`<tr><td>${lg(b.n,18)}<b>${E(b.n)}</b></td>
@@ -27475,27 +27499,28 @@ function dgaBuild(){
     <td class="r">${n0(x.tw.disc)}<br>${chg(x.tw.disc,x.lw.disc,true)}</td><td class="r">${n0(x.tw.adCost)}<br>${chg(x.tw.adCost,x.lw.adCost,true)}</td><td class="r"><b>${n0(x.tw.contribution)}</b><br>${chg(x.tw.contribution,x.lw.contribution)}</td></tr>`;}).join("");
   const p3=`<div class="page">${head("DELIVERY","Aggregator orders · brands · platforms")}
    <h2>Yesterday — delivery</h2><div class="sub">vs ${E(fmtDisp(SD))} (same weekday last week)</div>
-   <div class="kpis">${kp("Net sales",aed(D.y.sales),"",chg(D.y.sales,D.ys.sales))}${kp("Orders",n0(D.y.orders),"",chg(D.y.orders,D.ys.orders))}${kp("AOV","AED "+D.y.aov.toFixed(1),"",chg(D.y.aov,D.ys.aov))}
-    ${kp("Discount burn",aed(D.y.disc),pcs(D.y.disc),chg(D.y.disc,D.ys.disc,true))}${kp("Ad spend",aed(D.y.adCost),pcs(D.y.adCost),chg(D.y.adCost,D.ys.adCost,true))}${kp("Net contribution",aed(D.y.contribution),pcs(D.y.contribution),chg(D.y.contribution,D.ys.contribution))}</div>
+   <div class="kpis">${kp("Net sales",aed(D.y.sales),"",chg(D.y.sales,D.ys.sales),aed(D.ys.sales))}${kp("Orders",n0(D.y.orders),"",chg(D.y.orders,D.ys.orders),n0(D.ys.orders))}${kp("AOV","AED "+D.y.aov.toFixed(1),"",chg(D.y.aov,D.ys.aov),"AED "+(D.ys.aov||0).toFixed(1))}
+    ${kp("Discount burn",aed(D.y.disc),pcs(D.y.disc),chg(D.y.disc,D.ys.disc,true),aed(D.ys.disc))}${kp("Ad spend",aed(D.y.adCost),pcs(D.y.adCost),chg(D.y.adCost,D.ys.adCost,true),aed(D.ys.adCost))}${kp("Net contribution",aed(D.y.contribution),pcs(D.y.contribution),chg(D.y.contribution,D.ys.contribution),aed(D.ys.contribution))}</div>
    <h2>This week — delivery</h2><div class="sub">${E(fmtShort(dr.thisWeek.start))}–${E(fmtShort(dr.thisWeek.end))} vs last week · 4 weeks ago · last year</div>
    <table><tr><th>Metric</th><th class="r">This week</th><th class="r">vs last week</th><th class="r">vs 4 weeks ago</th><th class="r">vs last year</th></tr>
    ${wk("Orders","orders",n0)}${wk("Net sales","sales",aed)}${wk("AOV","aov",v=>"AED "+(v||0).toFixed(1))}${wk("Discount burn","disc",aed,true)}${wk("Ad spend","adCost",aed,true)}${wk("Net contribution","contribution",aed)}</table>
    <h2>Brands — yesterday and this week</h2><div class="sub">Yesterday on the left, the week on the right · AED excl. VAT</div>
-   <table><tr><th rowspan="2">Brand</th><th colspan="3" class="c" style="border-bottom:1px solid var(--line)">Yesterday vs ${E(fmtShort(SD))}</th><th colspan="6" class="c" style="border-bottom:1px solid var(--line);border-left:2px solid var(--line)">Week vs last week</th></tr>
+   <table class="fx bt"><colgroup><col style="width:12%"><col style="width:9.5%"><col style="width:8%"><col style="width:9.5%"><col style="width:10.5%"><col style="width:8.5%"><col style="width:8%"><col style="width:10%"><col style="width:9%"><col style="width:15%"></colgroup><tr><th rowspan="2">Brand</th><th colspan="3" class="c" style="border-bottom:1px solid var(--line)">Yesterday vs ${E(fmtShort(SD))}</th><th colspan="6" class="c" style="border-bottom:1px solid var(--line);border-left:2px solid var(--line)">Week vs last week</th></tr>
    <tr><th class="r">Sales</th><th class="r">Orders</th><th class="r">Contrib.</th><th class="r" style="border-left:2px solid var(--line)">Sales</th><th class="r">Orders</th><th class="r">AOV</th><th class="r">Discount</th><th class="r">Ad spend</th><th class="r">Contribution</th></tr>${bRows}</table>${foot(3)}</div>`;
 
   // ================= PAGE 4 — PLATFORMS, CAMPAIGNS, ADS =================
-  const cell=p=>{if(p==null)return'<span class="mut">—</span>';const g=p>=0;return`<span class="cell" style="background:${g?"#DDF3E5":"#FBE0DD"};color:${g?"#1E7A44":"#B03024"}">${g?"▲":"▼"}${Math.abs(p)>=100?Math.abs(p).toFixed(0):Math.abs(p).toFixed(1)}%</span>`;};
-  const gRows=BR.map(b=>`<tr><td>${lg(b.n,18)}<b>${E(b.n)}</b></td>${D.grid[b.n].map(p=>`<td class="c">${cell(p)}</td>`).join("")}</tr>`).join("");
+  const cell=x=>{if(x==null)return'<span class="mut">—</span>';const d=x.d;if(Math.abs(d)<0.5)return'<span class="mut">± 0</span>';const g=d>0;return`<span class="cell" style="background:${g?"#DDF3E5":"#FBE0DD"};color:${g?"#1E7A44":"#B03024"}">${g?"▲ +":"▼ −"}${n0(Math.abs(d))}</span>${x.b?`<br><span class="pc">${d>0?"+":"−"}${Math.abs(d/Math.abs(x.b)*100).toFixed(0)}%</span>`:""}`;};
+  const gIdx=D.aggs.map((a,i)=>i).filter(i=>!SMALLP.has(D.aggs[i]));
+  const gRows=BR.map(b=>`<tr><td>${lg(b.n,18)}<b>${E(b.n)}</b></td>${gIdx.map(i=>`<td class="c">${cell(D.grid[b.n][i])}</td>`).join("")}</tr>`).join("");
   const camp=(x,good)=>{if(!x)return"";const c=x.a?x.c:null;if(!c)return"";const v=x.a.incrContribPerDay;return`<div class="box" style="background:${good?"#F0FAF4":"#FDF2F1"};border-color:${good?"#BFE6CD":"#F2C7C2"}"><h3 style="color:${good?"var(--up)":"var(--dn)"}">${good?"Performing well — keep running":"Underperforming — consider pausing"}</h3>
     <div style="font-size:12px;font-weight:800">${lg(c.brand,16)}${lg(c.aggregator,16)}${E(c.brand)} · ${E(c.aggregator)} — "${E(c.name||c.comments||"Campaign")}"</div><div class="mut" style="margin:3px 0">${E(fmtShort(c.startDate))} – ${E(fmtShort(c.endDate))}</div>Incremental contribution/day <b class="${v>=0?"up":"dn"}">${v>=0?"+":""}${aed(v)}</b></div>`;};
-  const adRows=D.ads?Object.entries(D.ads.byAgg).map(([a,v])=>{const pc=v.alloc>0?v.spent/v.alloc*100:0;return`<tr><td>${lg(a,16)}<b>${E(a)}</b></td><td class="r">${aed(v.spent)}</td><td class="r">${aed(v.alloc)}</td><td style="width:140px"><div class="sb"><i style="width:${Math.min(100,pc).toFixed(0)}%;background:${pc>85?"#C0392B":"var(--gold)"}"></i></div></td><td class="r"><b>${pc.toFixed(0)}%</b></td></tr>`;}).join(""):"";
+  const adRows=D.ads?Object.entries(D.ads.byAgg).filter(([a])=>!SMALLP.has(a)).map(([a,v])=>{const pc=v.alloc>0?v.spent/v.alloc*100:0;return`<tr><td>${lg(a,16)}<b>${E(a)}</b></td><td class="r">${aed(v.spent)}</td><td class="r">${aed(v.alloc)}</td><td style="width:140px"><div class="sb"><i style="width:${Math.min(100,pc).toFixed(0)}%;background:${pc>85?"#C0392B":"var(--gold)"}"></i></div></td><td class="r"><b>${pc.toFixed(0)}%</b></td></tr>`;}).join(""):"";
   const adNotes=D.ads?[...D.ads.critical.map(r=>`${E(r.brand)} · ${E(r.branch||"")} · ${E(r.aggregator)} is nearly out of budget${r.daysUntilExhausted!=null?` (~${r.daysUntilExhausted}d left)`:""}.`),...D.ads.underspending.map(r=>`${E(r.brand)} · ${E(r.branch||"")} · ${E(r.aggregator)} has used under 15% of budget past halfway — bid or cap may be too low.`)]:[];
   const p4=`<div class="page">${head("DELIVERY · PLATFORMS &amp; CAMPAIGNS","Where the week's contribution moved")}
-   <h2>Platform × brand</h2><div class="sub">Contribution change, this week vs last week, every combination</div>
-   <table><tr><th>Brand</th>${D.aggs.map(a=>`<th class="c">${lg(a,16)}<br>${E(a)}</th>`).join("")}</tr>${gRows}</table>
+   <h2>Platform × brand</h2><div class="sub">Change in contribution (AED), this week vs last week, every combination</div>
+   <table><tr><th>Brand</th>${gIdx.map(i=>`<th class="c">${lg(D.aggs[i],16)}<br>${E(D.aggs[i])}</th>`).join("")}</tr>${gRows}</table>
    ${D.spot?`<h2>Campaign spotlight</h2><div class="sub">Best and worst incremental performers this week, currently running</div><div class="two">${camp(D.spot.best,true)}${camp(D.spot.worst,false)}</div>`:""}
-   ${D.ads?`<h2>Ad investment snapshot</h2><div class="sub">Spent vs allocated by platform, active budgets</div><table><tr><th>Platform</th><th class="r">Spent</th><th class="r">Allocated</th><th>Used</th><th class="r"></th></tr>${adRows}</table>${adNotes.length?`<ul style="margin:7px 0 0;padding-left:16px;font-size:10px;line-height:1.5">${adNotes.map(x=>`<li>${x}</li>`).join("")}</ul>`:""}`:""}${foot(4)}</div>`;
+   ${dgaAdTable({E,n0,lg,BOARD,SMALLP,D,chg,adNotes})}${foot(4)}</div>`;
 
   // ================= PAGE 5 — DINE-IN & TAKEAWAY =================
   const inst=Object.keys(Cy.by).filter(o=>Cy.by[o]["Dine-In"].sales>0||Cy.by[o].Takeaway.sales>0).sort((a,z)=>Cy.by[z]["Dine-In"].sales-Cy.by[a]["Dine-In"].sales||Cy.by[z].Takeaway.sales-Cy.by[a].Takeaway.sales);
@@ -27518,15 +27543,115 @@ function dgaBuild(){
   // ================= PAGE 6 — ACTIONS =================
   const p6=`<div class="page">${head("ACTIONS","Auto-generated from this week's numbers")}
    <h2>Action list</h2><div class="sub">Tick when done · the top four are on page 1</div>
-   ${acts.length?acts.map(a=>`<div class="ex"><span>☐</span><div><span class="pill" style="background:${a[1]}">${a[0]}</span><b>${E(a[2])}</b> — ${E(a[3])}</div><span class="mut">Owner: ______</span></div>`).join(""):'<div class="mut">No actions today.</div>'}
+   ${acts.length?acts.map(a=>`<div class="ex"><span>☐</span><span class="pill" style="background:${a[1]}">${a[0]}</span><div><b>${E(a[2])}</b> — ${E(a[3])}</div><span class="mut">Owner: ______</span></div>`).join(""):'<div class="mut">No actions today.</div>'}
    <h2>Data notes</h2><div class="note" style="font-size:9.5px">All sales excl. VAT. Delivery = aggregator orders from the brand tabs (discount burn, ad spend and contribution as on the dashboard)${Ctw.till>0.5?`, plus direct deliveries and other till-only bills on the delivery buttons (AED ${n0(Ctw.till)} this week); Catering = credit catering accounts on the delivery buttons — so group totals equal Finance's DSR; delivery KPIs on page 3 are platform orders only`:""}. Dine-in &amp; takeaway = Microsys POS (Dine-In &amp; Takeaway tab). Till discounts from the Dine-In Discounts tab, classified per the confirmed list (customer vs internal); internal discounts are excluded from discount depth. Last-year comparisons are delivery only — POS data starts in 2026.</div>${foot(6)}</div>`;
 
-  const filename=`OreganoGroup_DailyDigest_${Y}`;
-  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${E(filename)}</title><style>${DGA_CSS}</style></head><body>${p1}${p2}${p3}${p4}${p5}${p6}</body></html>`;
+  const pDO=dgaDeliveryByOutlet({Y,SD,E,n0,aed,kf,chg,lg,head,foot,fmtDisp,SMALLP});
+  const pK=dgaKpiPage({E,lg,head,foot,fd});
+  const filename=`OreganoGroup_DailyDigest_${Y}${BOARD?"":""}`;
+  const pages=BOARD?[p1,p2,p3,pDO,p4,p5,pK]:[p1,p2,p3,pDO,p4,p5,pK,p6];
+  let pn=0;const body=pages.join("").replace(/%%PG%%/g,()=>++pn).replace(/%%TOT%%/g,pages.length);
+  // v607: type is a size larger; a page whose content would run past its footer is scaled down just enough to fit
+  const FIT=`<script>(function(){document.querySelectorAll(".page").forEach(function(p){var kids=[].slice.call(p.children).filter(function(k){return!k.classList.contains("ft")});var lim=p.clientHeight-p.querySelector(".ft").offsetHeight-14;
+    function bottom(){var b=0;kids.forEach(function(k){var r=k.getBoundingClientRect(),t=p.getBoundingClientRect();b=Math.max(b,r.bottom-t.top);});return b;}
+    var z=1;while(bottom()>lim&&z>0.72){z-=0.03;kids.forEach(function(k){k.style.zoom=z;});}});})();<\/script>`;
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${E(filename)}</title><style>${DGA_CSS}${DGA_CSS2}</style></head><body>${body}${FIT}</body></html>`;
   return{html,filename};
 }
 (function(){const go=()=>{if(typeof digestBuildReportHTML!=="function"||typeof rdDigestSectionHTML==="undefined"&&false)return setTimeout(go,300);
-  if(!digestBuildReportHTML.__optA){digestBuildReportHTML=function(){return digestBuildOptionA();};digestBuildReportHTML.__optA=1;window.digestBuildReportHTML=digestBuildReportHTML;}};[0,1500,5000,15000].forEach(t=>setTimeout(go,t));})();
+  if(!digestBuildReportHTML.__optA){digestBuildReportHTML=function(){return digestBuildOptionA({board:window.__dgEdition==="board"});};digestBuildReportHTML.__optA=1;window.digestBuildReportHTML=digestBuildReportHTML;}};[0,1500,5000,15000].forEach(t=>setTimeout(go,t));})();
+
+// ═══ v607 — extra Digest pages + styles ═══
+const DGA_CSS2=`
+.mv3{display:grid;grid-template-columns:1fr 1fr;gap:16px}.mvh{font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;margin:2px 0 4px}
+ul.act{padding-left:0;list-style:none;margin:0}ul.act li{font-size:10.5px;margin:0 0 6px;line-height:1.4}
+.bc b{display:block;font-size:11px}.bc span{display:block;font-size:8.5px;color:var(--mut)}
+.k3{display:grid;grid-template-columns:1.15fr 1fr 1fr;gap:10px;align-items:start}
+.k3 table{font-size:9.5px}.k3 td,.k3 th{padding:3px 4px}.sec{margin-top:10px}
+.bw h4{margin:0 0 3px;font-size:9px;letter-spacing:1px;text-transform:uppercase}
+body{font-size:12px}table{font-size:11.5px}th{font-size:9px}td{padding:5px 6px}.sub{font-size:10px}.note{font-size:9px}ul.act li{font-size:11.5px}
+table.fx{table-layout:fixed}table.fx th.c,table.fx td.c{text-align:center}table.fx th.c{text-transform:none;letter-spacing:0;font-size:9.5px;line-height:1.25;word-break:break-word}
+table.fx .pc{display:block}table.bt{font-size:10.5px}table.bt th{font-size:8.5px}table.bt td{padding:5px 4px}table.bt td:first-child b{font-size:10.5px}table.fx td{overflow:hidden}.pt td.c b{display:block;font-size:12px}.pt .pc{display:block}.bc b{font-size:12px}.bc span{font-size:9px}
+.k3 table{font-size:10.5px}.tile .k{font-size:10px}.kpi .x{font-size:10px}.up,.dn{white-space:nowrap}.dec{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px}.dec>div{display:grid;grid-template-columns:62px 1fr;gap:6px;font-size:10.5px;line-height:1.35;align-items:start}.dec .pill,.ex .pill{display:block;text-align:center;margin:1px 0 0}
+.ex{grid-template-columns:18px 64px 1fr 92px!important;font-size:11px!important}.pc{color:#9AA1AE;font-size:.82em;font-weight:400;white-space:nowrap}.big .pc{color:#AEB5C2}
+.hero{grid-template-columns:minmax(0,1.05fr) minmax(0,2fr)}.ch{grid-template-columns:repeat(3,minmax(0,1fr))}.big .v{white-space:nowrap}
+.tile .k{white-space:normal;align-items:flex-start}.tile .k span:first-child{white-space:nowrap}.tile .k b{text-align:right}.tile .k b .pc{display:block}`;
+// Delivery by outlet — orders per brand at each location (Nikhil, v607)
+function dgaDeliveryByOutlet(H){const{Y,SD,E,n0,chg,lg,head,foot,fmtDisp,SMALLP}=H;
+  const kf=v=>Math.abs(v)>=1000?(v/1000).toFixed(1)+"K":n0(v);
+  const agg=d=>{const m={},pl={};for(const r of chDelivSrc()){if(r.channel==="instore"||r.branch==="(brand-level)"||r.date!==d)continue;const o=chOutletOfDelivery(r),sl=(r.sales||0)/1.05;
+    const x=(m[o]=m[o]||{orders:0,sales:0,br:{}});x.orders+=r.orders||0;x.sales+=sl;const b=(x.br[r.brand]=x.br[r.brand]||{orders:0,sales:0});b.orders+=r.orders||0;b.sales+=sl;
+    const q=((pl[r.brand]=pl[r.brand]||{})[r.aggregator]=pl[r.brand][r.aggregator]||{orders:0,sales:0});q.orders+=r.orders||0;q.sales+=sl;}return{m,pl};};
+  const A=agg(Y),B=agg(SD),brands=BR.map(b=>b.n).filter(b=>Object.values(A.m).some(x=>x.br[b])||Object.values(B.m).some(x=>x.br[b]));
+  const outs=Object.keys(A.m).concat(Object.keys(B.m).filter(o=>!A.m[o])).sort((a,z)=>((A.m[z]||{}).sales||0)-((A.m[a]||{}).sales||0));
+  const T={orders:0,sales:0,br:{}},TB={orders:0,sales:0};
+  const rows=outs.map(o=>{const x=A.m[o]||{orders:0,sales:0,br:{}},y=B.m[o]||{orders:0,sales:0,br:{}};T.orders+=x.orders;T.sales+=x.sales;TB.orders+=y.orders;TB.sales+=y.sales;
+    return`<tr><td><b>${E(o)}</b></td>${brands.map(b=>{const c=x.br[b];if(c){const t=(T.br[b]=T.br[b]||{orders:0,sales:0});t.orders+=c.orders;t.sales+=c.sales;}return`<td class="c bc">${c&&c.orders?`<b>${n0(c.orders)}</b><span>${kf(c.sales)}</span>`:'<span class="mut">–</span>'}</td>`;}).join("")}
+     <td class="r" style="border-left:2px solid var(--line)"><b>${n0(x.orders)}</b></td><td class="r">${chg(x.orders,y.orders)}</td><td class="r">${n0(x.sales)}</td><td class="r">${chg(x.sales,y.sales)}</td><td class="r">${x.orders?(x.sales/x.orders).toFixed(1):"–"}</td></tr>`;}).join("")
+    +`<tr class="tot"><td>Group</td>${brands.map(b=>`<td class="c">${n0((T.br[b]||{}).orders||0)}</td>`).join("")}<td class="r" style="border-left:2px solid var(--line)">${n0(T.orders)}</td><td class="r">${chg(T.orders,TB.orders)}</td><td class="r">${n0(T.sales)}</td><td class="r">${chg(T.sales,TB.sales)}</td><td class="r">${T.orders?(T.sales/T.orders).toFixed(1):"–"}</td></tr>`;
+  const PO=["Talabat","Deliveroo","Careem","Noon","Keeta","Instashop","Smiles"],plats=PO.filter(a=>!(SMALLP&&SMALLP.has(a))&&brands.some(b=>(A.pl[b]||{})[a]||(B.pl[b]||{})[a]));
+  const pRows=brands.map(b=>{const a=A.pl[b]||{},z=B.pl[b]||{};const tot=Object.values(a).reduce((s,v)=>s+v.orders,0),tz=Object.values(z).reduce((s,v)=>s+v.orders,0);
+    return`<tr><td>${lg(b,16)}<b>${E(b)}</b></td>${plats.map(p=>`<td class="c">${a[p]?`<b>${n0(a[p].orders)}</b>${chg(a[p].orders,(z[p]||{}).orders||0)}`:'<span class="mut">–</span>'}</td>`).join("")}<td class="c" style="border-left:2px solid var(--line)"><b>${n0(tot)}</b>${chg(tot,tz)}</td></tr>`;}).join("");
+  return`<div class="page">${head("DELIVERY · BY OUTLET","Orders per brand at every location")}
+   <h2>Delivery orders by outlet — yesterday</h2><div class="sub">Each brand cell: orders (bold) and net sales AED excl. VAT · changes vs ${E(fmtDisp(SD))} in actual numbers</div>
+   <table class="fx"><colgroup><col style="width:15%">${brands.map(()=>`<col style="width:${(43/brands.length).toFixed(2)}%">`).join("")}<col style="width:7%"><col style="width:9.5%"><col style="width:8.5%"><col style="width:11%"><col style="width:6%"></colgroup>
+   <tr><th>Outlet</th>${brands.map(b=>`<th class="c">${lg(b,16)}<br>${E(b)}</th>`).join("")}<th class="r" style="border-left:2px solid var(--line)">Orders</th><th class="r">vs LW</th><th class="r">Net sales</th><th class="r">vs LW</th><th class="r">AOV</th></tr>${rows}</table>
+   <h2>Orders by brand × platform — yesterday</h2><div class="sub">Orders and the change vs the same day last week</div>
+   <table class="fx pt"><colgroup><col style="width:18%">${plats.map(()=>`<col style="width:${(68/plats.length).toFixed(2)}%">`).join("")}<col style="width:14%"></colgroup><tr><th>Brand</th>${plats.map(p=>`<th class="c">${lg(p,16)}<br>${E(p)}</th>`).join("")}<th class="c" style="border-left:2px solid var(--line)">Total</th></tr>${pRows}</table>${foot()}</div>`;
+}
+// KPIs & ratings — best and worst 5 (ratings, prep time, driver wait) per brand × platform (Nikhil, v607)
+function dgaKpiPage(H){const{E,lg,head,foot}=H;
+  // v607 (Nikhil): current ratings and the last entered prep / driver-wait figures, each with the date it was last updated
+  const rows=(typeof kpiLoaded!=="undefined"&&kpiLoaded&&typeof buildKPIEvalRows==="function")?buildKPIEvalRows():[];
+  const fdt=d=>{const t=Date.parse(d);return isNaN(t)?String(d||""):new Date(t).toLocaleDateString("en-GB",{day:"numeric",month:"short"});};
+  const on=o=>String(o||"").replace(/^FYOOZHEN-DIP$/i,"DIP").replace(/^TSQR$/i,"Town Square");
+  const SECS=[{t:"rating",title:"Ratings",dec:2,inv:false,plats:["Talabat","Deliveroo","Google Maps"],note:"current rating · higher is better"},
+    {t:"prep_time",title:"Prep time",dec:1,inv:true,plats:["Talabat","Deliveroo","Careem"],note:"last entered · minutes · lower is better"},
+    {t:"rider_wait",alt:"rider_wait_pct",title:"Driver wait",dec:1,inv:true,plats:["Talabat","Deliveroo","Careem"],note:"last entered · lower is better"}];
+  const sec=S=>{let rs=rows.filter(r=>r.type===S.t);if(!rs.length&&S.alt)rs=rows.filter(r=>r.type===S.alt); // minutes and % never mixed
+    if(!rs.length)return`<div class="sec"><h2>${S.title}</h2><div class="mut">No ${S.title.toLowerCase()} figures in the KPI tracker yet.</div></div>`;
+    const plats=S.plats.filter(p=>rs.some(r=>r.aggregator===p)),u=(rs[0].unit||"").trim();
+    const cellOf=(b,p)=>{const x=rs.filter(r=>r.brand===b&&r.aggregator===p);if(!x.length)return'<span class="mut">–</span>';const v=x.reduce((a,r)=>a+r.latest,0)/x.length,last=x.map(r=>r.latestDate).sort().slice(-1)[0];
+      const bad=x.filter(r=>r.isBad).length;return`<b class="${bad>x.length/2?"dn":""}">${v.toFixed(S.dec)}</b><br><span class="pc">${fdt(last)}</span>`;};
+    const grid=BR.filter(b=>rs.some(r=>r.brand===b.n)).map(b=>`<tr><td>${lg(b.n,14)}<b>${E(b.n)}</b></td>${plats.map(p=>`<td class="r">${cellOf(b.n,p)}</td>`).join("")}</tr>`).join("");
+    const sorted=rs.slice().sort((a,z)=>S.inv?a.latest-z.latest:z.latest-a.latest);
+    const li=(r,good)=>`<tr><td>${lg(r.brand,12)}${E(r.brand)} · ${E(on(r.outlet))}<br><span class="mut">${E(r.aggregator)}</span></td><td class="r"><b class="${good?"up":"dn"}">${r.latest.toFixed(S.dec)}${u?" "+E(u):""}</b><br><span class="pc">updated ${fdt(r.latestDate)}</span></td></tr>`;
+    return`<div class="sec"><h2>${S.title}</h2><div class="sub">${S.note} · average of each outlet's figure${u?" ("+E(u)+")":""}, with the date it was last updated</div><div class="k3">
+      <div><table><tr><th>Brand</th>${plats.map(p=>`<th class="r">${E(p)}</th>`).join("")}</tr>${grid}</table></div>
+      <div class="bw"><h4 style="color:var(--up)">Best 5</h4><table>${sorted.slice(0,5).map(r=>li(r,true)).join("")}</table></div>
+      <div class="bw"><h4 style="color:var(--dn)">Worst 5</h4><table>${sorted.slice(-5).reverse().map(r=>li(r,false)).join("")}</table></div></div></div>`;};
+  return`<div class="page">${head("KPIs &amp; RATINGS","Ratings, kitchen prep time and driver wait — by brand and platform")}
+   ${rows.length?SECS.map(sec).join(""):'<div class="note" style="font-size:11px;margin-top:20px">The KPI tracker sheets weren\'t loaded when this Digest was made.</div>'}${foot()}</div>`;
+}
+
+// v607: "Export Daily Digest" asks which edition — Full (for Nikhil: decisions + action list) or Board (what the directors get by email)
+function dgaPickEdition(){return new Promise(res=>{const o=document.createElement("div");o.style.cssText="position:fixed;inset:0;background:rgba(5,10,20,.6);z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px";
+  const T=typeof DARK_THEME!=="undefined"?DARK_THEME:{card:"#1A2337",cardBorder:"#3A4875",textPrimary:"#F1F5F9",textSecondary:"#94A3B8",accentOrange:"#FF8A3D"};
+  const card=(k,t,d)=>`<button data-k="${k}" style="text-align:left;flex:1;min-width:200px;background:${T.bg||"#0F1729"};border:1px solid ${T.cardBorder};border-radius:12px;padding:14px;color:${T.textPrimary};cursor:pointer;font:inherit"><div style="font-weight:800;font-size:15px;margin-bottom:4px">${t}</div><div style="font-size:12.5px;color:${T.textSecondary};line-height:1.45">${d}</div></button>`;
+  o.innerHTML=`<div style="background:${T.card};border:1px solid ${T.cardBorder};border-radius:14px;padding:18px;max-width:560px;width:100%;color:${T.textPrimary}"><div style="font-size:16px;font-weight:800;margin-bottom:12px">📄 Which Daily Digest?</div><div style="display:flex;gap:10px;flex-wrap:wrap">${card("full","Full — for me","8 pages, with 'Needs a decision today' and the Action list.")}${card("board","Board — directors &amp; GM","7 pages: the numbers and what's going on. Same as the morning email.")}</div><div style="text-align:right;margin-top:12px"><button data-k="" style="background:none;border:1px solid ${T.cardBorder};border-radius:8px;padding:7px 14px;color:${T.textSecondary};cursor:pointer;font:inherit">Cancel</button></div></div>`;
+  o.addEventListener("click",e=>{const b=e.target.closest("button");if(!b&&e.target!==o)return;o.remove();res(b?b.dataset.k||null:null);});document.body.appendChild(o);});}
+function dgaHookExport(){if(typeof digestExportPDF!=="function"||window.__DG_AUTO)return window.__DG_AUTO?null:setTimeout(dgaHookExport,400);if(digestExportPDF.__ed)return;
+  const _d=digestExportPDF;digestExportPDF=async function(){const k=await dgaPickEdition();if(!k)return;window.__dgEdition=k;try{return await _d.apply(this,arguments);}finally{window.__dgEdition=null;}};digestExportPDF.__ed=1;window.digestExportPDF=digestExportPDF;}
+setTimeout(dgaHookExport,50); // after busy_ui's wrapper, so the "Building the PDF" panel only shows once an edition is picked
+
+// v608: Ad spend — the budgets running now, brand × platform (spent of allocated, % used, days left at the current pace),
+// plus the week's ad spend vs last week. Careem / Noon "combined per brand" budgets are one pool per brand × platform.
+// Always shown: when nothing is running the section says so instead of disappearing.
+function dgaAdTable(H){const{E,n0,lg,BOARD,SMALLP,D,chg,adNotes}=H;
+  const has=typeof cpcLoaded!=="undefined"&&cpcLoaded&&typeof cpcData!=="undefined";
+  const act=has?cpcData.filter(r=>(r.status==="Active"||r.status==="Critical")&&!(typeof CPC_EXCLUDE_AGGS!=="undefined"&&CPC_EXCLUDE_AGGS.has(String(r.aggregator).toLowerCase()))&&!SMALLP.has(r.aggregator)):[];
+  const wk=`<div class="sub" style="margin-top:6px">Ad spend this week <b>AED ${n0(D.tw.adCost)}</b> ${chg(D.tw.adCost,D.lw.adCost,true)} vs last week · yesterday AED ${n0(D.y.adCost)}</div>`;
+  if(!act.length)return`<h2>Ad spend — budgets running now</h2><div class="sub">From the Ad Investments sheet</div><div class="note" style="font-size:11px">${has?"No ad budgets are running today according to the Ad Investments sheet.":"The Ad Investments sheet wasn't loaded when this Digest was made."}</div>${wk}`;
+  const PO=["Talabat","Deliveroo","Careem","Noon","Keeta","Instashop","Smiles"],plats=PO.filter(p=>act.some(r=>r.aggregator===p)).concat([...new Set(act.map(r=>r.aggregator))].filter(p=>!PO.includes(p)));
+  const brands=BR.map(b=>b.n).filter(b=>act.some(r=>r.brand===b));
+  const cellOf=rs=>{if(!rs.length)return null;const x={alloc:0,spent:0,left:0,burn:0};rs.forEach(r=>{x.alloc+=r.budgetAlloc||0;x.spent+=r.budgetSpent||0;x.left+=Math.max(0,r.leftover||0);x.burn+=r.liveBurn||0;});x.pc=x.alloc>0?x.spent/x.alloc*100:0;x.days=x.left>5&&x.burn>0?Math.floor(x.left/x.burn):null;return x;};
+  const show=x=>{if(!x)return'<span class="mut">–</span>';const low=x.left<=5||(x.days!=null&&x.days<=3);return`<b>${n0(x.spent)}</b><span class="pc"> of ${n0(x.alloc)}</span><div class="sb" style="margin:3px auto 2px;width:85%"><i style="width:${Math.min(100,x.pc).toFixed(0)}%;background:${low?"#C0392B":"var(--gold)"}"></i></div><span class="pc">${x.pc.toFixed(0)}% used${x.left<=5?" · <b style='color:var(--dn)'>used up</b>":x.days!=null?" · ~"+x.days+"d left":""}</span>`;};
+  const rows=brands.map(b=>`<tr><td>${lg(b,16)}<b>${E(b)}</b></td>${plats.map(p=>`<td class="c">${show(cellOf(act.filter(r=>r.brand===b&&r.aggregator===p)))}</td>`).join("")}<td class="c" style="border-left:2px solid var(--line)">${show(cellOf(act.filter(r=>r.brand===b)))}</td></tr>`).join("")
+    +`<tr class="tot"><td>All brands</td>${plats.map(p=>`<td class="c">${show(cellOf(act.filter(r=>r.aggregator===p)))}</td>`).join("")}<td class="c" style="border-left:2px solid var(--line)">${show(cellOf(act))}</td></tr>`;
+  return`<h2>Ad spend — budgets running now</h2><div class="sub">AED spent of the budget allocated, % used and days left at the current pace · from the Ad Investments sheet · Careem / Noon combined budgets counted as one pool per brand</div>
+   <table class="fx"><colgroup><col style="width:16%">${plats.map(()=>`<col style="width:${(68/plats.length).toFixed(2)}%">`).join("")}<col style="width:16%"></colgroup><tr><th>Brand</th>${plats.map(p=>`<th class="c">${lg(p,16)}<br>${E(p)}</th>`).join("")}<th class="c" style="border-left:2px solid var(--line)">Total</th></tr>${rows}</table>${wk}
+   ${adNotes&&adNotes.length&&!BOARD?`<ul style="margin:7px 0 0;padding-left:16px;font-size:10.5px;line-height:1.5">${adNotes.map(x=>`<li>${x}</li>`).join("")}</ul>`:""}`;
+}
 
 // ═══ v589 SITE P&L — Finance's monthly P&L workbook, per outlet, visible to Nikhil only ═══════════════════════
 // Nikhil uploads Finance's "PL report" xlsx (one tab per outlet + Combined). The browser reads it (SheetJS), keeps the
@@ -28379,11 +28504,11 @@ window.apEnable=apEnable;window.apDisable=apDisable;window.apTest=apTest;window.
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",show);else setTimeout(show,0);
   const t0=Date.now();
   const ready=()=>typeof latest!=="undefined"&&latest&&typeof allData!=="undefined"&&allData.length&&(typeof instoreLoaded==="undefined"||instoreLoaded)&&(typeof ddLoaded==="undefined"||ddLoaded)
-    &&(typeof tillOnly==="undefined"||tillOnly.rows!==null||tillOnly.failed);
+    &&(typeof tillOnly==="undefined"||tillOnly.rows!==null||tillOnly.failed)&&(typeof kpiLoaded==="undefined"||kpiLoaded);
   const build=async()=>{
     try{if(typeof campLoaded!=="undefined"&&!campLoaded){const csv=await fetchCSV(CAMPAIGN_GID);campaignData=parseCampaigns(csv);campLoaded=true;if(typeof rebuildCampIdxMap==="function")rebuildCampIdxMap();}}catch(e){}
     try{if(typeof cpcLoaded!=="undefined"&&!cpcLoaded){const csv=await fetchCSV(CPC_GID);cpcData=parseCPCSheet(csv);cpcLoaded=true;}}catch(e){}
-    let html;try{html=digestBuildReportHTML().html;}catch(e){html=`<!DOCTYPE html><html><body style="font-family:Arial;padding:40px"><h2>Daily Digest couldn't be built</h2><p>${String(e&&e.message||e)}</p></body></html>`;}
+    let html;try{html=(typeof digestBuildOptionA==="function"?digestBuildOptionA({board:true}):digestBuildReportHTML()).html;}catch(e){html=`<!DOCTYPE html><html><body style="font-family:Arial;padding:40px"><h2>Daily Digest couldn't be built</h2><p>${String(e&&e.message||e)}</p></body></html>`;}
     const hi=setTimeout(()=>{},0);for(let i=0;i<=hi+50;i++){clearTimeout(i);clearInterval(i);} // stop the dashboard's timers so nothing draws over the report
     document.open();document.write(html.replace("</body>",'<div id="digest-ready" style="display:none"></div></body>'));document.close();
   };
