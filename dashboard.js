@@ -13,8 +13,10 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-21-612";
+const BUILD_VERSION="2026-10-21-614";
 const BUILD_NOTES=[
+  "⛔ CANCELLED ADS SHOW AS CANCELLED (build 614). Per Nikhil's approved mock-up: when the Ad Investments Remarks column says 'Cancelled' (e.g. 'Cancelled – non-performance 21-Oct-2026'), the ad is treated as stopped on that date — a red '⛔ Cancelled <date>' tag with the reason and the dates it ran under the outlet on the Advertising page, leftover greyed as 'not spent · saved', Invest/Bid says 'Cancelled — no pacing advice', and the table header counts the cancelled ads. It drops out of 'running now', budget alerts and pacing straight away (even on the day it's cancelled), and its cost is never stretched past the cancel date — even if the End Date was left unchanged. Any other text written in Remarks (besides the date) now shows in grey under the outlet and in the History tab. The Daily Digest and Board Brief ad section list ads cancelled in the last 7 days. Google comments and cell colours aren't in the published sheet, so the Remarks cell is the source.",
+  "🔒 CLOSURE NOTES ONLY FOR THE BRAND THAT CLOSED (build 613). Per Nikhil: a Wicked Wings · Talabat comparison PDF showed 'NAS 🔒 Lollorosso closed' in its outlet table — the closure belongs to Lollorosso, not to Wicked Wings. The note now shows only when the closed brand is part of what you're looking at (all brands, or Lollorosso selected): Compare report outlet table, Compare outlet card, the report's best/worst outlet lines (NAS is no longer skipped there for other brands) and the Outlets page tiles (follows the brand filter). Figures were never affected — only the label.",
   "📰 BOARD BRIEF — NEW '5-MINUTE READ' PAGE 1 FOR THE DIRECTORS (build 612). Per Nikhil: the directors' PDF (the morning email and 'Board Brief' in the export picker) now opens with a page that tells the story — two plain sentences on yesterday and the week, four tiles (group, delivery, dine-in, takeaway, each with 'was AED X last <day>'), the sales-mix charts, What's working next to Needs attention, Brands at a glance (yesterday, vs last week, week to date, contribution %, rating) and an index of the deep-dive pages 2–7. Nikhil's own full Daily Digest is unchanged.",
   "🔁 BRANDS THAT FAIL TO LOAD NOW RETRY BY THEMSELVES (build 611). Per Nikhil — the red '2 brands failed to load' banner was turning up more often and needed a tap on Retry each time. (1) Each brand tab is now also fetched through the dashboard's own server (Cloudflare), alongside the direct Google link and the two public proxies, whichever answers first — the public proxies were the usual weak point. (2) If a brand still fails, the dashboard retries it in the background (after 4s, 10s, 20s, 40s, 75s and 2 min) and again straight away when the internet comes back or the app is reopened; the banner shows the countdown, and when the data arrives the page redraws and a green note confirms it. The buttons are now 'Retry … now'. NEEDS the new worker.js.",
   "🧭 MENU — DELIVERY AND DINE-IN & TAKEAWAY AS CLEAR BANDS, ALL ON ONE SCREEN (build 610). Nikhil picked option B: Delivery and the in-store section are now coloured bands with an icon (blue Delivery, amber Dine-in & Takeaway — 'In-store' renamed); 'Service' is now 'Ratings & KPIs' (KPI tracker, cancellations, feedback). The menu items no longer stretch to fill the column, so everything down to Admin fits without scrolling. The directors' PDF is now named OreganoGroup_BoardBrief_<date> (the full one stays OreganoGroup_DailyDigest_<date>) and the morning email says 'Board Brief'. DAILY DIGEST, BOTH EDITIONS: page 1's small bar chart is replaced by two charts — a 3D pie of the overall sales split by channel (rounded edges, the same gap between every slice, cards with % and AED beside it) and a half donut of delivery sales by brand in each brand's logo colours (Oregano maroon, Lollorosso olive, Fyoozhen black with gold, Smokeys orange, Wicked Wings plum-red-orange) with the % inside every piece and brand chips underneath. Page 2 is now 'Sales by channel & outlet'; the ad-spend table is more compact.",
@@ -576,7 +578,7 @@ function outletClosedOn(brand,branch,date){
 function outletClosureLastDay(brand,branch){const c=outletClosure(brand,branch);return c?c.lastDay:null;}
 function outletRowRetired(r){return !!r&&outletIsRetired(r.brand,r.branch);}
 // Any closure at this branch (for branch-level tiles that span several brands).
-function branchClosures(branch){return OUTLET_CLOSURES.filter(c=>outletClosure(c.brand,branch)===c);}
+function branchClosures(branch,scope){const S=scope?(scope instanceof Set?scope:new Set(scope)):null;return OUTLET_CLOSURES.filter(c=>outletClosure(c.brand,branch)===c&&(!S||!S.size||S.has(c.brand)));} // v613: scope = brands in view
 // v517: true when a campaign is scoped ONLY to outlets that have closed (e.g. a Lollorosso campaign on NAS alone).
 function campScopeAllRetired(c){
   if(!c||!c.brand||c.brand==="All Brands"||typeof campOutlets!=="function")return false;
@@ -775,8 +777,8 @@ function parseCpcSchedule(cellRaw){
 function cpcLiveBurn(r){
   if(!r)return 0;
   if(!r.startDate||!r.endDate||r.budgetSpent==null)return r.dailyBurn||0;
-  const confirmedEnded=r.updateDate&&r.updateDate>r.endDate;
-  const knownThrough=(!confirmedEnded&&r.updateDate&&r.updateDate<r.endDate)?cpcPrevDay(r.updateDate):r.endDate;
+  const confirmedEnded=!!r.cancelled||(r.updateDate&&r.updateDate>r.endDate);
+  const knownThrough=(r.cancelled&&r.updateDate&&r.updateDate<r.endDate)?r.updateDate:(!confirmedEnded&&r.updateDate&&r.updateDate<r.endDate)?cpcPrevDay(r.updateDate):r.endDate;
   const dow=(r.schedule&&r.schedule.days)?r.schedule.days:null;
   const days=cpcDowDaysBetween(r.startDate,knownThrough,dow);
   if(days<1)return r.dailyBurn||0;
@@ -866,9 +868,9 @@ function cpcAdCostForRange(brand,agg,startDate,endDate,viewBranches){
     const isSplit=!!r.splitScope; // pooled row with no single outlet → distribute by sales share
     // v357: per-outlet row whose outlet isn't in the filtered view — skip entirely.
     if(scoped&&!isSplit&&!viewBranches.has(r.branch))continue;
-    const confirmedEnded=r.updateDate&&r.updateDate>r.endDate;
+    const confirmedEnded=!!r.cancelled||(r.updateDate&&r.updateDate>r.endDate);
     // v339: real confirmed data boundary — day BEFORE a still-open row's update date.
-    const knownThrough=(!confirmedEnded&&r.updateDate&&r.updateDate<r.endDate)?cpcPrevDay(r.updateDate):r.endDate;
+    const knownThrough=(r.cancelled&&r.updateDate&&r.updateDate<r.endDate)?r.updateDate:(!confirmedEnded&&r.updateDate&&r.updateDate<r.endDate)?cpcPrevDay(r.updateDate):r.endDate;
     // v352: real confirmed days use REAL budgetSpent (scaled for partial-range queries); the
     // extrapolation rate is derived fresh from budgetSpent over those real confirmed days.
     const dow=(r.schedule&&r.schedule.days)?r.schedule.days:null; // v361: day-of-week restriction, if any
@@ -1132,7 +1134,7 @@ function digestCampaignSpotlight(){
 function digestAdSnapshot(){
   if(typeof cpcLoaded==="undefined"||!cpcLoaded||typeof cpcData==="undefined")return null;
   const active=cpcData.filter(r=>r.status==="Active"||r.status==="Critical");
-  if(!active.length)return null;
+  if(!active.length&&!cpcData.some(r=>r.cancelled))return null; // v614: still report recent cancellations
   const byAgg={};
   for(const r of active){
     if(!byAgg[r.aggregator])byAgg[r.aggregator]={spent:0,alloc:0};
@@ -1154,7 +1156,10 @@ function digestAdSnapshot(){
     const elapsedFrac=Math.min(1,elapsed/totalDays);
     return elapsedFrac>0.5&&(r.budgetSpent/r.budgetAlloc)<0.15;
   }).slice(0,3);
-  return{byAgg,critical,underspending};
+  // v614: ads cancelled early in the last 7 days (Remarks says "Cancelled")
+  const _wk=(()=>{const d=new Date(today+"T12:00:00");d.setDate(d.getDate()-7);return d.toISOString().slice(0,10);})();
+  const cancelled=cpcData.filter(r=>r.cancelled&&cpcCancelDate(r)&&cpcCancelDate(r)>=_wk&&cpcCancelDate(r)<=today).sort((a,b)=>(cpcCancelDate(b)||"").localeCompare(cpcCancelDate(a)||""));
+  return{byAgg,critical,underspending,cancelled};
 }
 // v284: explains WHY profitability moved between two record sets, not just by how much. A
 // single number ("profit down 16.8%") hides which of several genuinely different stories is
@@ -7262,7 +7267,7 @@ function renderOutlets(){
               <div style="font-size:20px;font-weight:800;color:${textPrimary};letter-spacing:.2px">${t.branch}</div>
               <span style="font-size:10.5px;font-weight:800;padding:3px 8px;border-radius:10px;background:${regionColor}15;color:${regionColor};letter-spacing:.6px">${region}</span>
             </div>
-            <div style="font-size:13px;color:${textMuted};margin-top:4px;font-weight:600">${t.brands.length} brand${t.brands.length!==1?'s':''} · AOV AED ${t.aov.toFixed(1)}</div>${branchClosures(t.branch).map(c=>`<div style="font-size:11px;font-weight:700;color:#94A3B8;margin-top:3px" title="${c.note}">🔒 ${c.brand} closed after ${closureShortDate(c.lastDay)}</div>`).join('')}
+            <div style="font-size:13px;color:${textMuted};margin-top:4px;font-weight:600">${t.brands.length} brand${t.brands.length!==1?'s':''} · AOV AED ${t.aov.toFixed(1)}</div>${branchClosures(t.branch,curFilters().brands).map(c=>`<div style="font-size:11px;font-weight:700;color:#94A3B8;margin-top:3px" title="${c.note}">🔒 ${c.brand} closed after ${closureShortDate(c.lastDay)}</div>`).join('')}
           </div>
           <div style="text-align:right;background:${scBg};border-radius:8px;padding:5px 10px;white-space:nowrap"><div style="font-size:14px;color:${scClr};font-weight:800" title="Net Sales change ${getCompShort()}">${fmtPct(t.sc)}</div></div>
         </div>
@@ -7855,6 +7860,16 @@ function resolveBrandLocation(bl,brandCache,branchCache){
 }
 
 // Parse the Ad Investments CSV into raw rows (light work only — heavy analysis happens later)
+// v614: cancelled ads + readable remarks (from the Ad Investments Remarks column)
+function cpcIsCancelled(s){s=String(s||"");return /\bcancel(?:l?ed)?\b/i.test(s)&&!/from\s+cancel/i.test(s);}
+function cpcRemarkNote(s){let t=String(s||"");
+  t=t.replace(/\d{4}-\d{1,2}-\d{1,2}(\s+\d{1,2}:\d{2}(:\d{2})?)?/g," ").replace(/\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}/g," ")
+     .replace(/\d{1,2}(st|nd|rd|th)?[\s\-\/]*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?[\s\-\/,]*(\d{2,4})?/gi," ");
+  t=t.replace(/\s{2,}/g," ").replace(/^[\s:;,–—\-]+|[\s:;,–—\-]+$/g,"").trim();
+  if(t.length<3||/^(cpc|ftu cpc|kw|key ?words?|banners?|shoppable banners?|on|till|until|updated?)$/i.test(t))return"";
+  return t;}
+function cpcEscH(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");}
+function cpcCancelDate(r){return r&&r.cancelled?((r.updateDate&&r.endDate&&r.updateDate<r.endDate)?r.updateDate:r.endDate):null;}
 function parseCPCSheet(csv){
   const rows=parseCSV(csv);if(!rows.length)return[];
   let hdrIdx=-1;
@@ -7936,6 +7951,7 @@ function parseCPCSheet(csv){
       roi:num(cm.roi),avgBid:num(cm.avgBid),ftu:num(cm.ftu),
       budgetType,schedule,
       remarks:remarksRaw,
+      cancelled:cpcIsCancelled(remarksRaw),remarkNote:cpcRemarkNote(remarksRaw), // v614
       updateDate:parseRemarksDate(remarksRaw),
       month:startDate?startDate.slice(0,7):null,
       // True when the Brand-Location cell didn't parse into a real brand (e.g. entered as just
@@ -7963,6 +7979,7 @@ function parseCPCSheet(csv){
       else if(today>rec.endDate)rec.status=rec.budgetSpent>=rec.budgetAlloc*0.95?"Exhausted":"Completed";
       else rec.status="Upcoming";
     }else rec.status="Unknown";
+    if(rec.cancelled&&rec.startDate&&cpcRealToday()>=rec.startDate)rec.status="Cancelled"; // v614: stopped early (Remarks says Cancelled)
     rec.liveBurn=cpcLiveBurn(rec);
     rec.daysUntilExhausted=(rec.status==="Active"&&rec.liveBurn>0)?Math.floor(rec.leftover/rec.liveBurn):null; // v534: real pace, not diluted dailyBurn
     rec.be=cpcBE(brand,aggregator);
@@ -8127,7 +8144,7 @@ function buildCPCModel(onProgress){
     // Step 5: post-exhaustion impact for completed/exhausted rows (the heavy scan, but indexed)
     steps.push(()=>{
       for(const r of rows){
-        if(!r.endDate||(r.status!=="Exhausted"&&r.status!=="Completed"))continue;
+        if(!r.endDate||(r.status!=="Exhausted"&&r.status!=="Completed"&&r.status!=="Cancelled"))continue;
         const afterStart=subDays(r.endDate,-1),afterEnd=subDays(r.endDate,-7);
         if(afterEnd>today)continue;
         const duringEnd=r.endDate,duringStart=subDays(r.endDate,6);
@@ -10608,7 +10625,7 @@ function cpcHistTableView(){
     const roasTxt=roas!=null?`<strong style="color:${roas>=r.be?'#22C55E':'#EF4444'}">${roas.toFixed(2)}×</strong>`:`<span style="color:${T.muted};font-size:10.5px">—</span>`;
     const poolTag=r.budgetType==="combined"?`<span style="background:rgba(96,165,250,.12);color:#60A5FA;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700">POOL</span>`:`<span style="background:rgba(148,163,184,.1);color:${T.label};padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700">SEPARATE</span>`;
     const fundedTag=/funded\s+by\s+noon/i.test(r.remarks||"")?`<span style="background:rgba(34,197,94,.12);color:#22C55E;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700;margin-left:4px">FUNDED BY NOON</span>`:"";
-    return`<tr style="border-bottom:1px solid ${T.border}"><td style="padding:6px 8px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11px">${r.brand}</td><td style="padding:6px 8px;color:${T.text};font-size:11px">${r.branch||"—"}</td><td style="padding:6px 8px;color:${AC[r.aggregator]||'#fff'};font-size:11px">${r.aggregator}</td><td style="padding:6px 8px;color:${T.label};font-size:10.5px">${r.adType}</td><td style="padding:6px 8px;color:${T.label};font-size:10.5px">${r.startDate||"?"} → ${r.endDate||"?"}</td><td style="padding:6px 8px;text-align:right;color:${T.label};font-size:11px">${fmtAEDTip(r.budgetAlloc)}</td><td style="padding:6px 8px;text-align:right;color:${T.secondary};font-size:11px">${fmtAEDTip(r.budgetSpent)}</td><td style="padding:6px 8px;text-align:right;color:#22C55E;font-size:11px">${fmtAEDTip(r.sales)}</td><td style="padding:6px 8px;text-align:right">${roasTxt}</td><td style="padding:6px 8px">${poolTag}</td><td style="padding:6px 8px;color:${T.label};font-size:10px">${r.updateDate||"—"}${fundedTag}</td></tr>`;
+    return`<tr style="border-bottom:1px solid ${T.border}"><td style="padding:6px 8px;color:${BMAP[r.brand]?.c||'#fff'};font-weight:700;font-size:11px">${r.brand}</td><td style="padding:6px 8px;color:${T.text};font-size:11px">${r.branch||"—"}</td><td style="padding:6px 8px;color:${AC[r.aggregator]||'#fff'};font-size:11px">${r.aggregator}</td><td style="padding:6px 8px;color:${T.label};font-size:10.5px">${r.adType}</td><td style="padding:6px 8px;color:${T.label};font-size:10.5px">${r.startDate||"?"} → ${r.endDate||"?"}${r.cancelled?`<div><span style="font-size:9px;font-weight:800;color:#FCA5A5;background:rgba(239,68,68,.12);border-radius:3px;padding:0 5px">⛔ CANCELLED ${fmtShort(cpcCancelDate(r))}</span></div>`:""}${r.remarkNote?`<div style="font-size:10px;color:${T.label};white-space:normal;max-width:240px">“${cpcEscH(r.remarkNote)}”</div>`:""}</td><td style="padding:6px 8px;text-align:right;color:${T.label};font-size:11px">${fmtAEDTip(r.budgetAlloc)}</td><td style="padding:6px 8px;text-align:right;color:${T.secondary};font-size:11px">${fmtAEDTip(r.budgetSpent)}</td><td style="padding:6px 8px;text-align:right;color:#22C55E;font-size:11px">${fmtAEDTip(r.sales)}</td><td style="padding:6px 8px;text-align:right">${roasTxt}</td><td style="padding:6px 8px">${poolTag}</td><td style="padding:6px 8px;color:${T.label};font-size:10px">${r.updateDate||"—"}${fundedTag}</td></tr>`;
   }).join("");
   return summaryStrip+`<div class="card" style="margin-top:12px"><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="border-bottom:1px solid ${T.border};color:${T.muted};font-size:9.5px;text-transform:uppercase;letter-spacing:.3px"><th style="padding:6px 8px;text-align:left">Brand</th><th style="padding:6px 8px;text-align:left">Outlet</th><th style="padding:6px 8px;text-align:left">Aggregator</th><th style="padding:6px 8px;text-align:left">Ad Type</th><th style="padding:6px 8px;text-align:left">Period</th><th style="padding:6px 8px;text-align:right">Allocated</th><th style="padding:6px 8px;text-align:right">Spent</th><th style="padding:6px 8px;text-align:right">Sales</th><th style="padding:6px 8px;text-align:right">ROAS</th><th style="padding:6px 8px;text-align:left">Budget Type</th><th style="padding:6px 8px;text-align:left">Last Updated</th></tr></thead><tbody>${tRows}</tbody></table></div></div>`;
 }
@@ -10842,6 +10859,7 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
   // Totals accumulators. tInvestPool comes from the POOL aggregate computed once below
   // (not from summing per-outlet amounts); tInvestSep comes from per-outlet calculations.
   let tClicks=0,tOrders=0,tSales=0,tBudget=0,tSpent=0,tLeftover=0,tFtu=0,tInvest=0,tInvestPool=0,tInvestSep=0;
+  let _cxCount=0; // v614
 
   // ── POOL-LEVEL CALCULATION ─────────────────────────────────────────────────
   // For "Combined Per Brand" outlets, individual rows can show "exhausted" or "leftover ≤ 0"
@@ -10906,6 +10924,15 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
     // Lock badge for pooled outlets (tooltip explains why no per-outlet recommendation)
     const poolTag=isPooled?` <span title="Budget pooled with other ${brand} outlets on ${ag} — can't be topped up individually." style="font-size:9px;color:#60A5FA;cursor:help">🔒</span>`:'';
     // Investment + bid recommendation (current month only)
+    // v614: cancelled early (Remarks says "Cancelled") — tag + reason under the outlet, leftover = saved, no pacing advice
+    const _mr=(t.monthRows&&t.monthRows.length?t.monthRows:t.rows)||[];const _cxr=_mr.filter(rr=>rr.cancelled);
+    const _cx={any:_cxr.length>0,all:_cxr.length>0&&!_mr.some(rr=>rr.status==="Active"||rr.status==="Critical"||rr.status==="Upcoming")};
+    if(_cx.any)_cxCount+=_cxr.length;
+    const _cxLast=_cxr.slice().sort((a,b)=>(cpcCancelDate(a)||"").localeCompare(cpcCancelDate(b)||"")).pop();
+    const _ran=rr=>rr&&rr.startDate?`ran ${fmtShort(rr.startDate)}–${fmtShort(cpcCancelDate(rr)||rr.endDate)}`:"";
+    const _notes=[...new Set(_mr.map(rr=>rr.remarkNote).filter(Boolean))];
+    const cxTag=_cx.any?`<div style="margin-top:4px"><span style="display:inline-block;font-size:9.5px;font-weight:800;color:#FCA5A5;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:5px;padding:1px 6px">⛔ Cancelled ${fmtShort(cpcCancelDate(_cxLast))}${_cxr.length>1?` · ${_cxr.length} ads`:""}</span></div>`:"";
+    const noteLine=(_notes.length||_cx.any)?`<div style="font-size:10px;color:${T.label};font-weight:600;margin-top:2px;max-width:260px;white-space:normal">${_notes.map(n=>"“"+cpcEscH(n)+"”").join(" · ")}${_cx.any&&_cxLast?`${_notes.length?" · ":""}${_ran(_cxLast)}`:""}</div>`:"";
     let recCell=`<span style="color:${T.secondary};font-size:10px">—</span>`;
     if(isCurrentMonth){
       const bidOpt=cpcDeliverooBidOpt(ag,brand,t.outlet,t.liveRow,t.calcBid);
@@ -10934,7 +10961,7 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
         }
       }else{
         // Separate row: per-outlet calculation as before
-        const inv=cpcInvestRec(ag,brand,t.outlet,t.liveRow,bidOpt);
+        const inv=_cx.all?null:cpcInvestRec(ag,brand,t.outlet,t.liveRow,bidOpt); // v614
         const goodVerdict=d.verdict==="SCALE"||d.verdict==="INVEST";
         const poorVerdict=d.verdict==="WITHDRAW";
         if(inv){
@@ -10976,6 +11003,7 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
         const fromTxt=bidOpt.curBid!=null?` <span style="color:${T.label};font-weight:400">(from ${bidOpt.curBid.toFixed(2)})</span>`:'';
         parts.push(`<div style="font-size:10px;color:${bClr}" title="Best balance of ROAS & volume was ${cpcMonthLabel(bidOpt.bestMonth)} at this bid. Independent of this month's budget pacing above — this looks at 6 months of history, not what's needed to spend out the current budget.">Historical optimal: ${action} bid to AED ${bidOpt.suggestedBid.toFixed(2)}${fromTxt}</div>`);
       }
+      if(_cx.all)parts.splice(0,parts.length,`<div style="font-size:10.5px;color:${T.label};font-weight:700">Cancelled — no pacing advice</div>`); // v614
       if(parts.length)recCell=parts.join('');
     }
     // Pool banner: emitted once, right before the first pooled outlet row. Shows the total pool
@@ -10988,7 +11016,7 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
       const poolPct=poolTotalAlloc>0?Math.round(poolTotalSpent/poolTotalAlloc*100):0;
       bannerRow=`<tr><td colspan="${colCount}" style="padding:0"><div style="margin:12px 0 6px 0;padding:10px 14px;background:linear-gradient(135deg,rgba(96,165,250,.08),rgba(96,165,250,.02));border:1px solid rgba(96,165,250,.25);border-radius:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:14px">🔒</span><div><div style="font-size:12px;font-weight:800;color:#60A5FA">Pooled Budget — ${pooledTableRows.length} outlets share this pool</div><div style="font-size:10px;color:${T.label};margin-top:2px">${ag} auto-distributes spend across these outlets. Per-outlet budget is not controllable individually.</div></div></div><div style="display:flex;gap:16px;align-items:center"><div style="text-align:center"><div style="font-size:9px;color:${T.muted};text-transform:uppercase;font-weight:700">Allocated</div><div style="font-size:15px;font-weight:800;color:#fbbf24">${fmtAEDTip(poolTotalAlloc)}</div></div><div style="text-align:center"><div style="font-size:9px;color:${T.muted};text-transform:uppercase;font-weight:700">Spent</div><div style="font-size:15px;font-weight:800;color:${T.secondary}">${fmtAEDTip(poolTotalSpent)}</div></div><div style="text-align:center"><div style="font-size:9px;color:${T.muted};text-transform:uppercase;font-weight:700">Remaining</div><div style="font-size:15px;font-weight:800;color:${poolLeft>0?'#22C55E':'#EF4444'}">${fmtAEDTip(poolLeft)}</div></div><div style="text-align:center"><div style="font-size:9px;color:${T.muted};text-transform:uppercase;font-weight:700">Burn</div><div style="font-size:15px;font-weight:800;color:${T.label}">${poolPct}%</div></div></div></div></td></tr>`;
     }
-    const row=`<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:${T.text}">${t.outlet}</strong>${impTag}${poolTag}${fundedTag}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right">${(d.views||0).toLocaleString()}</td><td style="text-align:right">${(d.orders||0).toLocaleString()}</td><td style="text-align:right">${fmtAEDExact(d.sales)}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${isPooled?'<span style="color:#60A5FA;font-size:10px">pool</span>':fmtAEDExact(d.alloc)}</td><td style="text-align:right">${fmtAEDExact(d.spent)}</td><td style="text-align:right">${isPooled?'<span style="color:#60A5FA;font-size:10px">pool</span>':fmtAEDExact(d.leftover)}</td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}<div style="font-size:8px;color:${t.momChg==null?T.secondary:pctClr(t.momChg)}">${t.momChg!=null?'MoM '+fmtPct(t.momChg):''}</div></td><td style="text-align:right">${t.calcBid!=null?'AED '+t.calcBid.toFixed(2):'—'}</td><td style="text-align:right">${d.ftu||0}</td>${showInvestCol?`<td style="text-align:right">${recCell}</td>`:''}</tr>`;
+    const row=`<tr style="cursor:pointer" onclick="cpcOpenOutletDetail('${ag}','${brand}','${encodeURIComponent(t.outlet)}')"><td><strong style="font-size:12px;color:${T.text}">${t.outlet}</strong>${impTag}${poolTag}${fundedTag}${cxTag}${noteLine}</td><td><span style="padding:3px 9px;border-radius:8px;background:${CPC_VB[d.verdict]||'rgba(100,116,139,.1)'};color:${vClr};font-size:10px;font-weight:800">${d.verdict||'—'}</span></td><td style="text-align:right">${(d.views||0).toLocaleString()}</td><td style="text-align:right">${(d.orders||0).toLocaleString()}</td><td style="text-align:right">${fmtAEDExact(d.sales)}</td><td style="text-align:right">${d.aov?d.aov.toFixed(0):'—'}</td><td style="text-align:right">${d.cto!=null?d.cto.toFixed(1)+'%':'—'} ${ctoTag}</td><td style="text-align:right">${isPooled?'<span style="color:#60A5FA;font-size:10px">pool</span>':fmtAEDExact(d.alloc)}</td><td style="text-align:right">${fmtAEDExact(d.spent)}</td><td style="text-align:right">${isPooled?'<span style="color:#60A5FA;font-size:10px">pool</span>':_cx.all?`<span style="color:${T.label}">${fmtAEDExact(d.leftover)}</span><div style="font-size:9px;color:${T.label};font-weight:600">not spent · saved</div>`:fmtAEDExact(d.leftover)}</td><td style="text-align:right;font-weight:800;color:${vClr}">${d.roi?d.roi.toFixed(2)+'×':'—'}<div style="font-size:8px;color:${t.momChg==null?T.secondary:pctClr(t.momChg)}">${t.momChg!=null?'MoM '+fmtPct(t.momChg):''}</div></td><td style="text-align:right">${t.calcBid!=null?'AED '+t.calcBid.toFixed(2):'—'}</td><td style="text-align:right">${d.ftu||0}</td>${showInvestCol?`<td style="text-align:right">${recCell}</td>`:''}</tr>`;
     // v362: schedule split — when this outlet's month rows carry ≥2 distinct schedule labels
     // (Mon-Thu/Fri-Sun or Lunch/Dinner), render one line per schedule instead of the combined row.
     // Totals above already used the combined `d`, so this is display-only and never double-counts.
@@ -11113,8 +11141,9 @@ function cpcRenderOutletLevelSingle(ag,brand,skipToggle){
     ?`<div style="font-size:11px;color:${T.label};margin-bottom:12px;padding:8px 12px;background:rgba(96,165,250,.06);border-left:3px solid #60A5FA;border-radius:4px">ℹ️ ${rowsHaveSep?`Some ${brand} outlets on ${ag} have <strong>pooled budgets</strong> (🔒) — those can only be topped up at brand level. Others are <strong>individually editable</strong>.`:`${brand} budgets on ${ag} are <strong>pooled at brand level</strong>. Per-outlet budget/spent are indicative; the brand total is the real budget. Per-outlet <strong>results</strong> (orders, sales, ROAS, CTO) are exact.`}</div>`
     :'';
   const bidNote=ag==="Deliveroo"?`<div style="font-size:11px;color:${T.label};margin-bottom:10px">Bid suggestions analyze the past 6 months and target the bid with the best balance of ROAS and order volume. Changing the bid shifts the burn rate proportionally, and the extra budget needed is recalculated accordingly.</div>`:`<div style="font-size:11px;color:${T.label};margin-bottom:10px">${ag} uses auto-bidding, so only budget recommendations are shown. 📉 = sales dropped after a CPC ended.</div>`;
+  const cxNote=_cxCount?`<div style="font-size:11px;color:#FCA5A5;font-weight:700;margin-bottom:10px">⛔ ${_cxCount} ad${_cxCount===1?"":"s"} cancelled early — reason from the Remarks column</div>`:""; // v614
 
-  return controlBar+poolNote+`<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap"><div class="ct" style="margin-bottom:0">${brand} on ${ag} — Outlet Performance · ${cpcMonthLabel(selMonth)}${isCurrentMonth?' (current month)':''}</div><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-size:10px;color:${T.muted}" title="Most recent date in the underlying sales data. Reinvestment figures recompute live based on today's real calendar date, so re-render the page just before you act on a recommendation.">📅 Data as of ${fmtShort(latest)}${isCurrentMonth?` · live (recalculated from today's date)`:''}</span><button onclick="cpcExportTable()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:5px">⬇ Export to Excel</button></div></div><div style="margin-top:8px">${bidNote}</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th style="cursor:pointer" onclick="cpcSetSort('outlet')">Outlet${arrow('outlet')}</th><th>Verdict</th>${th('clicks','Clicks')}${th('orders','Orders')}${th('sales','Sales')}${th('aov','AOV')}${th('cto','CTO')}${th('budget','Budget')}${th('spent','Spent')}${th('leftover','Leftover')}${th('roas','ROAS')}${th('bid','Avg Bid')}${th('ftu','FTU')}${showInvestCol?`<th style="text-align:right">Invest / Bid</th>`:''}</tr></thead><tbody>${body}${totalsRow}</tbody></table></div>${investSummary}</div>`;
+  return controlBar+poolNote+`<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap"><div class="ct" style="margin-bottom:0">${brand} on ${ag} — Outlet Performance · ${cpcMonthLabel(selMonth)}${isCurrentMonth?' (current month)':''}</div><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-size:10px;color:${T.muted}" title="Most recent date in the underlying sales data. Reinvestment figures recompute live based on today's real calendar date, so re-render the page just before you act on a recommendation.">📅 Data as of ${fmtShort(latest)}${isCurrentMonth?` · live (recalculated from today's date)`:''}</span><button onclick="cpcExportTable()" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);border-radius:6px;color:#22C55E;padding:5px 12px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;gap:5px">⬇ Export to Excel</button></div></div><div style="margin-top:8px">${bidNote}${cxNote}</div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th style="cursor:pointer" onclick="cpcSetSort('outlet')">Outlet${arrow('outlet')}</th><th>Verdict</th>${th('clicks','Clicks')}${th('orders','Orders')}${th('sales','Sales')}${th('aov','AOV')}${th('cto','CTO')}${th('budget','Budget')}${th('spent','Spent')}${th('leftover','Leftover')}${th('roas','ROAS')}${th('bid','Avg Bid')}${th('ftu','FTU')}${showInvestCol?`<th style="text-align:right">Invest / Bid</th>`:''}</tr></thead><tbody>${body}${totalsRow}</tbody></table></div>${investSummary}</div>`;
 }
 
 // Combine multiple CPC rows into one record (Σsales/Σspent for ROI, Σorders/Σclicks for CTO)
@@ -22174,13 +22203,14 @@ function cmpOutletCard(dA,dB,dC){
   const T=_darkPage?{muted:DARK_THEME.textMuted,vs:DARK_THEME.textSecondary,border:DARK_THEME.cardBorder,panelBg:DARK_THEME.card,panelBorder:DARK_THEME.cardBorder,panelShadow:DARK_THEME.shadow,rowText:DARK_THEME.textSecondary}
     :{muted:"#64748b",vs:"#475569",border:"#E2E8F0",panelBg:"#FFFFFF",panelBorder:"#E2E8F0",panelShadow:"0 12px 30px rgba(15,23,42,.12)",rowText:"#475569"};
   const setA=new Set(dA.map(r=>r.branch)),setB=new Set(dB.map(r=>r.branch));
+  const _cs=new Set([...dA,...dB,...(dC||[])].map(r=>r.brand)); // v613
   const onlyA=[...setA].filter(b=>!setB.has(b)).sort();
   const onlyB=[...setB].filter(b=>!setA.has(b)).sort();
   const both=[...setA].filter(b=>setB.has(b)).sort();
   const diff=setA.size-setB.size;
   const diffClr=diff>0?CMP_A_CLR:diff<0?CMP_B_CLR:"#64748b";
   const setC=dC?new Set(dC.map(r=>r.branch)):null;
-  const col=(title,clr,list)=>`<div style="flex:1;min-width:120px"><div style="font-size:10.5px;font-weight:700;color:${clr};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">${title} (${list.length})</div>${list.length?list.map(o=>`<div style="font-size:12.5px;color:${T.vs};padding:1px 0">${o}${branchClosures(o).length?` <span style="color:#94A3B8;font-size:11px" title="${branchClosures(o).map(c=>c.note).join('; ')}">🔒 ${branchClosures(o).map(c=>c.brand+' closed '+closureShortDate(c.lastDay)).join(', ')}</span>`:''}</div>`).join(""):`<div style="font-size:12.5px;color:${T.vs};font-weight:600">—</div>`}</div>`;
+  const col=(title,clr,list)=>`<div style="flex:1;min-width:120px"><div style="font-size:10.5px;font-weight:700;color:${clr};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">${title} (${list.length})</div>${list.length?list.map(o=>`<div style="font-size:12.5px;color:${T.vs};padding:1px 0">${o}${branchClosures(o,_cs).length?` <span style="color:#94A3B8;font-size:11px" title="${branchClosures(o,_cs).map(c=>c.note).join('; ')}">🔒 ${branchClosures(o,_cs).map(c=>c.brand+' closed '+closureShortDate(c.lastDay)).join(', ')}</span>`:''}</div>`).join(""):`<div style="font-size:12.5px;color:${T.vs};font-weight:600">—</div>`}</div>`;
   // The panel is hidden by default and shown on hover (CSS sibling, inline handlers as fallback)
   const panel=`<div class="cmp-outlet-panel" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:30;margin-top:6px;background:${T.panelBg};border:1px solid ${T.panelBorder};border-radius:10px;padding:12px;box-shadow:${T.panelShadow}">
       <div style="font-size:11.5px;color:${T.muted};margin-bottom:8px">${diff===0?"Both groups cover the same outlets.":`Group ${diff>0?"A":"B"} has ${Math.abs(diff)} more outlet${Math.abs(diff)!==1?"s":""}.`}</div>
@@ -22703,7 +22733,7 @@ function cmpReportConclusions(prior,latest){
     }).filter(m=>m&&m.salesPct!=null);
     // v516: an outlet name that carries a closure (e.g. NAS, where Lollorosso closed) can't be named
     // the "worst decliner" — its drop is the closure, not a performance change.
-    const bySalesPct=[...outletMovers].filter(m=>!branchClosures(m.name).length).sort((a,b)=>a.salesPct-b.salesPct);
+    const _mvScope=new Set([...(prior.brandPlatform||[]),...(latest.brandPlatform||[])].map(x=>x.brand));const bySalesPct=[...outletMovers].filter(m=>!branchClosures(m.name,_mvScope).length).sort((a,b)=>a.salesPct-b.salesPct);
     const worstOutlet=bySalesPct[0],bestOutlet=bySalesPct[bySalesPct.length-1];
     if(worstOutlet&&worstOutlet.salesPct<=-15){
       const alsoContrib=worstOutlet.contribPct!=null&&worstOutlet.contribPct<worstOutlet.salesPct-5;
@@ -22964,6 +22994,7 @@ function cmpReportPlatformComparison(data){
 // v428: same fix as Brand/Platform Comparison — loops every consecutive pair instead of only
 // the last one, so a 3+-period scope shows every transition's outlet detail, not just the latest.
 function cmpReportOutletDetail(data){
+  const _scopeBrands=new Set(data.flatMap(d=>(d.brandPlatform||[]).map(bp=>bp.brand))); // v613
   const allOutlets=new Set(data.flatMap(d=>d.outlets.map(o=>o.outlet)));
   if(allOutlets.size<2)return"";
   const brandCount=Math.max(...data.map(d=>d.brandCount));
@@ -22975,7 +23006,7 @@ function cmpReportOutletDetail(data){
     const clrA=cmpClrFor(prior.key),clrB=cmpClrFor(latest.key);
     const outletRow=(name,brand)=>{
       const mL=cmpScopedMetrics(latest.cfg,brand,null,name),mP=cmpScopedMetrics(prior.cfg,brand,null,name);
-      const _clo=(!brand||outletClosure(brand,name))?branchClosures(name).filter(c=>!brand||c.brand===brand):[];
+      const _clo=brand?(outletClosure(brand,name)?[outletClosure(brand,name)]:[]):branchClosures(name,_scopeBrands); // v613
       return`<tr><td>${esc(name)}${_clo.length?` <span style="color:#94A3B8;font-size:11px;font-weight:600" title="${_clo.map(c=>esc(c.note)).join('; ')}">🔒 ${_clo.map(c=>esc(c.brand)+' closed '+closureShortDate(c.lastDay)).join(', ')}</span>`:''}</td>
         ${cmpPairedMetricCell(mP.sales,mL.sales,fmtAEDExact,true,clrA,clrB)}
         ${cmpPairedMetricCell(mP.orders,mL.orders,v=>v.toLocaleString(),true,clrA,clrB)}
@@ -27564,7 +27595,9 @@ function dgaBuild(opts){
   const camp=(x,good)=>{if(!x)return"";const c=x.a?x.c:null;if(!c)return"";const v=x.a.incrContribPerDay;return`<div class="box" style="background:${good?"#F0FAF4":"#FDF2F1"};border-color:${good?"#BFE6CD":"#F2C7C2"}"><h3 style="color:${good?"var(--up)":"var(--dn)"}">${good?"Performing well — keep running":"Underperforming — consider pausing"}</h3>
     <div style="font-size:12px;font-weight:800">${lg(c.brand,16)}${lg(c.aggregator,16)}${E(c.brand)} · ${E(c.aggregator)} — "${E(c.name||c.comments||"Campaign")}"</div><div class="mut" style="margin:3px 0">${E(fmtShort(c.startDate))} – ${E(fmtShort(c.endDate))}</div>Incremental contribution/day <b class="${v>=0?"up":"dn"}">${v>=0?"+":""}${aed(v)}</b></div>`;};
   const adRows=D.ads?Object.entries(D.ads.byAgg).filter(([a])=>!SMALLP.has(a)).map(([a,v])=>{const pc=v.alloc>0?v.spent/v.alloc*100:0;return`<tr><td>${lg(a,16)}<b>${E(a)}</b></td><td class="r">${aed(v.spent)}</td><td class="r">${aed(v.alloc)}</td><td style="width:140px"><div class="sb"><i style="width:${Math.min(100,pc).toFixed(0)}%;background:${pc>85?"#C0392B":"var(--gold)"}"></i></div></td><td class="r"><b>${pc.toFixed(0)}%</b></td></tr>`;}).join(""):"";
-  const adNotes=D.ads?[...D.ads.critical.map(r=>`${E(r.brand)} · ${E(r.branch||"")} · ${E(r.aggregator)} is nearly out of budget${r.daysUntilExhausted!=null?` (~${r.daysUntilExhausted}d left)`:""}.`),...D.ads.underspending.map(r=>`${E(r.brand)} · ${E(r.branch||"")} · ${E(r.aggregator)} has used under 15% of budget past halfway — bid or cap may be too low.`)]:[];
+  const adNotes=D.ads?[...D.ads.critical.map(r=>`${E(r.brand)} · ${E(r.branch||"")} · ${E(r.aggregator)} is nearly out of budget${r.daysUntilExhausted!=null?` (~${r.daysUntilExhausted}d left)`:""}.`),...D.ads.underspending.map(r=>`${E(r.brand)} · ${E(r.branch||"")} · ${E(r.aggregator)} has used under 15% of budget past halfway — bid or cap may be too low.`),
+    ...(D.ads.cancelled||[]).slice(0,6).map(r=>`⛔ <b>Cancelled early:</b> ${E(r.brand)} · ${E(r.branch||"")} · ${E(r.aggregator)} ${E(r.adType||"")} — stopped ${E(fmtShort(cpcCancelDate(r)))}${r.remarkNote?` (${E(r.remarkNote.replace(/^cancel(l?ed)?\s*[–—:-]?\s*/i,""))})`:""}, AED ${n0(r.budgetSpent)} spent of ${n0(r.budgetAlloc)}.`),
+    ...((D.ads.cancelled||[]).length>6?[`⛔ …and ${(D.ads.cancelled.length-6)} more ads cancelled in the last 7 days.`]:[])]:[];
   const p4=`<div class="page">${head("DELIVERY · PLATFORMS &amp; CAMPAIGNS","Where the week's contribution moved")}
    <h2>Platform × brand</h2><div class="sub">Change in contribution (AED), this week vs last week, every combination</div>
    <table><tr><th>Brand</th>${gIdx.map(i=>`<th class="c">${lg(D.aggs[i],16)}<br>${E(D.aggs[i])}</th>`).join("")}</tr>${gRows}</table>
@@ -27753,8 +27786,9 @@ setTimeout(dgaHookExport,50); // after busy_ui's wrapper, so the "Building the P
 function dgaAdTable(H){const{E,n0,lg,BOARD,SMALLP,D,chg,adNotes}=H;
   const has=typeof cpcLoaded!=="undefined"&&cpcLoaded&&typeof cpcData!=="undefined";
   const act=has?cpcData.filter(r=>(r.status==="Active"||r.status==="Critical")&&!(typeof CPC_EXCLUDE_AGGS!=="undefined"&&CPC_EXCLUDE_AGGS.has(String(r.aggregator).toLowerCase()))&&!SMALLP.has(r.aggregator)):[];
+  const cxN=(adNotes||[]).filter(x=>x.startsWith("⛔")),cxH=BOARD&&cxN.length?`<ul style="margin:7px 0 0;padding-left:16px;font-size:10.5px;line-height:1.5">${cxN.map(x=>`<li>${x}</li>`).join("")}</ul>`:""; // v614: board sees cancellations only
   const wk=`<div class="sub" style="margin-top:6px">Ad spend this week <b>AED ${n0(D.tw.adCost)}</b> ${chg(D.tw.adCost,D.lw.adCost,true)} vs last week · yesterday AED ${n0(D.y.adCost)}</div>`;
-  if(!act.length)return`<h2>Ad spend — budgets running now</h2><div class="sub">From the Ad Investments sheet</div><div class="note" style="font-size:11px">${has?"No ad budgets are running today according to the Ad Investments sheet.":"The Ad Investments sheet wasn't loaded when this Digest was made."}</div>${wk}`;
+  if(!act.length)return`<h2>Ad spend — budgets running now</h2><div class="sub">From the Ad Investments sheet</div><div class="note" style="font-size:11px">${has?"No ad budgets are running today according to the Ad Investments sheet.":"The Ad Investments sheet wasn't loaded when this Digest was made."}</div>${wk}${(adNotes||[]).filter(x=>x.startsWith("⛔")).length?`<ul style="margin:7px 0 0;padding-left:16px;font-size:10.5px;line-height:1.5">${adNotes.filter(x=>x.startsWith("⛔")).map(x=>`<li>${x}</li>`).join("")}</ul>`:""}`;
   const PO=["Talabat","Deliveroo","Careem","Noon","Keeta","Instashop","Smiles"],plats=PO.filter(p=>act.some(r=>r.aggregator===p)).concat([...new Set(act.map(r=>r.aggregator))].filter(p=>!PO.includes(p)));
   const brands=BR.map(b=>b.n).filter(b=>act.some(r=>r.brand===b));
   const cellOf=rs=>{if(!rs.length)return null;const x={alloc:0,spent:0,left:0,burn:0};rs.forEach(r=>{x.alloc+=r.budgetAlloc||0;x.spent+=r.budgetSpent||0;x.left+=Math.max(0,r.leftover||0);x.burn+=r.liveBurn||0;});x.pc=x.alloc>0?x.spent/x.alloc*100:0;x.days=x.left>5&&x.burn>0?Math.floor(x.left/x.burn):null;return x;};
@@ -27763,7 +27797,7 @@ function dgaAdTable(H){const{E,n0,lg,BOARD,SMALLP,D,chg,adNotes}=H;
     +`<tr class="tot"><td>All brands</td>${plats.map(p=>`<td class="c">${show(cellOf(act.filter(r=>r.aggregator===p)))}</td>`).join("")}<td class="c" style="border-left:2px solid var(--line)">${show(cellOf(act))}</td></tr>`;
   return`<h2>Ad spend — budgets running now</h2><div class="sub">AED spent / budget and % used · red = used up or ≤3 days left at the current pace · Careem &amp; Noon budgets are one pool per brand</div>
    <table class="fx"><colgroup><col style="width:16%">${plats.map(()=>`<col style="width:${(68/plats.length).toFixed(2)}%">`).join("")}<col style="width:16%"></colgroup><tr><th>Brand</th>${plats.map(p=>`<th class="c">${lg(p,16)}<br>${E(p)}</th>`).join("")}<th class="c" style="border-left:2px solid var(--line)">Total</th></tr>${rows}</table>${wk}
-   ${adNotes&&adNotes.length&&!BOARD?`<ul style="margin:7px 0 0;padding-left:16px;font-size:10.5px;line-height:1.5">${adNotes.map(x=>`<li>${x}</li>`).join("")}</ul>`:""}`;
+   ${adNotes&&adNotes.length&&!BOARD?`<ul style="margin:7px 0 0;padding-left:16px;font-size:10.5px;line-height:1.5">${adNotes.map(x=>`<li>${x}</li>`).join("")}</ul>`:""}${cxH}`;
 }
 
 // v610: sales mix donut — inner ring = channels (delivery, dine-in, takeaway, catering), outer ring = delivery split by brand
