@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-22-619";
+const BUILD_VERSION="2026-10-22-620";
 const BUILD_NOTES=[
+  "📊 CONTRIBUTION CHANGE IN EVERY BREAKDOWN TABLE + DEEP DIVES REDRAWN (build 620). Per Nikhil: (1) Platforms → 'Brand performance on X', Brands → Outlet × Platform, Outlets → brand table and Brand × Platform table now have a Δ Contribution column next to Δ Orders and Δ Net Sales; the three Δ headings show the comparison date on a second line and the columns stay aligned. (2) Brands → Deep Dive by Outlet and by Platform (option C): one table so the header, rows and opened rows line up; share is a bar under the name with the % beside it; Contribution and Δ Contribution added; each change is a coloured ▲/▼ pill with the amount under it. (3) Phones with Chrome's 'Desktop site' ticked get a one-line hint at the bottom to untick it (× hides it for 7 days).",
   "📱 PHONE LAYOUT + ONE VAT BASIS + EXACT FIGURES ON HOVER (build 619). (1) Phones (screens up to 760 px wide — the laptop layout is unchanged): the sidebar no longer sits on screen; ☰ MENU opens it as a slide-over menu (tap a page and it closes). Pages are never wider than the screen, so Chrome stops zooming out; wide tables swipe sideways inside their own card with the first column pinned; filter groups sit one per line with their buttons in a swipeable row; Platforms, Brands and Overview cards go one per row with their numbers in two columns; long headers and button rows wrap. (2) The Incl. VAT / Excl. VAT switch now also applies on Brands, Outlets and Platforms (it was Overview and Compare only), so the same AOV shows everywhere — your choice is remembered. (3) Group sales on Overview: hover Delivery / Dine-in / Takeaway (e.g. AED 128.4K) for the exact amount again; same for the outlet ranking and the 'direct & other till' line.",
   "🟡 KEETA MINIMUM-COMMISSION CARD STAYS PUT (build 618). Per Nikhil: on Platforms → Keeta the minimum-commission card showed, then vanished after clicking another platform and coming back to Keeta. Clicking a platform card redraws the page directly, and that redraw didn't add the card back (only opening the page did). It's now added on every redraw.",
   "🧾 WRONG SETTLEMENTS ARE NOW CAUGHT (build 617). Per Nikhil, after two DIP (Fyoozhen) dine-in bills on 20 Oct were settled to 1041 Fyoo zhen Careem (delivery) instead of 1030 Careem Dine Out. Every Credit Sales line shows the account AND how the bill was punched, so each morning's pull (and 'Check these days again') now flags: ⛔ dine-in / takeaway bills on a delivery account; ⛔ delivery bills on a dine-out account (Careem Dine Out, Noon Out, Zomato); ⛔ bills on another brand's account; ⚠ bills settled by hand with no platform order number (Finance can't match them to the platform's statement); ⚠ order numbers that look like a different platform's (Talabat 10 digits, Careem 9). Also ℹ when an outlet settled several orders by hand while Deliverect handled the rest (Deliverect may have missed them). Shown in POS Sync → Till vs dashboard with '✓ Told Finance' / 'OK as is' (a settled bill can't be changed in Microsys), an Export for Finance CSV, a count per outlet, the red menu badge, the morning notification and Nikhil's Daily Digest. NEEDS the new worker.js (keeps the findings with each day).",
@@ -6968,113 +6969,56 @@ function brToggleDeepDiveOutlet(){brDeepDiveOutletOpen=!brDeepDiveOutletOpen;ren
 function brToggleDeepDivePlatform(){brDeepDivePlatformOpen=!brDeepDivePlatformOpen;renderBrands();}
 function brToggleDeepDiveOutletRow(branch){brDeepDiveOutletExpanded=brDeepDiveOutletExpanded===branch?null:branch;renderBrands();}
 function brToggleDeepDivePlatformRow(agg){brDeepDivePlatformExpanded=brDeepDivePlatformExpanded===agg?null:agg;renderBrands();}
+// Option C (Nikhil picked it, 22 Oct): one real table per panel, so the header, the rows and the expanded rows share
+// the same columns. Share sits as a bar under the name (scaled to the largest row, real % beside it); every change is a
+// coloured ▲/▼ pill with the amount under it; Contribution and Δ Contribution added.
+function brDDTheme(){const d=_darkPage;return{d,border:d?"#2A3A55":"#E2E8F0",soft:d?"rgba(42,58,85,.45)":"#EEF2F7",muted:d?"#8393AB":"#64748B",num:d?"#CBD5E1":"#334155",text:d?"#F1F5F9":"#0F172A",track:d?"#24324A":"#E2E8F0",subBg:d?"rgba(15,23,42,.55)":"#F8FAFC"};}
+function brDDPill(cur,prev,money){const pct=pctOf(cur,prev);if(pct==null||isNaN(pct))return'<span style="color:#94a3b8">—</span>';
+  const d=cur-(prev||0),up=d>=0,clr=pctClr(pct),abs=money?fmtAEDTip(Math.abs(d)):Math.abs(Math.round(d)).toLocaleString();
+  return`<span style="display:inline-block;min-width:62px;text-align:center;padding:2px 7px;border-radius:999px;font-weight:800;font-size:11.5px;color:${clr};background:${clr}1F;border:1px solid ${clr}55;white-space:nowrap">${up?"▲":"▼"} ${Math.abs(pct).toFixed(1)}%</span><div style="font-size:10.5px;color:#94a3b8;margin-top:2px;white-space:nowrap">${up?"+":"−"}${abs}</div>`;}
+function brDDHead(T,first,compShort){
+  const th=(t,al)=>`<th style="text-align:${al};padding:10px 12px;font-size:10.5px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:${T.muted};white-space:nowrap;vertical-align:bottom;border-bottom:1px solid ${T.border}">${t}</th>`;
+  const sub=`<div style="font-weight:400;font-size:9px;color:${T.muted};text-transform:none;letter-spacing:0;margin-top:2px">${compShort}</div>`;
+  return`<thead><tr>${th(first,"left")}${th("Orders","right")}${th("Net Sales","right")}${th("AOV","right")}${th("💵 Contribution","right")}${th("Δ Orders"+sub,"center")}${th("Δ Net Sales"+sub,"center")}${th("Δ Contribution"+sub,"center")}</tr></thead>`;}
+// o: name, share (% of parent), maxShare (largest share in this group → full bar), clr, ld, pd, sub, last, accent, click
+function brDDRow(T,o){const pref=curFilters().end||dk(new Date()),cur=sumR(o.ld),prv=sumR(o.pd),has=o.pd.length>0;
+  const ct=computeProfitability(o.ld,pref).contribution,cp=has?computeProfitability(o.pd,pref).contribution:null,mg=cur.sales>0?ct/cur.sales*100:0;
+  const pad=o.sub?"7px 12px":"11px 12px",bd=`border-bottom:1px solid ${o.sub&&!o.last?T.soft:T.border};`,bg=o.sub?`background:${T.subBg};`:"";
+  const td=(h,al,ex)=>`<td style="text-align:${al||"right"};padding:${pad};${bd}${bg}${ex||""}">${h}</td>`;
+  const w=o.maxShare>0?Math.min(100,o.share/o.maxShare*100):0;
+  const name=`<div style="min-width:0">${o.name}<div style="display:flex;align-items:center;gap:8px;margin-top:5px"><div style="flex:1;max-width:180px;min-width:90px;height:5px;border-radius:3px;background:${T.track};overflow:hidden"><div style="height:100%;width:${w.toFixed(1)}%;background:${o.clr}"></div></div><span style="font-size:10.5px;color:${T.muted};font-weight:600">${o.share.toFixed(0)}%</span></div></div>`;
+  return`<tr${o.click?` onclick="${o.click}" style="cursor:pointer"`:""}>
+    ${td(name,"left",`${o.sub?`box-shadow:inset 3px 0 0 ${o.accent};padding-left:34px;`:""}white-space:nowrap;font-size:${o.sub?12.5:13.5}px`)}
+    ${td(`<span style="color:${T.num}">${cur.orders.toLocaleString()}</span>`)}
+    ${td(`<b style="color:${T.text}">${fmtAEDTip(cur.sales)}</b>`)}
+    ${td(`<span style="color:${T.num}">${cur.orders>0?`AED ${(cur.sales/cur.orders).toFixed(1)}`:"—"}</span>`)}
+    ${td(`<b style="color:${profitClr(ct)}">${fmtAEDTip(ct)}</b> <span style="font-size:10.5px;opacity:.7;color:${profitClr(ct)}">${mg.toFixed(1)}%</span>`,"right","white-space:nowrap")}
+    ${td(brDDPill(cur.orders,has?prv.orders:undefined,false),"center")}
+    ${td(brDDPill(cur.sales,has?prv.sales:undefined,true),"center")}
+    ${td(brDDPill(ct,cp,true),"center")}</tr>`;}
+function brDDWrap(T,title,clr,note,first,body){return`<div class="card" style="margin-bottom:12px">
+    <div class="ct" style="color:${clr}">${title} <span style="color:${T.muted};font-weight:400;text-transform:none;letter-spacing:0;font-size:11px">${note}</span></div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:960px">${brDDHead(T,first,getCompShort())}<tbody>${body}</tbody></table></div></div>`;}
 function brDeepDiveOutletPanel(ld,pd,b){
-  const T={border:_darkPage?DARK_THEME.cardBorder:"#E2E8F0",muted:_darkPage?DARK_THEME.textMuted:"#64748B",text:_darkPage?DARK_THEME.textPrimary:"#0F172A",bg:_darkPage?DARK_THEME.bg:"#F8FAFC"};
-  const compShort=getCompShort();
-  const m=mkMap(ld.filter(r=>r.branch!=='(brand-level)'),r=>r.branch);
-  const pm0=mkMap(pd.filter(r=>r.branch!=='(brand-level)'),r=>r.branch);
-  const rows=Object.values(m).map(c=>({branch:c.k,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,prev:pm0[c.k]})).sort((a,b2)=>b2.sales-a.sales);
-  const maxSales=Math.max(1,...rows.map(r=>r.sales));
-  const brandClr=b?.c||"#f59e0b";
-  const body=rows.map(r=>{
-    const expanded=brDeepDiveOutletExpanded===r.branch;
-    const barPct=Math.round(r.sales/maxSales*100);
-    let sub="";
-    if(expanded){
-      const pm=mkMap(ld.filter(x=>x.branch===r.branch),x=>x.aggregator);
-      const ppm=mkMap(pd.filter(x=>x.branch===r.branch),x=>x.aggregator);
-      const prows=Object.values(pm).map(c=>({aggregator:c.k,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,prev:ppm[c.k]})).sort((a,b2)=>b2.sales-a.sales);
-      sub=`<div style="margin:0 4px 10px 26px;padding:8px 12px;background:${T.bg};border-radius:8px;border:1px solid ${T.border};overflow-x:auto">
-        <div style="min-width:620px">
-        ${prows.map(p=>`<div style="display:flex;align-items:center;gap:10px;padding:4px 0">
-          <span style="width:8px;height:8px;border-radius:2px;background:${AC[p.aggregator]||"#888"};flex-shrink:0"></span>
-          <span style="flex:2 1 100px;font-size:12px;font-weight:700;color:${AC[p.aggregator]||"#888"}">${p.aggregator}</span>
-          <span style="flex:1 1 55px;text-align:right;font-size:11.5px;color:${T.muted}">${p.orders.toLocaleString()}</span>
-          <span style="flex:1 1 85px;text-align:right;font-size:12px;font-weight:700;color:${T.text}">${fmtAEDTip(p.sales)}</span>
-          <span style="flex:1 1 65px;text-align:right;font-size:11.5px;color:${T.muted}">${p.orders>0?`AED ${p.aov.toFixed(1)}`:"—"}</span>
-          <span style="flex:1 1 80px;text-align:right;font-size:11px">${fmtChgCell(p.orders,p.prev?.orders,false)}</span>
-          <span style="flex:1 1 95px;text-align:right;font-size:11px">${fmtChgCell(p.sales,p.prev?.sales,true)}</span>
-        </div>`).join("")}
-        </div>
-      </div>`;
-    }
-    return`<div style="border-top:1px solid ${T.border}">
-      <button onclick="brToggleDeepDiveOutletRow('${r.branch.replace(/'/g,"\\'")}')" style="all:unset;display:flex;align-items:center;gap:14px;padding:10px 4px;cursor:pointer;width:100%;box-sizing:border-box;min-width:760px">
-        <span style="font-size:13px;width:14px;color:${T.muted}">${expanded?"▾":"▸"}</span>
-        <span style="flex:2 1 130px;font-size:13px;font-weight:700;color:${T.text}">${r.branch}</span>
-        <span style="flex:2 1 90px;height:8px;border-radius:4px;background:${T.bg};overflow:hidden;display:block"><span style="display:block;height:100%;background:${brandClr};width:${barPct}%"></span></span>
-        <span style="flex:1 1 60px;text-align:right;font-size:12.5px;color:${T.muted}">${r.orders.toLocaleString()}</span>
-        <span style="flex:1 1 95px;text-align:right;font-size:13px;font-weight:700;color:${T.text}">${fmtAEDTip(r.sales)}</span>
-        <span style="flex:1 1 70px;text-align:right;font-size:12.5px;color:${T.muted}">${r.orders>0?`AED ${r.aov.toFixed(1)}`:"—"}</span>
-        <span style="flex:1 1 90px;text-align:right;font-size:12px">${fmtChgCell(r.orders,r.prev?.orders,false)}</span>
-        <span style="flex:1 1 105px;text-align:right;font-size:12px">${fmtChgCell(r.sales,r.prev?.sales,true)}</span>
-      </button>
-      ${sub}
-    </div>`;
-  }).join("");
-  return`<div class="card" style="margin-bottom:12px">
-    <div class="ct" style="color:${brandClr}">${selBrand} — Deep Dive by Outlet <span style="color:${T.muted};font-weight:400;text-transform:none;letter-spacing:0;font-size:11px">· click an outlet to see its platform split</span></div>
-    <div style="overflow-x:auto">
-    <div style="display:flex;align-items:center;gap:14px;padding:0 4px 8px;font-size:10.5px;color:${T.muted};text-transform:uppercase;font-weight:800;letter-spacing:.5px;min-width:760px">
-      <span style="width:14px"></span><span style="flex:2 1 130px">Outlet</span><span style="flex:2 1 90px">Share</span><span style="flex:1 1 60px;text-align:right">Orders</span><span style="flex:1 1 95px;text-align:right">Net Sales</span><span style="flex:1 1 70px;text-align:right">AOV</span><span style="flex:1 1 90px;text-align:right">Δ Orders <span style="font-weight:400">${compShort}</span></span><span style="flex:1 1 105px;text-align:right">Δ Net Sales <span style="font-weight:400">${compShort}</span></span>
-    </div>
-    ${body}
-    </div>
-  </div>`;
+  const T=brDDTheme(),brandClr=b?.c||"#f59e0b";
+  const L=ld.filter(r=>r.branch!=='(brand-level)'),P=pd.filter(r=>r.branch!=='(brand-level)'),tot=sumR(L).sales||1;
+  const outs=[...new Set(L.map(r=>r.branch))].map(br=>({br,s:sumR(L.filter(r=>r.branch===br)).sales})).sort((a,c)=>c.s-a.s),mx=outs.length?outs[0].s/tot*100:0;
+  const body=outs.map(({br,s})=>{const ex=brDeepDiveOutletExpanded===br,lr=L.filter(r=>r.branch===br),pr=P.filter(r=>r.branch===br);
+    let h=brDDRow(T,{name:`<span style="color:${T.muted};display:inline-block;width:16px">${ex?"▾":"▸"}</span><b style="color:${T.text}">${br}</b>`,share:s/tot*100,maxShare:mx,clr:brandClr,ld:lr,pd:pr,click:`brToggleDeepDiveOutletRow('${br.replace(/'/g,"\\'")}')`});
+    if(ex){const aggs=[...new Set(lr.map(r=>r.aggregator))].map(a=>({a,s:sumR(lr.filter(r=>r.aggregator===a)).sales})).sort((x,y)=>y.s-x.s),m2=aggs.length&&s?aggs[0].s/s*100:0;
+      h+=aggs.map(({a,s:as},i)=>brDDRow(T,{sub:true,last:i===aggs.length-1,accent:brandClr,name:`<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${AC[a]||"#888"};margin-right:8px"></span><b style="color:${AC[a]||"#888"}">${a}</b>`,share:s?as/s*100:0,maxShare:m2,clr:AC[a]||"#888",ld:lr.filter(r=>r.aggregator===a),pd:pr.filter(r=>r.aggregator===a)})).join("");}
+    return h;}).join("");
+  return brDDWrap(T,`${selBrand} — Deep Dive by Outlet`,brandClr,`· click an outlet to see its platform split · % = share of ${selBrand}'s net sales (platform rows: of that outlet) · bars scaled to the largest`,"Outlet",body);
 }
 function brDeepDivePlatformPanel(ld,pd){
-  const T={border:_darkPage?DARK_THEME.cardBorder:"#E2E8F0",muted:_darkPage?DARK_THEME.textMuted:"#64748B",text:_darkPage?DARK_THEME.textPrimary:"#0F172A",bg:_darkPage?DARK_THEME.bg:"#F8FAFC"};
-  const compShort=getCompShort();
-  const total=sumR(ld).sales;
-  const m=mkMap(ld,r=>r.aggregator);
-  const pm0=mkMap(pd,r=>r.aggregator);
-  const rows=Object.values(m).map(c=>({aggregator:c.k,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,share:total>0?c.sales/total*100:0,prev:pm0[c.k]})).sort((a,b2)=>b2.sales-a.sales);
-  const body=rows.map(r=>{
-    const expanded=brDeepDivePlatformExpanded===r.aggregator;
-    const clr=AC[r.aggregator]||"#888";
-    let sub="";
-    if(expanded){
-      const om=mkMap(ld.filter(x=>x.aggregator===r.aggregator&&x.branch!=='(brand-level)'),x=>x.branch);
-      const pom=mkMap(pd.filter(x=>x.aggregator===r.aggregator&&x.branch!=='(brand-level)'),x=>x.branch);
-      const orows=Object.values(om).map(c=>({branch:c.k,orders:c.orders,sales:c.sales,aov:c.orders>0?c.sales/c.orders:0,prev:pom[c.k]})).sort((a,b2)=>b2.sales-a.sales);
-      sub=`<div style="margin:0 4px 10px 26px;padding:8px 12px;background:${T.bg};border-radius:8px;border:1px solid ${T.border};overflow-x:auto">
-        <div style="min-width:620px">
-        ${orows.map(o=>`<div style="display:flex;align-items:center;gap:10px;padding:4px 0">
-          <span style="font-size:11px">📍</span>
-          <span style="flex:2 1 110px;font-size:12px;font-weight:700;color:${T.text}">${o.branch}</span>
-          <span style="flex:1 1 55px;text-align:right;font-size:11.5px;color:${T.muted}">${o.orders.toLocaleString()}</span>
-          <span style="flex:1 1 85px;text-align:right;font-size:12px;font-weight:700;color:${T.text}">${fmtAEDTip(o.sales)}</span>
-          <span style="flex:1 1 65px;text-align:right;font-size:11.5px;color:${T.muted}">${o.orders>0?`AED ${o.aov.toFixed(1)}`:"—"}</span>
-          <span style="flex:1 1 80px;text-align:right;font-size:11px">${fmtChgCell(o.orders,o.prev?.orders,false)}</span>
-          <span style="flex:1 1 95px;text-align:right;font-size:11px">${fmtChgCell(o.sales,o.prev?.sales,true)}</span>
-        </div>`).join("")}
-        </div>
-      </div>`;
-    }
-    return`<div style="border-top:1px solid ${T.border}">
-      <button onclick="brToggleDeepDivePlatformRow('${r.aggregator.replace(/'/g,"\\'")}')" style="all:unset;display:flex;align-items:center;gap:14px;padding:10px 4px;cursor:pointer;width:100%;box-sizing:border-box;min-width:760px">
-        <span style="font-size:13px;width:14px;color:${T.muted}">${expanded?"▾":"▸"}</span>
-        <span style="width:8px;height:8px;border-radius:2px;background:${clr};flex-shrink:0"></span>
-        <span style="flex:2 1 90px;font-size:13px;font-weight:700;color:${clr}">${r.aggregator}</span>
-        <span style="flex:1 1 55px;text-align:right;font-size:12.5px;color:${T.muted}">${r.share.toFixed(0)}%</span>
-        <span style="flex:1 1 60px;text-align:right;font-size:12.5px;color:${T.muted}">${r.orders.toLocaleString()}</span>
-        <span style="flex:1 1 95px;text-align:right;font-size:13px;font-weight:700;color:${T.text}">${fmtAEDTip(r.sales)}</span>
-        <span style="flex:1 1 70px;text-align:right;font-size:12.5px;color:${T.muted}">${r.orders>0?`AED ${r.aov.toFixed(1)}`:"—"}</span>
-        <span style="flex:1 1 90px;text-align:right;font-size:12px">${fmtChgCell(r.orders,r.prev?.orders,false)}</span>
-        <span style="flex:1 1 105px;text-align:right;font-size:12px">${fmtChgCell(r.sales,r.prev?.sales,true)}</span>
-      </button>
-      ${sub}
-    </div>`;
-  }).join("");
-  return`<div class="card" style="margin-bottom:12px">
-    <div class="ct" style="color:#4E9BFF">${selBrand} — Deep Dive by Platform <span style="color:${T.muted};font-weight:400;text-transform:none;letter-spacing:0;font-size:11px">· click a platform to see its outlet split</span></div>
-    <div style="overflow-x:auto">
-    <div style="display:flex;align-items:center;gap:14px;padding:0 4px 8px;font-size:10.5px;color:${T.muted};text-transform:uppercase;font-weight:800;letter-spacing:.5px;min-width:760px">
-      <span style="width:22px"></span><span style="flex:2 1 90px">Platform</span><span style="flex:1 1 55px;text-align:right">Share</span><span style="flex:1 1 60px;text-align:right">Orders</span><span style="flex:1 1 95px;text-align:right">Net Sales</span><span style="flex:1 1 70px;text-align:right">AOV</span><span style="flex:1 1 90px;text-align:right">Δ Orders <span style="font-weight:400">${compShort}</span></span><span style="flex:1 1 105px;text-align:right">Δ Net Sales <span style="font-weight:400">${compShort}</span></span>
-    </div>
-    ${body}
-    </div>
-  </div>`;
+  const T=brDDTheme(),tot=sumR(ld).sales||1;
+  const aggs=[...new Set(ld.map(r=>r.aggregator))].map(a=>({a,s:sumR(ld.filter(r=>r.aggregator===a)).sales})).sort((x,y)=>y.s-x.s),mx=aggs.length?aggs[0].s/tot*100:0;
+  const body=aggs.map(({a,s})=>{const ex=brDeepDivePlatformExpanded===a,clr=AC[a]||"#888",lr=ld.filter(r=>r.aggregator===a),pr=pd.filter(r=>r.aggregator===a);
+    let h=brDDRow(T,{name:`<span style="color:${T.muted};display:inline-block;width:16px">${ex?"▾":"▸"}</span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${clr};margin-right:8px"></span><b style="color:${clr}">${a}</b>`,share:s/tot*100,maxShare:mx,clr,ld:lr,pd:pr,click:`brToggleDeepDivePlatformRow('${a.replace(/'/g,"\\'")}')`});
+    if(ex){const L=lr.filter(r=>r.branch!=='(brand-level)'),P=pr.filter(r=>r.branch!=='(brand-level)');const outs=[...new Set(L.map(r=>r.branch))].map(br=>({br,s:sumR(L.filter(r=>r.branch===br)).sales})).sort((x,y)=>y.s-x.s),m2=outs.length&&s?outs[0].s/s*100:0;
+      h+=outs.map(({br,s:os},i)=>brDDRow(T,{sub:true,last:i===outs.length-1,accent:clr,name:`<span style="margin-right:6px">📍</span><b style="color:${T.text}">${br}</b>`,share:s?os/s*100:0,maxShare:m2,clr,ld:L.filter(r=>r.branch===br),pd:P.filter(r=>r.branch===br)})).join("");}
+    return h;}).join("");
+  return brDDWrap(T,`${selBrand} — Deep Dive by Platform`,"#4E9BFF",`· click a platform to see its outlet split · % = share of ${selBrand}'s net sales (outlet rows: of that platform) · bars scaled to the largest`,"Platform",body);
 }
 function brDeepDiveSection(ld,pd,b){
   const T={border:_darkPage?DARK_THEME.cardBorder:"#E2E8F0",muted:_darkPage?DARK_THEME.textMuted:"#64748B",text:_darkPage?DARK_THEME.textPrimary:"#0F172A"};
@@ -7112,6 +7056,7 @@ function renderBrands(){
     const pm2=pm[`${r.branch}|${r.aggregator}`];
     const rowRecs=ld.filter(x=>x.branch===r.branch&&x.aggregator===r.aggregator);
     const prof=computeProfitability(rowRecs,profDateRef).contribution;
+    const profP2=computeProfitability(pd.filter(x=>x.branch===r.branch&&x.aggregator===r.aggregator),profDateRef).contribution; // v620
     const profMargin=r.sales>0?prof/r.sales*100:0;
     return{cells:[
     `<strong>${r.branch}</strong>`,
@@ -7121,11 +7066,12 @@ function renderBrands(){
     disc>0?`<span style="color:${depth>=20?(_darkPage?'#FF6B6B':'#EF4444'):depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
     `<span ${profTipHook(rowRecs,pd.filter(x=>x.branch===r.branch&&x.aggregator===r.aggregator),profDateRef)} style="cursor:help;color:${profitClr(prof)};font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
     fmtChgCell(r.orders,pm2?.orders,false),
-    fmtChgCell(r.sales,pm2?.sales,true)
-  ],sortVals:[r.branch,r.aggregator,r.orders,r.sales,r.aov,disc,depth,prof,r.oc,r.sc]};
+    fmtChgCell(r.sales,pm2?.sales,true),
+    fmtChgCell(prof,profP2,true)
+  ],sortVals:[r.branch,r.aggregator,r.orders,r.sales,r.aov,disc,depth,prof,r.oc,r.sc,pctOf(prof,profP2)]};
   });
   const mutedClr=_darkPage?DARK_THEME.textMuted:"#64748b";
-  const heads=["Outlet","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %","💵 Profitability",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
+  const heads=["Outlet","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %","💵 Profitability",`Δ Orders<br><span style="font-weight:400;font-size:9px;color:#8393AB;text-transform:none;letter-spacing:0">${compShort}</span>`,`Δ Net Sales<br><span style="font-weight:400;font-size:9px;color:#8393AB;text-transform:none;letter-spacing:0">${compShort}</span>`,`Δ Contribution<br><span style="font-weight:400;font-size:9px;color:#8393AB;text-transform:none;letter-spacing:0">${compShort}</span>`];
   const brandDisc=ls.disc||0;const brandGross=ls.sales+brandDisc;const brandDepth=brandGross>0?(brandDisc/brandGross*100):0;
   const brandsStyleOverride=_darkPage?`<style>
       #page-brands{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
@@ -7173,12 +7119,13 @@ function renderOutlets(){
     const brandRows=brandsHere.map(brand=>{const c=sumR(outletData.filter(r=>r.brand===brand));const p=sumR(outletPrev.filter(r=>r.brand===brand));return{brand,...c,aov:c.orders>0?c.sales/c.orders:0,oc:pctOf(c.orders,p.orders),sc:pctOf(c.sales,p.sales)};});
     const region=AUH.has(selOutlet)?'🇦🇪 Abu Dhabi':'🇦🇪 Dubai';
     const mutedClr=_darkPage?DARK_THEME.textMuted:"#64748b";
-    const brHeads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %","💵 Profitability",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
+    const brHeads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %","💵 Profitability",`Δ Orders<br><span style="font-weight:400;font-size:9px;color:#8393AB;text-transform:none;letter-spacing:0">${compShort}</span>`,`Δ Net Sales<br><span style="font-weight:400;font-size:9px;color:#8393AB;text-transform:none;letter-spacing:0">${compShort}</span>`,`Δ Contribution<br><span style="font-weight:400;font-size:9px;color:#8393AB;text-transform:none;letter-spacing:0">${compShort}</span>`];
     const discClr=_darkPage?"#FF6B6B":"#EF4444";
     const brTRows=brandRows.map(b=>{
       const disc=b.disc||0;const gross=b.sales+disc;const depth=gross>0?(disc/gross*100):0;
       const pv=sumR(outletPrev.filter(r=>r.brand===b.brand));
       const prof=computeProfitability(outletData.filter(r=>r.brand===b.brand),profDateRef).contribution;
+      const profP2=computeProfitability(outletPrev.filter(r=>r.brand===b.brand),profDateRef).contribution; // v620
       const profMargin=b.sales>0?prof/b.sales*100:0;
       return{cells:[
       `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.brand,22)}<strong style="color:${BMAP[b.brand]?.c||'#888'}">${b.brand}</strong></span>`,
@@ -7187,14 +7134,16 @@ function renderOutlets(){
       disc>0?`<span style="color:${depth>=20?discClr:depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
       `<span ${profTipHook(outletData.filter(r=>r.brand===b.brand),outletPrev.filter(r=>r.brand===b.brand),profDateRef)} style="cursor:help;color:${profitClr(prof)};font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
       fmtChgCell(b.orders,pv.orders,false),
-      fmtChgCell(b.sales,pv.sales,true)
-    ],sortVals:[b.brand,b.orders,b.sales,b.aov,disc,depth,prof,b.oc,b.sc]};
+      fmtChgCell(b.sales,pv.sales,true),
+      fmtChgCell(prof,profP2,true)
+    ],sortVals:[b.brand,b.orders,b.sales,b.aov,disc,depth,prof,b.oc,b.sc,pctOf(prof,profP2)]};
     });
-    const bpHeads=["Brand","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %","💵 Profitability",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
+    const bpHeads=["Brand","Platform","Orders","Net Sales","AOV","Disc. Burn","Depth %","💵 Profitability",`Δ Orders<br><span style="font-weight:400;font-size:9px;color:#8393AB;text-transform:none;letter-spacing:0">${compShort}</span>`,`Δ Net Sales<br><span style="font-weight:400;font-size:9px;color:#8393AB;text-transform:none;letter-spacing:0">${compShort}</span>`,`Δ Contribution<br><span style="font-weight:400;font-size:9px;color:#8393AB;text-transform:none;letter-spacing:0">${compShort}</span>`];
     const bpTRows=rows.map(r=>{
       const disc=r.disc||0;const gross=r.sales+disc;const depth=gross>0?(disc/gross*100):0;
       const pv=pmM[`${r.brand}|${r.aggregator}`];
       const prof=computeProfitability(outletData.filter(x=>x.brand===r.brand&&x.aggregator===r.aggregator),profDateRef).contribution;
+      const profP2=computeProfitability(outletPrev.filter(x=>x.brand===r.brand&&x.aggregator===r.aggregator),profDateRef).contribution; // v620
       const profMargin=r.sales>0?prof/r.sales*100:0;
       return{cells:[
       `<span style="color:${BMAP[r.brand]?.c||'#888'};font-weight:700;font-size:11px">${r.brand}</span>`,
@@ -7204,8 +7153,9 @@ function renderOutlets(){
       disc>0?`<span style="color:${depth>=20?discClr:depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
       `<span ${profTipHook(outletData.filter(x=>x.brand===r.brand&&x.aggregator===r.aggregator),outletPrev.filter(x=>x.brand===r.brand&&x.aggregator===r.aggregator),profDateRef)} style="cursor:help;color:${profitClr(prof)};font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
       fmtChgCell(r.orders,pv?.orders,false),
-      fmtChgCell(r.sales,pv?.sales,true)
-    ],sortVals:[r.brand,r.aggregator,r.orders,r.sales,r.aov,disc,depth,prof,r.oc,r.sc]};
+      fmtChgCell(r.sales,pv?.sales,true),
+      fmtChgCell(prof,profP2,true)
+    ],sortVals:[r.brand,r.aggregator,r.orders,r.sales,r.aov,disc,depth,prof,r.oc,r.sc,pctOf(prof,profP2)]};
     });
     const outDisc=tot.disc||0;const outGross=tot.sales+outDisc;const outDepth=outGross>0?(outDisc/outGross*100):0;
     const outletsStyleOverride=_darkPage?`<style>
@@ -7588,12 +7538,16 @@ function renderPlatforms(){
   }).join("");
   const mutedClr=_darkPage?DARK_THEME.textMuted:"#64748b";
   const discClr2=_darkPage?"#FF6B6B":"#EF4444";
-  const heads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %","💵 Profitability",`Δ Orders <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`,`Δ Net Sales <span style="font-weight:400;color:${mutedClr}">${compShort}</span>`];
+  const heads=["Brand","Orders","Net Sales","AOV","Disc. Burn","Depth %","💵 Profitability",
+    `Δ Orders<br><span style="font-weight:400;font-size:9px;color:#8393AB;text-transform:none;letter-spacing:0">${compShort}</span>`,
+    `Δ Net Sales<br><span style="font-weight:400;font-size:9px;color:#8393AB;text-transform:none;letter-spacing:0">${compShort}</span>`,
+    `Δ Contribution<br><span style="font-weight:400;font-size:9px;color:#8393AB;text-transform:none;letter-spacing:0">${compShort}</span>`];
   const profDateRefPlatBrand=curFilters().end||dk(new Date());
   const tRows=brandRows.map(b=>{
     const disc=b.cv.disc||0;const gross=b.cv.sales+disc;const depth=gross>0?(disc/gross*100):0;
     const pv=sumR(pd.filter(r=>r.brand===b.n));
     const prof=computeProfitability(ld.filter(r=>r.brand===b.n),profDateRefPlatBrand).contribution;
+    const profPrior=computeProfitability(pd.filter(r=>r.brand===b.n),profDateRefPlatBrand).contribution; // v620
     const profMargin=b.cv.sales>0?prof/b.cv.sales*100:0;
     return{cells:[
     `<span style="display:inline-flex;align-items:center;gap:7px">${logoImg(b.n,22)}<strong style="color:${b.c}">${b.n}</strong></span>`,
@@ -7602,8 +7556,9 @@ function renderPlatforms(){
     disc>0?`<span style="color:${depth>=20?discClr2:depth>=10?'#F59E0B':'#22C55E'};font-weight:700">${depth.toFixed(1)}%</span>`:'—',
     `<span ${profTipHook(ld.filter(r=>r.brand===b.n),pd.filter(r=>r.brand===b.n),profDateRefPlatBrand)} style="cursor:help;color:${profitClr(prof)};font-weight:700">${fmtAEDTip(prof)} <span style="opacity:.6;font-size:10px">${profMargin.toFixed(1)}%</span></span>`,
     fmtChgCell(b.cv.orders,pv.orders,false),
-    fmtChgCell(b.cv.sales,pv.sales,true)
-  ],sortVals:[b.n,b.cv.orders,b.cv.sales,b.cv.orders>0?b.cv.sales/b.cv.orders:0,disc,depth,prof,b.oc,b.sc]};
+    fmtChgCell(b.cv.sales,pv.sales,true),
+    fmtChgCell(prof,profPrior,true)
+  ],sortVals:[b.n,b.cv.orders,b.cv.sales,b.cv.orders>0?b.cv.sales/b.cv.orders:0,disc,depth,prof,b.oc,b.sc,pctOf(prof,profPrior)]};
   });
   const platStyleOverride=_darkPage?`<style>
       #page-platforms{background:${DARK_THEME.bg};border-radius:12px;padding:16px 20px}
@@ -28918,3 +28873,14 @@ function mobWrapTables(root){if(!mobIs())return;(root||document).querySelectorAl
   const mo=new MutationObserver(()=>{clearTimeout(mobInit._t);mobInit._t=setTimeout(()=>{try{mobWrapTables();}catch(e){}},120);});
   const m=document.getElementById("main-app");if(m)mo.observe(m,{childList:true,subtree:true});else setTimeout(mobInit,300);})();
 window.mobNav=mobNav;
+// v620: phone showing the laptop layout because Chrome's "Desktop site" is ticked (happened to Nikhil, 20 Oct).
+// A phone in desktop mode reports a ~980 px page but a small physical screen with touch → show a one-line hint.
+(function mobDeskHint(){if(!document.body)return setTimeout(mobDeskHint,500);
+  try{const small=Math.min(screen.width,screen.height)<=540,touch=(navigator.maxTouchPoints||0)>0;
+    if(!(small&&touch&&window.innerWidth>760))return;
+    const k="mob_desk_hint_until";if(+localStorage.getItem(k)>Date.now())return;
+    const d=document.createElement("div");d.id="mob-desk-hint";
+    d.style.cssText="position:fixed;left:8px;right:8px;bottom:8px;z-index:99998;background:#1E293B;color:#F1F5F9;border:1px solid #F59E0B;border-radius:12px;padding:14px 44px 14px 16px;font:600 26px/1.35 system-ui,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.4)";
+    d.innerHTML='📱 You are seeing the laptop layout. For the phone layout, open Chrome’s <b>⋮</b> menu and untick <b>Desktop site</b>.<span style="position:absolute;right:14px;top:8px;font-size:30px;cursor:pointer;color:#94A3B8">×</span>';
+    d.querySelector("span").onclick=()=>{try{localStorage.setItem(k,String(Date.now()+7*864e5));}catch(e){}d.remove();};
+    document.body.appendChild(d);}catch(e){}})();
