@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-21-617";
+const BUILD_VERSION="2026-10-22-618";
 const BUILD_NOTES=[
+  "🟡 KEETA MINIMUM-COMMISSION CARD STAYS PUT (build 618). Per Nikhil: on Platforms → Keeta the minimum-commission card showed, then vanished after clicking another platform and coming back to Keeta. Clicking a platform card redraws the page directly, and that redraw didn't add the card back (only opening the page did). It's now added on every redraw.",
   "🧾 WRONG SETTLEMENTS ARE NOW CAUGHT (build 617). Per Nikhil, after two DIP (Fyoozhen) dine-in bills on 20 Oct were settled to 1041 Fyoo zhen Careem (delivery) instead of 1030 Careem Dine Out. Every Credit Sales line shows the account AND how the bill was punched, so each morning's pull (and 'Check these days again') now flags: ⛔ dine-in / takeaway bills on a delivery account; ⛔ delivery bills on a dine-out account (Careem Dine Out, Noon Out, Zomato); ⛔ bills on another brand's account; ⚠ bills settled by hand with no platform order number (Finance can't match them to the platform's statement); ⚠ order numbers that look like a different platform's (Talabat 10 digits, Careem 9). Also ℹ when an outlet settled several orders by hand while Deliverect handled the rest (Deliverect may have missed them). Shown in POS Sync → Till vs dashboard with '✓ Told Finance' / 'OK as is' (a settled bill can't be changed in Microsys), an Export for Finance CSV, a count per outlet, the red menu badge, the morning notification and Nikhil's Daily Digest. NEEDS the new worker.js (keeps the findings with each day).",
   "🧮 FEWER CLOUDFLARE WRITES — 'KV put() limit exceeded' (build 616). The free Cloudflare plan allows 1,000 storage writes a day and on 21 Oct they ran out, so the Raw Microsys report (and anything else that saves) failed until the daily reset (4 AM Dubai). (1) Open dashboards now refresh their sign-in every 30 minutes instead of every 5, and the one-system-per-login pointer every 6 hours — the biggest source of writes. (2) Re-pulling a day no longer rewrites Journal Tape, till-check or low-sales records that haven't changed. (3) Caches and logs (Microsys sign-in, Google token, event log, POS log) no longer break a request when the limit is hit — Raw report, pulls and the till check keep working; only signing in fresh still needs a write. NEEDS the new worker.js.",
   "🔍 RAW MICROSYS REPORT — PICKERS FIXED + CSV DOWNLOAD (build 615). Per Nikhil: on POS Sync → Raw Microsys report, choosing Credit Sales or Sales Discount Details (or another date) snapped straight back to Sales Summary · yesterday — the pickers were saving into the Backfill card's settings. They now stick, and a '⬇ Download CSV' button saves the whole report shown (all rows, not just the 40 on screen).",
@@ -28390,7 +28391,10 @@ function kmPaint(){const pg=document.getElementById("page-platforms");if(!pg)ret
   const top=pg.querySelector(".sm")||null;
   els.forEach(el=>{if(el.id==="km-strip"&&top)top.parentNode.insertBefore(el,top);else if(anchor)anchor.parentNode.insertBefore(el,anchor);else pg.appendChild(el);});}
 (function kmHookPlat(){if(typeof renderPlatforms!=="function"||typeof renderPage!=="function"||!window.lensSet)return setTimeout(kmHookPlat,300);
-  const _rp=renderPage;renderPage=function(p){const r=_rp.apply(this,arguments);if(p==="platforms")try{kmPaint();}catch(e){console.warn(e);}return r;};window.renderPage=renderPage;})();
+  const _rp=renderPage;renderPage=function(p){const r=_rp.apply(this,arguments);if(p==="platforms")try{kmPaint();}catch(e){console.warn(e);}return r;};window.renderPage=renderPage;
+  // v618: clicking a platform card calls renderPlatforms() directly (not renderPage), which redrew the page without the
+  // Keeta minimum-commission card — it showed on first open, then vanished after switching to another platform and back.
+  const _rpl=renderPlatforms;renderPlatforms=function(){const r=_rpl.apply(this,arguments);try{if(typeof curPage==="undefined"||curPage==="platforms")kmPaint();}catch(e){console.warn(e);}return r;};window.renderPlatforms=renderPlatforms;})();
 window.kmToggle=kmToggle;window.kmAlerts=kmAlerts;
 
 // ═══ v594 CAMPAIGN PLANNER — consistent discount maths + "continuation" of an offer that is already running ═══
