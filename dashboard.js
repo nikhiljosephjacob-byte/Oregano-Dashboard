@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-22-618";
+const BUILD_VERSION="2026-10-22-619";
 const BUILD_NOTES=[
+  "📱 PHONE LAYOUT + ONE VAT BASIS + EXACT FIGURES ON HOVER (build 619). (1) Phones (screens up to 760 px wide — the laptop layout is unchanged): the sidebar no longer sits on screen; ☰ MENU opens it as a slide-over menu (tap a page and it closes). Pages are never wider than the screen, so Chrome stops zooming out; wide tables swipe sideways inside their own card with the first column pinned; filter groups sit one per line with their buttons in a swipeable row; Platforms, Brands and Overview cards go one per row with their numbers in two columns; long headers and button rows wrap. (2) The Incl. VAT / Excl. VAT switch now also applies on Brands, Outlets and Platforms (it was Overview and Compare only), so the same AOV shows everywhere — your choice is remembered. (3) Group sales on Overview: hover Delivery / Dine-in / Takeaway (e.g. AED 128.4K) for the exact amount again; same for the outlet ranking and the 'direct & other till' line.",
   "🟡 KEETA MINIMUM-COMMISSION CARD STAYS PUT (build 618). Per Nikhil: on Platforms → Keeta the minimum-commission card showed, then vanished after clicking another platform and coming back to Keeta. Clicking a platform card redraws the page directly, and that redraw didn't add the card back (only opening the page did). It's now added on every redraw.",
   "🧾 WRONG SETTLEMENTS ARE NOW CAUGHT (build 617). Per Nikhil, after two DIP (Fyoozhen) dine-in bills on 20 Oct were settled to 1041 Fyoo zhen Careem (delivery) instead of 1030 Careem Dine Out. Every Credit Sales line shows the account AND how the bill was punched, so each morning's pull (and 'Check these days again') now flags: ⛔ dine-in / takeaway bills on a delivery account; ⛔ delivery bills on a dine-out account (Careem Dine Out, Noon Out, Zomato); ⛔ bills on another brand's account; ⚠ bills settled by hand with no platform order number (Finance can't match them to the platform's statement); ⚠ order numbers that look like a different platform's (Talabat 10 digits, Careem 9). Also ℹ when an outlet settled several orders by hand while Deliverect handled the rest (Deliverect may have missed them). Shown in POS Sync → Till vs dashboard with '✓ Told Finance' / 'OK as is' (a settled bill can't be changed in Microsys), an Export for Finance CSV, a count per outlet, the red menu badge, the morning notification and Nikhil's Daily Digest. NEEDS the new worker.js (keeps the findings with each day).",
   "🧮 FEWER CLOUDFLARE WRITES — 'KV put() limit exceeded' (build 616). The free Cloudflare plan allows 1,000 storage writes a day and on 21 Oct they ran out, so the Raw Microsys report (and anything else that saves) failed until the daily reset (4 AM Dubai). (1) Open dashboards now refresh their sign-in every 30 minutes instead of every 5, and the one-system-per-login pointer every 6 hours — the biggest source of writes. (2) Re-pulling a day no longer rewrites Journal Tape, till-check or low-sales records that haven't changed. (3) Caches and logs (Microsys sign-in, Google token, event log, POS log) no longer break a request when the limit is hit — Raw report, pulls and the till check keep working; only signing in fresh still needs a write. NEEDS the new worker.js.",
@@ -26297,6 +26298,7 @@ window.renderChannels=renderChannels;window.chSet=chSet;window.injectChannelsTab
 // v559: channel split by page — Overview & Compare show any mix of channels; the Delivery pages (Brands/Outlets/Platforms)
 // are delivery-only, and the Dine-In & Takeaway pages are in-store only.
 const LENS_PAGES=new Set(["overview","compare"]);
+const VAT_PAGES=new Set(["overview","compare","brands","outlets","platforms"]); // v619: the Incl./Excl. VAT switch also applies to Brands, Outlets and Platforms (Nikhil: one AOV everywhere)
 const LENS_CH=["Dine-In","Takeaway"];
 const LENS_FYZ_SITES=new Set(["DIP (Fyoozhen)","NAS","WTC"]);
 // v555: which brand a site's dine-in & takeaway belongs to (its front-of-house brand). Default Oregano.
@@ -26327,7 +26329,7 @@ function lensInstoreRecords(){
 function lensSync(page){
   if(!lensBase)lensBase=allData.filter(r=>r.channel!=="instore");
   const sel=LENS_PAGES.has(page)?lensSelKey():"D";
-  const ex=LENS_PAGES.has(page)&&chState.vat==="excl"; // v563: Overview & Compare can show sales excl. VAT (÷1.05)
+  const ex=VAT_PAGES.has(page)&&chState.vat==="excl"; // v563/v619: Overview, Compare, Brands, Outlets, Platforms can show sales excl. VAT (÷1.05)
   const key=(sel==="D"&&!ex)?"delivery":sel+":"+lensVer+(ex?":ex":""); // re-applies when the Dine-In & Takeaway tab (re)loads
   if(key===lensApplied)return;
   const hit=_lensIdx.get(key); // v579: switching pages no longer rebuilds the whole index every time
@@ -26404,7 +26406,7 @@ function lensHeroHTML(){
       <div><div style="font-size:11px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:${T.textSecondary}">Group sales · ${lensSel.size===4?"all channels":shown.join(" + ")} · ${getPeriodLabel()}</div>
         <div class="kpi-value-num" style="font-size:40px;font-weight:900;letter-spacing:-1px;font-variant-numeric:tabular-nums;margin-top:4px">${fmtAEDExact(tot)}</div>
         <div style="font-size:13px;color:${T.textMuted};margin-top:2px">${chg(pctOf(tot,totP))} ${cs}</div></div>
-      <div style="display:flex;gap:22px;flex-wrap:wrap">${cur.map(x=>`<div><div style="font-size:11px;font-weight:800;color:${x.c}">● ${x.n}</div><div class="kpi-value-num" style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(x.v.s)}</div><div style="font-size:12px;color:${T.textMuted}">${tot>0?(x.v.s/tot*100).toFixed(1):"0.0"}%${x.p.s>0?" · "+chg(pctOf(x.v.s,x.p.s)):""}</div>${x.till?`<div style="font-size:10.5px;color:${T.textMuted}" title="Delivery-button sales no platform accounts for — direct deliveries paid to us, the Deliverect test order and small till differences. Finance's DSR counts them; Brands, Platforms and Campaigns stay platform-only. Catering is shown as its own channel.">incl. ${fmtAED(x.till)} direct &amp; other till</div>`:""}</div>`).join("")}</div>
+      <div style="display:flex;gap:22px;flex-wrap:wrap">${cur.map(x=>`<div><div style="font-size:11px;font-weight:800;color:${x.c}">● ${x.n}</div><div class="kpi-value-num" title="${fmtAEDExact(x.v.s)}" style="font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;cursor:help;text-decoration:underline dotted;text-decoration-thickness:1px;text-underline-offset:4px">${fmtAED(x.v.s)}</div><div style="font-size:12px;color:${T.textMuted}">${tot>0?(x.v.s/tot*100).toFixed(1):"0.0"}%${x.p.s>0?" · "+chg(pctOf(x.v.s,x.p.s)):""}</div>${x.till?`<div style="font-size:10.5px;color:${T.textMuted}" title="Delivery-button sales no platform accounts for — direct deliveries paid to us, the Deliverect test order and small till differences. Finance's DSR counts them; Brands, Platforms and Campaigns stay platform-only. Catering is shown as its own channel.">incl. ${fmtAEDTip(x.till)} direct &amp; other till</div>`:""}</div>`).join("")}</div>
     </div>
     <div class="rd-grow" style="display:flex;height:12px;border-radius:6px;overflow:hidden;margin:16px 0 10px;background:${T.bg}">${cur.map(x=>`<div title="${x.n}" style="width:${tot>0?x.v.s/tot*100:0}%;background:${x.c}"></div>`).join("")}</div>
     
@@ -26437,7 +26439,7 @@ function lensRankHTML(){
     <span style="font-weight:800;color:${i<3?T.accentOrange:T.textMuted};font-variant-numeric:tabular-nums">${i+1}</span>
     <span style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(x.o)}</span>
     <span class="rd-grow" style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:${T.bg};width:${(x.t/max*100).toFixed(1)}%;animation-delay:${(.15+i*.035).toFixed(3)}s">${shown.map(c=>`<span title="${c} ${fmtAED(x.c[c].sales)}" style="width:${x.t>0?x.c[c].sales/x.t*100:0}%;background:${CH_CLR[c]}"></span>`).join("")}</span>
-    <span style="text-align:right;font-weight:800;font-variant-numeric:tabular-nums">${fmtAED(x.t)}</span>
+    <span style="text-align:right;font-weight:800;font-variant-numeric:tabular-nums">${fmtAEDTip(x.t)}</span>
     <span style="text-align:right;font-size:11.5px;font-weight:700;color:${pctClr(pctOf(x.t,x.p))}">${x.p?fmtPct(pctOf(x.t,x.p)):"—"}</span></div>`;
   return`<div class="card rd-in" id="lens-rank" style="animation-delay:.08s"><div class="ct" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">📍 Outlets ranked by total sales <span style="font-weight:600;font-size:11px;color:${T.textMuted};text-transform:none;letter-spacing:0">· ${lensSel.size===4?"all channels":shown.join(" + ")} · Δ ${cs} · hover an outlet for its channel split</span>
     <span style="margin-left:auto;display:flex;gap:12px;align-items:center;font-size:11px;font-weight:700;text-transform:none;letter-spacing:0">${shown.map(c=>`<span style="color:${T.textSecondary}"><span style="color:${CH_CLR[c]}">●</span> ${c}</span>`).join("")}${lensRankViewSeg()}</span></div>
@@ -26468,7 +26470,7 @@ function rdFilterBar(opts){
   const hasCh=LENS_PAGES.has(curPage),hasCmp=typeof GROWTH_LENS_PAGES!=="undefined"&&GROWTH_LENS_PAGES.has(curPage),hasF=!!(brDD||plDD||ouDD);
   const chHTML=lensControlHTML(),cmpHTML=hasCmp?growthLensSwitchHTML().replace(/<span style="font-size:10px;font-weight:800;letter-spacing:\.6px;text-transform:uppercase;color:[^"]*">Compare<\/span>/,""):"";
   const fHTML=brDD+plDD+ouDD+clearBtn,chipsLine=chips?`<div class="fb-line" style="margin-top:6px">${chips}</div>`:"";
-  if(hasCh&&!/lensVat\(/.test(dateExtra))dateExtra=lensVatSegHTML()+(dateExtra?" "+dateExtra:""); // v563: VAT toggle back on Overview & Compare (it lived on the old All channels page)
+  if((hasCh||VAT_PAGES.has(curPage))&&!/lensVat\(/.test(dateExtra))dateExtra=lensVatSegHTML()+(dateExtra?" "+dateExtra:""); // v563: VAT toggle back on Overview & Compare (it lived on the old All channels page)
   const period=getPeriodLabel(),extra=dateExtra?`<span class="fb-extra">${dateExtra}</span>`:"";
   const row=(label,body,ext)=>`<div class="fb-row"><div class="fb-lbl">${label}</div><div class="fb-body"><div class="fb-line">${body}</div>${ext||""}</div></div>`;
   let h="",cls="fbar fbar2";
@@ -27184,7 +27186,7 @@ function renderDinDisc(){
   const roi=x=>x.disc>0?x.net/x.disc:null,roiTxt=x=>{const r=roi(x);return r==null?"—":`AED ${r.toFixed(1)}`;};
   h+=`<div class="g4 ov-kpi-row">`+
     kpiCard("In-store discounts",fmtAEDTip(all.disc),`${baseGross>0?(all.disc/baseGross*100).toFixed(1):"—"}% of in-store gross · ${cs}`,pctOf(all.disc,allP.disc),null,null,true)+
-    kpiCard(`<span style="color:${DD_TYPE_CLR["Partner programme"]}">●</span> Programmes & promotions`,fmtAEDTip(pp.disc),`brought ${fmtAED(pp.net*vf)} sales on ${Math.round(pp.checks).toLocaleString()} checks`,pctOf(pp.disc,ppP.disc),null,null,true)+
+    kpiCard(`<span style="color:${DD_TYPE_CLR["Partner programme"]}">●</span> Programmes & promotions`,fmtAEDTip(pp.disc),`brought ${fmtAEDTip(pp.net*vf)} sales on ${Math.round(pp.checks).toLocaleString()} checks`,pctOf(pp.disc,ppP.disc),null,null,true)+
     kpiCard("Return per AED 1 discount",roiTxt(pp),`net sales per AED 1 given · ${cs}: ${roiTxt(ppP)}`,pctOf(roi(pp),roi(ppP)))+
     kpiCard("Checks with a discount",Math.round(all.checks).toLocaleString(),`${baseChecks>0?(all.checks/baseChecks*100).toFixed(1):"—"}% of dine-in + takeaway checks`,pctOf(all.checks,allP.checks))+
     kpiCard(`<span style="color:${DD_TYPE_CLR["Team & owners"]}">●</span> Team & owners meals`,fmtAEDTip(team.disc),`staff, management & BOD · ${cs}`,pctOf(team.disc,teamP.disc),null,null,true)+
@@ -28845,3 +28847,74 @@ window.apEnable=apEnable;window.apDisable=apDisable;window.apTest=apTest;window.
   const wait=()=>{if(ready()||Date.now()-t0>38000)setTimeout(build,1500);else setTimeout(wait,500);};
   setTimeout(wait,1000);
 })();
+
+
+// ── v619 PHONE LAYOUT (screens ≤ 760px only — the laptop layout is untouched) ──
+// Per Nikhil (22 Oct): on the phone the laptop sidebar stayed on screen and one wide table made Chrome lay the whole page
+// out at laptop width and shrink it, so cards overlapped. On phones: the sidebar becomes a ☰ slide-over menu, the page is
+// never wider than the screen (wide tables swipe inside their own card, first column pinned), the filter bar becomes
+// swipeable rows, and card grids drop to one or two columns.
+const MOB_Q="(max-width:760px)";
+function mobIs(){try{return matchMedia(MOB_Q).matches;}catch(e){return false;}}
+(function mobCSS(){if(document.getElementById("mob-css"))return;const T=DARK_THEME,s=document.createElement("style");s.id="mob-css";
+s.textContent=`@media ${MOB_Q}{
+html{overflow-x:hidden!important;--sidebar-w:0px!important}
+body{margin-left:0!important;overflow-x:hidden!important;max-width:100vw}
+#main-app{max-width:100vw;overflow-x:hidden}
+#app-sidebar{position:fixed!important;width:284px!important;transform:translateX(-105%);transition:transform .22s ease!important;z-index:9000!important;box-shadow:10px 0 40px rgba(0,0,0,.55)}
+body.mob-nav-open #app-sidebar{transform:none}
+#app-sidebar .sidebar-brand-txt,#app-sidebar .nv-item span,#app-sidebar .nav-sec{display:revert!important}
+#sidebar-toggle{display:none!important}
+#mob-scrim{display:none;position:fixed;inset:0;background:rgba(3,6,14,.6);z-index:8999}
+body.mob-nav-open #mob-scrim{display:block}
+#mobile-nav-drawer{display:none!important}
+#nav-brand-strip{display:none!important}
+#main-app>nav{position:sticky;top:0;left:0!important;z-index:50;padding:8px 12px!important;gap:10px}
+#hub-bar{overflow-x:auto;flex-wrap:nowrap!important;white-space:nowrap;padding:8px 12px!important;gap:6px!important}
+#hub-bar>span:first-child{display:none}
+.pg{padding-left:10px!important;padding-right:10px!important;min-width:0}
+.pg *{min-width:0}
+/* filter bar → one labelled row per group; chips swipe sideways (dropdown rows wrap so their menus aren't clipped) */
+.fbar{padding:10px 12px!important}
+.fbar .fb-tb{display:block!important}
+.fbar .fb-g{display:block!important;margin:0 0 8px!important;padding:0!important;border:none!important;min-width:0}
+.fbar .fb-cap{display:block!important;margin:0 0 4px!important}
+.fbar .fb-sep,.fbar .fb-tb-div{display:none!important}
+.fbar .fb-line{display:flex!important;flex-wrap:nowrap!important;overflow-x:auto;gap:6px!important;scrollbar-width:none;padding-bottom:2px}
+.fbar .fb-line::-webkit-scrollbar{display:none}
+.fbar .fb-line>span{display:flex!important;flex-wrap:nowrap!important;gap:6px}
+.fbar .fb-line:has(.dd-wrap){flex-wrap:wrap!important;overflow:visible}
+.fbar .fb-extra{display:flex!important;flex-wrap:wrap;gap:8px}
+.fbar .preset,.fbar .fpill,.fbar button{flex:0 0 auto;white-space:nowrap}
+/* card grids → one column; inner metric grids → two */
+.g2,.g3,.g4,.g5,.plat-grid,.brand-grid{grid-template-columns:1fr!important}
+.plat-grid>div [style*="grid-template-columns"]{grid-template-columns:1fr 1fr!important;row-gap:10px!important}
+.plat-grid>div>*{max-width:100%}
+.card,.sm{padding:12px!important}
+.mob-tw{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;margin:0 -2px}
+.mob-tw table{min-width:520px}
+.mob-tw tr>*:first-child{position:sticky;left:0;z-index:1;background:${T.card};box-shadow:1px 0 0 ${T.cardBorder}}
+.mob-swipe{font-size:10.5px;color:${T.textMuted};margin:4px 2px 0}
+canvas{max-width:100%!important}
+.fbar2 .fb-row{display:block!important}.fbar2 .fb-line{flex-wrap:wrap!important;overflow:visible!important;row-gap:6px!important}.fbar2 .fb-note{flex-basis:100%;order:3}.fbar2 .fb-line>span[style*="margin-left:auto"]{margin-left:0!important}
+.pg div[style*="justify-content:space-between"],.pg div[style*="justify-content: space-between"]{flex-wrap:wrap!important;row-gap:6px}
+.pg div[style*="display:flex"]>button{flex:0 0 auto}
+#pos-recon div[style*="font-size:30px"]{font-size:22px!important}
+#pos-recon div[style*="font-size:19px"]{font-size:15.5px!important}
+}`;document.head.appendChild(s);})();
+function mobNav(open){document.body.classList.toggle("mob-nav-open",open==null?!document.body.classList.contains("mob-nav-open"):!!open);}
+function mobWrapTables(root){if(!mobIs())return;(root||document).querySelectorAll(".pg table").forEach(t=>{
+  if(t.closest(".mob-tw"))return;let p=t.parentElement,ok=false;for(let i=0;i<3&&p;i++,p=p.parentElement){const ox=getComputedStyle(p).overflowX;if(ox==="auto"||ox==="scroll"){ok=true;break;}}
+  if(ok&&t.parentElement.scrollWidth<=t.parentElement.clientWidth+2){return;}
+  if(t.scrollWidth<=(t.parentElement.clientWidth||0)+2&&!ok)return;
+  const w=document.createElement("div");w.className="mob-tw";t.parentNode.insertBefore(w,t);w.appendChild(t);
+  const n=document.createElement("div");n.className="mob-swipe";n.textContent="↔ swipe for more columns";w.after(n);});}
+(function mobInit(){if(!document.body||typeof DARK_THEME==="undefined")return setTimeout(mobInit,300);
+  if(!document.getElementById("mob-scrim")){const s=document.createElement("div");s.id="mob-scrim";s.onclick=()=>mobNav(false);document.body.appendChild(s);}
+  // the existing ☰ MENU button opens the real sidebar on phones
+  document.addEventListener("click",e=>{if(!mobIs())return;const b=e.target.closest&&e.target.closest("#mobile-menu-btn");if(b){e.preventDefault();e.stopPropagation();mobNav(true);return;}
+    if(document.body.classList.contains("mob-nav-open")&&e.target.closest&&e.target.closest("#app-sidebar .nv-item,#app-sidebar .nv-subs [onclick],#app-sidebar .tab"))setTimeout(()=>mobNav(false),120);},true);
+  // wrap wide tables after every page render
+  const mo=new MutationObserver(()=>{clearTimeout(mobInit._t);mobInit._t=setTimeout(()=>{try{mobWrapTables();}catch(e){}},120);});
+  const m=document.getElementById("main-app");if(m)mo.observe(m,{childList:true,subtree:true});else setTimeout(mobInit,300);})();
+window.mobNav=mobNav;
