@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-23-624";
+const BUILD_VERSION="2026-10-23-625";
 const BUILD_NOTES=[
+  "⏹ STOP BUTTON BACK ON PULL & BACKFILL (build 625). Per Nikhil: the Stop button disappeared from POS Sync's progress panel — it was lost when the new loading panel replaced the old bar (build 600). It's back, top-right next to the %; it stops after the current day, keeps every day already written, and a re-run of the same range skips the done days.",
   "✉️ BOARD BRIEF EMAIL — COMPACT LAYOUT WITH LOGOS (build 624). Per Nikhil (layout X4, no Total column): four headline tiles; one row of five brand cards (logo, net sales, orders, AOV — accent per brand: Oregano maroon, Fyoozhen yellow, Lollorosso green, Smokey's orange, Wicked Wings purple); then one brand × channel table of net sales — Talabat, Deliveroo, Careem, Keeta, Noon, Smiles + Instashop, Dine-in and Takeaway (new plate and paper-bag icons), logos centred over each column — with orders and AOV per channel at the bottom. Dine-in & takeaway count under each site's front-of-house brand. The logos are served by the dashboard (/mail-logo/…), so worker.js is part of this build.",
   "🩹 EMAIL BRAND CARDS FIXED (build 623). The 622 email showed outlets (DMC, Villa, Furjan…) as extra cards and left Oregano's card with delivery only — dine-in and takeaway come from Microsys per site, and they weren't folded into the brand. Now each site's dine-in & takeaway counts under its front-of-house brand, as on the dashboard: DIP (Fyoozhen), NAS and WTC → Fyoozhen; Al Reef → Smokeys; every other site → Oregano. Only the five brands get cards.",
   "✉️ NEW BOARD BRIEF EMAIL (build 622). Per Nikhil (subject S11 + body D): subject '📊 Oregano Group Board Brief · Thu 22 Oct 2026'; the body opens with four tiles — net sales, orders, AOV, dine-in guests (Guests) — then a card per brand (all channels, net sales excl. VAT after discounts, orders, AOV, share of group), from each morning's Microsys pull. Wrong-settlement and low-outlet warnings stay in your phone notification only. To test: in the Apps Script run runNow (re-pulls yesterday — nothing doubles), then emailNow.",
@@ -28535,7 +28536,7 @@ function bzPanel(o){bzCSS();const esc_=typeof esc==="function"?esc:(x=>x);
   const pc=o.pct==null?null:Math.max(0,Math.min(1,o.pct));
   const bits=[o.cur?`Now: <span class="cur">${esc_(o.cur)}</span>`:"","keep this page open",bzFmtLeft(o.left),o.sub||""].filter(Boolean).join(" · ");
   const steps=o.steps&&o.steps.length?`<ul>${o.steps.map(x=>`<li class="${x.st}"><span style="width:14px;text-align:center">${x.st==="ok"?"✓":x.st==="run"?"◐":x.st==="err"?"✗":"○"}</span>${esc_(x.t)}</li>`).join("")}</ul>`:"";
-  return`<div class="bz"><div class="r"><div class="ring"></div><div style="flex:1;min-width:0"><div class="h">${esc_(o.title)}</div><div class="s">${bits}</div></div>${pc==null?"":`<div class="pc">${Math.round(pc*100)}%</div>`}</div><div class="bar"><div class="fill ${pc==null?"ind":""}" style="width:${pc==null?35:Math.max(4,pc*100)}%"></div></div>${steps}</div>`;}
+  return`<div class="bz"><div class="r"><div class="ring"></div><div style="flex:1;min-width:0"><div class="h">${esc_(o.title)}</div><div class="s">${bits}</div></div>${pc==null?"":`<div class="pc">${Math.round(pc*100)}%</div>`}${o.act?`<div style="margin-left:12px;flex:0 0 auto">${o.act}</div>`:""}</div><div class="bar"><div class="fill ${pc==null?"ind":""}" style="width:${pc==null?35:Math.max(4,pc*100)}%"></div></div>${steps}</div>`;}
 // ── what is running right now (read from each feature's own state — no feature has to "register")
 function bzJobs(){const J=[];try{
   const P=typeof posSyncState!=="undefined"?posSyncState:null;
@@ -28589,7 +28590,9 @@ setInterval(bzTick,500);
     if(b.finished)return _o.apply(this,arguments);
     const bf=b.total===b.days+1&&b.total!==b.days*6+1,el=(Date.now()-b.start)/1000,pr=P.progress||[];
     const steps=pr.slice(-6).map(x=>({t:x.t,st:x.st==="ok"?"ok":x.st==="err"?"err":"run"}));
-    return bzPanel({title:`${bf?"Backfilling dine-in & takeaway":"Pulling from Microsys"} — day ${Math.max(1,Math.min(b.day,b.days))} of ${b.days}`,pct:b.done/b.total,left:b.done?el/b.done*(b.total-b.done):null,cur:(pr.slice(-1)[0]||{}).t||"starting",steps});};
+    return bzPanel({title:`${bf?"Backfilling dine-in & takeaway":"Pulling from Microsys"} — day ${Math.max(1,Math.min(b.day,b.days))} of ${b.days}`,pct:b.done/b.total,left:b.done?el/b.done*(b.total-b.done):null,cur:(pr.slice(-1)[0]||{}).t||"starting",steps,
+      // v625: the Stop button was lost when this panel replaced the old bar (build 600) — back next to the %
+      act:P.stop?`<span style="font-size:12px;font-weight:800;color:#F87171;white-space:nowrap">⏹ Stopping after this day…</span>`:`<button onclick="posStop()" style="border:1px solid #EF4444;background:rgba(239,68,68,.12);color:#F87171;border-radius:7px;padding:6px 14px;font:inherit;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap">⏹ Stop</button>`});};
   window.posProgressHTML=posProgressHTML;})();
 // Journal Tape: panel above the card while it reads
 (function bzJT(){if(typeof posJTCardHTML!=="function")return setTimeout(bzJT,500);const _o=posJTCardHTML;
