@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-23-630";
+const BUILD_VERSION="2026-10-23-631";
 const BUILD_NOTES=[
+  "🏬 TALABAT STORE NAMES (build 631). Per Nikhil: the August Talabat upload skipped 218 orders — outlet not recognised: 'DMC', 'WTC Mall', 'Aswaaq Mall'. Now mapped: DMC → DMC, WTC Mall → WTC, Aswaaq Mall → Nad Al Sheba (the same Fyoozhen and Wicked Wings stores Talabat renamed 'Nad Al Sheba 4' from September). Re-upload the August file to bring those orders and their discounts in. Also: the Platform costs filter bar now uses the dark style like Platforms.",
   "💸 NEW PAGE: PLATFORM COSTS (build 630). Per Nikhil (option B): Delivery → Performance → Platform costs. What each platform really keeps, from its own statements — commission, payment fee and every other charge (Deliveroo admin fees, corrections, refunds, remake/cancellation commission · Talabat operational & wait-time fees, commission on orders you cancelled and on refunds paid back · Careem Plus · Noon refunds, cancellation and radius fees · Keeta's AED 6 minimum commission and top-ups), minus credits (disputed refunds won back, payments for cancellations not your fault), compared with the contract, plus ads from the Ad Investments sheet (amount and %). One table for all platforms, then a card per platform with a brand table (click a brand for its outlets), chips for each extra charge, and 'Show all numbers' — every charge in its own column, exact AED or % of net sales, downloadable as CSV. Deliveroo: a ⚠ when the sheet's ad spend and the ad fee Deliveroo billed differ by more than 5% (periods of 28+ days). To fill it: clear each platform on Promotions and upload its statements again — uploads from before 630 kept only sales and discounts.",
   "📅 DELIVEROO & NOON DATES FIXED (build 629). Per Nikhil: Promotions showed Deliveroo '23 Mar–9 Dec' and Noon '26 Feb–8 Dec' — dates in the future. Some statement files use day-first dates (Deliveroo's 14 Sep statement: '07/09/2026'; Noon's 10 Aug files: '12/08/2026') and the upload read them month-first, so 12 Sep became 9 Dec and 12 Aug became 8 Dec (and days 1–12 of those weeks landed in the wrong months). Day-first dates are now read correctly. Clear Deliveroo and Noon (×) on Promotions and upload their statements again.",
   "🧾 KEETA EFFECTIVE RATE NO LONGER 0.0% (build 628). Per Nikhil: on days without a Keeta statement the minimum-commission card works from the Microsys till estimate, and that estimate counted orders and extra commission but not the commission itself — so the effective rate showed 0.0%. It now estimates the commission too (16% of order value after discount, at least AED 6 per order), and the tile says when it is estimated. Once the Keeta Recent Orders file for those days is uploaded, the real statement figures replace the estimate.",
@@ -3779,10 +3780,10 @@ const TALABAT_OUTLET_MAP={
   "town square":"Town Square",
   // v566: names in the Oct 2026 export
   "al forsan":"Al Forsan","forsan":"Al Forsan","khalifa city":"Al Forsan","khalifa city a":"Al Forsan",
-  "media city":"DMC","sports society mirdif":"Mirdiff","mirdif sports society":"Mirdiff","mirdiff":"Mirdiff"
+  "media city":"DMC","dmc":"DMC","wtc mall":"WTC","wtc":"WTC","world trade center":"WTC","aswaaq mall":"NAS","aswaaq":"NAS","sports society mirdif":"Mirdiff","mirdif sports society":"Mirdiff","mirdiff":"Mirdiff"
 };
 // v566: if Talabat renames a store again, fall back to keywords before giving up (so its discount still counts)
-const TALABAT_OUTLET_KEYWORDS=[[/forsan|khalifa/,"Al Forsan"],[/media city|internet city/,"DMC"],[/mirdi/,"Mirdiff"],[/furjan/,"Furjan"],[/quoz/,"Al Quoz"],[/reef/,"Al Reef"],[/reem/,"Al Reem"],[/marina/,"Marina"],[/motor ?city/,"Motorcity"],[/silicon|\bdso\b/,"DSO"],[/villa/,"Villa"],[/town square/,"Town Square"],[/jumeirah|jumierah|wasl/,"Jumeirah"],[/nad al sheba/,"NAS"],[/investments? park|\bdip\b/,"DIP"],[/khalidiyah|trade cent/,"WTC"]];
+const TALABAT_OUTLET_KEYWORDS=[[/forsan|khalifa/,"Al Forsan"],[/media city|internet city/,"DMC"],[/mirdi/,"Mirdiff"],[/furjan/,"Furjan"],[/quoz/,"Al Quoz"],[/reef/,"Al Reef"],[/reem/,"Al Reem"],[/marina/,"Marina"],[/motor ?city/,"Motorcity"],[/silicon|\bdso\b/,"DSO"],[/villa/,"Villa"],[/town square/,"Town Square"],[/jumeirah|jumierah|wasl/,"Jumeirah"],[/nad al sheba/,"NAS"],[/investments? park|\bdip\b/,"DIP"],[/khalidiyah|trade cent|\bwtc\b/,"WTC"],[/\bdmc\b/,"DMC"],[/aswaaq/,"NAS"]];
 const TALABAT_STORAGE_KEY="talabat_orders_data_v1";
 
 let talabatOrdersData=null;
