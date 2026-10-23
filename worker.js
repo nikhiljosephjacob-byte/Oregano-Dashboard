@@ -1445,7 +1445,15 @@ async function handleDigestCfgSet(request, env) {
   if (!s || s.auto || !(s.admin || s.user === "nikhil")) return json({ error: "forbidden" }, 403);
   const b = await readBody(request);
   const to = [...new Set((Array.isArray(b.to) ? b.to : []).map(x => String(x || "").trim().toLowerCase()).filter(x => /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(x)))].slice(0, 20);
-  const c = { on: !!b.on, to, by: s.user, at: new Date().toISOString() };
+  // v621: send from Outlook via a Power Automate relay — the morning script mails ONE copy to the relay inbox with the
+  // recipients and a private code in the subject; Nikhil's flow forwards it from his Outlook address.
+  let prev = {}; try { prev = JSON.parse((await env.SESSIONS.get("auto:digestcfg")) || "{}") || {}; } catch (e) { }
+  const via = b.via === "outlook" ? "outlook" : (b.via === "gmail" ? "gmail" : (prev.via || "gmail"));
+  const rl = String(b.relay || prev.relay || "nikhil@oreganorestaurants.com").trim().toLowerCase();
+  const relay = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(rl) ? rl : "nikhil@oreganorestaurants.com";
+  let key = prev.key;
+  if (!key || b.newKey) { const a = new Uint8Array(6); crypto.getRandomValues(a); key = [...a].map(x => "abcdefghjkmnpqrstuvwxyz23456789"[x % 31]).join(""); }
+  const c = { on: !!b.on, to, via, relay, key, by: s.user, at: new Date().toISOString() };
   await env.SESSIONS.put("auto:digestcfg", JSON.stringify(c));
   return json(Object.assign({ ok: true }, c));
 }
