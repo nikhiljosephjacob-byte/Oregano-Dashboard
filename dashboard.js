@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-23-634";
+const BUILD_VERSION="2026-10-23-635";
 const BUILD_NOTES=[
+  "📅 CAREEM FILE SAVED IN EXCEL (build 635). Per Nikhil: the Careem September file (FOOD_ORDER_01-09-2026_30-09-2026) uploaded but nothing showed. The file had been opened and saved in Excel, which cut TRANSACTION_DATE down to minutes:seconds ('52:32.0'), so every order was skipped for having no date. The dashboard now falls back to DELIVERY_TIME ('Wed Sep 30 22:52:32 UTC 2026') — same clock, same day.",
   "🕐 LOADING CARD WORDING (build 634). Per Nikhil: the Overview loading card said 'pulling in today's sales', but the dashboard shows the selected period (by default yesterday, the latest full day), not today. It now says e.g. 'One moment — loading sales for Thu, 22 Oct' or '1 Oct – 22 Oct'.",
   "💾 PLATFORM COSTS REMEMBERED (build 633 + worker.js). Per Nikhil: the page kept asking to upload statements again. The fee lines read from each statement were only kept in this browser — the shared server copy didn't store them, so a reload, another device or a sync from the server lost them. They now save to and load from the server with the rest of the order data. A browser that still has them pushes them up once by itself.",
   "🔢 PLATFORM COSTS NUMBER FORMAT (build 632). Per Nikhil's screenshot: Deliveroo net sales showed 'AED 1111.3K'. Amounts of a million or more now show as 'AED 1.11M'. Also: a platform's period and its ads now count only the days that actually have statement rows — Careem showed '22 Sep–22 Oct' and 5.2% ads although its statements only had October, so a month of ads was set against three weeks of sales. Gaps now show '⚠ Nd gap' and the date runs that are covered.",
@@ -3590,9 +3591,12 @@ function parseCareemAmount(v){
   const n=/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)?parseFloat(s.replace(/,/g,"")):parseFloat(s); // v526: thousands comma
   return isNaN(n)?0:n;
 }
-function parseCareemDate(ts){
+function parseCareemDate(ts,alt){
+  const M={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  const ok=v=>/^\d{4}-\d{2}-\d{2}/.test(String(v||"").trim());
+  if(!ok(ts)&&alt){const m=String(alt).trim().match(/^\w{3}\s+(\w{3})\s+(\d{1,2})\s+[\d:]+\s+\w+\s+(\d{4})/);if(m&&M[m[1].toLowerCase()])return`${m[3]}-${String(M[m[1].toLowerCase()]).padStart(2,"0")}-${m[2].padStart(2,"0")}`;}
   if(!ts)return null;
-  const s=String(ts).trim();
+  const s=String(ts).trim();if(!ok(s))return null;
   // Careem format: "2026-06-20 22:46:17.0" — first 10 chars is the date
   return s.length>=10?s.slice(0,10):null;
 }
@@ -3638,7 +3642,7 @@ async function parseCareemCSV(file){
         aggregator:"Careem",
         order_no:r[headerIdx["REFERENCE_ID"]]||null,
         brand:careemBrand(cBrandRaw),outlet:CAREEM_OUTLET_CODE[cOutletRaw]||null,
-        date:parseCareemDate(r[headerIdx["TRANSACTION_DATE"]]),
+        date:parseCareemDate(r[headerIdx["TRANSACTION_DATE"]],r[headerIdx["DELIVERY_TIME"]]),
         reason:status, // Careem's export gives no reason text beyond the status itself
         responsibility:status==="Cancelled by merchant"?"Restaurant":"Careem/Customer",
         amount:parseCareemAmount(r[headerIdx["TOTAL_AMOUNT"]]),
@@ -3653,7 +3657,7 @@ async function parseCareemCSV(file){
     const outletRaw=String(r[headerIdx["MERCHANT_AREA"]]||"").trim();
     const outlet=CAREEM_OUTLET_CODE[outletRaw];
     if(!outlet){unmappedOutlets.add(outletRaw);skipped.no_outlet++;continue;}
-    const date=parseCareemDate(r[headerIdx["TRANSACTION_DATE"]]);
+    const date=parseCareemDate(r[headerIdx["TRANSACTION_DATE"]],r[headerIdx["DELIVERY_TIME"]]);
     if(!date){skipped.no_date++;continue;}
 
     const gross=parseCareemAmount(r[headerIdx["FOOD_GROSS_BASKET_AMOUNT"]])||parseCareemAmount(r[headerIdx["TOTAL_AMOUNT"]]);
@@ -29050,7 +29054,7 @@ async function pcFeesTalabat(file){const rows=await pcRows(file);const r0=(rows[
   return A.out();}
 async function pcFeesCareem(file){const rows=await pcRows(file);const hd=(rows[0]||[]).map(h=>String(h).replace(/^﻿/,"").trim()),ix={};hd.forEach((h,i)=>ix[h]=i);
   const n=(r,c)=>ix[c]===undefined?0:pcNum(r[ix[c]]),A=pcAcc(file.name);
-  for(const r of rows.slice(1)){if(!r||!r.length)continue;const b=careemBrand(r[ix.BRAND_NAME]),o=CAREEM_OUTLET_CODE[String(r[ix.MERCHANT_AREA]||"").trim()]||null,d=parseCareemDate(r[ix.TRANSACTION_DATE]);if(!b||!d)continue;
+  for(const r of rows.slice(1)){if(!r||!r.length)continue;const b=careemBrand(r[ix.BRAND_NAME]),o=CAREEM_OUTLET_CODE[String(r[ix.MERCHANT_AREA]||"").trim()]||null,d=parseCareemDate(r[ix.TRANSACTION_DATE],r[ix.DELIVERY_TIME]);if(!b||!d)continue;
     const ok=String(r[ix.STATUS]||"").trim()==="Delivered",f={comm:-n(r,"BILLING_PLATFORM_FEE"),pg:-n(r,"BILLING_PROCESSING_FEE"),cplus:-n(r,"CPLUS_FEE"),vat:-(n(r,"BILLING_PLATFORM_FEE_TAX")+n(r,"CPLUS_FEE_TAX")+n(r,"BILLING_PROCESSING_FEE_TAX"))};
     if(ok){f.n=1;f.net=n(r,"FOOD_GROSS_BASKET_AMOUNT")+n(r,"PARTNER_FUNDED_CATALOG_DISCOUNT")+n(r,"PARTNER_FUNDED_PROMO_DISCOUNT");}A.add(b,o,d,f);}
   return A.out();}
