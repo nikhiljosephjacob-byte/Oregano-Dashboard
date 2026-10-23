@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-23-635";
+const BUILD_VERSION="2026-10-23-636";
 const BUILD_NOTES=[
+  "🧭 PLATFORM COSTS: CLEARER GAP MESSAGE (build 636). Per Nikhil's incognito check (Careem and Keeta blank for August): the files on his laptop were complete for Careem, so the gap was fee details never re-uploaded, not a missing statement. The row now tells the two apart — 'fee details not loaded for this period — re-upload these statements' when the sales are there, or 'no statement uploaded for this period' when they are not.",
   "📅 CAREEM FILE SAVED IN EXCEL (build 635). Per Nikhil: the Careem September file (FOOD_ORDER_01-09-2026_30-09-2026) uploaded but nothing showed. The file had been opened and saved in Excel, which cut TRANSACTION_DATE down to minutes:seconds ('52:32.0'), so every order was skipped for having no date. The dashboard now falls back to DELIVERY_TIME ('Wed Sep 30 22:52:32 UTC 2026') — same clock, same day.",
   "🕐 LOADING CARD WORDING (build 634). Per Nikhil: the Overview loading card said 'pulling in today's sales', but the dashboard shows the selected period (by default yesterday, the latest full day), not today. It now says e.g. 'One moment — loading sales for Thu, 22 Oct' or '1 Oct – 22 Oct'.",
   "💾 PLATFORM COSTS REMEMBERED (build 633 + worker.js). Per Nikhil: the page kept asking to upload statements again. The fee lines read from each statement were only kept in this browser — the shared server copy didn't store them, so a reload, another device or a sync from the server lost them. They now save to and load from the server with the rest of the order data. A browser that still has them pushes them up once by itself.",
@@ -29103,6 +29104,10 @@ function pcMergeFees(ex,fr,strategy){const E=(ex&&ex.fees)||[],F=(fr&&fr.fees)||
   return kept.concat(add);}
 // ── maths ──
 function pcContract(a,b,d){if(a==="Deliveroo")return 0.23;try{const c=commissionRateFor(a,b,d);return c;}catch(e){return 0.2;}}
+function pcOrdHas(a,s,e){const D=pcData(a),dr=(D&&D.metadata&&D.metadata.date_range)||[];return!!(dr[0]&&dr[1]&&!(e<dr[0]||s>dr[1]));}
+function pcGapMsg(a,C,s,e,long){const cv=`${fmtShort(C.cov[0])}–${fmtShort(C.cov[1])}`;
+  return pcOrdHas(a,s,e)?(long?`sales for this period are loaded, but its fee details aren't — fee details are only loaded for ${cv}. Upload the ${a} statements for this period again on Promotions (once is enough; they're then kept on the server).`:`fee details not loaded for this period (loaded: ${cv}) — re-upload these ${a} statements on Promotions`)
+   :(long?`no ${a} statement uploaded for this period. Fee details cover ${cv}.`:`no statement uploaded for this period — fee details cover ${cv}`);}
 function pcRange(a){const D=pcData(a);if(!D||!D.fees||!D.fees.length)return null;let lo="9999",hi="";for(const x of D.fees)if(x.n){if(x.d<lo)lo=x.d;if(x.d>hi)hi=x.d;}return hi?[lo,hi]:null;}
 function pcCalc(a,s,e,F){const D=pcData(a),cols=PC_COLS[a];if(!D||!D.fees||!D.fees.length)return null;const cov=pcRange(a);if(!cov)return null;
   const lo=s>cov[0]?s:cov[0],hi=e<cov[1]?e:cov[1];if(lo>hi)return{cov,lo,hi,empty:true};
@@ -29148,7 +29153,7 @@ function renderPlatformCosts(){const pg=document.getElementById("page-pcost");if
   // overview
   let rows="",any=false;
   for(const a of PC_AGGS){const C=pcCalc(a,s,e,F);
-    if(!C||C.empty||!C.T.net){const why=!C?"upload its statements again (Promotions → upload) to see the fees":C.empty?`no statement for this period — statements cover ${fmtShort(C.cov[0])}–${fmtShort(C.cov[1])}`:"no orders in this period";
+    if(!C||C.empty||!C.T.net){const why=!C?"upload its statements again (Promotions → upload) to see the fees":C.empty?pcGapMsg(a,C,s,e,false):"no orders in this period";
       rows+=`<tr style="cursor:pointer;opacity:.6" onclick="pcSel('${a}')"><td class="l">${pcLogo(a)}<b>${a}</b></td><td colspan="6" class="l" style="color:${T.textMuted};font-size:12px">${why}</td></tr>`;continue;}
     any=true;const t=C.T,n=t.net,w=v=>Math.max(0,v/0.4*200).toFixed(0);
     rows+=`<tr style="cursor:pointer" onclick="pcSel('${a}')"><td class="l">${pcLogo(a)}<b>${a}</b><div style="font-size:11px;color:${T.textMuted};margin-left:28px">${C.rl}${C.miss?` <span style="color:#F59E0B" title="No statement rows on ${C.miss} day(s) in this period — those days (and their ads) are left out">⚠ ${C.miss}d gap</span>`:""}</div></td><td>${k(n)}</td><td class="l"><span style="display:inline-flex;height:10px;vertical-align:middle"><i style="width:${w(t.fee/n)}px;background:${CF}"></i><i style="width:${w(Math.max(0,t.xt+t.cr)/n)}px;background:${CX}"></i><i style="width:${w(t.ads/n)}px;background:${CA}"></i></span></td><td>${pc(t.keep/n)}</td><td>${gap(t.keep/n-t.con)}</td><td style="color:${CA}">${pc(t.ads/n)}</td><td style="background:#1E2A44"><b style="font-size:14px">${pc((t.keep+t.ads)/n)}</b></td></tr>`;}
@@ -29157,7 +29162,7 @@ function renderPlatformCosts(){const pg=document.getElementById("page-pcost");if
   h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${PC_AGGS.map(a=>`<button class="tab ${a===pcCur?"on":""}" onclick="pcSel('${a}')">${pcLogo(a,18)}${a}</button>`).join("")}</div>`;
   // platform card
   const a=pcCur,C=pcCalc(a,s,e,F),cols=PC_COLS[a];
-  if(!C||C.empty||!C.T.net){h+=`<div class="pc-card" style="color:${T.textSecondary}">${pcLogo(a,24)}<b style="color:${T.textPrimary}">${a}</b> — ${!C?`no fee details yet. Clear ${a} on Promotions and upload its statements again — uploads from before build 630 kept only sales and discounts.`:C.empty?`no statement for this period. ${a} statements cover ${fmtShort(C.cov[0])}–${fmtShort(C.cov[1])}.`:"no orders in this period."}</div>`;}
+  if(!C||C.empty||!C.T.net){h+=`<div class="pc-card" style="color:${T.textSecondary}">${pcLogo(a,24)}<b style="color:${T.textPrimary}">${a}</b> — ${!C?`no fee details yet. Clear ${a} on Promotions and upload its statements again — uploads from before build 630 kept only sales and discounts.`:C.empty?pcGapMsg(a,C,s,e,true):"no orders in this period."}</div>`;}
   else{const t=C.T,n=t.net,kp=t.keep/n,ad=t.ads/n;
     const tile=(l,v,sub,c)=>`<div class="tile"><div class="tl">${l}</div><div class="tv" style="color:${c||T.textPrimary}">${v}</div><div class="ts">${sub}</div></div>`;
     // Deliveroo: monthly check of the sheet's ad spend against the ad fee Deliveroo billed
