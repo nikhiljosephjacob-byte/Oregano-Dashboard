@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-23-622";
+const BUILD_VERSION="2026-10-23-623";
 const BUILD_NOTES=[
+  "🩹 EMAIL BRAND CARDS FIXED (build 623). The 622 email showed outlets (DMC, Villa, Furjan…) as extra cards and left Oregano's card with delivery only — dine-in and takeaway come from Microsys per site, and they weren't folded into the brand. Now each site's dine-in & takeaway counts under its front-of-house brand, as on the dashboard: DIP (Fyoozhen), NAS and WTC → Fyoozhen; Al Reef → Smokeys; every other site → Oregano. Only the five brands get cards.",
   "✉️ NEW BOARD BRIEF EMAIL (build 622). Per Nikhil (subject S11 + body D): subject '📊 Oregano Group Board Brief · Thu 22 Oct 2026'; the body opens with four tiles — net sales, orders, AOV, dine-in guests (Guests) — then a card per brand (all channels, net sales excl. VAT after discounts, orders, AOV, share of group), from each morning's Microsys pull. Wrong-settlement and low-outlet warnings stay in your phone notification only. To test: in the Apps Script run runNow (re-pulls yesterday — nothing doubles), then emailNow.",
   "📮 BOARD BRIEF FROM YOUR OUTLOOK ADDRESS (build 621). Per Nikhil: POS Sync → Morning auto-pull → 'Send from' can now be Outlook (via Power Automate). The 8 am script sends one copy to your Outlook inbox with the list and a private code in the subject; a Power Automate flow you set up once (6 steps on the card, every value has a copy button) sends it on to the list from nikhil@oreganorestaurants.com with the PDF. Switch back to Gmail any time. Also: the Board Brief headline no longer has the 'Delivery contribution AED … (49% of delivery sales)' line.",
   "📊 CONTRIBUTION CHANGE IN EVERY BREAKDOWN TABLE + DEEP DIVES REDRAWN (build 620). Per Nikhil: (1) Platforms → 'Brand performance on X', Brands → Outlet × Platform, Outlets → brand table and Brand × Platform table now have a Δ Contribution column next to Δ Orders and Δ Net Sales; the three Δ headings show the comparison date on a second line and the columns stay aligned. (2) Brands → Deep Dive by Outlet and by Platform (option C): one table so the header, rows and opened rows line up; share is a bar under the name with the % beside it; Contribution and Δ Contribution added; each change is a coloured ▲/▼ pill with the amount under it. (3) Phones with Chrome's 'Desktop site' ticked get a one-line hint at the bottom to untick it (× hides it for 7 days).",
@@ -25580,7 +25581,11 @@ async function posStartPull(opt){
       I.warn.forEach(w=>day.warn.push(w));
       const it=Object.values(I.rows).reduce((a,o)=>({di:a.di+o.di.sales,to:a.to+o.to.sales,dd:a.dd+o.di.disc,td:a.td+o.to.disc,g:a.g+o.di.guests}),{di:0,to:0,dd:0,td:0,g:0});
       day.instore={di:psRound(it.di,2),to:psRound(it.to,2),dd:psRound(it.dd,2),td:psRound(it.td,2),guests:it.g};
-      day.instoreBy={};for(const[b,o]of Object.entries(I.rows))day.instoreBy[b]={di:[psRound(o.di.sales,2),o.di.orders],to:[psRound(o.to.sales,2),o.to.orders]}; // v622: per brand, incl. VAT — for the email table
+      // v623: I.rows is keyed by SITE (DMC, Villa…), not brand — fold each site into its front-of-house brand (same rule as the
+      // dashboard's instoreBrandOf: DIP (Fyoozhen), NAS, WTC → Fyoozhen; Al Reef → Smokeys; every other site → Oregano)
+      day.instoreBy={};{const SB={"DIP (Fyoozhen)":"Fyoozhen","NAS":"Fyoozhen","WTC":"Fyoozhen","Al Reef":"Smokeys"};
+        for(const[site,o]of Object.entries(I.rows)){const b=SB[site]||"Oregano",t=day.instoreBy[b]||(day.instoreBy[b]={di:[0,0],to:[0,0]});
+          t.di[0]=psRound(t.di[0]+o.di.sales,2);t.di[1]+=o.di.orders||0;t.to[0]=psRound(t.to[0]+o.to.sales,2);t.to[1]+=o.to.orders||0;}}
       done(i,"ok",`${posFmtDate(iso)} — Sales Summary: dine-in AED ${day.instore.di.toLocaleString()}, takeaway AED ${day.instore.to.toLocaleString()} (incl. VAT)`);
       const brands=[...new Set([...C.rows.map(x=>x.brand),...D.rows.map(x=>x.brand)])].filter(b=>PS_BRAND_TABS.includes(b)).sort();
       brands.forEach(b=>{const r=C.rows.filter(x=>x.brand===b),d=D.rows.filter(x=>x.brand===b);
@@ -28673,7 +28678,7 @@ function apMessage(res,sumY,sumW){
   // v622: per-brand table for the directors' email (net sales excl. VAT; orders = delivery orders + dine-in checks + takeaway orders)
   const by={},z=()=>({dl:[0,0],di:[0,0],to:[0,0]});
   for(const[b,v]of Object.entries(day.brands||{}))(by[b]=by[b]||z()).dl=[v.sales/PS_VAT,v.orders||0];
-  for(const[b,v]of Object.entries(day.instoreBy||{})){const o=by[b]=by[b]||z();o.di=[v.di[0]/PS_VAT,v.di[1]||0];o.to=[v.to[0]/PS_VAT,v.to[1]||0];}
+  for(const[b,v]of Object.entries(day.instoreBy||{})){if(!PS_BRAND_TABS.includes(b))continue;const o=by[b]=by[b]||z();o.di=[v.di[0]/PS_VAT,v.di[1]||0];o.to=[v.to[0]/PS_VAT,v.to[1]||0];}
   const mail={tot,ch,dow,guests:day.instore?day.instore.guests||0:0,split:!!day.instoreBy,by};
   return{ok:true,title:`✅ Yesterday's data is ready — ${dl}`,body:L.join("\n")||"Pulled from Microsys into the LIVE sheet.",url:"/",tag:"autopull",mail};
 }
