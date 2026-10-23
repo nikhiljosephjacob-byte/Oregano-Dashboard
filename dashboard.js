@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-23-628";
+const BUILD_VERSION="2026-10-23-629";
 const BUILD_NOTES=[
+  "📅 DELIVEROO & NOON DATES FIXED (build 629). Per Nikhil: Promotions showed Deliveroo '23 Mar–9 Dec' and Noon '26 Feb–8 Dec' — dates in the future. Some statement files use day-first dates (Deliveroo's 14 Sep statement: '07/09/2026'; Noon's 10 Aug files: '12/08/2026') and the upload read them month-first, so 12 Sep became 9 Dec and 12 Aug became 8 Dec (and days 1–12 of those weeks landed in the wrong months). Day-first dates are now read correctly. Clear Deliveroo and Noon (×) on Promotions and upload their statements again.",
   "🧾 KEETA EFFECTIVE RATE NO LONGER 0.0% (build 628). Per Nikhil: on days without a Keeta statement the minimum-commission card works from the Microsys till estimate, and that estimate counted orders and extra commission but not the commission itself — so the effective rate showed 0.0%. It now estimates the commission too (16% of order value after discount, at least AED 6 per order), and the tile says when it is estimated. Once the Keeta Recent Orders file for those days is uploaded, the real statement figures replace the estimate.",
   "🧾 KEETA MINIMUM COMMISSION — TOTALS ROW (build 627). Per Nikhil: Platforms → Keeta → the minimum-commission table now ends with a Total row — all orders, share on the minimum, orders on the minimum, extra commission, effective rate and discount on those orders, for the date range shown (same figures as the tiles above).",
   "🛵 CAREEM: SMOKEY'S DELI = SMOKEYS (build 626). Per Nikhil: the 1–22 Oct Careem upload skipped 43 orders (19–22 Oct, AED 577 of discount) because Careem lists a second Smokeys brand, “Smokey's Deli - UAE”. It now counts as Smokeys, and Careem brand names that change in future are matched by how they start (Smokey's…, Lollo Rosso…, Fyoo Zhen…, Wicked Wings…, Oregano), so a rename no longer drops orders. Upload the same Careem file again after updating.",
@@ -4207,6 +4208,10 @@ function deliverooNum(v){
   if(/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s))return parseFloat(s.replace(/,/g,""));
   return parseFloat(s);
 }
+// v629: dd/mm/yyyy (UAE, day-first) → yyyy-mm-dd; null if the text isn't a slash date
+function aggDayFirstISO(s){const m=String(s||"").trim().match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})/);if(!m)return null;
+  let d=+m[1],mo=+m[2];if(mo>12&&d<=12){const t=d;d=mo;mo=t;}if(mo<1||mo>12||d<1||d>31)return null;
+  return`${m[3]}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;}
 async function parseDeliverooCSV(file){
   await loadSheetJS();
   const ab=await file.arrayBuffer();
@@ -4249,6 +4254,7 @@ async function parseDeliverooCSV(file){
     const s=String(v).trim();
     const m=s.match(/^(\d{4}-\d{2}-\d{2})/);
     if(m)return m[1];
+    const dm=aggDayFirstISO(s);if(dm)return dm; // v629: dd/mm/yyyy
     // Try parsing whatever string form we got
     const d=new Date(s);
     if(!isNaN(d))return d.toISOString().slice(0,10);
@@ -4583,7 +4589,7 @@ async function parseNoonCSV(file){
         let cDate=null;
         const cDateRaw=col("order_date");
         if(cDateRaw instanceof Date&&!isNaN(cDateRaw)){cDate=dk(cDateRaw);}
-        else{const s=String(cDateRaw||"").trim();const m=s.match(/^(\d{4}-\d{2}-\d{2})/);if(m)cDate=m[1];}
+        else{const s=String(cDateRaw||"").trim();const m=s.match(/^(\d{4}-\d{2}-\d{2})/);if(m)cDate=m[1];else cDate=aggDayFirstISO(s);}
         cancellations.push({
           aggregator:"Noon",
           order_no:col("order_nr")||col("order_ref")||null,
@@ -4616,6 +4622,7 @@ async function parseNoonCSV(file){
       const s=String(dateRaw||"").trim();
       const m=s.match(/^(\d{4}-\d{2}-\d{2})/);
       if(m)dateStr=m[1];
+      else if(aggDayFirstISO(s))dateStr=aggDayFirstISO(s); // v629: dd/mm/yyyy
       else{const d=new Date(s);if(!isNaN(d))dateStr=dk(d);}
     }
     if(!dateStr)continue;
