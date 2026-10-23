@@ -790,7 +790,11 @@ function posStartPull(opt){
       I.warn.forEach(w=>day.warn.push(w));
       const it=Object.values(I.rows).reduce((a,o)=>({di:a.di+o.di.sales,to:a.to+o.to.sales,dd:a.dd+o.di.disc,td:a.td+o.to.disc,g:a.g+o.di.guests}),{di:0,to:0,dd:0,td:0,g:0});
       day.instore={di:psRound(it.di,2),to:psRound(it.to,2),dd:psRound(it.dd,2),td:psRound(it.td,2),guests:it.g};
-      day.instoreBy={};for(const[b,o]of Object.entries(I.rows))day.instoreBy[b]={di:[psRound(o.di.sales,2),o.di.orders],to:[psRound(o.to.sales,2),o.to.orders]}; // v622: per brand, incl. VAT — for the email table
+      // v623: I.rows is keyed by SITE (DMC, Villa…), not brand — fold each site into its front-of-house brand (same rule as the
+      // dashboard's instoreBrandOf: DIP (Fyoozhen), NAS, WTC → Fyoozhen; Al Reef → Smokeys; every other site → Oregano)
+      day.instoreBy={};{const SB={"DIP (Fyoozhen)":"Fyoozhen","NAS":"Fyoozhen","WTC":"Fyoozhen","Al Reef":"Smokeys"};
+        for(const[site,o]of Object.entries(I.rows)){const b=SB[site]||"Oregano",t=day.instoreBy[b]||(day.instoreBy[b]={di:[0,0],to:[0,0]});
+          t.di[0]=psRound(t.di[0]+o.di.sales,2);t.di[1]+=o.di.orders||0;t.to[0]=psRound(t.to[0]+o.to.sales,2);t.to[1]+=o.to.orders||0;}}
       done(i,"ok",`${posFmtDate(iso)} — Sales Summary: dine-in AED ${day.instore.di.toLocaleString()}, takeaway AED ${day.instore.to.toLocaleString()} (incl. VAT)`);
       const brands=[...new Set([...C.rows.map(x=>x.brand),...D.rows.map(x=>x.brand)])].filter(b=>PS_BRAND_TABS.includes(b)).sort();
       brands.forEach(b=>{const r=C.rows.filter(x=>x.brand===b),d=D.rows.filter(x=>x.brand===b);
@@ -1322,7 +1326,7 @@ function apMessage(res,sumY,sumW){
   // v622: per-brand table for the directors' email (net sales excl. VAT; orders = delivery orders + dine-in checks + takeaway orders)
   const by={},z=()=>({dl:[0,0],di:[0,0],to:[0,0]});
   for(const[b,v]of Object.entries(day.brands||{}))(by[b]=by[b]||z()).dl=[v.sales/PS_VAT,v.orders||0];
-  for(const[b,v]of Object.entries(day.instoreBy||{})){const o=by[b]=by[b]||z();o.di=[v.di[0]/PS_VAT,v.di[1]||0];o.to=[v.to[0]/PS_VAT,v.to[1]||0];}
+  for(const[b,v]of Object.entries(day.instoreBy||{})){if(!PS_BRAND_TABS.includes(b))continue;const o=by[b]=by[b]||z();o.di=[v.di[0]/PS_VAT,v.di[1]||0];o.to=[v.to[0]/PS_VAT,v.to[1]||0];}
   const mail={tot,ch,dow,guests:day.instore?day.instore.guests||0:0,split:!!day.instoreBy,by};
   return{ok:true,title:`✅ Yesterday's data is ready — ${dl}`,body:L.join("\n")||"Pulled from Microsys into the LIVE sheet.",url:"/",tag:"autopull",mail};
 }
