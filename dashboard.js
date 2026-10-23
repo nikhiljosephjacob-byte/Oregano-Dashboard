@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-23-632";
+const BUILD_VERSION="2026-10-23-633";
 const BUILD_NOTES=[
+  "💾 PLATFORM COSTS REMEMBERED (build 633 + worker.js). Per Nikhil: the page kept asking to upload statements again. The fee lines read from each statement were only kept in this browser — the shared server copy didn't store them, so a reload, another device or a sync from the server lost them. They now save to and load from the server with the rest of the order data. A browser that still has them pushes them up once by itself.",
   "🔢 PLATFORM COSTS NUMBER FORMAT (build 632). Per Nikhil's screenshot: Deliveroo net sales showed 'AED 1111.3K'. Amounts of a million or more now show as 'AED 1.11M'. Also: a platform's period and its ads now count only the days that actually have statement rows — Careem showed '22 Sep–22 Oct' and 5.2% ads although its statements only had October, so a month of ads was set against three weeks of sales. Gaps now show '⚠ Nd gap' and the date runs that are covered.",
   "🏬 TALABAT STORE NAMES (build 631). Per Nikhil: the August Talabat upload skipped 218 orders — outlet not recognised: 'DMC', 'WTC Mall', 'Aswaaq Mall'. Now mapped: DMC → DMC, WTC Mall → WTC, Aswaaq Mall → Nad Al Sheba (the same Fyoozhen and Wicked Wings stores Talabat renamed 'Nad Al Sheba 4' from September). Re-upload the August file to bring those orders and their discounts in. Also: the Platform costs filter bar now uses the dark style like Platforms.",
   "💸 NEW PAGE: PLATFORM COSTS (build 630). Per Nikhil (option B): Delivery → Performance → Platform costs. What each platform really keeps, from its own statements — commission, payment fee and every other charge (Deliveroo admin fees, corrections, refunds, remake/cancellation commission · Talabat operational & wait-time fees, commission on orders you cancelled and on refunds paid back · Careem Plus · Noon refunds, cancellation and radius fees · Keeta's AED 6 minimum commission and top-ups), minus credits (disputed refunds won back, payments for cancellations not your fault), compared with the contract, plus ads from the Ad Investments sheet (amount and %). One table for all platforms, then a card per platform with a brand table (click a brand for its outlets), chips for each extra charge, and 'Show all numbers' — every charge in its own column, exact AED or % of net sales, downloadable as CSV. Deliveroo: a ⚠ when the sheet's ad spend and the ad fee Deliveroo billed differ by more than 5% (periods of 28+ days). To fill it: clear each platform on Promotions and upload its statements again — uploads from before 630 kept only sales and discounts.",
@@ -2060,6 +2061,7 @@ async function syncOrderDataToServer(agg,dataObj){
     const payload={metadata:dataObj.metadata,records:dataObj.records};
     if(dataObj.orderDetail)payload.orderDetail=dataObj.orderDetail;
     if(dataObj.cancellations)payload.cancellations=dataObj.cancellations;
+    if(dataObj.fees&&dataObj.fees.length)payload.fees=dataObj.fees; // v633 Platform costs
     const body=JSON.stringify(payload);
     const sizeKB=Math.round(body.length/1024);
     // v246: upgraded from console-only to visible — Feedback data (full complaint text per
@@ -2156,6 +2158,7 @@ async function pullOrderDataFromServer(){
         // silently wipe out cancellations this browser already has locally.
         if(server.cancellations)obj.cancellations=server.cancellations;
         else if(local&&local.cancellations)obj.cancellations=local.cancellations;
+        if(server.fees&&server.fees.length)obj.fees=server.fees;else if(local&&local.fees&&local.fees.length)obj.fees=local.fees; // v633
         cfg.set(obj);
         try{localStorage.setItem(cfg.lsKey(),JSON.stringify(obj));}catch(e){}
         changed=true;
@@ -2174,7 +2177,8 @@ async function pullOrderDataFromServer(){
         const server=data[cfg.agg];
         const localTs=local.metadata?.uploadDate||null;
         const serverTs=server?(server.metadata?.uploadDate||server.updatedAt||null):null;
-        if(!server||(localTs&&(!serverTs||localTs>serverTs))){
+        const feesOnlyHere=!!(local.fees&&local.fees.length&&!(server&&server.fees&&server.fees.length)); // v633: one-time push of Platform-costs fees
+        if(!server||feesOnlyHere||(localTs&&(!serverTs||localTs>serverTs))){
           // v305: fixes the exact same blind spot v300 fixed on the PULL side, but on PUSH —
           // found from Nikhil's CSV still showing every row as fallback even after a hard
           // refresh, which ruled out a stale-download or stale-pull explanation (v300 already
