@@ -322,6 +322,8 @@ async function handleOrderDataSave(request, env, agg) {
   // dropped on every push since this endpoint only ever copied whitelisted fields into the
   // stored record. Confirmed directly in the code before fixing, not assumed.
   if (Array.isArray(body.cancellations)) record.cancellations = body.cancellations;
+  // v633: Platform costs fee rows (one per brand|outlet|day) — previously dropped by this whitelist.
+  if (Array.isArray(body.fees)) record.fees = body.fees;
   await env.SESSIONS.put(`orderdata:${agg}`, JSON.stringify(record)); // no TTL — lives until replaced/cleared
   return json({ ok: true, agg, records: body.records.length, updatedAt: record.updatedAt });
 }
