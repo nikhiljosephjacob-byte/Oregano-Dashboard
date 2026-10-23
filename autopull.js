@@ -1393,9 +1393,14 @@ function AP_mailDigest(o,msg,test){
     // impersonation to company mail filters (Microsoft 365 held the first test while a plain Gmail message got through).
     // Sent under the account's own name, with a plain-text copy alongside the formatted one.
     const plain=`Oregano Group — Board Brief · ${day}\n\n${msg&&msg.body?msg.body+"\n\n":""}${pdf?"The Board Brief is attached — page 1 is the day in five minutes, deep dives follow.":"The full Daily Digest PDF couldn't be made this morning ("+why+")."}\n\nSent automatically after the morning POS pull · ${o.base}`;
-    MailApp.sendEmail({to:cfg.to.join(","),subject:`Board Brief ${day}${test?" (test)":""}`,body:plain,htmlBody:html,attachments:pdf?[pdf]:[]});
-    Logger.log(`Emailed to ${cfg.to.join(", ")}${pdf?" with the PDF":" without the PDF"}.`);
-    try{UrlFetchApp.fetch(o.base+"/api/auto/report",{method:"post",contentType:"application/json",headers:H,payload:JSON.stringify({stage:"email",ok:!!pdf,to:cfg.to.length,msg:pdf?"Digest emailed":"Emailed without the PDF — "+why}),muteHttpExceptions:true});}catch(e){}}
+    const subj=`Board Brief ${day}${test?" (test)":""}`;
+    // v621: Outlook route — ONE copy goes to the relay inbox (Nikhil's Outlook) with the recipients and the private flow
+    // code in the subject; his Power Automate flow sends it on from nikhil@oreganorestaurants.com with the PDF.
+    const viaO=cfg.via==="outlook"&&cfg.relay&&cfg.key;
+    if(viaO)MailApp.sendEmail({to:cfg.relay,subject:`${subj} || ${cfg.to.join(";")} || OGR-${cfg.key}`,body:plain,htmlBody:html,attachments:pdf?[pdf]:[]});
+    else MailApp.sendEmail({to:cfg.to.join(","),subject:subj,body:plain,htmlBody:html,attachments:pdf?[pdf]:[]});
+    Logger.log(viaO?`Handed to the Outlook relay (${cfg.relay}) for ${cfg.to.join(", ")}${pdf?" with the PDF":" without the PDF"}.`:`Emailed to ${cfg.to.join(", ")}${pdf?" with the PDF":" without the PDF"}.`);
+    try{UrlFetchApp.fetch(o.base+"/api/auto/report",{method:"post",contentType:"application/json",headers:H,payload:JSON.stringify({stage:"email",ok:!!pdf,to:cfg.to.length,msg:(viaO?"Handed to Outlook flow":"Digest emailed")+(pdf?"":" without the PDF — "+why)}),muteHttpExceptions:true});}catch(e){}}
   catch(e){Logger.log("Email failed: "+e.message);}
 }
 // ── the dashboard's network call, done with Apps Script's UrlFetchApp (synchronous) ──
