@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-23-629";
+const BUILD_VERSION="2026-10-23-630";
 const BUILD_NOTES=[
+  "💸 NEW PAGE: PLATFORM COSTS (build 630). Per Nikhil (option B): Delivery → Performance → Platform costs. What each platform really keeps, from its own statements — commission, payment fee and every other charge (Deliveroo admin fees, corrections, refunds, remake/cancellation commission · Talabat operational & wait-time fees, commission on orders you cancelled and on refunds paid back · Careem Plus · Noon refunds, cancellation and radius fees · Keeta's AED 6 minimum commission and top-ups), minus credits (disputed refunds won back, payments for cancellations not your fault), compared with the contract, plus ads from the Ad Investments sheet (amount and %). One table for all platforms, then a card per platform with a brand table (click a brand for its outlets), chips for each extra charge, and 'Show all numbers' — every charge in its own column, exact AED or % of net sales, downloadable as CSV. Deliveroo: a ⚠ when the sheet's ad spend and the ad fee Deliveroo billed differ by more than 5% (periods of 28+ days). To fill it: clear each platform on Promotions and upload its statements again — uploads from before 630 kept only sales and discounts.",
   "📅 DELIVEROO & NOON DATES FIXED (build 629). Per Nikhil: Promotions showed Deliveroo '23 Mar–9 Dec' and Noon '26 Feb–8 Dec' — dates in the future. Some statement files use day-first dates (Deliveroo's 14 Sep statement: '07/09/2026'; Noon's 10 Aug files: '12/08/2026') and the upload read them month-first, so 12 Sep became 9 Dec and 12 Aug became 8 Dec (and days 1–12 of those weeks landed in the wrong months). Day-first dates are now read correctly. Clear Deliveroo and Noon (×) on Promotions and upload their statements again.",
   "🧾 KEETA EFFECTIVE RATE NO LONGER 0.0% (build 628). Per Nikhil: on days without a Keeta statement the minimum-commission card works from the Microsys till estimate, and that estimate counted orders and extra commission but not the commission itself — so the effective rate showed 0.0%. It now estimates the commission too (16% of order value after discount, at least AED 6 per order), and the tile says when it is estimated. Once the Keeta Recent Orders file for those days is uploaded, the real statement figures replace the estimate.",
   "🧾 KEETA MINIMUM COMMISSION — TOTALS ROW (build 627). Per Nikhil: Platforms → Keeta → the minimum-commission table now ends with a Total row — all orders, share on the minimum, orders on the minimum, extra commission, effective rate and discount on those orders, for the date range shown (same figures as the tiles above).",
@@ -29004,3 +29005,182 @@ window.mobNav=mobNav;
     d.innerHTML='📱 You are seeing the laptop layout. For the phone layout, open Chrome’s <b>⋮</b> menu and untick <b>Desktop site</b>.<span style="position:absolute;right:14px;top:8px;font-size:30px;cursor:pointer;color:#94A3B8">×</span>';
     d.querySelector("span").onclick=()=>{try{localStorage.setItem(k,String(Date.now()+7*864e5));}catch(e){}d.remove();};
     document.body.appendChild(d);}catch(e){}})();
+
+// ═══ v630 PLATFORM COSTS — what each delivery platform really keeps (Nikhil, option B: Performance → Platform costs) ═══
+// Every statement upload now also keeps its fee lines (per brand × outlet × day) in <platform>OrdersData.fees.
+// Costs are positive, credits negative; net = order value after the merchant's own discount, incl. VAT (as the statements).
+// VAT on platform fees is not counted (recoverable input VAT). Ads come from the Ad Investments sheet (management sets
+// them per brand) — Deliveroo's own ad fee is kept for a monthly cross-check only.
+const PC_AGGS=["Deliveroo","Talabat","Careem","Noon","Keeta"];
+const PC_COLS={ // [key,label,group]  group: fee | extra | credit | ref (shown, not counted)
+  Deliveroo:[["comm","Commission (23%)","fee"],["admin","Monthly admin fee","extra"],["corr","Invoice corrections","extra"],["rfd","Customer refunds (your fault)","extra"],["rcc","Commission on remakes & cancellations","extra"],["cxch","Cancelled-order charge","extra"],
+    ["won","Disputed refunds won back","credit"],["rcv","Remake & cancelled order value paid","credit"],["rcm","Commission refunded","credit"],["mpl","Marketplace+ delivery fee","credit"],
+    ["adb","Ad fee billed on statement","ref"],["mkt","Marketing contribution (Deliveroo-funded offers)","ref"],["vch","Your voucher funding","ref"]],
+  Talabat:[["comm","Commission (20% / 27%)","fee"],["pg","Online payment fee","fee"],["ops","Operational charges","extra"],["wait","Wait-time fees","extra"],["cxc","Commission on orders you cancelled","extra"],["crf","Commission on refunds paid back","extra"],
+    ["rfp","Disputed refunds paid back","credit"],["nfp","Paid for cancellations not your fault","credit"],["nfv","Order value of cancellations not your fault","ref"],["nfs","…not paid back (your loss)","ref"]],
+  Careem:[["comm","Platform fee","fee"],["pg","Processing fee","fee"],["cplus","Careem Plus fee","extra"],["vat","VAT on fees (recoverable)","ref"]],
+  Noon:[["comm","Lead-generation fee (17%)","fee"],["pg","Payment fee (2%)","fee"],["radj","Refund adjustments","extra"],["cxf","Cancellation fees","extra"],["ldf","Long-distance (radius) fee","extra"],["dlf","Delivery fee","extra"]],
+  Keeta:[["comm","Commission at 16%","fee"],["pg","Online payment fee","fee"],["minx","AED 6 minimum commission (above 16%)","extra"],["topup","Minimum-order top-ups","credit"]]};
+function pcData(a){try{return{Deliveroo:deliverooOrdersData,Talabat:talabatOrdersData,Careem:careemOrdersData,Noon:noonOrdersData,Keeta:keetaOrdersData}[a]||null;}catch(e){return null;}}
+function pcNum(v){if(v==null||v==="")return 0;if(typeof v==="number")return v;const n=parseFloat(String(v).replace(/AED/g,"").replace(/,/g,"").replace(/ /g,"").replace(/−/g,"-").trim());return isNaN(n)?0:n;}
+function pcISO(v){if(v==null||v==="")return null;if(v instanceof Date&&!isNaN(v))return v.toISOString().slice(0,10);const s=String(v).trim();const m=s.match(/^(\d{4}-\d{2}-\d{2})/);if(m)return m[1];
+  const dm=typeof aggDayFirstISO==="function"?aggDayFirstISO(s):null;if(dm)return dm;if(typeof v==="number"&&typeof XLSX!=="undefined"&&XLSX.SSF){const d=XLSX.SSF.parse_date_code(v);if(d)return`${d.y}-${String(d.m).padStart(2,"0")}-${String(d.d).padStart(2,"0")}`;}return null;}
+async function pcRows(file,headerFinder){await loadSheetJS();const ab=await file.arrayBuffer();const wb=XLSX.read(ab,{type:"array",raw:true,codepage:65001});
+  return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:""});}
+// one accumulator per brand|outlet|day
+function pcAcc(fname){const m={};return{m,add(b,o,d,f){if(!b||!d)return;o=o||"(brand)";const k=b+"|"+o+"|"+d;const r=m[k]||(m[k]={b,o,d,_f:fname});for(const x in f)r[x]=(r[x]||0)+(f[x]||0);},
+  out(){return Object.values(m).map(r=>{const o={};for(const x in r)o[x]=typeof r[x]==="number"?Math.round(r[x]*100)/100:r[x];return o;});}};}
+async function pcFeesTalabat(file){const rows=await pcRows(file);const r0=(rows[0]||[]).map(h=>String(h).replace(/^﻿/,"").trim()),r1=(rows[1]||[]).map(h=>String(h).replace(/^﻿/,"").trim());
+  const hd=r0.includes("Restaurant name")?r0:r1,st=hd===r0?1:2,ix={};hd.forEach((h,i)=>{if(h)ix[h.toLowerCase()]=i;});
+  const g=(r,c)=>{const i=ix[c.toLowerCase()];return i===undefined?"":r[i];},n=(r,c)=>pcNum(g(r,c)),A=pcAcc(file.name);
+  for(const r of rows.slice(st)){if(!r||!r.length)continue;const{brand,outlet}=parseTalabatBrandOutlet(g(r,"Restaurant name"));if(!brand)continue;
+    const d=parseTalabatDate(g(r,"Order received at"))||parseTalabatDate(g(r,"Cancelled at"));if(!d)continue;
+    const st_=String(g(r,"Order status")).trim().toLowerCase(),net=n(r,"Subtotal")-n(r,"Voucher Funded by you"),earn=ix["estimated earnings"]!==undefined?n(r,"Estimated earnings"):n(r,"Payout Amount");
+    if(st_==="cancelled"){const own=String(g(r,"Cancellation owner")).trim().toLowerCase();
+      if(own==="vendor")A.add(brand,outlet,d,{cxn:1,cxc:n(r,"Commission")});else A.add(brand,outlet,d,{nfn:1,nfv:n(r,"Subtotal"),nfp:-Math.max(0,earn),nfs:n(r,"Subtotal")-Math.max(0,earn)});continue;}
+    const rf=n(r,"Vendor refunds"),rate=(COMM.Talabat[brand]||{}).commission||0.27,cm=n(r,"Commission"),crf=rf>0?Math.max(0,cm-rate*net):0;
+    A.add(brand,outlet,d,{n:1,net,comm:cm-crf,crf,pg:n(r,"Online payment fee"),ops:n(r,"Operational charges"),wait:n(r,"Wait time fee"),rfp:-rf});}
+  return A.out();}
+async function pcFeesCareem(file){const rows=await pcRows(file);const hd=(rows[0]||[]).map(h=>String(h).replace(/^﻿/,"").trim()),ix={};hd.forEach((h,i)=>ix[h]=i);
+  const n=(r,c)=>ix[c]===undefined?0:pcNum(r[ix[c]]),A=pcAcc(file.name);
+  for(const r of rows.slice(1)){if(!r||!r.length)continue;const b=careemBrand(r[ix.BRAND_NAME]),o=CAREEM_OUTLET_CODE[String(r[ix.MERCHANT_AREA]||"").trim()]||null,d=parseCareemDate(r[ix.TRANSACTION_DATE]);if(!b||!d)continue;
+    const ok=String(r[ix.STATUS]||"").trim()==="Delivered",f={comm:-n(r,"BILLING_PLATFORM_FEE"),pg:-n(r,"BILLING_PROCESSING_FEE"),cplus:-n(r,"CPLUS_FEE"),vat:-(n(r,"BILLING_PLATFORM_FEE_TAX")+n(r,"CPLUS_FEE_TAX")+n(r,"BILLING_PROCESSING_FEE_TAX"))};
+    if(ok){f.n=1;f.net=n(r,"FOOD_GROSS_BASKET_AMOUNT")+n(r,"PARTNER_FUNDED_CATALOG_DISCOUNT")+n(r,"PARTNER_FUNDED_PROMO_DISCOUNT");}A.add(b,o,d,f);}
+  return A.out();}
+async function pcFeesDeliveroo(file){const rows=await pcRows(file);const hd=(rows[1]||[]).map(h=>String(h||"").replace(/^﻿/,"").trim()),ix={};hd.forEach((h,i)=>ix[h]=i);
+  const col=p=>{const k=hd.find(h=>h.startsWith(p));return k===undefined?undefined:ix[k];},cV=col("Order Value"),cA=col("Adjustment Net"),cC=hd.findIndex(h=>/^Deliveroo Commission \(/.test(h)),cD=ix["Delivery Date & Time (UTC)"],cAct=ix.Activity,cR=ix["Restaurant Name"];
+  const A=pcAcc(file.name);
+  for(const r of rows.slice(2)){if(!r||r.length<8)continue;const nm=String(r[cR]||"").trim();if(!nm||nm==="Restaurant Name")continue;const a=String(r[cAct]||"").trim(),d=pcISO(r[cD]);if(!a||!d)continue;
+    const{brand,outlet}=parseDeliverooBrandOutlet(nm);if(!brand)continue;const adj=pcNum(r[cA]),f={};
+    if(a==="Delivery"||a==="Previous Invoice: Delivery"||a==="Marketplace+"){if(a==="Delivery")f.n=1;f.net=pcNum(r[cV]);f.comm=-pcNum(r[cC]);}
+    else if(a==="Monthly admin fee")f.admin=-adj;else if(a==="Invoice correction debit")f.corr=-adj;
+    else if(a==="Customer refund"||a==="Previous Invoice: Customer refund")f.rfd=-adj;else if(a==="Contested customer refund")f.won=-adj;
+    else if(a==="Deliveroo commission on food remake"||a==="Deliveroo commission on cancelled order")f.rcc=-adj;else if(a==="Cancelled order charge")f.cxch=-adj;
+    else if(a==="Food remake order value"||a==="Cancelled order value")f.rcv=-adj;else if(a==="Refund commission")f.rcm=-adj;else if(a==="Marketplace+ delivery fee")f.mpl=-adj;
+    else if(a==="Marketer Adverts")f.adb=-adj;else if(a==="Marketing contribution")f.mkt=adj;else if(a==="Partner funding from agreed voucher campaign")f.vch=-adj;
+    else if(a!=="Redelivery"&&adj)f.corr=-adj; // anything new Deliveroo adds lands in corrections rather than being lost
+    A.add(brand,outlet,d,f);}
+  return A.out();}
+async function pcFeesNoon(file){const brand=noonDetectBrand(file.name);if(!brand)return[];const rows=await pcRows(file);const hd=(rows[0]||[]).map(h=>String(h||"").replace(/^﻿/,"").trim()),ix={};hd.forEach((h,i)=>ix[h]=i);
+  const n=(r,c)=>ix[c]===undefined?0:pcNum(r[ix[c]]),out=[];const by={};
+  for(const r of rows.slice(1)){if(!r||!r.length)continue;const o=noonMapOutlet(String(r[ix.outlet_name]||"").trim()),d=pcISO(r[ix.order_date]);if(!d)continue;
+    const src=(ix.statement_nr!==undefined?String(r[ix.statement_nr]||"").trim():"")||file.name,k=(o||"(brand)")+"|"+d+"|"+src;
+    const x=by[k]||(by[k]={b:brand,o:o||"(brand)",d,_src:src,_f:file.name});const add=(key,v)=>{x[key]=(x[key]||0)+v;};
+    if(String(r[ix.order_status]||"").trim().toLowerCase()==="delivered"){add("n",1);add("net",n(r,"order_comm_value"));}
+    add("comm",-n(r,"lead_generation_fee"));add("pg",-n(r,"payment_fee"));add("cxf",-n(r,"cancellation_fee"));add("radj",-n(r,"outlet_adj"));add("ldf",-n(r,"long_distance_fee_mp"));add("dlf",-n(r,"delivery_fee"));}
+  for(const x of Object.values(by)){for(const q in x)if(typeof x[q]==="number")x[q]=Math.round(x[q]*100)/100;out.push(x);}return out;}
+async function pcFeesKeeta(file){const rows=await pcRows(file);const hd=(rows[0]||[]).map(h=>String(h||"").trim()),ix={};hd.forEach((h,i)=>ix[h]=i);if(ix["Restaurant name"]===undefined)ix["Restaurant name"]=ix["Store name"];
+  const n=(r,c)=>ix[c]===undefined?0:pcNum(r[ix[c]]),A=pcAcc(file.name);
+  for(const r of rows.slice(1)){if(!r||!r.length)continue;if(String(r[ix["Order status"]]||"").trim()!=="Completed")continue;const[b,o]=parseKeetaRestaurant(r[ix["Restaurant name"]]),d=parseKeetaOrderDate(r[ix["Order time"]]);if(!b||!d)continue;
+    const net=n(r,"Original price")+n(r,"Promotion funded by merchant"),tu=n(r,"Top-up to minimum"),cm=-n(r,"Basic commission"),rt=typeof keetaCommissionFor==="function"?keetaCommissionFor(d):0.16,minx=Math.max(0,cm-rt*(net+tu));
+    A.add(b,o,d,{n:1,net,comm:cm-minx,minx,pg:-n(r,"Online payment fee"),topup:-tu});}
+  return A.out();}
+const PC_FEE_FN={talabat:pcFeesTalabat,careem:pcFeesCareem,deliveroo:pcFeesDeliveroo,noon:pcFeesNoon,keeta:pcFeesKeeta};
+// attach fees to every parser's result (the parsers themselves are untouched)
+(function pcHookParsers(){if(typeof parseTalabatXlsx!=="function"||typeof mergeOrdersData!=="function")return setTimeout(pcHookParsers,300);
+  const wrap=(name,kind)=>{const _o=window[name]||eval(name);const f=async function(file){const res=await _o.apply(this,arguments);try{if(res&&!res.fees)res.fees=await PC_FEE_FN[kind](file);}catch(e){console.warn("[platform cost] "+kind+" fees not read:",e);}return res;};
+    try{eval(name+"=f");}catch(e){}window[name]=f;};
+  wrap("parseTalabatXlsx","talabat");wrap("parseCareemCSV","careem");wrap("parseDeliverooCSV","deliveroo");wrap("parseNoonCSV","noon");wrap("parseKeetaXlsx","keeta");
+  const _m=mergeOrdersData;const m2=function(ex,fr,rc,strategy){const out=_m.apply(this,arguments);try{out.fees=pcMergeFees(ex,fr,strategy);}catch(e){out.fees=(ex&&ex.fees)||fr&&fr.fees;}return out;};
+  try{mergeOrdersData=m2;}catch(e){}window.mergeOrdersData=m2;})();
+function pcMergeFees(ex,fr,strategy){const E=(ex&&ex.fees)||[],F=(fr&&fr.fees)||[];if(!F.length)return E.length?E:undefined;if(!E.length)return F;
+  const files=new Set(F.map(x=>x._f));
+  if(strategy==="statement"){const srcs=new Set(F.map(x=>x._src).filter(Boolean)),brands=new Set(F.map(x=>x.b));return E.filter(x=>!(x._src&&srcs.has(x._src))&&!(brands.has(x.b)&&!x._src)&&!files.has(x._f)).concat(F);}
+  const cnt=recs=>{const m={};for(const r of recs||[]){const k=r.brand+"|"+r.date;m[k]=(m[k]||0)+(r.orders||0);}return m;};
+  const ec=cnt(ex&&ex.records),fc=cnt(fr&&fr.records),wins=new Set();for(const k in fc)if(ec[k]===undefined||fc[k]>=ec[k])wins.add(k);
+  const kept=E.filter(x=>!files.has(x._f)&&!wins.has(x.b+"|"+x.d)),add=F.filter(x=>{const k=x.b+"|"+x.d;return wins.has(k)||fc[k]===undefined;});
+  return kept.concat(add);}
+// ── maths ──
+function pcContract(a,b,d){if(a==="Deliveroo")return 0.23;try{const c=commissionRateFor(a,b,d);return c;}catch(e){return 0.2;}}
+function pcRange(a){const D=pcData(a);if(!D||!D.fees||!D.fees.length)return null;let lo="9999",hi="";for(const x of D.fees)if(x.n){if(x.d<lo)lo=x.d;if(x.d>hi)hi=x.d;}return hi?[lo,hi]:null;}
+function pcCalc(a,s,e,F){const D=pcData(a),cols=PC_COLS[a];if(!D||!D.fees||!D.fees.length)return null;const cov=pcRange(a);if(!cov)return null;
+  const lo=s>cov[0]?s:cov[0],hi=e<cov[1]?e:cov[1];if(lo>hi)return{cov,lo,hi,empty:true};
+  const G=g=>cols.filter(c=>c[2]===g).map(c=>c[0]),fee=G("fee"),ext=G("extra"),cr=G("credit");
+  const z=()=>({n:0,net:0,r:{},keep:0,fee:0,xt:0,cr:0,ads:0,conW:0});const B={},O={};
+  for(const x of D.fees){if(x.d<lo||x.d>hi)continue;if(F.brands.size&&!F.brands.has(x.b))continue;if(F.branches.size&&!F.branches.has(x.o))continue;
+    for(const T of[B[x.b]||(B[x.b]=z()),O[x.b+"|"+x.o]||(O[x.b+"|"+x.o]=z())]){T.n+=x.n||0;T.net+=x.net||0;T.conW+=(x.net||0)*pcContract(a,x.b,x.d);for(const c of cols)T.r[c[0]]=(T.r[c[0]]||0)+(x[c[0]]||0);
+      for(const k of fee)T.fee+=x[k]||0;for(const k of ext)T.xt+=x[k]||0;for(const k of cr)T.cr+=x[k]||0;}}
+  const vb=F.branches.size?F.branches:null,haveAds=typeof cpcData!=="undefined"&&cpcData&&cpcData.length;
+  for(const b in B){B[b].ads=haveAds?cpcAdCostForRange(b,a,lo,hi,vb):0;}
+  for(const k in O){const[b,o]=k.split("|");O[k].ads=haveAds&&o!=="(brand)"?cpcAdCostForRange(b,a,lo,hi,new Set([o])):0;}
+  const fin=T=>{T.keep=T.fee+T.xt+T.cr;T.con=T.net?T.conW/T.net:0;return T;};Object.values(B).forEach(fin);Object.values(O).forEach(fin);
+  const T=z();for(const x of Object.values(B)){T.n+=x.n;T.net+=x.net;T.conW+=x.conW;T.fee+=x.fee;T.xt+=x.xt;T.cr+=x.cr;T.ads+=x.ads;for(const c in x.r)T.r[c]=(T.r[c]||0)+x.r[c];}fin(T);
+  return{cov,lo,hi,B,O,T,haveAds};}
+// ── page ──
+let pcCur="Deliveroo",pcAll=false,pcMode="aed",pcOpen={};
+function pcSel(a){pcCur=a;renderPlatformCosts();}function pcToggle(b){pcOpen[b]=!pcOpen[b];renderPlatformCosts();}
+function pcAllTog(){pcAll=!pcAll;renderPlatformCosts();}function pcSetMode(m){pcMode=m;renderPlatformCosts();}
+function pcLogo(n,z){try{const s=typeof logoImg==="function"?logoImg(n,z||20):"";return s?`<span style="display:inline-flex;vertical-align:middle;margin-right:8px">${s}</span>`:"";}catch(e){return"";}}
+function renderPlatformCosts(){const pg=document.getElementById("page-pcost");if(!pg)return;const T=DARK_THEME;
+  if(typeof cpcLoaded!=="undefined"&&!cpcLoaded&&typeof fetchCSV==="function"&&!renderPlatformCosts._ld){renderPlatformCosts._ld=1;fetchCSV(CPC_GID).then(c=>{cpcData=parseCPCSheet(c);cpcLoaded=true;}).catch(()=>{}).finally(()=>{renderPlatformCosts._ld=0;if(curPage==="pcost")renderPlatformCosts();});}
+  const F=curFilters(),s=F.start,e=dispEnd(F.start,F.end);
+  const k=v=>{const a=Math.abs(v);return(v<-0.004?"−":"")+"AED "+(a>=1000?(a/1000).toFixed(1)+"K":a.toFixed(0));},ex=v=>(v<-0.004?"−":"")+Math.abs(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+  const pc=v=>((Math.abs(v)<0.0005?0:v)*100).toFixed(1)+"%",pc2=v=>((Math.abs(v)<0.00005?0:v)*100).toFixed(2)+"%";
+  const gap=g=>{g=Math.abs(g)<0.0005?0:g;const c=g>0.003?T.accentRed:g<-0.003?T.accentGreen:T.textSecondary;return`<span style="color:${c};font-weight:700">${g>=0?"+":"−"}${Math.abs(g*100).toFixed(1)} pts</span>`;};
+  const CF="#5B8DEF",CX="#F59E0B",CA="#E879F9",CR=T.accentGreen;
+  const css=`<style>#page-pcost .fbar{background:${T.card}!important;border:1px solid ${T.cardBorder}!important;box-shadow:${T.shadow}!important}#page-pcost .fbar .preset{background:${T.bg}!important;border:1px solid ${T.cardBorder}!important;color:${T.textSecondary}!important}#page-pcost .fbar .preset.act{background:${T.accentOrange}22!important;border-color:${T.accentOrange}!important;color:${T.accentOrange}!important}#page-pcost .fbar .fpill{background:${T.bg}!important;border:1px solid ${T.cardBorder}!important;color:${T.textSecondary}!important}#page-pcost .fbar .fpill.on{border-color:${T.accentOrange}!important;color:${T.accentOrange}!important}#page-pcost .fbar .fchip{color:${T.textSecondary}!important}
+   #page-pcost .pc-card{background:${T.card};border:1px solid ${T.cardBorder};border-radius:12px;padding:16px 18px;margin-bottom:14px;color:${T.textPrimary}}
+   #page-pcost table{width:100%;border-collapse:collapse;font-size:13px}#page-pcost th{padding:8px 9px;border-bottom:1px solid ${T.cardBorder};font-size:10.5px;color:${T.textMuted};text-transform:uppercase;letter-spacing:.05em;text-align:right;white-space:nowrap;vertical-align:bottom}
+   #page-pcost td{padding:8px 9px;border-bottom:1px solid ${T.cardBorder}77;text-align:right;white-space:nowrap}#page-pcost .l{text-align:left}#page-pcost tr.tot td{border-top:2px solid ${T.textSecondary};font-weight:800;border-bottom:none}
+   #page-pcost .tile{background:${T.bg};border:1px solid ${T.cardBorder};border-radius:10px;padding:11px 14px;flex:1;min-width:170px}#page-pcost .tl{font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:${T.textSecondary}}
+   #page-pcost .tv{font-size:21px;font-weight:800;margin:3px 0 2px}#page-pcost .ts{font-size:11.5px;color:${T.textMuted}}#page-pcost .chip{display:inline-block;background:${T.bg};border:1px solid ${T.cardBorder};border-radius:14px;padding:3px 10px;margin:3px 6px 3px 0;font-size:12px;color:${T.textSecondary}}
+   #page-pcost .btn{background:transparent;border:1px solid ${T.cardBorder};color:${T.textPrimary};border-radius:8px;padding:6px 12px;cursor:pointer;font:inherit;font-weight:700;font-size:12.5px}
+   #page-pcost .seg{display:inline-flex;border:1px solid ${T.cardBorder};border-radius:8px;overflow:hidden}#page-pcost .seg button{background:transparent;border:0;color:${T.textSecondary};padding:6px 11px;font:inherit;font-weight:700;font-size:12.5px;cursor:pointer}#page-pcost .seg button.on{background:#1C2A48;color:#fff}
+   #page-pcost .tab{background:${T.card};border:1px solid ${T.cardBorder};color:${T.textSecondary};border-radius:9px;padding:7px 12px;cursor:pointer;font:inherit;font-weight:700}#page-pcost .tab.on{border-color:#4E9BFF;color:#fff;background:#1C2A48}
+   #page-pcost .scroll{overflow-x:auto;border:1px solid ${T.cardBorder};border-radius:10px;margin-top:10px}#page-pcost .scroll table{min-width:1300px}#page-pcost .scroll td.l{position:sticky;left:0;background:${T.card}}</style>`;
+  let h=css+makeFilterBar({hidePlatform:true})+`<div style="margin:6px 0 12px"><div style="font-size:20px;font-weight:800;color:${T.textPrimary}">💸 Platform costs</div><div style="font-size:12.5px;color:${T.textMuted}">What each platform keeps — commission, payment fee, every other charge on its statements — plus your ads · % of net sales (after your discount, incl. VAT) · VAT on fees not counted</div></div>`;
+  // overview
+  let rows="",any=false;
+  for(const a of PC_AGGS){const C=pcCalc(a,s,e,F);
+    if(!C||C.empty||!C.T.net){const why=!C?"upload its statements again (Promotions → upload) to see the fees":C.empty?`no statement for this period — statements cover ${fmtShort(C.cov[0])}–${fmtShort(C.cov[1])}`:"no orders in this period";
+      rows+=`<tr style="cursor:pointer;opacity:.6" onclick="pcSel('${a}')"><td class="l">${pcLogo(a)}<b>${a}</b></td><td colspan="6" class="l" style="color:${T.textMuted};font-size:12px">${why}</td></tr>`;continue;}
+    any=true;const t=C.T,n=t.net,w=v=>Math.max(0,v/0.4*200).toFixed(0);
+    rows+=`<tr style="cursor:pointer" onclick="pcSel('${a}')"><td class="l">${pcLogo(a)}<b>${a}</b><div style="font-size:11px;color:${T.textMuted};margin-left:28px">${fmtShort(C.lo)}–${fmtShort(C.hi)}</div></td><td>${k(n)}</td><td class="l"><span style="display:inline-flex;height:10px;vertical-align:middle"><i style="width:${w(t.fee/n)}px;background:${CF}"></i><i style="width:${w(Math.max(0,t.xt+t.cr)/n)}px;background:${CX}"></i><i style="width:${w(t.ads/n)}px;background:${CA}"></i></span></td><td>${pc(t.keep/n)}</td><td>${gap(t.keep/n-t.con)}</td><td style="color:${CA}">${pc(t.ads/n)}</td><td style="background:#1E2A44"><b style="font-size:14px">${pc((t.keep+t.ads)/n)}</b></td></tr>`;}
+  h+=`<div class="pc-card"><div style="font-size:15px;font-weight:800;margin-bottom:10px">What each platform costs you <span style="font-size:12px;font-weight:400;color:${T.textSecondary}">· click a platform</span></div><table><tr><th class="l">Platform</th><th>Net sales</th><th class="l">Where it goes</th><th>Platform keeps</th><th>vs contract</th><th>Ads</th><th>All-in</th></tr>${rows}</table>
+    <div style="font-size:11.5px;color:${T.textMuted};margin-top:8px"><span style="color:${CF}">■</span> commission & payment fee <span style="color:${CX}">■</span> extra charges (after credits) <span style="color:${CA}">■</span> ads (Ad Investments sheet) · each platform uses only the days its statements cover</div></div>`;
+  h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${PC_AGGS.map(a=>`<button class="tab ${a===pcCur?"on":""}" onclick="pcSel('${a}')">${pcLogo(a,18)}${a}</button>`).join("")}</div>`;
+  // platform card
+  const a=pcCur,C=pcCalc(a,s,e,F),cols=PC_COLS[a];
+  if(!C||C.empty||!C.T.net){h+=`<div class="pc-card" style="color:${T.textSecondary}">${pcLogo(a,24)}<b style="color:${T.textPrimary}">${a}</b> — ${!C?`no fee details yet. Clear ${a} on Promotions and upload its statements again — uploads from before build 630 kept only sales and discounts.`:C.empty?`no statement for this period. ${a} statements cover ${fmtShort(C.cov[0])}–${fmtShort(C.cov[1])}.`:"no orders in this period."}</div>`;}
+  else{const t=C.T,n=t.net,kp=t.keep/n,ad=t.ads/n;
+    const tile=(l,v,sub,c)=>`<div class="tile"><div class="tl">${l}</div><div class="tv" style="color:${c||T.textPrimary}">${v}</div><div class="ts">${sub}</div></div>`;
+    // Deliveroo: monthly check of the sheet's ad spend against the ad fee Deliveroo billed
+    let adWarn="";if(a==="Deliveroo"&&C.haveAds){const days=(new Date(C.hi)-new Date(C.lo))/864e5+1;if(days>=28){const bad=Object.entries(C.B).filter(([b,x])=>{const bl=x.r.adb||0;return(bl>50||x.ads>50)&&Math.abs(x.ads-bl)>0.05*Math.max(bl,x.ads);});
+      if(bad.length)adWarn=`<div style="margin-top:6px;font-size:12px;color:${T.accentOrange}">⚠ Ad Investments sheet vs Deliveroo's billed ad fee differ by more than 5%: ${bad.map(([b,x])=>`${esc(b)} sheet ${k(x.ads)} · billed ${k(x.r.adb||0)}`).join(" · ")}</div>`;}}
+    h+=`<div class="pc-card"><div style="margin-bottom:10px">${pcLogo(a,24)}<span style="font-size:15px;font-weight:800">${a} — what it costs you</span> <span style="font-size:12px;color:${T.textSecondary}">· statements ${fmtShort(C.lo)}–${fmtShort(C.hi)}${(C.lo>s||C.hi<e)?` (period ${fmtShort(s)}–${fmtShort(e)}; statements cover ${fmtShort(C.cov[0])}–${fmtShort(C.cov[1])})`:""} · % of net sales</span></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">${tile("Platform keeps",pc(kp),`${k(t.keep)} · ${gap(kp-t.con)} vs contract ${pc(t.con)}`)}${tile("Extra charges (after credits)",k(t.xt+t.cr),`${pc((t.xt+t.cr)/n)} on top of commission & payment fee`,CX)}${tile("Ads",k(t.ads),C.haveAds?`${pc(ad)} of net sales — set by management per brand`:"Ad Investments sheet not loaded yet",CA)}${tile("All-in cost",pc(kp+ad),`platform + ads · ${t.n.toLocaleString()} orders`,T.accentRed)}</div>`;
+    const row=(x,lbl,lvl,tot)=>`<tr class="${tot?"tot":""}" ${lvl===1?`style="cursor:pointer" onclick="pcToggle('${esc(lbl).replace(/'/g,"\\'")}')"`:lvl===2?`style="background:${T.bg}"`:""}><td class="l" style="${lvl===2?"padding-left:34px;color:"+T.textSecondary:""}">${tot?"Total":lvl===1?pcLogo(lbl)+`<b>${pcOpen[lbl]?"▾":"▸"} ${esc(lbl)}</b>`:esc(lbl)}</td><td>${k(x.net)}</td><td>${pc(x.fee/x.net)}</td><td style="color:${CX}">${pc((x.xt+x.cr)/x.net)}</td><td><b>${pc(x.keep/x.net)}</b> <span style="font-size:11.5px">${tot?"":gap(x.keep/x.net-x.con)}</span></td><td style="color:${CA}">${k(x.ads)} <span style="color:${T.textMuted}">· ${pc(x.ads/x.net)}</span></td><td style="background:#1E2A44"><b>${pc((x.keep+x.ads)/x.net)}</b></td></tr>`;
+    const brands=Object.entries(C.B).filter(([,x])=>x.net>0).sort((p,q)=>q[1].net-p[1].net);let body="";
+    for(const[b,x]of brands){body+=row(x,b,1);if(pcOpen[b])Object.entries(C.O).filter(([kk,y])=>kk.startsWith(b+"|")&&y.net>0).sort((p,q)=>q[1].net-p[1].net).forEach(([kk,y])=>{body+=row(y,kk.split("|")[1],2);});}
+    h+=`<table><tr><th class="l">Brand</th><th>Net sales</th><th>Commission & payment fee</th><th>Extra charges</th><th>Platform keeps</th><th>Ads</th><th>All-in</th></tr>${body}${row(t,"",0,1)}</table>`;
+    const chips=cols.filter(c=>c[2]==="extra"||c[2]==="credit").filter(c=>Math.abs(t.r[c[0]]||0)>=0.5).map(c=>`<span class="chip">${c[1]}${c[0]==="cxc"&&t.r.cxn?` (${t.r.cxn})`:""} <b style="color:${t.r[c[0]]<0?CR:T.textPrimary}">${k(t.r[c[0]])}</b></span>`).join("");
+    h+=`<div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:300px">${chips||`<span style="color:${T.textMuted};font-size:12px">No extra charges in this period</span>`}</div><button class="btn" style="border-color:#4E9BFF;color:#8EC1FF" onclick="pcAllTog()">${pcAll?"▾ Hide all numbers":"▸ Show all numbers"}</button></div>${adWarn}`;
+    if(pcAll)h+=pcDetailHTML(a,C,brands);
+    h+=`</div>`;}
+  h+=`<div style="font-size:11.5px;color:${T.textMuted};margin:4px 0 20px">Fees come from the statements uploaded on Promotions (Deliveroo, Talabat, Careem, Noon, Keeta). Contract = commission + payment fee in the dashboard's commission table. Click a brand for its outlets.</div>`;
+  pg.innerHTML=h;}
+function pcDetailHTML(a,C,brands){const T=DARK_THEME,cols=PC_COLS[a],gs=["fee","extra","credit"].filter(g=>cols.some(c=>c[2]===g)),ref=cols.filter(c=>c[2]==="ref");
+  const GR={fee:["Commission & payment fee","#5B8DEF"],extra:["Extra charges","#F59E0B"],credit:["Credits back to you",T.accentGreen]};
+  const ex=v=>(v<-0.004?"−":"")+Math.abs(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}),v=(x,val)=>pcMode==="aed"?ex(val):((Math.abs(val/x.net)<0.00005?0:val/x.net)*100).toFixed(2)+"%";
+  let h=`<div style="display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap"><b>All numbers</b><span style="color:${T.textMuted};font-size:12px">exact, from the statements · costs positive, credits negative</span><span style="flex:1"></span><div class="seg"><button class="${pcMode==="aed"?"on":""}" onclick="pcSetMode('aed')">AED</button><button class="${pcMode==="pct"?"on":""}" onclick="pcSetMode('pct')">% of net sales</button></div><button class="btn" onclick="pcDownload()">⬇ Download CSV</button></div><div class="scroll"><table>`;
+  h+=`<tr><th class="l" colspan="3"></th>${gs.map(g=>`<th colspan="${cols.filter(c=>c[2]===g).length}" style="text-align:center;color:${GR[g][1]};border-bottom:2px solid ${GR[g][1]}">${GR[g][0]}</th>`).join("")}<th colspan="3" style="text-align:center;color:${T.textPrimary};border-bottom:2px solid ${T.textPrimary}">Total</th>${ref.length?`<th colspan="${ref.length}" style="text-align:center;border-bottom:2px solid ${T.textMuted}">For reference — not counted</th>`:""}</tr>`;
+  h+=`<tr><th class="l">Brand / outlet</th><th>Orders</th><th>Net sales (AED)</th>${gs.map(g=>cols.filter(c=>c[2]===g).map(c=>`<th style="white-space:normal;min-width:90px">${c[1]}</th>`).join("")).join("")}<th>Platform keeps</th><th>Ads (sheet)</th><th>All-in</th>${ref.map(c=>`<th style="white-space:normal;min-width:100px">${c[1]}</th>`).join("")}</tr>`;
+  const r=(x,lbl,lvl,tot)=>`<tr class="${tot?"tot":""}" ${lvl===2?`style="background:${T.bg}"`:""}><td class="l" style="${lvl===2?"padding-left:28px;color:"+T.textSecondary:""}">${tot?"Total":lvl===1?pcLogo(lbl)+esc(lbl):esc(lbl)}</td><td>${Math.round(x.n).toLocaleString()}</td><td>${ex(x.net)}</td>${gs.map(g=>cols.filter(c=>c[2]===g).map(c=>{const val=x.r[c[0]]||0;return`<td style="${val<-0.004?"color:"+T.accentGreen:""}">${v(x,val)}</td>`;}).join("")).join("")}<td><b>${v(x,x.keep)}</b></td><td style="color:#E879F9">${v(x,x.ads)}</td><td style="background:#1E2A44"><b>${v(x,x.keep+x.ads)}</b></td>${ref.map(c=>`<td style="color:${T.textMuted}">${v(x,x.r[c[0]]||0)}</td>`).join("")}</tr>`;
+  let body="";for(const[b,x]of brands){body+=r(x,b,1);if(pcOpen[b])Object.entries(C.O).filter(([kk,y])=>kk.startsWith(b+"|")&&y.net>0).sort((p,q)=>q[1].net-p[1].net).forEach(([kk,y])=>{body+=r(y,kk.split("|")[1],2);});}
+  return h+body+r(C.T,"",0,1)+`</table></div>`;}
+function pcDownload(){const a=pcCur,F=curFilters(),C=pcCalc(a,F.start,dispEnd(F.start,F.end),F);if(!C||!C.T.net)return;const cols=PC_COLS[a];
+  const hd=["Brand","Outlet","Orders","Net sales AED",...cols.map(c=>c[1]+(c[2]==="ref"?" (not counted)":"")+" AED"),"Platform keeps AED","Platform keeps %","Contract %","Ads AED","Ads %","All-in AED","All-in %"];
+  const line=(b,o,x)=>[b,o,Math.round(x.n),x.net.toFixed(2),...cols.map(c=>(x.r[c[0]]||0).toFixed(2)),x.keep.toFixed(2),(x.keep/x.net*100).toFixed(2),(x.con*100).toFixed(2),x.ads.toFixed(2),(x.ads/x.net*100).toFixed(2),(x.keep+x.ads).toFixed(2),((x.keep+x.ads)/x.net*100).toFixed(2)];
+  const L=[hd];for(const[b,x]of Object.entries(C.B).filter(([,x])=>x.net>0).sort((p,q)=>q[1].net-p[1].net)){L.push(line(b,"All outlets",x));for(const[kk,y]of Object.entries(C.O).filter(([kk,y])=>kk.startsWith(b+"|")&&y.net>0).sort((p,q)=>q[1].net-p[1].net))L.push(line(b,kk.split("|")[1],y));}
+  L.push(line("Total","",C.T));const q=s=>/[",\n]/.test(String(s))?'"'+String(s).replace(/"/g,'""')+'"':s;
+  const blob=new Blob(["﻿"+L.map(r=>r.map(q).join(",")).join("\n")],{type:"text/csv"}),u=URL.createObjectURL(blob),el=document.createElement("a");el.href=u;el.download=`${a}_platform_cost_${C.lo}_to_${C.hi}.csv`;document.body.appendChild(el);el.click();el.remove();setTimeout(()=>URL.revokeObjectURL(u),2000);}
+// ── wiring: page + menu entry under Performance (after Platforms) ──
+(function pcInit(){
+  if(typeof renderPage!=="function"||typeof NAV_LAYOUTS==="undefined"||!document.querySelector(".pg"))return setTimeout(pcInit,400);
+  if(!document.getElementById("page-pcost")){const any=document.querySelector(".pg"),div=document.createElement("div");div.className="pg";div.id="page-pcost";any.parentNode.appendChild(div);}
+  for(const key in NAV_LAYOUTS){const L=NAV_LAYOUTS[key];if(!Array.isArray(L))continue;for(const n of L){if(!n.subs||!n.subs.some(x=>x[0]==="platforms")||n.subs.some(x=>x[0]==="pcost"))continue;const i=n.subs.findIndex(x=>x[0]==="platforms");n.subs.splice(i+1,0,["pcost","Platform costs"]);}}
+  try{DARK_PAGES.add("pcost");}catch(e){}
+  const _rp=renderPage;renderPage=function(p){const r=_rp.apply(this,arguments);if(p==="pcost")renderPlatformCosts();return r;};window.renderPage=renderPage;
+  try{navPaint();}catch(e){}
+})();
+window.pcSel=pcSel;window.pcToggle=pcToggle;window.pcAllTog=pcAllTog;window.pcSetMode=pcSetMode;window.pcDownload=pcDownload;window.renderPlatformCosts=renderPlatformCosts;
