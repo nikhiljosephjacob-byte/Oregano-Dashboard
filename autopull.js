@@ -790,6 +790,7 @@ function posStartPull(opt){
       I.warn.forEach(w=>day.warn.push(w));
       const it=Object.values(I.rows).reduce((a,o)=>({di:a.di+o.di.sales,to:a.to+o.to.sales,dd:a.dd+o.di.disc,td:a.td+o.to.disc,g:a.g+o.di.guests}),{di:0,to:0,dd:0,td:0,g:0});
       day.instore={di:psRound(it.di,2),to:psRound(it.to,2),dd:psRound(it.dd,2),td:psRound(it.td,2),guests:it.g};
+      day.instoreBy={};for(const[b,o]of Object.entries(I.rows))day.instoreBy[b]={di:[psRound(o.di.sales,2),o.di.orders],to:[psRound(o.to.sales,2),o.to.orders]}; // v622: per brand, incl. VAT — for the email table
       done(i,"ok",`${posFmtDate(iso)} — Sales Summary: dine-in AED ${day.instore.di.toLocaleString()}, takeaway AED ${day.instore.to.toLocaleString()} (incl. VAT)`);
       const brands=[...new Set([...C.rows.map(x=>x.brand),...D.rows.map(x=>x.brand)])].filter(b=>PS_BRAND_TABS.includes(b)).sort();
       brands.forEach(b=>{const r=C.rows.filter(x=>x.brand===b),d=D.rows.filter(x=>x.brand===b);
@@ -1318,8 +1319,38 @@ function apMessage(res,sumY,sumW){
   const w=day.warn||[];
   if(w.some(x=>/incomplete/i.test(x)))L.push("⚠ Credit Sales looked incomplete — re-pull this day");
   else if(w.some(x=>/hasn't split/i.test(x)))L.push("Dine-in / takeaway split not in Microsys yet — added on the next pull");
-  return{ok:true,title:`✅ Yesterday's data is ready — ${dl}`,body:L.join("\n")||"Pulled from Microsys into the LIVE sheet.",url:"/",tag:"autopull"};
+  // v622: per-brand table for the directors' email (net sales excl. VAT; orders = delivery orders + dine-in checks + takeaway orders)
+  const by={},z=()=>({dl:[0,0],di:[0,0],to:[0,0]});
+  for(const[b,v]of Object.entries(day.brands||{}))(by[b]=by[b]||z()).dl=[v.sales/PS_VAT,v.orders||0];
+  for(const[b,v]of Object.entries(day.instoreBy||{})){const o=by[b]=by[b]||z();o.di=[v.di[0]/PS_VAT,v.di[1]||0];o.to=[v.to[0]/PS_VAT,v.to[1]||0];}
+  const mail={tot,ch,dow,guests:day.instore?day.instore.guests||0:0,split:!!day.instoreBy,by};
+  return{ok:true,title:`✅ Yesterday's data is ready — ${dl}`,body:L.join("\n")||"Pulled from Microsys into the LIVE sheet.",url:"/",tag:"autopull",mail};
 }
+
+// v622: the Board Brief email (Nikhil picked body D + subject S11 with the year): four headline tiles, then one card per
+// brand (net sales excl. VAT after discounts · orders · AOV · share of group). Email-safe tables only (Outlook desktop).
+function apMailSubject(day,test){return`📊 Oregano Group Board Brief · ${day}${test?" (test)":""}`;}
+function apMailHTML(m){const esc=x=>String(x==null?"":x).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+  const n0=v=>Math.round(+v||0).toLocaleString("en-US"),a1=(s,c)=>c>0?(s/c).toFixed(1):"—",k=v=>(v>=1000?(v/1000).toFixed(1)+"K":n0(v));
+  const C={Oregano:"#B8862F",Lollorosso:"#7A8B2E",Smokeys:"#E5631B",Fyoozhen:"#C2185B","Wicked Wings":"#C62828"};
+  const rows=Object.entries(m.by||{}).map(([b,v])=>({b,s:v.dl[0]+v.di[0]+v.to[0],c:v.dl[1]+v.di[1]+v.to[1]})).filter(r=>r.s>0).sort((x,y)=>y.s-x.s);
+  const S=rows.reduce((a,r)=>a+r.s,0),N=rows.reduce((a,r)=>a+r.c,0),G=m.tot||S,oth=G-S;
+  const chg=m.ch==null?"":` — <b style="color:${m.ch>=0?"#15803D":"#C0392B"}">${Math.abs(m.ch)}% ${m.ch>=0?"above":"below"}</b> last ${esc(m.dow)}`;
+  let h=`<div style="font-size:15px;color:#1B2233;margin:4px 0 12px">Net sales <b>AED ${n0(G)}</b> excl. VAT${chg}.</div>`;
+  const aed=(v,c)=>`<span style="font-size:11px;font-weight:600;color:${c}">AED</span>&nbsp;${v}`; // small "AED" keeps the amounts on one line on phones
+  const tiles=[["Net sales",aed(k(G),"#B8C2D6")],["Orders",n0(N)],["AOV",aed(a1(S,N),"#B8C2D6")]];if(m.guests)tiles.push(["Guests",n0(m.guests)]);
+  h+=`<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;border-collapse:collapse;margin:0 0 8px"><tr>${tiles.map(([l,v])=>`<td style="padding:5px;width:${100/tiles.length}%;vertical-align:top"><div style="background:#1B2233;color:#FFFFFF;border-radius:8px;padding:10px 12px"><div style="font-size:10.5px;color:#B8C2D6;text-transform:uppercase;letter-spacing:.5px">${l}</div><div style="font-size:18px;font-weight:700;margin-top:2px;color:#FFFFFF;white-space:nowrap">${v}</div></div></td>`).join("")}</tr></table>`;
+  const tile=r=>`<td style="width:33%;padding:5px;vertical-align:top"><div style="border:1px solid #E6E8EE;border-top:4px solid ${C[r.b]||"#94A3B8"};border-radius:8px;padding:10px 12px"><div style="font-size:12px;font-weight:700;color:${C[r.b]||"#475569"}">${esc(r.b)}</div><div style="font-size:20px;font-weight:700;margin:3px 0;color:#1B2233;white-space:nowrap">${aed(k(r.s),"#6B7385")}</div><div style="font-size:12px;color:#475569">${n0(r.c)} orders · AOV ${a1(r.s,r.c)}</div><div style="font-size:11px;color:#6B7385;margin-top:3px">${S?(r.s/S*100).toFixed(0):0}% of group</div></div></td>`;
+  const tr=[];for(let i=0;i<rows.length;i+=3)tr.push(`<tr>${rows.slice(i,i+3).map(tile).join("")}${i+3>rows.length?'<td style="width:33%"></td>'.repeat(i+3-rows.length):""}</tr>`);
+  if(rows.length)h+=`<div style="font-size:11.5px;font-weight:700;color:#B8862F;letter-spacing:1px;text-transform:uppercase;margin-top:6px">By brand · all channels</div><table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;border-collapse:collapse;margin:4px 0 6px">${tr.join("")}</table>`;
+  const notes=[];if(oth>=100)notes.push(`Other (catering &amp; direct) AED ${n0(oth)}`);notes.push("orders = delivery orders + dine-in checks + takeaway orders");if(!m.split)notes.push("dine-in &amp; takeaway not split by Microsys yet — brand cards show delivery only");
+  h+=`<div style="font-size:11.5px;color:#6B7385;margin:0 0 14px">${notes.join(" · ")}</div>`;
+  return h;}
+function apMailPlain(m){const n0=v=>Math.round(+v||0).toLocaleString("en-US"),k=v=>(v>=1000?(v/1000).toFixed(1)+"K":n0(v));
+  const rows=Object.entries(m.by||{}).map(([b,v])=>({b,s:v.dl[0]+v.di[0]+v.to[0],c:v.dl[1]+v.di[1]+v.to[1]})).filter(r=>r.s>0).sort((x,y)=>y.s-x.s);
+  const S=rows.reduce((a,r)=>a+r.s,0),N=rows.reduce((a,r)=>a+r.c,0);
+  return[`Net sales AED ${n0(m.tot||S)} excl. VAT${m.ch==null?"":` (${m.ch>=0?"+":"−"}${Math.abs(m.ch)}% vs last ${m.dow})`} · ${n0(N)} orders · AOV AED ${N?(S/N).toFixed(1):"—"}`]
+    .concat(rows.map(r=>`${r.b}: AED ${k(r.s)} · ${n0(r.c)} orders · AOV ${r.c?(r.s/r.c).toFixed(1):"—"}`)).join("\n");}
 
 // ═══ v601 /autopull.js — run by Nikhil's Google Apps Script every morning. It is the dashboard's own POS Sync code
 // (possync_core + possync_client) with the screen parts switched off, calling the same /api/pos/* endpoints with the
@@ -1358,7 +1389,8 @@ function AP_gs(o,what){
   Logger.log("Pulling yesterday from Microsys…");
   const msg=AP_run({base:o.base,token:o.token,retry,hour});
   Logger.log(msg.title+"\n"+msg.body);
-  if(msg.ok&&!now){P.setProperty("msg",JSON.stringify(msg));ScriptApp.newTrigger("notifyReady").timeBased().after(5*60*1000).create();Logger.log("The notification goes out in 5 minutes.");}
+  if(msg.ok)P.setProperty("msg",JSON.stringify(msg)); // v622: runNow also keeps the message, so emailNow can test the new email
+  if(msg.ok&&!now){ScriptApp.newTrigger("notifyReady").timeBased().after(5*60*1000).create();Logger.log("The notification goes out in 5 minutes.");}
   else if(!msg.ok&&!retry&&!now){ScriptApp.newTrigger("autoPullRetry").timeBased().after(30*60*1000).create();Logger.log("Will try again in 30 minutes.");}
   else send(msg);
 }
@@ -1385,15 +1417,15 @@ function AP_mailDigest(o,msg,test){
   const lines=msg&&msg.body?msg.body.split("\n").map(l=>`<div style="margin:2px 0">${esc_(l)}</div>`).join(""):"";
   const html=`<div style="font-family:Arial,sans-serif;font-size:14px;color:#1B2233;max-width:640px">
     <div style="font-size:12px;color:#B8862F;font-weight:700;letter-spacing:1px">OREGANO GROUP · BOARD BRIEF</div>
-    <h2 style="margin:6px 0 10px;font-weight:600">${esc_(day)}</h2>
-    ${lines?`<div style="background:#F6F7F9;border-radius:8px;padding:10px 12px;margin-bottom:12px">${lines}</div>`:""}
+    <h2 style="margin:6px 0 4px;font-weight:600">${esc_(day)}</h2>
+    ${msg&&msg.mail?apMailHTML(msg.mail):lines?`<div style="background:#F6F7F9;border-radius:8px;padding:10px 12px;margin-bottom:12px">${lines}</div>`:""}
     ${pdf?"<div>The Board Brief is attached — page 1 is the day in five minutes, deep dives follow.</div>":`<div style="color:#C0392B">The full Daily Digest PDF couldn't be made this morning (${esc_(why)}). Open the dashboard → Overview → Export Daily Digest.</div>`}
     <div style="margin-top:14px;font-size:11px;color:#6B7385">Sent automatically after the morning POS pull · <a href="${o.base}">Open the dashboard</a> · sales excl. VAT</div></div>`;
   try{// v607: no "Oregano Dashboard" sender name — a Gmail address sending under the company's own brand name looks like
     // impersonation to company mail filters (Microsoft 365 held the first test while a plain Gmail message got through).
     // Sent under the account's own name, with a plain-text copy alongside the formatted one.
-    const plain=`Oregano Group — Board Brief · ${day}\n\n${msg&&msg.body?msg.body+"\n\n":""}${pdf?"The Board Brief is attached — page 1 is the day in five minutes, deep dives follow.":"The full Daily Digest PDF couldn't be made this morning ("+why+")."}\n\nSent automatically after the morning POS pull · ${o.base}`;
-    const subj=`Board Brief ${day}${test?" (test)":""}`;
+    const plain=`Oregano Group — Board Brief · ${day}\n\n${msg&&msg.mail?apMailPlain(msg.mail)+"\n\n":msg&&msg.body?msg.body+"\n\n":""}${pdf?"The Board Brief is attached — page 1 is the day in five minutes, deep dives follow.":"The full Daily Digest PDF couldn't be made this morning ("+why+")."}\n\nSent automatically after the morning POS pull · ${o.base}`;
+    const subj=apMailSubject(day,test); // v622: "📊 Oregano Group Board Brief · Thu 22 Oct 2026"
     // v621: Outlook route — ONE copy goes to the relay inbox (Nikhil's Outlook) with the recipients and the private flow
     // code in the subject; his Power Automate flow sends it on from nikhil@oreganorestaurants.com with the PDF.
     const viaO=cfg.via==="outlook"&&cfg.relay&&cfg.key;
