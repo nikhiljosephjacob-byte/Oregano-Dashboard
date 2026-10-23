@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-23-633";
+const BUILD_VERSION="2026-10-23-634";
 const BUILD_NOTES=[
+  "🕐 LOADING CARD WORDING (build 634). Per Nikhil: the Overview loading card said 'pulling in today's sales', but the dashboard shows the selected period (by default yesterday, the latest full day), not today. It now says e.g. 'One moment — loading sales for Thu, 22 Oct' or '1 Oct – 22 Oct'.",
   "💾 PLATFORM COSTS REMEMBERED (build 633 + worker.js). Per Nikhil: the page kept asking to upload statements again. The fee lines read from each statement were only kept in this browser — the shared server copy didn't store them, so a reload, another device or a sync from the server lost them. They now save to and load from the server with the rest of the order data. A browser that still has them pushes them up once by itself.",
   "🔢 PLATFORM COSTS NUMBER FORMAT (build 632). Per Nikhil's screenshot: Deliveroo net sales showed 'AED 1111.3K'. Amounts of a million or more now show as 'AED 1.11M'. Also: a platform's period and its ads now count only the days that actually have statement rows — Careem showed '22 Sep–22 Oct' and 5.2% ads although its statements only had October, so a month of ads was set against three weeks of sales. Gaps now show '⚠ Nd gap' and the date runs that are covered.",
   "🏬 TALABAT STORE NAMES (build 631). Per Nikhil: the August Talabat upload skipped 218 orders — outlet not recognised: 'DMC', 'WTC Mall', 'Aswaaq Mall'. Now mapped: DMC → DMC, WTC Mall → WTC, Aswaaq Mall → Nad Al Sheba (the same Fyoozhen and Wicked Wings stores Talabat renamed 'Nad Al Sheba 4' from September). Re-upload the August file to bring those orders and their discounts in. Also: the Platform costs filter bar now uses the dark style like Platforms.",
@@ -27361,7 +27362,7 @@ function rdLoadStepsHTML(){const st=rdLoadSteps();let cur=false;
 function rdLoadCardHTML(){const L=typeof LOGOS!=="undefined"?LOGOS:{};const st=rdLoadSteps(),done=st.filter(x=>x[1]).length;
   const logos=RD_LOAD_BRANDS.map((b,k)=>`<div class="lg" style="display:flex;flex-direction:column;align-items:center;gap:8px;animation-delay:${(k*0.25).toFixed(2)}s">${L[b]?`<img src="${L[b]}" alt="" onerror="this.style.visibility='hidden'">`:`<div style="width:72px;height:72px;border-radius:16px;background:#F3ECE1"></div>`}<span style="font-size:12px;color:#6B7280;font-weight:600">${b}</span></div>`).join("");
   return`<div class="card" id="rdLoadCard" style="padding:48px 20px 40px;text-align:center;background:#FFFDF9"><div class="lgs" style="display:flex;justify-content:center;gap:30px;flex-wrap:wrap;align-items:flex-end;min-height:112px">${logos}</div>
-  <div class="ttl" style="margin-top:20px;font-size:21px;font-weight:800;color:#1F2937">One moment — pulling in today's sales</div>
+  <div class="ttl" style="margin-top:20px;font-size:21px;font-weight:800;color:#1F2937">One moment — loading sales for ${(()=>{try{const f=curFilters(),e=typeof dispEnd==="function"?dispEnd(f.start,f.end):f.end;return f.start===e?new Date(f.start+"T12:00:00").toLocaleDateString("en-AE",{weekday:"short",day:"numeric",month:"short"}):fmtShort(f.start)+" – "+fmtShort(e);}catch(x){return"the selected period";}})()}</div>
   <div id="rdLoadSteps" style="margin-top:6px;font-size:13.5px">${rdLoadStepsHTML()}</div>
   <div style="margin:18px auto 0;max-width:300px;height:6px;border-radius:3px;background:#EFE8DC;overflow:hidden"><div id="rdLoadFill" style="height:100%;width:${Math.round(done/st.length*100)}%;background:#F07B2B;border-radius:3px;transition:width .4s"></div></div>
   <div style="margin-top:8px;font-size:12px;color:#6B7280">Usually takes under 10 seconds · numbers show once every channel is in</div></div>`;}
