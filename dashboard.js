@@ -13,8 +13,9 @@
 // BUILD_NOTES populates the "What's new" popup that appears AFTER the user hard-refreshes.
 // Keep entries short (one line each), most-impactful first. The popup compares BUILD_VERSION
 // against localStorage.oregano_last_seen_version to decide whether to show.
-const BUILD_VERSION="2026-10-23-625";
+const BUILD_VERSION="2026-10-23-626";
 const BUILD_NOTES=[
+  "🛵 CAREEM: SMOKEY'S DELI = SMOKEYS (build 626). Per Nikhil: the 1–22 Oct Careem upload skipped 43 orders (19–22 Oct, AED 577 of discount) because Careem lists a second Smokeys brand, “Smokey's Deli - UAE”. It now counts as Smokeys, and Careem brand names that change in future are matched by how they start (Smokey's…, Lollo Rosso…, Fyoo Zhen…, Wicked Wings…, Oregano), so a rename no longer drops orders. Upload the same Careem file again after updating.",
   "⏹ STOP BUTTON BACK ON PULL & BACKFILL (build 625). Per Nikhil: the Stop button disappeared from POS Sync's progress panel — it was lost when the new loading panel replaced the old bar (build 600). It's back, top-right next to the %; it stops after the current day, keeps every day already written, and a re-run of the same range skips the done days.",
   "✉️ BOARD BRIEF EMAIL — COMPACT LAYOUT WITH LOGOS (build 624). Per Nikhil (layout X4, no Total column): four headline tiles; one row of five brand cards (logo, net sales, orders, AOV — accent per brand: Oregano maroon, Fyoozhen yellow, Lollorosso green, Smokey's orange, Wicked Wings purple); then one brand × channel table of net sales — Talabat, Deliveroo, Careem, Keeta, Noon, Smiles + Instashop, Dine-in and Takeaway (new plate and paper-bag icons), logos centred over each column — with orders and AOV per channel at the bottom. Dine-in & takeaway count under each site's front-of-house brand. The logos are served by the dashboard (/mail-logo/…), so worker.js is part of this build.",
   "🩹 EMAIL BRAND CARDS FIXED (build 623). The 622 email showed outlets (DMC, Villa, Furjan…) as extra cards and left Oregano's card with delivery only — dine-in and takeaway come from Microsys per site, and they weren't folded into the brand. Now each site's dine-in & takeaway counts under its front-of-house brand, as on the dashboard: DIP (Fyoozhen), NAS and WTC → Fyoozhen; Al Reef → Smokeys; every other site → Oregano. Only the five brands get cards.",
@@ -3462,11 +3463,15 @@ const CAREEM_BRAND_NORM={
   "Fyoo Zhen - UAE":          "Fyoozhen",
   "Smokey's Pizzeria - UAE":  "Smokeys",  // old name — kept for historical exports
   "Smokey's - UAE":           "Smokeys",  // current name, confirmed from Sep 2026 export
+  "Smokey's Deli - UAE":      "Smokeys",  // v626: second Smokeys listing on Careem from 19 Oct 2026 (Nikhil: "Smokeys Deli is Smokeys")
   "Wicked Wings- UAE":        "Wicked Wings"
 };
 // MERCHANT_AREA → dashboard branch. Some Careem names are non-obvious:
 //   "Jebel Ali Village" is actually Furjan; "Dubai Land" is Villa; "Al Sufouh" maps to DMC.
 // When new outlets appear, add them here. Unmapped outlets are surfaced in metadata.
+// v626: exact name first, then by how the name starts — survives Careem renaming a listing
+function careemBrand(raw){raw=String(raw||"").trim();if(CAREEM_BRAND_NORM[raw])return CAREEM_BRAND_NORM[raw];const n=raw.toLowerCase().replace(/[^a-z]/g,"");
+  if(n.startsWith("smokey"))return"Smokeys";if(n.startsWith("lollo"))return"Lollorosso";if(n.startsWith("fyoo"))return"Fyoozhen";if(n.startsWith("wicked")||n.startsWith("wckd"))return"Wicked Wings";if(n.startsWith("oregano"))return"Oregano";return null;}
 const CAREEM_OUTLET_CODE={
   "Motor City":                  "Motorcity",
   "Dubai Marina":                "Marina",
@@ -3621,7 +3626,7 @@ async function parseCareemCSV(file){
       cancellations.push({
         aggregator:"Careem",
         order_no:r[headerIdx["REFERENCE_ID"]]||null,
-        brand:CAREEM_BRAND_NORM[cBrandRaw]||null,outlet:CAREEM_OUTLET_CODE[cOutletRaw]||null,
+        brand:careemBrand(cBrandRaw),outlet:CAREEM_OUTLET_CODE[cOutletRaw]||null,
         date:parseCareemDate(r[headerIdx["TRANSACTION_DATE"]]),
         reason:status, // Careem's export gives no reason text beyond the status itself
         responsibility:status==="Cancelled by merchant"?"Restaurant":"Careem/Customer",
@@ -3632,7 +3637,7 @@ async function parseCareemCSV(file){
       continue;
     }
     const brandRaw=String(r[headerIdx["BRAND_NAME"]]||"").trim();
-    const brand=CAREEM_BRAND_NORM[brandRaw];
+    const brand=careemBrand(brandRaw);
     if(!brand){unmappedBrands.add(brandRaw);skipped.no_brand++;continue;}
     const outletRaw=String(r[headerIdx["MERCHANT_AREA"]]||"").trim();
     const outlet=CAREEM_OUTLET_CODE[outletRaw];
